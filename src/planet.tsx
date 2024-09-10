@@ -6,6 +6,7 @@ import {
   calculateOrbitPosition,
   calculateRotation,
   degreesToRadians,
+  calculateLocationAndRotationForLatLng,
 } from './utils'
 import { useCamera } from './camera'
 import { useStore } from './store'
@@ -13,12 +14,10 @@ import { OrbitLabel } from './orbit-label'
 
 export default forwardRef(function Planet(
   {
-    initialPosition,
     texture,
     orbitalDistance,
     diameter,
     rotationPeriod,
-    rotationSpeed,
     orbitalInclination,
     orbitalPeriod,
     axialTilt = 0,
@@ -28,47 +27,53 @@ export default forwardRef(function Planet(
     interactive = false,
     storeLabel,
     showOrbit = false,
+    orbitOffset = 0,
+    rotationOffset = 0,
     parent,
   }: {
-    initialPosition: any
     diameter: number
     texture: string
     orbitalDistance?: number
     rotationPeriod: number
-    rotationSpeed?: number
     orbitalInclination?: number
     orbitalPeriod?: number
-    axialTilt: number
+    axialTilt?: number
     emitLight?: boolean
     surfaceCamera?: boolean
     moonCamera?: boolean
     interactive?: boolean
     storeLabel?: string
     showOrbit?: boolean
-    parent?: any
+    orbitOffset?: number
+    rotationOffset?: number
+    parent?: { current: THREE.Mesh }
   },
-  ref
+  ref: { current: THREE.Mesh }
 ) {
   const { handleFocus } = useCamera()
-  const surfaceCameraRef = useRef()
-  const moonCameraRef = useRef()
+  const surfaceCameraRef = useRef<any>()
+  const moonCameraRef = useRef<any>()
+  const surfaceCameraContainerRef = useRef<THREE.Mesh>()
   const { get, set } = useThree(({ get, set }) => ({ get, set }))
-  const { moon, time } = useStore()
+  const { moon } = useStore()
   useEffect(() => {
     if (surfaceCamera) {
       set({ camera: surfaceCameraRef.current })
     }
 
     if (moonCamera && moon?.current) {
+      // @ts-ignore
       moonCameraRef.current.lookAt(moon.current.position)
       set({ camera: moonCameraRef.current })
     }
   }, [moon])
   useFrame((state) => {
+    // calculate planet position
     const rotation = calculateRotation(
       rotationPeriod,
+      // @ts-ignore
       state.timestamp || Date.now(),
-      0
+      rotationOffset
     )
 
     ref.current.rotation.y = rotation
@@ -77,24 +82,57 @@ export default forwardRef(function Planet(
       const coords = calculateOrbitPosition({
         radius: orbitalDistance,
         period: orbitalPeriod as number,
+        // @ts-ignore
         time: state.timestamp || Date.now(),
-        centerX: parent?.current?.position.x || 0,
-        centerZ: parent?.current?.position.z || 0,
+        centerX: parent?.current.position.x || 0,
+        centerZ: parent?.current.position.z || 0,
         centerY: 0,
         inclination: orbitalInclination as number,
+        orbitOffset,
       })
-      ref.current.position.x = coords.x
-      ref.current.position.z = coords.z
-      ref.current.position.y = coords.y
+
+      if (ref.current) {
+        ref.current.position.x = coords.x
+        ref.current.position.z = coords.z
+        ref.current.position.y = coords.y
+      }
     }
 
+    // look at the moon
     if (moonCamera && moon?.current) {
+      // @ts-ignore
       moonCameraRef.current.lookAt(moon.current.position)
+    }
+
+    // calculate surface camera position
+    if (surfaceCameraContainerRef.current) {
+      const { position, rotation } = calculateLocationAndRotationForLatLng(
+        -30, //40.7225378,
+        0, //-73.954713,
+        diameter
+      )
+
+      if (surfaceCameraContainerRef.current) {
+        surfaceCameraContainerRef.current.position.x = position.x
+        surfaceCameraContainerRef.current.position.y = position.y
+        surfaceCameraContainerRef.current.position.z = position.z
+        surfaceCameraContainerRef.current.rotation.x = rotation.x
+        surfaceCameraContainerRef.current.rotation.y = rotation.y
+        surfaceCameraContainerRef.current.rotation.z = rotation.z
+      }
     }
   })
   const threeTexture = useLoader(THREE.TextureLoader, texture)
 
   const onClick = (event) => {
+    event.stopPropagation()
+    if (interactive) {
+      handleFocus(event)
+    }
+  }
+
+  const onCameraClick = (event) => {
+    event.stopPropagation()
     if (interactive) {
       handleFocus(event)
     }
@@ -105,24 +143,43 @@ export default forwardRef(function Planet(
       <mesh
         castShadow
         receiveShadow
-        position={initialPosition}
+        position={[0, 0, 0]}
         rotation={[degreesToRadians(axialTilt), 0, 0]}
-        onClick={onClick}
+        onPointerDown={onClick}
+        // @ts-ignore
         ref={ref}
       >
+        {storeLabel == 'earth' && (
+          <mesh
+            position={[0, 0, -diameter]}
+            rotation={[0, 0, Math.PI]}
+            ref={surfaceCameraContainerRef}
+            onPointerDown={onCameraClick}
+          >
+            {/* <boxGeometry args={[1, 1, 1]} />
+            <meshBasicMaterial
+              attach="material"
+              color="red"
+            /> */}
+            <PerspectiveCamera
+              position={[0, 0, 0]}
+              rotation={[0, 0, 0]}
+              zoom={0.75}
+              ref={surfaceCameraRef}
+            />
+          </mesh>
+        )}
         <PerspectiveCamera
           position={[0, 0, 0]}
-          rotation={[0, Math.PI / 2, Math.PI]}
           zoom={1}
-          ref={surfaceCameraRef}
+          ref={moonCameraRef}
         />
-        <PerspectiveCamera position={[0, 0, 0]} zoom={1} ref={moonCameraRef} />
         <sphereGeometry args={[diameter, 128, 128]} />
 
         {emitLight ? (
           <>
             <pointLight
-              position={initialPosition}
+              position={[0, 0, 0]}
               decay={1.1}
               intensity={1400}
             />
@@ -145,7 +202,7 @@ export default forwardRef(function Planet(
         <OrbitLabel
           radius={orbitalDistance}
           orbitalPeriod={orbitalPeriod}
-          rotationalPeriod={rotationPeriod}
+          orbitOffset={orbitOffset}
           targetPosition={ref?.current?.position}
           segments={[
             'January',

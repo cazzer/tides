@@ -8,7 +8,10 @@ export default function Box(props: any) {
   const [hovered, hover] = useState(false)
   const [clicked, click] = useState(false)
   // Subscribe this component to the render-loop, rotate the mesh every frame
-  useFrame((state, delta) => (ref.current.rotation.x += delta))
+  useFrame((state, delta) => {
+    // @ts-ignore
+    ref.current.rotation.x += delta
+  })
   // Return the view, these are regular Threejs elements expressed in JSX
   return (
     <mesh

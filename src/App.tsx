@@ -23,17 +23,43 @@ export default function App() {
       >
         <View.Port />
       </Canvas>
-      <Panel ref={solarSystemView} gridArea="main">
+      <Panel
+        ref={solarSystemView}
+        gridArea="main"
+      >
         <MainCamera />
-        <Scene background="black" matrix={matrix} interactive showOrbitLabels />
-        <OrbitControls maxDistance={80} minDistance={5} makeDefault />
+        <Scene
+          background="black"
+          matrix={matrix}
+          interactive
+          showOrbitLabels
+        />
+        <OrbitControls
+          maxDistance={80}
+          minDistance={5}
+          makeDefault
+        />
       </Panel>
-      <Panel ref={earthView} gridArea="top">
-        <PanelCamera which="earth" />
-        <Scene background="black" matrix={matrix} earthCamera />
+      <Panel
+        ref={earthView}
+        gridArea="top"
+      >
+        <PanelCamera />
+        <Scene
+          background="black"
+          matrix={matrix}
+          earthCamera
+        />
       </Panel>
-      <Panel ref={moonView} gridArea="bottom">
-        <Scene background="black" matrix={matrix} moonCamera />
+      <Panel
+        ref={moonView}
+        gridArea="bottom"
+      >
+        <Scene
+          background="black"
+          matrix={matrix}
+          moonCamera
+        />
       </Panel>
     </div>
   )
@@ -44,32 +70,31 @@ function Scene({
   earthCamera = false,
   moonCamera = false,
   interactive = false,
-  children,
   ...props
 }) {
   return (
     <>
-      <color attach="background" args={[background]} />
+      <color
+        attach="background"
+        args={[background]}
+      />
       <group
         matrixAutoUpdate={false}
         onUpdate={(self) => (self.matrix = matrix)}
         {...props}
       >
         <SolarSystem
-          store={useStore}
           earthCamera={earthCamera}
           moonCamera={moonCamera}
           interactive={interactive}
           {...props}
         />
-        {children}
       </group>
     </>
   )
 }
 
 function MainCamera() {
-  // return  <PerspectiveCamera makeDefault position={[0, 50, 80]} far={200000} />
   return (
     <OrthographicCamera
       makeDefault
@@ -80,8 +105,8 @@ function MainCamera() {
   )
 }
 
-function PanelCamera({ which }) {
-  const { earth, moon } = useStore()
+function PanelCamera() {
+  const { earth } = useStore()
   if (!earth) {
     return
   }
@@ -98,20 +123,31 @@ function PanelCamera({ which }) {
   )
 }
 
-const Panel = forwardRef(({ gridArea, children, ...props }, fref) => {
-  return (
-    <div ref={fref} className="panel" style={{ gridArea }}>
-      <View
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-        }}
+// @ts-ignore
+const Panel = forwardRef(
+  (
+    { gridArea, children, ...props }: { gridArea: string; children: any },
+    fref
+  ) => {
+    return (
+      <div
+        // @ts-ignore
+        ref={fref}
+        className="panel"
+        style={{ gridArea }}
       >
-        {children}
-      </View>
-    </div>
-  )
-})
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+          }}
+        >
+          {children}
+        </View>
+      </div>
+    )
+  }
+)

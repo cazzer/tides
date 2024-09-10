@@ -16,7 +16,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
 
   useFrame(() => {
     if (focusedObject) {
-      let target
+      let target = new Vector3()
 
       if (focusedObject.instanceId !== undefined) {
         const instanceMatrix = new Matrix4()
@@ -26,14 +26,16 @@ export const CameraProvider = ({ children }: { children: any }) => {
         )
         target = new Vector3().setFromMatrixPosition(instanceMatrix)
       } else {
-        target = focusedObject.object.position.clone()
+        focusedObject.object.getWorldPosition(target)
       }
 
       const smoothness = 0.05
       cameraTarget.current.lerp(target, smoothness)
       camera.lookAt(cameraTarget.current)
 
+      // @ts-ignore
       controls.target.copy(cameraTarget.current)
+      // @ts-ignore
       controls.update()
     }
   })

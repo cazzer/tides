@@ -25,6 +25,7 @@ interface OrbitParams {
   centerY?: number // Y coordinate of the center of the orbit (optional, default is 0)
   centerZ?: number // Z coordinate of the center of the orbit (optional, default is 0)
   inclination: number // Orbital inclination in degrees
+  orbitOffset?: number // Offset angle for the orbit
 }
 
 export function calculateOrbitPosition({
@@ -35,6 +36,7 @@ export function calculateOrbitPosition({
   centerY = 0,
   centerZ = 0,
   inclination,
+  orbitOffset = 0,
 }: OrbitParams): { x: number; y: number; z: number; angle: number } {
   // Convert inclination to radians
   const inclinationRad = (inclination * Math.PI) / 180
@@ -42,8 +44,7 @@ export function calculateOrbitPosition({
   // Calculate the angular velocity
   const angularVelocity = (2 * Math.PI) / period
 
-  // Calculate the angle at time t
-  const angle = angularVelocity * time
+  const angle = (time / period) * Math.PI * 2 - orbitOffset
 
   // Calculate x, y, and z coordinates with inclination
   const x = centerX + radius * Math.cos(angle)
@@ -56,7 +57,32 @@ export function calculateOrbitPosition({
 export function calculateRotation(
   rotationPeriod: number,
   time: number,
-  offset?: number
+  offset: number = 0
 ) {
-  return ((time % rotationPeriod) / rotationPeriod) * Math.PI * 2
+  return ((time % rotationPeriod) / rotationPeriod) * Math.PI * 2 + offset
+}
+
+export function calculateLocationAndRotationForLatLng(
+  lat: number,
+  lng: number,
+  radius: number
+) {
+  const latRad = (lat * Math.PI) / 180
+  const lngRad = (-lng * Math.PI) / 180
+
+  const x = radius * Math.cos(latRad) * Math.cos(lngRad)
+  const y = radius * Math.sin(latRad)
+  const z = radius * Math.cos(latRad) * Math.sin(lngRad)
+
+  // calculate the rotation as an Euler angle
+  const rotationY = (lng * Math.PI) / 180 - Math.PI / 2
+  // const rotationX = latRad * -Math.sin(lngRad)
+  // const rotationZ = latRad * Math.cos(lngRad)
+  const rotationX = 0
+  const rotationZ = 0
+
+  return {
+    position: { x, y, z },
+    rotation: { x: rotationX, y: rotationY, z: rotationZ },
+  }
 }
