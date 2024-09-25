@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber'
 import { DateTime } from 'luxon'
 import Planet from './planet'
 import { scaleLog, scaleLinear } from 'd3'
+import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
 import { useStore } from './store'
 
@@ -65,6 +66,9 @@ export default function SolarSystem({
       2 -
     Math.PI / 2
 
+  const earthOffset = suncalc.getPosition(new Date(), 0, 0)
+  console.log(earthOffset)
+
   return (
     <CameraProvider>
       <ambientLight intensity={1} />
@@ -90,7 +94,7 @@ export default function SolarSystem({
         orbitalPeriod={earthOrbitalPeriod}
         orbitalInclination={0}
         orbitOffset={angle}
-        rotationOffset={(0 / 180) * Math.PI}
+        rotationOffset={2 * Math.PI * earthOffset.azimuth}
         axialTilt={23.4}
         texture={earthTexture}
         interactive={interactive}
