@@ -1,7 +1,6 @@
 import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
-import ephemeris from 'ephemeris'
 import { DateTime } from 'luxon'
 import Planet from './planet'
 import { scaleLog, scaleLinear } from 'd3'
@@ -54,10 +53,6 @@ export default function SolarSystem({
     // }
   })
 
-  const { observed } = ephemeris.getAllPlanets(new Date())
-  const earthOffset = observed.sun.apparentLongitudeDd
-  const moonOffset = observed.moon.apparentLongitudeDd
-
   const earthOrbitalPeriod = 365.256 * 24 * 3600000
   const start = DateTime.utc(2024, 1, 1, 0, 0, 0)
   const end = DateTime.utc(2024, 12, 31, 23, 59, 59)
@@ -95,7 +90,7 @@ export default function SolarSystem({
         orbitalPeriod={earthOrbitalPeriod}
         orbitalInclination={0}
         orbitOffset={angle}
-        rotationOffset={(earthOffset / 180) * Math.PI}
+        rotationOffset={(0 / 180) * Math.PI}
         axialTilt={23.4}
         texture={earthTexture}
         interactive={interactive}
@@ -106,7 +101,7 @@ export default function SolarSystem({
         diameter={scaleDiameter(3474800)}
         orbitalDistance={scaleOrbit(384400000)}
         orbitalPeriod={655.728 * 3600000}
-        orbitOffset={(10 / 180) * Math.PI}
+        orbitOffset={(8 / 180) * Math.PI}
         orbitalInclination={-21}
         rotationPeriod={655.728 * 3600000}
         rotationOffset={2.5}
