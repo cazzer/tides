@@ -8,6 +8,10 @@ import { scaleLog, scaleLinear } from 'd3'
 import { CameraProvider } from './camera'
 import { useStore } from './store'
 
+import sunTexture from './assets/sun-8k.jpg'
+import earthTexture from './assets/earth-8k-day.jpg'
+import moonTexture from './assets/moon-8k.jpg'
+
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
 const scaleOrbit = scaleLinear()
   .domain([384400000, 149597870700])
@@ -75,7 +79,7 @@ export default function SolarSystem({
         emitLight
         diameter={scaleDiameter(1392700000)}
         rotationPeriod={609.12 * 3600000}
-        texture="https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Map_of_the_full_sun.jpg/1280px-Map_of_the_full_sun.jpg"
+        texture={sunTexture}
         interactive={interactive}
       />
       <Planet
@@ -93,7 +97,7 @@ export default function SolarSystem({
         orbitOffset={angle}
         rotationOffset={(earthOffset / 180) * Math.PI}
         axialTilt={23.4}
-        texture="https://upload.wikimedia.org/wikipedia/commons/0/04/Solarsystemscope_texture_8k_earth_daymap.jpg"
+        texture={earthTexture}
         interactive={interactive}
       />
       <Planet
@@ -105,9 +109,9 @@ export default function SolarSystem({
         orbitOffset={(10 / 180) * Math.PI}
         orbitalInclination={-21}
         rotationPeriod={655.728 * 3600000}
-        rotationOffset={2.8}
+        rotationOffset={2.5}
         axialTilt={-1.53}
-        texture="https://upload.wikimedia.org/wikipedia/commons/4/4b/Solarsystemscope_texture_2k_haumea_fictional.jpg"
+        texture={moonTexture}
         interactive={interactive}
       />
     </CameraProvider>

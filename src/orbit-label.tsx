@@ -26,7 +26,10 @@ export function OrbitLabel({
 
   useEffect(() => {
     if (dateRef.current) {
-      camera.lookAt(dateRef.current)
+      handleFocus({
+        object: dateRef.current,
+        instanceId: undefined,
+      })
     }
   }, [dateRef.current])
 

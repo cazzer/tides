@@ -17,6 +17,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
   useFrame(() => {
     if (focusedObject) {
       let target = new Vector3()
+      let targetRotation = new Vector3()
 
       if (focusedObject.instanceId !== undefined) {
         const instanceMatrix = new Matrix4()
@@ -27,6 +28,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
         target = new Vector3().setFromMatrixPosition(instanceMatrix)
       } else {
         focusedObject.object.getWorldPosition(target)
+        focusedObject.object.getWorldDirection(targetRotation)
       }
 
       const smoothness = 0.05

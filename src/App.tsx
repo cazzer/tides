@@ -99,7 +99,7 @@ function MainCamera() {
     <OrthographicCamera
       makeDefault
       position={[100, 80, 80]}
-      zoom={3}
+      zoom={10}
       near={0}
     />
   )
