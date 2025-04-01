@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { DateTime } from 'luxon'
 import Planet from './planet'
-import { scaleLog, scaleLinear } from 'd3'
+import { scaleLog, scaleLinear, easeQuadInOut } from 'd3'
 import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
 import { useStore } from './store'
@@ -11,6 +11,7 @@ import { useStore } from './store'
 import sunTexture from './assets/sun-8k.jpg'
 import earthTexture from './assets/earth-8k-day.jpg'
 import moonTexture from './assets/moon-8k.jpg'
+import { interpolateValue } from './utils'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
 const scaleOrbit = scaleLinear()
@@ -28,7 +29,8 @@ export default function SolarSystem({
   interactive?: boolean
   showOrbitLabels?: boolean
 }) {
-  const { setPlanet, timeScale } = useStore()
+  const { setPlanet, timeScale, jumpDate, jumpDateSetAt, setJumpDate } =
+    useStore()
   const sun = useRef()
   const earth = useRef()
   const moon = useRef()
@@ -38,20 +40,40 @@ export default function SolarSystem({
   }, [])
 
   useFrame((state, delta) => {
-    const newTime =
+    let newTime
+
+    if (jumpDate) {
       // @ts-ignore
-      (parseInt(state.timestamp) || Date.now()) + delta * 1000 * timeScale
+      if (!state.startJumpAt) {
+        // @ts-ignore
+        state.startJumpAt = state.timestamp
+      }
+
+      const duration = 5000
+      const jumpDateMillis = jumpDate.getTime()
+      const jumpDateSetAtMillis = jumpDateSetAt.getTime()
+      newTime = interpolateValue(
+        // @ts-ignore
+        state.startJumpAt,
+        jumpDateMillis,
+        (Date.now() - jumpDateSetAtMillis) / duration,
+        easeQuadInOut
+      )
+      if (Date.now() - jumpDateSetAtMillis > duration) {
+        setJumpDate(null)
+        // @ts-ignore
+        state.startJumpAt = null
+      }
+    } else {
+      newTime =
+        // @ts-ignore
+        (parseInt(state.timestamp) || Date.now()) + delta * 1000 * timeScale
+    }
+
     state.set({
       // @ts-ignore
       timestamp: newTime,
     })
-
-    //   fitCameraToObjects(
-    //     state.camera,
-    //     [sun.current, earth.current],
-    //     state.controls as any
-    //   )
-    // }
   })
 
   const earthOrbitalPeriod = 365.256 * 24 * 3600000

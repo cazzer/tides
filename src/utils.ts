@@ -1,3 +1,5 @@
+import _ from 'lodash'
+
 const DIAMETER_MIN_LOG = Math.log(3474800)
 const DIAMETER_MAX_LOG = Math.log(1392700000)
 
@@ -85,4 +87,14 @@ export function calculateLocationAndRotationForLatLng(
     position: { x, y, z },
     rotation: { x: rotationX, y: rotationY, z: rotationZ },
   }
+}
+
+export function interpolateValue(
+  start: number,
+  end: number,
+  x: number,
+  easingFunction: (x: number) => number
+): number {
+  const easedProgress = easingFunction(x)
+  return start + (end - start) * easedProgress
 }

@@ -7,7 +7,9 @@ export const useStore = create<{
   timeScale: number
   setPlanet: Function
   setTimeScale: (value: number) => void
-  focus: string
+  jumpDate: Date | null
+  jumpDateSetAt: Date | null
+  setJumpDate: (date: Date) => void
 }>((set) => ({
   earth: undefined,
   moon: undefined,
@@ -15,5 +17,8 @@ export const useStore = create<{
   timeScale: 1, // one millisecond per millisecond
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setTimeScale: (timeScale: number) => set({ timeScale }),
-  focus: 'sun',
+  jumpDate: null,
+  jumpDateSetAt: null,
+  setJumpDate: (date: Date) =>
+    set({ jumpDate: date, jumpDateSetAt: new Date() }),
 }))
