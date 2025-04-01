@@ -67,7 +67,6 @@ export default function SolarSystem({
     Math.PI / 2
 
   const earthOffset = suncalc.getPosition(new Date(), 0, 0)
-  console.log(earthOffset)
 
   return (
     <CameraProvider>

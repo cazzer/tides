@@ -10,13 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^7.0.1",
     "@react-three/drei": "^9.111.2",
     "@react-three/fiber": "^8.17.5",
+    "@tabler/icons-react-native": "^3.31.0",
     "d3": "^7.9.0",
     "luxon": "^3.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-use-refs": "^1.0.1",
+    "styled-components": "^6.1.16",
     "suncalc": "^1.9.0",
     "three": "^0.167.1",
     "zustand": "^4.5.5"

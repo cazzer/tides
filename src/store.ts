@@ -6,7 +6,8 @@ export const useStore = create<{
   clock: any
   timeScale: number
   setPlanet: Function
-  setTimeScale: Function
+  setTimeScale: (value: number) => void
+  focus: string
 }>((set) => ({
   earth: undefined,
   moon: undefined,
@@ -14,4 +15,5 @@ export const useStore = create<{
   timeScale: 1, // one millisecond per millisecond
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setTimeScale: (timeScale: number) => set({ timeScale }),
+  focus: 'sun',
 }))

@@ -6,7 +6,7 @@ import useRefs from 'react-use-refs'
 
 import SolarSystem from './solar-system'
 import { useStore } from './store'
-import Clock from './clock'
+import Controls from './controls'
 
 const matrix = new THREE.Matrix4()
 
@@ -15,7 +15,7 @@ export default function App() {
 
   return (
     <div className="container">
-      <Clock />
+      <Controls />
       <Canvas
         shadows
         eventSource={document.getElementById('root')}
