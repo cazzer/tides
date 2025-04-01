@@ -33,6 +33,7 @@ export default function Controls() {
           type="text"
           placeholder="enter a date mm/dd/yyyy"
           onChange={onDateChange}
+          value={date}
         />
       </form>
     </ControlContainer>
