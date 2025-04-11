@@ -4173,7 +4173,7 @@ vTroikaGlyphColor = uTroikaUseGlyphColors ? aTroikaGlyphColor / 255.0 : diffuse;
   align-items: 'center';
 `,hV=by.select`
   padding: 4px;
-  font-size: 16px;
+  font-size: 18px;
   background-color: black;
   color: gray;
   outline: none;
@@ -4181,7 +4181,7 @@ vTroikaGlyphColor = uTroikaUseGlyphColors ? aTroikaGlyphColor / 255.0 : diffuse;
   border-radius: 8px;
 `,dV=by.input`
   padding: 4px;
-  font-size: 16px;
+  font-size: 18px;
   background-color: black;
   color: gray;
   outline: none;

@@ -90,7 +90,7 @@ const ControlContainer = styled.section`
 
 const DropdownContainer = styled.select`
   padding: 4px;
-  font-size: 16px;
+  font-size: 18px;
   background-color: black;
   color: gray;
   outline: none;
@@ -100,7 +100,7 @@ const DropdownContainer = styled.select`
 
 const DateInput = styled.input`
   padding: 4px;
-  font-size: 16px;
+  font-size: 18px;
   background-color: black;
   color: gray;
   outline: none;
