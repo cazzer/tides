@@ -5,6 +5,7 @@ import { useRef, useState } from 'react'
 export default function Controls() {
   const { timeScale, setTimeScale, setJumpDate } = useStore()
   const [date, setDate] = useState<string>()
+  const [isFocused, setIsFocused] = useState(false)
   const dateRef = useRef<HTMLInputElement>(null)
 
   const onDateChange = (event) => {
@@ -19,6 +20,13 @@ export default function Controls() {
     if (dateRef.current) {
       dateRef.current.blur()
     }
+  }
+
+  const handleFocus = () => {
+    setIsFocused(true)
+  }
+  const handleBlur = () => {
+    setIsFocused(false)
   }
 
   return (
@@ -40,7 +48,12 @@ export default function Controls() {
           placeholder="date (mm/dd/yyyy)"
           onChange={onDateChange}
           value={date}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
         />
+        <Tooltip visible={isFocused}>
+          <p>Enter date in mm/dd/yyyy format and hit "return"</p>
+        </Tooltip>
       </DateForm>
     </ControlContainer>
   )
@@ -119,4 +132,30 @@ const DateInput = styled.input`
   outline: none;
   border: 1px gray solid;
   border-radius: 8px;
+`
+
+const Tooltip = styled.div<{ visible: boolean }>`
+  display: ${({ visible }) => (visible ? 'block' : 'none')};
+  opacity: ${({ visible }) => (visible ? 1 : 0)};
+  position: absolute;
+  background-color: darkslategray;
+  align-self: center;
+  justify-self: center;
+  padding-left: 8px;
+  padding-right: 8px;
+  margin-top: 8px;
+  right: 8px;
+  max-width: 60vw;
+  border-radius: 8px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: -10px;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent darkslategray transparent;
+  }
 `

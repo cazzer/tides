@@ -3,7 +3,13 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { DateTime } from 'luxon'
 import Planet from './planet'
-import { scaleLog, scaleLinear, easeQuadInOut } from 'd3'
+import {
+  scaleLog,
+  scaleLinear,
+  easeQuadInOut,
+  easeExpInOut,
+  easeCubicInOut,
+} from 'd3'
 import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
 import { useStore } from './store'
@@ -57,7 +63,7 @@ export default function SolarSystem({
         state.startJumpAt,
         jumpDateMillis,
         (Date.now() - jumpDateSetAtMillis) / duration,
-        easeQuadInOut
+        easeExpInOut
       )
       if (Date.now() - jumpDateSetAtMillis > duration) {
         setJumpDate(null)
