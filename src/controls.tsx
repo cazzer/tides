@@ -1,10 +1,11 @@
 import styled from 'styled-components'
 import { useStore } from './store'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 export default function Controls() {
   const { timeScale, setTimeScale, setJumpDate } = useStore()
   const [date, setDate] = useState<string>()
+  const dateRef = useRef<HTMLInputElement>(null)
 
   const onDateChange = (event) => {
     setDate(event.target.value)
@@ -14,6 +15,10 @@ export default function Controls() {
     event.stopPropagation()
     event.preventDefault()
     setJumpDate(new Date(date))
+
+    if (dateRef.current) {
+      dateRef.current.blur()
+    }
   }
 
   return (
@@ -28,14 +33,15 @@ export default function Controls() {
           { value: 60 * 60 * 24 * 30, label: '1 Month per Second' },
         ]}
       />
-      <form onSubmit={handleDateSubmit}>
+      <DateForm onSubmit={handleDateSubmit}>
         <DateInput
+          ref={dateRef}
           type="text"
-          placeholder="enter a date mm/dd/yyyy"
+          placeholder="date (mm/dd/yyyy)"
           onChange={onDateChange}
           value={date}
         />
-      </form>
+      </DateForm>
     </ControlContainer>
   )
 }
@@ -81,25 +87,32 @@ function Dropdown({
 const ControlContainer = styled.section`
   position: absolute;
   z-index: 1000;
-  margin: 10px;
   width: 100vw;
   display: flex;
   justify-content: space-around;
-  align-items: 'center';
+  align-items: center;
 `
 
 const DropdownContainer = styled.select`
   padding: 4px;
+  margin: 4px;
   font-size: 18px;
   background-color: black;
   color: gray;
   outline: none;
   border: 1px gray solid;
   border-radius: 8px;
+  min-width: 0;
+`
+
+const DateForm = styled.form`
+  margin: 4px;
+  min-width: 0;
 `
 
 const DateInput = styled.input`
   padding: 4px;
+  width: 100%;
   font-size: 18px;
   background-color: black;
   color: gray;
