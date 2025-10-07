@@ -1,6 +1,6 @@
-import { useRef, forwardRef, useEffect } from 'react'
-import { useFrame, useLoader, useThree } from '@react-three/fiber'
-import { MeshWobbleMaterial, PerspectiveCamera } from '@react-three/drei'
+import { forwardRef, useRef, useEffect } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
+import { PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import {
   calculateOrbitPosition,
@@ -12,43 +12,53 @@ import { useCamera } from './camera'
 import { useStore } from './store'
 import { OrbitLabel } from './orbit-label'
 
-export default forwardRef(function Planet(
+interface OrbitingBodyProps {
+  // Orbital properties
+  orbitalDistance?: number
+  orbitalPeriod?: number
+  orbitalInclination?: number
+  orbitOffset?: number
+  parent?: { current: THREE.Mesh }
+
+  // Rotation properties
+  rotationPeriod: number
+  rotationOffset?: number
+  axialTilt?: number
+
+  // Physical properties
+  diameter?: number // Needed for surface camera positioning
+
+  // Camera properties
+  surfaceCamera?: boolean
+  moonCamera?: boolean
+
+  // Interaction properties
+  interactive?: boolean
+  storeLabel?: string
+  showOrbit?: boolean
+
+  // Visual renderer
+  children: React.ReactNode
+}
+export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   {
-    texture,
     orbitalDistance,
-    diameter,
-    rotationPeriod,
-    orbitalInclination,
     orbitalPeriod,
+    orbitalInclination = 0,
+    orbitOffset = 0,
+    parent,
+    rotationPeriod,
+    rotationOffset = 0,
     axialTilt = 0,
-    emitLight = false,
+    diameter = 5, // Default diameter
     surfaceCamera = false,
     moonCamera = false,
     interactive = false,
     storeLabel,
     showOrbit = false,
-    orbitOffset = 0,
-    rotationOffset = 0,
-    parent,
-  }: {
-    diameter: number
-    texture: string
-    orbitalDistance?: number
-    rotationPeriod: number
-    orbitalInclination?: number
-    orbitalPeriod?: number
-    axialTilt?: number
-    emitLight?: boolean
-    surfaceCamera?: boolean
-    moonCamera?: boolean
-    interactive?: boolean
-    storeLabel?: string
-    showOrbit?: boolean
-    orbitOffset?: number
-    rotationOffset?: number
-    parent?: { current: THREE.Mesh }
+    children,
   },
-  ref: { current: THREE.Mesh }
+  ref
 ) {
   const { handleFocus } = useCamera()
   const surfaceCameraRef = useRef<any>()
@@ -56,6 +66,7 @@ export default forwardRef(function Planet(
   const surfaceCameraContainerRef = useRef<THREE.Mesh>()
   const { get, set } = useThree(({ get, set }) => ({ get, set }))
   const { moon } = useStore()
+
   useEffect(() => {
     if (surfaceCamera) {
       set({ camera: surfaceCameraRef.current })
@@ -67,8 +78,9 @@ export default forwardRef(function Planet(
       set({ camera: moonCameraRef.current })
     }
   }, [moon])
+
   useFrame((state) => {
-    // calculate planet position
+    // calculate rotation
     const rotation = calculateRotation(
       rotationPeriod,
       // @ts-ignore
@@ -76,26 +88,33 @@ export default forwardRef(function Planet(
       rotationOffset
     )
 
-    ref.current.rotation.y = rotation
+    if (ref && 'current' in ref && ref.current) {
+      ref.current.rotation.y = rotation
+    }
 
-    if (orbitalDistance) {
+    // calculate orbital position if this body orbits something
+    if (
+      orbitalDistance &&
+      orbitalPeriod &&
+      ref &&
+      'current' in ref &&
+      ref.current
+    ) {
       const coords = calculateOrbitPosition({
         radius: orbitalDistance,
-        period: orbitalPeriod as number,
+        period: orbitalPeriod,
         // @ts-ignore
         time: state.timestamp || Date.now(),
         centerX: parent?.current.position.x || 0,
         centerZ: parent?.current.position.z || 0,
         centerY: 0,
-        inclination: orbitalInclination as number,
+        inclination: orbitalInclination,
         orbitOffset,
       })
 
-      if (ref.current) {
-        ref.current.position.x = coords.x
-        ref.current.position.z = coords.z
-        ref.current.position.y = coords.y
-      }
+      ref.current.position.x = coords.x
+      ref.current.position.z = coords.z
+      ref.current.position.y = coords.y
     }
 
     // look at the moon
@@ -106,9 +125,11 @@ export default forwardRef(function Planet(
 
     // calculate surface camera position
     if (surfaceCameraContainerRef.current) {
+      const lat = -30
+      const lng = 0
       const { position, rotation } = calculateLocationAndRotationForLatLng(
-        -30, //40.7225378,
-        0, //-73.954713,
+        lat,
+        lng,
         diameter
       )
 
@@ -122,7 +143,6 @@ export default forwardRef(function Planet(
       }
     }
   })
-  const threeTexture = useLoader(THREE.TextureLoader, texture)
 
   const onClick = (event) => {
     event.stopPropagation()
@@ -149,21 +169,14 @@ export default forwardRef(function Planet(
         // @ts-ignore
         ref={ref}
       >
-        {storeLabel == 'earth' && (
+        {/* Surface camera for Earth */}
+        {storeLabel === 'earth' && (
           <mesh
             position={[0, 0, -diameter]}
             rotation={[0, 0, Math.PI]}
             ref={surfaceCameraContainerRef}
             onPointerDown={onCameraClick}
           >
-            {/* Camera position marker - red pyramid */}
-            <mesh
-              position={[0, 0, 0]}
-              rotation={[-Math.PI / 2, 0, 0]} // Point the pyramid tip outward from Earth's surface
-            >
-              <coneGeometry args={[0.2, 0.4, 4]} />
-              <meshBasicMaterial color="red" />
-            </mesh>
             <PerspectiveCamera
               position={[0, 0, 0]}
               rotation={[0, 0, 0]}
@@ -172,41 +185,27 @@ export default forwardRef(function Planet(
             />
           </mesh>
         )}
+
+        {/* Moon camera */}
         <PerspectiveCamera
           position={[0, 0, 0]}
           zoom={1}
           ref={moonCameraRef}
         />
-        <sphereGeometry args={[diameter, 128, 128]} />
 
-        {emitLight ? (
-          <>
-            <pointLight
-              position={[0, 0, 0]}
-              decay={1.1}
-              intensity={1400}
-            />
-            <MeshWobbleMaterial
-              attach="material"
-              map={threeTexture}
-              factor={0.01}
-              speed={1}
-            />
-          </>
-        ) : (
-          <meshPhongMaterial
-            attach="material"
-            map={threeTexture}
-            shininess={5}
-          />
-        )}
+        {/* Render the visual representation */}
+        {children}
       </mesh>
-      {showOrbit && (
+
+      {/* Orbit visualization */}
+      {showOrbit && orbitalDistance && orbitalPeriod && (
         <OrbitLabel
           radius={orbitalDistance}
           orbitalPeriod={orbitalPeriod}
           orbitOffset={orbitOffset}
-          targetPosition={ref?.current?.position}
+          targetPosition={
+            ref && 'current' in ref ? ref.current?.position : undefined
+          }
           segments={[
             'January',
             'February',

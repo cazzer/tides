@@ -3,6 +3,10 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { DateTime } from 'luxon'
 import Planet from './planet'
+import OrbitingBody from './OrbitingBody'
+import SunRenderer from './renderers/SunRenderer'
+import EarthRenderer from './renderers/EarthRenderer'
+import MoonRenderer from './renderers/MoonRenderer'
 import {
   scaleLog,
   scaleLinear,
@@ -100,15 +104,17 @@ export default function SolarSystem({
     <CameraProvider>
       <ambientLight intensity={1} />
 
-      <Planet
+      <OrbitingBody
         ref={sun}
-        emitLight
-        diameter={scaleDiameter(1392700000)}
         rotationPeriod={609.12 * 3600000}
-        texture={sunTexture}
         interactive={interactive}
-      />
-      <Planet
+      >
+        <SunRenderer
+          diameter={scaleDiameter(1392700000)}
+          texture={sunTexture}
+        />
+      </OrbitingBody>
+      <OrbitingBody
         surfaceCamera={earthCamera}
         moonCamera={moonCamera}
         ref={earth}
@@ -123,10 +129,14 @@ export default function SolarSystem({
         orbitOffset={angle}
         rotationOffset={2 * Math.PI * earthOffset.azimuth}
         axialTilt={23.4}
-        texture={earthTexture}
         interactive={interactive}
-      />
-      <Planet
+      >
+        <EarthRenderer
+          diameter={scaleDiameter(12742000)}
+          texture={earthTexture}
+        />
+      </OrbitingBody>
+      <OrbitingBody
         ref={moon}
         parent={earth}
         diameter={scaleDiameter(3474800)}
@@ -137,9 +147,13 @@ export default function SolarSystem({
         rotationPeriod={655.728 * 3600000}
         rotationOffset={2.5}
         axialTilt={-1.53}
-        texture={moonTexture}
         interactive={interactive}
-      />
+      >
+        <MoonRenderer
+          diameter={scaleDiameter(3474800)}
+          texture={moonTexture}
+        />
+      </OrbitingBody>
     </CameraProvider>
   )
 }
