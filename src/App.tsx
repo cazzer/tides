@@ -3,6 +3,8 @@ import { forwardRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { View, OrbitControls, OrthographicCamera } from '@react-three/drei'
 import useRefs from 'react-use-refs'
+import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
+import { ToneMappingMode, BlendFunction } from 'postprocessing'
 
 import SolarSystem from './solar-system'
 import { useStore } from './store'
@@ -20,6 +22,10 @@ export default function App() {
         shadows
         eventSource={document.getElementById('root')}
         className="canvas"
+        gl={{
+          toneMapping: THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 1.0,
+        }}
       >
         <View.Port />
       </Canvas>
