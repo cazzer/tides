@@ -35,12 +35,12 @@ void main() {
   vLayer0 = p0;
 
   vec3 p1 = position;
-  mat2 rot2 = rotate(t + .1);
+  mat2 rot2 = rotate(t + .6);
   p1.xz = rot2*p1.xz;
   vLayer1 = p1;
 
   vec3 p2 = position;
-  mat2 rot3 = rotate(t + .3);
+  mat2 rot3 = rotate(t + 1.2);
   p2.xy = rot3*p2.xy;
   vLayer2 = p2;
 

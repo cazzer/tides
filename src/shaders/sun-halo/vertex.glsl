@@ -10,22 +10,23 @@ varying vec3 vEyeVector;
 varying vec3 vWorldPosition;
 float PI = 3.1415926535897932384626433832795;
 
-mat2 rotate( float a) {
+mat2 rotate(float a) {
   float s = sin(a);
   float c = cos(a);
   return mat2(c, -s, s, c);
 }
 
 void main() {
-  // Calculate world position
+  // Calculate world position first
   vec4 worldPosition = modelMatrix * vec4(position, 1.0);
   vWorldPosition = worldPosition.xyz;
   
-  // Calculate eye vector in world space
-  vEyeVector = normalize(cameraPosition - vWorldPosition);
+  // Transform normal to world space using normalMatrix
+  // vNormal = normalize(normalMatrix * normal);
+  vNormal = normalize(mat3(modelMatrix) * normal);
   
-  // Transform normal to world space
-  vNormal = normalize(normalMatrix * normal);
+  // Calculate eye vector (for debugging - we'll recalc in fragment)
+  vEyeVector = normalize(cameraPosition - vWorldPosition);
 
   float t = time * .005;
 
@@ -46,5 +47,5 @@ void main() {
 
   vUv = uv;
   vPosition = position;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
