@@ -6,6 +6,21 @@ import { calculateOrbitPosition } from './utils'
 import { useCamera } from './camera'
 import { useStore } from './store'
 
+function formatClockDate(date: Date): string {
+  const weekday = date.toLocaleDateString(undefined, { weekday: 'long' })
+  const datePart = date.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+  const timePart = date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  return `${weekday}, ${datePart} ${timePart}`
+}
+
 export function OrbitLabel({
   radius,
   segments,
@@ -122,7 +137,7 @@ export function OrbitLabel({
           position={[coords.x, coords.y + 1.5, coords.z]}
           rotation={[-Math.PI / 2, 0, coords.angle]}
         >
-          {new Date(timestamp).toLocaleString()}
+          {formatClockDate(new Date(timestamp))}
         </Text>
       )}
 
@@ -239,7 +254,7 @@ export function OrbitLabel3D({
           letterSpacing={0.3}
           font={'/Roboto-light.json'}
         >
-          {new Date(timestamp).toLocaleString()}
+          {formatClockDate(new Date(timestamp))}
         </Text3D>
       )}
 

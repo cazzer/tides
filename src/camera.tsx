@@ -9,12 +9,19 @@ const CameraContext = createContext({
   handleFocus: null,
 })
 
-const FOCUS_VALUES: CameraFocus[] = ['clock', 'earth', 'sun', 'moon', 'location']
+const FOCUS_VALUES: CameraFocus[] = [
+  'clock',
+  'earth',
+  'sun',
+  'moon',
+  'location',
+]
 
 function getFocusForObject(object: Object3D): CameraFocus | null {
   let o: Object3D | null = object
   while (o) {
-    const focus = (o as Object3D & { userData?: { focus?: string } }).userData?.focus
+    const focus = (o as Object3D & { userData?: { focus?: string } }).userData
+      ?.focus
     if (focus && FOCUS_VALUES.includes(focus as CameraFocus)) {
       return focus as CameraFocus
     }
@@ -63,10 +70,10 @@ export const CameraProvider = ({ children }: { children: any }) => {
           cameraFocus === 'clock'
             ? clock
             : cameraFocus === 'earth'
-              ? earth
-              : cameraFocus === 'sun'
-                ? sun
-                : moon
+            ? earth
+            : cameraFocus === 'sun'
+            ? sun
+            : moon
         if (ref?.current) {
           if (cameraFocus === 'clock') {
             ref.current.getWorldPosition(target)
