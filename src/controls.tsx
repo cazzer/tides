@@ -9,8 +9,16 @@ import {
   IconPlayerTrackNext,
   IconEye,
 } from '@tabler/icons-react'
+import { DateTime } from 'luxon'
 import { useStore, type CameraFocus } from './store'
 import { truncateLatLon } from './utils'
+
+function formatDateInput(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 8)
+  if (digits.length <= 2) return digits
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
+}
 
 const FOCUS_OPTIONS: {
   value: CameraFocus
@@ -32,10 +40,20 @@ export default function Controls() {
     setCameraFocus,
     setLocation,
   } = useStore()
-  const [date, setDate] = useState<string>()
-  const [isFocused, setIsFocused] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
-  const dateRef = useRef<HTMLInputElement>(null)
+  const [dateInput, setDateInput] = useState('')
+
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDateInput(formatDateInput(e.target.value))
+  }
+
+  const handleDateSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const dt = DateTime.fromFormat(dateInput, 'MM/dd/yyyy')
+    if (dt.isValid) {
+      setJumpDate(dt.toJSDate())
+    }
+  }
 
   const handleLocationClick = () => {
     setLocationError(null)
@@ -53,27 +71,6 @@ export default function Controls() {
       (err) => setLocationError(err.message),
       { enableHighAccuracy: true }
     )
-  }
-
-  const onDateChange = (event) => {
-    setDate(event.target.value)
-  }
-
-  const handleDateSubmit = (event) => {
-    event.stopPropagation()
-    event.preventDefault()
-    setJumpDate(new Date(date))
-
-    if (dateRef.current) {
-      dateRef.current.blur()
-    }
-  }
-
-  const handleFocus = () => {
-    setIsFocused(true)
-  }
-  const handleBlur = () => {
-    setIsFocused(false)
   }
 
   return (
@@ -102,17 +99,13 @@ export default function Controls() {
       {locationError && <LocationError>{locationError}</LocationError>}
       <DateForm onSubmit={handleDateSubmit}>
         <DateInput
-          ref={dateRef}
           type="text"
-          placeholder="date (mm/dd/yyyy)"
-          onChange={onDateChange}
-          value={date}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
+          inputMode="numeric"
+          placeholder="mm/dd/yyyy"
+          value={dateInput}
+          onChange={handleDateChange}
+          maxLength={10}
         />
-        <Tooltip visible={isFocused}>
-          <p>Enter date in mm/dd/yyyy format and hit "return"</p>
-        </Tooltip>
       </DateForm>
     </ControlContainer>
   )
@@ -431,42 +424,19 @@ const SpeedOptionButton = styled.button`
 const DateForm = styled.form`
   margin: 0;
   min-width: 0;
-  position: relative;
 `
 
 const DateInput = styled.input`
   padding: 6px 10px;
-  width: 180px;
+  width: 120px;
   font-size: 16px;
   background-color: black;
   color: gray;
   outline: none;
   border: 1px gray solid;
   border-radius: 8px;
-`
 
-const Tooltip = styled.div<{ visible: boolean }>`
-  display: ${({ visible }) => (visible ? 'block' : 'none')};
-  opacity: ${({ visible }) => (visible ? 1 : 0)};
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 6px;
-  padding: 6px 10px;
-  background-color: darkslategray;
-  color: #eee;
-  max-width: 60vw;
-  border-radius: 8px;
-  z-index: 1000;
-
-  &::before {
-    content: '';
-    position: absolute;
-    bottom: 100%;
-    left: 16px;
-    margin-left: -4px;
-    border-width: 4px;
-    border-style: solid;
-    border-color: transparent transparent darkslategray transparent;
+  &::placeholder {
+    color: #555;
   }
 `
