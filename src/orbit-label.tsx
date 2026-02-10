@@ -1,9 +1,10 @@
 import * as THREE from 'three'
 import { useEffect, useRef } from 'react'
-import { useThree } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import { Text, Text3D } from '@react-three/drei'
 import { calculateOrbitPosition } from './utils'
 import { useCamera } from './camera'
+import { useStore } from './store'
 
 export function OrbitLabel({
   radius,
@@ -21,8 +22,21 @@ export function OrbitLabel({
   orbitOffset?: number
 }) {
   const dateRef = useRef()
+  const clockRef = useRef(null)
   const { handleFocus } = useCamera()
   const { camera, controls } = useThree()
+  const setPlanet = useStore((s) => s.setPlanet)
+
+  useEffect(() => {
+    setPlanet('clock', clockRef)
+  }, [setPlanet])
+
+  useFrame(() => {
+    if (dateRef.current) {
+      clockRef.current = dateRef.current
+      dateRef.current.userData.focus = 'clock'
+    }
+  })
 
   useEffect(() => {
     if (dateRef.current) {

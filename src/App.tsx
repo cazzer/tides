@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { forwardRef } from 'react'
+import { forwardRef, useEffect, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { View, OrbitControls, OrthographicCamera } from '@react-three/drei'
 import useRefs from 'react-use-refs'
@@ -7,66 +7,96 @@ import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
 import { ToneMappingMode, BlendFunction } from 'postprocessing'
 
 import SolarSystem from './solar-system'
-import { useStore } from './store'
+import { useStore, type CameraFocus } from './store'
 import Controls from './controls'
+
+const FOCUS_VALUES: CameraFocus[] = ['clock', 'earth', 'sun', 'moon']
 
 const matrix = new THREE.Matrix4()
 
 export default function App() {
   const [solarSystemView, earthView, moonView] = useRefs()
+  const cameraFocus = useStore((s) => s.cameraFocus)
+  const setCameraFocus = useStore((s) => s.setCameraFocus)
+
+  // Read ?focus= from URL on mount (before writing)
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get('focus')
+    if (focus && FOCUS_VALUES.includes(focus as CameraFocus)) {
+      setCameraFocus(focus as CameraFocus)
+    }
+  }, [setCameraFocus])
+
+  // Write focus to URL when it changes; skip first run so we don't overwrite URL before read
+  const isFirstWrite = useRef(true)
+  useEffect(() => {
+    if (isFirstWrite.current) {
+      isFirstWrite.current = false
+      return
+    }
+    const params = new URLSearchParams(window.location.search)
+    params.set('focus', cameraFocus)
+    const url = `${window.location.pathname}?${params.toString()}`
+    window.history.replaceState(null, '', url)
+  }, [cameraFocus])
 
   return (
     <div className="container">
       <Controls />
-      <Canvas
-        shadows
-        eventSource={document.getElementById('root')}
-        className="canvas"
-        gl={{
-          toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 1.0,
-        }}
-      >
-        <View.Port />
-      </Canvas>
-      <Panel
-        ref={solarSystemView}
-        gridArea="main"
-      >
-        <MainCamera />
-        <Scene
-          background="black"
-          matrix={matrix}
-          interactive
-          showOrbitLabels
-        />
-        <OrbitControls
-          maxDistance={80}
-          minDistance={5}
-          makeDefault
-        />
-      </Panel>
-      <Panel
-        ref={earthView}
-        gridArea="top"
-      >
-        <PanelCamera />
-        <Scene
-          background="black"
-          matrix={matrix}
-          earthCamera
-        />
-      </Panel>
-      <Panel
-        ref={moonView}
-        gridArea="bottom"
-      >
-        <Scene
-          background="black"
-          matrix={matrix}
-          moonCamera
-        />
-      </Panel>
+      <div className="viewports">
+        <Canvas
+          shadows
+          eventSource={document.getElementById('root')}
+          className="canvas"
+          gl={{
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1.0,
+          }}
+        >
+          <View.Port />
+        </Canvas>
+        <Panel
+          ref={solarSystemView}
+          gridArea="main"
+          label="Three Body System"
+        >
+          <MainCamera />
+          <Scene
+            background="black"
+            matrix={matrix}
+            interactive
+            showOrbitLabels
+          />
+          <OrbitControls
+            maxDistance={80}
+            minDistance={5}
+            makeDefault
+          />
+        </Panel>
+        <Panel
+          ref={earthView}
+          gridArea="top"
+          label="View from Earth"
+        >
+          <PanelCamera />
+          <Scene
+            background="black"
+            matrix={matrix}
+            earthCamera
+          />
+        </Panel>
+        <Panel
+          ref={moonView}
+          gridArea="bottom"
+          label="Moon Phase"
+        >
+          <Scene
+            background="black"
+            matrix={matrix}
+            moonCamera
+          />
+        </Panel>
+      </div>
     </div>
   )
 }
@@ -132,7 +162,12 @@ function PanelCamera() {
 // @ts-ignore
 const Panel = forwardRef(
   (
-    { gridArea, children, ...props }: { gridArea: string; children: any },
+    {
+      gridArea,
+      label,
+      children,
+      ...props
+    }: { gridArea: string; label?: string; children: any },
     fref
   ) => {
     return (
@@ -153,6 +188,7 @@ const Panel = forwardRef(
         >
           {children}
         </View>
+        {label && <span className="panel-label">{label}</span>}
       </div>
     )
   }

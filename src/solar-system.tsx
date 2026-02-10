@@ -46,6 +46,8 @@ export default function SolarSystem({
   const moon = useRef()
 
   useEffect(() => {
+    setPlanet('earth', earth)
+    setPlanet('sun', sun)
     setPlanet('moon', moon)
   }, [])
 
@@ -106,6 +108,7 @@ export default function SolarSystem({
 
       <OrbitingBody
         ref={sun}
+        focusKey="sun"
         rotationPeriod={609.12 * 3600000}
         interactive={interactive}
       >
@@ -118,6 +121,7 @@ export default function SolarSystem({
         surfaceCamera={earthCamera}
         moonCamera={moonCamera}
         ref={earth}
+        focusKey="earth"
         storeLabel="earth"
         parent={sun}
         showOrbit={showOrbitLabels}
@@ -138,6 +142,7 @@ export default function SolarSystem({
       </OrbitingBody>
       <OrbitingBody
         ref={moon}
+        focusKey="moon"
         parent={earth}
         diameter={scaleDiameter(3474800)}
         orbitalDistance={scaleOrbit(384400000)}

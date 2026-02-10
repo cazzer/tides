@@ -36,6 +36,7 @@ interface OrbitingBodyProps {
   interactive?: boolean
   storeLabel?: string
   showOrbit?: boolean
+  focusKey?: 'clock' | 'earth' | 'sun' | 'moon'
 
   // Visual renderer
   children: React.ReactNode
@@ -56,6 +57,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     interactive = false,
     storeLabel,
     showOrbit = false,
+    focusKey,
     children,
   },
   ref
@@ -90,6 +92,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
 
     if (ref && 'current' in ref && ref.current) {
       ref.current.rotation.y = rotation
+      if (focusKey) ref.current.userData.focus = focusKey
     }
 
     // calculate orbital position if this body orbits something
