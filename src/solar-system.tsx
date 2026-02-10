@@ -84,6 +84,7 @@ export default function SolarSystem({
 
   const earthOrbitalPeriod = 365.256 * 24 * 3600000
   const start = DateTime.utc(2024, 1, 1, 0, 0, 0)
+  const epochMs = start.toMillis()
   const end = DateTime.utc(2024, 12, 31, 23, 59, 59)
   const summerSolstice = DateTime.utc(2024, 6, 20, 20, 51, 0)
 
@@ -127,6 +128,7 @@ export default function SolarSystem({
         orbitalPeriod={earthOrbitalPeriod}
         orbitalInclination={0}
         orbitOffset={angle}
+        orbitEpochMs={epochMs}
         rotationOffset={2 * Math.PI * earthOffset.azimuth}
         axialTilt={23.4}
         interactive={interactive}
@@ -145,6 +147,7 @@ export default function SolarSystem({
         orbitalPeriod={655.728 * 3600000}
         orbitOffset={(8 / 180) * Math.PI}
         orbitalInclination={-21}
+        orbitEpochMs={epochMs}
         rotationPeriod={655.728 * 3600000}
         rotationOffset={2.5}
         axialTilt={-1.53}

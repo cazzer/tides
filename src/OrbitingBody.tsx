@@ -19,6 +19,7 @@ interface OrbitingBodyProps {
   orbitalPeriod?: number
   orbitalInclination?: number
   orbitOffset?: number
+  orbitEpochMs?: number
   parent?: { current: THREE.Mesh }
 
   // Rotation properties
@@ -48,6 +49,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     orbitalPeriod,
     orbitalInclination = 0,
     orbitOffset = 0,
+    orbitEpochMs = 0,
     parent,
     rotationPeriod,
     rotationOffset = 0,
@@ -120,7 +122,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
         radius: orbitalDistance,
         period: orbitalPeriod,
         // @ts-ignore
-        time: state.timestamp || Date.now(),
+        time: (state.timestamp || Date.now()) - orbitEpochMs,
         centerX: parent?.current.position.x || 0,
         centerZ: parent?.current.position.z || 0,
         centerY: 0,
