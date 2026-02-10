@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
+import { useTexture } from '@react-three/drei'
 import { DateTime } from 'luxon'
 import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
@@ -12,15 +13,17 @@ import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
 import { useStore } from './store'
 
-import sunTexture from './assets/sun-8k.jpg'
-import earthTexture from './assets/earth-8k-day.jpg'
-import moonTexture from './assets/moon-8k.jpg'
+import earthTexture from './assets/earth-day.jpg'
+import moonTexture from './assets/moon.jpg'
 import { interpolateValue } from './utils'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
 const scaleOrbit = scaleLinear()
   .domain([384400000, 149597870700])
   .range([10, 50])
+
+useTexture.preload(earthTexture)
+useTexture.preload(moonTexture)
 
 export default function SolarSystem({
   earthCamera = false,
@@ -111,7 +114,6 @@ export default function SolarSystem({
       >
         <SunRenderer
           diameter={scaleDiameter(1392700000)}
-          texture={sunTexture}
         />
       </OrbitingBody>
       <OrbitingBody

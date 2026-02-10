@@ -1,4 +1,5 @@
 import { useLoader, useFrame } from '@react-three/fiber'
+import { useTexture } from '@react-three/drei'
 import { useRef } from 'react'
 import * as THREE from 'three'
 
@@ -9,6 +10,13 @@ import earthCloudsTexture from '../assets/earth-clouds.jpg'
 import earthCloudsAlpha from '../assets/earth-clouds-alpha.jpg'
 import earthNightTexture from '../assets/earth-night.jpg'
 import earthBumpMap from '../assets/earth-bump.jpg'
+
+useTexture.preload(earthNormalMap)
+useTexture.preload(earthSpecularMap)
+useTexture.preload(earthCloudsTexture)
+useTexture.preload(earthCloudsAlpha)
+useTexture.preload(earthNightTexture)
+useTexture.preload(earthBumpMap)
 
 interface EarthRendererProps {
   diameter: number

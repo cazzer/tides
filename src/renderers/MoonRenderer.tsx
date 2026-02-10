@@ -1,4 +1,5 @@
 import { useLoader } from '@react-three/fiber'
+import { useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 
 interface MoonRendererProps {
@@ -7,6 +8,7 @@ interface MoonRendererProps {
 }
 
 export default function MoonRenderer({ diameter, texture }: MoonRendererProps) {
+  useTexture.preload(texture)
   const threeTexture = useLoader(THREE.TextureLoader, texture)
 
   return (

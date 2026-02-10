@@ -16,14 +16,12 @@ const REFLECTION_LAYER = 1
 
 interface SunRendererProps {
   diameter: number
-  texture: string
   intensity?: number
   decay?: number
 }
 
 export default function SunRenderer({
   diameter,
-  texture,
   intensity = 1400,
   decay = 1.1,
 }: SunRendererProps) {
