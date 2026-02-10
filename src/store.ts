@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 export type CameraFocus = 'clock' | 'earth' | 'sun' | 'moon' | 'location'
+export type PanelKey = 'main' | 'top' | 'bottom'
 
 const SPEED_VALUES = [1, 60 * 60, 60 * 60 * 24, 60 * 60 * 24 * 30] as const
 
@@ -18,6 +19,14 @@ function getInitialCameraFocus(): CameraFocus {
   return (focus === 'clock' || focus === 'earth' || focus === 'sun' || focus === 'moon' || focus === 'location')
     ? focus
     : 'clock'
+}
+
+function getInitialPanel(): PanelKey {
+  if (typeof window === 'undefined') return 'main'
+  const panel = new URLSearchParams(window.location.search).get('panel')
+  return (panel === 'main' || panel === 'top' || panel === 'bottom')
+    ? panel
+    : 'main'
 }
 
 import { truncateLatLon } from './utils'
@@ -47,11 +56,13 @@ export const useStore = create<{
   earthRadius: number | undefined
   timeScale: number
   cameraFocus: CameraFocus
+  mainPanel: PanelKey
   location: Location | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
   setCameraFocus: (focus: CameraFocus) => void
+  setMainPanel: (panel: PanelKey) => void
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
@@ -65,11 +76,13 @@ export const useStore = create<{
   earthRadius: undefined,
   timeScale: getInitialTimeScale(),
   cameraFocus: getInitialCameraFocus(),
+  mainPanel: getInitialPanel(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),
   setCameraFocus: (cameraFocus: CameraFocus) => set({ cameraFocus }),
+  setMainPanel: (mainPanel: PanelKey) => set({ mainPanel }),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,
