@@ -1,7 +1,8 @@
 import styled from 'styled-components'
 import { useRef, useState, useEffect } from 'react'
-import { IconClock, IconWorld, IconSun, IconMoon } from '@tabler/icons-react'
+import { IconClock, IconWorld, IconSun, IconMoon, IconMapPin } from '@tabler/icons-react'
 import { useStore, type CameraFocus } from './store'
+import { truncateLatLon } from './utils'
 
 const FOCUS_OPTIONS: {
   value: CameraFocus
@@ -15,11 +16,30 @@ const FOCUS_OPTIONS: {
 ]
 
 export default function Controls() {
-  const { timeScale, setTimeScale, setJumpDate, cameraFocus, setCameraFocus } =
+  const { timeScale, setTimeScale, setJumpDate, cameraFocus, setCameraFocus, setLocation } =
     useStore()
   const [date, setDate] = useState<string>()
   const [isFocused, setIsFocused] = useState(false)
+  const [locationError, setLocationError] = useState<string | null>(null)
   const dateRef = useRef<HTMLInputElement>(null)
+
+  const handleLocationClick = () => {
+    setLocationError(null)
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation not supported')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocation({
+          lat: truncateLatLon(pos.coords.latitude),
+          lon: truncateLatLon(pos.coords.longitude),
+        })
+      },
+      (err) => setLocationError(err.message),
+      { enableHighAccuracy: true }
+    )
+  }
 
   const onDateChange = (event) => {
     setDate(event.target.value)
@@ -59,6 +79,15 @@ export default function Controls() {
           { value: 60 * 60 * 24 * 30, label: '1 Month per Second' },
         ]}
       />
+      <LocationButton
+        type="button"
+        onClick={handleLocationClick}
+        title="Use my location"
+        aria-label="Use my location"
+      >
+        <IconMapPin size={20} stroke={2} />
+      </LocationButton>
+      {locationError && <LocationError>{locationError}</LocationError>}
       <DateForm onSubmit={handleDateSubmit}>
         <DateInput
           ref={dateRef}
@@ -258,6 +287,30 @@ const FocusTrigger = styled.button`
   &:hover {
     color: #aaa;
   }
+`
+
+const LocationButton = styled.button`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  background-color: black;
+  color: gray;
+  border: 1px gray solid;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    color: #aaa;
+  }
+`
+
+const LocationError = styled.span`
+  font-size: 12px;
+  color: #c66;
 `
 
 const FocusMenu = styled.div`

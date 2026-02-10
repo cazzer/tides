@@ -66,8 +66,9 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   const surfaceCameraRef = useRef<any>()
   const moonCameraRef = useRef<any>()
   const surfaceCameraContainerRef = useRef<THREE.Mesh>()
+  const flagRef = useRef<THREE.Group>(null)
   const { get, set } = useThree(({ get, set }) => ({ get, set }))
-  const { moon } = useStore()
+  const { moon, location } = useStore()
 
   useEffect(() => {
     if (surfaceCamera) {
@@ -126,10 +127,10 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
       moonCameraRef.current.lookAt(moon.current.position)
     }
 
-    // calculate surface camera position
+    // calculate surface camera position (use location from store if set)
     if (surfaceCameraContainerRef.current) {
-      const lat = -30
-      const lng = 0
+      const lat = location?.lat ?? -30
+      const lng = location?.lon ?? 0
       const { position, rotation } = calculateLocationAndRotationForLatLng(
         lat,
         lng,
@@ -144,6 +145,21 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
         surfaceCameraContainerRef.current.rotation.y = rotation.y
         surfaceCameraContainerRef.current.rotation.z = rotation.z
       }
+    }
+
+    // position flag on earth when location is set
+    if (flagRef.current && location && storeLabel === 'earth') {
+      const { position: pos } = calculateLocationAndRotationForLatLng(
+        location.lat,
+        location.lon,
+        diameter
+      )
+      flagRef.current.position.set(pos.x, pos.y, pos.z)
+      const dir = new THREE.Vector3(pos.x, pos.y, pos.z).normalize()
+      flagRef.current.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        dir
+      )
     }
   })
 
@@ -198,6 +214,20 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
 
         {/* Render the visual representation */}
         {children}
+
+        {/* Location flag on earth when geolocation is set (only in main view, not in "View from Earth" camera) */}
+        {storeLabel === 'earth' && location && !surfaceCamera && (
+          <group ref={flagRef}>
+            <mesh position={[0, 0.15, 0]}>
+              <cylinderGeometry args={[0.02, 0.02, 0.3, 8]} />
+              <meshBasicMaterial color="#333" />
+            </mesh>
+            <mesh position={[0, 0.35, 0.08]} rotation={[0, 0, -Math.PI / 2]}>
+              <planeGeometry args={[0.15, 0.1]} />
+              <meshBasicMaterial color="#c33" side={THREE.DoubleSide} />
+            </mesh>
+          </group>
+        )}
       </mesh>
 
       {/* Orbit visualization */}

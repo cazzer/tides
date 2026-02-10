@@ -17,6 +17,11 @@ export function degreesToRadians(degrees: number): number {
   return (degrees * Math.PI) / 180
 }
 
+/** Truncate to 4 decimal places for lat/lon */
+export function truncateLatLon(n: number): number {
+  return Math.trunc(n * 10000) / 10000
+}
+
 export const THREE_FPS = 120
 
 interface OrbitParams {

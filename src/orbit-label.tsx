@@ -122,7 +122,7 @@ export function OrbitLabel({
           position={[coords.x, coords.y + 1.5, coords.z]}
           rotation={[-Math.PI / 2, 0, coords.angle]}
         >
-          {new Date(timestamp).toUTCString()}
+          {new Date(timestamp).toLocaleString()}
         </Text>
       )}
 
@@ -239,7 +239,7 @@ export function OrbitLabel3D({
           letterSpacing={0.3}
           font={'/Roboto-light.json'}
         >
-          {new Date(timestamp).toUTCString()}
+          {new Date(timestamp).toLocaleString()}
         </Text3D>
       )}
 

@@ -18,6 +18,7 @@ export default function App() {
   const [solarSystemView, earthView, moonView] = useRefs()
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
+  const location = useStore((s) => s.location)
 
   // Read ?focus= from URL on mount (before writing)
   useEffect(() => {
@@ -36,9 +37,16 @@ export default function App() {
     }
     const params = new URLSearchParams(window.location.search)
     params.set('focus', cameraFocus)
+    if (location) {
+      params.set('lat', String(location.lat))
+      params.set('lon', String(location.lon))
+    } else {
+      params.delete('lat')
+      params.delete('lon')
+    }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus])
+  }, [cameraFocus, location])
 
   return (
     <div className="container">
