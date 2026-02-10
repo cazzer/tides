@@ -6,6 +6,9 @@ import { calculateLocationAndRotationForLatLng } from './utils'
 
 const thumbtackUrl = new URL('./assets/Thumbtack.glb', import.meta.url).href
 
+/** Layer for the location pin; only the main "Three Body System" camera enables it. */
+export const PIN_LAYER = 2
+
 interface LocationPinProps {
   lat: number
   lon: number
@@ -19,6 +22,7 @@ export const LocationPin = forwardRef<THREE.Group, LocationPinProps>(
 
     const { clone, tipOffset } = useMemo(() => {
       const c = scene.clone()
+      c.traverse((child) => child.layers.set(PIN_LAYER))
       c.updateWorldMatrix(true, true)
       const bbox = new THREE.Box3().setFromObject(c)
       const center = new THREE.Vector3()
@@ -41,10 +45,18 @@ export const LocationPin = forwardRef<THREE.Group, LocationPinProps>(
         .multiplyScalar(tipOffset * scale * 0.75)
         .add(pos)
       ref.current.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
+      ;(
+        ref.current as THREE.Object3D & { userData: { focus?: string } }
+      ).userData.focus = 'location'
+      ref.current.layers.set(PIN_LAYER)
     })
 
     return (
-      <group ref={ref} scale={[scale, scale, scale]}>
+      <group
+        ref={ref}
+        scale={[scale, scale, scale]}
+        layers={PIN_LAYER}
+      >
         <primitive object={clone} />
       </group>
     )

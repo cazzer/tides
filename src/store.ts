@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type CameraFocus = 'clock' | 'earth' | 'sun' | 'moon'
+export type CameraFocus = 'clock' | 'earth' | 'sun' | 'moon' | 'location'
 
 const SPEED_VALUES = [1, 60 * 60, 60 * 60 * 24, 60 * 60 * 24 * 30] as const
 
@@ -15,7 +15,7 @@ function getInitialTimeScale(): number {
 function getInitialCameraFocus(): CameraFocus {
   if (typeof window === 'undefined') return 'clock'
   const focus = new URLSearchParams(window.location.search).get('focus')
-  return (focus === 'clock' || focus === 'earth' || focus === 'sun' || focus === 'moon')
+  return (focus === 'clock' || focus === 'earth' || focus === 'sun' || focus === 'moon' || focus === 'location')
     ? focus
     : 'clock'
 }
@@ -43,10 +43,13 @@ export const useStore = create<{
   moon: any
   sun: any
   clock: any
+  locationPin: any
+  earthRadius: number | undefined
   timeScale: number
   cameraFocus: CameraFocus
   location: Location | null
   setPlanet: Function
+  setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
   setCameraFocus: (focus: CameraFocus) => void
   setLocation: (location: Location | null) => void
@@ -58,13 +61,20 @@ export const useStore = create<{
   moon: undefined,
   sun: undefined,
   clock: undefined,
+  locationPin: undefined,
+  earthRadius: undefined,
   timeScale: getInitialTimeScale(),
   cameraFocus: getInitialCameraFocus(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
+  setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),
   setCameraFocus: (cameraFocus: CameraFocus) => set({ cameraFocus }),
-  setLocation: (location: Location | null) => set({ location }),
+  setLocation: (location: Location | null) =>
+    set((s) => ({
+      location,
+      cameraFocus: location === null && s.cameraFocus === 'location' ? 'earth' : s.cameraFocus,
+    })),
   jumpDate: null,
   jumpDateSetAt: null,
   setJumpDate: (date: Date) =>

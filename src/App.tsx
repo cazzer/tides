@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { forwardRef, useEffect, useRef } from 'react'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { View, OrbitControls, OrthographicCamera } from '@react-three/drei'
 import useRefs from 'react-use-refs'
 import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
@@ -9,8 +9,15 @@ import { ToneMappingMode, BlendFunction } from 'postprocessing'
 import SolarSystem from './solar-system'
 import { useStore, type CameraFocus } from './store'
 import Controls from './controls'
+import { PIN_LAYER } from './LocationPin'
 
-const FOCUS_VALUES: CameraFocus[] = ['clock', 'earth', 'sun', 'moon']
+const FOCUS_VALUES: CameraFocus[] = [
+  'clock',
+  'earth',
+  'sun',
+  'moon',
+  'location',
+]
 
 const matrix = new THREE.Matrix4()
 
@@ -71,6 +78,7 @@ export default function App() {
           label="Three Body System"
         >
           <MainCamera />
+          <EnablePinLayerForCamera />
           <Scene
             background="black"
             matrix={matrix}
@@ -151,10 +159,19 @@ function MainCamera() {
   )
 }
 
+/** Ensures the main view's camera sees the location pin (PIN_LAYER). Only used in the main panel. */
+function EnablePinLayerForCamera() {
+  const { camera } = useThree()
+  useFrame(() => {
+    camera.layers.enable(PIN_LAYER)
+  })
+  return null
+}
+
 function PanelCamera() {
   const { earth } = useStore()
-  if (!earth) {
-    return
+  if (!earth?.current) {
+    return null
   }
 
   return (

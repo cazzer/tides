@@ -2,13 +2,14 @@ import { createContext, useContext, useState, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { Vector3, Matrix4, type Object3D } from 'three'
 import { useStore, type CameraFocus } from './store'
+import { calculateLocationAndRotationForLatLng } from './utils'
 
 const CameraContext = createContext({
   focusedObject: null,
   handleFocus: null,
 })
 
-const FOCUS_VALUES: CameraFocus[] = ['clock', 'earth', 'sun', 'moon']
+const FOCUS_VALUES: CameraFocus[] = ['clock', 'earth', 'sun', 'moon', 'location']
 
 function getFocusForObject(object: Object3D): CameraFocus | null {
   let o: Object3D | null = object
@@ -34,27 +35,46 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const sun = useStore((s) => s.sun)
   const moon = useStore((s) => s.moon)
   const clock = useStore((s) => s.clock)
+  const locationPin = useStore((s) => s.locationPin)
+  const location = useStore((s) => s.location)
+  const earthRadius = useStore((s) => s.earthRadius)
 
   useFrame(() => {
     const target = new Vector3()
     let hasTarget = false
 
     if (cameraFocus) {
-      const ref =
-        cameraFocus === 'clock'
-          ? clock
-          : cameraFocus === 'earth'
-            ? earth
-            : cameraFocus === 'sun'
-              ? sun
-              : moon
-      if (ref?.current) {
-        if (cameraFocus === 'clock') {
-          ref.current.getWorldPosition(target)
-        } else {
-          target.copy(ref.current.position)
+      if (cameraFocus === 'location') {
+        if (locationPin?.current) {
+          locationPin.current.getWorldPosition(target)
+          hasTarget = true
+        } else if (location && earth?.current && earthRadius != null) {
+          const { position } = calculateLocationAndRotationForLatLng(
+            location.lat,
+            location.lon,
+            earthRadius
+          )
+          target.set(position.x, position.y, position.z)
+          earth.current.localToWorld(target)
+          hasTarget = true
         }
-        hasTarget = true
+      } else {
+        const ref =
+          cameraFocus === 'clock'
+            ? clock
+            : cameraFocus === 'earth'
+              ? earth
+              : cameraFocus === 'sun'
+                ? sun
+                : moon
+        if (ref?.current) {
+          if (cameraFocus === 'clock') {
+            ref.current.getWorldPosition(target)
+          } else {
+            target.copy(ref.current.position)
+          }
+          hasTarget = true
+        }
       }
     }
 

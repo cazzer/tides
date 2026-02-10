@@ -39,6 +39,7 @@ export default function Controls() {
     cameraFocus,
     setCameraFocus,
     setLocation,
+    location,
   } = useStore()
   const [locationError, setLocationError] = useState<string | null>(null)
   const [dateInput, setDateInput] = useState('')
@@ -78,7 +79,18 @@ export default function Controls() {
       <FocusDropdown
         value={cameraFocus}
         onChange={setCameraFocus}
-        options={FOCUS_OPTIONS}
+        options={
+          location
+            ? [
+                ...FOCUS_OPTIONS,
+                {
+                  value: 'location' as const,
+                  Icon: IconMapPin,
+                  title: 'My Location',
+                },
+              ]
+            : FOCUS_OPTIONS
+        }
       />
       <SpeedDropdown
         value={timeScale}
@@ -198,7 +210,6 @@ function FocusDropdown({
     return () => document.removeEventListener('mousedown', onOutside)
   }, [open])
 
-  const [hoveredOption, setHoveredOption] = useState<CameraFocus | null>(null)
   const current = options.find((o) => o.value === value)
   const CurrentIcon = current?.Icon ?? IconClock
   const label = current?.title ?? 'Clock'
@@ -226,28 +237,21 @@ function FocusDropdown({
       {open && (
         <FocusMenu>
           {options.map(({ value: v, Icon, title }) => (
-            <FocusOptionWrap
+            <FocusOption
               key={v}
-              onMouseEnter={() => setHoveredOption(v)}
-              onMouseLeave={() => setHoveredOption(null)}
+              type="button"
+              onClick={() => {
+                onChange(v)
+                setOpen(false)
+              }}
+              aria-label={title}
             >
-              <FocusOption
-                type="button"
-                onClick={() => {
-                  onChange(v)
-                  setOpen(false)
-                }}
-                aria-label={title}
-              >
-                <Icon
-                  size={20}
-                  stroke={2}
-                />
-              </FocusOption>
-              {hoveredOption === v && (
-                <FocusOptionTooltip>{title}</FocusOptionTooltip>
-              )}
-            </FocusOptionWrap>
+              <Icon
+                size={18}
+                stroke={2}
+              />
+              <span>{title}</span>
+            </FocusOption>
           ))}
         </FocusMenu>
       )}
@@ -272,37 +276,6 @@ const ControlContainer = styled.section`
 
 const FocusDropdownWrap = styled.div`
   position: relative;
-`
-
-const FocusOptionWrap = styled.div`
-  position: relative;
-`
-
-const FocusOptionTooltip = styled.div`
-  position: absolute;
-  top: 50%;
-  left: 100%;
-  transform: translateY(-50%);
-  margin-left: 8px;
-  padding: 4px 8px;
-  font-size: 12px;
-  white-space: nowrap;
-  background-color: darkslategray;
-  color: #eee;
-  border-radius: 6px;
-  pointer-events: none;
-  z-index: 1001;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    right: 100%;
-    margin-top: -4px;
-    border-width: 4px;
-    border-style: solid;
-    border-color: transparent darkslategray transparent transparent;
-  }
 `
 
 const FocusTrigger = styled.button`
@@ -385,10 +358,11 @@ const FocusMenu = styled.div`
 const FocusOption = styled.button`
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 36px;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 120px;
   height: 36px;
-  padding: 0;
+  padding: 0 10px;
   margin: 0;
   background: transparent;
   color: gray;

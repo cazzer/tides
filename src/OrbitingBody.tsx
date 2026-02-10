@@ -69,7 +69,18 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   const surfaceCameraContainerRef = useRef<THREE.Mesh>()
   const flagRef = useRef<THREE.Group>(null)
   const { get, set } = useThree(({ get, set }) => ({ get, set }))
-  const { moon, location } = useStore()
+  const { moon, location, setPlanet, setEarthRadius } = useStore()
+
+  useEffect(() => {
+    setPlanet('locationPin', location ? flagRef : undefined)
+  }, [location, setPlanet])
+
+  useEffect(() => {
+    if (storeLabel === 'earth') {
+      setEarthRadius(diameter)
+      return () => setEarthRadius(undefined)
+    }
+  }, [storeLabel, diameter, setEarthRadius])
 
   useEffect(() => {
     if (surfaceCamera) {
@@ -147,7 +158,6 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
         surfaceCameraContainerRef.current.rotation.z = rotation.z
       }
     }
-
   })
 
   const onClick = (event) => {
