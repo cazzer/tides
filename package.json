@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "convert:stars": "node scripts/convertStars.mjs"
+    "convert:stars": "node scripts/convertStars.mjs",
+    "textures:2k": "bash scripts/resize-textures-2k.sh"
   },
   "dependencies": {
     "@emotion/styled": "^11.14.1",

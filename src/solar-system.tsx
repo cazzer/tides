@@ -13,8 +13,10 @@ import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
 import { useStore } from './store'
 
-import earthTexture from './assets/earth-day.jpg'
-import moonTexture from './assets/moon.jpg'
+import earthTextureHigh from './assets/earth-day.jpg'
+import earthTextureLow from './assets/earth-day-2k.jpg'
+import moonTextureHigh from './assets/moon.jpg'
+import moonTextureLow from './assets/moon-2k.jpg'
 import { interpolateValue } from './utils'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
@@ -22,8 +24,7 @@ const scaleOrbit = scaleLinear()
   .domain([384400000, 149597870700])
   .range([10, 50])
 
-useTexture.preload(earthTexture)
-useTexture.preload(moonTexture)
+useTexture.preload(earthTextureHigh)
 
 export default function SolarSystem({
   earthCamera = false,
@@ -36,6 +37,10 @@ export default function SolarSystem({
   interactive?: boolean
   showOrbitLabels?: boolean
 }) {
+  const earthTexture = getEarthTexture()
+  const moonTexture = getMoonTexture()
+  useTexture.preload(earthTexture)
+  useTexture.preload(moonTexture)
   const { setPlanet, timeScale, jumpDate, jumpDateSetAt, setJumpDate } =
     useStore()
   const sun = useRef(null)
@@ -162,6 +167,29 @@ export default function SolarSystem({
       </OrbitingBody>
     </CameraProvider>
   )
+}
+
+function getMoonTexture() {
+  if (typeof window === 'undefined') return moonTextureHigh
+  const quality = getQualityOverride()
+  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
+  const useLow = quality === 'low' || (quality !== 'high' && isMobile)
+  return useLow ? moonTextureLow : moonTextureHigh
+}
+
+function getEarthTexture() {
+  if (typeof window === 'undefined') return earthTextureHigh
+  const quality = getQualityOverride()
+  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
+  const useLow = quality === 'low' || (quality !== 'high' && isMobile)
+  return useLow ? earthTextureLow : earthTextureHigh
+}
+
+function getQualityOverride() {
+  if (typeof window === 'undefined') return null
+  const value = new URLSearchParams(window.location.search).get('quality')
+  if (value === 'low' || value === 'high') return value
+  return null
 }
 
 function fitCameraToObjects(camera, objects, controls) {

@@ -4,19 +4,18 @@ import { useRef } from 'react'
 import * as THREE from 'three'
 
 // Import assets directly
-import earthNormalMap from '../assets/earth-normal.jpg'
-import earthSpecularMap from '../assets/earth-specular.jpg'
-import earthCloudsTexture from '../assets/earth-clouds.jpg'
-import earthCloudsAlpha from '../assets/earth-clouds-alpha.jpg'
-import earthNightTexture from '../assets/earth-night.jpg'
-import earthBumpMap from '../assets/earth-bump.jpg'
-
-useTexture.preload(earthNormalMap)
-useTexture.preload(earthSpecularMap)
-useTexture.preload(earthCloudsTexture)
-useTexture.preload(earthCloudsAlpha)
-useTexture.preload(earthNightTexture)
-useTexture.preload(earthBumpMap)
+import earthNormalMapHigh from '../assets/earth-normal.jpg'
+import earthNormalMapLow from '../assets/earth-normal-2k.jpg'
+import earthSpecularMapHigh from '../assets/earth-specular.jpg'
+import earthSpecularMapLow from '../assets/earth-specular-2k.jpg'
+import earthCloudsTextureHigh from '../assets/earth-clouds.jpg'
+import earthCloudsTextureLow from '../assets/earth-clouds-2k.jpg'
+import earthCloudsAlphaHigh from '../assets/earth-clouds-alpha.jpg'
+import earthCloudsAlphaLow from '../assets/earth-clouds-alpha-2k.jpg'
+import earthNightTextureHigh from '../assets/earth-night.jpg'
+import earthNightTextureLow from '../assets/earth-night-2k.jpg'
+import earthBumpMapHigh from '../assets/earth-bump.jpg'
+import earthBumpMapLow from '../assets/earth-bump-2k.jpg'
 
 interface EarthRendererProps {
   diameter: number
@@ -27,17 +26,26 @@ export default function EarthRenderer({
   diameter,
   texture,
 }: EarthRendererProps) {
+  const textureSet = getEarthTextureSet(texture)
+
+  useTexture.preload(textureSet.normal)
+  useTexture.preload(textureSet.specular)
+  useTexture.preload(textureSet.clouds)
+  useTexture.preload(textureSet.cloudsAlpha)
+  useTexture.preload(textureSet.night)
+  useTexture.preload(textureSet.bump)
+
   const cloudRef = useRef<THREE.Mesh>(null)
   const atmosphereRef = useRef<THREE.Mesh>(null)
 
   // Load textures using imported paths
   const earthTexture = useLoader(THREE.TextureLoader, texture)
-  const normalMap = useLoader(THREE.TextureLoader, earthNormalMap)
-  const specularMap = useLoader(THREE.TextureLoader, earthSpecularMap)
-  const cloudsTexture = useLoader(THREE.TextureLoader, earthCloudsTexture)
-  const alphaMap = useLoader(THREE.TextureLoader, earthCloudsAlpha)
-  const nightTexture = useLoader(THREE.TextureLoader, earthNightTexture)
-  const bumpTexture = useLoader(THREE.TextureLoader, earthBumpMap)
+  const normalMap = useLoader(THREE.TextureLoader, textureSet.normal)
+  const specularMap = useLoader(THREE.TextureLoader, textureSet.specular)
+  const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
+  const alphaMap = useLoader(THREE.TextureLoader, textureSet.cloudsAlpha)
+  const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
+  const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
 
   // TODO: Add GeoTIFF loader for displacement mapping
   // const displacementMap = useLoader(GeoTIFFLoader, '/assets/earth-elevation.tif')
@@ -97,4 +105,51 @@ export default function EarthRenderer({
       </mesh> */}
     </group>
   )
+}
+
+function getEarthTextureSet(baseTexture: string) {
+  if (typeof window === 'undefined') {
+    return {
+      day: baseTexture,
+      normal: earthNormalMapHigh,
+      specular: earthSpecularMapHigh,
+      clouds: earthCloudsTextureHigh,
+      cloudsAlpha: earthCloudsAlphaHigh,
+      night: earthNightTextureHigh,
+      bump: earthBumpMapHigh,
+    }
+  }
+
+  const quality = getQualityOverride()
+  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
+  const useLow = quality === 'low' || (quality !== 'high' && isMobile)
+
+  if (!useLow) {
+    return {
+      day: baseTexture,
+      normal: earthNormalMapHigh,
+      specular: earthSpecularMapHigh,
+      clouds: earthCloudsTextureHigh,
+      cloudsAlpha: earthCloudsAlphaHigh,
+      night: earthNightTextureHigh,
+      bump: earthBumpMapHigh,
+    }
+  }
+
+  return {
+    day: baseTexture,
+    normal: earthNormalMapLow,
+    specular: earthSpecularMapLow,
+    clouds: earthCloudsTextureLow,
+    cloudsAlpha: earthCloudsAlphaLow,
+    night: earthNightTextureLow,
+    bump: earthBumpMapLow,
+  }
+}
+
+function getQualityOverride() {
+  if (typeof window === 'undefined') return null
+  const value = new URLSearchParams(window.location.search).get('quality')
+  if (value === 'low' || value === 'high') return value
+  return null
 }
