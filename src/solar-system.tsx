@@ -6,6 +6,7 @@ import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
+import Starfield from './renderers/Starfield'
 import { scaleLog, scaleLinear, easeExpInOut } from 'd3'
 import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
@@ -34,9 +35,9 @@ export default function SolarSystem({
 }) {
   const { setPlanet, timeScale, jumpDate, jumpDateSetAt, setJumpDate } =
     useStore()
-  const sun = useRef()
-  const earth = useRef()
-  const moon = useRef()
+  const sun = useRef(null)
+  const earth = useRef(null)
+  const moon = useRef(null)
 
   useEffect(() => {
     setPlanet('earth', earth)
@@ -98,6 +99,8 @@ export default function SolarSystem({
   return (
     <CameraProvider>
       <ambientLight intensity={1} />
+
+      <Starfield />
 
       <OrbitingBody
         ref={sun}

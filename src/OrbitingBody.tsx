@@ -64,9 +64,9 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   ref
 ) {
   const { handleFocus } = useCamera()
-  const surfaceCameraRef = useRef<any>()
-  const moonCameraRef = useRef<any>()
-  const surfaceCameraContainerRef = useRef<THREE.Mesh>()
+  const surfaceCameraRef = useRef<any>(null)
+  const moonCameraRef = useRef<any>(null)
+  const surfaceCameraContainerRef = useRef<THREE.Mesh>(null)
   const flagRef = useRef<THREE.Group>(null)
   const { get, set } = useThree(({ get, set }) => ({ get, set }))
   const { moon, location, setPlanet, setEarthRadius } = useStore()

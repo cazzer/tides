@@ -36,8 +36,8 @@ export function OrbitLabel({
   firstSegmentPosition?: number
   orbitOffset?: number
 }) {
-  const dateRef = useRef()
-  const clockRef = useRef(null)
+  const dateRef = useRef<THREE.Object3D>(null)
+  const clockRef = useRef<THREE.Object3D>(null)
   const { handleFocus } = useCamera()
   const { camera, controls } = useThree()
   const setPlanet = useStore((s) => s.setPlanet)
@@ -178,7 +178,7 @@ export function OrbitLabel3D({
   rotationPeriod: number
   firstSegmentPosition?: number
 }) {
-  const dateRef = useRef()
+  const dateRef = useRef(null)
   const eclipsePoints = []
   for (let index = 0; index < 256; index++) {
     const angle = (index / 256) * 2 * Math.PI + firstSegmentPosition

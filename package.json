@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "convert:stars": "node scripts/convertStars.mjs"
   },
   "dependencies": {
     "@emotion/styled": "^11.14.1",
@@ -32,6 +33,7 @@
     "@rollup/plugin-commonjs": "^28.0.6",
     "@types/d3": "^7.4.3",
     "@types/luxon": "^3.7.1",
+    "@types/node": "^25.2.3",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.0.4",

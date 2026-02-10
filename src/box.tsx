@@ -1,15 +1,15 @@
 import { useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
+import * as THREE from 'three'
 
 export default function Box(props: any) {
   // This reference gives us direct access to the THREE.Mesh object
-  const ref = useRef()
+  const ref = useRef<THREE.Mesh>(null)
   // Hold state for hovered and clicked events
   const [hovered, hover] = useState(false)
   const [clicked, click] = useState(false)
   // Subscribe this component to the render-loop, rotate the mesh every frame
   useFrame((state, delta) => {
-    // @ts-ignore
     ref.current.rotation.x += delta
   })
   // Return the view, these are regular Threejs elements expressed in JSX

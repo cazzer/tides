@@ -1,0 +1,19 @@
+{
+  "count": 9096,
+  "stride": 7,
+  "magnitudeCutoff": null,
+  "attributes": {
+    "position": {
+      "offset": 0,
+      "components": 3
+    },
+    "color": {
+      "offset": 3,
+      "components": 3
+    },
+    "vmag": {
+      "offset": 6,
+      "components": 1
+    }
+  }
+}
