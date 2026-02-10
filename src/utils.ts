@@ -51,7 +51,7 @@ export function calculateOrbitPosition({
   // Calculate the angular velocity
   const angularVelocity = (2 * Math.PI) / period
 
-  const angle = (time / period) * Math.PI * 2 - orbitOffset
+  const angle = ((time % period) / period) * Math.PI * 2 - orbitOffset
 
   // Calculate x, y, and z coordinates with inclination
   const x = centerX + radius * Math.cos(angle)
