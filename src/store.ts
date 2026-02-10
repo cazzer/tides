@@ -2,6 +2,16 @@ import { create } from 'zustand'
 
 export type CameraFocus = 'clock' | 'earth' | 'sun' | 'moon'
 
+const SPEED_VALUES = [1, 60 * 60, 60 * 60 * 24, 60 * 60 * 24 * 30] as const
+
+function getInitialTimeScale(): number {
+  if (typeof window === 'undefined') return 1
+  const speed = new URLSearchParams(window.location.search).get('speed')
+  if (speed == null) return 1
+  const n = Number(speed)
+  return SPEED_VALUES.includes(n as (typeof SPEED_VALUES)[number]) ? n : 1
+}
+
 function getInitialCameraFocus(): CameraFocus {
   if (typeof window === 'undefined') return 'clock'
   const focus = new URLSearchParams(window.location.search).get('focus')
@@ -48,7 +58,7 @@ export const useStore = create<{
   moon: undefined,
   sun: undefined,
   clock: undefined,
-  timeScale: 1,
+  timeScale: getInitialTimeScale(),
   cameraFocus: getInitialCameraFocus(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),

@@ -1,6 +1,14 @@
 import styled from 'styled-components'
 import { useRef, useState, useEffect } from 'react'
-import { IconClock, IconWorld, IconSun, IconMoon, IconMapPin } from '@tabler/icons-react'
+import {
+  IconClock,
+  IconWorld,
+  IconSun,
+  IconMoon,
+  IconMapPin,
+  IconPlayerTrackNext,
+  IconEye,
+} from '@tabler/icons-react'
 import { useStore, type CameraFocus } from './store'
 import { truncateLatLon } from './utils'
 
@@ -16,8 +24,14 @@ const FOCUS_OPTIONS: {
 ]
 
 export default function Controls() {
-  const { timeScale, setTimeScale, setJumpDate, cameraFocus, setCameraFocus, setLocation } =
-    useStore()
+  const {
+    timeScale,
+    setTimeScale,
+    setJumpDate,
+    cameraFocus,
+    setCameraFocus,
+    setLocation,
+  } = useStore()
   const [date, setDate] = useState<string>()
   const [isFocused, setIsFocused] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
@@ -69,15 +83,10 @@ export default function Controls() {
         onChange={setCameraFocus}
         options={FOCUS_OPTIONS}
       />
-      <Dropdown
-        currentValue={timeScale}
+      <SpeedDropdown
+        value={timeScale}
         onChange={setTimeScale}
-        values={[
-          { value: 1, label: 'Real Time' },
-          { value: 60 * 60, label: '1 Hour per Second' },
-          { value: 60 * 60 * 24, label: '1 Day per Second' },
-          { value: 60 * 60 * 24 * 30, label: '1 Month per Second' },
-        ]}
+        options={SPEED_OPTIONS}
       />
       <LocationButton
         type="button"
@@ -85,7 +94,10 @@ export default function Controls() {
         title="Use my location"
         aria-label="Use my location"
       >
-        <IconMapPin size={20} stroke={2} />
+        <IconMapPin
+          size={20}
+          stroke={2}
+        />
       </LocationButton>
       {locationError && <LocationError>{locationError}</LocationError>}
       <DateForm onSubmit={handleDateSubmit}>
@@ -106,9 +118,70 @@ export default function Controls() {
   )
 }
 
-type Speed = {
-  value: number | string
-  label: string
+const SPEED_OPTIONS = [
+  { value: 1, label: 'Real Time' },
+  { value: 60 * 60, label: '1 Hour per Second' },
+  { value: 60 * 60 * 24, label: '1 Day per Second' },
+  { value: 60 * 60 * 24 * 30, label: '1 Month per Second' },
+] as const
+
+type SpeedOption = (typeof SPEED_OPTIONS)[number]
+
+function SpeedDropdown({
+  value,
+  onChange,
+  options,
+}: {
+  value: number
+  options: readonly SpeedOption[]
+  onChange: (value: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onOutside)
+    return () => document.removeEventListener('mousedown', onOutside)
+  }, [open])
+
+  const current = options.find((o) => o.value === value)
+  const label = current?.label ?? 'Real Time'
+
+  return (
+    <FocusDropdownWrap ref={ref}>
+      <FocusTrigger
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label={`Time speed: ${label}`}
+        title={label}
+      >
+        <IconPlayerTrackNext
+          size={20}
+          stroke={2}
+        />
+      </FocusTrigger>
+      {open && (
+        <FocusMenu>
+          {options.map(({ value: v, label: l }) => (
+            <SpeedOptionButton
+              key={v}
+              type="button"
+              onClick={() => {
+                onChange(v)
+                setOpen(false)
+              }}
+            >
+              {l}
+            </SpeedOptionButton>
+          ))}
+        </FocusMenu>
+      )}
+    </FocusDropdownWrap>
+  )
 }
 
 function FocusDropdown({
@@ -144,7 +217,18 @@ function FocusDropdown({
         onClick={() => setOpen((o) => !o)}
         aria-label={`Camera focus: ${label}`}
       >
-        <CurrentIcon size={20} stroke={2} />
+        <FocusTriggerIconWrap>
+          <IconEye
+            size={20}
+            stroke={2}
+          />
+          <FocusTriggerBadge>
+            <CurrentIcon
+              size={12}
+              stroke={2}
+            />
+          </FocusTriggerBadge>
+        </FocusTriggerIconWrap>
       </FocusTrigger>
       {open && (
         <FocusMenu>
@@ -162,7 +246,10 @@ function FocusDropdown({
                 }}
                 aria-label={title}
               >
-                <Icon size={20} stroke={2} />
+                <Icon
+                  size={20}
+                  stroke={2}
+                />
               </FocusOption>
               {hoveredOption === v && (
                 <FocusOptionTooltip>{title}</FocusOptionTooltip>
@@ -172,39 +259,6 @@ function FocusDropdown({
         </FocusMenu>
       )}
     </FocusDropdownWrap>
-  )
-}
-
-function Dropdown({
-  currentValue,
-  values,
-  onChange,
-  disabled = false,
-}: {
-  currentValue: number | string
-  values: Speed[]
-  onChange: (value: number) => void
-  disabled?: boolean
-}) {
-  const handleChange = (event) => {
-    onChange(event.target.value as number)
-  }
-
-  return (
-    <DropdownContainer
-      onChange={handleChange}
-      value={currentValue}
-      disabled={disabled}
-    >
-      {values.map(({ value, label }) => (
-        <option
-          key={value}
-          value={value}
-        >
-          {label}
-        </option>
-      ))}
-    </DropdownContainer>
   )
 }
 
@@ -221,18 +275,6 @@ const ControlContainer = styled.section`
   padding: 0 16px;
   background-color: #1a1a1a;
   border-bottom: 1px solid #333;
-`
-
-const DropdownContainer = styled.select`
-  padding: 6px 10px;
-  margin: 0;
-  font-size: 16px;
-  background-color: black;
-  color: gray;
-  outline: none;
-  border: 1px gray solid;
-  border-radius: 8px;
-  min-width: 0;
 `
 
 const FocusDropdownWrap = styled.div`
@@ -289,6 +331,25 @@ const FocusTrigger = styled.button`
   }
 `
 
+const FocusTriggerIconWrap = styled.span`
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+`
+
+const FocusTriggerBadge = styled.span`
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+`
+
 const LocationButton = styled.button`
   display: flex;
   align-items: center;
@@ -336,6 +397,25 @@ const FocusOption = styled.button`
   height: 36px;
   padding: 0;
   margin: 0;
+  background: transparent;
+  color: gray;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+
+  &:hover {
+    background-color: #222;
+    color: #aaa;
+  }
+`
+
+const SpeedOptionButton = styled.button`
+  display: block;
+  width: 100%;
+  min-width: 160px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 14px;
   background: transparent;
   color: gray;
   border: none;

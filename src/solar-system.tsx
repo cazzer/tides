@@ -2,18 +2,11 @@ import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { DateTime } from 'luxon'
-import Planet from './planet'
 import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
-import {
-  scaleLog,
-  scaleLinear,
-  easeQuadInOut,
-  easeExpInOut,
-  easeCubicInOut,
-} from 'd3'
+import { scaleLog, scaleLinear, easeExpInOut } from 'd3'
 import suncalc from 'suncalc'
 import { CameraProvider } from './camera'
 import { useStore } from './store'

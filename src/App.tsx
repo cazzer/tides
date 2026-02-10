@@ -18,9 +18,10 @@ export default function App() {
   const [solarSystemView, earthView, moonView] = useRefs()
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
+  const timeScale = useStore((s) => s.timeScale)
   const location = useStore((s) => s.location)
 
-  // Read ?focus= from URL on mount (before writing)
+  // Read ?focus= and ?speed= from URL on mount (before writing)
   useEffect(() => {
     const focus = new URLSearchParams(window.location.search).get('focus')
     if (focus && FOCUS_VALUES.includes(focus as CameraFocus)) {
@@ -28,7 +29,7 @@ export default function App() {
     }
   }, [setCameraFocus])
 
-  // Write focus to URL when it changes; skip first run so we don't overwrite URL before read
+  // Write focus and speed to URL when they change; skip first run so we don't overwrite URL before read
   const isFirstWrite = useRef(true)
   useEffect(() => {
     if (isFirstWrite.current) {
@@ -37,6 +38,7 @@ export default function App() {
     }
     const params = new URLSearchParams(window.location.search)
     params.set('focus', cameraFocus)
+    params.set('speed', String(timeScale))
     if (location) {
       params.set('lat', String(location.lat))
       params.set('lon', String(location.lon))
@@ -46,7 +48,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, location])
+  }, [cameraFocus, timeScale, location])
 
   return (
     <div className="container">

@@ -11,6 +11,7 @@ import {
 import { useCamera } from './camera'
 import { useStore } from './store'
 import { OrbitLabel } from './orbit-label'
+import { LocationPin } from './LocationPin'
 
 interface OrbitingBodyProps {
   // Orbital properties
@@ -147,20 +148,6 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
       }
     }
 
-    // position flag on earth when location is set
-    if (flagRef.current && location && storeLabel === 'earth') {
-      const { position: pos } = calculateLocationAndRotationForLatLng(
-        location.lat,
-        location.lon,
-        diameter
-      )
-      flagRef.current.position.set(pos.x, pos.y, pos.z)
-      const dir = new THREE.Vector3(pos.x, pos.y, pos.z).normalize()
-      flagRef.current.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        dir
-      )
-    }
   })
 
   const onClick = (event) => {
@@ -215,18 +202,14 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
         {/* Render the visual representation */}
         {children}
 
-        {/* Location flag on earth when geolocation is set (only in main view, not in "View from Earth" camera) */}
+        {/* Location pin on earth when geolocation is set (only in main view, not in "View from Earth" camera) */}
         {storeLabel === 'earth' && location && !surfaceCamera && (
-          <group ref={flagRef}>
-            <mesh position={[0, 0.15, 0]}>
-              <cylinderGeometry args={[0.02, 0.02, 0.3, 8]} />
-              <meshBasicMaterial color="#333" />
-            </mesh>
-            <mesh position={[0, 0.35, 0.08]} rotation={[0, 0, -Math.PI / 2]}>
-              <planeGeometry args={[0.15, 0.1]} />
-              <meshBasicMaterial color="#c33" side={THREE.DoubleSide} />
-            </mesh>
-          </group>
+          <LocationPin
+            ref={flagRef}
+            lat={location.lat}
+            lon={location.lon}
+            diameter={diameter}
+          />
         )}
       </mesh>
 
