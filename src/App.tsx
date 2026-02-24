@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { forwardRef, useEffect, useRef } from 'react'
+import { forwardRef, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { View, OrbitControls, OrthographicCamera } from '@react-three/drei'
 import useRefs from 'react-use-refs'
@@ -10,6 +10,7 @@ import SolarSystem from './solar-system'
 import { useStore, type CameraFocus, type PanelKey } from './store'
 import Controls from './controls'
 import { PIN_LAYER } from './LocationPin'
+import LoadingOverlay from './LoadingOverlay'
 
 const FOCUS_VALUES: CameraFocus[] = [
   'clock',
@@ -25,6 +26,7 @@ const matrix = new THREE.Matrix4()
 
 export default function App() {
   const [solarSystemView, earthView, moonView] = useRefs()
+  const [sceneReady, setSceneReady] = useState(false)
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const mainPanel = useStore((s) => s.mainPanel)
@@ -72,8 +74,13 @@ export default function App() {
     }
   }
 
+  const handleSceneReady = useCallback(() => {
+    setSceneReady(true)
+  }, [])
+
   return (
     <div className="container">
+      <LoadingOverlay sceneReady={sceneReady} />
       <Controls />
       <div className="viewports">
         <Canvas
@@ -101,6 +108,7 @@ export default function App() {
             matrix={matrix}
             interactive
             showOrbitLabels
+            onReady={handleSceneReady}
           />
           <OrbitControls
             maxDistance={80}
@@ -145,7 +153,15 @@ function Scene({
   earthCamera = false,
   moonCamera = false,
   interactive = false,
+  onReady,
   ...props
+}: {
+  background?: string
+  earthCamera?: boolean
+  moonCamera?: boolean
+  interactive?: boolean
+  onReady?: () => void
+  [key: string]: any
 }) {
   return (
     <>
@@ -153,20 +169,40 @@ function Scene({
         attach="background"
         args={[background]}
       />
-      <group
-        matrixAutoUpdate={false}
-        onUpdate={(self) => (self.matrix = matrix)}
-        {...props}
-      >
-        <SolarSystem
-          earthCamera={earthCamera}
-          moonCamera={moonCamera}
-          interactive={interactive}
+      <Suspense fallback={null}>
+        <group
+          matrixAutoUpdate={false}
+          onUpdate={(self) => (self.matrix = matrix)}
           {...props}
-        />
-      </group>
+        >
+          <SolarSystem
+            earthCamera={earthCamera}
+            moonCamera={moonCamera}
+            interactive={interactive}
+            {...props}
+          />
+          {onReady ? <SceneReadySignal onReady={onReady} /> : null}
+        </group>
+      </Suspense>
     </>
   )
+}
+
+function SceneReadySignal({ onReady }: { onReady: () => void }) {
+  const hasSignaledRef = useRef(false)
+  const frameCountRef = useRef(0)
+
+  useFrame(() => {
+    if (hasSignaledRef.current) return
+
+    frameCountRef.current += 1
+    if (frameCountRef.current >= 2) {
+      hasSignaledRef.current = true
+      onReady()
+    }
+  })
+
+  return null
 }
 
 function MainCamera() {

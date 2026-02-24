@@ -11,7 +11,7 @@ type StarfieldProps = {
   opacity?: number
 }
 
-const DEFAULT_RADIUS = 200
+const DEFAULT_RADIUS = 1000
 const DEFAULT_SIZE = 1.2
 
 export default function Starfield({
