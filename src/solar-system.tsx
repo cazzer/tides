@@ -2,31 +2,32 @@ import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
-import { DateTime } from 'luxon'
 import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
-import { scaleLog, scaleLinear, easeExpInOut } from 'd3'
-import suncalc from 'suncalc'
+import { scaleLog, easeExpInOut } from 'd3'
 import { CameraProvider } from './camera'
+import { OrbitLabel } from './orbit-label'
 import { useStore } from './store'
 
 import earthTextureHigh from './assets/earth-day.jpg'
 import earthTextureLow from './assets/earth-day-2k.jpg'
 import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
-import { degreesToRadians, interpolateValue, trueAnomalyToMeanAnomaly } from './utils'
+import { interpolateValue } from './utils'
+import {
+  EARTH_ORBIT_RADIUS,
+  earthPosition,
+  earthSpin,
+  moonPosition,
+  moonSpin,
+  sunSpin,
+} from './ephemeris'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
-const scaleOrbit = scaleLinear()
-  .domain([384400000, 149597870700])
-  .range([10, 50])
 
-const EARTH_SOLAR_DAY_MS = 24 * 3600000
-const EARTH_SIDEREAL_YEAR_MS = 365.256363004 * 24 * 3600000
-const MOON_SIDEREAL_PERIOD_MS = 27.321661 * 24 * 3600000
 const JUMP_DURATION_MS = 5000
 
 useTexture.preload(earthTextureHigh)
@@ -103,37 +104,6 @@ export default function SolarSystem({
     })
   })
 
-  const start = DateTime.utc(2024, 1, 1, 0, 0, 0)
-  const epochMs = start.toMillis()
-  const end = DateTime.utc(2024, 12, 31, 23, 59, 59)
-  const summerSolstice = DateTime.utc(2024, 6, 20, 20, 51, 0)
-
-  const angle =
-    ((summerSolstice.toMillis() - start.toMillis()) /
-      (end.toMillis() - start.toMillis())) *
-      Math.PI *
-      2 -
-    Math.PI / 2
-
-  const earthArgumentOfPeriapsisDeg = 102.9372
-  const earthInitialTrueAnomaly = -angle - degreesToRadians(earthArgumentOfPeriapsisDeg)
-  const earthMeanAnomalyAtEpoch = trueAnomalyToMeanAnomaly(
-    earthInitialTrueAnomaly,
-    0.0167
-  )
-
-  const moonArgumentOfPeriapsisDeg = 318.15
-  const moonAscendingNodeDeg = 125.08
-  const moonInitialTrueAnomaly =
-    degreesToRadians(-8) - degreesToRadians(moonArgumentOfPeriapsisDeg)
-  const moonMeanAnomalyAtEpoch = trueAnomalyToMeanAnomaly(
-    moonInitialTrueAnomaly,
-    0.0549
-  )
-
-  const earthOffset = suncalc.getPosition(new Date(), 0, 0)
-  const earthRotationOffset = 2 * Math.PI * earthOffset.azimuth
-
   return (
     <CameraProvider>
       <ambientLight intensity={1} />
@@ -143,7 +113,7 @@ export default function SolarSystem({
       <OrbitingBody
         ref={sun}
         focusKey="sun"
-        rotationPeriod={609.12 * 3600000}
+        spinAt={sunSpin}
         interactive={interactive}
       >
         <SunRenderer
@@ -156,24 +126,9 @@ export default function SolarSystem({
         ref={earth}
         focusKey="earth"
         storeLabel="earth"
-        parent={sun}
-        showOrbit={showOrbitLabels}
         diameter={scaleDiameter(12742000)}
-        rotationPeriod={EARTH_SOLAR_DAY_MS}
-        rotationEpochMs={epochMs}
-        orbitalDistance={scaleOrbit(149597870700)}
-        orbitalPeriod={EARTH_SIDEREAL_YEAR_MS}
-        orbitOffset={angle}
-        orbitEpochMs={epochMs}
-        keplerOrbit={{
-          semiMajorAxis: scaleOrbit(149597870700),
-          eccentricity: 0.0167,
-          inclinationDeg: 0,
-          ascendingNodeDeg: 0,
-          argumentOfPeriapsisDeg: earthArgumentOfPeriapsisDeg,
-          meanAnomalyAtEpochRad: earthMeanAnomalyAtEpoch,
-        }}
-        rotationOffset={earthRotationOffset}
+        positionAt={earthPosition}
+        spinAt={earthSpin}
         axialTilt={23.4}
         interactive={interactive}
       >
@@ -182,24 +137,13 @@ export default function SolarSystem({
           texture={earthTexture}
         />
       </OrbitingBody>
+      {showOrbitLabels && <OrbitLabel radius={EARTH_ORBIT_RADIUS} />}
       <OrbitingBody
         ref={moon}
         focusKey="moon"
-        parent={earth}
         diameter={scaleDiameter(3474800)}
-        orbitalPeriod={MOON_SIDEREAL_PERIOD_MS}
-        orbitEpochMs={epochMs}
-        keplerOrbit={{
-          semiMajorAxis: scaleOrbit(384400000),
-          eccentricity: 0.0549,
-          inclinationDeg: 5.145,
-          ascendingNodeDeg: moonAscendingNodeDeg,
-          argumentOfPeriapsisDeg: moonArgumentOfPeriapsisDeg,
-          meanAnomalyAtEpochRad: moonMeanAnomalyAtEpoch,
-        }}
-        rotationPeriod={MOON_SIDEREAL_PERIOD_MS}
-        rotationEpochMs={epochMs}
-        rotationOffset={2.5}
+        positionAt={moonPosition}
+        spinAt={moonSpin}
         axialTilt={-1.53}
         interactive={interactive}
       >

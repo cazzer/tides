@@ -202,26 +202,7 @@ export default forwardRef(function Planet(
         )}
       </mesh>
       {showOrbit && (
-        <OrbitLabel
-          radius={orbitalDistance}
-          orbitalPeriod={orbitalPeriod}
-          orbitOffset={orbitOffset}
-          targetPosition={ref?.current?.position}
-          segments={[
-            'January',
-            'February',
-            'March',
-            'April',
-            'May',
-            'June',
-            'July',
-            'August',
-            'September',
-            'October',
-            'November',
-            'December',
-          ].reverse()}
-        />
+        <OrbitLabel radius={orbitalDistance} />
       )}
     </group>
   )

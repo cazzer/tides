@@ -3,35 +3,17 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  calculateKeplerOrbitPosition,
-  calculateOrbitPosition,
-  calculateRotation,
   degreesToRadians,
   calculateLocationAndRotationForLatLng,
-  type KeplerOrbitParams,
 } from './utils'
+import type { Vec3 } from './ephemeris'
 import { useCamera } from './camera'
 import { useStore } from './store'
-import { OrbitLabel } from './orbit-label'
 import { LocationPin } from './LocationPin'
 
 interface OrbitingBodyProps {
-  // Orbital properties
-  orbitalDistance?: number
-  orbitalPeriod?: number
-  orbitalInclination?: number
-  orbitOffset?: number
-  orbitEpochMs?: number
-  keplerOrbit?: Omit<
-    KeplerOrbitParams,
-    'period' | 'timeSinceEpoch' | 'centerX' | 'centerY' | 'centerZ'
-  >
-  parent?: { current: THREE.Mesh }
-
-  // Rotation properties
-  rotationPeriod: number
-  rotationOffset?: number
-  rotationEpochMs?: number
+  positionAt?: (t: number) => Vec3
+  spinAt?: (t: number) => number
   axialTilt?: number
 
   // Physical properties
@@ -44,7 +26,6 @@ interface OrbitingBodyProps {
   // Interaction properties
   interactive?: boolean
   storeLabel?: string
-  showOrbit?: boolean
   focusKey?: 'clock' | 'earth' | 'sun' | 'moon'
 
   // Visual renderer
@@ -52,23 +33,14 @@ interface OrbitingBodyProps {
 }
 export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   {
-    orbitalDistance,
-    orbitalPeriod,
-    orbitalInclination = 0,
-    orbitOffset = 0,
-    orbitEpochMs = 0,
-    keplerOrbit,
-    parent,
-    rotationPeriod,
-    rotationOffset = 0,
-    rotationEpochMs = 0,
+    positionAt,
+    spinAt,
     axialTilt = 0,
     diameter = 5, // Default diameter
     surfaceCamera = false,
     moonCamera = false,
     interactive = false,
     storeLabel,
-    showOrbit = false,
     focusKey,
     children,
   },
@@ -117,59 +89,10 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
       return
     }
 
-    // calculate rotation
-    const rotation = calculateRotation(
-      rotationPeriod,
-      simulationTime - rotationEpochMs,
-      rotationOffset
-    )
-
     if (ref && 'current' in ref && ref.current) {
-      ref.current.rotation.y = rotation
+      if (spinAt) ref.current.rotation.y = spinAt(simulationTime)
+      if (positionAt) ref.current.position.set(...positionAt(simulationTime))
       if (focusKey) ref.current.userData.focus = focusKey
-    }
-
-    // calculate orbital position if this body orbits something
-    if (
-      orbitalPeriod &&
-      ref &&
-      'current' in ref &&
-      ref.current
-    ) {
-      const centerX = parent?.current.position.x || 0
-      const centerZ = parent?.current.position.z || 0
-      const centerY = 0
-      const timeSinceEpoch = simulationTime - orbitEpochMs
-
-      const coords = keplerOrbit
-        ? calculateKeplerOrbitPosition({
-            ...keplerOrbit,
-            period: orbitalPeriod,
-            timeSinceEpoch,
-            centerX,
-            centerY,
-            centerZ,
-          })
-        : orbitalDistance
-          ? calculateOrbitPosition({
-              radius: orbitalDistance,
-              period: orbitalPeriod,
-              time: timeSinceEpoch,
-              centerX,
-              centerZ,
-              centerY,
-              inclination: orbitalInclination,
-              orbitOffset,
-            })
-          : null
-
-      if (!coords) {
-        return
-      }
-
-      ref.current.position.x = coords.x
-      ref.current.position.z = coords.z
-      ref.current.position.y = coords.y
     }
 
     // look at the moon
@@ -261,32 +184,6 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
           />
         )}
       </mesh>
-
-      {/* Orbit visualization */}
-      {showOrbit && orbitalDistance && orbitalPeriod && (
-        <OrbitLabel
-          radius={orbitalDistance}
-          orbitalPeriod={orbitalPeriod}
-          orbitOffset={orbitOffset}
-          targetPosition={
-            ref && 'current' in ref ? ref.current?.position : undefined
-          }
-          segments={[
-            'January',
-            'February',
-            'March',
-            'April',
-            'May',
-            'June',
-            'July',
-            'August',
-            'September',
-            'October',
-            'November',
-            'December',
-          ].reverse()}
-        />
-      )}
     </group>
   )
 })

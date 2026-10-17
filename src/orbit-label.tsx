@@ -1,10 +1,25 @@
 import * as THREE from 'three'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Text, Text3D } from '@react-three/drei'
-import { calculateOrbitPosition } from './utils'
+import { Text } from '@react-three/drei'
 import { useCamera } from './camera'
 import { useStore } from './store'
+import { earthPosition, monthStartAngles } from './ephemeris'
+
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
 
 function formatClockDate(date: Date): string {
   const weekday = date.toLocaleDateString(undefined, { weekday: 'long' })
@@ -21,21 +36,7 @@ function formatClockDate(date: Date): string {
   return `${weekday}, ${datePart} ${timePart}`
 }
 
-export function OrbitLabel({
-  radius,
-  segments,
-  targetPosition,
-  orbitalPeriod,
-  firstSegmentPosition = 0,
-  orbitOffset = 0,
-}: {
-  radius: number
-  segments?: string[]
-  targetPosition?: any
-  orbitalPeriod: number
-  firstSegmentPosition?: number
-  orbitOffset?: number
-}) {
+export function OrbitLabel({ radius }: { radius: number }) {
   const dateRef = useRef<THREE.Object3D>(null)
   const clockRef = useRef<THREE.Object3D>(null)
   const { handleFocus } = useCamera()
@@ -64,48 +65,22 @@ export function OrbitLabel({
 
   const eclipsePoints = []
   for (let index = 0; index < 256; index++) {
-    const angle = (index / 256) * 2 * Math.PI + firstSegmentPosition
+    const angle = (index / 256) * 2 * Math.PI
     const x = radius * Math.cos(angle)
     const z = radius * Math.sin(angle)
     eclipsePoints.push(new THREE.Vector3(x, 0, z))
   }
   eclipsePoints.push(eclipsePoints[0])
 
-  const segmentDefinitions = []
-  if (segments) {
-    const segmentCount = segments.length
-
-    for (let index = 0; index < segmentCount; index++) {
-      const angle = (index / segmentCount) * 2 * Math.PI
-      const x = radius * Math.cos(angle)
-      const z = radius * Math.sin(angle)
-      segmentDefinitions.push({
-        label: segments[index],
-        geometry: new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(1, 1, 1),
-          new THREE.Vector3(x, 0, z),
-        ]),
-        labelRotation: -((2 * Math.PI) / segmentCount) * index,
-        labelPosition: new THREE.Vector3(
-          radius * 0.75 * Math.cos(angle),
-          0,
-          radius * 0.75 * Math.sin(angle)
-        ),
-      })
-    }
-  }
-
-  const segmentRotation =
-    -orbitOffset - (Math.PI * 2) / segmentDefinitions.length
-
   // @ts-ignore
-  const { timestamp } = useThree()
+  const { timestamp: sceneTimestamp } = useThree()
+  // Unset until SolarSystem's first frame, which starts from Date.now().
+  const timestamp: number = sceneTimestamp ?? Date.now()
+  const year = new Date(timestamp).getFullYear()
+  const angles = useMemo(() => monthStartAngles(year), [year])
 
-  const fallbackAngle = ((timestamp % orbitalPeriod) / orbitalPeriod) * Math.PI * 2
-  const markerX = targetPosition?.x ?? (radius - 20) * Math.cos(fallbackAngle)
-  const markerY = (targetPosition?.y ?? 0) + 1.5
-  const markerZ = targetPosition?.z ?? (radius - 20) * -Math.sin(fallbackAngle)
-  const markerAngle = Math.atan2(-(targetPosition?.z ?? markerZ), targetPosition?.x ?? markerX)
+  const [markerX, markerY, markerZ] = earthPosition(timestamp)
+  const markerAngle = Math.atan2(-markerZ, markerX)
 
   const lineGeometry = new THREE.BufferGeometry().setFromPoints(eclipsePoints)
 
@@ -121,162 +96,36 @@ export function OrbitLabel({
           opacity={0.2}
         />
       </line>
-      {targetPosition && (
+      <Text
+        ref={dateRef}
+        onClick={handleFocus}
+        scale={[2, 2, 2]}
+        color="white" // default
+        anchorX="center" // default
+        anchorY="middle" // default
+        position={[markerX, markerY + 1.5, markerZ]}
+        rotation={[-Math.PI / 2, 0, markerAngle]}
+      >
+        {formatClockDate(new Date(timestamp))}
+      </Text>
+
+      {MONTHS.map((month, m) => (
         <Text
-          ref={dateRef}
-          onClick={handleFocus}
-          scale={[2, 2, 2]}
+          key={month}
+          scale={[4, 4, 4]}
           color="white" // default
-          anchorX="center" // default
+          anchorX="right" // default
           anchorY="middle" // default
-          position={[markerX, markerY, markerZ]}
-          rotation={[-Math.PI / 2, 0, markerAngle]}
+          position={[
+            0.75 * radius * Math.cos(angles[m]),
+            0,
+            -0.75 * radius * Math.sin(angles[m]),
+          ]}
+          rotation={[-Math.PI / 2, 0, angles[m]]}
+          fillOpacity={0.25}
         >
-          {formatClockDate(new Date(timestamp))}
+          {month}
         </Text>
-      )}
-
-      {segmentDefinitions.map((segment) => (
-        <group
-          key={segment.label}
-          rotation={[0, segmentRotation, 0]}
-        >
-          <Text
-            scale={[4, 4, 4]}
-            color="white" // default
-            anchorX="right" // default
-            anchorY="middle" // default
-            position={segment.labelPosition}
-            rotation={[-Math.PI / 2, 0, segment.labelRotation]}
-            fillOpacity={0.25}
-          >
-            {segment.label}
-          </Text>
-        </group>
-      ))}
-    </group>
-  )
-}
-
-export function OrbitLabel3D({
-  radius,
-  segments,
-  targetPosition,
-  orbitalPeriod,
-  rotationPeriod,
-  firstSegmentPosition = 0,
-}: {
-  radius: number
-  segments?: string[]
-  targetPosition?: any
-  orbitalPeriod: number
-  rotationPeriod: number
-  firstSegmentPosition?: number
-}) {
-  const dateRef = useRef(null)
-  const eclipsePoints = []
-  for (let index = 0; index < 256; index++) {
-    const angle = (index / 256) * 2 * Math.PI + firstSegmentPosition
-    const x = radius * Math.cos(angle)
-    const z = radius * Math.sin(angle)
-    eclipsePoints.push(new THREE.Vector3(x, 0, z))
-  }
-  eclipsePoints.push(eclipsePoints[0])
-
-  const segmentDefinitions = []
-  if (segments) {
-    const segmentCount = segments.length
-
-    for (let index = 0; index < segmentCount; index++) {
-      const angle = (index / segmentCount) * 2 * Math.PI
-      const x = radius * Math.cos(angle)
-      const z = radius * Math.sin(angle)
-      segmentDefinitions.push({
-        label: segments[index],
-        geometry: new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(1, 1, 1),
-          new THREE.Vector3(x, 0, z),
-        ]),
-        labelRotation: -((2 * Math.PI) / segmentCount) * index,
-        labelPosition: new THREE.Vector3(
-          radius * 0.75 * Math.cos(angle),
-          0,
-          radius * 0.75 * Math.sin(angle)
-        ),
-      })
-    }
-  }
-
-  // @ts-ignore
-  const { timestamp } = useThree()
-
-  const coords = calculateOrbitPosition({
-    radius: radius - 38,
-    period: orbitalPeriod,
-    time: timestamp,
-    centerX: 0,
-    centerY: 0,
-    centerZ: 0,
-    inclination: 0,
-  })
-
-  const lineGeometry = new THREE.BufferGeometry().setFromPoints(eclipsePoints)
-
-  return (
-    <group>
-      {/* @ts-ignore */}
-      <line geometry={lineGeometry}>
-        <lineBasicMaterial
-          attach="material"
-          color="#BFBBDA"
-          linewidth={10}
-          transparent
-          opacity={0.2}
-        />
-      </line>
-      {targetPosition?.x && (
-        <Text3D
-          ref={dateRef}
-          scale={[1.1, 1.1, 0.1]}
-          position={[coords.x, coords.y + 1.5, coords.z]}
-          rotation={[-Math.PI / 2, 0, coords.angle]}
-          curveSegments={24}
-          bevelEnabled
-          bevelSize={0.08}
-          bevelThickness={0.03}
-          height={1}
-          lineHeight={0.9}
-          letterSpacing={0.3}
-          font={'/Roboto-light.json'}
-        >
-          {formatClockDate(new Date(timestamp))}
-        </Text3D>
-      )}
-
-      {segmentDefinitions.map((segment) => (
-        <group key={segment.label}>
-          <Text3D
-            scale={[4, 4, 0.1]}
-            position={segment.labelPosition}
-            rotation={[-Math.PI / 2, 0, segment.labelRotation]}
-            curveSegments={24}
-            bevelEnabled
-            bevelSize={0.08}
-            bevelThickness={0.03}
-            height={1}
-            lineHeight={0.9}
-            letterSpacing={0.3}
-            font={'/Roboto-light.json'}
-          >
-            {segment.label}
-            <meshBasicMaterial
-              attach="material"
-              color="white"
-              opacity={0.25}
-              transparent
-            />
-          </Text3D>
-        </group>
       ))}
     </group>
   )
