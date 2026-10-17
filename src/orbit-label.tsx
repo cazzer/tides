@@ -4,7 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
 import { useCamera } from './camera'
 import { useStore } from './store'
-import { earthPosition, monthStartAngles } from './ephemeris'
+import { earthAngle, monthStartAngles } from './ephemeris'
 
 const MONTHS = [
   'January',
@@ -22,7 +22,7 @@ const MONTHS = [
 ]
 
 function formatClockDate(date: Date): string {
-  const weekday = date.toLocaleDateString(undefined, { weekday: 'long' })
+  const weekday = date.toLocaleDateString(undefined, { weekday: 'short' })
   const datePart = date.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
@@ -33,7 +33,7 @@ function formatClockDate(date: Date): string {
     minute: '2-digit',
     second: '2-digit',
   })
-  return `${weekday}, ${datePart} ${timePart}`
+  return `${weekday}, ${datePart}\n${timePart}`
 }
 
 export function OrbitLabel({ radius }: { radius: number }) {
@@ -79,8 +79,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
   const year = new Date(timestamp).getFullYear()
   const angles = useMemo(() => monthStartAngles(year), [year])
 
-  const [markerX, markerY, markerZ] = earthPosition(timestamp)
-  const markerAngle = Math.atan2(-markerZ, markerX)
+  const clockAngle = earthAngle(timestamp)
 
   const lineGeometry = new THREE.BufferGeometry().setFromPoints(eclipsePoints)
 
@@ -101,10 +100,15 @@ export function OrbitLabel({ radius }: { radius: number }) {
         onClick={handleFocus}
         scale={[2, 2, 2]}
         color="white" // default
-        anchorX="center" // default
+        anchorX="right"
         anchorY="middle" // default
-        position={[markerX, markerY + 1.5, markerZ]}
-        rotation={[-Math.PI / 2, 0, markerAngle]}
+        textAlign="right"
+        position={[
+          0.75 * radius * Math.cos(clockAngle),
+          0.5,
+          -0.75 * radius * Math.sin(clockAngle),
+        ]}
+        rotation={[-Math.PI / 2, 0, clockAngle]}
       >
         {formatClockDate(new Date(timestamp))}
       </Text>
