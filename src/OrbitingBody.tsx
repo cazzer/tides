@@ -3,10 +3,12 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import {
+  calculateKeplerOrbitPosition,
   calculateOrbitPosition,
   calculateRotation,
   degreesToRadians,
   calculateLocationAndRotationForLatLng,
+  type KeplerOrbitParams,
 } from './utils'
 import { useCamera } from './camera'
 import { useStore } from './store'
@@ -20,11 +22,16 @@ interface OrbitingBodyProps {
   orbitalInclination?: number
   orbitOffset?: number
   orbitEpochMs?: number
+  keplerOrbit?: Omit<
+    KeplerOrbitParams,
+    'period' | 'timeSinceEpoch' | 'centerX' | 'centerY' | 'centerZ'
+  >
   parent?: { current: THREE.Mesh }
 
   // Rotation properties
   rotationPeriod: number
   rotationOffset?: number
+  rotationEpochMs?: number
   axialTilt?: number
 
   // Physical properties
@@ -50,9 +57,11 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     orbitalInclination = 0,
     orbitOffset = 0,
     orbitEpochMs = 0,
+    keplerOrbit,
     parent,
     rotationPeriod,
     rotationOffset = 0,
+    rotationEpochMs = 0,
     axialTilt = 0,
     diameter = 5, // Default diameter
     surfaceCamera = false,
@@ -97,11 +106,21 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   }, [moon])
 
   useFrame((state) => {
+    const simulationState = state as typeof state & {
+      timestamp?: number
+    }
+    const simulationTime =
+      typeof simulationState.timestamp === 'number'
+        ? simulationState.timestamp
+        : null
+    if (simulationTime == null) {
+      return
+    }
+
     // calculate rotation
     const rotation = calculateRotation(
       rotationPeriod,
-      // @ts-ignore
-      state.timestamp || Date.now(),
+      simulationTime - rotationEpochMs,
       rotationOffset
     )
 
@@ -112,23 +131,41 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
 
     // calculate orbital position if this body orbits something
     if (
-      orbitalDistance &&
       orbitalPeriod &&
       ref &&
       'current' in ref &&
       ref.current
     ) {
-      const coords = calculateOrbitPosition({
-        radius: orbitalDistance,
-        period: orbitalPeriod,
-        // @ts-ignore
-        time: (state.timestamp || Date.now()) - orbitEpochMs,
-        centerX: parent?.current.position.x || 0,
-        centerZ: parent?.current.position.z || 0,
-        centerY: 0,
-        inclination: orbitalInclination,
-        orbitOffset,
-      })
+      const centerX = parent?.current.position.x || 0
+      const centerZ = parent?.current.position.z || 0
+      const centerY = 0
+      const timeSinceEpoch = simulationTime - orbitEpochMs
+
+      const coords = keplerOrbit
+        ? calculateKeplerOrbitPosition({
+            ...keplerOrbit,
+            period: orbitalPeriod,
+            timeSinceEpoch,
+            centerX,
+            centerY,
+            centerZ,
+          })
+        : orbitalDistance
+          ? calculateOrbitPosition({
+              radius: orbitalDistance,
+              period: orbitalPeriod,
+              time: timeSinceEpoch,
+              centerX,
+              centerZ,
+              centerY,
+              inclination: orbitalInclination,
+              orbitOffset,
+            })
+          : null
+
+      if (!coords) {
+        return
+      }
 
       ref.current.position.x = coords.x
       ref.current.position.z = coords.z

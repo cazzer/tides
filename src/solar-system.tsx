@@ -17,12 +17,17 @@ import earthTextureHigh from './assets/earth-day.jpg'
 import earthTextureLow from './assets/earth-day-2k.jpg'
 import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
-import { interpolateValue } from './utils'
+import { degreesToRadians, interpolateValue, trueAnomalyToMeanAnomaly } from './utils'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
 const scaleOrbit = scaleLinear()
   .domain([384400000, 149597870700])
   .range([10, 50])
+
+const EARTH_SOLAR_DAY_MS = 24 * 3600000
+const EARTH_SIDEREAL_YEAR_MS = 365.256363004 * 24 * 3600000
+const MOON_SIDEREAL_PERIOD_MS = 27.321661 * 24 * 3600000
+const JUMP_DURATION_MS = 5000
 
 useTexture.preload(earthTextureHigh)
 
@@ -54,34 +59,40 @@ export default function SolarSystem({
   }, [])
 
   useFrame((state, delta) => {
+    const simulationState = state as typeof state & {
+      timestamp?: number
+      startJumpAt?: number | null
+      startJumpClock?: number | null
+    }
+    const currentTimestamp =
+      typeof simulationState.timestamp === 'number'
+        ? simulationState.timestamp
+        : Date.now()
     let newTime
 
     if (jumpDate) {
-      // @ts-ignore
-      if (!state.startJumpAt) {
-        // @ts-ignore
-        state.startJumpAt = state.timestamp
+      if (!simulationState.startJumpAt) {
+        simulationState.startJumpAt = currentTimestamp
+        simulationState.startJumpClock = state.clock.elapsedTime
       }
 
-      const duration = 5000
       const jumpDateMillis = jumpDate.getTime()
-      const jumpDateSetAtMillis = jumpDateSetAt.getTime()
+      const jumpStartClock = simulationState.startJumpClock ?? state.clock.elapsedTime
+      const jumpElapsedMs = (state.clock.elapsedTime - jumpStartClock) * 1000
+      const jumpProgress = Math.min(1, Math.max(0, jumpElapsedMs / JUMP_DURATION_MS))
       newTime = interpolateValue(
-        // @ts-ignore
-        state.startJumpAt,
+        simulationState.startJumpAt ?? currentTimestamp,
         jumpDateMillis,
-        (Date.now() - jumpDateSetAtMillis) / duration,
+        jumpProgress,
         easeExpInOut
       )
-      if (Date.now() - jumpDateSetAtMillis > duration) {
+      if (jumpProgress >= 1) {
         setJumpDate(null)
-        // @ts-ignore
-        state.startJumpAt = null
+        simulationState.startJumpAt = null
+        simulationState.startJumpClock = null
       }
     } else {
-      newTime =
-        // @ts-ignore
-        (parseInt(state.timestamp) || Date.now()) + delta * 1000 * timeScale
+      newTime = currentTimestamp + delta * 1000 * timeScale
     }
 
     state.set({
@@ -90,7 +101,6 @@ export default function SolarSystem({
     })
   })
 
-  const earthOrbitalPeriod = 365.256 * 24 * 3600000
   const start = DateTime.utc(2024, 1, 1, 0, 0, 0)
   const epochMs = start.toMillis()
   const end = DateTime.utc(2024, 12, 31, 23, 59, 59)
@@ -103,7 +113,24 @@ export default function SolarSystem({
       2 -
     Math.PI / 2
 
+  const earthArgumentOfPeriapsisDeg = 102.9372
+  const earthInitialTrueAnomaly = -angle - degreesToRadians(earthArgumentOfPeriapsisDeg)
+  const earthMeanAnomalyAtEpoch = trueAnomalyToMeanAnomaly(
+    earthInitialTrueAnomaly,
+    0.0167
+  )
+
+  const moonArgumentOfPeriapsisDeg = 318.15
+  const moonAscendingNodeDeg = 125.08
+  const moonInitialTrueAnomaly =
+    degreesToRadians(-8) - degreesToRadians(moonArgumentOfPeriapsisDeg)
+  const moonMeanAnomalyAtEpoch = trueAnomalyToMeanAnomaly(
+    moonInitialTrueAnomaly,
+    0.0549
+  )
+
   const earthOffset = suncalc.getPosition(new Date(), 0, 0)
+  const earthRotationOffset = 2 * Math.PI * earthOffset.azimuth
 
   return (
     <CameraProvider>
@@ -130,13 +157,21 @@ export default function SolarSystem({
         parent={sun}
         showOrbit={showOrbitLabels}
         diameter={scaleDiameter(12742000)}
-        rotationPeriod={24 * 3600000}
+        rotationPeriod={EARTH_SOLAR_DAY_MS}
+        rotationEpochMs={epochMs}
         orbitalDistance={scaleOrbit(149597870700)}
-        orbitalPeriod={earthOrbitalPeriod}
-        orbitalInclination={0}
+        orbitalPeriod={EARTH_SIDEREAL_YEAR_MS}
         orbitOffset={angle}
         orbitEpochMs={epochMs}
-        rotationOffset={2 * Math.PI * earthOffset.azimuth}
+        keplerOrbit={{
+          semiMajorAxis: scaleOrbit(149597870700),
+          eccentricity: 0.0167,
+          inclinationDeg: 0,
+          ascendingNodeDeg: 0,
+          argumentOfPeriapsisDeg: earthArgumentOfPeriapsisDeg,
+          meanAnomalyAtEpochRad: earthMeanAnomalyAtEpoch,
+        }}
+        rotationOffset={earthRotationOffset}
         axialTilt={23.4}
         interactive={interactive}
       >
@@ -150,12 +185,18 @@ export default function SolarSystem({
         focusKey="moon"
         parent={earth}
         diameter={scaleDiameter(3474800)}
-        orbitalDistance={scaleOrbit(384400000)}
-        orbitalPeriod={655.728 * 3600000}
-        orbitOffset={(8 / 180) * Math.PI}
-        orbitalInclination={-21}
+        orbitalPeriod={MOON_SIDEREAL_PERIOD_MS}
         orbitEpochMs={epochMs}
-        rotationPeriod={655.728 * 3600000}
+        keplerOrbit={{
+          semiMajorAxis: scaleOrbit(384400000),
+          eccentricity: 0.0549,
+          inclinationDeg: 5.145,
+          ascendingNodeDeg: moonAscendingNodeDeg,
+          argumentOfPeriapsisDeg: moonArgumentOfPeriapsisDeg,
+          meanAnomalyAtEpochRad: moonMeanAnomalyAtEpoch,
+        }}
+        rotationPeriod={MOON_SIDEREAL_PERIOD_MS}
+        rotationEpochMs={epochMs}
         rotationOffset={2.5}
         axialTilt={-1.53}
         interactive={interactive}

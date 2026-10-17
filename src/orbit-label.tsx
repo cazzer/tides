@@ -101,16 +101,11 @@ export function OrbitLabel({
   // @ts-ignore
   const { timestamp } = useThree()
 
-  const coords = calculateOrbitPosition({
-    radius: radius - 20,
-    period: orbitalPeriod,
-    time: timestamp,
-    centerX: 0,
-    centerY: 0,
-    centerZ: 0,
-    inclination: 0,
-    orbitOffset,
-  })
+  const fallbackAngle = ((timestamp % orbitalPeriod) / orbitalPeriod) * Math.PI * 2
+  const markerX = targetPosition?.x ?? (radius - 20) * Math.cos(fallbackAngle)
+  const markerY = (targetPosition?.y ?? 0) + 1.5
+  const markerZ = targetPosition?.z ?? (radius - 20) * -Math.sin(fallbackAngle)
+  const markerAngle = Math.atan2(-(targetPosition?.z ?? markerZ), targetPosition?.x ?? markerX)
 
   const lineGeometry = new THREE.BufferGeometry().setFromPoints(eclipsePoints)
 
@@ -126,7 +121,7 @@ export function OrbitLabel({
           opacity={0.2}
         />
       </line>
-      {targetPosition?.x && (
+      {targetPosition && (
         <Text
           ref={dateRef}
           onClick={handleFocus}
@@ -134,8 +129,8 @@ export function OrbitLabel({
           color="white" // default
           anchorX="center" // default
           anchorY="middle" // default
-          position={[coords.x, coords.y + 1.5, coords.z]}
-          rotation={[-Math.PI / 2, 0, coords.angle]}
+          position={[markerX, markerY, markerZ]}
+          rotation={[-Math.PI / 2, 0, markerAngle]}
         >
           {formatClockDate(new Date(timestamp))}
         </Text>

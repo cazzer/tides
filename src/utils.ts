@@ -35,6 +35,115 @@ interface OrbitParams {
   orbitOffset?: number // Offset angle for the orbit
 }
 
+export interface KeplerOrbitParams {
+  semiMajorAxis: number
+  eccentricity: number
+  inclinationDeg: number
+  ascendingNodeDeg: number
+  argumentOfPeriapsisDeg: number
+  meanAnomalyAtEpochRad: number
+  period: number
+  timeSinceEpoch: number
+  centerX?: number
+  centerY?: number
+  centerZ?: number
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  const remainder = value % divisor
+  return remainder >= 0 ? remainder : remainder + divisor
+}
+
+function solveEccentricAnomaly(
+  meanAnomaly: number,
+  eccentricity: number,
+  iterations: number = 7
+) {
+  let eccentricAnomaly = meanAnomaly
+  for (let i = 0; i < iterations; i += 1) {
+    const f =
+      eccentricAnomaly - eccentricity * Math.sin(eccentricAnomaly) - meanAnomaly
+    const fPrime = 1 - eccentricity * Math.cos(eccentricAnomaly)
+    eccentricAnomaly -= f / fPrime
+  }
+  return eccentricAnomaly
+}
+
+export function trueAnomalyToMeanAnomaly(
+  trueAnomalyRad: number,
+  eccentricity: number
+) {
+  const e = Math.max(0, Math.min(0.9999, eccentricity))
+  const eccentricAnomaly =
+    2 *
+    Math.atan2(
+      Math.sqrt(1 - e) * Math.sin(trueAnomalyRad / 2),
+      Math.sqrt(1 + e) * Math.cos(trueAnomalyRad / 2)
+    )
+  return positiveModulo(eccentricAnomaly - e * Math.sin(eccentricAnomaly), Math.PI * 2)
+}
+
+export function calculateKeplerOrbitPosition({
+  semiMajorAxis,
+  eccentricity,
+  inclinationDeg,
+  ascendingNodeDeg,
+  argumentOfPeriapsisDeg,
+  meanAnomalyAtEpochRad,
+  period,
+  timeSinceEpoch,
+  centerX = 0,
+  centerY = 0,
+  centerZ = 0,
+}: KeplerOrbitParams): { x: number; y: number; z: number; angle: number } {
+  const e = Math.max(0, Math.min(0.9999, eccentricity))
+  const inclination = degreesToRadians(inclinationDeg)
+  const ascendingNode = degreesToRadians(ascendingNodeDeg)
+  const argumentOfPeriapsis = degreesToRadians(argumentOfPeriapsisDeg)
+
+  const meanMotion = (Math.PI * 2) / period
+  const meanAnomaly = positiveModulo(
+    meanAnomalyAtEpochRad + meanMotion * timeSinceEpoch,
+    Math.PI * 2
+  )
+  const eccentricAnomaly = solveEccentricAnomaly(meanAnomaly, e)
+
+  const trueAnomaly =
+    2 *
+    Math.atan2(
+      Math.sqrt(1 + e) * Math.sin(eccentricAnomaly / 2),
+      Math.sqrt(1 - e) * Math.cos(eccentricAnomaly / 2)
+    )
+
+  const radius = semiMajorAxis * (1 - e * Math.cos(eccentricAnomaly))
+
+  const xOrbital = radius * Math.cos(trueAnomaly)
+  const zOrbital = -radius * Math.sin(trueAnomaly)
+
+  const cosArg = Math.cos(argumentOfPeriapsis)
+  const sinArg = Math.sin(argumentOfPeriapsis)
+  const xArg = xOrbital * cosArg + zOrbital * sinArg
+  const zArg = -xOrbital * sinArg + zOrbital * cosArg
+
+  const cosInc = Math.cos(inclination)
+  const sinInc = Math.sin(inclination)
+  const xInclined = xArg
+  const yInclined = zArg * sinInc
+  const zInclined = zArg * cosInc
+
+  const cosNode = Math.cos(ascendingNode)
+  const sinNode = Math.sin(ascendingNode)
+  const xFinal = xInclined * cosNode + zInclined * sinNode
+  const zFinal = -xInclined * sinNode + zInclined * cosNode
+
+  return {
+    x: centerX + xFinal,
+    y: centerY + yInclined,
+    z: centerZ + zFinal,
+    angle: trueAnomaly,
+  }
+}
+
 export function calculateOrbitPosition({
   radius,
   period,
@@ -48,10 +157,8 @@ export function calculateOrbitPosition({
   // Convert inclination to radians
   const inclinationRad = (inclination * Math.PI) / 180
 
-  // Calculate the angular velocity
-  const angularVelocity = (2 * Math.PI) / period
-
-  const angle = ((time % period) / period) * Math.PI * 2 - orbitOffset
+  const phase = positiveModulo(time, period) / period
+  const angle = phase * Math.PI * 2 - orbitOffset
 
   // Calculate x, y, and z coordinates with inclination
   const x = centerX + radius * Math.cos(angle)
@@ -66,7 +173,8 @@ export function calculateRotation(
   time: number,
   offset: number = 0
 ) {
-  return ((time % rotationPeriod) / rotationPeriod) * Math.PI * 2 + offset
+  const phase = positiveModulo(time, rotationPeriod) / rotationPeriod
+  return phase * Math.PI * 2 + offset
 }
 
 export function calculateLocationAndRotationForLatLng(
