@@ -21,15 +21,31 @@ const MONTHS = [
   'December',
 ]
 
-// Just outside the sun halo (radius ~14). September at scale 4 is ~19.4 units
-// long, so month labels end by ~37, inside the Moon's band around Earth.
-const LABEL_INNER_RADIUS = 17.5
+// Clear of the sun halo (radius ~14). September at scale 3.5 is ~16.9 units
+// long and the clock ~16.4, so both end by ~37.5, inside the Moon's band.
+const LABEL_INNER_RADIUS = 20
 const CLOCK_INNER_RADIUS = LABEL_INNER_RADIUS + 1
+const MONTH_SCALE = 3.5
+// Solid grey reads like the old 25%-opaque white on black, but stays visible
+// over the Sun, where translucent white blends into its bright surface.
+const MONTH_COLOR = '#404040'
 // Roughly half the clock text's width (~16.4 units at scale 2), so the camera
 // centres on the text rather than its left-anchored inner end.
 const CLOCK_HALF_WIDTH = 8
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
+
+// The camera never moves, only re-aims, so from its oblique angle the Sun's
+// disc hides anything on the ecliptic within ~27 units behind it. Draw labels
+// as an overlay after the bodies instead.
+const LABEL_RENDER_ORDER = 1
+const overlayMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  side: THREE.DoubleSide,
+  transparent: true,
+  depthTest: false,
+  depthWrite: false,
+})
 
 type SimulationState = RootState & { timestamp?: number }
 type TroikaText = THREE.Mesh & {
@@ -117,13 +133,11 @@ export function OrbitLabel({ radius }: { radius: number }) {
     for (let m = 0; m < MONTHS.length; m++) {
       const month = monthRefs.current[m]
       if (month) {
-        month.fillOpacity =
-          0.25 *
-          smoothstep(
-            Math.abs(wrapToPi(angles[m] - angle)),
-            FADE_START,
-            FADE_END
-          )
+        month.fillOpacity = smoothstep(
+          Math.abs(wrapToPi(angles[m] - angle)),
+          FADE_START,
+          FADE_END
+        )
       }
     }
 
@@ -168,8 +182,13 @@ export function OrbitLabel({ radius }: { radius: number }) {
         ref={clockTextRef}
         userData-focus="clock"
         onClick={handleFocus}
+        material={overlayMaterial}
+        renderOrder={LABEL_RENDER_ORDER}
         scale={[2, 2, 2]}
         color="white" // default
+        // Thin white strokes wash out over the Sun without a dark edge.
+        outlineWidth="6%"
+        outlineColor="black"
         anchorX="left"
         anchorY="middle" // default
         textAlign="left"
@@ -183,8 +202,10 @@ export function OrbitLabel({ radius }: { radius: number }) {
           ref={(text: TroikaText | null) => {
             monthRefs.current[m] = text
           }}
-          scale={[4, 4, 4]}
-          color="white" // default
+          material={overlayMaterial}
+          renderOrder={LABEL_RENDER_ORDER}
+          scale={[MONTH_SCALE, MONTH_SCALE, MONTH_SCALE]}
+          color={MONTH_COLOR}
           anchorX="left"
           anchorY="middle" // default
           position={[
