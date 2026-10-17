@@ -21,9 +21,13 @@ const MONTHS = [
   'December',
 ]
 
-// Roughly half the clock text's width, so the camera centres on the text
-// rather than its right-anchored outer end.
-const CLOCK_CENTRE_INSET = 8
+// Just outside the sun halo (radius ~14). September at scale 4 is ~19.4 units
+// long, so month labels end by ~37, inside the Moon's band around Earth.
+const LABEL_INNER_RADIUS = 17.5
+const CLOCK_INNER_RADIUS = LABEL_INNER_RADIUS + 1
+// Roughly half the clock text's width (~16.4 units at scale 2), so the camera
+// centres on the text rather than its left-anchored inner end.
+const CLOCK_HALF_WIDTH = 8
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
 
@@ -93,7 +97,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
   const angles = useMemo(() => monthStartAngles(year), [year])
 
   const clockAngle = earthAngle(timestamp)
-  const clockCentre = 0.75 * radius - CLOCK_CENTRE_INSET
+  const clockCentre = CLOCK_INNER_RADIUS + CLOCK_HALF_WIDTH
 
   return (
     <group>
@@ -121,13 +125,13 @@ export function OrbitLabel({ radius }: { radius: number }) {
         onClick={handleFocus}
         scale={[2, 2, 2]}
         color="white" // default
-        anchorX="right"
+        anchorX="left"
         anchorY="middle" // default
-        textAlign="right"
+        textAlign="left"
         position={[
-          0.75 * radius * Math.cos(clockAngle),
+          CLOCK_INNER_RADIUS * Math.cos(clockAngle),
           0.5,
-          -0.75 * radius * Math.sin(clockAngle),
+          -CLOCK_INNER_RADIUS * Math.sin(clockAngle),
         ]}
         rotation={[-Math.PI / 2, 0, clockAngle]}
       >
@@ -139,12 +143,12 @@ export function OrbitLabel({ radius }: { radius: number }) {
           key={month}
           scale={[4, 4, 4]}
           color="white" // default
-          anchorX="right"
+          anchorX="left"
           anchorY="middle" // default
           position={[
-            0.75 * radius * Math.cos(angles[m]),
+            LABEL_INNER_RADIUS * Math.cos(angles[m]),
             0,
-            -0.75 * radius * Math.sin(angles[m]),
+            -LABEL_INNER_RADIUS * Math.sin(angles[m]),
           ]}
           rotation={[-Math.PI / 2, 0, angles[m]]}
           fillOpacity={
