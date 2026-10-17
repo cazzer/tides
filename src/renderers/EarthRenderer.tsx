@@ -1,5 +1,5 @@
 import { useLoader, useFrame } from '@react-three/fiber'
-import { useTexture } from '@react-three/drei'
+import { meshBounds, useTexture } from '@react-three/drei'
 import { useRef } from 'react'
 import * as THREE from 'three'
 
@@ -63,7 +63,7 @@ export default function EarthRenderer({
   return (
     <group>
       {/* Land with topology - main Earth surface */}
-      <mesh>
+      <mesh raycast={meshBounds}>
         <sphereGeometry args={[diameter, 128, 128]} />
         <meshPhongMaterial
           map={earthTexture}
@@ -82,7 +82,10 @@ export default function EarthRenderer({
       </mesh>
 
       {/* Clouds layer */}
-      <mesh ref={cloudRef}>
+      <mesh
+        ref={cloudRef}
+        raycast={meshBounds}
+      >
         <sphereGeometry args={[diameter * 1.02, 64, 64]} />
         <meshLambertMaterial
           map={cloudsTexture}

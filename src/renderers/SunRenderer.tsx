@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, useEffect } from 'react'
 import { useFrame, useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
 import noiseVertex from '../shaders/sun-noise/vertex.glsl'
@@ -7,7 +7,7 @@ import sunVertex from '../shaders/sun/vertex.glsl'
 import sunFragment from '../shaders/sun/fragment.frag'
 import haloVertex from '../shaders/sun-halo/vertex.glsl'
 import haloFragment from '../shaders/sun-halo/fragment.frag'
-import { CubeCamera, useCubeCamera } from '@react-three/drei'
+import { CubeCamera, meshBounds } from '@react-three/drei'
 
 // https://www.youtube.com/watch?v=3krH52AhPqk
 // ended at 1:04:24
@@ -27,14 +27,16 @@ export default function SunRenderer({
 }: SunRendererProps) {
   const noiseRef = useRef<THREE.Mesh>(null)
   const sunRef = useRef<THREE.Mesh>(null)
-  const noiseMaterial = new THREE.ShaderMaterial({
-    vertexShader: noiseVertex,
-    fragmentShader: noiseFragment,
-    side: THREE.DoubleSide,
-    uniforms: {
-      time: { value: 0 },
-    },
-  })
+  const noiseMaterial = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: noiseVertex,
+      fragmentShader: noiseFragment,
+      side: THREE.DoubleSide,
+      uniforms: {
+        time: { value: 0 },
+      },
+    })
+  }, [])
   const sunMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -47,25 +49,33 @@ export default function SunRenderer({
       fragmentShader: sunFragment,
     })
   }, [])
-  const sunHaloMaterial = new THREE.ShaderMaterial({
-    vertexShader: haloVertex,
-    fragmentShader: haloFragment,
-    side: THREE.BackSide,
-    transparent: true,
-    uniforms: {
-      time: { value: 0 },
-      uPerlin: { value: null },
-    },
-  })
+  const sunHaloMaterial = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: haloVertex,
+      fragmentShader: haloFragment,
+      side: THREE.BackSide,
+      transparent: true,
+      uniforms: {
+        time: { value: 0 },
+        uPerlin: { value: null },
+      },
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      noiseMaterial.dispose()
+      sunMaterial.dispose()
+      sunHaloMaterial.dispose()
+    }
+  }, [noiseMaterial, sunMaterial, sunHaloMaterial])
 
   // Update the shader time uniform for animation
   useFrame((state) => {
-    if (noiseMaterial) {
-      noiseMaterial.uniforms.time.value = state.clock.elapsedTime
-    }
-    if (sunMaterial) {
-      sunMaterial.uniforms.time.value = state.clock.elapsedTime
-      sunMaterial.uniforms.cameraPosition.value.copy(state.camera.position)
+    noiseMaterial.uniforms.time.value = state.clock.elapsedTime
+    sunMaterial.uniforms.time.value = state.clock.elapsedTime
+    sunMaterial.uniforms.cameraPosition.value.copy(state.camera.position)
+    if (sunRef.current) {
       sunMaterial.uniforms.objectCenter.value.copy(sunRef.current.position)
     }
   })
@@ -95,8 +105,8 @@ export default function SunRenderer({
           return (
             <>
               <mesh
-                ref={sunRef}
                 position={[0, 0, 0]}
+                raycast={meshBounds}
               >
                 <sphereGeometry args={[diameter + 4, 128, 128]} />
                 <primitive
@@ -107,6 +117,7 @@ export default function SunRenderer({
               <mesh
                 ref={sunRef}
                 position={[0, 0, 0]}
+                raycast={meshBounds}
               >
                 <sphereGeometry args={[diameter, 128, 128]} />
                 <primitive

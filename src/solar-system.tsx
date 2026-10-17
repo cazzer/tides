@@ -46,8 +46,10 @@ export default function SolarSystem({
   const moonTexture = getMoonTexture()
   useTexture.preload(earthTexture)
   useTexture.preload(moonTexture)
-  const { setPlanet, timeScale, jumpDate, jumpDateSetAt, setJumpDate } =
-    useStore()
+  const setPlanet = useStore((s) => s.setPlanet)
+  const timeScale = useStore((s) => s.timeScale)
+  const jumpDate = useStore((s) => s.jumpDate)
+  const setJumpDate = useStore((s) => s.setJumpDate)
   const sun = useRef(null)
   const earth = useRef(null)
   const moon = useRef(null)
