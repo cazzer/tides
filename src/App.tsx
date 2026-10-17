@@ -218,7 +218,7 @@ function MainCamera() {
 
 /** Ensures the main view's camera sees the location pin (PIN_LAYER). Only used in the main panel. */
 function EnablePinLayerForCamera() {
-  const { camera } = useThree()
+  const camera = useThree((s) => s.camera)
   useFrame(() => {
     camera.layers.enable(PIN_LAYER)
   })
@@ -226,7 +226,7 @@ function EnablePinLayerForCamera() {
 }
 
 function PanelCamera() {
-  const { earth } = useStore()
+  const earth = useStore((s) => s.earth)
   if (!earth?.current) {
     return null
   }

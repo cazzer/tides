@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import { useEffect, useMemo, useRef } from 'react'
-import { useThree } from '@react-three/fiber'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useFrame, useThree, type RootState } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
 import { useCamera } from './camera'
 import { useStore } from './store'
@@ -31,6 +31,13 @@ const CLOCK_HALF_WIDTH = 8
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
 
+type SimulationState = RootState & { timestamp?: number }
+type TroikaText = THREE.Mesh & {
+  text: string
+  fillOpacity: number
+  sync(): void
+}
+
 const weekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short' })
 const dateFormat = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -58,6 +65,8 @@ function smoothstep(x: number, edge0: number, edge1: number): number {
 
 export function OrbitLabel({ radius }: { radius: number }) {
   const clockRef = useRef<THREE.Object3D>(null)
+  const clockTextRef = useRef<TroikaText>(null)
+  const monthRefs = useRef<(TroikaText | null)[]>([])
   const { handleFocus } = useCamera()
   const setPlanet = useStore((s) => s.setPlanet)
 
@@ -88,16 +97,56 @@ export function OrbitLabel({ radius }: { radius: number }) {
 
   useEffect(() => () => lineGeometry.dispose(), [lineGeometry])
 
-  const sceneTimestamp = useThree(
-    (s) => (s as typeof s & { timestamp?: number }).timestamp
+  const get = useThree((s) => s.get)
+  const [year, setYear] = useState(() =>
+    new Date((get() as SimulationState).timestamp ?? Date.now()).getFullYear()
   )
-  // Unset until SolarSystem's first frame, which starts from Date.now().
-  const timestamp: number = sceneTimestamp ?? Date.now()
-  const year = new Date(timestamp).getFullYear()
   const angles = useMemo(() => monthStartAngles(year), [year])
+  const lastSecond = useRef<number | null>(null)
 
-  const clockAngle = earthAngle(timestamp)
-  const clockCentre = CLOCK_INNER_RADIUS + CLOCK_HALF_WIDTH
+  useFrame((state) => {
+    // Unset until SolarSystem's first frame, which starts from Date.now().
+    const timestamp = (state as SimulationState).timestamp ?? Date.now()
+    const angle = earthAngle(timestamp)
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
+    const clockCentre = CLOCK_INNER_RADIUS + CLOCK_HALF_WIDTH
+
+    clockRef.current?.position.set(clockCentre * cos, 0.5, -clockCentre * sin)
+
+    for (let m = 0; m < MONTHS.length; m++) {
+      const month = monthRefs.current[m]
+      if (month) {
+        month.fillOpacity =
+          0.25 *
+          smoothstep(
+            Math.abs(wrapToPi(angles[m] - angle)),
+            FADE_START,
+            FADE_END
+          )
+      }
+    }
+
+    const clock = clockTextRef.current
+    if (!clock) return
+    clock.position.set(
+      CLOCK_INNER_RADIUS * cos,
+      0.5,
+      -CLOCK_INNER_RADIUS * sin
+    )
+    clock.rotation.set(-Math.PI / 2, 0, angle)
+
+    const second = Math.floor(timestamp / 1000)
+    if (second !== lastSecond.current) {
+      lastSecond.current = second
+      const date = new Date(timestamp)
+      clock.text = formatClockDate(date)
+      // troika auto-syncs only in onBeforeRender, which culled meshes skip.
+      clock.sync()
+      const currentYear = date.getFullYear()
+      if (currentYear !== year) setYear(currentYear)
+    }
+  })
 
   return (
     <group>
@@ -114,13 +163,9 @@ export function OrbitLabel({ radius }: { radius: number }) {
       <object3D
         ref={clockRef}
         userData-focus="clock"
-        position={[
-          clockCentre * Math.cos(clockAngle),
-          0.5,
-          -clockCentre * Math.sin(clockAngle),
-        ]}
       />
       <Text
+        ref={clockTextRef}
         userData-focus="clock"
         onClick={handleFocus}
         scale={[2, 2, 2]}
@@ -128,19 +173,16 @@ export function OrbitLabel({ radius }: { radius: number }) {
         anchorX="left"
         anchorY="middle" // default
         textAlign="left"
-        position={[
-          CLOCK_INNER_RADIUS * Math.cos(clockAngle),
-          0.5,
-          -CLOCK_INNER_RADIUS * Math.sin(clockAngle),
-        ]}
-        rotation={[-Math.PI / 2, 0, clockAngle]}
       >
-        {formatClockDate(new Date(timestamp))}
+        {''}
       </Text>
 
       {MONTHS.map((month, m) => (
         <Text
           key={month}
+          ref={(text: TroikaText | null) => {
+            monthRefs.current[m] = text
+          }}
           scale={[4, 4, 4]}
           color="white" // default
           anchorX="left"
@@ -151,14 +193,6 @@ export function OrbitLabel({ radius }: { radius: number }) {
             -LABEL_INNER_RADIUS * Math.sin(angles[m]),
           ]}
           rotation={[-Math.PI / 2, 0, angles[m]]}
-          fillOpacity={
-            0.25 *
-            smoothstep(
-              Math.abs(wrapToPi(angles[m] - clockAngle)),
-              FADE_START,
-              FADE_END
-            )
-          }
         >
           {month}
         </Text>

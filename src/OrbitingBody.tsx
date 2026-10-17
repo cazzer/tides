@@ -51,8 +51,11 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   const moonCameraRef = useRef<any>(null)
   const surfaceCameraContainerRef = useRef<THREE.Mesh>(null)
   const flagRef = useRef<THREE.Group>(null)
-  const { get, set } = useThree(({ get, set }) => ({ get, set }))
-  const { moon, location, setPlanet, setEarthRadius } = useStore()
+  const set = useThree((s) => s.set)
+  const moon = useStore((s) => s.moon)
+  const location = useStore((s) => s.location)
+  const setPlanet = useStore((s) => s.setPlanet)
+  const setEarthRadius = useStore((s) => s.setEarthRadius)
 
   useEffect(() => {
     setPlanet('locationPin', location ? flagRef : undefined)

@@ -1,11 +1,17 @@
-import { createContext, useContext, useState, useRef } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  useRef,
+} from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { Vector3, Matrix4, type Object3D } from 'three'
 import { useStore, type CameraFocus } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
 
 const CameraContext = createContext({
-  focusedObject: null,
   handleFocus: null,
 })
 
@@ -33,7 +39,8 @@ function getFocusForObject(object: Object3D): CameraFocus | null {
 export const useCamera = () => useContext(CameraContext)
 
 export const CameraProvider = ({ children }: { children: any }) => {
-  const { camera, controls } = useThree()
+  const camera = useThree((s) => s.camera)
+  const controls = useThree((s) => s.controls)
   const cameraTarget = useRef(new Vector3())
   const [focusedObject, setFocusedObject] = useState(null)
   const cameraFocus = useStore((s) => s.cameraFocus)
@@ -111,22 +118,26 @@ export const CameraProvider = ({ children }: { children: any }) => {
   })
 
   // Handle focus: update store (and thus dropdown) when a known body is clicked.
-  const handleFocus = (event: any) => {
-    const object = event.intersection?.object ?? event.object
-    const instanceId = event.instanceId
-    const focus = getFocusForObject(object)
-    if (focus) {
-      setCameraFocus(focus)
-    }
-    if (instanceId !== undefined) {
-      setFocusedObject({ object, instanceId })
-    } else {
-      setFocusedObject({ object })
-    }
-  }
+  const handleFocus = useCallback(
+    (event: any) => {
+      const object = event.intersection?.object ?? event.object
+      const instanceId = event.instanceId
+      const focus = getFocusForObject(object)
+      if (focus) {
+        setCameraFocus(focus)
+      }
+      if (instanceId !== undefined) {
+        setFocusedObject({ object, instanceId })
+      } else {
+        setFocusedObject({ object })
+      }
+    },
+    [setCameraFocus]
+  )
+  const value = useMemo(() => ({ handleFocus }), [handleFocus])
 
   return (
-    <CameraContext.Provider value={{ focusedObject, handleFocus }}>
+    <CameraContext.Provider value={value}>
       {children}
     </CameraContext.Provider>
   )
