@@ -81,7 +81,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
         instanceId: undefined,
       })
     }
-  }, [clockRef.current])
+  }, [handleFocus])
 
   const lineGeometry = useMemo(() => {
     const eclipsePoints = []

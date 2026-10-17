@@ -3,11 +3,10 @@ import {
   useCallback,
   useContext,
   useMemo,
-  useState,
   useRef,
 } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Vector3, Matrix4, type Object3D } from 'three'
+import { Vector3, Matrix4, type InstancedMesh, type Object3D } from 'three'
 import { useStore, type CameraFocus } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
 
@@ -42,7 +41,10 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
   const cameraTarget = useRef(new Vector3())
-  const [focusedObject, setFocusedObject] = useState(null)
+  const focusedObject = useRef<{
+    object: Object3D
+    instanceId?: number
+  } | null>(null)
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const earth = useStore((s) => s.earth)
@@ -92,16 +94,15 @@ export const CameraProvider = ({ children }: { children: any }) => {
       }
     }
 
-    if (!hasTarget && focusedObject) {
-      if (focusedObject.instanceId !== undefined) {
+    const focused = focusedObject.current
+    if (!hasTarget && focused) {
+      if (focused.instanceId !== undefined) {
+        const instanced = focused.object as InstancedMesh
         const instanceMatrix = new Matrix4()
-        focusedObject.object.getMatrixAt(
-          focusedObject.instanceId,
-          instanceMatrix
-        )
+        instanced.getMatrixAt(focused.instanceId, instanceMatrix)
         target.copy(new Vector3().setFromMatrixPosition(instanceMatrix))
       } else {
-        focusedObject.object.getWorldPosition(target)
+        focused.object.getWorldPosition(target)
       }
       hasTarget = true
     }
@@ -126,11 +127,8 @@ export const CameraProvider = ({ children }: { children: any }) => {
       if (focus) {
         setCameraFocus(focus)
       }
-      if (instanceId !== undefined) {
-        setFocusedObject({ object, instanceId })
-      } else {
-        setFocusedObject({ object })
-      }
+      focusedObject.current =
+        instanceId !== undefined ? { object, instanceId } : { object }
     },
     [setCameraFocus]
   )
