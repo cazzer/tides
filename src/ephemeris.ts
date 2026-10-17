@@ -58,7 +58,10 @@ export function sunSpin(t: number): number {
 
 // Local midnight, to match the locale-formatted clock.
 export function monthStartAngles(year: number): number[] {
-  return Array.from({ length: 12 }, (_, m) =>
-    earthAngle(new Date(year, m, 1).getTime())
-  )
+  return Array.from({ length: 12 }, (_, m) => {
+    const d = new Date(0)
+    d.setFullYear(year, m, 1)
+    d.setHours(0, 0, 0, 0)
+    return earthAngle(d.getTime())
+  })
 }
