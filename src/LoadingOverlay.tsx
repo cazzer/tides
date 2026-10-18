@@ -27,7 +27,9 @@ export default function LoadingOverlay({
   const canHide = assetsLoaded && sceneReady
 
   useEffect(() => {
-    if (active) {
+    // Only the first load covers the app; a view mounted later (single
+    // layout) loads its assets behind the scenes.
+    if (active && !sceneReady) {
       setIsVisible(true)
       setIsFadingOut(false)
       return
@@ -43,7 +45,7 @@ export default function LoadingOverlay({
         window.clearTimeout(timeout)
       }
     }
-  }, [active, canHide])
+  }, [active, sceneReady, canHide])
 
   const clampedProgress = Math.max(0, Math.min(100, progress || 0))
 

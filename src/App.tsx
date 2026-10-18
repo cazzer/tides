@@ -12,6 +12,7 @@ import Controls from './controls'
 import { PIN_LAYER } from './LocationPin'
 import LoadingOverlay from './LoadingOverlay'
 import { advanceClock, type Jump } from './sim-clock'
+import ViewMenu from './ViewMenu'
 
 const FOCUS_VALUES: CameraFocus[] = [
   'clock',
@@ -22,6 +23,12 @@ const FOCUS_VALUES: CameraFocus[] = [
 ]
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
+
+const PANEL_OPTIONS: { value: PanelKey; label: string }[] = [
+  { value: 'main', label: 'Three Body System' },
+  { value: 'top', label: 'View from Earth' },
+  { value: 'bottom', label: 'Moon Phase' },
+]
 
 const matrix = new THREE.Matrix4()
 
@@ -34,6 +41,8 @@ export default function App() {
   const setMainPanel = useStore((s) => s.setMainPanel)
   const timeScale = useStore((s) => s.timeScale)
   const location = useStore((s) => s.location)
+  const weatherSource = useStore((s) => s.weatherSource)
+  const layout = useStore((s) => s.layout)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
@@ -58,6 +67,8 @@ export default function App() {
     params.set('focus', cameraFocus)
     params.set('speed', String(timeScale))
     params.set('panel', mainPanel)
+    params.set('weather', weatherSource)
+    params.set('layout', layout)
     if (location) {
       params.set('lat', String(location.lat))
       params.set('lon', String(location.lon))
@@ -67,7 +78,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {
@@ -79,11 +90,27 @@ export default function App() {
     setSceneReady(true)
   }, [])
 
+  // Single layout mounts only the chosen panel, so the others never render.
+  const single = layout === 'single'
+  const showPanel = (panelKey: PanelKey) => !single || panelKey === mainPanel
+  const panelProps = (panelKey: PanelKey) => ({
+    gridArea: single ? 'main' : getGridArea(panelKey, mainPanel),
+    // Single layout swaps views through the ViewMenu instead.
+    label: single
+      ? undefined
+      : PANEL_OPTIONS.find((o) => o.value === panelKey)!.label,
+    panelKey,
+    onSwap: handlePanelSwap,
+  })
+  // The clock waits for the main scene; in single layout that is the shown one.
+  const readyHandler = (panelKey: PanelKey) =>
+    single || panelKey === 'main' ? handleSceneReady : undefined
+
   return (
     <div className="container">
       <LoadingOverlay sceneReady={sceneReady} />
       <Controls />
-      <div className="viewports">
+      <div className={single ? 'viewports viewports--single' : 'viewports'}>
         <Canvas
           shadows
           eventSource={document.getElementById('root')}
@@ -96,55 +123,62 @@ export default function App() {
           <SimClock running={sceneReady} />
           <View.Port />
         </Canvas>
-        <Panel
-          ref={solarSystemView}
-          gridArea={getGridArea('main', mainPanel)}
-          label="Three Body System"
-          panelKey="main"
-          onSwap={handlePanelSwap}
-        >
-          <MainCamera />
-          <EnablePinLayerForCamera />
-          <Scene
-            background="black"
-            matrix={matrix}
-            interactive
-            showOrbitLabels
-            onReady={handleSceneReady}
+        {showPanel('main') && (
+          <Panel
+            ref={solarSystemView}
+            {...panelProps('main')}
+          >
+            <MainCamera />
+            <EnablePinLayerForCamera />
+            <Scene
+              background="black"
+              matrix={matrix}
+              interactive
+              showOrbitLabels
+              onReady={readyHandler('main')}
+            />
+            <OrbitControls
+              maxDistance={80}
+              minDistance={5}
+              makeDefault
+            />
+          </Panel>
+        )}
+        {showPanel('top') && (
+          <Panel
+            ref={earthView}
+            {...panelProps('top')}
+          >
+            <PanelCamera />
+            <Scene
+              background="black"
+              matrix={matrix}
+              earthCamera
+              onReady={readyHandler('top')}
+            />
+          </Panel>
+        )}
+        {showPanel('bottom') && (
+          <Panel
+            ref={moonView}
+            {...panelProps('bottom')}
+          >
+            <Scene
+              background="black"
+              matrix={matrix}
+              moonCamera
+              onReady={readyHandler('bottom')}
+            />
+          </Panel>
+        )}
+        {/* Outside the panels, so it (and its focus) survives the view switch. */}
+        {single && (
+          <ViewMenu
+            value={mainPanel}
+            options={PANEL_OPTIONS}
+            onChange={setMainPanel}
           />
-          <OrbitControls
-            maxDistance={80}
-            minDistance={5}
-            makeDefault
-          />
-        </Panel>
-        <Panel
-          ref={earthView}
-          gridArea={getGridArea('top', mainPanel)}
-          label="View from Earth"
-          panelKey="top"
-          onSwap={handlePanelSwap}
-        >
-          <PanelCamera />
-          <Scene
-            background="black"
-            matrix={matrix}
-            earthCamera
-          />
-        </Panel>
-        <Panel
-          ref={moonView}
-          gridArea={getGridArea('bottom', mainPanel)}
-          label="Moon Phase"
-          panelKey="bottom"
-          onSwap={handlePanelSwap}
-        >
-          <Scene
-            background="black"
-            matrix={matrix}
-            moonCamera
-          />
-        </Panel>
+        )}
       </div>
     </div>
   )

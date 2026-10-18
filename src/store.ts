@@ -2,6 +2,8 @@ import { create } from 'zustand'
 
 export type CameraFocus = 'clock' | 'earth' | 'sun' | 'moon' | 'location'
 export type PanelKey = 'main' | 'top' | 'bottom'
+export type WeatherSource = 'static' | 'real'
+export type Layout = 'single' | 'triple'
 
 const SPEED_VALUES = [1, 60 * 60, 60 * 60 * 24, 60 * 60 * 24 * 30] as const
 
@@ -40,6 +42,18 @@ function getInitialPanel(): PanelKey {
     : 'main'
 }
 
+function getInitialWeatherSource(): WeatherSource {
+  if (typeof window === 'undefined') return 'static'
+  const weather = new URLSearchParams(window.location.search).get('weather')
+  return weather === 'real' ? 'real' : 'static'
+}
+
+function getInitialLayout(): Layout {
+  if (typeof window === 'undefined') return 'triple'
+  const layout = new URLSearchParams(window.location.search).get('layout')
+  return layout === 'single' ? 'single' : 'triple'
+}
+
 import { truncateLatLon } from './utils'
 
 export type Location = { lat: number; lon: number }
@@ -72,12 +86,17 @@ export const useStore = create<{
   timestamp: number | null
   cameraFocus: CameraFocus
   mainPanel: PanelKey
+  /** 'real' only records the choice for now; the clouds stay static (tides-pdu). */
+  weatherSource: WeatherSource
+  layout: Layout
   location: Location | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
   setCameraFocus: (focus: CameraFocus) => void
   setMainPanel: (panel: PanelKey) => void
+  setWeatherSource: (weatherSource: WeatherSource) => void
+  setLayout: (layout: Layout) => void
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
@@ -94,12 +113,16 @@ export const useStore = create<{
   timestamp: null,
   cameraFocus: getInitialCameraFocus(),
   mainPanel: getInitialPanel(),
+  weatherSource: getInitialWeatherSource(),
+  layout: getInitialLayout(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),
   setCameraFocus: (cameraFocus: CameraFocus) => set({ cameraFocus }),
   setMainPanel: (mainPanel: PanelKey) => set({ mainPanel }),
+  setWeatherSource: (weatherSource: WeatherSource) => set({ weatherSource }),
+  setLayout: (layout: Layout) => set({ layout }),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,

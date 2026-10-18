@@ -71,12 +71,14 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     setPlanet('locationPin', location ? flagRef : undefined)
   }, [ownsLocationPin, location, setPlanet])
 
+  // Same owner as the pin: the single layout unmounts the other panels, and
+  // their cleanup must not clear the radius the main camera still reads.
   useEffect(() => {
-    if (storeLabel === 'earth') {
+    if (storeLabel === 'earth' && interactive) {
       setEarthRadius(diameter)
       return () => setEarthRadius(undefined)
     }
-  }, [storeLabel, diameter, setEarthRadius])
+  }, [storeLabel, interactive, diameter, setEarthRadius])
 
   useEffect(() => {
     if (surfaceCamera) {

@@ -1,5 +1,5 @@
 import styled from 'styled-components'
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useId } from 'react'
 import {
   IconClock,
   IconWorld,
@@ -8,9 +8,16 @@ import {
   IconMapPin,
   IconPlayerTrackNext,
   IconEye,
+  IconSettings,
+  IconX,
 } from '@tabler/icons-react'
 import { DateTime } from 'luxon'
-import { useStore, type CameraFocus } from './store'
+import {
+  useStore,
+  type CameraFocus,
+  type Layout,
+  type WeatherSource,
+} from './store'
 import { truncateLatLon } from './utils'
 
 function formatDateInput(value: string): string {
@@ -42,6 +49,7 @@ export default function Controls() {
   const location = useStore((s) => s.location)
   const [locationError, setLocationError] = useState<string | null>(null)
   const [dateInput, setDateInput] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDateInput(formatDateInput(e.target.value))
@@ -101,7 +109,7 @@ export default function Controls() {
         onChange={setTimeScale}
         options={SPEED_OPTIONS}
       />
-      <LocationButton
+      <IconButton
         type="button"
         onClick={handleLocationClick}
         title="Use my location"
@@ -111,7 +119,7 @@ export default function Controls() {
           size={20}
           stroke={2}
         />
-      </LocationButton>
+      </IconButton>
       {locationError && <LocationError>{locationError}</LocationError>}
       <DateForm onSubmit={handleDateSubmit}>
         <DateInput
@@ -123,7 +131,144 @@ export default function Controls() {
           maxLength={10}
         />
       </DateForm>
+      <IconButton
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        title="Settings"
+        aria-label="Settings"
+        aria-haspopup="dialog"
+      >
+        <IconSettings
+          size={20}
+          stroke={2}
+        />
+      </IconButton>
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
     </ControlContainer>
+  )
+}
+
+const WEATHER_OPTIONS: { value: WeatherSource; label: string }[] = [
+  { value: 'real', label: 'Real' },
+  { value: 'static', label: 'Simulated' },
+]
+
+const LAYOUT_OPTIONS: { value: Layout; label: string }[] = [
+  { value: 'single', label: 'Single' },
+  { value: 'triple', label: 'Triple' },
+]
+
+/** A native modal dialog: showModal() supplies the focus trap, Esc, and focus return. */
+function SettingsDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const pressedBackdrop = useRef(false)
+  const titleId = useId()
+  const weatherHintId = useId()
+  const weatherSource = useStore((s) => s.weatherSource)
+  const setWeatherSource = useStore((s) => s.setWeatherSource)
+  const layout = useStore((s) => s.layout)
+  const setLayout = useStore((s) => s.setLayout)
+
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    if (open && !dialog.open) dialog.showModal()
+    if (!open && dialog.open) dialog.close()
+  }, [open])
+
+  // The dialog element itself is only hit through its backdrop; the content
+  // fills it. Both press and release must land there, so a drag that ends
+  // outside doesn't close it.
+  const isBackdrop = (e: React.MouseEvent) => e.target === e.currentTarget
+
+  return (
+    <Dialog
+      ref={ref}
+      aria-labelledby={titleId}
+      onClose={onClose}
+      onMouseDown={(e) => {
+        pressedBackdrop.current = isBackdrop(e)
+      }}
+      onClick={(e) => {
+        if (pressedBackdrop.current && isBackdrop(e)) onClose()
+      }}
+    >
+      <DialogBody>
+        <DialogHeader>
+          <DialogTitle id={titleId}>Settings</DialogTitle>
+          <CloseButton
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+          >
+            <IconX
+              size={18}
+              stroke={2}
+            />
+          </CloseButton>
+        </DialogHeader>
+        <SettingGroup aria-describedby={weatherHintId}>
+          <SettingLegend>Weather</SettingLegend>
+          <SegmentedControl
+            name="weather"
+            value={weatherSource}
+            options={WEATHER_OPTIONS}
+            onChange={setWeatherSource}
+          />
+          <SettingHint id={weatherHintId}>
+            Real weather is experimental and falls back to static clouds for
+            now.
+          </SettingHint>
+        </SettingGroup>
+        <SettingGroup>
+          <SettingLegend>Layout</SettingLegend>
+          <SegmentedControl
+            name="layout"
+            value={layout}
+            options={LAYOUT_OPTIONS}
+            onChange={setLayout}
+          />
+        </SettingGroup>
+      </DialogBody>
+    </Dialog>
+  )
+}
+
+function SegmentedControl<T extends string>({
+  name,
+  value,
+  options,
+  onChange,
+}: {
+  name: string
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (value: T) => void
+}) {
+  return (
+    <Segments>
+      {options.map((option) => (
+        <Segment key={option.value}>
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={option.value === value}
+            onChange={() => onChange(option.value)}
+          />
+          <span>{option.label}</span>
+        </Segment>
+      ))}
+    </Segments>
   )
 }
 
@@ -276,6 +421,12 @@ const ControlContainer = styled.section`
   padding: 0 16px;
   background-color: #1a1a1a;
   border-bottom: 1px solid #333;
+
+  /* Five controls fit a 320px phone only with tighter spacing. */
+  @media (max-width: 400px) {
+    gap: 8px;
+    padding: 0 8px;
+  }
 `
 
 const FocusDropdownWrap = styled.div`
@@ -320,7 +471,7 @@ const FocusTriggerBadge = styled.span`
   border-radius: 3px;
 `
 
-const LocationButton = styled.button`
+const IconButton = styled.button`
   display: flex;
   align-items: center;
   justify-content: center;
@@ -416,5 +567,130 @@ const DateInput = styled.input`
 
   &::placeholder {
     color: #555;
+  }
+`
+
+const Dialog = styled.dialog`
+  width: min(360px, calc(100vw - 32px));
+  padding: 0;
+  background-color: #1a1a1a;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 12px;
+
+  &::backdrop {
+    background-color: rgba(0, 0, 0, 0.6);
+  }
+`
+
+const DialogBody = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 20px 20px;
+`
+
+const DialogHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+`
+
+const DialogTitle = styled.h2`
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ddd;
+`
+
+const CloseButton = styled.button`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  color: gray;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    background-color: #222;
+    color: #aaa;
+  }
+
+  &:focus-visible {
+    outline: 2px solid #4c9ffe;
+    outline-offset: 1px;
+  }
+`
+
+const SettingGroup = styled.fieldset`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+`
+
+const SettingLegend = styled.legend`
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #888;
+`
+
+const SettingHint = styled.p`
+  margin: 0;
+  font-size: 12px;
+  color: #888;
+`
+
+const Segments = styled.div`
+  display: flex;
+  padding: 3px;
+  gap: 3px;
+  background-color: black;
+  border: 1px gray solid;
+  border-radius: 8px;
+`
+
+const Segment = styled.label`
+  position: relative;
+  flex: 1;
+
+  input {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  span {
+    display: block;
+    padding: 6px 12px;
+    text-align: center;
+    font-size: 14px;
+    color: gray;
+    border-radius: 6px;
+  }
+
+  input:hover + span {
+    color: #aaa;
+  }
+
+  input:checked + span {
+    background-color: #333;
+    color: #ddd;
+  }
+
+  input:focus-visible + span {
+    outline: 2px solid #4c9ffe;
+    outline-offset: 1px;
   }
 `
