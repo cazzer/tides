@@ -10,8 +10,6 @@ import earthSpecularMapHigh from '../assets/earth-specular.jpg'
 import earthSpecularMapLow from '../assets/earth-specular-2k.jpg'
 import earthCloudsTextureHigh from '../assets/earth-clouds.jpg'
 import earthCloudsTextureLow from '../assets/earth-clouds-2k.jpg'
-import earthCloudsAlphaHigh from '../assets/earth-clouds-alpha.jpg'
-import earthCloudsAlphaLow from '../assets/earth-clouds-alpha-2k.jpg'
 import earthNightTextureHigh from '../assets/earth-night.jpg'
 import earthNightTextureLow from '../assets/earth-night-2k.jpg'
 import earthBumpMapHigh from '../assets/earth-bump.jpg'
@@ -31,7 +29,6 @@ export default function EarthRenderer({
   useTexture.preload(textureSet.normal)
   useTexture.preload(textureSet.specular)
   useTexture.preload(textureSet.clouds)
-  useTexture.preload(textureSet.cloudsAlpha)
   useTexture.preload(textureSet.night)
   useTexture.preload(textureSet.bump)
 
@@ -43,7 +40,6 @@ export default function EarthRenderer({
   const normalMap = useLoader(THREE.TextureLoader, textureSet.normal)
   const specularMap = useLoader(THREE.TextureLoader, textureSet.specular)
   const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
-  const alphaMap = useLoader(THREE.TextureLoader, textureSet.cloudsAlpha)
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
   const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
 
@@ -88,11 +84,14 @@ export default function EarthRenderer({
       >
         <sphereGeometry args={[diameter * 1.02, 64, 64]} />
         <meshLambertMaterial
-          map={cloudsTexture}
-          alphaMap={alphaMap}
+          // Cloud brightness drives opacity: white cloud = opaque, black sky = clear.
+          // No colour map: binding the texture as `map` makes R3F tag it sRGB,
+          // which also linearizes the alpha and turns clouds into a grey veil.
+          color="white"
+          alphaMap={cloudsTexture}
           transparent
-          opacity={0.4}
-          alphaTest={0.1}
+          opacity={0.9}
+          alphaTest={0.05}
         />
       </mesh>
 
@@ -117,7 +116,6 @@ function getEarthTextureSet(baseTexture: string) {
       normal: earthNormalMapHigh,
       specular: earthSpecularMapHigh,
       clouds: earthCloudsTextureHigh,
-      cloudsAlpha: earthCloudsAlphaHigh,
       night: earthNightTextureHigh,
       bump: earthBumpMapHigh,
     }
@@ -133,7 +131,6 @@ function getEarthTextureSet(baseTexture: string) {
       normal: earthNormalMapHigh,
       specular: earthSpecularMapHigh,
       clouds: earthCloudsTextureHigh,
-      cloudsAlpha: earthCloudsAlphaHigh,
       night: earthNightTextureHigh,
       bump: earthBumpMapHigh,
     }
@@ -144,7 +141,6 @@ function getEarthTextureSet(baseTexture: string) {
     normal: earthNormalMapLow,
     specular: earthSpecularMapLow,
     clouds: earthCloudsTextureLow,
-    cloudsAlpha: earthCloudsAlphaLow,
     night: earthNightTextureLow,
     bump: earthBumpMapLow,
   }
