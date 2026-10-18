@@ -15,6 +15,7 @@ import { applyBodyTransform } from './body-transform'
 interface OrbitingBodyProps {
   positionAt?: (t: number) => Vec3
   spinAt?: (t: number) => number
+  orientationAt?: (t: number) => THREE.Quaternion
   axialTilt?: number
 
   // Physical properties
@@ -36,6 +37,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   {
     positionAt,
     spinAt,
+    orientationAt,
     axialTilt = 0,
     diameter = 5, // Default diameter
     surfaceCamera = false,
@@ -96,7 +98,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     if (ref && 'current' in ref && ref.current) {
       applyBodyTransform(
         ref.current,
-        { axialTilt, spinAt, positionAt },
+        { axialTilt, spinAt, orientationAt, positionAt },
         simulationTime
       )
       if (focusKey) ref.current.userData.focus = focusKey

@@ -3,12 +3,11 @@ import { describe, expect, test, afterAll } from 'vitest'
 import { KM_PER_AU } from 'astronomy-engine'
 import {
   EARTH_AXIAL_TILT,
-  MOON_AXIAL_TILT,
   MOON_UNITS_PER_KM,
   earthPosition,
   earthSpin,
   moonPosition,
-  moonSpin,
+  moonOrientation,
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 import { calculateLocationAndRotationForLatLng } from './utils'
@@ -47,7 +46,7 @@ function moonAt(t: number): THREE.Object3D {
   const moon = new THREE.Object3D()
   applyBodyTransform(
     moon,
-    { axialTilt: MOON_AXIAL_TILT, spinAt: moonSpin, positionAt: moonPosition },
+    { orientationAt: moonOrientation, positionAt: moonPosition },
     t
   )
   moon.updateMatrixWorld()
@@ -174,9 +173,9 @@ describe('scene Moon vs JPL Horizons', () => {
       'illum err': +fractionError.toFixed(4),
       'phase err°': +(phaseAngle - row.phaseAngleDeg).toFixed(3),
       'sub-Earth lon°': +subEarth.lon.toFixed(2),
-      'sub-Earth lon err°': +subEarthLonError.toFixed(2),
+      'sub-Earth lon err°': +subEarthLonError.toFixed(3),
       'sub-Earth lat°': +subEarth.lat.toFixed(2),
-      'sub-Earth lat err°': +subEarthLatError.toFixed(2),
+      'sub-Earth lat err°': +subEarthLatError.toFixed(3),
     })
 
     expect(Math.abs(lonError)).toBeLessThan(0.1)
@@ -185,10 +184,9 @@ describe('scene Moon vs JPL Horizons', () => {
     expect(Math.abs(fractionError)).toBeLessThan(0.01)
     // The fraction is flat near new and full moon, so check the angle too.
     expect(Math.abs(phaseAngle - row.phaseAngleDeg)).toBeLessThan(0.3)
-    // Libration reaches ~8°, so these must sit well inside it. Latitude is
-    // off by up to 3.0° while the Moon's pole is fixed (tides-44w).
-    expect(Math.abs(subEarthLonError)).toBeLessThan(0.5)
-    expect(Math.abs(subEarthLatError)).toBeLessThan(4)
+    // Libration reaches ~8°; measured max is 0.01°.
+    expect(Math.abs(subEarthLonError)).toBeLessThan(0.05)
+    expect(Math.abs(subEarthLatError)).toBeLessThan(0.05)
   })
 })
 

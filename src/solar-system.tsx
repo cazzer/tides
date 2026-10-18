@@ -19,12 +19,11 @@ import moonTextureLow from './assets/moon-2k.jpg'
 import { interpolateValue } from './utils'
 import {
   EARTH_AXIAL_TILT,
-  MOON_AXIAL_TILT,
   EARTH_ORBIT_RADIUS,
   earthPosition,
   earthSpin,
   moonPosition,
-  moonSpin,
+  moonOrientation,
   sunSpin,
 } from './ephemeris'
 
@@ -146,8 +145,7 @@ export default function SolarSystem({
         focusKey="moon"
         diameter={scaleDiameter(3474800)}
         positionAt={moonPosition}
-        spinAt={moonSpin}
-        axialTilt={MOON_AXIAL_TILT}
+        orientationAt={moonOrientation}
         interactive={interactive}
       >
         <MoonRenderer
