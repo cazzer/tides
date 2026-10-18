@@ -1,6 +1,14 @@
 import * as THREE from 'three'
 import { describe, expect, test, afterAll } from 'vitest'
-import { Body, Equator, Horizon, KM_PER_AU, Observer } from 'astronomy-engine'
+import { readFileSync } from 'node:fs'
+import {
+  Body,
+  DefineStar,
+  Equator,
+  Horizon,
+  KM_PER_AU,
+  Observer,
+} from 'astronomy-engine'
 import {
   EARTH_AXIAL_TILT,
   MOON_UNITS_PER_KM,
@@ -18,6 +26,13 @@ import {
   surfaceView,
 } from './sky'
 import { calculateLocationAndRotationForLatLng } from './utils'
+import {
+  DEFAULT_RADIUS,
+  centreStarfieldOn,
+  orientStarfield,
+  starDirectionsEQJ,
+} from './renderers/Starfield'
+import starsMeta from './assets/stars.meta.json'
 import horizons from './__fixtures__/horizons-sun.json'
 import horizonsMoon from './__fixtures__/horizons-moon.json'
 import usno from './__fixtures__/usno-sun-rise-set.json'
@@ -313,6 +328,78 @@ describe('View from Earth vs astronomy-engine Horizon()', () => {
       // catches a J2000/of-date mix-up (~0.36° by 2026).
       expect(Math.abs(altError)).toBeLessThan(0.05)
       expect(Math.abs(azError)).toBeLessThan(0.05)
+    }
+  })
+})
+
+// J2000 positions from the catalog (src/assets/ybsc5, HR 424 and HR 2491).
+const brightStars = [
+  { name: 'Polaris', ra: 2 + 31 / 60 + 48.7 / 3600, dec: 89 + 15 / 60 + 51 / 3600, vmag: 2.02 },
+  { name: 'Sirius', ra: 6 + 45 / 60 + 8.9 / 3600, dec: -(16 + 42 / 60 + 58 / 3600), vmag: -1.46 },
+]
+
+const starData = new Float32Array(
+  readFileSync(new URL('./assets/stars.bin', import.meta.url)).buffer.slice(0)
+)
+const starDirections = starDirectionsEQJ(starData, starsMeta.stride)
+
+// The Starfield vertex for a catalog star: the one of its magnitude nearest
+// its position.
+function starVertex({ ra, dec, vmag }: (typeof brightStars)[number]) {
+  const a = (ra * 15) / DEG
+  const d = dec / DEG
+  const target = new THREE.Vector3(
+    Math.cos(d) * Math.cos(a),
+    Math.cos(d) * Math.sin(a),
+    Math.sin(d)
+  )
+  let best = new THREE.Vector3()
+  let bestDot = -Infinity
+  for (let i = 0; i < starDirections.length / 3; i++) {
+    if (Math.abs(starData[i * starsMeta.stride + 6] - vmag) > 0.005) continue
+    const v = new THREE.Vector3().fromArray(starDirections, i * 3)
+    if (v.dot(target) > bestDot) {
+      bestDot = v.dot(target)
+      best = v
+    }
+  }
+  return best
+}
+
+describe('View from Earth stars vs astronomy-engine Horizon()', () => {
+  test.each(skyCases)('$place $t', ({ place, lat, lon, t: iso }) => {
+    const t = Date.parse(iso)
+    const camera = surfaceCameraAt(t, lat, lon)
+
+    // The Starfield's transform when that camera draws it.
+    const scene = new THREE.Object3D()
+    const stars = new THREE.Object3D()
+    scene.add(stars)
+    stars.scale.setScalar(DEFAULT_RADIUS)
+    orientStarfield(stars, t)
+    centreStarfieldOn(stars, camera)
+
+    const site = new Observer(lat, lon, 0)
+    for (const star of brightStars) {
+      const point = starVertex(star).applyMatrix4(stars.matrixWorld)
+      const rendered = cameraAltAz(camera, point, lat)
+      DefineStar(Body.Star1, star.ra, star.dec, 1000)
+      const { ra, dec } = Equator(Body.Star1, new Date(t), site, true, true)
+      const expected = Horizon(new Date(t), site, ra, dec)
+      const altError = rendered.alt - expected.altitude
+      const azError =
+        wrap180(rendered.az - expected.azimuth) * Math.cos(expected.altitude / DEG)
+      skyReport.push({
+        t: iso,
+        place,
+        body: star.name,
+        'alt°': +expected.altitude.toFixed(2),
+        'az°': +expected.azimuth.toFixed(2),
+        'alt err°': +altError.toFixed(4),
+        'az err° (arc)': +azError.toFixed(4),
+      })
+      expect(Math.abs(altError)).toBeLessThan(0.1)
+      expect(Math.abs(azError)).toBeLessThan(0.1)
     }
   })
 })
