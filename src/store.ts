@@ -67,6 +67,9 @@ export const useStore = create<{
   earthRadius: number | undefined
   timeScale: number
   initialTimestamp: number | null
+  /** Simulation time (epoch ms), written every frame by SimClock. Read it
+   * with useStore.getState() inside useFrame; selecting it re-renders per frame. */
+  timestamp: number | null
   cameraFocus: CameraFocus
   mainPanel: PanelKey
   location: Location | null
@@ -78,7 +81,7 @@ export const useStore = create<{
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
-  setJumpDate: (date: Date) => void
+  setJumpDate: (date: Date | null) => void
 }>((set) => ({
   earth: undefined,
   moon: undefined,
@@ -88,6 +91,7 @@ export const useStore = create<{
   earthRadius: undefined,
   timeScale: getInitialTimeScale(),
   initialTimestamp: getInitialTimestamp(),
+  timestamp: null,
   cameraFocus: getInitialCameraFocus(),
   mainPanel: getInitialPanel(),
   location: getInitialLocation(),
@@ -103,6 +107,6 @@ export const useStore = create<{
     })),
   jumpDate: null,
   jumpDateSetAt: null,
-  setJumpDate: (date: Date) =>
+  setJumpDate: (date: Date | null) =>
     set({ jumpDate: date, jumpDateSetAt: new Date() }),
 }))

@@ -11,6 +11,7 @@ import { useStore, type CameraFocus, type PanelKey } from './store'
 import Controls from './controls'
 import { PIN_LAYER } from './LocationPin'
 import LoadingOverlay from './LoadingOverlay'
+import { advanceClock, type Jump } from './sim-clock'
 
 const FOCUS_VALUES: CameraFocus[] = [
   'clock',
@@ -92,6 +93,7 @@ export default function App() {
             toneMappingExposure: 1.0,
           }}
         >
+          <SimClock />
           <View.Port />
         </Canvas>
         <Panel
@@ -186,6 +188,34 @@ function Scene({
       </Suspense>
     </>
   )
+}
+
+/**
+ * The one simulation clock. Mounted in the root Canvas, outside every View, so
+ * all panels share it; priority -1 runs it before the panels' frames (every
+ * portal shares the root's frame loop) without taking over rendering.
+ */
+function SimClock() {
+  const jump = useRef<Jump | null>(null)
+  useFrame((state, delta) => {
+    const { timestamp, timeScale, initialTimestamp, jumpDate, setJumpDate } =
+      useStore.getState()
+    const next = advanceClock(
+      { timestamp, jump: jump.current },
+      {
+        now: Date.now(),
+        elapsed: state.clock.elapsedTime,
+        delta,
+        timeScale,
+        initialTimestamp,
+        jumpTo: jumpDate ? jumpDate.getTime() : null,
+      }
+    )
+    jump.current = next.jump
+    useStore.setState({ timestamp: next.timestamp })
+    if (next.jumpDone) setJumpDate(null)
+  }, -1)
+  return null
 }
 
 function SceneReadySignal({ onReady }: { onReady: () => void }) {

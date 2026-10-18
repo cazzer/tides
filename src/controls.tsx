@@ -32,15 +32,14 @@ const FOCUS_OPTIONS: {
 ]
 
 export default function Controls() {
-  const {
-    timeScale,
-    setTimeScale,
-    setJumpDate,
-    cameraFocus,
-    setCameraFocus,
-    setLocation,
-    location,
-  } = useStore()
+  // Per-field selectors: the whole store changes every frame (timestamp).
+  const timeScale = useStore((s) => s.timeScale)
+  const setTimeScale = useStore((s) => s.setTimeScale)
+  const setJumpDate = useStore((s) => s.setJumpDate)
+  const cameraFocus = useStore((s) => s.cameraFocus)
+  const setCameraFocus = useStore((s) => s.setCameraFocus)
+  const setLocation = useStore((s) => s.setLocation)
+  const location = useStore((s) => s.location)
   const [locationError, setLocationError] = useState<string | null>(null)
   const [dateInput, setDateInput] = useState('')
 

@@ -6,11 +6,13 @@ import {
   degreesToRadians,
   calculateLocationAndRotationForLatLng,
 } from './utils'
-import type { Vec3 } from './ephemeris'
+import { moonPosition, type Vec3 } from './ephemeris'
 import { useCamera } from './camera'
 import { useStore } from './store'
 import { LocationPin } from './LocationPin'
 import { applyBodyTransform } from './body-transform'
+
+const moonTarget = new THREE.Vector3()
 
 interface OrbitingBodyProps {
   positionAt?: (t: number) => Vec3
@@ -55,14 +57,16 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   const surfaceCameraContainerRef = useRef<THREE.Mesh>(null)
   const flagRef = useRef<THREE.Group>(null)
   const set = useThree((s) => s.set)
-  const moon = useStore((s) => s.moon)
   const location = useStore((s) => s.location)
   const setPlanet = useStore((s) => s.setPlanet)
   const setEarthRadius = useStore((s) => s.setEarthRadius)
 
+  // Only the main panel's Earth mounts a LocationPin that the camera can focus.
+  const ownsLocationPin = storeLabel === 'earth' && interactive
   useEffect(() => {
+    if (!ownsLocationPin) return
     setPlanet('locationPin', location ? flagRef : undefined)
-  }, [location, setPlanet])
+  }, [ownsLocationPin, location, setPlanet])
 
   useEffect(() => {
     if (storeLabel === 'earth') {
@@ -76,21 +80,13 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
       set({ camera: surfaceCameraRef.current })
     }
 
-    if (moonCamera && moon?.current) {
-      // @ts-ignore
-      moonCameraRef.current.lookAt(moon.current.position)
+    if (moonCamera) {
       set({ camera: moonCameraRef.current })
     }
-  }, [moon])
+  }, [])
 
-  useFrame((state) => {
-    const simulationState = state as typeof state & {
-      timestamp?: number
-    }
-    const simulationTime =
-      typeof simulationState.timestamp === 'number'
-        ? simulationState.timestamp
-        : null
+  useFrame(() => {
+    const simulationTime = useStore.getState().timestamp
     if (simulationTime == null) {
       return
     }
@@ -105,9 +101,10 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     }
 
     // look at the moon
-    if (moonCamera && moon?.current) {
-      // @ts-ignore
-      moonCameraRef.current.lookAt(moon.current.position)
+    if (moonCamera) {
+      moonCameraRef.current.lookAt(
+        moonTarget.fromArray(moonPosition(simulationTime))
+      )
     }
 
     // calculate surface camera position (use location from store if set)

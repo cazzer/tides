@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useFrame, useThree, type RootState } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
 import { useCamera } from './camera'
 import { useStore } from './store'
@@ -44,7 +44,6 @@ const labelMaterial = new THREE.MeshBasicMaterial({
   depthWrite: false,
 })
 
-type SimulationState = RootState & { timestamp?: number }
 type TroikaText = THREE.Mesh & {
   text: string
   fillOpacity: number
@@ -101,16 +100,15 @@ export function OrbitLabel({ radius }: { radius: number }) {
 
   useEffect(() => () => lineGeometry.dispose(), [lineGeometry])
 
-  const get = useThree((s) => s.get)
   const [year, setYear] = useState(() =>
-    new Date((get() as SimulationState).timestamp ?? Date.now()).getFullYear()
+    new Date(useStore.getState().timestamp ?? Date.now()).getFullYear()
   )
   const angles = useMemo(() => monthStartAngles(year), [year])
   const lastSecond = useRef<number | null>(null)
 
-  useFrame((state) => {
-    // Unset until SolarSystem's first frame, which starts from Date.now().
-    const timestamp = (state as SimulationState).timestamp ?? Date.now()
+  useFrame(() => {
+    // Unset until SimClock's first frame, which starts from Date.now().
+    const timestamp = useStore.getState().timestamp ?? Date.now()
     const angle = earthAngle(timestamp)
     const cos = Math.cos(angle)
     const sin = Math.sin(angle)

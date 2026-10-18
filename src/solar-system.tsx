@@ -1,13 +1,12 @@
 import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
-import { useFrame } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
 import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
-import { scaleLog, easeExpInOut } from 'd3'
+import { scaleLog } from 'd3'
 import { CameraProvider } from './camera'
 import { OrbitLabel } from './orbit-label'
 import { useStore } from './store'
@@ -16,7 +15,6 @@ import earthTextureHigh from './assets/earth-day.jpg'
 import earthTextureLow from './assets/earth-day-2k.jpg'
 import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
-import { interpolateValue } from './utils'
 import {
   EARTH_AXIAL_TILT,
   EARTH_ORBIT_RADIUS,
@@ -28,8 +26,6 @@ import {
 } from './ephemeris'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
-
-const JUMP_DURATION_MS = 5000
 
 useTexture.preload(earthTextureHigh)
 
@@ -49,62 +45,17 @@ export default function SolarSystem({
   useTexture.preload(earthTexture)
   useTexture.preload(moonTexture)
   const setPlanet = useStore((s) => s.setPlanet)
-  const timeScale = useStore((s) => s.timeScale)
-  const initialTimestamp = useStore((s) => s.initialTimestamp)
-  const jumpDate = useStore((s) => s.jumpDate)
-  const setJumpDate = useStore((s) => s.setJumpDate)
   const sun = useRef(null)
   const earth = useRef(null)
   const moon = useRef(null)
 
+  // Only the main panel's CameraProvider (the one with OrbitControls) uses these.
   useEffect(() => {
+    if (!interactive) return
     setPlanet('earth', earth)
     setPlanet('sun', sun)
     setPlanet('moon', moon)
-  }, [])
-
-  useFrame((state, delta) => {
-    const simulationState = state as typeof state & {
-      timestamp?: number
-      startJumpAt?: number | null
-      startJumpClock?: number | null
-    }
-    const currentTimestamp =
-      typeof simulationState.timestamp === 'number'
-        ? simulationState.timestamp
-        : initialTimestamp ?? Date.now()
-    let newTime
-
-    if (jumpDate) {
-      if (!simulationState.startJumpAt) {
-        simulationState.startJumpAt = currentTimestamp
-        simulationState.startJumpClock = state.clock.elapsedTime
-      }
-
-      const jumpDateMillis = jumpDate.getTime()
-      const jumpStartClock = simulationState.startJumpClock ?? state.clock.elapsedTime
-      const jumpElapsedMs = (state.clock.elapsedTime - jumpStartClock) * 1000
-      const jumpProgress = Math.min(1, Math.max(0, jumpElapsedMs / JUMP_DURATION_MS))
-      newTime = interpolateValue(
-        simulationState.startJumpAt ?? currentTimestamp,
-        jumpDateMillis,
-        jumpProgress,
-        easeExpInOut
-      )
-      if (jumpProgress >= 1) {
-        setJumpDate(null)
-        simulationState.startJumpAt = null
-        simulationState.startJumpClock = null
-      }
-    } else {
-      newTime = currentTimestamp + delta * 1000 * timeScale
-    }
-
-    state.set({
-      // @ts-ignore
-      timestamp: newTime,
-    })
-  })
+  }, [interactive])
 
   return (
     <CameraProvider>
