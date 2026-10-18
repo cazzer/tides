@@ -93,7 +93,7 @@ export default function App() {
             toneMappingExposure: 1.0,
           }}
         >
-          <SimClock />
+          <SimClock running={sceneReady} />
           <View.Port />
         </Canvas>
         <Panel
@@ -192,25 +192,37 @@ function Scene({
 
 /**
  * The one simulation clock. Mounted in the root Canvas, outside every View, so
- * all panels share it; priority -1 runs it before the panels' frames (every
- * portal shares the root's frame loop) without taking over rendering.
+ * all panels share it; priority -1 runs it before the panels' frames without
+ * taking over rendering. That relies on every View portal sharing the root's
+ * subscriber list and on drei's View rendering at priority >= 1: moving this
+ * inside a View, or dropping the -1, brings back a one-frame lag.
  */
-function SimClock() {
+function SimClock({ running }: { running: boolean }) {
   const jump = useRef<Jump | null>(null)
+  const runningRef = useRef(running)
+  useEffect(() => {
+    runningRef.current = running
+  }, [running])
+
   useFrame((state, delta) => {
     const { timestamp, timeScale, initialTimestamp, jumpDate, setJumpDate } =
       useStore.getState()
-    const next = advanceClock(
-      { timestamp, jump: jump.current },
-      {
-        now: Date.now(),
-        elapsed: state.clock.elapsedTime,
-        delta,
-        timeScale,
-        initialTimestamp,
-        jumpTo: jumpDate ? jumpDate.getTime() : null,
-      }
-    )
+    const input = {
+      now: Date.now(),
+      elapsed: state.clock.elapsedTime,
+      delta,
+      timeScale,
+      initialTimestamp,
+      jumpTo: jumpDate ? jumpDate.getTime() : null,
+    }
+    // Until the scene has loaded, restart from ?t= (or now) every frame, so
+    // loading time never counts as simulated time (tides-8pz).
+    const next = runningRef.current
+      ? advanceClock({ timestamp, jump: jump.current }, input)
+      : advanceClock(
+          { timestamp: null, jump: null },
+          { ...input, delta: 0, jumpTo: null }
+        )
     jump.current = next.jump
     useStore.setState({ timestamp: next.timestamp })
     if (next.jumpDone) setJumpDate(null)

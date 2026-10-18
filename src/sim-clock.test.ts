@@ -31,6 +31,29 @@ describe('advanceClock', () => {
     expect(step.timestamp).toBe(T0)
   })
 
+  test('frames with delta 0 hold at initialTimestamp', () => {
+    const start = Date.UTC(2030, 0, 1)
+    let state: ClockState = fresh
+    for (let i = 0; i < 10; i++) {
+      state = advanceClock(
+        state,
+        input({ initialTimestamp: start, delta: 0, now: T0 + i * 1000, elapsed: i, timeScale: 2_592_000 })
+      )
+      expect(state.timestamp).toBe(start)
+    }
+  })
+
+  test('frames with delta 0 hold at the first frame\'s now', () => {
+    let state: ClockState = fresh
+    for (let i = 0; i < 10; i++) {
+      state = advanceClock(
+        state,
+        input({ delta: 0, now: T0 + i * 1000, elapsed: i, timeScale: 2_592_000 })
+      )
+      expect(state.timestamp).toBe(T0)
+    }
+  })
+
   test('advances by delta scaled by timeScale', () => {
     const step = advanceClock(
       { timestamp: T0, jump: null },
