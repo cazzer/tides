@@ -18,6 +18,7 @@ import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
 import { interpolateValue } from './utils'
 import {
+  EARTH_AXIAL_TILT,
   EARTH_ORBIT_RADIUS,
   earthPosition,
   earthSpin,
@@ -129,7 +130,7 @@ export default function SolarSystem({
         diameter={scaleDiameter(12742000)}
         positionAt={earthPosition}
         spinAt={earthSpin}
-        axialTilt={23.4}
+        axialTilt={EARTH_AXIAL_TILT}
         interactive={interactive}
       >
         <EarthRenderer

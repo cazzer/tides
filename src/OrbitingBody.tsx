@@ -10,6 +10,7 @@ import type { Vec3 } from './ephemeris'
 import { useCamera } from './camera'
 import { useStore } from './store'
 import { LocationPin } from './LocationPin'
+import { applyBodyTransform } from './body-transform'
 
 interface OrbitingBodyProps {
   positionAt?: (t: number) => Vec3
@@ -93,8 +94,11 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     }
 
     if (ref && 'current' in ref && ref.current) {
-      if (spinAt) ref.current.rotation.y = spinAt(simulationTime)
-      if (positionAt) ref.current.position.set(...positionAt(simulationTime))
+      applyBodyTransform(
+        ref.current,
+        { axialTilt, spinAt, positionAt },
+        simulationTime
+      )
       if (focusKey) ref.current.userData.focus = focusKey
     }
 

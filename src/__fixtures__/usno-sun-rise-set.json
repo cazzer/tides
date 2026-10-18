@@ -1,0 +1,286 @@
+{
+  "source": "USNO AA API rstt/oneday, tz=0",
+  "fetchedAt": "2026-10-18T03:57:52.659Z",
+  "events": [
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Set",
+      "t": "2000-03-20T02:21:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Rise",
+      "t": "2000-03-20T14:11:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Set",
+      "t": "2026-06-21T04:11:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Rise",
+      "t": "2026-06-21T12:12:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Set",
+      "t": "2026-09-23T02:07:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Rise",
+      "t": "2026-09-23T13:58:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Set",
+      "t": "2026-12-21T00:20:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Rise",
+      "t": "2026-12-21T15:55:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Set",
+      "t": "2050-06-21T04:11:00Z"
+    },
+    {
+      "place": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "phen": "Rise",
+      "t": "2050-06-21T12:12:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Rise",
+      "t": "2000-03-20T11:18:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Set",
+      "t": "2000-03-20T23:24:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Rise",
+      "t": "2026-06-21T11:12:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Set",
+      "t": "2026-06-21T23:19:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Rise",
+      "t": "2026-09-23T11:03:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Set",
+      "t": "2026-09-23T23:09:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Rise",
+      "t": "2026-12-21T11:08:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Set",
+      "t": "2026-12-21T23:16:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Rise",
+      "t": "2050-06-21T11:12:00Z"
+    },
+    {
+      "place": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "phen": "Set",
+      "t": "2050-06-21T23:19:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Rise",
+      "t": "2000-03-20T04:50:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Set",
+      "t": "2000-03-20T16:57:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Rise",
+      "t": "2026-06-21T05:51:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Set",
+      "t": "2026-06-21T15:45:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Rise",
+      "t": "2026-09-23T04:35:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Set",
+      "t": "2026-09-23T16:43:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Rise",
+      "t": "2026-12-21T03:32:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Set",
+      "t": "2026-12-21T17:57:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Rise",
+      "t": "2050-06-21T05:51:00Z"
+    },
+    {
+      "place": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "phen": "Set",
+      "t": "2050-06-21T15:45:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Set",
+      "t": "2000-03-20T08:53:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Rise",
+      "t": "2000-03-20T20:44:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Set",
+      "t": "2026-06-21T10:00:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Rise",
+      "t": "2026-06-21T19:26:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Set",
+      "t": "2026-09-23T08:37:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Rise",
+      "t": "2026-09-23T20:30:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Set",
+      "t": "2026-12-21T07:31:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Rise",
+      "t": "2026-12-21T21:47:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Set",
+      "t": "2050-06-21T10:00:00Z"
+    },
+    {
+      "place": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "phen": "Rise",
+      "t": "2050-06-21T19:26:00Z"
+    }
+  ]
+}

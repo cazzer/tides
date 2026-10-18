@@ -9,6 +9,7 @@ import {
 export type Vec3 = [number, number, number]
 
 export const EARTH_ORBIT_RADIUS = 50
+export const EARTH_AXIAL_TILT = 23.4
 const MOON_UNITS_PER_KM = 10 / 384400
 const DEG = Math.PI / 180
 

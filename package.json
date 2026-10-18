@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "vitest run --silent=false",
     "preview": "vite preview",
     "convert:stars": "node scripts/convertStars.mjs",
     "textures:2k": "bash scripts/resize-textures-2k.sh"
@@ -45,6 +46,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.1",
     "vite": "^7.1.9",
-    "vite-plugin-glsl": "^1.5.4"
+    "vite-plugin-glsl": "^1.5.4",
+    "vitest": "^5.0.5"
   }
 }
