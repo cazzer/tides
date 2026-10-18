@@ -10,7 +10,8 @@ export type Vec3 = [number, number, number]
 
 export const EARTH_ORBIT_RADIUS = 50
 export const EARTH_AXIAL_TILT = 23.4
-const MOON_UNITS_PER_KM = 10 / 384400
+export const MOON_AXIAL_TILT = -1.53
+export const MOON_UNITS_PER_KM = 10 / 384400
 const DEG = Math.PI / 180
 
 // Scene angle φ = atan2(-z, x) maps to ecliptic longitude φ + 180°, so the

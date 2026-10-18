@@ -11,6 +11,13 @@
 // Horizons' own sub-solar quantity (15) isn't used: from the Earth's centre it
 // is undefined, and from the Sun it is retarded by 8.3 min of light time.
 //
+// JPL Horizons, target Moon (301) from the geocentre (500@399):
+//   10 illuminated fraction (%)
+//   14 sub-observer (sub-Earth) longitude & latitude, i.e. libration
+//   20 range (au)
+//   24 Sun–Moon–Earth phase angle
+//   31 apparent ecliptic-of-date longitude & latitude
+//
 // USNO AA rstt/oneday: sunrise and sunset in UTC (whole minutes, Sun's upper
 // limb at the horizon with standard refraction, i.e. centre at −0.8333°).
 import { writeFile, mkdir } from 'node:fs/promises'
@@ -41,22 +48,34 @@ timestamps.push(
 )
 const unique = [...new Set(timestamps)].sort((a, b) => a - b)
 
+// The same grid plus 2026 new and full moons (USNO), for the phase extremes.
+const moonTimestamps = [
+  ...new Set([
+    ...timestamps,
+    Date.UTC(2026, 0, 18, 19, 52), // new
+    Date.UTC(2026, 2, 3, 11, 38), // full (total lunar eclipse)
+    Date.UTC(2026, 7, 12, 17, 37), // new (total solar eclipse)
+    Date.UTC(2026, 7, 28, 4, 18), // full
+    Date.UTC(2026, 9, 10, 15, 50), // new
+    Date.UTC(2026, 9, 3, 13, 25), // last quarter
+    Date.UTC(2026, 9, 18, 16, 12), // first quarter
+    Date.UTC(2026, 9, 26, 4, 12), // full
+  ]),
+].sort((a, b) => a - b)
+
 const toJd = (ms) => ms / 86400000 + 2440587.5
 
-async function fetchHorizons() {
+// `columns` maps fixture keys to Horizons column-name prefixes.
+async function fetchHorizons(query, columns, times) {
   const params = new URLSearchParams({
     format: 'json',
-    COMMAND: "'10'",
     EPHEM_TYPE: "'OBSERVER'",
-    CENTER: "'coord@399'",
-    COORD_TYPE: "'GEODETIC'",
-    SITE_COORD: "'0,0,0'",
     TIME_TYPE: "'UT'",
-    QUANTITIES: "'2,7,31'",
     ANG_FORMAT: "'DEG'",
     EXTRA_PREC: "'YES'",
     CSV_FORMAT: "'YES'",
-    TLIST: unique.map((t) => `'${toJd(t).toFixed(9)}'`).join(','),
+    ...query,
+    TLIST: times.map((t) => `'${toJd(t).toFixed(9)}'`).join(','),
   })
   const res = await fetch(`https://ssd.jpl.nasa.gov/api/horizons.api?${params}`)
   if (!res.ok) throw new Error(`Horizons ${res.status}`)
@@ -75,21 +94,18 @@ async function fetchHorizons() {
     if (i < 0) throw new Error(`Horizons: no ${prefix} column in ${header}`)
     return i
   }
-  const COLS = {
-    raDeg: column('R.A.'),
-    decDeg: column('DEC'),
-    gastHours: column('L_Ap_Sid_Time'),
-    eclipticLonDeg: column('ObsEcLon'),
-  }
+  const COLS = Object.fromEntries(
+    Object.entries(columns).map(([key, prefix]) => [key, column(prefix)])
+  )
   const rows = body.trim().split('\n')
-  if (rows.length !== unique.length) {
-    throw new Error(`Horizons: ${rows.length} rows for ${unique.length} times`)
+  if (rows.length !== times.length) {
+    throw new Error(`Horizons: ${rows.length} rows for ${times.length} times`)
   }
   return rows.map((row, i) => {
     const cols = row.split(',').map((c) => c.trim())
     // Guards against TLIST being read in another time scale.
-    if (cols[0] !== horizonsDate(unique[i])) {
-      throw new Error(`Horizons: row ${cols[0]} for ${new Date(unique[i]).toISOString()}`)
+    if (cols[0] !== horizonsDate(times[i])) {
+      throw new Error(`Horizons: row ${cols[0]} for ${new Date(times[i]).toISOString()}`)
     }
     const values = Object.fromEntries(
       Object.entries(COLS).map(([key, c]) => {
@@ -100,7 +116,7 @@ async function fetchHorizons() {
         return [key, value]
       })
     )
-    return { t: new Date(unique[i]).toISOString(), horizonsDate: cols[0], ...values }
+    return { t: new Date(times[i]).toISOString(), horizonsDate: cols[0], ...values }
   })
 }
 
@@ -160,7 +176,46 @@ await writeFile(
     {
       source: 'JPL Horizons API, COMMAND=10, CENTER=coord@399 SITE_COORD=0,0,0, QUANTITIES=2,7,31',
       fetchedAt,
-      rows: await fetchHorizons(),
+      rows: await fetchHorizons(
+        {
+          COMMAND: "'10'",
+          CENTER: "'coord@399'",
+          COORD_TYPE: "'GEODETIC'",
+          SITE_COORD: "'0,0,0'",
+          QUANTITIES: "'2,7,31'",
+        },
+        {
+          raDeg: 'R.A.',
+          decDeg: 'DEC',
+          gastHours: 'L_Ap_Sid_Time',
+          eclipticLonDeg: 'ObsEcLon',
+        },
+        unique
+      ),
+    },
+    null,
+    2
+  ) + '\n'
+)
+await writeFile(
+  new URL('horizons-moon.json', OUT_DIR),
+  JSON.stringify(
+    {
+      source: 'JPL Horizons API, COMMAND=301, CENTER=500@399, QUANTITIES=10,14,20,24,31',
+      fetchedAt,
+      rows: await fetchHorizons(
+        { COMMAND: "'301'", CENTER: "'500@399'", QUANTITIES: "'10,14,20,24,31'" },
+        {
+          illuminatedPercent: 'Illu%',
+          subEarthLonDeg: 'ObsSub-LON',
+          subEarthLatDeg: 'ObsSub-LAT',
+          rangeAu: 'delta',
+          phaseAngleDeg: 'S-T-O',
+          eclipticLonDeg: 'ObsEcLon',
+          eclipticLatDeg: 'ObsEcLat',
+        },
+        moonTimestamps
+      ),
     },
     null,
     2

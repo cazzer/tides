@@ -1,18 +1,25 @@
 import * as THREE from 'three'
 import { describe, expect, test, afterAll } from 'vitest'
+import { KM_PER_AU } from 'astronomy-engine'
 import {
   EARTH_AXIAL_TILT,
+  MOON_AXIAL_TILT,
+  MOON_UNITS_PER_KM,
   earthPosition,
   earthSpin,
+  moonPosition,
+  moonSpin,
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import horizons from './__fixtures__/horizons-sun.json'
+import horizonsMoon from './__fixtures__/horizons-moon.json'
 import usno from './__fixtures__/usno-sun-rise-set.json'
 
 // Reference data comes from the committed fixtures (see
 // scripts/fetch-ephemeris-fixtures.mjs); everything compared against it is
-// read back from the Earth's scene transform, built with OrbitingBody's code.
+// read back from the Earth's and Moon's scene transforms, built with
+// OrbitingBody's code. (astronomy-engine is imported only for a unit constant.)
 
 const DEG = 180 / Math.PI
 const MINUTE = 60_000
@@ -34,6 +41,17 @@ function earthAt(t: number): THREE.Object3D {
   )
   earth.updateMatrixWorld()
   return earth
+}
+
+function moonAt(t: number): THREE.Object3D {
+  const moon = new THREE.Object3D()
+  applyBodyTransform(
+    moon,
+    { axialTilt: MOON_AXIAL_TILT, spinAt: moonSpin, positionAt: moonPosition },
+    t
+  )
+  moon.updateMatrixWorld()
+  return moon
 }
 
 // Inverse of calculateLocationAndRotationForLatLng on a unit sphere.
@@ -85,9 +103,11 @@ function crossing(
 }
 
 const horizonsReport: Record<string, unknown>[] = []
+const moonReport: Record<string, unknown>[] = []
 const usnoReport: Record<string, unknown>[] = []
 afterAll(() => {
   console.table(horizonsReport)
+  console.table(moonReport)
   console.table(usnoReport)
 })
 
@@ -111,6 +131,61 @@ describe('scene geometry vs JPL Horizons', () => {
     expect(Math.abs(latError)).toBeLessThan(0.1)
     expect(Math.abs(lonError)).toBeLessThan(0.25)
     expect(Math.abs(eclError)).toBeLessThan(0.05)
+  })
+})
+
+describe('scene Moon vs JPL Horizons', () => {
+  test.each(horizonsMoon.rows)('$t', (row) => {
+    const t = Date.parse(row.t)
+    const earth = earthAt(t).position
+    const moon = moonAt(t)
+    const geocentric = moon.position.clone().sub(earth)
+    const range = geocentric.length()
+
+    // Scene angle φ is ecliptic longitude + 180° (see ephemeris.ts).
+    const lon = Math.atan2(-geocentric.z, geocentric.x) * DEG + 180
+    const lat = Math.asin(geocentric.y / range) * DEG
+    const lonError = wrap180(lon - row.eclipticLonDeg)
+    const latError = lat - row.eclipticLatDeg
+    const rangeError = range / MOON_UNITS_PER_KM / KM_PER_AU / row.rangeAu - 1
+
+    // Phase from the Sun's direction as seen from Earth. The scene's Sun is
+    // only 5 Moon-distances away (389 in reality), so the direction from the
+    // Moon to the scene origin is up to ~11° off and inflates the fraction by
+    // up to 0.10 near the quarters; tides-2e6 lights the Moon along this
+    // direction instead.
+    const toSun = earth.clone().negate()
+    const toEarth = earth.clone().sub(moon.position)
+    const phaseAngle = toSun.angleTo(toEarth) * DEG
+    const fraction = (1 + Math.cos(phaseAngle / DEG)) / 2
+    const fractionError = fraction - row.illuminatedPercent / 100
+
+    // The point on the Moon's texture that faces the Earth.
+    const subEarth = toLatLon(moon.worldToLocal(earth.clone()).normalize())
+    const subEarthLonError = wrap180(subEarth.lon - row.subEarthLonDeg)
+    const subEarthLatError = subEarth.lat - row.subEarthLatDeg
+
+    moonReport.push({
+      t: row.t,
+      'lon err°': +lonError.toFixed(4),
+      'lat err°': +latError.toFixed(4),
+      'range err %': +(rangeError * 100).toFixed(3),
+      'illum': +fraction.toFixed(4),
+      'illum err': +fractionError.toFixed(4),
+      'sub-Earth lon°': +subEarth.lon.toFixed(2),
+      'sub-Earth lon err°': +subEarthLonError.toFixed(2),
+      'sub-Earth lat°': +subEarth.lat.toFixed(2),
+      'sub-Earth lat err°': +subEarthLatError.toFixed(2),
+    })
+
+    expect(Math.abs(lonError)).toBeLessThan(0.1)
+    expect(Math.abs(latError)).toBeLessThan(0.1)
+    expect(Math.abs(rangeError)).toBeLessThan(0.001)
+    expect(Math.abs(fractionError)).toBeLessThan(0.01)
+    // Optical libration reaches ~8°; the texture's near side must face Earth
+    // at least that well.
+    expect(Math.abs(subEarthLonError)).toBeLessThan(8)
+    expect(Math.abs(subEarthLatError)).toBeLessThan(8)
   })
 })
 
