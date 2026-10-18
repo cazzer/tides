@@ -10,7 +10,18 @@ function getInitialTimeScale(): number {
   const speed = new URLSearchParams(window.location.search).get('speed')
   if (speed == null) return 1
   const n = Number(speed)
+  // 0 pauses; it has no menu entry, so it is only reachable from the URL.
+  if (n === 0) return 0
   return SPEED_VALUES.includes(n as (typeof SPEED_VALUES)[number]) ? n : 1
+}
+
+// ?t= takes epoch milliseconds or anything Date.parse accepts (e.g. ISO 8601).
+function getInitialTimestamp(): number | null {
+  if (typeof window === 'undefined') return null
+  const t = new URLSearchParams(window.location.search).get('t')
+  if (t == null) return null
+  const ms = /^-?\d+$/.test(t) ? Number(t) : Date.parse(t)
+  return Number.isFinite(ms) ? ms : null
 }
 
 function getInitialCameraFocus(): CameraFocus {
@@ -55,6 +66,7 @@ export const useStore = create<{
   locationPin: any
   earthRadius: number | undefined
   timeScale: number
+  initialTimestamp: number | null
   cameraFocus: CameraFocus
   mainPanel: PanelKey
   location: Location | null
@@ -75,6 +87,7 @@ export const useStore = create<{
   locationPin: undefined,
   earthRadius: undefined,
   timeScale: getInitialTimeScale(),
+  initialTimestamp: getInitialTimestamp(),
   cameraFocus: getInitialCameraFocus(),
   mainPanel: getInitialPanel(),
   location: getInitialLocation(),

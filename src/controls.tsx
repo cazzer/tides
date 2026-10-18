@@ -52,7 +52,12 @@ export default function Controls() {
     e.preventDefault()
     const dt = DateTime.fromFormat(dateInput, 'MM/dd/yyyy')
     if (dt.isValid) {
-      setJumpDate(dt.toJSDate())
+      const date = dt.toJSDate()
+      setJumpDate(date)
+      // Only jumps write ?t=; the running clock would change it every frame.
+      const params = new URLSearchParams(window.location.search)
+      params.set('t', date.toISOString())
+      window.history.replaceState(null, '', `${window.location.pathname}?${params}`)
     }
   }
 

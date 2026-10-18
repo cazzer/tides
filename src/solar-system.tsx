@@ -50,6 +50,7 @@ export default function SolarSystem({
   useTexture.preload(moonTexture)
   const setPlanet = useStore((s) => s.setPlanet)
   const timeScale = useStore((s) => s.timeScale)
+  const initialTimestamp = useStore((s) => s.initialTimestamp)
   const jumpDate = useStore((s) => s.jumpDate)
   const setJumpDate = useStore((s) => s.setJumpDate)
   const sun = useRef(null)
@@ -71,7 +72,7 @@ export default function SolarSystem({
     const currentTimestamp =
       typeof simulationState.timestamp === 'number'
         ? simulationState.timestamp
-        : Date.now()
+        : initialTimestamp ?? Date.now()
     let newTime
 
     if (jumpDate) {
