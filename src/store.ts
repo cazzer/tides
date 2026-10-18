@@ -108,5 +108,5 @@ export const useStore = create<{
   jumpDate: null,
   jumpDateSetAt: null,
   setJumpDate: (date: Date | null) =>
-    set({ jumpDate: date, jumpDateSetAt: new Date() }),
+    set(date ? { jumpDate: date, jumpDateSetAt: new Date() } : { jumpDate: null }),
 }))

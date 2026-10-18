@@ -5,6 +5,7 @@ export const JUMP_DURATION_MS = 5000
 
 export interface Jump {
   from: number
+  to: number
   /** Root clock time (s) when the jump began. */
   startedAt: number
 }
@@ -44,7 +45,11 @@ export function advanceClock(prev: ClockState, input: ClockInput): ClockStep {
     }
   }
 
-  const jump = prev.jump ?? { from: current, startedAt: input.elapsed }
+  // A new target mid-jump restarts the tween from where the clock is now.
+  const jump =
+    prev.jump?.to === input.jumpTo
+      ? prev.jump
+      : { from: current, to: input.jumpTo, startedAt: input.elapsed }
   const progress = Math.min(
     1,
     Math.max(0, ((input.elapsed - jump.startedAt) * 1000) / JUMP_DURATION_MS)
