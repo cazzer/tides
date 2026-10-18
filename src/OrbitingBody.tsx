@@ -2,15 +2,18 @@ import { forwardRef, useRef, useEffect } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
-import {
-  degreesToRadians,
-  calculateLocationAndRotationForLatLng,
-} from './utils'
+import { degreesToRadians } from './utils'
 import { moonPosition, type Vec3 } from './ephemeris'
 import { useCamera } from './camera'
 import { useStore } from './store'
 import { LocationPin } from './LocationPin'
 import { applyBodyTransform } from './body-transform'
+import {
+  DEFAULT_SURFACE_LOCATION,
+  GROUND_RADIUS,
+  SURFACE_FOV,
+  placeSurfaceCamera,
+} from './sky'
 
 const moonTarget = new THREE.Vector3()
 
@@ -108,23 +111,15 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     }
 
     // calculate surface camera position (use location from store if set)
-    if (surfaceCameraContainerRef.current) {
-      const lat = location?.lat ?? -30
-      const lng = location?.lon ?? 0
-      const { position, rotation } = calculateLocationAndRotationForLatLng(
+    if (surfaceCameraContainerRef.current && surfaceCameraRef.current) {
+      const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
+      placeSurfaceCamera(
+        surfaceCameraContainerRef.current,
+        surfaceCameraRef.current,
         lat,
-        lng,
+        lon,
         diameter
       )
-
-      if (surfaceCameraContainerRef.current) {
-        surfaceCameraContainerRef.current.position.x = position.x
-        surfaceCameraContainerRef.current.position.y = position.y
-        surfaceCameraContainerRef.current.position.z = position.z
-        surfaceCameraContainerRef.current.rotation.x = rotation.x
-        surfaceCameraContainerRef.current.rotation.y = rotation.y
-        surfaceCameraContainerRef.current.rotation.z = rotation.z
-      }
     }
   })
 
@@ -156,17 +151,24 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
         {/* Surface camera for Earth */}
         {storeLabel === 'earth' && (
           <mesh
-            position={[0, 0, -diameter]}
-            rotation={[0, 0, Math.PI]}
             ref={surfaceCameraContainerRef}
             onPointerDown={onCameraClick}
           >
             <PerspectiveCamera
-              position={[0, 0, 0]}
-              rotation={[0, 0, 0]}
-              zoom={0.75}
+              fov={SURFACE_FOV}
               ref={surfaceCameraRef}
             />
+            {surfaceCamera && (
+              <mesh>
+                <sphereGeometry
+                  args={[GROUND_RADIUS, 64, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]}
+                />
+                <meshBasicMaterial
+                  color="#161a14"
+                  side={THREE.BackSide}
+                />
+              </mesh>
+            )}
           </mesh>
         )}
 

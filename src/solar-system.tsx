@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useTexture } from '@react-three/drei'
 import OrbitingBody from './OrbitingBody'
@@ -8,9 +8,16 @@ import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
 import Sunlight from './renderers/Sunlight'
 import { scaleLog } from 'd3'
+import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
 import { OrbitLabel } from './orbit-label'
 import { useStore } from './store'
+import {
+  DEFAULT_SURFACE_LOCATION,
+  MOON_SKY_DISTANCE,
+  SUN_SKY_DISTANCE,
+  skyPositionAt,
+} from './sky'
 
 import earthTextureHigh from './assets/earth-day.jpg'
 import earthTextureLow from './assets/earth-day-2k.jpg'
@@ -27,6 +34,7 @@ import {
 } from './ephemeris'
 
 const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
+const EARTH_DIAMETER = scaleDiameter(12742000)
 
 useTexture.preload(earthTextureHigh)
 
@@ -49,6 +57,25 @@ export default function SolarSystem({
   const sun = useRef(null)
   const earth = useRef(null)
   const moon = useRef(null)
+  const location = useStore((s) => s.location)
+  const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
+
+  // From the surface, the Sun and Moon move to their true directions on a sky
+  // around the observer (see sky.ts).
+  const sunPositionAt = useMemo(
+    () =>
+      earthCamera
+        ? skyPositionAt(Body.Sun, SUN_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
+        : undefined,
+    [earthCamera, lat, lon]
+  )
+  const moonPositionAt = useMemo(
+    () =>
+      earthCamera
+        ? skyPositionAt(Body.Moon, MOON_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
+        : moonPosition,
+    [earthCamera, lat, lon]
+  )
 
   // Only the main panel's CameraProvider (the one with OrbitControls) uses these.
   useEffect(() => {
@@ -68,6 +95,7 @@ export default function SolarSystem({
       <OrbitingBody
         ref={sun}
         focusKey="sun"
+        positionAt={sunPositionAt}
         spinAt={sunSpin}
         interactive={interactive}
       >
@@ -81,23 +109,26 @@ export default function SolarSystem({
         ref={earth}
         focusKey="earth"
         storeLabel="earth"
-        diameter={scaleDiameter(12742000)}
+        diameter={EARTH_DIAMETER}
         positionAt={earthPosition}
         spinAt={earthSpin}
         axialTilt={EARTH_AXIAL_TILT}
         interactive={interactive}
       >
-        <EarthRenderer
-          diameter={scaleDiameter(12742000)}
-          texture={earthTexture}
-        />
+        {/* From the surface, the ground stands in for the globe. */}
+        {!earthCamera && (
+          <EarthRenderer
+            diameter={EARTH_DIAMETER}
+            texture={earthTexture}
+          />
+        )}
       </OrbitingBody>
       {showOrbitLabels && <OrbitLabel radius={EARTH_ORBIT_RADIUS} />}
       <OrbitingBody
         ref={moon}
         focusKey="moon"
         diameter={scaleDiameter(3474800)}
-        positionAt={moonPosition}
+        positionAt={moonPositionAt}
         orientationAt={moonOrientation}
         interactive={interactive}
       >

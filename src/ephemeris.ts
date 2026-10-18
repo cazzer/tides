@@ -56,7 +56,7 @@ export function moonPosition(t: number): Vec3 {
 
 // Ecliptic of date (x toward λ = 0°, z north) to scene axes (φ = λ + 180°,
 // +Y north).
-function eclipticToScene(v: Vector, out: THREE.Vector3): THREE.Vector3 {
+export function eclipticToScene(v: Vector, out: THREE.Vector3): THREE.Vector3 {
   return out.set(-v.x, v.z, v.y)
 }
 

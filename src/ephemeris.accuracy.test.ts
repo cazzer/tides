@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { describe, expect, test, afterAll } from 'vitest'
-import { KM_PER_AU } from 'astronomy-engine'
+import { Body, Equator, Horizon, KM_PER_AU, Observer } from 'astronomy-engine'
 import {
   EARTH_AXIAL_TILT,
   MOON_UNITS_PER_KM,
@@ -10,6 +10,13 @@ import {
   moonOrientation,
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
+import {
+  MOON_SKY_DISTANCE,
+  SUN_SKY_DISTANCE,
+  placeSurfaceCamera,
+  skyPositionAt,
+  surfaceView,
+} from './sky'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import horizons from './__fixtures__/horizons-sun.json'
 import horizonsMoon from './__fixtures__/horizons-moon.json'
@@ -18,7 +25,8 @@ import usno from './__fixtures__/usno-sun-rise-set.json'
 // Reference data comes from the committed fixtures (see
 // scripts/fetch-ephemeris-fixtures.mjs); everything compared against it is
 // read back from the Earth's and Moon's scene transforms, built with
-// OrbitingBody's code. (astronomy-engine is imported only for a unit constant.)
+// OrbitingBody's code. (astronomy-engine is otherwise imported only for a unit
+// constant, and as the reference for the sky seen from the surface.)
 
 const DEG = 180 / Math.PI
 const MINUTE = 60_000
@@ -104,10 +112,12 @@ function crossing(
 const horizonsReport: Record<string, unknown>[] = []
 const moonReport: Record<string, unknown>[] = []
 const usnoReport: Record<string, unknown>[] = []
+const skyReport: Record<string, unknown>[] = []
 afterAll(() => {
   console.table(horizonsReport)
   console.table(moonReport)
   console.table(usnoReport)
+  console.table(skyReport)
 })
 
 describe('scene geometry vs JPL Horizons', () => {
@@ -212,6 +222,98 @@ describe('scene terminator vs USNO sunrise/sunset', () => {
     })
 
     expect(Math.abs(error)).toBeLessThan(2)
+  })
+})
+
+// The scene Earth's radius (solar-system.tsx); the directions below don't
+// depend on it, since the sky bodies are placed relative to the observer.
+const EARTH_RADIUS = 2.95
+
+// The "View from Earth" camera, inside the observer that OrbitingBody stands
+// on the spinning Earth.
+function surfaceCameraAt(t: number, lat: number, lon: number): THREE.Object3D {
+  const earth = earthAt(t)
+  const observer = new THREE.Object3D()
+  const camera = new THREE.Object3D()
+  placeSurfaceCamera(observer, camera, lat, lon, EARTH_RADIUS)
+  earth.add(observer)
+  observer.add(camera)
+  earth.updateMatrixWorld()
+  return camera
+}
+
+// Alt/az of a world point, read from the camera's frame by undoing the view's
+// azimuth and tilt (surfaceView).
+function cameraAltAz(camera: THREE.Object3D, point: THREE.Vector3, lat: number) {
+  const d = camera.worldToLocal(point.clone()).normalize()
+  const { azimuth, altitude } = surfaceView(lat)
+  const h = altitude / DEG
+  const ahead = -d.z * Math.cos(h) - d.y * Math.sin(h)
+  const upward = -d.z * Math.sin(h) + d.y * Math.cos(h)
+  return {
+    alt: Math.asin(upward) * DEG,
+    az: azimuth + Math.atan2(d.x, ahead) * DEG,
+  }
+}
+
+const skySites = [
+  ...new Map(usno.events.map((e) => [e.place, e])).values(),
+  // The view's edge cases: facing south from the equator, and near the poles.
+  { place: 'Equator', lat: 0, lon: 30 },
+  { place: 'North Pole', lat: 89.9, lon: 0 },
+  { place: 'South Pole', lat: -89.9, lon: 0 },
+]
+const skyTimes = horizonsMoon.rows.map((row) => row.t).filter((t) => t >= '2026')
+const skyCases = skySites.flatMap(({ place, lat, lon }) =>
+  skyTimes.map((t) => ({ place, lat, lon, t }))
+)
+
+describe('View from Earth vs astronomy-engine Horizon()', () => {
+  test.each(skyCases)('$place $t', ({ place, lat, lon, t: iso }) => {
+    const t = Date.parse(iso)
+    const camera = surfaceCameraAt(t, lat, lon)
+
+    // A level horizon: the camera's right axis is horizontal, and its up axis
+    // leans toward the zenith (the Earth's centre to the observer).
+    const zenith = camera
+      .getWorldPosition(new THREE.Vector3())
+      .sub(earthAt(t).position)
+      .normalize()
+    const right = new THREE.Vector3(1, 0, 0).transformDirection(camera.matrixWorld)
+    const up = new THREE.Vector3(0, 1, 0).transformDirection(camera.matrixWorld)
+    expect(Math.abs(right.dot(zenith))).toBeLessThan(1e-9)
+    expect(up.dot(zenith)).toBeGreaterThan(0)
+
+    const site = new Observer(lat, lon, 0)
+    for (const [name, body, distance] of [
+      ['Sun', Body.Sun, SUN_SKY_DISTANCE],
+      ['Moon', Body.Moon, MOON_SKY_DISTANCE],
+    ] as const) {
+      const scene = cameraAltAz(
+        camera,
+        new THREE.Vector3(...skyPositionAt(body, distance, lat, lon, EARTH_RADIUS)(t)),
+        lat
+      )
+      const { ra, dec } = Equator(body, new Date(t), site, true, true)
+      const expected = Horizon(new Date(t), site, ra, dec)
+      const altError = scene.alt - expected.altitude
+      // Azimuth error as an arc on the sky, so it stays meaningful near the zenith.
+      const azError =
+        wrap180(scene.az - expected.azimuth) * Math.cos(expected.altitude / DEG)
+      skyReport.push({
+        t: iso,
+        place,
+        body: name,
+        'alt°': +expected.altitude.toFixed(2),
+        'az°': +expected.azimuth.toFixed(2),
+        'alt err°': +altError.toFixed(4),
+        'az err° (arc)': +azError.toFixed(4),
+      })
+      // The ticket asks for 0.5°; measured max is 0.011°, and 0.05° still
+      // catches a J2000/of-date mix-up (~0.36° by 2026).
+      expect(Math.abs(altError)).toBeLessThan(0.05)
+      expect(Math.abs(azError)).toBeLessThan(0.05)
+    }
   })
 })
 
