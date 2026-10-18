@@ -55,6 +55,8 @@ export default function SunRenderer({
       fragmentShader: haloFragment,
       side: THREE.BackSide,
       transparent: true,
+      // A glow, not a surface: writing depth would hide labels behind it.
+      depthWrite: false,
       uniforms: {
         time: { value: 0 },
         uPerlin: { value: null },

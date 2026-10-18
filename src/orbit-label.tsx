@@ -35,15 +35,12 @@ const CLOCK_HALF_WIDTH = 8
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
 
-// The camera never moves, only re-aims, so from its oblique angle the Sun's
-// disc hides anything on the ecliptic within ~27 units behind it. Draw labels
-// as an overlay after the bodies instead.
-const LABEL_RENDER_ORDER = 1
-const overlayMaterial = new THREE.MeshBasicMaterial({
+// Depth-tested so the Sun, Earth and Moon hide labels behind them, but not
+// depth-written so overlapping glyphs and later transparents still blend.
+const labelMaterial = new THREE.MeshBasicMaterial({
   color: 0xffffff,
   side: THREE.DoubleSide,
   transparent: true,
-  depthTest: false,
   depthWrite: false,
 })
 
@@ -182,8 +179,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
         ref={clockTextRef}
         userData-focus="clock"
         onClick={handleFocus}
-        material={overlayMaterial}
-        renderOrder={LABEL_RENDER_ORDER}
+        material={labelMaterial}
         scale={[2, 2, 2]}
         color="white" // default
         // Thin white strokes wash out over the Sun without a dark edge.
@@ -202,8 +198,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
           ref={(text: TroikaText | null) => {
             monthRefs.current[m] = text
           }}
-          material={overlayMaterial}
-          renderOrder={LABEL_RENDER_ORDER}
+          material={labelMaterial}
           scale={[MONTH_SCALE, MONTH_SCALE, MONTH_SCALE]}
           color={MONTH_COLOR}
           anchorX="left"
