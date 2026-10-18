@@ -6,7 +6,13 @@ import {
   useRef,
 } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Vector3, Matrix4, type InstancedMesh, type Object3D } from 'three'
+import {
+  Vector3,
+  Matrix4,
+  type InstancedMesh,
+  type Object3D,
+  type OrthographicCamera,
+} from 'three'
 import { useStore, type CameraFocus } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
 
@@ -35,6 +41,20 @@ function getFocusForObject(object: Object3D): CameraFocus | null {
   return null
 }
 
+/**
+ * OrbitControls turns 2π·rotateSpeed/domHeight rad per dragged pixel, while
+ * the surface point facing the camera moves worldPerPixel/radius rad per
+ * pixel. Matching the two keeps the grabbed surface under the cursor up close;
+ * capping at the default 1 leaves the far-away orbit as it was.
+ */
+export function surfaceGrabRotateSpeed(
+  worldPerPixel: number,
+  domHeight: number,
+  radius: number
+): number {
+  return Math.min(1, (worldPerPixel * domHeight) / (2 * Math.PI * radius))
+}
+
 export const useCamera = () => useContext(CameraContext)
 
 export const CameraProvider = ({ children }: { children: any }) => {
@@ -55,7 +75,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const location = useStore((s) => s.location)
   const earthRadius = useStore((s) => s.earthRadius)
 
-  useFrame(() => {
+  useFrame((state) => {
     const target = new Vector3()
     let hasTarget = false
 
@@ -113,6 +133,17 @@ export const CameraProvider = ({ children }: { children: any }) => {
       camera.lookAt(cameraTarget.current)
       // @ts-ignore
       controls.target.copy(cameraTarget.current)
+      const ortho = camera as OrthographicCamera
+      // @ts-ignore
+      controls.rotateSpeed =
+        cameraFocus === 'earth' && earthRadius != null && ortho.isOrthographicCamera
+          ? surfaceGrabRotateSpeed(
+              (ortho.top - ortho.bottom) / (ortho.zoom * state.size.height),
+              // @ts-ignore
+              controls.domElement.clientHeight,
+              earthRadius
+            )
+          : 1
       // @ts-ignore
       controls.update()
     }
