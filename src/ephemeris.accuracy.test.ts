@@ -172,6 +172,7 @@ describe('scene Moon vs JPL Horizons', () => {
       'range err %': +(rangeError * 100).toFixed(3),
       'illum': +fraction.toFixed(4),
       'illum err': +fractionError.toFixed(4),
+      'phase err°': +(phaseAngle - row.phaseAngleDeg).toFixed(3),
       'sub-Earth lon°': +subEarth.lon.toFixed(2),
       'sub-Earth lon err°': +subEarthLonError.toFixed(2),
       'sub-Earth lat°': +subEarth.lat.toFixed(2),
@@ -182,10 +183,12 @@ describe('scene Moon vs JPL Horizons', () => {
     expect(Math.abs(latError)).toBeLessThan(0.1)
     expect(Math.abs(rangeError)).toBeLessThan(0.001)
     expect(Math.abs(fractionError)).toBeLessThan(0.01)
-    // Optical libration reaches ~8°; the texture's near side must face Earth
-    // at least that well.
-    expect(Math.abs(subEarthLonError)).toBeLessThan(8)
-    expect(Math.abs(subEarthLatError)).toBeLessThan(8)
+    // The fraction is flat near new and full moon, so check the angle too.
+    expect(Math.abs(phaseAngle - row.phaseAngleDeg)).toBeLessThan(0.3)
+    // Libration reaches ~8°, so these must sit well inside it. Latitude is
+    // off by up to 3.0° while the Moon's pole is fixed (tides-44w).
+    expect(Math.abs(subEarthLonError)).toBeLessThan(0.5)
+    expect(Math.abs(subEarthLatError)).toBeLessThan(4)
   })
 })
 

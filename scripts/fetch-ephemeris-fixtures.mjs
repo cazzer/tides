@@ -48,7 +48,7 @@ timestamps.push(
 )
 const unique = [...new Set(timestamps)].sort((a, b) => a - b)
 
-// The same grid plus 2026 new and full moons (USNO), for the phase extremes.
+// The same grid plus 2026 new, full and quarter moons (USNO).
 const moonTimestamps = [
   ...new Set([
     ...timestamps,
