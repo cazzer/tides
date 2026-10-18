@@ -127,7 +127,8 @@ describe('scene geometry vs JPL Horizons', () => {
       'ecliptic lon err°': +eclError.toFixed(4),
     })
 
-    expect(Math.abs(latError)).toBeLessThan(0.1)
+    // Measured max 0.011° (2100), from the fixed J2000 tilt.
+    expect(Math.abs(latError)).toBeLessThan(0.015)
     expect(Math.abs(lonError)).toBeLessThan(0.25)
     expect(Math.abs(eclError)).toBeLessThan(0.05)
   })

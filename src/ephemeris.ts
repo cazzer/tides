@@ -15,7 +15,10 @@ import {
 export type Vec3 = [number, number, number]
 
 export const EARTH_ORBIT_RADIUS = 50
-export const EARTH_AXIAL_TILT = 23.4
+// Mean obliquity at J2000. The true obliquity of date drifts about
+// −0.013°/century and nods ±0.003°, so a fixed tilt is within ~0.012° over
+// 1950–2100.
+export const EARTH_AXIAL_TILT = 23.4393
 export const MOON_UNITS_PER_KM = 10 / 384400
 const DEG = Math.PI / 180
 

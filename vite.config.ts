@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { configDefaults, defineConfig } from 'vitest/config'
 import path from 'path'
 import react from '@vitejs/plugin-react'
 import glsl from 'vite-plugin-glsl'
@@ -30,6 +30,10 @@ export default defineConfig({
       transformMixedEsModules: true,
       requireReturnsDefault: 'auto',
     },
+  },
+  test: {
+    // Agent worktrees hold full copies of src/ and its tests.
+    exclude: [...configDefaults.exclude, '.claude/**'],
   },
   define: {
     ephemeris: {},
