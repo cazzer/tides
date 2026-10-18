@@ -87,15 +87,6 @@ export function OrbitLabel({ radius }: { radius: number }) {
     setPlanet('clock', clockRef)
   }, [setPlanet])
 
-  useEffect(() => {
-    if (clockRef.current) {
-      handleFocus({
-        object: clockRef.current,
-        instanceId: undefined,
-      })
-    }
-  }, [handleFocus])
-
   const lineGeometry = useMemo(() => {
     const eclipsePoints = []
     for (let index = 0; index < 256; index++) {
