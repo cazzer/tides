@@ -6,6 +6,7 @@ import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
+import Sunlight from './renderers/Sunlight'
 import { scaleLog } from 'd3'
 import { CameraProvider } from './camera'
 import { OrbitLabel } from './orbit-label'
@@ -60,6 +61,7 @@ export default function SolarSystem({
   return (
     <CameraProvider>
       <ambientLight intensity={1} />
+      <Sunlight />
 
       <Starfield />
 

@@ -16,15 +16,9 @@ const REFLECTION_LAYER = 1
 
 interface SunRendererProps {
   diameter: number
-  intensity?: number
-  decay?: number
 }
 
-export default function SunRenderer({
-  diameter,
-  intensity = 1400,
-  decay = 1.1,
-}: SunRendererProps) {
+export default function SunRenderer({ diameter }: SunRendererProps) {
   const noiseRef = useRef<THREE.Mesh>(null)
   const sunRef = useRef<THREE.Mesh>(null)
   const noiseMaterial = useMemo(() => {
@@ -84,12 +78,6 @@ export default function SunRenderer({
 
   return (
     <>
-      {/* Point light for illuminating other objects */}
-      <pointLight
-        position={[0, 0, 0]}
-        decay={decay}
-        intensity={intensity}
-      />
       <CubeCamera
         position={[0, 0, 0]}
         resolution={256}
