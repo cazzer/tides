@@ -8,6 +8,7 @@
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
 import {
+  airMass,
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
@@ -15,6 +16,7 @@ import {
   EARTH_RADIUS_KM,
   MAX_CLOUD_TOP_KM,
   MIN_MEASURED_TOP_KM,
+  SUNBEAM_FLOOR_KM,
   SUNLIGHT_EXTINCTION,
   SUNSET_FLOOR,
   TERRAIN_DISPLACEMENT,
@@ -22,6 +24,7 @@ import {
 } from '../cloud-layer'
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
+import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 
 const f = (x: number) => x.toFixed(6)
 
@@ -42,6 +45,8 @@ uniform float uSeaLevel;
 #define CLOUD_LAYER_TOP ${f(CLOUD_LAYER_TOP)}
 #define CLOUD_FLAT_ALTITUDE ${f(CLOUD_FLAT_ALTITUDE)}
 #define TERRAIN_DISPLACEMENT ${f(TERRAIN_DISPLACEMENT)}
+
+${poleSmoothingGlsl('cloudPoleSmoothed', POLE_SMOOTH_CLOUD_TAPS)}
 
 // directionToUv(): SphereGeometry's texture coordinates of a local direction.
 vec2 cloudUv(vec3 dir) {
@@ -65,7 +70,11 @@ float cloudTerrain(vec2 uv) {
 // x: opacity, y: base altitude, z: top altitude, w: top height above the
 // ground (km).
 vec4 cloudColumn(vec2 uv, float lod, float terrain) {
-  vec3 c = textureLod(uCloudMap, vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0)), lod).rgb;
+  vec2 st = vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0));
+  // Smoothed near the poles (./poleSmoothing.ts).
+  vec3 c = cloudPoleSmoothed(uCloudMap, st,
+    max(lod, log2(float(textureSize(uCloudMap, 0).x)) + ${f(poleSmoothingLod(1))}),
+    textureLod(uCloudMap, st, lod)).rgb;
   float trust = c.b * uCloudMeasured;
   float km = mix(1.5 + 7.0 * c.g * c.g, max(c.r * ${f(MAX_CLOUD_TOP_KM)}, ${f(MIN_MEASURED_TOP_KM)}), trust);
   float base = terrain + CLOUD_CLEARANCE;
@@ -133,12 +142,19 @@ varying vec3 vRayDir;
 #define SKY 0.22
 #define FORWARD 0.6
 
-// sunlightTint()
+// sunbeamAirMass() and sunlightTint()
 vec3 cloudSunTint(float mu, float km) {
-  float zenith = min(90.0, degrees(acos(clamp(mu, -1.0, 1.0))));
-  float m = 1.0 / (cos(radians(zenith)) + 0.50572 * pow(96.07995 - zenith, -1.6364)) - 1.0;
-  float thin = exp(-max(0.0, km) / 8.0);
-  vec3 t = exp(-vec3(${SUNLIGHT_EXTINCTION.map(f).join(', ')}) * thin * m);
+  float h = max(0.0, km);
+  float m;
+  if (mu >= 0.0) {
+    float zenith = min(90.0, degrees(acos(clamp(mu, -1.0, 1.0))));
+    m = (1.0 / (cos(radians(zenith)) + 0.50572 * pow(96.07995 - zenith, -1.6364)) - 1.0)
+      * exp(-h / 8.0);
+  } else {
+    float tangent = (${f(EARTH_RADIUS_KM)} + h) * sqrt(1.0 - mu * mu) - ${f(EARTH_RADIUS_KM)};
+    m = ${f(airMass(0) - 1)} * exp(-max(0.0, tangent) / 8.0) * (2.0 - exp(-max(0.0, h - tangent) / 8.0));
+  }
+  vec3 t = exp(-vec3(${SUNLIGHT_EXTINCTION.map(f).join(', ')}) * m);
   return t / max(t.r, ${f(SUNSET_FLOOR)});
 }
 
@@ -146,6 +162,11 @@ vec3 cloudSunTint(float mu, float km) {
 float cloudDipSin(float km) {
   float c = ${f(EARTH_RADIUS_KM)} / (${f(EARTH_RADIUS_KM)} + max(0.0, km));
   return sqrt(max(0.0, 1.0 - c * c));
+}
+
+// sunVisibility()
+float cloudSunUp(float mu, float km) {
+  return smoothstep(-0.01, 0.01, mu + cloudDipSin(km - ${f(SUNBEAM_FLOOR_KM)}));
 }
 
 void main() {
@@ -249,13 +270,16 @@ void main() {
   // True height above sea level, for the horizon dip and the air mass.
   float km = (col.z - col.y) / CLOUD_UNITS_PER_KM
     + (col.y - CLOUD_CLEARANCE) / TERRAIN_DISPLACEMENT * ${f(TERRAIN_KM_PER_GREY)};
-  float dip = cloudDipSin(km);
-  float sunUp = smoothstep(-dip - 0.035, -dip + 0.025, mu);
+  float sunUp = cloudSunUp(mu, km);
   vec3 tint = cloudSunTint(mu, km);
   float eclipse = uEclipseActive > 0.5 ? eclipseSunlight(vEclipsePoint).x : 1.0;
   float light = sunUp * (1.0 - SHADOW_DARK * occ) * eclipse;
 
-  float diffuse = clamp((dot(n, s) + WRAP) / (1.0 + WRAP), 0.0, 1.0);
+  // Wrapped diffuse softens the day side; toward the terminator it gives
+  // way to the tops' own slopes, so only the tops facing the low Sun catch
+  // its light.
+  float wrap = WRAP * smoothstep(-0.02, 0.2, mu);
+  float diffuse = clamp((dot(n, s) + wrap) / (1.0 + wrap), 0.0, 1.0);
   // Thick cloud turned from the Sun reads grey.
   float albedo = 1.0 - 0.3 * smoothstep(0.5, 1.0, alpha) * (1.0 - diffuse);
   vec3 sky = vec3(0.55, 0.68, 0.9) * SKY * smoothstep(-0.1, 0.35, mu);

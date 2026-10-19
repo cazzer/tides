@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { describe, expect, test } from 'vitest'
 import {
+  auroraActivity,
+  DEFAULT_KP,
   diffuseEquatorwardLat,
   geomagneticAxis,
   geomagneticNorthPole,
@@ -128,6 +130,19 @@ describe('oval boundaries', () => {
       )
       expect(night.intensity).toBeGreaterThan(3 * day.intensity)
     }
+  })
+
+  test('quiet nights are faint; storms are several times brighter', () => {
+    let prev = -Infinity
+    for (let kp = 0; kp <= 8; kp += 0.5) {
+      const a = auroraActivity(kp)
+      expect(a).toBeGreaterThan(prev)
+      prev = a
+    }
+    expect(auroraActivity(8)).toBe(1)
+    expect(auroraActivity(9)).toBe(1)
+    expect(auroraActivity(DEFAULT_KP)).toBeLessThan(0.35)
+    expect(ovalAt(9, 23).intensity).toBeGreaterThan(3 * ovalAt(DEFAULT_KP, 23).intensity)
   })
 
   test('boundaries stay ordered all around the oval', () => {

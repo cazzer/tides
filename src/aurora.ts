@@ -241,6 +241,14 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t)
 }
 
+/** Overall brightness, 0..1, at this Kp. Quiet nights (Kp 2-3) show a thin,
+ * faint arc; it brightens faster than linearly toward a severe storm, whose
+ * displays are tens of times brighter than a quiet arc (IBC I vs III-IV). */
+export function auroraActivity(kp: number): number {
+  const k = Math.min(Math.max(kp / 8, 0), 1)
+  return 0.1 + 0.9 * k ** 1.4
+}
+
 export function ovalAt(kp: number, mltHours: number): OvalSlice {
   const al = kpToAL(kp)
   const polewardLat = 90 - starkovColatitude('ocb', al, mltHours)
@@ -259,7 +267,7 @@ export function ovalAt(kp: number, mltHours: number): OvalSlice {
   )
   const diffuseLat = Math.min(diffuse, equatorwardLat)
   const night = 0.5 + 0.5 * Math.cos(((mltHours - BRIGHTEST_MLT) / 24) * 2 * Math.PI)
-  const activity = 0.3 + 0.7 * Math.min(Math.max(kp / 8, 0), 1)
+  const activity = auroraActivity(kp)
   return {
     diffuseLat,
     equatorwardLat,

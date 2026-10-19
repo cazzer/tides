@@ -140,17 +140,56 @@ export function airMass(mu: number): number {
 export const SUNLIGHT_EXTINCTION: Vec3 = [0.045, 0.1, 0.22]
 const SCALE_HEIGHT_KM = 8
 
-/** Sunset light keeps at least this much of its red's brightness. */
-export const SUNSET_FLOOR = 0.3
+/** Sunset light keeps at least this much of its red's brightness: the low
+ * Sun's light on cloud still glows a little, but dimmer than noon (at 1 it
+ * would be the plain extinction). */
+export const SUNSET_FLOOR = 0.75
+
+/** The lowest air a grazing sunbeam can cross: haze and low cloud below it
+ * block the beam, so a cloud top loses the Sun when its beam would pass
+ * closer to the ground than this (km). */
+export const SUNBEAM_FLOOR_KM = 2
+
+/** Sine of how far below the cloud top's horizon the Sun can be before its
+ * beam would graze SUNBEAM_FLOOR_KM: the end of a top's sunset. */
+export function sunsetDipSin(heightKm: number): number {
+  return horizonDipSin(Math.max(0, heightKm) - SUNBEAM_FLOOR_KM)
+}
+
+/** How much of the Sun a cloud top sees, 0..1: all of it until just before
+ * sunsetDipSin, softened over about the Sun's disc and refraction. */
+export function sunVisibility(mu: number, heightKm: number): number {
+  return smoothstep(-0.01, 0.01, mu + sunsetDipSin(heightKm))
+}
+
+/** The height (km) where a sunbeam to a point heightKm up passes closest to
+ * the ground: the point itself while the Sun is above its horizon, lower
+ * once the Sun has set there. */
+export function sunbeamTangentKm(mu: number, heightKm: number): number {
+  const h = Math.max(0, heightKm)
+  if (mu >= 0) return h
+  return (EARTH_RADIUS_KM + h) * Math.sqrt(1 - mu * mu) - EARTH_RADIUS_KM
+}
+
+/** Air masses a sunbeam to a cloud top crosses beyond the overhead Sun's
+ * one: Kasten & Young's above the horizon, thinned for the top's height;
+ * below it, the beam grazes the ground at sunbeamTangentKm and crosses the
+ * dense air on both sides of that point, so it reddens and dims fast. */
+export function sunbeamAirMass(mu: number, heightKm: number): number {
+  const h = Math.max(0, heightKm)
+  const thin = (km: number) => Math.exp(-Math.max(0, km) / SCALE_HEIGHT_KM)
+  if (mu >= 0) return (airMass(mu) - 1) * thin(h)
+  const tangent = sunbeamTangentKm(mu, h)
+  return (airMass(0) - 1) * thin(tangent) * (2 - thin(h - tangent))
+}
 
 /** Sunlight's colour reaching a cloud top: white with the Sun overhead,
- * reddening toward the terminator. It keeps the colour of the extinction but
- * not all its dimming (red stays near 1), since the low Sun's light on cloud
- * is what makes the terminator glow. */
+ * reddening toward the terminator. It keeps the colour of the extinction and
+ * most of its dimming (down to SUNSET_FLOOR the red is lifted back), so the
+ * terminator shows a thin, dim band of warm light rather than a bright one. */
 export function sunlightTint(mu: number, heightKm: number): Vec3 {
-  const m = airMass(mu) - 1
-  const thin = Math.exp(-Math.max(0, heightKm) / SCALE_HEIGHT_KM)
-  const t = SUNLIGHT_EXTINCTION.map((tau) => Math.exp(-tau * thin * m))
+  const m = sunbeamAirMass(mu, heightKm)
+  const t = SUNLIGHT_EXTINCTION.map((tau) => Math.exp(-tau * m))
   const norm = Math.max(t[0], SUNSET_FLOOR)
   return t.map((c) => c / norm) as Vec3
 }

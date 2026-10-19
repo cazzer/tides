@@ -7,6 +7,7 @@ import { realClouds, useRealClouds } from './realCloudTextures'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
 import { nightLightsPatch } from './nightLights'
+import { poleSmoothingPatch } from './poleSmoothing'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
 import {
   driftOffset,
@@ -69,7 +70,8 @@ export default function EarthRenderer({
       composePatches(
         eclipseShadow.material,
         clouds.groundPatch,
-        nightLightsPatch(clouds.uniforms.uSunDir)
+        nightLightsPatch(clouds.uniforms.uSunDir),
+        poleSmoothingPatch()
       ),
     [eclipseShadow, clouds]
   )

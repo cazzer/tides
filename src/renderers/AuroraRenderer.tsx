@@ -60,7 +60,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
       new THREE.ShaderMaterial({
         vertexShader: shellVertex,
         fragmentShader: auroraFragment,
-        defines: { STEPS: low ? 8 : 16 },
+        defines: { STEPS: low ? 10 : 24 },
         uniforms: {
           uInner: { value: 0 },
           uOuter: { value: 0 },

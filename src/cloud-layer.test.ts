@@ -17,7 +17,11 @@ import {
   MAX_CLOUD_TOP_KM,
   maxTopKm,
   shadowCaster,
+  sunbeamAirMass,
+  sunbeamTangentKm,
   sunlightTint,
+  sunsetDipSin,
+  sunVisibility,
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
   type Vec3,
@@ -170,7 +174,8 @@ describe('sunlight on cloud tops', () => {
     const noon = sunlightTint(1, 2)
     for (const c of noon) expect(c).toBeCloseTo(1, 4)
     const low = sunlightTint(Math.cos(85 * DEG), 2)
-    expect(low[0]).toBeCloseTo(1)
+    expect(low[0]).toBeGreaterThan(0.9)
+    expect(low[0]).toBeLessThanOrEqual(1)
     expect(low[1]).toBeLessThan(low[0])
     expect(low[2]).toBeLessThan(low[1])
     const horizon = sunlightTint(0, 2)
@@ -179,6 +184,36 @@ describe('sunlight on cloud tops', () => {
 
   it('reddens less for higher cloud', () => {
     expect(sunlightTint(0.05, 12)[2]).toBeGreaterThan(sunlightTint(0.05, 1)[2])
+  })
+
+  it('dims the terminator rather than lifting it to full brightness', () => {
+    // Sun on the horizon of a 2 km top: warm and well under noon's white.
+    const horizon = sunlightTint(0, 2)
+    expect(horizon[0]).toBeLessThan(0.5)
+    expect(horizon[1]).toBeLessThan(0.25 * horizon[0])
+    // Past it, the beam grazes the ground and fades fast.
+    const past = sunlightTint(-0.03, 10)
+    expect(past[0]).toBeLessThan(0.75 * sunlightTint(0, 10)[0])
+    expect(sunlightTint(-0.05, 10)[0]).toBeLessThan(0.2)
+  })
+
+  it('crosses the horizon without a jump', () => {
+    for (const km of [0.5, 2, 12]) {
+      expect(sunbeamTangentKm(1e-9, km)).toBeCloseTo(km, 6)
+      expect(sunbeamTangentKm(-1e-9, km)).toBeCloseTo(km, 6)
+      expect(sunbeamAirMass(-1e-9, km)).toBeCloseTo(sunbeamAirMass(1e-9, km), 3)
+      expect(sunbeamAirMass(-0.02, km)).toBeGreaterThan(sunbeamAirMass(0, km))
+    }
+  })
+
+  it('lights only tall tops past the terminator, in a thin band', () => {
+    // A 10 km beam that must clear 2 km of haze: ~2.9° past the horizon.
+    expect(Math.asin(sunsetDipSin(10)) / DEG).toBeCloseTo(2.9, 1)
+    expect(sunsetDipSin(1.5)).toBe(0)
+    expect(sunVisibility(0.05, 1)).toBe(1)
+    expect(sunVisibility(-0.02, 2)).toBe(0)
+    expect(sunVisibility(-0.03, 12)).toBe(1)
+    expect(sunVisibility(-0.07, 12)).toBe(0)
   })
 
   it('has a sane air mass', () => {
