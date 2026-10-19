@@ -1,10 +1,20 @@
 import { describe, expect, test } from 'vitest'
 import {
+  blendDaily,
+  boxBlur,
   cloudAlpha,
   composeCloudAlpha,
+  dataMask,
+  DATELINE_FEATHER_PX,
   desiredCloudSource,
+  FEATHER_PX,
   fillDate,
-  fillNoData,
+  GLINT_CLEAR,
+  glintFloor,
+  glintSunGate,
+  NOT_FETCHED,
+  removeGlint,
+  solarDeclination,
   GEO_ARCHIVE_MS,
   GEO_LATENCY_MS,
   GEO_NEAR_SETTLE_MS,
@@ -384,74 +394,226 @@ describe('tilesToFill', () => {
   })
 })
 
-describe('fillNoData', () => {
-  const px = (x: number, y: number) => (y * OUT_W + x) * 4
-  const frame = (rows: number) => new Uint8ClampedArray(OUT_W * rows * 4)
-  const get = (buf: Uint8ClampedArray, x: number, y: number) =>
-    Array.from(buf.subarray(px(x, y), px(x, y) + 4))
+describe('dataMask', () => {
+  test('1 for data, 0 for no-data black, NOT_FETCHED inside unfetched tiles', () => {
+    const img = new Uint8ClampedArray(OUT_W * OUT_H * 4).fill(150)
+    img.set([5, 8, 11], 0)
+    img.set([12, 0, 0], 4)
+    const notFetched = Array<boolean>(15).fill(false)
+    notFetched[1] = true
+    const mask = dataMask(img, notFetched)
+    expect([mask[0], mask[1], mask[2], mask[512], mask[1024]]).toEqual([0, 1, 1, NOT_FETCHED, 1])
+  })
+})
 
-  test('no-data pixels take the fill day, others keep theirs; alpha untouched', () => {
-    const gibs = frame(2)
-    const falseColour = frame(2)
-    ;[[0, 0, 0, 7], [12, 0, 0, 8], [11, 5, 0, 9]].forEach((rgba, i) => {
-      gibs.set(rgba, px(10 + i, 1))
-      falseColour.set([1, 2, 3, 4], px(10 + i, 1))
-    })
-    fillNoData(
-      gibs,
-      falseColour,
-      [200, 201, 202, 50, 200, 201, 202, 50, 210, 211, 212, 50],
-      [100, 101, 102, 60, 100, 101, 102, 60, 110, 111, 112, 60],
-      10,
-      1,
-      3,
-      1
+describe('boxBlur', () => {
+  test('wraps in x and averages only the rows that exist', () => {
+    const w = 6
+    const h = 3
+    const src = new Float32Array(w * h)
+    src[0] = 9
+    const out = boxBlur(src, w, h, 1)
+    // 3x3 around (0,0): 6 cells exist (rows 0-1, columns 5,0,1).
+    expect(out[0]).toBeCloseTo(9 / 6)
+    expect(out[w - 1]).toBeCloseTo(9 / 6)
+    expect(out[2]).toBe(0)
+    expect(out[2 * w]).toBe(0)
+  })
+  test('without wrapX, only the columns that exist', () => {
+    const src = new Float32Array([9, 0, 0, 0, 0, 0])
+    const out = boxBlur(src, 6, 1, 1, false)
+    expect(out[0]).toBeCloseTo(9 / 2)
+    expect(out[5]).toBe(0)
+  })
+})
+
+describe('blendDaily (tides-g29)', () => {
+  const N = OUT_W * OUT_H
+  const grey = (a: number) => {
+    const img = new Uint8ClampedArray(N * 4)
+    for (let i = 0; i < img.length; i += 4) img[i] = img[i + 1] = img[i + 2] = a
+    return img
+  }
+  const mask = (valid: (x: number, y: number) => number) => {
+    const m = new Uint8Array(N)
+    for (let p = 0; p < N; p++) m[p] = valid(p % OUT_W, Math.floor(p / OUT_W))
+    return m
+  }
+  const run = (
+    primaryData: Uint8Array,
+    fillData: Uint8Array | null,
+    staticAlpha = 0
+  ) => {
+    const out = grey(200)
+    blendDaily(
+      out,
+      primaryData,
+      fillData ? grey(100) : null,
+      fillData,
+      new Uint8Array(N).fill(staticAlpha),
+      out
     )
-    expect([10, 11, 12].map((x) => get(gibs, x, 1))).toEqual([
-      [200, 201, 202, 7],
-      [12, 0, 0, 8],
-      [210, 211, 212, 9],
-    ])
-    expect([10, 11, 12].map((x) => get(falseColour, x, 1))).toEqual([
-      [100, 101, 102, 4],
-      [1, 2, 3, 4],
-      [110, 111, 112, 4],
+    return (x: number, y: number) => out[(y * OUT_W + x) * 4 + 1]
+  }
+  const all = mask(() => 1)
+
+  test('whole data is the day alone, away from the antimeridian', () => {
+    const at = run(all, all)
+    expect([at(1280, 640), at(OUT_W - 1, 640), at(DATELINE_FEATHER_PX, 640)]).toEqual([
+      200, 200, 200,
     ])
   })
+  test('the fill day leads just east of 180° and hands over by DATELINE_FEATHER_PX', () => {
+    const at = run(all, all)
+    expect(at(0, 640)).toBe(100)
+    const mid = at(DATELINE_FEATHER_PX / 2, 640)
+    expect(mid).toBeGreaterThan(110)
+    expect(mid).toBeLessThan(190)
+  })
+  test('the antimeridian handover needs the fill day there', () => {
+    const at = run(all, mask((x) => (x < 512 ? NOT_FETCHED : 1)))
+    expect(at(0, 640)).toBe(200)
+  })
+  test('the day fades into the fill day over FEATHER_PX inside a gap edge', () => {
+    // A gap west of x = 1500.
+    const at = run(mask((x) => (x >= 1500 ? 1 : 0)), all)
+    expect(at(1400, 640)).toBe(100)
+    expect(at(1500, 640)).toBeLessThan(110)
+    const mid = at(1500 + FEATHER_PX / 2, 640)
+    expect(mid).toBeGreaterThan(110)
+    expect(mid).toBeLessThan(190)
+    expect(at(1500 + FEATHER_PX + 1, 640)).toBe(200)
+  })
+  test('without the fill day the gap edge fades to the static clouds', () => {
+    const at = run(mask((x) => (x >= 1500 ? 1 : 0)), null, 30)
+    expect(at(1400, 640)).toBe(30)
+    expect(at(1500, 640)).toBeLessThan(40)
+    expect(at(1500 + FEATHER_PX + 1, 640)).toBe(200)
+  })
+  test("an unfetched fill tile isn't an edge of the fill day", () => {
+    // Fill fetched only in column 2 (x 1024..1535), primary missing there.
+    const fillData = mask((x) => (x >= 1024 && x < 1536 ? 1 : NOT_FETCHED))
+    const at = run(mask((x) => (x >= 1024 && x < 1536 ? 0 : 1)), fillData)
+    expect(at(1030, 640)).toBe(100)
+  })
+  test('out is grey and opaque', () => {
+    const out = grey(200)
+    blendDaily(out, all, null, null, new Uint8Array(N), out)
+    expect(Array.from(out.subarray(0, 4))).toEqual([200, 200, 200, 255])
+  })
+})
 
-  test('the region is read row by row and nothing outside it changes', () => {
-    const gibs = frame(3)
-    const falseColour = frame(3)
-    const fill = Uint8ClampedArray.from({ length: 16 }, (_, i) => 100 + i)
-    fillNoData(gibs, falseColour, fill, fill, OUT_W - 2, 1, 2, 2)
-    expect(get(gibs, OUT_W - 2, 1)).toEqual([100, 101, 102, 0])
-    expect(get(gibs, OUT_W - 1, 1)).toEqual([104, 105, 106, 0])
-    expect(get(gibs, OUT_W - 2, 2)).toEqual([108, 109, 110, 0])
-    expect(get(falseColour, OUT_W - 1, 2)).toEqual([112, 113, 114, 0])
-    expect(gibs.reduce((n, v) => n + (v ? 1 : 0), 0)).toBe(12)
-    expect(falseColour.reduce((n, v) => n + (v ? 1 : 0), 0)).toBe(12)
+describe('sunglint (tides-a7w)', () => {
+  test('solarDeclination', () => {
+    expect(solarDeclination(Date.UTC(2026, 5, 21))).toBeCloseTo(23.4, 0)
+    expect(solarDeclination(Date.UTC(2026, 11, 21))).toBeCloseTo(-23.4, 0)
+    expect(Math.abs(solarDeclination(Date.UTC(2026, 2, 20)))).toBeLessThan(2)
+    expect(solarDeclination(Date.UTC(2026, 9, 18, 12))).toBeCloseTo(-10, 0)
+  })
+  test('glintSunGate follows the sun at the overpass', () => {
+    expect(glintSunGate(-10, -9.6)).toBe(1)
+    expect(glintSunGate(30, 23.4)).toBe(1)
+    expect(glintSunGate(60, -9.6)).toBe(0)
+    expect(glintSunGate(-60, 23.4)).toBe(0)
+    const edge = glintSunGate(-48, -9.6)
+    expect(edge).toBeGreaterThan(0)
+    expect(edge).toBeLessThan(1)
+  })
+  test('removeGlint takes the floor to clear ocean and keeps white white', () => {
+    expect(removeGlint(115, 115)).toBe(GLINT_CLEAR)
+    expect(removeGlint(255, 115)).toBe(255)
+    expect(removeGlint(60, 115)).toBe(0)
   })
 
-  test('the filled pixels go through composeCloudAlpha like primary ones', () => {
-    const white = [243, 244, 247, 255]
-    const snow = [107, 241, 242, 255]
-    const cloud = [186, 231, 229, 255]
-    const black = [0, 0, 0, 255]
-    const gibs = frame(1)
-    const falseColour = frame(1)
-    fillNoData(
-      gibs,
-      falseColour,
-      [...white, ...black, ...white],
-      [...snow, ...black, ...cloud],
-      0,
-      0,
-      3,
-      1
+  // A day in October (sun at ~10°S) over an ocean of rough noise around clear
+  // ocean's brightness, with:
+  // - a smooth glint streak (115) at x 1000..1099 from 20°N to 30°S, holding a
+  //   textured cloud at x 1040..1059, y 600..619;
+  // - the same streak at 65-75°N, where the sun is too low for glint;
+  // - the same streak on land at x 1600..1699;
+  // - textured cloud of a similar mean brightness at x 300..399.
+  const day = Date.UTC(2026, 9, 18)
+  const N = OUT_W * OUT_H
+  let seed = 1
+  const noise = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % 1000) / 1000
+  const img = new Uint8ClampedArray(N * 4)
+  const land = new Uint8Array(N)
+  const set = (x: number, y: number, v: number) => {
+    const i = (y * OUT_W + x) * 4
+    img[i] = v
+    img[i + 1] = v + 1
+    img[i + 2] = v + 5
+    img[i + 3] = 255
+  }
+  const rowOf = (lat: number) => Math.round(((90 - lat) / 180) * OUT_H)
+  for (let y = 0; y < OUT_H; y++) {
+    for (let x = 0; x < OUT_W; x++) set(x, y, 15 + Math.round(55 * noise()))
+  }
+  for (const [x0, y0, y1] of [
+    [1000, rowOf(20), rowOf(-30)],
+    [1000, rowOf(75), rowOf(65)],
+    [1600, rowOf(20), rowOf(-30)],
+  ]) {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x0 + 100; x++) set(x, y, 115)
+  }
+  for (let y = rowOf(20); y < rowOf(-30); y++) {
+    for (let x = 1600; x < 1700; x++) land[y * OUT_W + x] = 1
+    for (let x = 300; x < 400; x++) set(x, y, 60 + Math.round(120 * noise()))
+  }
+  for (let y = 600; y < 620; y++) for (let x = 1040; x < 1060; x++) set(x, y, 200 + Math.round(55 * noise()))
+  const floor = glintFloor(img, land, day)
+  const alphaAt = (x: number, y: number) => {
+    const out = new Uint8ClampedArray(4)
+    const i = (y * OUT_W + x) * 4
+    composeCloudAlpha(
+      img.subarray(i, i + 4),
+      [0, 0, 0, 255],
+      SNOW_EDGES[VIIRS_SNOW],
+      [0],
+      [0],
+      out,
+      [floor[y * OUT_W + x]]
     )
-    const out = new Uint8ClampedArray(12)
-    composeCloudAlpha(gibs, falseColour, SNOW_EDGES[VIIRS_SNOW], [0, 90, 0], [0, 0, 0], out)
-    expect(Array.from(out)).toEqual([0, 0, 0, 255, 90, 90, 90, 255, 255, 255, 255, 255])
+    return out[1]
+  }
+  const plain = (x: number, y: number) => {
+    const i = (y * OUT_W + x) * 4
+    return cloudAlpha(img[i], img[i + 1], img[i + 2])
+  }
+
+  test('glint over open water goes', () => {
+    expect(plain(1020, 700)).toBeGreaterThan(50)
+    expect(floor[700 * OUT_W + 1020]).toBeGreaterThan(100)
+    expect(alphaAt(1020, 700)).toBe(0)
+    expect(alphaAt(1085, 560)).toBe(0)
+  })
+  test('cloud inside the glint stays', () => {
+    let kept = 0
+    for (let y = 602; y < 618; y++) {
+      for (let x = 1042; x < 1058; x++) kept += alphaAt(x, y) / plain(x, y)
+    }
+    expect(kept / 256).toBeGreaterThan(0.7)
+  })
+  test('not on land, nor where the sun is too low for glint', () => {
+    expect(floor[700 * OUT_W + 1650]).toBe(0)
+    expect(floor[rowOf(70) * OUT_W + 1050]).toBe(0)
+    expect(alphaAt(1050, rowOf(70))).toBe(Math.floor(plain(1050, rowOf(70))))
+  })
+  test('textured cloud of the same brightness stays', () => {
+    let before = 0
+    let after = 0
+    for (let y = 650; y < 750; y++) {
+      for (let x = 320; x < 380; x++) {
+        before += plain(x, y)
+        after += alphaAt(x, y)
+      }
+    }
+    expect(after / before).toBeGreaterThan(0.95)
+  })
+  test('without a floor composeCloudAlpha is unchanged', () => {
+    const out = new Uint8ClampedArray(4)
+    composeCloudAlpha([115, 116, 120, 255], [0, 0, 0, 255], SNOW_EDGES[VIIRS_SNOW], [0], [0], out, [0])
+    expect(out[1]).toBe(Math.floor(cloudAlpha(115, 116, 120)))
   })
 })
 
@@ -497,18 +659,15 @@ describe('growNoData', () => {
     growNoData(corner, W, H)
     expect(black(corner).slice(3)).toEqual(['.........', '......###', '......###', '......###'])
   })
-  test("a filled failed tile leaves its neighbours' edges alone", () => {
+  test("a failed tile leaves its neighbours' edges alone", () => {
     const img = new Uint8ClampedArray(OUT_W * OUT_H * 4).fill(150)
     const failed = Array<boolean>(15).fill(false)
     failed[6] = true
     for (let y = 512; y < 1024; y++) img.fill(0, (y * OUT_W + 512) * 4, (y * OUT_W + 1024) * 4)
     growNoData(img, OUT_W, OUT_H, failed)
-    const fill =new Uint8ClampedArray(512 * 512 * 4).fill(200)
-    fillNoData(img, new Uint8ClampedArray(img.length), fill, fill, 512, 512, 512, 512)
     const green = (x: number, y: number) => img[(y * OUT_W + x) * 4 + 1]
     expect([510, 511, 1024, 1025].map((x) => green(x, 700))).toEqual([150, 150, 150, 150])
     expect([510, 511, 1024, 1025].map((y) => green(700, y))).toEqual([150, 150, 150, 150])
-    expect([512, 1023].map((x) => green(x, 700))).toEqual([200, 200])
   })
   test('dark data is not no-data', () => {
     const img = image()

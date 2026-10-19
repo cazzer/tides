@@ -1,17 +1,21 @@
 // Browser side of the real-weather cloud layer (tides-l3s): fetches the GIBS
 // tiles and turns them into a cloud alphaMap for the shared controller. A day
 // of the daily composite is the true- and false-colour tiles, plus the
-// previous day's where they have gaps. A geostationary slot (tides-1zj) is
+// previous day's where they have gaps and along the antimeridian, with sunglint
+// taken out (tides-a7w) and the seams between them feathered (tides-g29). A geostationary slot (tides-1zj) is
 // each satellite's IR, and visible where it's day, over that day's composite.
 // The maths is in ../real-clouds.ts and ../geo-clouds.ts, the state machine
 // in ./realCloudController.ts.
 import { useEffect, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import {
+  blendDaily,
   COLS,
   composeCloudAlpha,
+  dataMask,
+  DAY_MS,
   fillDate,
-  fillNoData,
+  glintFloor,
   GEO_SLOT_MS,
   geoTimeKey,
   growNoData,
@@ -19,6 +23,7 @@ import {
   isRetryable,
   OUT_H,
   OUT_W,
+  ROWS,
   SNOW_EDGES,
   sourceKey,
   TILE,
@@ -135,6 +140,7 @@ const yieldToFrame = () => new Promise<void>((resolve) => setTimeout(resolve, 0)
 
 // Built once and kept, all 1 byte per output pixel (~3.3 MB each).
 let iceMask: Promise<Uint8Array> | null = null
+let landMask: Promise<Uint8Array> | null = null
 let terrain: Promise<Terrain> | null = null
 const staticAlphas = new Map<string, Promise<Uint8Array>>()
 
@@ -166,23 +172,33 @@ function getIceMask(): Promise<Uint8Array> {
   )
 }
 
-/** Elevation and land from the static bump and specular (water is bright)
- * maps, for the geostationary clear-sky reference. */
+/** Nonzero on land, from the static specular map (water is bright), for the
+ * glint removal and the geostationary clear-sky reference. */
+function getLand(): Promise<Uint8Array> {
+  return (
+    landMask ??
+    memo(
+      async () => {
+        const spec = pixelsOf(await fetchBitmap(earthSpecular))
+        const land = new Uint8Array(OUT_W * OUT_H)
+        for (let p = 0; p < land.length; p++) land[p] = spec[p * 4 + 1] < 128 ? 255 : 0
+        return land
+      },
+      (p) => (landMask = p)
+    )
+  )
+}
+
+/** Elevation from the static bump map, and land, for the geostationary
+ * clear-sky reference. */
 function getTerrain(): Promise<Terrain> {
   return (
     terrain ??
     memo(
       async () => {
-        const [bump, spec] = await Promise.all([
-          fetchBitmap(earthBump).then(pixelsOf),
-          fetchBitmap(earthSpecular).then(pixelsOf),
-        ])
+        const [bump, land] = await Promise.all([fetchBitmap(earthBump).then(pixelsOf), getLand()])
         const elevation = new Uint8Array(OUT_W * OUT_H)
-        const land = new Uint8Array(OUT_W * OUT_H)
-        for (let p = 0, i = 0; p < land.length; p++, i += 4) {
-          elevation[p] = bump[i]
-          land[p] = spec[i + 1] < 128 ? 255 : 0
-        }
+        for (let p = 0; p < elevation.length; p++) elevation[p] = bump[p * 4]
         return { elevation, land }
       },
       (p) => (terrain = p)
@@ -272,51 +288,59 @@ async function buildDailyAlpha(
     // a gap.
     growNoData(image.data, OUT_W, OUT_H, failed)
     const date = fillDate(source)
+    // The fill day's west-most column always: just east of 180° it continues
+    // this day's west side, which this day's own east side doesn't (tides-g29).
+    if (date !== null) for (let row = 0; row < ROWS; row++) wanted[row * COLS] = true
     const fillSettled =
-      date !== null && wanted.some(Boolean)
+      date !== null
         ? Promise.all([load(source.layer, date, wanted), load(source.snowLayer, date, wanted)])
         : null
-    const [[staticAlpha, ice], falseResults, fillResults] = await Promise.all([
+    // Without the land mask there's no telling sea glint from cloud, so it
+    // stays; the clouds are still worth showing.
+    const landLoad = getLand().catch((err: unknown) => {
+      console.warn('[clouds] no land mask for the glint removal', err)
+      return null
+    })
+    const [[staticAlpha, ice], land, falseResults, fillResults] = await Promise.all([
       masks,
+      landLoad,
       falseSettled,
       fillSettled,
     ])
     signal.throwIfAborted()
 
-    ctx.clearRect(0, 0, OUT_W, OUT_H)
-    mosaic(ctx, tileValues(falseResults))
-    const falseColour = ctx.getImageData(0, 0, OUT_W, OUT_H).data
+    const colours = (tiles: (ImageBitmap | null)[]) => {
+      ctx.clearRect(0, 0, OUT_W, OUT_H)
+      mosaic(ctx, tiles)
+      return ctx.getImageData(0, 0, OUT_W, OUT_H).data
+    }
+    const falseColour = colours(tileValues(falseResults))
+    let fill: { gibs: Uint8ClampedArray; falseColour: Uint8ClampedArray; data: Uint8Array } | null =
+      null
     if (fillResults) {
       const [fillTrue, fillFalse] = fillResults.map(tileValues)
-      fillTrue.forEach((tile, i) => {
-        if (!tile) return
-        const x = (i % COLS) * TILE
-        const y = Math.floor(i / COLS) * TILE
-        const h = Math.min(TILE, OUT_H - y)
-        const region = (bitmap: ImageBitmap | null) => {
-          ctx.clearRect(x, y, TILE, h)
-          if (bitmap) {
-            ctx.drawImage(bitmap, x, y)
-            bitmap.close()
-          }
-          return ctx.getImageData(x, y, TILE, h).data
-        }
-        const fillFalseColour = region(fillFalse[i])
-        const fillTrueColour = region(tile)
-        growNoData(fillTrueColour, TILE, h)
-        fillNoData(image.data, falseColour, fillTrueColour, fillFalseColour, x, y, TILE, h)
-      })
+      // Unfetched (and failed) tiles are no data, but not a gap to grow.
+      const missing = fillTrue.map((t) => t === null)
+      const gibs = colours(fillTrue)
+      growNoData(gibs, OUT_W, OUT_H, missing)
+      fill = { gibs, falseColour: colours(fillFalse), data: dataMask(gibs, missing) }
     }
     canvas.width = 0
 
-    composeCloudAlpha(
-      image.data,
-      falseColour,
-      SNOW_EDGES[source.snowLayer],
-      staticAlpha,
-      ice,
-      image.data
-    )
+    const primaryData = dataMask(image.data)
+    const snowEdges = SNOW_EDGES[source.snowLayer]
+    const dayMs = Date.parse(source.date)
+    const glint = land ? glintFloor(image.data, land, dayMs) : null
+    composeCloudAlpha(image.data, falseColour, snowEdges, staticAlpha, ice, image.data, glint)
+    await yieldToFrame()
+    signal.throwIfAborted()
+    if (fill) {
+      const fillGlint = land ? glintFloor(fill.gibs, land, dayMs - DAY_MS) : null
+      composeCloudAlpha(fill.gibs, fill.falseColour, snowEdges, staticAlpha, ice, fill.gibs, fillGlint)
+      await yieldToFrame()
+      signal.throwIfAborted()
+    }
+    blendDaily(image.data, primaryData, fill?.gibs ?? null, fill?.data ?? null, staticAlpha, image.data)
     return image.data
   } finally {
     // For the paths that return or throw before mosaic; close() is idempotent.
