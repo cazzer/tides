@@ -4,6 +4,7 @@ import { useRef } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import { realClouds, useRealClouds } from './realCloudTextures'
+import { useEclipseShadow } from './eclipseShadow'
 
 // Import assets directly
 import earthNormalMapHigh from '../assets/earth-normal.jpg'
@@ -46,6 +47,8 @@ export default function EarthRenderer({
   const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
   const real = useStore((s) => s.weatherSource) === 'real'
   const { texture: realCloudsTexture } = useRealClouds(real)
+  // The Moon's shadow during solar eclipses, on the ground and the clouds.
+  const eclipseShadow = useEclipseShadow('earth')
 
   // TODO: Add GeoTIFF loader for displacement mapping
   // const displacementMap = useLoader(GeoTIFFLoader, '/assets/earth-elevation.tif')
@@ -80,6 +83,7 @@ export default function EarthRenderer({
       <mesh raycast={meshBounds}>
         <sphereGeometry args={[diameter, 128, 128]} />
         <meshPhongMaterial
+          {...eclipseShadow}
           map={earthTexture}
           // normalMap={normalMap}
           // normalMapType={0}
@@ -102,6 +106,7 @@ export default function EarthRenderer({
       >
         <sphereGeometry args={[diameter * 1.02, 64, 64]} />
         <meshLambertMaterial
+          {...eclipseShadow}
           // Cloud brightness drives opacity: white cloud = opaque, black sky = clear.
           // No colour map: binding the texture as `map` makes R3F tag it sRGB,
           // which also linearizes the alpha and turns clouds into a grey veil.
