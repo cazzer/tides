@@ -14,6 +14,7 @@ import LoadingOverlay from './LoadingOverlay'
 import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
 import { CloudAttribution } from './CloudAttribution'
+import { TONE_MAPPING_EXPOSURE } from './lighting'
 
 const FOCUS_VALUES: CameraFocus[] = [
   'clock',
@@ -118,7 +119,7 @@ export default function App() {
           className="canvas"
           gl={{
             toneMapping: THREE.ACESFilmicToneMapping,
-            toneMappingExposure: 1.0,
+            toneMappingExposure: TONE_MAPPING_EXPOSURE,
           }}
         >
           <SimClock running={sceneReady} />

@@ -8,6 +8,7 @@ import {
   type ShadedBody,
 } from '../eclipse'
 import { useStore } from '../store'
+import { LUNAR_ECLIPSE_GLOW } from '../lighting'
 
 // Eclipse shadows for a lit material (Phong or Lambert): direct sunlight is
 // scaled by the fraction of the Sun's disc visible from each fragment's true
@@ -15,12 +16,10 @@ import { useStore } from '../store'
 // useEclipseShadow() onto the material:
 //   <meshPhongMaterial {...useEclipseShadow('earth')} ... />
 
-// Light the atmosphere bends into Earth's umbra, as a fraction of sunlight:
-// coppery, and brightest near the umbra's edge. Stylised; a real total lunar
-// eclipse is ~10⁻⁴ of the full Moon, which would read as black here.
+// Light the atmosphere bends into the shadow, as a fraction of sunlight.
 const UMBRA_GLOW: Record<ShadedBody, [number, number, number]> = {
   earth: [0, 0, 0],
-  moon: [0.12, 0.032, 0.01],
+  moon: LUNAR_ECLIPSE_GLOW,
 }
 
 const VERTEX_HEAD = /* glsl */ `

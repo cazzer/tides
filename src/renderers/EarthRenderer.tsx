@@ -6,6 +6,8 @@ import { useStore } from '../store'
 import { realClouds, useRealClouds } from './realCloudTextures'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
+import { nightLightsPatch } from './nightLights'
+import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
 import {
   driftOffset,
   maxTopKm,
@@ -63,7 +65,12 @@ export default function EarthRenderer({
   )
   useEffect(() => () => clouds.dispose(), [clouds])
   const groundPatch = useMemo(
-    () => composePatches(eclipseShadow.material, clouds.groundPatch),
+    () =>
+      composePatches(
+        eclipseShadow.material,
+        clouds.groundPatch,
+        nightLightsPatch(clouds.uniforms.uSunDir)
+      ),
     [eclipseShadow, clouds]
   )
   // The ground's program holds the patch's uniforms; a new patch (Fast
@@ -137,8 +144,8 @@ export default function EarthRenderer({
           specularMap={specularMap}
           // specular="#aaddff"
           emissiveMap={nightTexture}
-          emissive="#ffff88"
-          emissiveIntensity={0.5}
+          emissive={CITY_LIGHTS_COLOR}
+          emissiveIntensity={CITY_LIGHTS_INTENSITY}
           shininess={100}
           displacementMap={bumpTexture}
           displacementScale={TERRAIN_DISPLACEMENT}

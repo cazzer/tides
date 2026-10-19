@@ -16,7 +16,6 @@ uniform vec4 uOval[24];
 uniform float uKp;
 uniform float uTime;
 uniform float uGain;
-uniform float uVeil;
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
@@ -136,7 +135,7 @@ void main() {
     float curtain = discrete * sheet;
     float glow = band * (0.025 + 0.015 * fold);
 
-    vec3 e = GREEN * green * (curtain + glow)
+    vec3 e = GREEN * green * (curtain + glow * (1.0 - 0.7 * storm))
       + RED * redH * redAmount * ((0.12 + 0.15 * storm) * curtain + glow * (0.2 + 0.8 * storm))
       + VIOLET * violet * storm * curtain * 0.6;
     col += e * intensity * dark;
@@ -145,13 +144,12 @@ void main() {
   // Path length in units of the shell's thickness, so looking straight down
   // through it gives ~1 and the limb brightens naturally.
   col *= uGain * dt / thickness;
-  // Soft shoulder so bright folds keep their hue instead of clipping white.
-  col = col / (1.0 + col);
-  // Premultiplied: the light adds, and the alpha dims what is behind a
-  // little. The scene lights the night side brightly, and over a bright
-  // surface pure additive glow just bleaches to white.
-  float cover = max(col.r, max(col.g, col.b));
-  gl_FragColor = vec4(col, min(cover * uVeil, 0.7));
+  // Soft shoulder on the brightest channel, so bright folds keep their hue
+  // (per channel, overlapping green and red would fade toward white).
+  col /= 1.0 + max(col.r, max(col.g, col.b));
+  // Emission only: added to whatever is behind (additive blending). The
+  // night side is dark enough (../../lighting.ts) for it to hold its hue.
+  gl_FragColor = vec4(col, 1.0);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

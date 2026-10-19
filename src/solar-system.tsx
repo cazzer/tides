@@ -8,7 +8,7 @@ import AuroraRenderer from './renderers/AuroraRenderer'
 import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
-import Sunlight from './renderers/Sunlight'
+import SceneLights from './renderers/SceneLights'
 import { scaleLog } from 'd3'
 import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
@@ -89,8 +89,7 @@ export default function SolarSystem({
 
   return (
     <CameraProvider>
-      <ambientLight intensity={1} />
-      <Sunlight />
+      <SceneLights />
 
       <Starfield />
 

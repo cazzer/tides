@@ -20,17 +20,11 @@ import {
   TERRAIN_DISPLACEMENT,
   TERRAIN_KM_PER_GREY,
 } from '../cloud-layer'
-import { SUNLIGHT_INTENSITY } from '../sunlight'
+import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
 
 const f = (x: number) => x.toFixed(6)
 
-/** Cloud brightness against the ground's (the ground's Phong gets the full
- * SUNLIGHT_INTENSITY, which tone-maps sunlit cloud to flat white). */
-const CLOUD_EXPOSURE = 0.42
-/** The scene's ambient light (intensity 1) on cloud, a little under the
- * Lambertian white it had, so the night side sets off the terminator. */
-const CLOUD_AMBIENT = 0.5 / Math.PI
 
 // Height field shared by the cloud shell and the ground's shadow.
 const FIELD = /* glsl */ `

@@ -1,9 +1,8 @@
 import * as THREE from 'three'
-import { EARTH_ORBIT_RADIUS, earthPosition } from './ephemeris'
+import { earthPosition } from './ephemeris'
+import { SUNLIGHT_INTENSITY } from './lighting'
 
-// The irradiance the old point light (1400, decay 1.1) gave at the Earth's
-// orbit, so the day side keeps its brightness against the ambient.
-export const SUNLIGHT_INTENSITY = 1400 / EARTH_ORBIT_RADIUS ** 1.1
+export { SUNLIGHT_INTENSITY }
 
 // Sunlight arrives in parallel rays. A point light at this compressed-scale
 // Sun would light less than a hemisphere of the Earth (sunsets ~30 min early)

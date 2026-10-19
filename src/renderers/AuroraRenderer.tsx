@@ -14,6 +14,7 @@ import {
   sunDirectionLocal,
 } from '../aurora'
 import { kpFeed } from './kpFeed'
+import { AURORA_GAIN } from '../lighting'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
 
@@ -70,16 +71,14 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
           },
           uKp: { value: DEFAULT_KP },
           uTime: { value: 0 },
-          uGain: { value: 3 },
-          uVeil: { value: 1.8 },
+          uGain: { value: AURORA_GAIN },
         },
         transparent: true,
         depthWrite: false,
-        // Premultiplied "over": see the end of the fragment shader.
-        blending: THREE.CustomBlending,
-        blendEquation: THREE.AddEquation,
-        blendSrc: THREE.OneFactor,
-        blendDst: THREE.OneMinusSrcAlphaFactor,
+        blending: THREE.AdditiveBlending,
+        // ACES would wash the bright folds toward white; the shader's own
+        // shoulder keeps them in range.
+        toneMapped: false,
       }),
     [low]
   )
