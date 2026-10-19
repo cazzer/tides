@@ -2,6 +2,8 @@ import { useLoader, useFrame } from '@react-three/fiber'
 import { meshBounds, useTexture } from '@react-three/drei'
 import { useRef } from 'react'
 import * as THREE from 'three'
+import { useStore } from '../store'
+import { realClouds, useRealClouds } from './realCloudTextures'
 
 // Import assets directly
 import earthNormalMapHigh from '../assets/earth-normal.jpg'
@@ -42,15 +44,31 @@ export default function EarthRenderer({
   const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
   const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
+  const real = useStore((s) => s.weatherSource) === 'real'
+  const { texture: realCloudsTexture } = useRealClouds(real)
 
   // TODO: Add GeoTIFF loader for displacement mapping
   // const displacementMap = useLoader(GeoTIFFLoader, '/assets/earth-elevation.tif')
 
   // Animate clouds rotation
   useFrame((state) => {
-    if (cloudRef.current) {
-      cloudRef.current.rotation.y += 0.0001 // Slower than Earth rotation
+    if (!real) {
+      if (cloudRef.current) {
+        cloudRef.current.rotation.y += 0.0001 // Slower than Earth rotation
+      }
+      return
     }
+    // Real clouds sit on the geography they were photographed over.
+    if (cloudRef.current) cloudRef.current.rotation.y = 0
+    const { timestamp, jumpDate } = useStore.getState()
+    if (timestamp == null) return
+    realClouds.tick(
+      timestamp,
+      jumpDate?.getTime() ?? null,
+      performance.now(),
+      Date.now(),
+      textureSet.clouds
+    )
   })
 
   const radius = diameter / 2
@@ -88,7 +106,7 @@ export default function EarthRenderer({
           // No colour map: binding the texture as `map` makes R3F tag it sRGB,
           // which also linearizes the alpha and turns clouds into a grey veil.
           color="white"
-          alphaMap={cloudsTexture}
+          alphaMap={real && realCloudsTexture ? realCloudsTexture : cloudsTexture}
           transparent
           opacity={0.9}
           alphaTest={0.05}

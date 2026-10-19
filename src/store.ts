@@ -86,7 +86,7 @@ export const useStore = create<{
   timestamp: number | null
   cameraFocus: CameraFocus
   mainPanel: PanelKey
-  /** 'real' only records the choice for now; the clouds stay static (tides-pdu). */
+  /** 'real' shows NASA GIBS clouds for the sim date where imagery exists (tides-l3s). */
   weatherSource: WeatherSource
   layout: Layout
   location: Location | null

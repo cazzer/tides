@@ -225,8 +225,8 @@ function SettingsDialog({
             onChange={setWeatherSource}
           />
           <SettingHint id={weatherHintId}>
-            Real weather is experimental and falls back to static clouds for
-            now.
+            Real shows daily NASA satellite clouds from 2000-02-24 to
+            yesterday, and simulated clouds otherwise.
           </SettingHint>
         </SettingGroup>
         <SettingGroup>

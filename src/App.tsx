@@ -13,6 +13,7 @@ import { PIN_LAYER } from './LocationPin'
 import LoadingOverlay from './LoadingOverlay'
 import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
+import { CloudAttribution } from './CloudAttribution'
 
 const FOCUS_VALUES: CameraFocus[] = [
   'clock',
@@ -179,6 +180,7 @@ export default function App() {
             onChange={setMainPanel}
           />
         )}
+        {weatherSource === 'real' && <CloudAttribution />}
       </div>
     </div>
   )
