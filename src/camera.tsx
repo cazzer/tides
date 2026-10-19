@@ -15,6 +15,7 @@ import {
 } from 'three'
 import { useStore, type CameraFocus } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
+import { leaveClock, rideWithClock, useClockRide } from './clock-view'
 
 const CameraContext = createContext({
   handleFocus: null,
@@ -61,6 +62,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
   const cameraTarget = useRef(new Vector3())
+  const rideRef = useClockRide(controls)
   const focusedObject = useRef<{
     object: Object3D
     instanceId?: number
@@ -129,7 +131,20 @@ export const CameraProvider = ({ children }: { children: any }) => {
 
     if (hasTarget && controls) {
       const smoothness = 0.05
-      cameraTarget.current.lerp(target, smoothness)
+      if (cameraFocus === 'clock' && clock?.current) {
+        rideWithClock(
+          camera.position,
+          // @ts-ignore
+          controls.target,
+          cameraTarget.current,
+          target,
+          rideRef.current,
+          smoothness
+        )
+      } else {
+        leaveClock(rideRef.current)
+        cameraTarget.current.lerp(target, smoothness)
+      }
       camera.lookAt(cameraTarget.current)
       // @ts-ignore
       controls.target.copy(cameraTarget.current)
