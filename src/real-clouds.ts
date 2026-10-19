@@ -258,35 +258,73 @@ export function tilesToFill(gibs: ArrayLike<number>, failed: readonly boolean[])
 // seam with the fill day or the static clouds.
 export const NO_DATA_GROW = 2
 
-/** Blackens the RGB of every pixel within NO_DATA_GROW px (a square) of a
- * no-data pixel in a w x h RGBA image, so the fill and static fallback cover
- * the darkened rim too. Failed tiles (row-major, like tileUrls) don't seed:
- * their edges are clean, and the fill only writes inside them. Alpha bytes are
- * left alone. */
+// Dark open ocean (high latitudes, low sun) has the odd pixel under the
+// no-data threshold. Those aren't gaps (tides-9jn.3: grown, each let the
+// static clouds through as a sharp 5 px square); a real gap is at least 3 px
+// across, so only no-data pixels whose whole 3x3 neighbourhood is no-data
+// start one.
+/** What a stray dark pixel is lifted to: the darkest data. */
+const NO_DATA_LIFT = 12
+
+/**
+ * Blackens the RGB of every pixel within NO_DATA_GROW px (a square) of a
+ * no-data gap in a w x h RGBA image, so the fill and static fallback cover
+ * the darkened rim too. A gap is no-data at least 3 px across; stray no-data
+ * pixels outside one are dark data, and are lifted just above the no-data
+ * threshold so nothing downstream takes them for a gap. Failed tiles
+ * (row-major, like tileUrls) don't seed and aren't lifted: their edges are
+ * clean, and the fill only writes inside them. Alpha bytes are left alone.
+ */
 export function growNoData(
   rgba: { [index: number]: number; length: number },
   w: number,
   h: number,
   failed: readonly boolean[] = []
 ): void {
-  const n = NO_DATA_GROW
-  // Separable: spread along rows, then blacken along columns.
+  const noData = new Uint8Array(w * h)
+  for (let y = 0, p = 0; y < h; y++) {
+    const tileRow = Math.floor(y / TILE) * COLS
+    for (let x = 0; x < w; x++, p++) {
+      if (failed[tileRow + Math.floor(x / TILE)]) continue
+      if (isNoData(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2])) noData[p] = 1
+    }
+  }
+  // Seeds are the 3x3 erosion of noData; growing them by NO_DATA_GROW + 1
+  // covers the gap and NO_DATA_GROW px around it. Separable: spread along
+  // rows, then along columns.
+  const reach = NO_DATA_GROW + 1
   const rows = new Uint8Array(w * h)
   for (let y = 0, p = 0; y < h; y++) {
     for (let x = 0; x < w; x++, p++) {
-      if (failed[Math.floor(y / TILE) * COLS + Math.floor(x / TILE)]) continue
-      if (isNoData(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2])) {
-        rows.fill(1, p - Math.min(x, n), p + Math.min(w - 1 - x, n) + 1)
+      if (!noData[p]) continue
+      let seed = true
+      for (let yy = Math.max(0, y - 1); seed && yy <= Math.min(h - 1, y + 1); yy++) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(w - 1, x + 1); xx++) {
+          if (!noData[yy * w + xx]) {
+            seed = false
+            break
+          }
+        }
       }
+      if (seed) rows.fill(1, p - Math.min(x, reach), p + Math.min(w - 1 - x, reach) + 1)
     }
   }
+  const grown = new Uint8Array(w * h)
   for (let y = 0, p = 0; y < h; y++) {
     for (let x = 0; x < w; x++, p++) {
       if (!rows[p]) continue
-      for (let yy = Math.max(0, y - n); yy <= Math.min(h - 1, y + n); yy++) {
-        const i = (yy * w + x) * 4
-        rgba[i] = rgba[i + 1] = rgba[i + 2] = 0
+      for (let yy = Math.max(0, y - reach); yy <= Math.min(h - 1, y + reach); yy++) {
+        grown[yy * w + x] = 1
       }
+    }
+  }
+  for (let p = 0, i = 0; p < grown.length; p++, i += 4) {
+    if (grown[p]) {
+      rgba[i] = rgba[i + 1] = rgba[i + 2] = 0
+    } else if (noData[p]) {
+      rgba[i] = Math.max(rgba[i], NO_DATA_LIFT)
+      rgba[i + 1] = Math.max(rgba[i + 1], NO_DATA_LIFT)
+      rgba[i + 2] = Math.max(rgba[i + 2], NO_DATA_LIFT)
     }
   }
 }
@@ -645,15 +683,32 @@ export function blendDaily(
   }
 }
 
+// Ice cloud is cyan in the false colour too, a little less than snow, and
+// GIBS's JPEG chroma blocks push patches of it over the snow edges: over the
+// open sea that cut 8-16 px blocks out of the North Pacific storm track
+// (tides-9jn.3). Sea ice is (nearly all) poleward of 50-65°, so over the sea
+// the snow mask fades in across those latitudes; the odd late-winter ice
+// further south (the Sea of Okhotsk, the Gulf of St Lawrence) shows as cloud,
+// which it looks like anyway.
+export const SEA_ICE_LAT_EDGES = [50, 65] as const
+
+/** 0..1: how far the false-colour snow mask counts over the sea at a
+ * latitude. */
+export function seaIceGate(latDeg: number): number {
+  return smoothstep(SEA_ICE_LAT_EDGES[0], SEA_ICE_LAT_EDGES[1], Math.abs(latDeg))
+}
+
 /**
  * gibs, falseColour and out are RGBA; staticAlpha and ice hold one byte per
  * pixel. Pixels with no true colour (polar night, swath gaps, failed tiles)
  * are black and keep the static cloud alpha. Elsewhere glint (glintFloor, one
  * byte per pixel, optional) is taken out first, then the land-ice mask or
  * false-colour snow, whichever is stronger, removes cloud; missing false
- * colour is black and masks nothing. Output is grey (RGB = alpha) and opaque,
- * since the cloud material reads its alphaMap from the green channel. out may
- * alias gibs.
+ * colour is black and masks nothing. With land (nonzero over land, one byte
+ * per pixel of a full OUT_W x OUT_H image), false-colour snow over the sea
+ * only counts where there can be sea ice (seaIceGate). Output is grey (RGB =
+ * alpha) and opaque, since the cloud material reads its alphaMap from the
+ * green channel. out may alias gibs.
  */
 export function composeCloudAlpha(
   gibs: ArrayLike<number>,
@@ -662,9 +717,12 @@ export function composeCloudAlpha(
   staticAlpha: ArrayLike<number>,
   ice: ArrayLike<number>,
   out: { [index: number]: number; length: number },
-  glint: ArrayLike<number> | null = null
+  glint: ArrayLike<number> | null = null,
+  land: ArrayLike<number> | null = null
 ): void {
+  let seaGate = 1
   for (let p = 0, i = 0; i < out.length; p++, i += 4) {
+    if (land && p % OUT_W === 0) seaGate = seaIceGate(90 - ((p / OUT_W + 0.5) / OUT_H) * 180)
     const r = gibs[i]
     const g = gibs[i + 1]
     const b = gibs[i + 2]
@@ -677,7 +735,8 @@ export function composeCloudAlpha(
         ? cloudAlpha(removeGlint(r, floor), removeGlint(g, floor), removeGlint(b, floor))
         : cloudAlpha(r, g, b)
       if (a > 0) {
-        const snow = snowWeight(falseColour[i], falseColour[i + 1], falseColour[i + 2], snowEdges)
+        let snow = snowWeight(falseColour[i], falseColour[i + 1], falseColour[i + 2], snowEdges)
+        if (land && !land[p]) snow *= seaGate
         a *= 1 - Math.max(ice[p] / 255, snow)
       }
     }

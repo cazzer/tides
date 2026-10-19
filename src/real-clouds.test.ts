@@ -23,6 +23,8 @@ import {
   geoTimeKey,
   growNoData,
   iceWeight,
+  SEA_ICE_LAT_EDGES,
+  seaIceGate,
   initialCloudDayState,
   isLatestStandIn,
   isRetryable,
@@ -301,6 +303,31 @@ describe('composeCloudAlpha', () => {
     const gibs = Uint8ClampedArray.from([...white, ...white, ...black])
     composeCloudAlpha(gibs, [...snow, ...cloud, ...snow], edges, [0, 0, 90], [0, 0, 0], gibs)
     expect(Array.from(gibs)).toEqual([0, 0, 0, 255, 255, 255, 255, 255, 90, 90, 90, 255])
+  })
+  test('with land, snow over the sea only counts where there can be sea ice (tides-9jn.3)', () => {
+    expect(seaIceGate(30)).toBe(0)
+    expect(seaIceGate(-SEA_ICE_LAT_EDGES[0])).toBe(0)
+    expect(seaIceGate(SEA_ICE_LAT_EDGES[1])).toBe(1)
+    expect(seaIceGate(-80)).toBe(1)
+    const n = OUT_W * OUT_H
+    const fill = (px: number[]) => {
+      const a = new Uint8ClampedArray(n * 4)
+      for (let i = 0; i < a.length; i += 4) a.set(px, i)
+      return a
+    }
+    const land = new Uint8Array(n)
+    // Column 0 is land, the rest sea.
+    for (let y = 0; y < OUT_H; y++) land[y * OUT_W] = 255
+    const out = new Uint8ClampedArray(n * 4)
+    const zeros = new Uint8Array(n)
+    composeCloudAlpha(fill(white), fill(snow), edges, zeros, zeros, out, null, land)
+    const alpha = (x: number, lat: number) => out[(Math.round(((90 - lat) / 180) * OUT_H) * OUT_W + x) * 4 + 1]
+    // Ice cloud over the North Pacific storm track keeps its alpha...
+    expect(alpha(1000, 42)).toBe(255)
+    // ...but snow on land and sea ice near the poles are still masked.
+    expect(alpha(0, 42)).toBe(0)
+    expect(alpha(1000, 75)).toBe(0)
+    expect(alpha(1000, -70)).toBe(0)
   })
 })
 
@@ -633,31 +660,71 @@ describe('growNoData', () => {
     return rows
   }
 
-  test('blackens a square NO_DATA_GROW px around no-data, alpha untouched', () => {
+  const gap = (img: Uint8ClampedArray, x0: number, y0: number, w = 3, h = 3, rgb = [5, 9, 11]) => {
+    for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) img.set(rgb, (y * W + x) * 4)
+  }
+
+  test('blackens a square NO_DATA_GROW px around a gap, alpha untouched', () => {
     expect(NO_DATA_GROW).toBe(2)
-    const img = image()
-    img.set([5, 9, 11], (3 * W + 4) * 4)
-    growNoData(img, W, H)
-    expect(black(img)).toEqual([
-      '.........',
-      '..#####..',
-      '..#####..',
-      '..#####..',
-      '..#####..',
-      '..#####..',
-      '.........',
+    const big = new Uint8ClampedArray(13 * 11 * 4).fill(150)
+    for (let y = 4; y < 7; y++) for (let x = 5; x < 8; x++) big.set([5, 9, 11], (y * 13 + x) * 4)
+    growNoData(big, 13, 11)
+    const rows: string[] = []
+    for (let y = 0; y < 11; y++) {
+      let row = ''
+      for (let x = 0; x < 13; x++) row += big[(y * 13 + x) * 4] === 0 ? '#' : '.'
+      rows.push(row)
+    }
+    expect(rows).toEqual([
+      '.............',
+      '.............',
+      '...#######...',
+      '...#######...',
+      '...#######...',
+      '...#######...',
+      '...#######...',
+      '...#######...',
+      '...#######...',
+      '.............',
+      '.............',
     ])
-    expect(img.filter((_, i) => i % 4 === 3).every((a) => a === 150)).toBe(true)
+    expect(big.filter((_, i) => i % 4 === 3).every((a) => a === 150)).toBe(true)
   })
   test('stops at the image edges', () => {
     const img = image()
-    img.set([0, 0, 0], 0)
+    gap(img, 0, 0)
     growNoData(img, W, H)
-    expect(black(img).slice(0, 4)).toEqual(['###......', '###......', '###......', '.........'])
+    expect(black(img).slice(0, 6)).toEqual([
+      '#####....',
+      '#####....',
+      '#####....',
+      '#####....',
+      '#####....',
+      '.........',
+    ])
     const corner = image()
-    corner.set([0, 0, 0], (W * H - 1) * 4)
+    gap(corner, W - 3, H - 3)
     growNoData(corner, W, H)
-    expect(black(corner).slice(3)).toEqual(['.........', '......###', '......###', '......###'])
+    expect(black(corner).slice(1)).toEqual([
+      '.........',
+      '....#####',
+      '....#####',
+      '....#####',
+      '....#####',
+      '....#####',
+    ])
+  })
+  test('stray no-data pixels are dark data, not gaps (tides-9jn.3)', () => {
+    // Two dark ocean pixels, as GIBS's JPEG leaves at high latitudes: lifted
+    // to the darkest data, so neither the static clouds nor a fill day show
+    // through them.
+    const img = image()
+    img.set([5, 9, 11], (3 * W + 4) * 4)
+    img.set([3, 3, 3], (3 * W + 5) * 4)
+    growNoData(img, W, H)
+    expect(black(img).join('')).not.toContain('#')
+    expect(Array.from(img.subarray((3 * W + 4) * 4, (3 * W + 4) * 4 + 4))).toEqual([12, 12, 12, 150])
+    expect(dataMask(img).every((d) => d === 1)).toBe(true)
   })
   test("a failed tile leaves its neighbours' edges alone", () => {
     const img = new Uint8ClampedArray(OUT_W * OUT_H * 4).fill(150)

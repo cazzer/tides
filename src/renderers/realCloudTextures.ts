@@ -296,7 +296,8 @@ async function buildDailyAlpha(
         ? Promise.all([load(source.layer, date, wanted), load(source.snowLayer, date, wanted)])
         : null
     // Without the land mask there's no telling sea glint from cloud, so it
-    // stays; the clouds are still worth showing.
+    // stays, and ice cloud over the sea can read as snow; the clouds are
+    // still worth showing.
     const landLoad = getLand().catch((err: unknown) => {
       console.warn('[clouds] no land mask for the glint removal', err)
       return null
@@ -331,12 +332,12 @@ async function buildDailyAlpha(
     const snowEdges = SNOW_EDGES[source.snowLayer]
     const dayMs = Date.parse(source.date)
     const glint = land ? glintFloor(image.data, land, dayMs) : null
-    composeCloudAlpha(image.data, falseColour, snowEdges, staticAlpha, ice, image.data, glint)
+    composeCloudAlpha(image.data, falseColour, snowEdges, staticAlpha, ice, image.data, glint, land)
     await yieldToFrame()
     signal.throwIfAborted()
     if (fill) {
       const fillGlint = land ? glintFloor(fill.gibs, land, dayMs - DAY_MS) : null
-      composeCloudAlpha(fill.gibs, fill.falseColour, snowEdges, staticAlpha, ice, fill.gibs, fillGlint)
+      composeCloudAlpha(fill.gibs, fill.falseColour, snowEdges, staticAlpha, ice, fill.gibs, fillGlint, land)
       await yieldToFrame()
       signal.throwIfAborted()
     }

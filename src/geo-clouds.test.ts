@@ -14,6 +14,8 @@ import {
   geoTilesFor,
   geoTileUrl,
   irCloudAlpha,
+  irDayAlpha,
+  IR_DAY_TEXTURE,
   irTemperature,
   LAND_COOL_MAX,
   LAND_MARGIN,
@@ -30,7 +32,10 @@ import {
   viewAngle,
   viewCoverage,
   viewWeight,
+  visBrightness,
   visCloudAlpha,
+  VIS_GAMMA,
+  VIS_OPAQUE_FRACTION,
   visibleGrey,
   type Terrain,
 } from './geo-clouds'
@@ -114,7 +119,34 @@ describe('decodeIr', () => {
     for (let y = 0; y < H; y++) expect(t[y * W + 2]).toBeCloseTo(0.15, 0)
   })
 
-  test('a blend of two runs of the colormap takes its neighbours’ mean', () => {
+  test('a grey tinted by a dark red is unmixed, not read as warm sea (tides-9jn.3)', () => {
+    // Left half dark red (-68.6 °C), right half warm grey (13.5 °C); the
+    // middle column a resampled mix of the two, which lies within 13 RGB of
+    // the warm grey ramp.
+    const rgba = image([114, 114, 114, 255])
+    for (let y = 0; y < H; y++) {
+      set(rgba, 0, y, [51, 0, 0, 255])
+      set(rgba, 1, y, [51, 0, 0, 255])
+      set(rgba, 2, y, [92, 71, 71, 255])
+    }
+    const t = decodeIr(rgba, W, H)
+    for (let y = 0; y < H; y++) {
+      expect(t[y * W + 2]).toBeLessThan(-10)
+      expect(t[y * W + 2]).toBeGreaterThan(-60)
+    }
+  })
+
+  test('a grey just past the warm ramp’s top is warm by warm cloud, cold in a core', () => {
+    // 196,198,198: the -18.85 °C grey resampled with a touch of cyan.
+    const warm = image([0, 255, 255, 255])
+    set(warm, 2, 2, [196, 198, 198, 255])
+    expect(decodeIr(warm, W, H)[2 * W + 2]).toBeCloseTo(-18.85, 0)
+    const core = image([255, 127, 203, 255])
+    set(core, 2, 2, [204, 204, 204, 255])
+    expect(decodeIr(core, W, H)[2 * W + 2]).toBeLessThan(-75)
+  })
+
+  test('a blend of two runs of the colormap is unmixed from its neighbours', () => {
     // Greyish green: a warm grey resampled with a green cloud edge.
     const rgba = image([0, 255, 0, 255])
     set(rgba, 2, 2, [63, 167, 128, 255])
@@ -278,7 +310,7 @@ describe('clear-sky reference', () => {
     for (let p = 0; p < N; p++) if (terrain.land[p]) deck[p] = -40
     const decked = referenceAt(rows, terrain, landWarmGrid(deck, GOES_EAST.lon, terrain), col(-100), row(45))
     expect(decked).toBeCloseTo(15 - LAND_COOL_MAX)
-    expect(irCloudAlpha(-40, decked)).toBe(1)
+    expect(irCloudAlpha(-40, decked)).toBeGreaterThan(0.9)
   })
 
   test('landWarmGrid is Infinity where no land is seen', () => {
@@ -289,17 +321,26 @@ describe('clear-sky reference', () => {
 })
 
 describe('cloud alpha', () => {
-  test('irCloudAlpha ramps from CLEAR_DT to OPAQUE_DT below the reference', () => {
+  test('irCloudAlpha eases out from CLEAR_DT to OPAQUE_DT below the reference', () => {
     expect(irCloudAlpha(20, 20)).toBe(0)
     expect(irCloudAlpha(20 - CLEAR_DT, 20)).toBe(0)
-    expect(irCloudAlpha(20 - (CLEAR_DT + OPAQUE_DT) / 2, 20)).toBeCloseTo(0.5)
+    expect(irCloudAlpha(20 - (CLEAR_DT + OPAQUE_DT) / 2, 20)).toBeCloseTo(0.75)
     expect(irCloudAlpha(20 - OPAQUE_DT, 20)).toBe(1)
     // Warmer than clear sky (hot desert by day).
     expect(irCloudAlpha(45, 20)).toBe(0)
   })
 
+  test('thick cloud keeps the structure of its tops rather than saturating (tides-9jn.3)', () => {
+    // A front 30 K and 40 K below clear sky: both opaque before, now distinct.
+    const a30 = irCloudAlpha(-10, 20)
+    const a40 = irCloudAlpha(-20, 20)
+    expect(a30).toBeGreaterThan(0.8)
+    expect(a40 - a30).toBeGreaterThan(0.1)
+    expect(a40).toBeLessThan(1)
+  })
+
   test('very cold tops are cloud whatever the reference', () => {
-    expect(irCloudAlpha(-50, -45)).toBe(1)
+    expect(irCloudAlpha(-60, -55)).toBe(1)
     expect(irCloudAlpha(-20, -18)).toBe(0)
   })
 
@@ -315,7 +356,34 @@ describe('cloud alpha', () => {
   test('visCloudAlpha: bright and a little colder than clear sky is cloud', () => {
     expect(visCloudAlpha(200, 0.9, 12, 20, cal)).toBe(1)
     expect(visCloudAlpha(50, 0.9, 12, 20, cal)).toBe(0)
-    expect(visCloudAlpha(95, 0.9, 12, 20, cal)).toBeCloseTo(0.5)
+    expect(visCloudAlpha(95, 0.9, 12, 20, cal)).toBeCloseTo((45 / 150 / VIS_OPAQUE_FRACTION) ** VIS_GAMMA)
+  })
+
+  test('visCloudAlpha keeps the texture of bright cloud short of thick (tides-9jn.3)', () => {
+    // Stratocumulus at 70% and 80% of the way to thick cloud: both opaque
+    // with the old 0.6 span, now still apart.
+    const a70 = visCloudAlpha(155, 0.9, 12, 20, cal)
+    const a80 = visCloudAlpha(170, 0.9, 12, 20, cal)
+    expect(a70).toBeGreaterThan(0.75)
+    expect(a80 - a70).toBeGreaterThan(0.05)
+    expect(a80).toBeLessThan(1)
+  })
+
+  test('visBrightness interpolates the calibration between sun-height bins', () => {
+    const ramp = {
+      clear: new Float32Array(8).fill(50),
+      cloud: Float32Array.from([100, 110, 120, 130, 140, 150, 160, 170]),
+    }
+    // Bin centres 3 and 4 are at mu 0.49375 and 0.60625: half way between,
+    // thick cloud is 135.
+    expect(visBrightness(135, 0.55, ramp)).toBeCloseTo(1)
+    expect(visBrightness(92.5, 0.55, ramp)).toBeCloseTo(0.5)
+  })
+
+  test('irDayAlpha thins IR cloud where the visible is dim, by day only', () => {
+    expect(irDayAlpha(1, 200, 0.9, cal)).toBe(1)
+    expect(irDayAlpha(1, 50, 0.9, cal)).toBeCloseTo(1 - IR_DAY_TEXTURE)
+    expect(irDayAlpha(0.8, 50, 0.05, cal)).toBe(0.8)
   })
 
   test('visCloudAlpha ignores sunglint and desert (warm) and the night', () => {
@@ -342,6 +410,12 @@ describe('cloud alpha', () => {
     expect(result).not.toBeNull()
     expect([...result!.clear].every((v) => v === 60)).toBe(true)
     expect(result!.cloud.some((v) => v === 220)).toBe(true)
+    // Thick cloud is never darker under a higher sun, nor much darker under
+    // a lower one.
+    for (let b = 0; b + 1 < result!.cloud.length; b++) {
+      expect(result!.cloud[b]).toBeLessThanOrEqual(result!.cloud[b + 1])
+      expect(result!.cloud[b]).toBeGreaterThan(0.5 * result!.cloud[b + 1])
+    }
     // No daylight: nothing to calibrate.
     expect(calibrateVisible(vis, t, () => 20, GOES_WEST.lon, { lat: 0, lon: 43 })).toBeNull()
   })

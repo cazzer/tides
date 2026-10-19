@@ -140,9 +140,18 @@ const COLD_GREY_LOW = 5
 const COLD_GREY_HIGH = 230
 const WARM_POLYLINE_END = 60
 
+// Greys a little lighter than the warm ramp's top are nearly all that top
+// resampled with a little cyan (196,198,198 averages 197.3) rather than the
+// coldest greys of a core, which sit by its pinks; read as -79 °C they left
+// cold specks along cloud edges (tides-9jn.3). They're ambiguous like the
+// rest: warm unless inside a cold cluster.
+const WARM_GREY_SLACK = 210
+
 function greyTemperature(v: number): number {
-  if (v <= WARM_GREY_TOP) return WARM_GREY_TOP_C + (WARM_GREY_TOP - v) * WARM_GREY_C_PER_LEVEL
-  // Above the warm ramp only the cold greys and white remain.
+  if (v <= WARM_GREY_SLACK) {
+    return WARM_GREY_TOP_C + (WARM_GREY_TOP - Math.min(WARM_GREY_TOP, v)) * WARM_GREY_C_PER_LEVEL
+  }
+  // Above that only the cold greys and white remain.
   return v >= COLD_GREY_HIGH ? -79.6 - ((v - COLD_GREY_HIGH) / (255 - COLD_GREY_HIGH)) * 12 : -79
 }
 
@@ -225,9 +234,14 @@ function lutIndex(r: number, g: number, b: number): number {
 // Resampling also blends colours from different runs of the colormap (a warm
 // grey with a cyan, say), which lie off every polyline and whose nearest point
 // can be tens of degrees out. Further than this (in RGB, including the LUT's
-// quantisation) they take the mean of their on-ramp neighbours instead, which
-// is what the blend was of.
+// quantisation) they're unmixed from their on-ramp neighbours instead, which
+// is what the blend was of. So are greys with any tint (a dark red resampled
+// with a grey, say 92,71,71): the warm ramp is pure grey, so a tint is always
+// another run mixed in, but such pixels lie close enough to the grey ramp to
+// read as warm as the sea, and left holes in convective cloud (tides-9jn.3).
 const BLEND_DISTANCE = 20
+/** LUT temperatures above this are on the warm grey ramp proper. */
+const ON_WARM_GREY_C = WARM_GREY_TOP_C + 0.3
 
 const GREY_TOLERANCE = 3
 
@@ -256,11 +270,69 @@ const COLD_NEIGHBOURS = 4
 const COLD_GREY_PASSES = 8
 
 /**
+ * The temperature of a blended pixel p: of the on-ramp 8-neighbours (and
+ * pairs of them), the mix whose colour comes closest to p's, at the same mix
+ * of their temperatures. Its own decode when it has no such neighbour. The
+ * fit's RGB distance is left in unmixError.
+ */
+let unmixError = 0
+function unmix(
+  rgba: ArrayLike<number>,
+  temps: Float32Array,
+  isBlend: Uint8Array,
+  w: number,
+  h: number,
+  p: number
+): number {
+  const x = p % w
+  const y = (p - x) / w
+  const i = p * 4
+  const r = rgba[i]
+  const g = rgba[i + 1]
+  const b = rgba[i + 2]
+  const near: number[] = []
+  for (let yy = Math.max(0, y - 1); yy <= Math.min(h - 1, y + 1); yy++) {
+    for (let xx = Math.max(0, x - 1); xx <= Math.min(w - 1, x + 1); xx++) {
+      const q = yy * w + xx
+      if (!isBlend[q] && !Number.isNaN(temps[q])) near.push(q)
+    }
+  }
+  let best = Infinity
+  let temp = temps[p]
+  for (let a = 0; a < near.length; a++) {
+    const qa = near[a] * 4
+    const ra = rgba[qa]
+    const ga = rgba[qa + 1]
+    const ba = rgba[qa + 2]
+    const ta = temps[near[a]]
+    for (let c = a; c < near.length; c++) {
+      const qc = near[c] * 4
+      const dr = rgba[qc] - ra
+      const dg = rgba[qc + 1] - ga
+      const db = rgba[qc + 2] - ba
+      const len2 = dr * dr + dg * dg + db * db
+      const u = len2 ? Math.max(0, Math.min(1, ((r - ra) * dr + (g - ga) * dg + (b - ba) * db) / len2)) : 0
+      const er = ra + u * dr - r
+      const eg = ga + u * dg - g
+      const eb = ba + u * db - b
+      const d = er * er + eg * eg + eb * eb
+      if (d < best) {
+        best = d
+        temp = ta + u * (temps[near[c]] - ta)
+      }
+    }
+  }
+  unmixError = Math.sqrt(best)
+  return temp
+}
+
+/**
  * Decodes a w x h RGBA IR mosaic into °C, NaN where there's no data. Edge
  * pixels GIBS blended with transparency count as no data, since the blend
  * darkens (warms) them. Greys that could be either ramp are read as cold when a
  * neighbour is already colder than COLD_NEIGHBOUR_C, spreading a few pixels
- * inward through the core of a cold cluster.
+ * inward through the core of a cold cluster. Blends of two runs are unmixed
+ * from their neighbours.
  */
 export function decodeIr(rgba: ArrayLike<number>, w: number, h: number): Float32Array {
   const out = new Float32Array(w * h)
@@ -275,11 +347,12 @@ export function decodeIr(rgba: ArrayLike<number>, w: number, h: number): Float32
     const r = rgba[i]
     const g = rgba[i + 1]
     const b = rgba[i + 2]
-    out[p] = irTemperature(r, g, b)
+    const t = irTemperature(r, g, b)
+    out[p] = t
     if (isGrey(r, g, b)) {
       const v = (r + g + b) / 3
-      if (v >= COLD_GREY_LOW && v <= WARM_GREY_TOP) ambiguous.push(p)
-    } else if (distance[lutIndex(r, g, b)] > BLEND_DISTANCE) {
+      if (v >= COLD_GREY_LOW && v <= WARM_GREY_SLACK) ambiguous.push(p)
+    } else if (distance[lutIndex(r, g, b)] > BLEND_DISTANCE || t > ON_WARM_GREY_C) {
       blends.push(p)
     }
   }
@@ -314,22 +387,21 @@ export function decodeIr(rgba: ArrayLike<number>, w: number, h: number): Float32
       out[p] = coldGreyTemperature((rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3)
     }
   }
-  const means = blends.map((p) => {
-    const x = p % w
-    const y = (p - x) / w
-    let sum = 0
-    let n = 0
-    for (let yy = Math.max(0, y - 1); yy <= Math.min(h - 1, y + 1); yy++) {
-      for (let xx = Math.max(0, x - 1); xx <= Math.min(w - 1, x + 1); xx++) {
-        const q = yy * w + xx
-        if (isBlend[q] || Number.isNaN(out[q])) continue
-        sum += out[q]
-        n++
-      }
-    }
-    return n ? sum / n : out[p]
+  // Where a blend of three or more runs leaves no good pair of on-ramp
+  // neighbours, a second pass also draws on the blends that did fit.
+  const poor: number[] = []
+  const unmixed = blends.map((p) => {
+    const t = unmix(rgba, out, isBlend, w, h, p)
+    if (unmixError > BLEND_DISTANCE) poor.push(p)
+    return t
   })
-  blends.forEach((p, k) => (out[p] = means[k]))
+  blends.forEach((p, k) => {
+    out[p] = unmixed[k]
+    isBlend[p] = 0
+  })
+  for (const p of poor) isBlend[p] = 1
+  const refit = poor.map((p) => unmix(rgba, out, isBlend, w, h, p))
+  poor.forEach((p, k) => (out[p] = refit[k]))
   return out
 }
 
@@ -522,19 +594,22 @@ export function referenceAt(
 
 // A pixel this much colder than the clear-sky reference starts to show cloud
 // and is opaque at OPAQUE_DT: low cloud is only a few K colder than the sea
-// below it, deep convection 60-90 K.
+// below it, deep convection 60-90 K. The ramp eases out, so mid-level cloud
+// is about as opaque as a linear ramp to 30 K made it, but frontal and
+// convective cloud keeps the structure of its tops up to OPAQUE_DT instead
+// of saturating into flat white (tides-9jn.3).
 export const CLEAR_DT = 5
-export const OPAQUE_DT = 30
+export const OPAQUE_DT = 45
 // Anything this cold is cloud whatever the reference, which can sit low where
 // a latitude is mostly cloud. Ice sheets this cold are past GEO_ZERO_DEG.
 export const COLD_CLEAR_C = -25
-export const COLD_OPAQUE_C = -50
+export const COLD_OPAQUE_C = -60
 
 /** 0..1 cloud alpha from a brightness temperature and the clear-sky
  * reference (°C). */
 export function irCloudAlpha(t: number, reference: number): number {
-  const relative = Math.min(1, Math.max(0, (reference - t - CLEAR_DT) / (OPAQUE_DT - CLEAR_DT)))
-  return Math.max(relative, smoothstep(COLD_CLEAR_C, COLD_OPAQUE_C, t))
+  const x = Math.min(1, Math.max(0, (reference - t - CLEAR_DT) / (OPAQUE_DT - CLEAR_DT)))
+  return Math.max(1 - (1 - x) * (1 - x), smoothstep(COLD_CLEAR_C, COLD_OPAQUE_C, t))
 }
 
 // Cloud-top height above the ground from how far the top is below the clear
@@ -560,8 +635,16 @@ const VIS_SAMPLE_STEP = 3
 const VIS_CLEAR_DT = 1
 const VIS_THICK_C = -40
 const VIS_THICK_PERCENTILE = 0.8
-// Low cloud is opaque well short of the brightness of deep convection.
-export const VIS_OPAQUE_FRACTION = 0.6
+// Opaque a little short of the brightness of thick cold cloud. At 0.6 most
+// stratocumulus and frontal cloud saturated into flat white; nearer the full
+// span it keeps the texture the visible shows, and the curve keeps
+// moderately bright cloud looking like cloud rather than haze (tides-9jn.3).
+export const VIS_OPAQUE_FRACTION = 0.85
+export const VIS_GAMMA = 0.6
+// By day IR alpha is thinned where the visible is darker than thick cloud, by
+// up to this much, so cold cloud takes its texture from the visible too
+// rather than staying as flat as its IR.
+export const IR_DAY_TEXTURE = 0.35
 // Daylight fades the visible in toward a higher sun.
 export const VIS_DAY_FROM = 0.15
 export const VIS_DAY_TO = 0.35
@@ -634,10 +717,36 @@ export function calibrateVisible(
     fillBins(bins.map((b) => (b.length >= VIS_MIN_SAMPLES ? percentile(b, f) : null)))
   const c = pick(clear, 0.5)
   const k = pick(cloud, VIS_THICK_PERCENTILE)
-  return c && k ? { clear: c, cloud: k } : null
+  if (!c || !k) return null
+  // Thick cloud can't get darker as the sun gets higher, and is at least as
+  // bright as a higher sun's in proportion to mu, which a bin whose cold
+  // pixels are mostly thin cirrus would otherwise undercut (GOES-West at
+  // 2026-10-18 18Z, 50°S: 162 at mu 0.7 against 220 at 0.83), saturating
+  // its stratocumulus.
+  const mid = (b: number) => VIS_MIN_MU + ((b + 0.5) / VIS_BINS) * (1 - VIS_MIN_MU)
+  for (let b = VIS_BINS - 2; b >= 0; b--) k[b] = Math.max(k[b], (k[b + 1] * mid(b)) / mid(b + 1))
+  return { clear: c, cloud: k }
 }
 
-/** 0..1 cloud alpha from visible brightness, by day only, gated by IR. */
+/** 0..1 visible brightness from clear sky to thick cloud. */
+export function visBrightness(v: number, mu: number, cal: VisCalibration): number {
+  // Linear between bin centres: stepping from bin to bin drew arcs of
+  // constant sun height across the clouds.
+  const f = Math.min(
+    VIS_BINS - 1,
+    Math.max(0, ((mu - VIS_MIN_MU) / (1 - VIS_MIN_MU)) * VIS_BINS - 0.5)
+  )
+  const b = Math.min(VIS_BINS - 2, Math.floor(f))
+  const u = f - b
+  const clear = cal.clear[b] + u * (cal.clear[b + 1] - cal.clear[b])
+  const cloud = cal.cloud[b] + u * (cal.cloud[b + 1] - cal.cloud[b])
+  return Math.min(1, Math.max(0, (v - clear) / Math.max(20, cloud - clear)))
+}
+
+/** 0..1 cloud alpha from visible brightness, by day only, gated by IR. The
+ * composite passes as t the pixel's temperature or, if colder, that of the
+ * cloud on two sides of it, so a single warm IR pixel in a field of cumulus
+ * doesn't cut a hole in it. */
 export function visCloudAlpha(
   v: number,
   mu: number,
@@ -646,17 +755,45 @@ export function visCloudAlpha(
   cal: VisCalibration
 ): number {
   if (mu < VIS_DAY_FROM) return 0
-  const bin = muBin(mu)
-  const clear = cal.clear[bin]
-  const span = Math.max(20, VIS_OPAQUE_FRACTION * (cal.cloud[bin] - clear))
+  const x = Math.min(1, visBrightness(v, mu, cal) / VIS_OPAQUE_FRACTION)
   return (
-    Math.min(1, Math.max(0, (v - clear) / span)) *
+    x ** VIS_GAMMA *
     smoothstep(VIS_DAY_FROM, VIS_DAY_TO, mu) *
     smoothstep(VIS_GATE_FROM_DT, VIS_GATE_TO_DT, reference - t)
   )
 }
 
+/** IR alpha thinned by day where the visible is darker than thick cloud. */
+export function irDayAlpha(irAlpha: number, v: number, mu: number, cal: VisCalibration): number {
+  if (mu < VIS_DAY_FROM) return irAlpha
+  const day = smoothstep(VIS_DAY_FROM, VIS_DAY_TO, mu)
+  return irAlpha * (1 - day * IR_DAY_TEXTURE * (1 - visBrightness(v, mu, cal)))
+}
+
 // --- Composite -------------------------------------------------------------
+
+/** t0, the temperature at (x, y), or the second coldest of its 4 neighbours
+ * (wrapping in x) if colder: a warm pixel with cloud on two sides is a gap
+ * the IR resolution missed, while one beside a lone cumulus or along a
+ * cloud's straight edge is not. */
+function gateTemperature(t: Float32Array, x: number, y: number, t0: number): number {
+  let first = Infinity
+  let second = Infinity
+  const take = (v: number) => {
+    if (v < first) {
+      second = first
+      first = v
+    } else if (v < second) {
+      second = v
+    }
+  }
+  const o = y * OUT_W
+  take(t[o + ((x + 1) % OUT_W)])
+  take(t[o + ((x - 1 + OUT_W) % OUT_W)])
+  if (y > 0) take(t[o - OUT_W + x])
+  if (y < OUT_H - 1) take(t[o + OUT_W + x])
+  return second < t0 ? second : t0
+}
 
 export interface GeoImagery {
   /** Per GEO_SATELLITES entry, decoded IR (°C, NaN for no data), or null
@@ -724,7 +861,13 @@ export function composeGeoClouds(
         if (c <= 0) continue
         const ref = referenceAt(rows, terrain, sat.warm, x, y)
         let a = irCloudAlpha(t, ref)
-        if (sat.vis?.[p]) a = Math.max(a, visCloudAlpha(sat.vis[p], mu, t, ref, sat.cal!))
+        const v = sat.vis?.[p]
+        if (v && mu >= VIS_DAY_FROM) {
+          a = Math.max(
+            irDayAlpha(a, v, mu, sat.cal!),
+            visCloudAlpha(v, mu, gateTemperature(sat.t, x, y, t), ref, sat.cal!)
+          )
+        }
         const w = viewWeight(angle)
         uncovered *= 1 - c
         weights += w
