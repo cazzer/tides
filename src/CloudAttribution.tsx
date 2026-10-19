@@ -1,7 +1,11 @@
 import { useId } from 'react'
-import { isLatestStandIn, MODIS_FROM, utcDayKey } from './real-clouds'
+import { isLatestStandIn, MODIS_FROM, utcDayKey, type GibsSource } from './real-clouds'
 import { useStore } from './store'
-import { useRealCloudSnapshot, type RealCloudSnapshot } from './renderers/realCloudTextures'
+import {
+  useRealCloudSnapshot,
+  type GeoTextureInfo,
+  type RealCloudSnapshot,
+} from './renderers/realCloudTextures'
 
 const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
 // Wording requested by the GIBS documentation.
@@ -20,7 +24,12 @@ export function CloudAttribution() {
   )
 }
 
-function CloudSourceText({ snapshot: { source, status } }: { snapshot: RealCloudSnapshot }) {
+const instrument = (source: GibsSource) => source.layer.split('_')[0]
+
+/** 2026-10-18T18:00:00Z -> 2026-10-18 18:00 UTC */
+const slotLabel = (time: string) => `${time.slice(0, 10)} ${time.slice(11, 16)} UTC`
+
+function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: RealCloudSnapshot }) {
   const acknowledgementId = useId()
   // A boolean, so the per-frame timestamp only re-renders when it flips.
   const latest = useStore(
@@ -34,10 +43,22 @@ function CloudSourceText({ snapshot: { source, status } }: { snapshot: RealCloud
       ? <>simulated (before {utcDayKey(MODIS_FROM)})</>
       : <>simulated (no imagery yet)</>
   }
-  const instrument = source.layer.split('_')[0]
+  const daily = source.kind === 'geo' ? source.fallback : source
   if (status === 'failed') {
-    return <>simulated ({instrument} {source.date} unavailable)</>
+    const what = source.kind === 'geo' ? slotLabel(source.time) : `${instrument(daily)} ${daily.date}`
+    return <>simulated ({what} unavailable)</>
   }
+  // Geostationary satellites where they see, the daily composite elsewhere.
+  // While loading, the texture is still the previous source's.
+  const geo =
+    source.kind === 'geo' && status === 'ready'
+      ? (texture?.userData.geo as GeoTextureInfo | null | undefined)
+      : null
+  const what = geo
+    ? `${geo.satellites.join(', ')} ${slotLabel(geo.time)} + ${instrument(daily)} ${daily.date}`
+    : source.kind === 'geo' && status === 'loading'
+      ? slotLabel(source.time)
+      : `${instrument(daily)} ${daily.date}`
   return (
     <>
       <a
@@ -55,7 +76,7 @@ function CloudSourceText({ snapshot: { source, status } }: { snapshot: RealCloud
       >
         {ACKNOWLEDGEMENT}
       </span>
-      {` · ${instrument} ${source.date}${latest ? ' (latest)' : ''}`}
+      {` · ${what}${latest ? ' (latest)' : ''}`}
     </>
   )
 }

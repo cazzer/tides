@@ -5,6 +5,12 @@ import {
   desiredCloudSource,
   fillDate,
   fillNoData,
+  GEO_ARCHIVE_MS,
+  GEO_LATENCY_MS,
+  GEO_NEAR_SETTLE_MS,
+  GEO_SLOT_MS,
+  geoSlot,
+  geoTimeKey,
   growNoData,
   iceWeight,
   initialCloudDayState,
@@ -15,7 +21,10 @@ import {
   OUT_W,
   pickEvictions,
   selectCloudSource,
+  selectGeoSlot,
+  selectRealCloudSource,
   SETTLE_MS,
+  settleMsFor,
   SNOW_EDGES,
   snowWeight,
   sourceKey,
@@ -606,5 +615,100 @@ describe('pickEvictions', () => {
   })
   test('nothing to do under the limit', () => {
     expect(pickEvictions(entries, null, 4)).toEqual([])
+  })
+})
+
+describe('geostationary slots (tides-1zj)', () => {
+  const geo = (time: string, date: string) =>
+    ({ kind: 'geo', time, fallback: viirs(date) }) as const
+
+  test('geoSlot and geoTimeKey floor to 10 minutes', () => {
+    expect(geoTimeKey(at('2026-10-18T00:07:59Z'))).toBe('2026-10-18T00:00:00Z')
+    expect(geoTimeKey(at('2026-10-18T00:10:00Z'))).toBe('2026-10-18T00:10:00Z')
+    expect(geoSlot(at('2026-10-18T23:59:59Z'))).toBe(at('2026-10-18T23:50:00Z'))
+  })
+
+  test.each([
+    // The slot over that day's composite; today over yesterday's.
+    ['2026-10-17T06:43:00Z', geo('2026-10-17T06:40:00Z', '2026-10-17')],
+    ['2026-10-18T14:49:00Z', geo('2026-10-18T14:40:00Z', '2026-10-17')],
+    // After the latest published slot (NOW - latency): that one.
+    ['2026-10-18T15:30:00Z', geo('2026-10-18T14:50:00Z', '2026-10-17')],
+    ['2026-10-18T22:00:00Z', geo('2026-10-18T14:50:00Z', '2026-10-17')],
+    // Inside the rolling archive...
+    ['2026-07-22T00:00:00Z', geo('2026-07-22T00:00:00Z', '2026-07-22')],
+    // ...and before it, the daily composite alone.
+    ['2026-07-19T12:00:00Z', viirs('2026-07-19')],
+    ['2024-10-09T18:00:00Z', viirs('2024-10-09')],
+    ['1999-12-31T12:00:00Z', { kind: 'static', reason: 'before-coverage' }],
+    ['2026-10-19T00:00:00Z', { kind: 'static', reason: 'after-latest' }],
+  ])('selectRealCloudSource %s', (iso, expected) => {
+    expect(selectRealCloudSource(at(iso), NOW)).toEqual(expected)
+  })
+
+  test('selectGeoSlot is null past the archive', () => {
+    expect(selectGeoSlot(NOW - GEO_ARCHIVE_MS - GEO_SLOT_MS, NOW)).toBeNull()
+    expect(selectGeoSlot(NOW - GEO_ARCHIVE_MS + GEO_SLOT_MS, NOW)).not.toBeNull()
+    expect(selectGeoSlot(NOW, NOW)).toBe(geoSlot(NOW - GEO_LATENCY_MS))
+  })
+
+  test('desiredCloudSource follows a jump target into the archive', () => {
+    expect(
+      desiredCloudSource(at('2010-01-01T00:00:00Z'), at('2026-10-17T06:43:00Z'), NOW)
+    ).toEqual(geo('2026-10-17T06:40:00Z', '2026-10-17'))
+  })
+
+  test('sourceKey names the slot and its fallback', () => {
+    expect(sourceKey(geo('2026-10-17T06:40:00Z', '2026-10-17'))).toBe(
+      `geo/2026-10-17T06:40:00Z/${VIIRS}/2026-10-17`
+    )
+  })
+
+  test('isLatestStandIn: a slot before the sim time today', () => {
+    expect(isLatestStandIn(selectRealCloudSource(NOW, NOW), NOW, NOW)).toBe(true)
+    const morning = selectRealCloudSource(at('2026-10-18T09:00:00Z'), NOW)
+    expect(isLatestStandIn(morning, at('2026-10-18T09:05:00Z'), NOW)).toBe(false)
+    const yesterday = selectRealCloudSource(at('2026-10-17T09:00:00Z'), NOW)
+    expect(isLatestStandIn(yesterday, at('2026-10-17T09:00:00Z'), NOW)).toBe(false)
+  })
+
+  test('settleMsFor: nearby slots wait longer, everything else as before', () => {
+    const a = geo('2026-10-17T06:40:00Z', '2026-10-17')
+    expect(settleMsFor(geo('2026-10-17T06:50:00Z', '2026-10-17'), a)).toBe(GEO_NEAR_SETTLE_MS)
+    expect(settleMsFor(geo('2026-10-17T09:30:00Z', '2026-10-17'), a)).toBe(GEO_NEAR_SETTLE_MS)
+    expect(settleMsFor(geo('2026-10-17T09:40:00Z', '2026-10-17'), a)).toBe(SETTLE_MS)
+    expect(settleMsFor(a, null)).toBe(SETTLE_MS)
+    expect(settleMsFor(a, viirs('2026-10-17'))).toBe(SETTLE_MS)
+    expect(settleMsFor(viirs('2026-10-16'), a)).toBe(SETTLE_MS)
+  })
+
+  /** Commits while playing from 2026-10-17 at `speed` sim ms per wall ms. */
+  const commitsDuringPlayback = (speed: number, wallMs: number) => {
+    const start = at('2026-10-17T00:00:00Z')
+    let committed = selectRealCloudSource(start, NOW)
+    let s = stepCloudDay(initialCloudDayState, sourceKey(committed), 0).state
+    let commits = 0
+    for (let wall = 16; wall <= wallMs; wall += 16) {
+      const source = selectRealCloudSource(start + wall * speed, NOW)
+      const r = stepCloudDay(s, sourceKey(source), wall, settleMsFor(source, committed))
+      s = r.state
+      if (r.commit) {
+        commits++
+        committed = source
+      }
+    }
+    return commits
+  }
+
+  test('real-time playback refetches every 10 minutes', () => {
+    // 00:10 to 00:50, each GEO_NEAR_SETTLE_MS after it starts.
+    expect(commitsDuringPlayback(1, 3_600_000)).toBe(5)
+  })
+
+  test('fast playback refetches at most every GEO_NEAR_MS of sim time', () => {
+    // A sim hour per wall minute for 10 minutes: 10 sim hours.
+    expect(commitsDuringPlayback(60, 600_000)).toBeLessThanOrEqual(3)
+    // A sim day per wall minute: each slot lasts 0.4 s, so nothing settles.
+    expect(commitsDuringPlayback(1440, 60_000)).toBe(0)
   })
 })

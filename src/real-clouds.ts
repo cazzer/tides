@@ -2,9 +2,11 @@
 // findings in tides-pdu). A false-colour layer from the same instrument is
 // only a mask for seasonal snow and sea ice (tides-6bh). No-data gaps are
 // filled from the previous day before falling back to the static clouds
-// (tides-2t9). Pure logic only: which layers and days to show, the tile URLs,
-// the gap fill, the cloud-alpha maths and the day debounce. The browser side
-// lives in renderers/realCloudTextures.ts.
+// (tides-2t9). Within the last ~90 days geostationary imagery matched to the
+// sim time goes over the top (tides-1zj, geo-clouds.ts). Pure logic only:
+// which layers, days and slots to show, the tile URLs, the gap fill, the
+// cloud-alpha maths and the debounce. The browser side lives in
+// renderers/realCloudTextures.ts.
 
 const DAY_MS = 86_400_000
 
@@ -41,6 +43,7 @@ export const TILE_TIMEOUT_MS = 60_000
 // A day must stay wanted this long (wall clock) before it is fetched, so fast
 // playback and the frames of a jump tween never trigger downloads.
 export const SETTLE_MS = 1500
+/** Cloud textures kept, days or geostationary slots alike. */
 export const MAX_CACHED_DAYS = 3
 
 export function utcDay(ms: number): number {
@@ -51,10 +54,41 @@ export function utcDayKey(ms: number): string {
   return new Date(utcDay(ms)).toISOString().slice(0, 10)
 }
 
+export type GibsSource = { kind: 'gibs'; layer: string; snowLayer: SnowLayer; date: string }
+/** Geostationary imagery at a 10-minute slot (tides-1zj, geo-clouds.ts), over
+ * the daily composite where the satellites don't see. */
+export type GeoSource = { kind: 'geo'; time: string; fallback: GibsSource }
 export type CloudSource =
   | { kind: 'static'; reason: 'before-coverage' | 'after-latest' }
-  | { kind: 'gibs'; layer: string; snowLayer: SnowLayer; date: string }
+  | GibsSource
+  | GeoSource
 
+// Geostationary full disks come every 10 minutes. GIBS keeps a rolling ~90
+// days (older times 404 although DescribeDomains lists them) and publishes
+// 20-35 minutes after the scan.
+const MINUTE_MS = 60_000
+export const GEO_SLOT_MS = 10 * MINUTE_MS
+export const GEO_ARCHIVE_MS = 89 * DAY_MS
+export const GEO_LATENCY_MS = 40 * MINUTE_MS
+
+export function geoSlot(ms: number): number {
+  return Math.floor(ms / GEO_SLOT_MS) * GEO_SLOT_MS
+}
+
+/** WMTS time for a slot, e.g. 2026-10-18T00:10:00Z. */
+export function geoTimeKey(ms: number): string {
+  return new Date(geoSlot(ms)).toISOString().slice(0, 19) + 'Z'
+}
+
+/** The slot to show for a sim time, or null outside the archive. Times after
+ * the latest published slot (the present, or later today) show that one. */
+export function selectGeoSlot(simMs: number, nowMs: number): number | null {
+  const slot = Math.min(geoSlot(simMs), geoSlot(nowMs - GEO_LATENCY_MS))
+  return slot < nowMs - GEO_ARCHIVE_MS ? null : slot
+}
+
+/** The daily composite alone; see selectRealCloudSource for what Real
+ * weather shows. */
 export function selectCloudSource(simMs: number, nowMs: number): CloudSource {
   const today = utcDay(nowMs)
   // Today's composite is still filling in, so yesterday is the latest whole
@@ -69,8 +103,21 @@ export function selectCloudSource(simMs: number, nowMs: number): CloudSource {
   return { kind: 'static', reason: 'before-coverage' }
 }
 
-/** True when the sim day is today and shows the latest whole day instead. */
+/** Geostationary imagery for the sim time's 10-minute slot within the
+ * archive, over the daily composite; the daily composite alone outside it. */
+export function selectRealCloudSource(simMs: number, nowMs: number): CloudSource {
+  const daily = selectCloudSource(simMs, nowMs)
+  if (daily.kind !== 'gibs') return daily
+  const slot = selectGeoSlot(simMs, nowMs)
+  return slot === null ? daily : { kind: 'geo', time: geoTimeKey(slot), fallback: daily }
+}
+
+/** True when the sim time is today and shows the latest imagery instead: the
+ * latest whole day, or the latest published geostationary slot. */
 export function isLatestStandIn(source: CloudSource | null, simMs: number, nowMs: number): boolean {
+  if (source?.kind === 'geo') {
+    return utcDay(simMs) === utcDay(nowMs) && Date.parse(source.time) < geoSlot(simMs)
+  }
   return (
     source?.kind === 'gibs' &&
     utcDay(simMs) === utcDay(nowMs) &&
@@ -80,7 +127,7 @@ export function isLatestStandIn(source: CloudSource | null, simMs: number, nowMs
 
 /** The day before the source's, to fill its gaps from; null before the layer's
  * coverage. */
-export function fillDate(source: Extract<CloudSource, { kind: 'gibs' }>): string | null {
+export function fillDate(source: GibsSource): string | null {
   const day = Date.parse(source.date) - DAY_MS
   const from = source.layer === VIIRS.layer ? VIIRS_FROM : MODIS_FROM
   return day < from ? null : utcDayKey(day)
@@ -88,9 +135,9 @@ export function fillDate(source: Extract<CloudSource, { kind: 'gibs' }>): string
 
 /** snowLayer follows from layer, so it isn't part of the key. */
 export function sourceKey(source: CloudSource): string {
-  return source.kind === 'static'
-    ? `static:${source.reason}`
-    : `${source.layer}/${source.date}`
+  if (source.kind === 'static') return `static:${source.reason}`
+  if (source.kind === 'geo') return `geo/${source.time}/${sourceKey(source.fallback)}`
+  return `${source.layer}/${source.date}`
 }
 
 /** Row-major, top row first. */
@@ -316,13 +363,29 @@ export const initialCloudDayState: CloudDayState = {
   committed: null,
 }
 
+// Geostationary slots change every 10 sim minutes, so playback would refetch
+// constantly. A slot within GEO_NEAR_MS of the one shown must be wanted for
+// GEO_NEAR_SETTLE_MS: at real time it updates every 10 minutes, but during
+// fast playback the clouds only catch up in GEO_NEAR_MS steps (and not at all
+// once a slot lasts under SETTLE_MS of wall time) until it slows or stops.
+export const GEO_NEAR_MS = 3 * 3_600_000
+export const GEO_NEAR_SETTLE_MS = 12_000
+
+/** How long `next` must be wanted before it replaces `committed`. */
+export function settleMsFor(next: CloudSource, committed: CloudSource | null): number {
+  if (next.kind !== 'geo' || committed?.kind !== 'geo') return SETTLE_MS
+  const apart = Math.abs(Date.parse(next.time) - Date.parse(committed.time))
+  return apart < GEO_NEAR_MS ? GEO_NEAR_SETTLE_MS : SETTLE_MS
+}
+
 /** Debounces the wanted source key. The first key commits at once; later ones
- * once they have been wanted for SETTLE_MS. Returns the same state object when
+ * once they have been wanted for settleMs. Returns the same state object when
  * nothing changed, so calling it again in the same frame is a no-op. */
 export function stepCloudDay(
   prev: CloudDayState,
   desiredKey: string,
-  wallMs: number
+  wallMs: number,
+  settleMs: number = SETTLE_MS
 ): { state: CloudDayState; commit: string | null } {
   if (prev.committed === null) {
     return {
@@ -340,7 +403,7 @@ export function stepCloudDay(
       commit: null,
     }
   }
-  if (wallMs - prev.since >= SETTLE_MS) {
+  if (wallMs - prev.since >= settleMs) {
     return {
       state: { candidate: null, since: wallMs, committed: desiredKey },
       commit: desiredKey,
@@ -356,7 +419,7 @@ export function desiredCloudSource(
   jumpToMs: number | null,
   nowMs: number
 ): CloudSource {
-  return selectCloudSource(jumpToMs ?? simMs, nowMs)
+  return selectRealCloudSource(jumpToMs ?? simMs, nowMs)
 }
 
 export function isRetryable(failure: number | 'timeout' | 'network'): boolean {

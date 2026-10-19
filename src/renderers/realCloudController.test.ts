@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
-import { SETTLE_MS, type CloudSource } from '../real-clouds'
-import { createRealCloudController, type GibsSource } from './realCloudController'
+import { GEO_NEAR_SETTLE_MS, SETTLE_MS, type CloudSource } from '../real-clouds'
+import { createRealCloudController, type ImagerySource } from './realCloudController'
 
 const NOW = Date.UTC(2026, 9, 18, 15, 30)
 
@@ -21,7 +21,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 
 function setup() {
   const builds: {
-    source: GibsSource
+    source: ImagerySource
     signal: AbortSignal
     resolve: (t: FakeTexture | null) => void
   }[] = []
@@ -217,5 +217,27 @@ describe('realCloudController', () => {
     unsubscribe()
     expect(snap()).toBe(before)
     expect(notified).toBe(0)
+  })
+
+  test('geostationary slots: a nearby slot settles for longer, a far one as a day does', () => {
+    const { controller, builds } = setup()
+    const tick = (iso: string, wall: number) =>
+      controller.tick(Date.parse(iso), null, wall, NOW, 'static.jpg')
+    tick('2026-10-17T06:43:00Z', 0)
+    expect(builds.map((b) => b.source)).toMatchObject([
+      { kind: 'geo', time: '2026-10-17T06:40:00Z', fallback: { date: '2026-10-17' } },
+    ])
+    // Ten sim minutes on: waits GEO_NEAR_SETTLE_MS, not SETTLE_MS.
+    tick('2026-10-17T06:53:00Z', 1000)
+    tick('2026-10-17T06:53:00Z', 1000 + SETTLE_MS)
+    expect(builds).toHaveLength(1)
+    tick('2026-10-17T06:53:00Z', 1000 + GEO_NEAR_SETTLE_MS)
+    expect(builds).toHaveLength(2)
+    expect(builds[0].signal.aborted).toBe(true)
+    // A jump half a day away commits like a day change.
+    tick('2026-10-17T18:00:00Z', 20_000)
+    tick('2026-10-17T18:00:00Z', 20_000 + SETTLE_MS)
+    expect(builds).toHaveLength(3)
+    expect(builds[2].source).toMatchObject({ kind: 'geo', time: '2026-10-17T18:00:00Z' })
   })
 })

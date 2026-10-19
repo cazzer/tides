@@ -1,19 +1,26 @@
 // The shared state machine behind the real-weather cloud layer (tides-l3s).
 // Every View's EarthRenderer ticks one controller, and they all show the same
-// texture. Building a texture is injected, so this module needs no DOM.
+// texture. Building a texture is injected, so this module needs no DOM. A
+// source is a day of the daily composite or a geostationary slot over one
+// (tides-1zj); nearby slots settle for longer so playback doesn't refetch.
 import {
   desiredCloudSource,
   initialCloudDayState,
   MAX_CACHED_DAYS,
   pickEvictions,
+  settleMsFor,
   sourceKey,
   stepCloudDay,
   type CloudDayState,
   type CloudSource,
+  type GeoSource,
+  type GibsSource,
 } from '../real-clouds'
 
 export type CloudStatus = 'loading' | 'ready' | 'failed'
-export type GibsSource = Extract<CloudSource, { kind: 'gibs' }>
+export type { GibsSource }
+/** A source that needs imagery fetched. */
+export type ImagerySource = GibsSource | GeoSource
 
 export interface CloudSnapshot<T> {
   /** Null shows the static clouds. */
@@ -25,18 +32,20 @@ export interface CloudSnapshot<T> {
 
 export interface CloudControllerDeps<T> {
   /** Resolves null when no imagery could be had; may reject once aborted. */
-  build: (source: GibsSource, staticCloudsUrl: string, signal: AbortSignal) => Promise<T | null>
+  build: (source: ImagerySource, staticCloudsUrl: string, signal: AbortSignal) => Promise<T | null>
   dispose: (texture: T) => void
 }
 
 interface Build {
   key: string
-  source: GibsSource
+  source: ImagerySource
   abort: AbortController
 }
 
 export function createRealCloudController<T>({ build, dispose }: CloudControllerDeps<T>) {
   let day: CloudDayState = initialCloudDayState
+  // The source behind day.committed, for how long the next one must settle.
+  let committedSource: CloudSource | null = null
   let displayedKey: string | null = null
   let staticUrl = ''
   // Only ever the committed source: committing anything else aborts it.
@@ -58,7 +67,7 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     listeners.forEach((l) => l())
   }
 
-  function show(key: string, source: GibsSource) {
+  function show(key: string, source: ImagerySource) {
     const entry = cache.get(key)!
     entry.lastUsed = performance.now()
     displayedKey = key
@@ -78,7 +87,7 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     inFlight = null
   }
 
-  function start(source: GibsSource) {
+  function start(source: ImagerySource) {
     const current: Build = { key: sourceKey(source), source, abort: new AbortController() }
     inFlight = current
     build(source, staticUrl, current.abort.signal).then(
@@ -139,14 +148,23 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     ) {
       staticUrl = staticCloudsUrl
       const source = desiredCloudSource(simMs, jumpToMs, nowMs)
-      const step = stepCloudDay(day, sourceKey(source), wallMs)
+      const step = stepCloudDay(
+        day,
+        sourceKey(source),
+        wallMs,
+        settleMsFor(source, committedSource)
+      )
       day = step.state
-      if (step.commit) commit(source)
+      if (step.commit) {
+        committedSource = source
+        commit(source)
+      }
     },
     /** Stops fetching; the cache is kept for when Real weather comes back. */
     deactivate() {
       cancelInFlight()
       day = initialCloudDayState
+      committedSource = null
       displayedKey = null
       publish(initialSnapshot)
     },
