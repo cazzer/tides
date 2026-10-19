@@ -158,7 +158,10 @@ void main() {
     // and the weaker poleward part of the oval behind them.
     float band = smoothstep(diffuseLat - 1.0, diffuseLat + 2.0, mlat)
       * (1.0 - smoothstep(polLat - 1.5, polLat + 1.0, mlat));
-    float glow = band * (0.012 + 0.008 * meander) * (1.0 - 0.6 * smoothstep(2.0, 6.0, d));
+    // Faintest equatorward of the arcs, where it is mostly the diffuse
+    // aurora (subvisual to the eye).
+    float glow = band * (0.011 + 0.007 * meander)
+      * (0.5 + 0.5 * smoothstep(-2.0, 0.5, d)) * (1.0 - 0.6 * smoothstep(2.0, 6.0, d));
 
     // Height profiles. The curtains' lower border undulates a little.
     float base = 0.04 + 0.025 * fold;
