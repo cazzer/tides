@@ -1,5 +1,6 @@
 import { useId } from 'react'
-import { MODIS_FROM, utcDayKey } from './real-clouds'
+import { isLatestStandIn, MODIS_FROM, utcDayKey } from './real-clouds'
+import { useStore } from './store'
 import { useRealCloudSnapshot, type RealCloudSnapshot } from './renderers/realCloudTextures'
 
 const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
@@ -21,6 +22,12 @@ export function CloudAttribution() {
 
 function CloudSourceText({ snapshot: { source, status } }: { snapshot: RealCloudSnapshot }) {
   const acknowledgementId = useId()
+  // A boolean, so the per-frame timestamp only re-renders when it flips.
+  const latest = useStore(
+    (s) =>
+      s.timestamp != null &&
+      isLatestStandIn(source, s.jumpDate?.getTime() ?? s.timestamp, Date.now())
+  )
   if (!source) return null
   if (source.kind === 'static') {
     return source.reason === 'before-coverage'
@@ -48,7 +55,7 @@ function CloudSourceText({ snapshot: { source, status } }: { snapshot: RealCloud
       >
         {ACKNOWLEDGEMENT}
       </span>
-      {` · ${instrument} ${source.date}`}
+      {` · ${instrument} ${source.date}${latest ? ' (latest)' : ''}`}
     </>
   )
 }

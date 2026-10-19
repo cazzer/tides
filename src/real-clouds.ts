@@ -1,21 +1,34 @@
 // Date-matched clouds from NASA GIBS true-colour imagery (tides-l3s; spike
-// findings in tides-pdu). Pure logic only: which layer and day to show, the
-// tile URLs, the cloud-alpha maths and the day debounce. The browser side
+// findings in tides-pdu). A false-colour layer from the same instrument is
+// only a mask for seasonal snow and sea ice (tides-6bh). No-data gaps are
+// filled from the previous day before falling back to the static clouds
+// (tides-2t9). Pure logic only: which layers and days to show, the tile URLs,
+// the gap fill, the cloud-alpha maths and the day debounce. The browser side
 // lives in renderers/realCloudTextures.ts.
 
 const DAY_MS = 86_400_000
 
-// Daily true-colour composites of daytime passes. Ranges from the GIBS
-// capabilities document (2026-10-18). WMTS 404s outside them, so the client
-// checks the date itself.
+// Daily true-colour composites of daytime passes, each paired with the same
+// instrument's false colour, where snow and ice are cyan and cloud is white.
+// Ranges from the GIBS capabilities document (2026-10-18), the same for both
+// layers of a pair. WMTS 404s outside them, so the client checks the date
+// itself.
 export const VIIRS_FROM = Date.UTC(2015, 10, 24)
 export const MODIS_FROM = Date.UTC(2000, 1, 24)
-const VIIRS_LAYER = 'VIIRS_SNPP_CorrectedReflectance_TrueColor'
-const MODIS_LAYER = 'MODIS_Terra_CorrectedReflectance_TrueColor'
+const VIIRS = {
+  layer: 'VIIRS_SNPP_CorrectedReflectance_TrueColor',
+  snowLayer: 'VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1',
+} as const
+const MODIS = {
+  layer: 'MODIS_Terra_CorrectedReflectance_TrueColor',
+  snowLayer: 'MODIS_Terra_CorrectedReflectance_Bands721',
+} as const
+export type SnowLayer = typeof VIIRS.snowLayer | typeof MODIS.snowLayer
 
 // WMTS level 2 of the EPSG:4326 "250m" matrix is 5x3 tiles of 512px, 72 deg
-// each. The globe is the top-left 2560x1280, so the bottom tile row only
-// contributes its top 256px. Same equirectangular layout as the static clouds.
+// each, for both layers of a pair. The globe is the top-left 2560x1280, so the
+// bottom tile row only contributes its top 256px. Same equirectangular layout
+// as the static clouds.
 export const TILE = 512
 export const COLS = 5
 export const ROWS = 3
@@ -40,19 +53,40 @@ export function utcDayKey(ms: number): string {
 
 export type CloudSource =
   | { kind: 'static'; reason: 'before-coverage' | 'after-latest' }
-  | { kind: 'gibs'; layer: string; date: string }
+  | { kind: 'gibs'; layer: string; snowLayer: SnowLayer; date: string }
 
 export function selectCloudSource(simMs: number, nowMs: number): CloudSource {
-  const day = utcDay(simMs)
-  // Today's composite is still filling in, so yesterday is the latest whole day.
-  const latest = utcDay(nowMs) - DAY_MS
-  if (day > latest) return { kind: 'static', reason: 'after-latest' }
+  const today = utcDay(nowMs)
+  // Today's composite is still filling in, so yesterday is the latest whole
+  // day; today shows it rather than the static clouds (tides-x2f).
+  const latest = today - DAY_MS
+  const simDay = utcDay(simMs)
+  if (simDay > today) return { kind: 'static', reason: 'after-latest' }
+  const day = Math.min(simDay, latest)
   const date = utcDayKey(day)
-  if (day >= VIIRS_FROM) return { kind: 'gibs', layer: VIIRS_LAYER, date }
-  if (day >= MODIS_FROM) return { kind: 'gibs', layer: MODIS_LAYER, date }
+  if (day >= VIIRS_FROM) return { kind: 'gibs', ...VIIRS, date }
+  if (day >= MODIS_FROM) return { kind: 'gibs', ...MODIS, date }
   return { kind: 'static', reason: 'before-coverage' }
 }
 
+/** True when the sim day is today and shows the latest whole day instead. */
+export function isLatestStandIn(source: CloudSource | null, simMs: number, nowMs: number): boolean {
+  return (
+    source?.kind === 'gibs' &&
+    utcDay(simMs) === utcDay(nowMs) &&
+    source.date !== utcDayKey(simMs)
+  )
+}
+
+/** The day before the source's, to fill its gaps from; null before the layer's
+ * coverage. */
+export function fillDate(source: Extract<CloudSource, { kind: 'gibs' }>): string | null {
+  const day = Date.parse(source.date) - DAY_MS
+  const from = source.layer === VIIRS.layer ? VIIRS_FROM : MODIS_FROM
+  return day < from ? null : utcDayKey(day)
+}
+
+/** snowLayer follows from layer, so it isn't part of the key. */
 export function sourceKey(source: CloudSource): string {
   return source.kind === 'static'
     ? `static:${source.reason}`
@@ -77,19 +111,32 @@ export function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t)
 }
 
+/** GIBS fills areas without data with black; JPEG noise lifts it a little. */
+function isNoData(r: number, g: number, b: number): boolean {
+  return Math.max(r, g, b) < 12
+}
+
 function saturation(max: number, min: number): number {
   return max === 0 ? 0 : (max - min) / max
 }
 
-/** Cloud = bright and colourless: min(r,g,b) rejects ocean and vegetation,
- * the saturation term rejects tan desert. 0..255. */
+/** Cloud = bright and not warm: min(r,g,b) rejects ocean and vegetation, and
+ * is dimmed by how far red or green beats blue past a slight warm tint, which
+ * rejects desert and dry land. A blue tint is ocean through thin cloud, so it
+ * isn't penalised unless it is strong enough to be shallow water. The ramp is
+ * linear so thin cloud and cloud edges keep partial alpha.
+ * Calibrated on 2024-01-15 and 2023-09-20 (VIIRS) and 2010-01-15 (MODIS).
+ * 0..255. */
 export function cloudAlpha(r: number, g: number, b: number): number {
   const max = Math.max(r, g, b)
   const min = Math.min(r, g, b)
+  const rg = Math.max(r, g)
+  const warmth = rg > b ? (rg - b) / rg : 0
+  const v = (min / 255) * Math.max(0, 1 - 3.5 * Math.max(0, warmth - 0.05))
   return (
     255 *
-    smoothstep(0.32, 0.8, min / 255) *
-    (1 - smoothstep(0.12, 0.3, saturation(max, min)))
+    Math.min(1, Math.max(0, (v - 0.28) / (0.85 - 0.28))) *
+    (1 - smoothstep(0.25, 0.4, saturation(max, min)))
   )
 }
 
@@ -106,14 +153,132 @@ export function iceWeight(spec: number, r: number, g: number, b: number): number
   )
 }
 
+// Calibrated on 2024-01-15 (VIIRS) and 2010-01-15 (MODIS) samples; 7-2-1
+// renders ice cloud much more cyan than VIIRS does.
+export const SNOW_EDGES: Record<SnowLayer, readonly [number, number]> = {
+  [VIIRS.snowLayer]: [60, 110],
+  [MODIS.snowLayer]: [110, 160],
+}
+
+/** 0..1 snow/ice weight from a false-colour pixel: how much cyan beats red.
+ * min(g,b) because blue drops out on vegetation; an absolute difference
+ * because a ratio also removed cloud over ocean. */
+export function snowWeight(
+  r: number,
+  g: number,
+  b: number,
+  [lo, hi]: readonly [number, number]
+): number {
+  if (isNoData(r, g, b)) return 0
+  return smoothstep(lo, hi, Math.min(g, b) - r)
+}
+
+// Complete days have at most 0.06% no-data per column within ±45°, real gaps
+// at least 4.8%.
+export const FILL_GAP_FRACTION = 0.002
+
 /**
- * gibs and out are RGBA; staticAlpha and ice hold one byte per pixel. Pixels
- * GIBS has no data for (polar night, swath gaps, failed tiles) are black and
- * keep the static cloud alpha. Output is grey (RGB = alpha) and opaque, since
- * the cloud material reads its alphaMap from the green channel.
+ * Which tiles (row-major, like tileUrls) to fetch from fillDate: every row of a
+ * 512px column with gaps, and any tile whose primary true colour failed. gibs
+ * is the RGBA true-colour mosaic. Passes run pole to pole, so a gap spans the
+ * whole column; only ±45° is counted because polar night is no-data on
+ * complete days but never reaches that band. Failed tiles are left out of the
+ * count, since they are filled on their own.
+ */
+export function tilesToFill(gibs: ArrayLike<number>, failed: readonly boolean[]): boolean[] {
+  const wanted = failed.slice(0, COLS * ROWS)
+  for (let col = 0; col < COLS; col++) {
+    let gaps = 0
+    let counted = 0
+    for (let y = OUT_H / 4; y < (3 * OUT_H) / 4; y++) {
+      if (failed[Math.floor(y / TILE) * COLS + col]) continue
+      counted += TILE
+      for (let x = col * TILE, i = (y * OUT_W + x) * 4; x < (col + 1) * TILE; x++, i += 4) {
+        if (isNoData(gibs[i], gibs[i + 1], gibs[i + 2])) gaps++
+      }
+    }
+    if (counted > 0 && gaps / counted > FILL_GAP_FRACTION) {
+      for (let row = 0; row < ROWS; row++) wanted[row * COLS + col] = true
+    }
+  }
+  return wanted
+}
+
+// JPEG ringing and resampling darken the pixels next to a gap (half brightness
+// 1 px out, still dimmed 2 px out), which would read as a clear line along the
+// seam with the fill day or the static clouds.
+export const NO_DATA_GROW = 2
+
+/** Blackens the RGB of every pixel within NO_DATA_GROW px (a square) of a
+ * no-data pixel in a w x h RGBA image, so the fill and static fallback cover
+ * the darkened rim too. Failed tiles (row-major, like tileUrls) don't seed:
+ * their edges are clean, and the fill only writes inside them. Alpha bytes are
+ * left alone. */
+export function growNoData(
+  rgba: { [index: number]: number; length: number },
+  w: number,
+  h: number,
+  failed: readonly boolean[] = []
+): void {
+  const n = NO_DATA_GROW
+  // Separable: spread along rows, then blacken along columns.
+  const rows = new Uint8Array(w * h)
+  for (let y = 0, p = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, p++) {
+      if (failed[Math.floor(y / TILE) * COLS + Math.floor(x / TILE)]) continue
+      if (isNoData(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2])) {
+        rows.fill(1, p - Math.min(x, n), p + Math.min(w - 1 - x, n) + 1)
+      }
+    }
+  }
+  for (let y = 0, p = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, p++) {
+      if (!rows[p]) continue
+      for (let yy = Math.max(0, y - n); yy <= Math.min(h - 1, y + n); yy++) {
+        const i = (yy * w + x) * 4
+        rgba[i] = rgba[i + 1] = rgba[i + 2] = 0
+      }
+    }
+  }
+}
+
+/** gibs and falseColour are full-size RGBA; fillGibs and fillFalseColour are
+ * the fill day's RGBA for the w x h region at (x0, y0). Where gibs has no
+ * data, both take the fill day's colour; alpha bytes are left alone. */
+export function fillNoData(
+  gibs: { [index: number]: number; length: number },
+  falseColour: { [index: number]: number; length: number },
+  fillGibs: ArrayLike<number>,
+  fillFalseColour: ArrayLike<number>,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number
+): void {
+  for (let y = 0, j = 0; y < h; y++) {
+    for (let x = 0, i = ((y0 + y) * OUT_W + x0) * 4; x < w; x++, i += 4, j += 4) {
+      if (!isNoData(gibs[i], gibs[i + 1], gibs[i + 2])) continue
+      for (let c = 0; c < 3; c++) {
+        gibs[i + c] = fillGibs[j + c]
+        falseColour[i + c] = fillFalseColour[j + c]
+      }
+    }
+  }
+}
+
+/**
+ * gibs, falseColour and out are RGBA; staticAlpha and ice hold one byte per
+ * pixel. Pixels with no true colour on either day (polar night, swath gaps,
+ * failed tiles) are black and keep the static cloud alpha. Elsewhere the
+ * land-ice mask or false-colour snow, whichever is stronger, removes cloud;
+ * missing false colour is black and masks nothing. Output is grey (RGB =
+ * alpha) and opaque, since the cloud material reads its alphaMap from the green
+ * channel. out may alias gibs.
  */
 export function composeCloudAlpha(
   gibs: ArrayLike<number>,
+  falseColour: ArrayLike<number>,
+  snowEdges: readonly [number, number],
   staticAlpha: ArrayLike<number>,
   ice: ArrayLike<number>,
   out: { [index: number]: number; length: number }
@@ -122,10 +287,16 @@ export function composeCloudAlpha(
     const r = gibs[i]
     const g = gibs[i + 1]
     const b = gibs[i + 2]
-    const a =
-      Math.max(r, g, b) < 12
-        ? staticAlpha[p]
-        : cloudAlpha(r, g, b) * (1 - ice[p] / 255)
+    let a: number
+    if (isNoData(r, g, b)) {
+      a = staticAlpha[p]
+    } else {
+      a = cloudAlpha(r, g, b)
+      if (a > 0) {
+        const snow = snowWeight(falseColour[i], falseColour[i + 1], falseColour[i + 2], snowEdges)
+        a *= 1 - Math.max(ice[p] / 255, snow)
+      }
+    }
     out[i] = out[i + 1] = out[i + 2] = a
     out[i + 3] = 255
   }

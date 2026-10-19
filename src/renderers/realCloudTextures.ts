@@ -1,17 +1,23 @@
 // Browser side of the real-weather cloud layer (tides-l3s): fetches the GIBS
-// tiles and turns them into a cloud alphaMap for the shared controller. The
-// maths is in ../real-clouds.ts, the state machine in ./realCloudController.ts.
+// true- and false-colour tiles, plus the previous day's where they have gaps,
+// and turns them into a cloud alphaMap for the shared controller. The maths is
+// in ../real-clouds.ts, the state machine in ./realCloudController.ts.
 import { useEffect, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import {
   COLS,
   composeCloudAlpha,
+  fillDate,
+  fillNoData,
+  growNoData,
   iceWeight,
   isRetryable,
   OUT_H,
   OUT_W,
+  SNOW_EDGES,
   TILE,
   TILE_TIMEOUT_MS,
+  tilesToFill,
   tileUrls,
 } from '../real-clouds'
 import {
@@ -144,7 +150,20 @@ function getStaticAlpha(url: string): Promise<Uint8Array> {
   )
 }
 
-/** Null when every tile failed. Throws when aborted. */
+function tileValues(results: PromiseSettledResult<ImageBitmap | null>[]) {
+  return results.map((r) => (r.status === 'fulfilled' ? r.value : null))
+}
+
+/** Draws the tiles, then closes them to free their memory early. */
+function mosaic(ctx: CanvasRenderingContext2D, tiles: (ImageBitmap | null)[]) {
+  tiles.forEach((tile, i) => {
+    if (!tile) return
+    ctx.drawImage(tile, (i % COLS) * TILE, Math.floor(i / COLS) * TILE)
+    tile.close()
+  })
+}
+
+/** Null when every primary true-colour tile failed. Throws when aborted. */
 async function buildCloudTexture(
   source: GibsSource,
   staticUrl: string,
@@ -153,28 +172,92 @@ async function buildCloudTexture(
   // Lets a failed mask stop this build's tile downloads too.
   const local = new AbortController()
   const tileSignal = anySignal([signal, local.signal])
-  const settled = Promise.allSettled(
-    tileUrls(source.layer, source.date).map((url) => loadTile(url, tileSignal))
-  )
-  try {
-    const [staticAlpha, ice] = await Promise.all([
-      getStaticAlpha(staticUrl),
-      getIceMask(),
-    ]).catch((err: unknown) => {
+  const pending: Promise<PromiseSettledResult<ImageBitmap | null>[]>[] = []
+  /** Unwanted tiles resolve null without fetching. */
+  const load = (layer: string, date: string, wanted?: readonly boolean[]) => {
+    const settled = Promise.allSettled(
+      tileUrls(layer, date).map((url, i) =>
+        wanted && !wanted[i] ? null : loadTile(url, tileSignal)
+      )
+    )
+    pending.push(settled)
+    return settled
+  }
+  const trueSettled = load(source.layer, source.date)
+  const falseSettled = load(source.snowLayer, source.date)
+  const masks = Promise.all([getStaticAlpha(staticUrl), getIceMask()]).catch(
+    (err: unknown) => {
       local.abort()
       throw err
-    })
-    const tiles = (await settled).map((r) => (r.status === 'fulfilled' ? r.value : null))
+    }
+  )
+  // Awaited below; this only keeps an abort before then from leaving it
+  // unhandled.
+  masks.catch(() => {})
+  try {
+    const trueTiles = tileValues(await trueSettled)
     signal.throwIfAborted()
-    if (tiles.every((t) => t === null)) return null
+    const failed = trueTiles.map((t) => t === null)
+    if (failed.every(Boolean)) {
+      // A failed mask aborts the tiles, so report it rather than the tiles.
+      await masks
+      return null
+    }
 
-    // Missing tiles stay transparent black, which composeCloudAlpha reads as no data.
+    // Missing tiles stay transparent black: no data in true colour, no snow in
+    // false colour.
     const { canvas, ctx } = canvas2d(OUT_W, OUT_H)
-    tiles.forEach((tile, i) => {
-      if (tile) ctx.drawImage(tile, (i % COLS) * TILE, Math.floor(i / COLS) * TILE)
-    })
+    mosaic(ctx, trueTiles)
     const image = ctx.getImageData(0, 0, OUT_W, OUT_H)
-    composeCloudAlpha(image.data, staticAlpha, ice, image.data)
+    const wanted = tilesToFill(image.data, failed)
+    // After counting, so a complete day's stray no-data pixels don't add up to
+    // a gap.
+    growNoData(image.data, OUT_W, OUT_H, failed)
+    const date = fillDate(source)
+    const fillSettled =
+      date !== null && wanted.some(Boolean)
+        ? Promise.all([load(source.layer, date, wanted), load(source.snowLayer, date, wanted)])
+        : null
+    const [[staticAlpha, ice], falseResults, fillResults] = await Promise.all([
+      masks,
+      falseSettled,
+      fillSettled,
+    ])
+    signal.throwIfAborted()
+
+    ctx.clearRect(0, 0, OUT_W, OUT_H)
+    mosaic(ctx, tileValues(falseResults))
+    const falseColour = ctx.getImageData(0, 0, OUT_W, OUT_H).data
+    if (fillResults) {
+      const [fillTrue, fillFalse] = fillResults.map(tileValues)
+      fillTrue.forEach((tile, i) => {
+        if (!tile) return
+        const x = (i % COLS) * TILE
+        const y = Math.floor(i / COLS) * TILE
+        const h = Math.min(TILE, OUT_H - y)
+        const region = (bitmap: ImageBitmap | null) => {
+          ctx.clearRect(x, y, TILE, h)
+          if (bitmap) {
+            ctx.drawImage(bitmap, x, y)
+            bitmap.close()
+          }
+          return ctx.getImageData(x, y, TILE, h).data
+        }
+        const fillFalseColour = region(fillFalse[i])
+        const fillTrueColour = region(tile)
+        growNoData(fillTrueColour, TILE, h)
+        fillNoData(image.data, falseColour, fillTrueColour, fillFalseColour, x, y, TILE, h)
+      })
+    }
+
+    composeCloudAlpha(
+      image.data,
+      falseColour,
+      SNOW_EDGES[source.snowLayer],
+      staticAlpha,
+      ice,
+      image.data
+    )
     ctx.putImageData(image, 0, 0)
 
     const texture = new THREE.CanvasTexture(canvas)
@@ -182,8 +265,9 @@ async function buildCloudTexture(
     texture.colorSpace = THREE.NoColorSpace
     return texture
   } finally {
-    for (const r of await settled) {
-      if (r.status === 'fulfilled') r.value?.close()
+    // For the paths that return or throw before mosaic; close() is idempotent.
+    for (const results of await Promise.all(pending)) {
+      for (const tile of tileValues(results)) tile?.close()
     }
   }
 }
