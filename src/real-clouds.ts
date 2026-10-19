@@ -8,7 +8,7 @@
 // logic only:
 // which layers, days and slots to show, the tile URLs, the gap fill, the
 // cloud-alpha maths and the debounce. The browser side lives in
-// renderers/realCloudTextures.ts.
+// renderers/cloudPipeline.ts.
 
 export const DAY_MS = 86_400_000
 

@@ -5,7 +5,7 @@
 // can't see. Where none of them sees well (high latitudes, and Europe /
 // Africa / the western Indian Ocean, which would need Meteosat) the daily
 // VIIRS composite from real-clouds.ts shows through. Pure logic only; the
-// browser side is renderers/realCloudTextures.ts.
+// browser side is renderers/cloudPipeline.ts.
 import { COLS, OUT_H, OUT_W, ROWS, smoothstep, TILE } from './real-clouds.ts'
 
 const DAY_MS = 86_400_000
