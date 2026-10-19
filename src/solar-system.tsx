@@ -4,6 +4,8 @@ import { useTexture } from '@react-three/drei'
 import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
+import AuroraRenderer from './renderers/AuroraRenderer'
+import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
 import Sunlight from './renderers/Sunlight'
@@ -122,6 +124,8 @@ export default function SolarSystem({
             texture={earthTexture}
           />
         )}
+        {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
+        {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
       </OrbitingBody>
       {showOrbitLabels && <OrbitLabel radius={EARTH_ORBIT_RADIUS} />}
       <OrbitingBody
