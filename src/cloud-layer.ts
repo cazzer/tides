@@ -1,0 +1,166 @@
+// The cloud layer's geometry (tides-y2e): where the clouds sit above the
+// ground, how high their tops reach, and where a sunbeam meets them. The GLSL
+// in renderers/cloudShaders.ts mirrors these functions; keep them in step.
+//
+// Altitudes are scene units above the sea-level sphere, in the Earth's local
+// frame (the cloud and ground meshes share it). The scene is compressed, so
+// heights are exaggerated: terrain by the bump map's displacement scale, cloud
+// tops by CLOUD_UNITS_PER_KM. Lighting (sunset colour, the horizon dip) uses
+// true kilometres instead, since those effects don't scale with the scene.
+import { MAX_CLOUD_TOP_KM } from './geo-clouds'
+
+export { MAX_CLOUD_TOP_KM }
+
+export const EARTH_RADIUS_KM = 6371
+
+/** The ground's displacementScale: scene units at bump-map white. */
+export const TERRAIN_DISPLACEMENT = 0.075
+/** The bump map's brightest grey (Himalaya); bounds the cloud layer. */
+export const TERRAIN_MAX_GREY = 0.81
+/** Kilometres of elevation per unit of bump-map grey (geo-clouds' 1/39 per level). */
+export const TERRAIN_KM_PER_GREY = 255 / 39
+
+/** Gap between the (smoothed) ground and a cloud's base. */
+export const CLOUD_CLEARANCE = 0.006
+/** Cloud-top exaggeration: about 9x the true scale (terrain is about 25x). */
+export const CLOUD_UNITS_PER_KM = 0.004
+/** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */
+export const MIN_MEASURED_TOP_KM = 1
+
+/** Highest a cloud top can reach: the outer bound of the relief march. */
+export const CLOUD_LAYER_TOP =
+  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * MAX_CLOUD_TOP_KM
+
+/** The low-quality path's single flat shell: just clear of the highest
+ * ground (tides-7oi), at a typical low-cloud top. */
+export const CLOUD_FLAT_ALTITUDE =
+  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
+
+/** Where no satellite measured a top: thicker (brighter) cloud, taller tops. */
+export function defaultTopKm(alpha: number): number {
+  return 1.5 + 7 * alpha * alpha
+}
+
+/** The tallest top a texture can give, which bounds the relief march. */
+export function maxTopKm(measured: boolean): number {
+  return measured ? MAX_CLOUD_TOP_KM : defaultTopKm(1)
+}
+
+/**
+ * Cloud-top height above the ground (km) from a texel: r = measured height
+ * (0..1 of MAX_CLOUD_TOP_KM), coverage = how far r can be trusted (0..1),
+ * alpha = cloud opacity. measured = 0 for textures that carry no heights.
+ */
+export function cloudTopKm(r: number, coverage: number, alpha: number, measured: number): number {
+  const trust = coverage * measured
+  const fromIr = Math.max(r * MAX_CLOUD_TOP_KM, MIN_MEASURED_TOP_KM)
+  return defaultTopKm(alpha) * (1 - trust) + fromIr * trust
+}
+
+function smoothstep(e0: number, e1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)))
+  return t * t * (3 - 2 * t)
+}
+
+/** How much of its height a cloud's top keeps: thin edges sit low, so a
+ * cloud is a dome rather than a slab. */
+export function cloudShape(alpha: number): number {
+  return 0.25 + 0.75 * smoothstep(0, 0.65, alpha)
+}
+
+/** A cloud column: base and top altitudes over ground of the given bump grey. */
+export function cloudColumn(
+  alpha: number,
+  topKm: number,
+  terrainGrey: number
+): { base: number; top: number } {
+  const base = terrainGrey * TERRAIN_DISPLACEMENT + CLOUD_CLEARANCE
+  return { base, top: base + CLOUD_UNITS_PER_KM * topKm * cloudShape(alpha) }
+}
+
+export type Vec3 = [number, number, number]
+
+/**
+ * Texture coordinates of a local direction, matching THREE.SphereGeometry:
+ * u = 0.5 (Greenwich) at local +X, east toward -Z; v = 1 at the north (+Y).
+ */
+export function directionToUv([x, y, z]: Vec3): [number, number] {
+  const u = Math.atan2(z, -x) / (2 * Math.PI)
+  return [u - Math.floor(u), 0.5 + Math.asin(Math.max(-1, Math.min(1, y))) / Math.PI]
+}
+
+/**
+ * Distance along a ray from radius r0, at sine-of-elevation mu, to where it
+ * reaches radius r (outward). r must be at least r0.
+ */
+export function distanceToRadius(r0: number, mu: number, r: number): number {
+  return -r0 * mu + Math.sqrt(r0 * r0 * (mu * mu - 1) + r * r)
+}
+
+/**
+ * Where a sunbeam to the ground point (unit direction `ground`, at radius r0)
+ * crosses the altitude `altitude` above radius `seaLevel`: the cloud that
+ * would shade the point from there. Toward the Sun, by about
+ * height·tan(zenith) when the Sun is high.
+ */
+export function shadowCaster(
+  ground: Vec3,
+  sun: Vec3,
+  r0: number,
+  seaLevel: number,
+  altitude: number
+): Vec3 {
+  const mu = ground[0] * sun[0] + ground[1] * sun[1] + ground[2] * sun[2]
+  const t = distanceToRadius(r0, mu, seaLevel + altitude)
+  const p: Vec3 = [
+    ground[0] * r0 + sun[0] * t,
+    ground[1] * r0 + sun[1] * t,
+    ground[2] * r0 + sun[2] * t,
+  ]
+  const len = Math.hypot(...p)
+  return [p[0] / len, p[1] / len, p[2] / len]
+}
+
+/** Sine of how far below the horizon the Sun can be and still light a cloud
+ * top at heightKm (true scale). */
+export function horizonDipSin(heightKm: number): number {
+  const c = EARTH_RADIUS_KM / (EARTH_RADIUS_KM + Math.max(0, heightKm))
+  return Math.sqrt(Math.max(0, 1 - c * c))
+}
+
+/** Kasten & Young's relative air mass at sine-of-elevation mu, held at the
+ * horizon's for a Sun below it. */
+export function airMass(mu: number): number {
+  const zenith = Math.min(90, (Math.acos(Math.max(-1, Math.min(1, mu))) * 180) / Math.PI)
+  return 1 / (Math.cos((zenith * Math.PI) / 180) + 0.50572 * (96.07995 - zenith) ** -1.6364)
+}
+
+/** Vertical optical depth (red, green, blue) at sea level: Rayleigh plus a
+ * little haze, softened a touch for taste. */
+export const SUNLIGHT_EXTINCTION: Vec3 = [0.045, 0.1, 0.22]
+const SCALE_HEIGHT_KM = 8
+
+/** Sunset light keeps at least this much of its red's brightness. */
+export const SUNSET_FLOOR = 0.3
+
+/** Sunlight's colour reaching a cloud top: white with the Sun overhead,
+ * reddening toward the terminator. It keeps the colour of the extinction but
+ * not all its dimming (red stays near 1), since the low Sun's light on cloud
+ * is what makes the terminator glow. */
+export function sunlightTint(mu: number, heightKm: number): Vec3 {
+  const m = airMass(mu) - 1
+  const thin = Math.exp(-Math.max(0, heightKm) / SCALE_HEIGHT_KM)
+  const t = SUNLIGHT_EXTINCTION.map((tau) => Math.exp(-tau * thin * m))
+  const norm = Math.max(t[0], SUNSET_FLOOR)
+  return t.map((c) => c / norm) as Vec3
+}
+
+/** The static clouds drift east at this many radians per frame. */
+export const STATIC_DRIFT_PER_FRAME = 0.0001
+
+/** Texture-u offset of the static clouds after a drift of `radians`: the
+ * cloud seen at Earth u was painted at u - offset. */
+export function driftOffset(radians: number): number {
+  const u = radians / (2 * Math.PI)
+  return u - Math.floor(u)
+}

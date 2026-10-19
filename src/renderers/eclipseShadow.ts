@@ -93,9 +93,22 @@ function inject(source: string, chunk: string, code: string): string {
   return source.replace(include, `${include}\n${code}`)
 }
 
+/** The patch's GLSL, for shaders written whole (the cloud layer): declare
+ * the heads, run vertexBody after `position` is known, and call
+ * eclipseSunlight(vEclipsePoint) when uEclipseActive > 0.5. */
+export const ECLIPSE_GLSL = {
+  vertexHead: VERTEX_HEAD,
+  vertexBody: VERTEX_BODY,
+  fragmentHead: FRAGMENT_HEAD,
+}
+
+export type MaterialPatch = Pick<THREE.Material, 'onBeforeCompile' | 'customProgramCacheKey'>
+
 export interface EclipseShadow {
   update(t: number): void
-  material: Pick<THREE.Material, 'onBeforeCompile' | 'customProgramCacheKey'>
+  material: MaterialPatch
+  /** Shared with every material the shadow is spread onto. */
+  uniforms: Record<string, THREE.IUniform>
 }
 
 export function createEclipseShadow(body: ShadedBody): EclipseShadow {
@@ -110,6 +123,7 @@ export function createEclipseShadow(body: ShadedBody): EclipseShadow {
     uEclipseGlow: { value: UMBRA_GLOW[body] },
   }
   return {
+    uniforms,
     update(t) {
       updateEclipseShading(shading, body, t)
       uniforms.uEclipseActive.value = shading.active ? 1 : 0
@@ -141,11 +155,25 @@ export function createEclipseShadow(body: ShadedBody): EclipseShadow {
 
 // One shadow per body; share it between that body's materials (the Earth's
 // ground and cloud shell).
-export function useEclipseShadow(body: ShadedBody): EclipseShadow['material'] {
+export function useEclipseShadowState(body: ShadedBody): EclipseShadow {
   const shadow = useMemo(() => createEclipseShadow(body), [body])
   useFrame(() => {
     const { timestamp } = useStore.getState()
     if (typeof timestamp === 'number') shadow.update(timestamp)
   })
-  return shadow.material
+  return shadow
+}
+
+export function useEclipseShadow(body: ShadedBody): EclipseShadow['material'] {
+  return useEclipseShadowState(body).material
+}
+
+/** Two onBeforeCompile patches applied in turn, under a combined cache key. */
+export function composePatches(...patches: MaterialPatch[]): MaterialPatch {
+  return {
+    onBeforeCompile(shader, renderer) {
+      for (const p of patches) p.onBeforeCompile(shader, renderer)
+    },
+    customProgramCacheKey: () => patches.map((p) => p.customProgramCacheKey()).join('+'),
+  }
 }
