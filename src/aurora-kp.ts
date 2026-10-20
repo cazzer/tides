@@ -5,6 +5,9 @@
 // Sources, all CORS-open:
 // - NOAA SWPC, last ~7 days (3-hourly, updated through the day):
 //   https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json
+// - NOAA SWPC's 3-day forecast (the same week observed, then ~3 days
+//   predicted, issued a few times a day):
+//   https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json
 // - CelesTrak space-weather files (CSSI format, 8 Kp per day in tenths,
 //   definitive values from GFZ Potsdam):
 //   https://celestrak.org/SpaceData/SW-Last5Years.csv (~260 kB)
@@ -14,6 +17,8 @@
 
 export const SWPC_KP_URL =
   'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json'
+export const SWPC_FORECAST_URL =
+  'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json'
 export const CELESTRAK_RECENT_URL = 'https://celestrak.org/SpaceData/SW-Last5Years.csv'
 export const CELESTRAK_ALL_URL = 'https://celestrak.org/SpaceData/SW-All.csv'
 
@@ -25,6 +30,9 @@ export const SLOT_MS = 3 * HOUR
 export const KP_ARCHIVE_FROM = Date.UTC(1957, 9, 1)
 /** SWPC's file holds about a week; ask it for anything newer than this. */
 export const SWPC_SPAN_MS = 6.5 * DAY
+/** The SWPC forecast reaches about three days ahead; ask it for anything
+ * up to this far past now. */
+export const FORECAST_SPAN_MS = 4 * DAY
 /** SW-Last5Years starts on 1 January five years back; stay well inside. */
 export const RECENT_SPAN_MS = 4 * 365 * DAY
 /** The latest slot's value is carried this far past its end, so "now" uses
@@ -57,8 +65,9 @@ function parseUtc(tag: string): number {
   return Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`)
 }
 
-/** SWPC's planetary K-index product: either an array of objects
- * ({time_tag, Kp}) or the older array of rows with a header row. */
+/** SWPC's planetary K-index products: either an array of objects
+ * ({time_tag, Kp} observed, {time_tag, kp, observed} forecast) or the older
+ * array of rows with a header row. */
 export function parseSwpcKp(json: unknown): KpSeries {
   if (!Array.isArray(json)) throw new Error('SWPC Kp: expected an array')
   const samples: { t: number; kp: number }[] = []
@@ -140,26 +149,38 @@ export function kpAt(s: KpSeries, ms: number): number | null {
   return s.kp[i] + f * (s.kp[j] - s.kp[i])
 }
 
-export type KpSourceKind = 'swpc' | 'celestrak-recent' | 'celestrak-all'
+export type KpSourceKind = 'swpc' | 'swpc-forecast' | 'celestrak-recent' | 'celestrak-all'
 
-/** The cheapest file that covers `simMs`; null when nothing can (the future,
- * or before 1957). */
+/** The cheapest file that covers `simMs`; null when nothing can (past the
+ * forecast, or before 1957). */
 export function kpSourceFor(simMs: number, nowMs: number): KpSourceKind | null {
-  if (simMs > nowMs + CARRY_MS || simMs < KP_ARCHIVE_FROM) return null
+  if (simMs > nowMs + CARRY_MS) {
+    return simMs <= nowMs + FORECAST_SPAN_MS ? 'swpc-forecast' : null
+  }
+  if (simMs < KP_ARCHIVE_FROM) return null
   if (simMs >= nowMs - SWPC_SPAN_MS) return 'swpc'
   if (simMs >= nowMs - RECENT_SPAN_MS) return 'celestrak-recent'
   return 'celestrak-all'
 }
 
-/** Lookup order: the freshest data first. */
-const PRIORITY: readonly KpSourceKind[] = ['swpc', 'celestrak-recent', 'celestrak-all']
+/** Lookup order: the freshest observations first, predictions last. */
+const PRIORITY: readonly KpSourceKind[] = [
+  'swpc',
+  'celestrak-recent',
+  'celestrak-all',
+  'swpc-forecast',
+]
+
+/** The SWPC files change through the day; the archives don't. */
+const LIVE: ReadonlySet<KpSourceKind> = new Set(['swpc', 'swpc-forecast'])
 
 /** How long a source must be wanted before it is downloaded, so scrubbing
  * past 1990 doesn't start the 2.9 MB archive. */
 export const KP_SETTLE_MS = 1500
 /** Wait before retrying a failed download. */
 export const KP_RETRY_MS = 5 * 60_000
-/** Re-download SWPC this often while it is in use (it updates every slot). */
+/** Re-download the SWPC files this often while in use (the observations
+ * update every slot). */
 export const SWPC_REFRESH_MS = 30 * 60_000
 
 interface SourceState {
@@ -199,7 +220,7 @@ export function createKpFeed({ load }: KpFeedDeps) {
     if (!s) return true
     if (s.loading) return false
     if (s.failed) return wallMs - s.at >= KP_RETRY_MS
-    return kind === 'swpc' && wallMs - s.at >= SWPC_REFRESH_MS
+    return LIVE.has(kind) && wallMs - s.at >= SWPC_REFRESH_MS
   }
 
   function start(kind: KpSourceKind, wallMs: number) {

@@ -61,6 +61,20 @@ describe('parseSwpcKp', () => {
     expect(s.kp[1]).toBe(9)
   })
 
+  test('forecast rows (lower-case kp, observed and predicted)', () => {
+    const s = parseSwpcKp([
+      { time_tag: '2026-10-20T00:00:00', kp: 2.33, observed: 'observed', noaa_scale: null },
+      { time_tag: '2026-10-20T03:00:00', kp: 3.67, observed: 'estimated', noaa_scale: null },
+      { time_tag: '2026-10-22T21:00:00', kp: 5.0, observed: 'predicted', noaa_scale: 'G1' },
+    ])
+    expect(Array.from(s.t)).toEqual([
+      Date.UTC(2026, 9, 20, 0),
+      Date.UTC(2026, 9, 20, 3),
+      Date.UTC(2026, 9, 22, 21),
+    ])
+    expect(s.kp[2]).toBe(5)
+  })
+
   test('not an array', () => {
     expect(() => parseSwpcKp({})).toThrow()
   })
@@ -110,7 +124,10 @@ describe('kpSourceFor', () => {
     [Date.UTC(2024, 4, 11), 'celestrak-recent'],
     [Date.UTC(2003, 9, 29), 'celestrak-all'],
     [Date.UTC(1950, 0, 1), null],
-    [now + DAY, null],
+    [now + CARRY_MS + 1, 'swpc-forecast'],
+    [now + DAY, 'swpc-forecast'],
+    [now + 3 * DAY, 'swpc-forecast'],
+    [now + 5 * DAY, null],
   ])('%i → %s', (sim, kind) => {
     expect(kpSourceFor(sim, now)).toBe(kind)
   })
@@ -195,6 +212,29 @@ describe('createKpFeed', () => {
     expect(feed.tick(now + 30 * DAY, null, 0, now)).toBeNull()
     expect(feed.tick(Date.UTC(1900, 0, 1), null, 5000, now)).toBeNull()
     expect(load).not.toHaveBeenCalled()
+  })
+
+  test('future times use the forecast; observations win where both cover', async () => {
+    const observed: KpSeries = { t: new Float64Array([now - 3 * HOUR]), kp: new Float32Array([4]) }
+    const forecast: KpSeries = {
+      t: new Float64Array([now - 3 * HOUR, now, now + DAY]),
+      kp: new Float32Array([1, 1, 6]),
+    }
+    const { load, feed } = setup(async (kind) => (kind === 'swpc-forecast' ? forecast : observed))
+    const tomorrow = now + DAY + 1.5 * HOUR
+    expect(feed.tick(tomorrow, null, 0, now)).toBeNull()
+    expect(load).toHaveBeenCalledWith('swpc-forecast')
+    await flush()
+    expect(feed.tick(tomorrow, null, 10, now)).toBe(6)
+    // Back to now: observed SWPC loads once settled and outranks the forecast.
+    expect(feed.tick(now - 1.5 * HOUR, null, 20, now)).toBe(1)
+    feed.tick(now - 1.5 * HOUR, null, 20 + KP_SETTLE_MS, now)
+    await flush()
+    expect(feed.tick(now - 1.5 * HOUR, null, 30 + KP_SETTLE_MS, now)).toBe(4)
+    // The forecast is refreshed while in use, like the observations.
+    feed.tick(tomorrow, null, SWPC_REFRESH_MS + 40, now)
+    feed.tick(tomorrow, null, SWPC_REFRESH_MS + KP_SETTLE_MS + 50, now)
+    expect(load.mock.calls.filter(([k]) => k === 'swpc-forecast')).toHaveLength(2)
   })
 
   test('deactivate discards in-flight results', async () => {

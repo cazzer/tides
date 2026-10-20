@@ -1,7 +1,8 @@
 // Northern and southern lights (tides-qe5): a thin shell above the clouds,
 // ray-marched in the fragment shader. The ovals follow the geomagnetic poles
-// and Kp (see ../aurora.ts); with Real weather, Kp comes from NOAA SWPC or the
-// CelesTrak archive for the sim time (see ../aurora-kp.ts).
+// and Kp (see ../aurora.ts); with Real weather, Kp comes from NOAA SWPC (the
+// last week observed, the next ~3 days forecast) or the CelesTrak archive for
+// the sim time (see ../aurora-kp.ts).
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
