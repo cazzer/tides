@@ -5,18 +5,19 @@
 // crosses sqrt(2πpH)·exp(−(p−R)/H) of it. Over the disc it is faded out
 // just inside the limb rather than drawn as H/cos(z): the day side is
 // already bright, and a full haze washes it out. Lit where it is thickest.
+// Shared by the Earth (AtmosphereRenderer) and the planets (PlanetAtmosphere),
+// which pass their own sky and dusk colours (linear RGB).
 
 uniform float uSurface;
 uniform float uOuter;
 uniform float uScaleHeight;
 uniform vec3 uSun;
 uniform float uGain;
+uniform vec3 uSky;
+uniform vec3 uDusk;
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
-
-const vec3 SKY = vec3(0.30, 0.55, 1.0);
-const vec3 DUSK = vec3(1.0, 0.45, 0.2);
 
 void main() {
   vec3 ro = vRayOrigin;
@@ -46,7 +47,7 @@ void main() {
   float dusk = 1.0 - smoothstep(0.0, 0.35, mu);
   float glow = (column / grazing) * lit * uGain;
   // Compress the brightness, not each channel, so the limb stays blue.
-  vec3 col = mix(SKY, DUSK, dusk * 0.6) * (glow / (1.0 + glow));
+  vec3 col = mix(uSky, uDusk, dusk * 0.6) * (glow / (1.0 + glow));
   gl_FragColor = vec4(col, 1.0);
 
   #include <tonemapping_fragment>

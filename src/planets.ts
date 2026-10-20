@@ -52,7 +52,7 @@ export function sceneDistance(rAu: number): number {
   return F_R0 * (1 + K * Math.log(rAu / R0))
 }
 
-// The diameter scale solar-system.tsx uses for the Sun, Earth and Moon (Moon
+// The diameter scale shared with the Sun, Earth and Moon (Moon
 // 1 ↔ Sun 10); the value is used as a sphere radius.
 export const sceneRadius = scaleLog()
   .domain([3474800, 1392700000])

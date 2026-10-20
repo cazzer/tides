@@ -1,6 +1,6 @@
-// Ray-marched shells around the Earth (aurora, atmosphere; tides-qe5). Done in
-// the Earth's local frame so the fragment shaders can march through the shell
-// in geographic terms.
+// Ray-marched shells around the Earth (aurora, atmosphere; tides-qe5) and the
+// planets (PlanetAtmosphere; tides-kzj.2.4). Done in the body's local frame so
+// the fragment shaders can march through the shell in geographic terms.
 varying vec3 vPos;
 // Perspective: the camera position. Orthographic (the main view): a point
 // well behind the fragment along the view direction.

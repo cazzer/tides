@@ -13,6 +13,9 @@ import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 const SURFACE = 1.012
 const OUTER = 1.06
 const SCALE_HEIGHT = 0.0095
+// Linear RGB: blue overhead, reddening toward the terminator.
+const SKY = new THREE.Vector3(0.3, 0.55, 1.0)
+const DUSK = new THREE.Vector3(1.0, 0.45, 0.2)
 
 const noRaycast = () => null
 
@@ -28,6 +31,8 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
           uScaleHeight: { value: 0 },
           uSun: { value: new THREE.Vector3(1, 0, 0) },
           uGain: { value: 1.2 },
+          uSky: { value: SKY },
+          uDusk: { value: DUSK },
         },
         transparent: true,
         depthWrite: false,

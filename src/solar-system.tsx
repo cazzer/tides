@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from 'react'
+import { Suspense, useRef, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useTexture } from '@react-three/drei'
 import OrbitingBody from './OrbitingBody'
@@ -9,11 +9,12 @@ import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
 import SceneLights from './renderers/SceneLights'
-import { scaleLog } from 'd3'
 import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
 import { mainViewRange } from './main-view'
 import { OrbitLabel } from './orbit-label'
+import { PlanetBodies } from './PlanetBodies'
+import { sceneRadius } from './planets'
 import { useStore } from './store'
 import {
   DEFAULT_SURFACE_LOCATION,
@@ -36,8 +37,7 @@ import {
   sunSpin,
 } from './ephemeris'
 
-const scaleDiameter = scaleLog().domain([3474800, 1392700000]).range([1, 10])
-const EARTH_DIAMETER = scaleDiameter(12742000)
+const EARTH_DIAMETER = sceneRadius(12742000)
 
 useTexture.preload(earthTextureHigh)
 
@@ -107,7 +107,7 @@ export default function SolarSystem({
         interactive={interactive}
       >
         <SunRenderer
-          diameter={scaleDiameter(1392700000)}
+          diameter={sceneRadius(1392700000)}
         />
       </OrbitingBody>
       <OrbitingBody
@@ -136,16 +136,22 @@ export default function SolarSystem({
       <OrbitingBody
         ref={moon}
         focusKey="moon"
-        diameter={scaleDiameter(3474800)}
+        diameter={sceneRadius(3474800)}
         positionAt={moonPositionAt}
         orientationAt={moonOrientation}
         interactive={interactive}
       >
         <MoonRenderer
-          diameter={scaleDiameter(3474800)}
+          diameter={sceneRadius(3474800)}
           texture={moonTexture}
         />
       </OrbitingBody>
+      {/* Orbital views only; their textures must not suspend the scene. */}
+      {showPlanets && !earthCamera && !moonCamera && (
+        <Suspense fallback={null}>
+          <PlanetBodies interactive={interactive} />
+        </Suspense>
+      )}
     </CameraProvider>
   )
 }
