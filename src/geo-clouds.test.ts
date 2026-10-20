@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
+  bridgeGaps,
   calibrateVisible,
   CLEAR_DT,
   cloudTopKm,
@@ -421,6 +422,50 @@ describe('cloud alpha', () => {
   })
 })
 
+describe('bridgeGaps', () => {
+  const rowOf = (values: number[]) => {
+    const t = new Float32Array(OUT_W * 2).fill(5)
+    values.forEach((v, i) => (t[OUT_W + i] = v))
+    return t
+  }
+
+  test('fills a one-pixel gap with the mean of its neighbours', () => {
+    const t = rowOf([10, NaN, 20])
+    bridgeGaps(t, Number.isNaN)
+    expect(t[OUT_W + 1]).toBe(15)
+  })
+
+  test('bridges the antimeridian, wrapping in x', () => {
+    const t = new Float32Array(OUT_W * 2).fill(5)
+    t[OUT_W + OUT_W - 2] = 10
+    t[OUT_W + OUT_W - 1] = NaN
+    t[OUT_W] = 20
+    t[0] = NaN
+    bridgeGaps(t, Number.isNaN)
+    expect(t[OUT_W + OUT_W - 1]).toBe(15)
+    expect(t[0]).toBe(5)
+  })
+
+  test('leaves wider gaps and the limbs missing', () => {
+    const t = rowOf([10, NaN, NaN, 20])
+    for (let x = 100; x < OUT_W; x++) t[OUT_W + x] = NaN
+    bridgeGaps(t, Number.isNaN)
+    expect(t[OUT_W + 1]).toBeNaN()
+    expect(t[OUT_W + 2]).toBeNaN()
+    expect(t[OUT_W + 100]).toBeNaN()
+    expect(t[OUT_W + OUT_W - 1]).toBeNaN()
+  })
+
+  test("visibleGrey's 0 is missing too", () => {
+    const v = new Uint8Array(OUT_W).fill(0)
+    v[0] = 100
+    v[2] = 200
+    bridgeGaps(v, (x) => x === 0)
+    expect(v[1]).toBe(150)
+    expect(v[3]).toBe(0)
+  })
+})
+
 describe('composeGeoClouds', () => {
   const fallback = (alpha: number) => {
     const rgba = new Uint8ClampedArray(N * 4)
@@ -451,6 +496,28 @@ describe('composeGeoClouds', () => {
     // Africa and the poles: the composite.
     expect(px(out, 30, 0)).toEqual([0, 100, 0, 255])
     expect(px(out, -137, 85)).toEqual([0, 100, 0, 255])
+  })
+
+  test("Himawari's half-drawn column at 179.86°E leaves no seam once bridged (tides-uwv)", () => {
+    // GOES-West sees clear sky, Himawari cloud; both see the dateline, so it
+    // lies in their crossfade. GIBS's last Himawari column is no data.
+    const compose = (bridge: boolean) => {
+      const temps = uniform(20)
+      const himawari = temps[GEO_SATELLITES.indexOf(HIMAWARI)].fill(-10)
+      for (let p = OUT_W - 1; p < N; p += OUT_W) himawari[p] = NaN
+      if (bridge) for (const t of temps) bridgeGaps(t, Number.isNaN)
+      const out = fallback(0)
+      composeGeoClouds({ temps, vis: [null, null, null], timeMs }, null, out, out)
+      return out
+    }
+    const alpha = (out: Uint8ClampedArray, x: number) => out[(row(20) * OUT_W + x) * 4 + 1]
+    // How far a column stands out from the line through its neighbours: the
+    // crossfade itself is a gentle slope.
+    const kink = (out: Uint8ClampedArray, x: number) =>
+      Math.abs(alpha(out, x - 1) + alpha(out, (x + 1) % OUT_W) - 2 * alpha(out, x))
+    expect(kink(compose(false), OUT_W - 1)).toBeGreaterThan(100)
+    const out = compose(true)
+    for (const x of [OUT_W - 3, OUT_W - 2, OUT_W - 1]) expect(kink(out, x)).toBeLessThanOrEqual(2)
   })
 
   test('cloud tops carry their height in red', () => {
