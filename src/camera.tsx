@@ -25,7 +25,12 @@ import {
 } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
-import { MAIN_ZOOM, focusedRef, planetFramingZoom } from './main-view'
+import {
+  MAIN_ZOOM,
+  focusedRef,
+  planetFramingZoom,
+  planetsNear,
+} from './main-view'
 import {
   clampTilt,
   pivotDepth,
@@ -257,6 +262,27 @@ function useEarthPivot(
   })
 }
 
+/**
+ * With planets on, moves the main view's near plane with the zoom
+ * (planetsNear); off, it stays at 0 as it always was.
+ */
+function usePlanetsNear() {
+  useFrame(({ camera, controls }) => {
+    const ortho = camera as OrthographicCamera
+    if (!controls || !ortho.isOrthographicCamera) return
+    const near = useStore.getState().showPlanets
+      ? planetsNear(
+          ortho.zoom,
+          ortho.position.distanceTo((controls as OrbitControlsImpl).target)
+        )
+      : 0
+    if (near !== ortho.near) {
+      ortho.near = near
+      ortho.updateProjectionMatrix()
+    }
+  })
+}
+
 const FRAMING_EASE = 0.05
 
 /** The zoom framing eases toward, or null while a planet hasn't registered. */
@@ -341,6 +367,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
     connected || canvas
   )
   usePlanetFraming(cameraFocus)
+  usePlanetsNear()
 
   useFrame((state) => {
     const target = new Vector3()

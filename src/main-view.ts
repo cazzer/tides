@@ -16,24 +16,43 @@ export function planetFramingZoom(radius: number, earthRadius: number): number {
   )
 }
 
+/** Zooming out no further than this keeps the starfield's edge off screen. */
+export const PLANETS_MIN_ZOOM = 1
+
 /**
- * Main view clipping and starfield size. Planets reach ~350 units from the Sun,
- * so with them on the ortho camera keeps everything up to 1000 units behind its
- * eye (near < 0) and the stars sit beyond the farthest planet while their back
- * hemisphere stays clipped. Off, these are the values the view always had
- * (far is three's default, minZoom OrbitControls', and an undefined
- * starRadius keeps Starfield's).
+ * Main view zoom floor and starfield size. With planets on, the stars sit
+ * beyond every body planetsNear lets through (see main-view.test.ts). Off,
+ * these are the values the view always had (minZoom is OrbitControls'
+ * default, and an undefined starRadius keeps Starfield's).
  */
 export function mainViewRange(showPlanets: boolean): {
-  near: number
-  far: number
   minZoom: number
   starRadius: number | undefined
 } {
-  // minZoom keeps the starfield's edge (and its clipped back half) off screen.
   return showPlanets
-    ? { near: -1000, far: 2000, minZoom: 1, starRadius: 1500 }
-    : { near: 0, far: 2000, minZoom: 0, starRadius: undefined }
+    ? { minZoom: PLANETS_MIN_ZOOM, starRadius: 1500 }
+    : { minZoom: 0, starRadius: undefined }
+}
+
+/**
+ * How far in front of the target the main view draws at `zoom`: 800 units
+ * once zoomed out to the whole system (bodies sit within ~360 of the Sun, so
+ * two are at most ~720 apart), shrinking with the square of the zoom so that
+ * from zoom ~3.2 in, i.e. at every planet's framing, it is inside the eye.
+ */
+export function planetsDrawDepth(zoom: number): number {
+  return 800 / Math.max(zoom, PLANETS_MIN_ZOOM) ** 2
+}
+
+/**
+ * The ortho near plane with planets on, for an eye `eyeDistance` behind the
+ * target. Never past the eye up close, so a planet behind the eye (an ortho
+ * camera would draw it over the target) stays hidden, as Earth's neighbours
+ * always were; zoomed out it reaches back to take in the whole system, which
+ * is the same picture as pulling the eye back that far.
+ */
+export function planetsNear(zoom: number, eyeDistance: number): number {
+  return Math.min(0, eyeDistance - planetsDrawDepth(zoom))
 }
 
 /**

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { OrthographicCamera } from 'three'
 import {
   MAIN_ZOOM,
   focusedRef,
   mainViewRange,
   planetFramingZoom,
+  planetsNear,
 } from './main-view'
+import { PLANETS } from './planets'
 
 describe('planetFramingZoom', () => {
   const EARTH = 2.95
@@ -27,29 +30,63 @@ describe('planetFramingZoom', () => {
 describe('mainViewRange', () => {
   it('leaves the planets-off view exactly as it was', () => {
     expect(mainViewRange(false)).toEqual({
-      near: 0,
-      far: 2000,
       minZoom: 0,
       starRadius: undefined,
     })
   })
+})
 
-  it('keeps everything within Neptune range between the clip planes and in front of the stars', () => {
-    const { near, far, starRadius } = mainViewRange(true)
-    // Bodies sit within ~360 units of the Sun, the target too; the eye is at
-    // most OrbitControls' maxDistance (80) behind the target.
-    const extent = 2 * 360
-    const eye = 80
-    expect(near).toBeLessThan(5 - extent)
-    expect(far).toBeGreaterThan(eye + extent)
-    expect(far).toBeGreaterThanOrEqual(starRadius!)
-    // Stars more than ~45° off the view axis are well off screen even zoomed
-    // out to the whole system; inside that cone the front ones lie behind every
-    // body and the back ones beyond the near plane.
+describe('planetsNear', () => {
+  // The eye sits OrbitControls' maxDistance (and CLOCK_VIEW.distance) behind
+  // the target.
+  const EYE = 80
+  const EARTH = 2.95
+  // Bodies sit within ~360 units of the Sun (Neptune's aphelion surface ~327).
+  const SYSTEM_RADIUS = 360
+
+  it('draws nothing behind the eye at the default zoom or any planet framing', () => {
+    expect(planetsNear(MAIN_ZOOM, EYE)).toBe(0)
+    for (const { key, radius } of Object.values(PLANETS)) {
+      const zoom = planetFramingZoom(radius, EARTH)
+      expect(planetsNear(zoom, EYE), key).toBe(0)
+    }
+  })
+
+  it('reaches every body, wherever the target is, zoomed all the way out', () => {
+    const { minZoom } = mainViewRange(true)
+    expect(EYE - planetsNear(minZoom, EYE)).toBeGreaterThanOrEqual(
+      2 * SYSTEM_RADIUS
+    )
+  })
+
+  it('never reaches deeper than at the zoom floor', () => {
+    const { minZoom } = mainViewRange(true)
+    expect(planetsNear(minZoom / 4, EYE)).toBe(planetsNear(minZoom, EYE))
+  })
+
+  it('opens up steadily as the view zooms out', () => {
+    let previous = 0
+    for (let zoom = 40; zoom >= 1; zoom -= 0.25) {
+      const near = planetsNear(zoom, EYE)
+      expect(near).toBeLessThanOrEqual(previous)
+      previous = near
+    }
+  })
+
+  it('keeps the stars behind every drawn body and their back half clipped', () => {
+    const { minZoom, starRadius } = mainViewRange(true)
+    const R = starRadius!
+    const near = planetsNear(minZoom, EYE)
+    const far = new OrthographicCamera().far
+    // Stars sit R from the eye. Within 45° of the view axis (an offset of
+    // R·sin45 ≈ 1060 units, past the edge of a 2000 px wide view at minZoom)
+    // the front ones lie behind the deepest body and the back ones before
+    // the near plane.
     const cos45 = Math.SQRT1_2
-    expect(starRadius! * cos45).toBeGreaterThan(eye + extent)
-    expect(-starRadius! * cos45).toBeLessThan(near)
-    expect(starRadius! * Math.sin(Math.PI / 4)).toBeGreaterThan(500)
+    expect(R * cos45).toBeGreaterThan(EYE + 2 * SYSTEM_RADIUS)
+    expect(-R * cos45).toBeLessThan(near)
+    expect(R * cos45).toBeGreaterThan(2000 / 2 / minZoom)
+    expect(far).toBeGreaterThanOrEqual(R)
   })
 })
 

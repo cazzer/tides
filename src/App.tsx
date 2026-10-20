@@ -290,15 +290,12 @@ function SceneReadySignal({ onReady }: { onReady: () => void }) {
 }
 
 function MainCamera() {
-  const showPlanets = useStore((s) => s.showPlanets)
-  const { near, far } = mainViewRange(showPlanets)
   return (
     <OrthographicCamera
       makeDefault
       position={[100, 80, 80]}
       zoom={MAIN_ZOOM}
-      near={near}
-      far={far}
+      near={0}
     />
   )
 }
