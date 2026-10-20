@@ -11,7 +11,9 @@ import {
   geomagneticAxis,
   OVAL_TABLE_HOURS,
   ovalTable,
+  steadyGeomagneticAxis,
   sunDirectionLocal,
+  swayVisibility,
 } from '../aurora'
 import { kpFeed } from './kpFeed'
 import { AURORA_GAIN } from '../lighting'
@@ -28,6 +30,13 @@ const SHELL_OUTER = 1.07
 const CAP_THETA = (72 * Math.PI) / 180
 /** Seconds for the shown Kp to close most of the gap to a new value. */
 const KP_EASE_S = 1.2
+/** Seconds for the oval's daily sway to fade in or out with the time speed. */
+const SWAY_EASE_S = 0.3
+
+/** Fraction of the way to close toward a target this frame. */
+function ease(delta: number, seconds: number) {
+  return 1 - Math.exp(-Math.min(delta, 0.25) / seconds)
+}
 
 function useLowQuality() {
   return useMemo(() => {
@@ -52,6 +61,9 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
   const kp = useRef(DEFAULT_KP)
   const tableKp = useRef(Number.NaN)
   const table = useRef(new Float32Array(OVAL_TABLE_HOURS * 4))
+  const lastTimestamp = useRef<number | null>(null)
+  const sway = useRef(1)
+  const pole = useMemo(() => new THREE.Vector3(), [])
   // Uniforms are updated through the mesh, not the memoised material.
   const mesh = useRef<THREE.Mesh>(null)
 
@@ -115,7 +127,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         kpFeed.tick(timestamp, jumpDate?.getTime() ?? null, performance.now(), Date.now()) ??
         DEFAULT_KP
     }
-    kp.current += (target - kp.current) * (1 - Math.exp(-Math.min(delta, 0.25) / KP_EASE_S))
+    kp.current += (target - kp.current) * ease(delta, KP_EASE_S)
     if (!(Math.abs(kp.current - tableKp.current) < 0.005)) {
       tableKp.current = kp.current
       ovalTable(kp.current, table.current)
@@ -125,9 +137,15 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
     u.uInner.value = radius * SHELL_INNER
     u.uOuter.value = radius * SHELL_OUTER
     u.uKp.value = kp.current
+    // Wall-clock, so the shimmer runs at the same pace at any time speed.
     u.uTime.value = state.clock.elapsedTime
     sunDirectionLocal(timestamp, u.uSun.value)
-    geomagneticAxis(timestamp, u.uPole.value)
+    // Ease the daily sway out (and back) over a few frames rather than
+    // popping when the speed changes.
+    const step = lastTimestamp.current == null ? 0 : timestamp - lastTimestamp.current
+    lastTimestamp.current = timestamp
+    sway.current += (swayVisibility(step) - sway.current) * ease(delta, SWAY_EASE_S)
+    steadyGeomagneticAxis(geomagneticAxis(timestamp, pole), sway.current, u.uPole.value)
   })
 
   return (

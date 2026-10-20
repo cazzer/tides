@@ -11,7 +11,9 @@ import {
   magneticLocalTime,
   ovalAt,
   ovalTable,
+  steadyGeomagneticAxis,
   sunDirectionLocal,
+  swayVisibility,
 } from './aurora'
 import { calculateLocationAndRotationForLatLng } from './utils'
 
@@ -179,5 +181,32 @@ describe('magneticLocalTime', () => {
     // East of the midnight meridian is after midnight.
     expect(magneticLocalTime(latLonToLocal(60, -90), pole, sun)).toBeCloseTo(6, 6)
     expect(magneticLocalTime(latLonToLocal(-60, 90), pole, sun)).toBeCloseTo(18, 6)
+  })
+})
+
+describe('daily sway at speed', () => {
+  const HOUR = 3_600_000
+  // One 60 fps frame at each of the speed menu's settings.
+  const frame = (perSecond: number) => (perSecond * 1000) / 60
+
+  test('is kept up to 1 day per second and dropped at 1 month per second', () => {
+    expect(swayVisibility(0)).toBe(1)
+    expect(swayVisibility(frame(HOUR / 1000))).toBe(1)
+    expect(swayVisibility(frame(24 * HOUR / 1000))).toBe(1)
+    // At 30 fps too.
+    expect(swayVisibility(2 * frame(24 * HOUR / 1000))).toBe(1)
+    expect(swayVisibility(frame((30 * 24 * HOUR) / 1000))).toBe(0)
+    expect(swayVisibility(-frame((30 * 24 * HOUR) / 1000))).toBe(0)
+  })
+
+  test('averages the dipole axis onto the spin axis', () => {
+    const axis = geomagneticAxis(Date.UTC(2026, 0, 1))
+    expect(steadyGeomagneticAxis(axis, 1).angleTo(axis)).toBeLessThan(1e-9)
+    const steady = steadyGeomagneticAxis(axis, 0)
+    expect(steady.x).toBeCloseTo(0, 12)
+    expect(steady.y).toBeCloseTo(1, 12)
+    expect(steady.z).toBeCloseTo(0, 12)
+    const half = steadyGeomagneticAxis(axis, 0.5)
+    expect(half.angleTo(new THREE.Vector3(0, 1, 0))).toBeLessThan(axis.angleTo(new THREE.Vector3(0, 1, 0)))
   })
 })

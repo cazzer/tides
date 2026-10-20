@@ -96,6 +96,35 @@ export function geomagneticAxis(ms: number, out = new THREE.Vector3()): THREE.Ve
   return latLonToLocal(lat, lon, out)
 }
 
+// --- Fast playback ------------------------------------------------------------
+
+const SIDEREAL_DAY_MS = 86_164_091
+/** Earth turn per frame (degrees) over which the oval's daily sway is
+ * averaged away. The sway is real: the dipole pole is ~9° off the geographic
+ * one, so the oval circles the pole once a day. Up to 1 day/s (6° a frame at
+ * 60 fps) it reads as a 1 Hz sway; at 1 month/s the Earth turns ~180° a frame
+ * and the sway would alias into strobing. */
+const SWAY_KEEP_DEG = 30
+const SWAY_DROP_DEG = 90
+
+/** How much of the daily sway to show (1 = all, 0 = none) when the sim
+ * advances `simStepMs` between frames. */
+export function swayVisibility(simStepMs: number): number {
+  const turn = (Math.abs(simStepMs) / SIDEREAL_DAY_MS) * 360
+  return 1 - smoothstep(SWAY_KEEP_DEG, SWAY_DROP_DEG, turn)
+}
+
+/** The geomagnetic axis with its offset from the spin axis scaled by
+ * `visibility`: at 0, its average over a day (the geographic axis), which is
+ * what a frame spanning many turns of the Earth would show. */
+export function steadyGeomagneticAxis(
+  axis: THREE.Vector3,
+  visibility: number,
+  out = new THREE.Vector3()
+): THREE.Vector3 {
+  return out.set(axis.x * visibility, axis.y, axis.z * visibility).normalize()
+}
+
 // --- Sun direction ----------------------------------------------------------
 
 const earthFrame = new THREE.Object3D()
