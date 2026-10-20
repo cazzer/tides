@@ -9,3 +9,5 @@ See it here: [https://cazzer.github.io/tides/](https://cazzer.github.io/tides/)
 - Earth textures are from the [Planet Pixel Emporium](https://planetpixelemporium.com/earth8081.html)
   - referred from [reddit](https://www.reddit.com/r/blender/comments/khzosf/photorealistic_earth_21k_diffuse_texture_16k/)
 - Alternative textures are available on [Visible Earth](https://visibleearth.nasa.gov/collection/1595/earth-at-night?page=5)
+- Planet textures are from [Solar System Scope](https://www.solarsystemscope.com/textures/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+  - Mercury, Venus (atmosphere), Mars, Jupiter, Saturn and its ring alpha, Uranus, Neptune

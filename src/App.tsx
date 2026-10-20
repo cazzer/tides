@@ -14,6 +14,7 @@ import LoadingOverlay from './LoadingOverlay'
 import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
 import { CloudAttribution } from './CloudAttribution'
+import { PlanetAttribution } from './PlanetAttribution'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
 
 const FOCUS_VALUES: CameraFocus[] = [
@@ -187,7 +188,10 @@ export default function App() {
             onChange={setMainPanel}
           />
         )}
-        {weatherSource === 'real' && <CloudAttribution />}
+        <div className="viewport-credits">
+          {weatherSource === 'real' && <CloudAttribution />}
+          {showPlanets && <PlanetAttribution />}
+        </div>
       </div>
     </div>
   )
