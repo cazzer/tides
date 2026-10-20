@@ -60,20 +60,23 @@ export function eclipticToScene(v: Vector, out: THREE.Vector3): THREE.Vector3 {
   return out.set(-v.x, v.z, v.y)
 }
 
-const moonPole = new THREE.Vector3()
-const moonMeridian = new THREE.Vector3()
-const moonLocalZ = new THREE.Vector3()
-const moonBasis = new THREE.Matrix4()
-const moonQuaternion = new THREE.Quaternion()
+const axisPole = new THREE.Vector3()
+const axisMeridian = new THREE.Vector3()
+const axisLocalZ = new THREE.Vector3()
+const axisBasis = new THREE.Matrix4()
 
-// IAU pole and prime meridian, so the Moon's axis follows Cassini's laws
-// (precessing with its orbit's nodes) and the libration comes out right.
-// Local +Y is the pole and +X is 0° longitude, matching the texture.
-// Returns a shared quaternion, valid until the next call.
-export function moonOrientation(t: number): THREE.Quaternion {
+// A body's IAU pole and prime meridian as a scene orientation written into
+// `out`: local +Y is the north pole, +X is 0° longitude and −Z is east. For
+// the Moon this makes the axis follow Cassini's laws (precessing with its
+// orbit's nodes) and the libration come out right.
+export function axisOrientation(
+  body: Body,
+  t: number,
+  out: THREE.Quaternion
+): THREE.Quaternion {
   const date = new Date(t)
-  const { north, spin } = RotationAxis(Body.Moon, date)
-  // W is measured eastward along the Moon's equator from its ascending node
+  const { north, spin } = RotationAxis(body, date)
+  // W is measured eastward along the body's equator from its ascending node
   // on the J2000 equator.
   const nodeLength = Math.hypot(north.x, north.y)
   const nx = -north.y / nodeLength
@@ -86,12 +89,20 @@ export function moonOrientation(t: number): THREE.Quaternion {
     north.t
   )
   const toEcliptic = Rotation_EQJ_ECT(date)
-  eclipticToScene(RotateVector(toEcliptic, north), moonPole)
-  eclipticToScene(RotateVector(toEcliptic, meridian), moonMeridian)
+  eclipticToScene(RotateVector(toEcliptic, north), axisPole)
+  eclipticToScene(RotateVector(toEcliptic, meridian), axisMeridian)
   // Local −Z is east (90°E on the texture), so +Z = meridian × pole.
-  moonLocalZ.crossVectors(moonMeridian, moonPole)
-  moonBasis.makeBasis(moonMeridian, moonPole, moonLocalZ)
-  return moonQuaternion.setFromRotationMatrix(moonBasis)
+  axisLocalZ.crossVectors(axisMeridian, axisPole)
+  axisBasis.makeBasis(axisMeridian, axisPole, axisLocalZ)
+  return out.setFromRotationMatrix(axisBasis)
+}
+
+const moonQuaternion = new THREE.Quaternion()
+
+// Local +Y is the pole and +X is 0° longitude, matching the texture.
+// Returns a shared quaternion, valid until the next call.
+export function moonOrientation(t: number): THREE.Quaternion {
+  return axisOrientation(Body.Moon, t, moonQuaternion)
 }
 
 // IAU prime meridian angle W for the Sun.
