@@ -54,6 +54,11 @@ function getInitialLayout(): Layout {
   return layout === 'single' ? 'single' : 'triple'
 }
 
+function getInitialShowPlanets(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('planets') === '1'
+}
+
 import { truncateLatLon } from './utils'
 
 export type Location = { lat: number; lon: number }
@@ -89,6 +94,7 @@ export const useStore = create<{
   /** 'real' shows NASA GIBS clouds for the sim date where imagery exists (tides-l3s). */
   weatherSource: WeatherSource
   layout: Layout
+  showPlanets: boolean
   location: Location | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
@@ -97,6 +103,7 @@ export const useStore = create<{
   setMainPanel: (panel: PanelKey) => void
   setWeatherSource: (weatherSource: WeatherSource) => void
   setLayout: (layout: Layout) => void
+  setShowPlanets: (showPlanets: boolean) => void
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
@@ -115,6 +122,7 @@ export const useStore = create<{
   mainPanel: getInitialPanel(),
   weatherSource: getInitialWeatherSource(),
   layout: getInitialLayout(),
+  showPlanets: getInitialShowPlanets(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
@@ -123,6 +131,7 @@ export const useStore = create<{
   setMainPanel: (mainPanel: PanelKey) => set({ mainPanel }),
   setWeatherSource: (weatherSource: WeatherSource) => set({ weatherSource }),
   setLayout: (layout: Layout) => set({ layout }),
+  setShowPlanets: (showPlanets: boolean) => set({ showPlanets }),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,

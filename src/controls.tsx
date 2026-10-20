@@ -161,6 +161,11 @@ const LAYOUT_OPTIONS: { value: Layout; label: string }[] = [
   { value: 'triple', label: 'Triple' },
 ]
 
+const PLANETS_OPTIONS: { value: 'off' | 'on'; label: string }[] = [
+  { value: 'off', label: 'Hide' },
+  { value: 'on', label: 'Show' },
+]
+
 /** A native modal dialog: showModal() supplies the focus trap, Esc, and focus return. */
 function SettingsDialog({
   open,
@@ -177,6 +182,8 @@ function SettingsDialog({
   const setWeatherSource = useStore((s) => s.setWeatherSource)
   const layout = useStore((s) => s.layout)
   const setLayout = useStore((s) => s.setLayout)
+  const showPlanets = useStore((s) => s.showPlanets)
+  const setShowPlanets = useStore((s) => s.setShowPlanets)
 
   useEffect(() => {
     const dialog = ref.current
@@ -236,6 +243,15 @@ function SettingsDialog({
             value={layout}
             options={LAYOUT_OPTIONS}
             onChange={setLayout}
+          />
+        </SettingGroup>
+        <SettingGroup>
+          <SettingLegend>Planets</SettingLegend>
+          <SegmentedControl
+            name="planets"
+            value={showPlanets ? 'on' : 'off'}
+            options={PLANETS_OPTIONS}
+            onChange={(value) => setShowPlanets(value === 'on')}
           />
         </SettingGroup>
       </DialogBody>

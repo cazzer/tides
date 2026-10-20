@@ -45,6 +45,7 @@ export default function App() {
   const location = useStore((s) => s.location)
   const weatherSource = useStore((s) => s.weatherSource)
   const layout = useStore((s) => s.layout)
+  const showPlanets = useStore((s) => s.showPlanets)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
@@ -71,6 +72,11 @@ export default function App() {
     params.set('panel', mainPanel)
     params.set('weather', weatherSource)
     params.set('layout', layout)
+    if (showPlanets) {
+      params.set('planets', '1')
+    } else {
+      params.delete('planets')
+    }
     if (location) {
       params.set('lat', String(location.lat))
       params.set('lon', String(location.lon))
@@ -80,7 +86,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {
