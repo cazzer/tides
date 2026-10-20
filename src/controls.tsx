@@ -33,6 +33,8 @@ const FOCUS_OPTIONS: {
   value: CameraFocus
   Icon: typeof IconClock
   title: string
+  /** Starts a new group in the menu, set off by a divider. */
+  groupStart?: boolean
 }[] = [
   { value: 'clock', Icon: IconClock, title: 'Clock' },
   { value: 'earth', Icon: IconWorld, title: 'Earth' },
@@ -41,10 +43,11 @@ const FOCUS_OPTIONS: {
 ]
 
 const PLANET_FOCUS_OPTIONS: typeof FOCUS_OPTIONS = PLANET_FOCUS_KEYS.map(
-  (value) => ({
+  (value, i) => ({
     value,
     Icon: IconPlanet,
     title: value[0].toUpperCase() + value.slice(1),
+    groupStart: i === 0,
   })
 )
 
@@ -103,16 +106,16 @@ export default function Controls() {
         value={cameraFocus}
         onChange={setCameraFocus}
         options={[
-          ...FOCUS_OPTIONS,
           ...(location
             ? [
+                ...FOCUS_OPTIONS,
                 {
                   value: 'location' as const,
                   Icon: IconMapPin,
                   title: 'My Location',
                 },
               ]
-            : []),
+            : FOCUS_OPTIONS),
           ...(showPlanets ? PLANET_FOCUS_OPTIONS : []),
         ]}
       />
@@ -372,7 +375,7 @@ function FocusDropdown({
   options,
 }: {
   value: CameraFocus
-  options: { value: CameraFocus; Icon: typeof IconClock; title: string }[]
+  options: typeof FOCUS_OPTIONS
   onChange: (value: CameraFocus) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -413,10 +416,11 @@ function FocusDropdown({
       </FocusTrigger>
       {open && (
         <FocusMenu>
-          {options.map(({ value: v, Icon, title }) => (
+          {options.map(({ value: v, Icon, title, groupStart }) => (
             <FocusOption
               key={v}
               type="button"
+              data-group-start={groupStart || undefined}
               onClick={() => {
                 onChange(v)
                 setOpen(false)
@@ -596,9 +600,30 @@ const FocusMenu = styled.div`
   flex-direction: column;
   gap: 2px;
   padding: 6px;
+  max-height: calc(100dvh - 72px);
+  overflow-y: auto;
   border-radius: 18px;
   z-index: 100;
   ${glassPanel}
+
+  /* Scroll rather than squash the options when the menu is taller than the view. */
+  & > * {
+    flex-shrink: 0;
+  }
+
+  & > [data-group-start] {
+    position: relative;
+    margin-top: 5px;
+  }
+
+  & > [data-group-start]::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 6px;
+    right: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+  }
 `
 
 const FocusOption = styled.button`

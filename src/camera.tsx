@@ -25,7 +25,7 @@ import {
 } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
-import { focusedRef, planetFramingZoom } from './main-view'
+import { MAIN_ZOOM, focusedRef, planetFramingZoom } from './main-view'
 import {
   clampTilt,
   pivotDepth,
@@ -259,17 +259,34 @@ function useEarthPivot(
 
 const FRAMING_EASE = 0.05
 
+/** The zoom framing eases toward, or null while a planet hasn't registered. */
+function framingGoal(focus: CameraFocus): number | null {
+  if (!isPlanetFocus(focus)) return MAIN_ZOOM
+  const { earthRadius, [focus]: ref } = useStore.getState()
+  const radius = ref?.current?.userData?.radius
+  return radius > 0 && earthRadius != null
+    ? planetFramingZoom(radius, earthRadius)
+    : null
+}
+
 /**
  * Choosing a planet eases the zoom to planetFramingZoom once the planet has
- * registered its mesh (with userData.radius). Any other zoom change, i.e. the
- * user scrolling or pinching, ends the framing so it never fights them.
+ * registered its mesh (with userData.radius); leaving a planet eases it back
+ * to MAIN_ZOOM. Any other zoom change, i.e. the user scrolling or pinching,
+ * ends the framing so it never fights them.
  */
 function usePlanetFraming(cameraFocus: CameraFocus) {
-  // The zoom this hook last wrote; null until the first step.
+  // The zoom this hook last saw or wrote; null until the first frame after
+  // the focus changed.
   const framing = useRef<{ written: number | null } | null>(null)
+  const previousFocus = useRef<CameraFocus | null>(null)
 
   useEffect(() => {
-    framing.current = isPlanetFocus(cameraFocus) ? { written: null } : null
+    const leftPlanet =
+      previousFocus.current !== null && isPlanetFocus(previousFocus.current)
+    previousFocus.current = cameraFocus
+    framing.current =
+      isPlanetFocus(cameraFocus) || leftPlanet ? { written: null } : null
   }, [cameraFocus])
 
   // Only the main view has controls; the other panels' cameras stay put.
@@ -277,20 +294,20 @@ function usePlanetFraming(cameraFocus: CameraFocus) {
     const f = framing.current
     const ortho = camera as OrthographicCamera
     if (!f || !controls || !ortho.isOrthographicCamera) return
-    if (f.written !== null && ortho.zoom !== f.written) {
+    if (f.written === null) {
+      f.written = ortho.zoom
+    } else if (ortho.zoom !== f.written) {
       framing.current = null
       return
     }
-    if (!isPlanetFocus(cameraFocus)) return
-    const state = useStore.getState()
-    const radius = state[cameraFocus]?.current?.userData?.radius
-    if (!(radius > 0) || state.earthRadius == null) return
-    const goal = planetFramingZoom(radius, state.earthRadius)
+    const goal = framingGoal(cameraFocus)
+    if (goal === null) return
     const next = MathUtils.lerp(ortho.zoom, goal, FRAMING_EASE)
     const done = Math.abs(goal - next) < goal * 1e-3
     ortho.zoom = done ? goal : next
     ortho.updateProjectionMatrix()
-    framing.current = done ? null : { written: ortho.zoom }
+    if (done) framing.current = null
+    else f.written = ortho.zoom
   })
 }
 

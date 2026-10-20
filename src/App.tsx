@@ -145,6 +145,7 @@ export default function App() {
             <OrbitControls
               maxDistance={80}
               minDistance={5}
+              minZoom={mainViewRange(showPlanets).minZoom}
               makeDefault
             />
           </Panel>

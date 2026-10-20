@@ -29,6 +29,7 @@ describe('mainViewRange', () => {
     expect(mainViewRange(false)).toEqual({
       near: 0,
       far: 2000,
+      minZoom: 0,
       starRadius: undefined,
     })
   })

@@ -22,6 +22,8 @@ export const FOCUS_VALUES = [
   ...PLANET_FOCUS_KEYS,
 ] as const
 export type CameraFocus = (typeof FOCUS_VALUES)[number]
+/** Foci that are a body's mesh ref; 'location' is a point on Earth instead. */
+export type BodyFocus = Exclude<CameraFocus, 'location'>
 
 export function isPlanetFocus(focus: string): focus is PlanetFocus {
   return (PLANET_FOCUS_KEYS as readonly string[]).includes(focus)
