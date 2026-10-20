@@ -2,11 +2,13 @@
 // controller (./realCloudController.ts), whose builds run in the cloud worker
 // (tides-9jn.2, ./cloud.worker.ts via ./cloudWorkerClient.ts) where the browser
 // can draw there, and on the main thread otherwise. Either way the pipeline is
-// ./cloudPipeline.ts; this only uploads its pixels as a texture.
+// ./cloudPipeline.ts; this only uploads its pixels as a texture. The frames are
+// cross-faded by the shared blender (./cloudBlend.ts, tides-kzj.4.2).
 import { useEffect, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { OUT_H, OUT_W } from '../real-clouds'
 import { buildCloudImage, type CloudAssets, type CloudImage, type GeoTextureInfo } from './cloudPipeline'
+import { createCloudBlender } from './cloudBlend'
 import { createCloudImageBuilder, type CloudWorker } from './cloudWorkerClient'
 import { createRealCloudController, type CloudSnapshot, type ImagerySource } from './realCloudController'
 import earthSpecular from '../assets/earth-specular-2k.jpg'
@@ -78,14 +80,18 @@ export const realClouds = createRealCloudController<THREE.Texture>({
   dispose: (texture) => texture.dispose(),
 })
 
+export const realCloudBlend = createCloudBlender()
+
 export function useRealCloudSnapshot(): RealCloudSnapshot {
   return useSyncExternalStore(realClouds.subscribe, realClouds.getSnapshot)
 }
 
-/** The shared snapshot; stops fetching when `active` turns false. */
-export function useRealClouds(active: boolean): RealCloudSnapshot {
+/** Stops fetching and frees the blend when `active` turns false. Doesn't
+ * subscribe: the frame loop reads the controller itself. */
+export function useRealCloudsActive(active: boolean): void {
   useEffect(() => {
-    if (!active) realClouds.deactivate()
+    if (active) return
+    realClouds.deactivate()
+    realCloudBlend.release()
   }, [active])
-  return useRealCloudSnapshot()
 }

@@ -1,31 +1,34 @@
 // The shared state machine behind the real-weather cloud layer (tides-l3s).
 // Every View's EarthRenderer ticks one controller, and they all show the same
-// texture. Building a texture is injected, so this module needs no DOM. A
-// source is a day of the daily composite or a geostationary slot over one
-// (tides-1zj); nearby slots settle for longer so playback doesn't refetch.
+// frames. Building a texture is injected, so this module needs no DOM. Which
+// keyframes are wanted comes from ../cloud-frames.ts (tides-kzj.4.1): a frame
+// is a day of the daily composite or a geostationary slot over one
+// (tides-1zj). Up to MAX_IN_FLIGHT of them build at once, most wanted first,
+// and the last MAX_CACHED_FRAMES are kept.
 import {
-  desiredCloudSource,
-  initialCloudDayState,
-  MAX_CACHED_DAYS,
-  pickEvictions,
-  settleMsFor,
-  sourceKey,
-  stepCloudDay,
-  type CloudDayState,
-  type CloudSource,
-  type GeoSource,
-  type GibsSource,
-} from '../real-clouds'
+  initialPlanState,
+  MAX_CACHED_FRAMES,
+  MAX_IN_FLIGHT,
+  planCloudFrames,
+  stepCloudPlan,
+  type CloudFrame,
+  type CloudStatus,
+  type FrameView,
+  type PlanState,
+} from '../cloud-frames'
+import { pickEvictions, type CloudSource, type GeoSource, type GibsSource } from '../real-clouds'
 
-export type CloudStatus = 'loading' | 'ready' | 'failed'
-export type { GibsSource }
+export type { CloudStatus, FrameView, GibsSource }
 /** A source that needs imagery fetched. */
 export type ImagerySource = GibsSource | GeoSource
 
 export interface CloudSnapshot<T> {
-  /** Null shows the static clouds. */
+  /** The committed frames in time order; empty until the first tick. */
+  frames: readonly FrameView<T>[]
+  /** The rest describe the frame at or before the sim time (for attribution):
+   * its texture, null while it loads or for the static clouds. */
   texture: T | null
-  /** The committed source; null until the first tick. */
+  /** Null until the first tick. */
   source: CloudSource | null
   status: CloudStatus
 }
@@ -38,58 +41,67 @@ export interface CloudControllerDeps<T> {
 
 interface Build {
   key: string
-  source: ImagerySource
   abort: AbortController
 }
 
 export function createRealCloudController<T>({ build, dispose }: CloudControllerDeps<T>) {
-  let day: CloudDayState = initialCloudDayState
-  // The source behind day.committed, for how long the next one must settle.
-  let committedSource: CloudSource | null = null
-  let displayedKey: string | null = null
+  let plan: PlanState = initialPlanState
   let staticUrl = ''
-  // Only ever the committed source: committing anything else aborts it.
-  let inFlight: Build | null = null
+  // Builds survive the plan moving on (they finish into the cache) unless a
+  // discontinuous commit or deactivate aborts them.
+  const inFlight = new Map<string, Build>()
   const cache = new Map<string, { texture: T; lastUsed: number }>()
+  // Frames in the plan whose build found no imagery; forgotten once they leave.
+  const failed = new Set<string>()
+  let useCount = 0
   const listeners = new Set<() => void>()
-  const initialSnapshot: CloudSnapshot<T> = { texture: null, source: null, status: 'loading' }
+  const initialSnapshot: CloudSnapshot<T> = { frames: [], texture: null, source: null, status: 'loading' }
   let snapshot = initialSnapshot
 
-  function publish(next: CloudSnapshot<T>) {
-    if (
-      next.texture === snapshot.texture &&
-      next.source === snapshot.source &&
-      next.status === snapshot.status
-    ) {
-      return
-    }
+  const planFrames = (): readonly CloudFrame[] => plan.committed?.frames ?? []
+
+  function statusOf(frame: CloudFrame): CloudStatus {
+    if (frame.source.kind === 'static' || cache.has(frame.key)) return 'ready'
+    return failed.has(frame.key) ? 'failed' : 'loading'
+  }
+
+  function notify(next: CloudSnapshot<T>) {
     snapshot = next
     listeners.forEach((l) => l())
   }
 
-  function show(key: string, source: ImagerySource) {
-    const entry = cache.get(key)!
-    entry.lastUsed = performance.now()
-    displayedKey = key
-    publish({ texture: entry.texture, source, status: 'ready' })
+  function publish() {
+    const frames = [...planFrames()]
+      .sort((a, b) => a.timeMs - b.timeMs)
+      .map((f) => ({ ...f, status: statusOf(f), texture: cache.get(f.key)?.texture ?? null }))
+    const unchanged =
+      frames.length === snapshot.frames.length &&
+      frames.every((f, i) => {
+        const was = snapshot.frames[i]
+        return was.key === f.key && was.status === f.status && was.texture === f.texture
+      })
+    if (unchanged) return
+    const primary = frames.find((f) => f.key === planFrames()[0]?.key)
+    notify({
+      frames,
+      texture: primary?.texture ?? null,
+      source: primary?.source ?? null,
+      status: primary?.status ?? 'loading',
+    })
   }
 
   function evict() {
     const entries = [...cache].map(([key, e]) => ({ key, lastUsed: e.lastUsed }))
-    for (const key of pickEvictions(entries, displayedKey, MAX_CACHED_DAYS)) {
+    const keep = new Set(planFrames().map((f) => f.key))
+    for (const key of pickEvictions(entries, keep, MAX_CACHED_FRAMES)) {
       dispose(cache.get(key)!.texture)
       cache.delete(key)
     }
   }
 
-  function cancelInFlight() {
-    inFlight?.abort.abort()
-    inFlight = null
-  }
-
-  function start(source: ImagerySource) {
-    const current: Build = { key: sourceKey(source), source, abort: new AbortController() }
-    inFlight = current
+  function start(key: string, source: ImagerySource) {
+    const current: Build = { key, abort: new AbortController() }
+    inFlight.set(key, current)
     build(source, staticUrl, current.abort.signal).then(
       (texture) => finish(current, texture),
       (err) => {
@@ -101,72 +113,73 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     )
   }
 
-  function finish(done: Build, texture: T | null) {
-    if (inFlight !== done) {
-      // Superseded or deactivated: never touches the snapshot or the cache.
-      if (texture) dispose(texture)
-      return
-    }
-    inFlight = null
-    if (texture) {
-      cache.set(done.key, { texture, lastUsed: performance.now() })
-      show(done.key, done.source)
-      evict()
-    } else {
-      displayedKey = null
-      publish({ texture: null, source: done.source, status: 'failed' })
+  /** Starts builds for the plan's frames, in priority order, while there is
+   * room. */
+  function pump() {
+    for (const { key, source } of planFrames()) {
+      if (inFlight.size >= MAX_IN_FLIGHT) return
+      if (source.kind === 'static' || cache.has(key) || inFlight.has(key) || failed.has(key)) continue
+      start(key, source)
     }
   }
 
-  function commit(source: CloudSource) {
-    const key = sourceKey(source)
-    if (inFlight?.key === key) return
-    cancelInFlight()
-    if (source.kind === 'static') {
-      displayedKey = null
-      publish({ texture: null, source, status: 'ready' })
+  function finish(done: Build, texture: T | null) {
+    if (done.abort.signal.aborted) {
+      // Aborted or deactivated: never touches the snapshot or the cache.
+      if (texture) dispose(texture)
       return
     }
-    if (cache.has(key)) {
-      show(key, source)
-      return
-    }
-    // Keep showing the previous day until this one is ready.
-    publish({ texture: snapshot.texture, source, status: 'loading' })
-    start(source)
+    inFlight.delete(done.key)
+    if (texture) cache.set(done.key, { texture, lastUsed: ++useCount })
+    else if (planFrames().some((f) => f.key === done.key)) failed.add(done.key)
+    evict()
+    publish()
+    pump()
   }
 
   return {
     /** Call every frame while Real weather is on; cheap when nothing changes.
-     * Idempotent within a frame, so every View can call it. */
+     * Idempotent within a frame, so every View can call it. timeScale is sim
+     * seconds per wall second. */
     tick(
       simMs: number,
       jumpToMs: number | null,
+      timeScale: number,
       wallMs: number,
       nowMs: number,
       staticCloudsUrl: string
     ) {
       staticUrl = staticCloudsUrl
-      const source = desiredCloudSource(simMs, jumpToMs, nowMs)
-      const step = stepCloudDay(
-        day,
-        sourceKey(source),
-        wallMs,
-        settleMsFor(source, committedSource)
-      )
-      day = step.state
-      if (step.commit) {
-        committedSource = source
-        commit(source)
+      // During a jump the clock tweens through everything in between; only
+      // the target matters.
+      const next = planCloudFrames(jumpToMs ?? simMs, timeScale, nowMs)
+      const settled = planFrames().every((f) => statusOf(f) !== 'loading')
+      const step = stepCloudPlan(plan, next, wallMs, { jumping: jumpToMs !== null, settled })
+      plan = step.state
+      if (!step.commit) return
+      const wanted = new Set(step.commit.frames.map((f) => f.key))
+      if (step.abortUnwanted) {
+        for (const [key, b] of inFlight) {
+          if (wanted.has(key)) continue
+          b.abort.abort()
+          inFlight.delete(key)
+        }
       }
+      for (const key of failed) if (!wanted.has(key)) failed.delete(key)
+      for (const f of step.commit.frames) {
+        const entry = cache.get(f.key)
+        if (entry) entry.lastUsed = ++useCount
+      }
+      pump()
+      publish()
     },
     /** Stops fetching; the cache is kept for when Real weather comes back. */
     deactivate() {
-      cancelInFlight()
-      day = initialCloudDayState
-      committedSource = null
-      displayedKey = null
-      publish(initialSnapshot)
+      for (const b of inFlight.values()) b.abort.abort()
+      inFlight.clear()
+      failed.clear()
+      plan = initialPlanState
+      if (snapshot !== initialSnapshot) notify(initialSnapshot)
     },
     subscribe(listener: () => void) {
       listeners.add(listener)

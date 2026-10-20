@@ -6,9 +6,9 @@
 // out over the sea (tides-a7w). Within the last ~90 days geostationary imagery
 // matched to the sim time goes over the top (tides-1zj, geo-clouds.ts). Pure
 // logic only:
-// which layers, days and slots to show, the tile URLs, the gap fill, the
-// cloud-alpha maths and the debounce. The browser side lives in
-// renderers/cloudPipeline.ts.
+// which layers, days and slots there are, the tile URLs, the gap fill and the
+// cloud-alpha maths. Which of them to show when is ../cloud-frames.ts; the
+// browser side lives in renderers/cloudPipeline.ts.
 
 export const DAY_MS = 86_400_000
 
@@ -42,11 +42,6 @@ export const OUT_H = 1280
 // GIBS tile latency ranged from 1 s to over 280 s during the spike, so a slow
 // tile gets one retry and is then dropped; its area keeps the static clouds.
 export const TILE_TIMEOUT_MS = 60_000
-// A day must stay wanted this long (wall clock) before it is fetched, so fast
-// playback and the frames of a jump tween never trigger downloads.
-export const SETTLE_MS = 1500
-/** Cloud textures kept, days or geostationary slots alike. */
-export const MAX_CACHED_DAYS = 3
 
 export function utcDay(ms: number): number {
   return Math.floor(ms / DAY_MS) * DAY_MS
@@ -745,95 +740,22 @@ export function composeCloudAlpha(
   }
 }
 
-export interface CloudDayState {
-  /** Key waiting to settle, or null. */
-  candidate: string | null
-  /** Wall-clock ms when the candidate was first wanted. */
-  since: number
-  committed: string | null
-}
-
-export const initialCloudDayState: CloudDayState = {
-  candidate: null,
-  since: 0,
-  committed: null,
-}
-
-// Geostationary slots change every 10 sim minutes, so playback would refetch
-// constantly. A slot within GEO_NEAR_MS of the one shown must be wanted for
-// GEO_NEAR_SETTLE_MS: at real time it updates every 10 minutes, but during
-// fast playback the clouds only catch up in GEO_NEAR_MS steps (and not at all
-// once a slot lasts under SETTLE_MS of wall time) until it slows or stops.
-export const GEO_NEAR_MS = 3 * 3_600_000
-export const GEO_NEAR_SETTLE_MS = 12_000
-
-/** How long `next` must be wanted before it replaces `committed`. */
-export function settleMsFor(next: CloudSource, committed: CloudSource | null): number {
-  if (next.kind !== 'geo' || committed?.kind !== 'geo') return SETTLE_MS
-  const apart = Math.abs(Date.parse(next.time) - Date.parse(committed.time))
-  return apart < GEO_NEAR_MS ? GEO_NEAR_SETTLE_MS : SETTLE_MS
-}
-
-/** Debounces the wanted source key. The first key commits at once; later ones
- * once they have been wanted for settleMs. Returns the same state object when
- * nothing changed, so calling it again in the same frame is a no-op. */
-export function stepCloudDay(
-  prev: CloudDayState,
-  desiredKey: string,
-  wallMs: number,
-  settleMs: number = SETTLE_MS
-): { state: CloudDayState; commit: string | null } {
-  if (prev.committed === null) {
-    return {
-      state: { candidate: null, since: wallMs, committed: desiredKey },
-      commit: desiredKey,
-    }
-  }
-  if (desiredKey === prev.committed) {
-    if (prev.candidate === null) return { state: prev, commit: null }
-    return { state: { ...prev, candidate: null }, commit: null }
-  }
-  if (desiredKey !== prev.candidate) {
-    return {
-      state: { ...prev, candidate: desiredKey, since: wallMs },
-      commit: null,
-    }
-  }
-  if (wallMs - prev.since >= settleMs) {
-    return {
-      state: { candidate: null, since: wallMs, committed: desiredKey },
-      commit: desiredKey,
-    }
-  }
-  return { state: prev, commit: null }
-}
-
-/** During a jump the clock tweens through every day in between; only the
- * target matters. */
-export function desiredCloudSource(
-  simMs: number,
-  jumpToMs: number | null,
-  nowMs: number
-): CloudSource {
-  return selectRealCloudSource(jumpToMs ?? simMs, nowMs)
-}
-
 export function isRetryable(failure: number | 'timeout' | 'network'): boolean {
   if (failure === 'timeout' || failure === 'network') return true
   return failure === 408 || failure === 429 || failure >= 500
 }
 
-/** Keys to drop, least recently used first, so at most `max` remain. `keep`
- * (the displayed texture) is never evicted. */
+/** Keys to drop, least recently used first, so at most `max` remain. Keys in
+ * `keep` (the frames being shown) are never evicted. */
 export function pickEvictions(
   entries: { key: string; lastUsed: number }[],
-  keep: string | null,
+  keep: ReadonlySet<string>,
   max: number
 ): string[] {
   const excess = entries.length - max
   if (excess <= 0) return []
   return entries
-    .filter((e) => e.key !== keep)
+    .filter((e) => !keep.has(e.key))
     .sort((a, b) => a.lastUsed - b.lastUsed)
     .slice(0, excess)
     .map((e) => e.key)

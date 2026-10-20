@@ -6,7 +6,6 @@ import {
   composeCloudAlpha,
   dataMask,
   DATELINE_FEATHER_PX,
-  desiredCloudSource,
   FEATHER_PX,
   fillDate,
   GLINT_CLEAR,
@@ -17,7 +16,6 @@ import {
   solarDeclination,
   GEO_ARCHIVE_MS,
   GEO_LATENCY_MS,
-  GEO_NEAR_SETTLE_MS,
   GEO_SLOT_MS,
   geoSlot,
   geoTimeKey,
@@ -25,7 +23,6 @@ import {
   iceWeight,
   SEA_ICE_LAT_EDGES,
   seaIceGate,
-  initialCloudDayState,
   isLatestStandIn,
   isRetryable,
   NO_DATA_GROW,
@@ -35,16 +32,12 @@ import {
   selectCloudSource,
   selectGeoSlot,
   selectRealCloudSource,
-  SETTLE_MS,
-  settleMsFor,
   SNOW_EDGES,
   snowWeight,
   sourceKey,
-  stepCloudDay,
   tilesToFill,
   tileUrls,
   utcDayKey,
-  type CloudDayState,
 } from './real-clouds'
 
 const NOW = Date.UTC(2026, 9, 18, 15, 30)
@@ -101,15 +94,6 @@ describe('selectCloudSource', () => {
     const today = selectCloudSource(NOW, NOW)
     const yesterday = selectCloudSource(at('2026-10-17T12:00:00Z'), NOW)
     expect(sourceKey(today)).toBe(sourceKey(yesterday))
-  })
-
-  test('a jump target wins over the tweening clock', () => {
-    const mid = at('2010-01-01T00:00:00Z')
-    expect(desiredCloudSource(mid, at('1950-01-01T00:00:00Z'), NOW)).toEqual({
-      kind: 'static',
-      reason: 'before-coverage',
-    })
-    expect(desiredCloudSource(mid, null, NOW)).toEqual(modis('2010-01-01'))
   })
 })
 
@@ -744,78 +728,6 @@ describe('growNoData', () => {
   })
 })
 
-describe('stepCloudDay', () => {
-  const A = 'gibs/2024-10-09'
-  const B = 'gibs/2024-10-10'
-  const C = 'gibs/2024-10-11'
-
-  test('the first key commits at once', () => {
-    const { state, commit } = stepCloudDay(initialCloudDayState, A, 100)
-    expect(commit).toBe(A)
-    expect(state.committed).toBe(A)
-  })
-
-  test('a rollover commits after it settles', () => {
-    let s: CloudDayState = stepCloudDay(initialCloudDayState, A, 0).state
-    let r = stepCloudDay(s, B, 1000)
-    expect(r.commit).toBeNull()
-    s = r.state
-    r = stepCloudDay(s, B, 1000 + SETTLE_MS - 1)
-    expect(r.commit).toBeNull()
-    s = r.state
-    r = stepCloudDay(s, B, 1000 + SETTLE_MS)
-    expect(r.commit).toBe(B)
-    expect(r.state).toEqual({ candidate: null, since: 1000 + SETTLE_MS, committed: B })
-  })
-
-  test('fast-forward through days never commits', () => {
-    let s = stepCloudDay(initialCloudDayState, A, 0).state
-    const days = [B, C, 'd', 'e', 'f', 'g']
-    for (let frame = 0; frame < 6 * 60; frame++) {
-      const r = stepCloudDay(s, days[Math.floor(frame / 60)], frame * 16)
-      expect(r.commit).toBeNull()
-      s = r.state
-    }
-    expect(s.committed).toBe(A)
-  })
-
-  test('returning to the committed day drops the candidate', () => {
-    let s = stepCloudDay(initialCloudDayState, A, 0).state
-    s = stepCloudDay(s, B, 100).state
-    const r = stepCloudDay(s, A, 200)
-    expect(r.commit).toBeNull()
-    expect(r.state.candidate).toBeNull()
-    expect(stepCloudDay(r.state, B, 300 + SETTLE_MS - 1).commit).toBeNull()
-  })
-
-  test('calling twice in a frame commits once and is otherwise a no-op', () => {
-    let s = stepCloudDay(initialCloudDayState, A, 0).state
-    s = stepCloudDay(s, B, 100).state
-    const again = stepCloudDay(s, B, 100)
-    expect(again.state).toBe(s)
-    const first = stepCloudDay(s, B, 100 + SETTLE_MS)
-    expect(first.commit).toBe(B)
-    const second = stepCloudDay(first.state, B, 100 + SETTLE_MS)
-    expect(second.commit).toBeNull()
-    expect(second.state).toBe(first.state)
-  })
-
-  test('a jump commits its target, never the days it passes', () => {
-    const target = at('1950-01-01T00:00:00Z')
-    const key = (sim: number) => sourceKey(desiredCloudSource(sim, target, NOW))
-    const from = at('2024-10-09T12:00:00Z')
-    let s = stepCloudDay(initialCloudDayState, sourceKey(selectCloudSource(from, NOW)), 0).state
-    const commits: string[] = []
-    for (let ms = 16; ms <= 5000; ms += 16) {
-      const sim = from + ((target - from) * ms) / 5000
-      const r = stepCloudDay(s, key(sim), ms)
-      if (r.commit) commits.push(r.commit)
-      s = r.state
-    }
-    expect(commits).toEqual(['static:before-coverage'])
-  })
-})
-
 test('isRetryable', () => {
   expect(isRetryable('timeout')).toBe(true)
   expect(isRetryable('network')).toBe(true)
@@ -832,15 +744,17 @@ describe('pickEvictions', () => {
     { key: 'c', lastUsed: 2 },
     { key: 'd', lastUsed: 3 },
   ]
+  const none = new Set<string>()
   test('evicts the least recently used beyond max', () => {
-    expect(pickEvictions(entries, null, 3)).toEqual(['a'])
-    expect(pickEvictions(entries, null, 2)).toEqual(['a', 'c'])
+    expect(pickEvictions(entries, none, 3)).toEqual(['a'])
+    expect(pickEvictions(entries, none, 2)).toEqual(['a', 'c'])
   })
-  test('never evicts the kept key', () => {
-    expect(pickEvictions(entries, 'a', 3)).toEqual(['c'])
+  test('never evicts the kept keys', () => {
+    expect(pickEvictions(entries, new Set(['a']), 3)).toEqual(['c'])
+    expect(pickEvictions(entries, new Set(['a', 'c']), 2)).toEqual(['d', 'b'])
   })
   test('nothing to do under the limit', () => {
-    expect(pickEvictions(entries, null, 4)).toEqual([])
+    expect(pickEvictions(entries, none, 4)).toEqual([])
   })
 })
 
@@ -878,12 +792,6 @@ describe('geostationary slots (tides-1zj)', () => {
     expect(selectGeoSlot(NOW, NOW)).toBe(geoSlot(NOW - GEO_LATENCY_MS))
   })
 
-  test('desiredCloudSource follows a jump target into the archive', () => {
-    expect(
-      desiredCloudSource(at('2010-01-01T00:00:00Z'), at('2026-10-17T06:43:00Z'), NOW)
-    ).toEqual(geo('2026-10-17T06:40:00Z', '2026-10-17'))
-  })
-
   test('sourceKey names the slot and its fallback', () => {
     expect(sourceKey(geo('2026-10-17T06:40:00Z', '2026-10-17'))).toBe(
       `geo/2026-10-17T06:40:00Z/${VIIRS}/2026-10-17`
@@ -896,45 +804,5 @@ describe('geostationary slots (tides-1zj)', () => {
     expect(isLatestStandIn(morning, at('2026-10-18T09:05:00Z'), NOW)).toBe(false)
     const yesterday = selectRealCloudSource(at('2026-10-17T09:00:00Z'), NOW)
     expect(isLatestStandIn(yesterday, at('2026-10-17T09:00:00Z'), NOW)).toBe(false)
-  })
-
-  test('settleMsFor: nearby slots wait longer, everything else as before', () => {
-    const a = geo('2026-10-17T06:40:00Z', '2026-10-17')
-    expect(settleMsFor(geo('2026-10-17T06:50:00Z', '2026-10-17'), a)).toBe(GEO_NEAR_SETTLE_MS)
-    expect(settleMsFor(geo('2026-10-17T09:30:00Z', '2026-10-17'), a)).toBe(GEO_NEAR_SETTLE_MS)
-    expect(settleMsFor(geo('2026-10-17T09:40:00Z', '2026-10-17'), a)).toBe(SETTLE_MS)
-    expect(settleMsFor(a, null)).toBe(SETTLE_MS)
-    expect(settleMsFor(a, viirs('2026-10-17'))).toBe(SETTLE_MS)
-    expect(settleMsFor(viirs('2026-10-16'), a)).toBe(SETTLE_MS)
-  })
-
-  /** Commits while playing from 2026-10-17 at `speed` sim ms per wall ms. */
-  const commitsDuringPlayback = (speed: number, wallMs: number) => {
-    const start = at('2026-10-17T00:00:00Z')
-    let committed = selectRealCloudSource(start, NOW)
-    let s = stepCloudDay(initialCloudDayState, sourceKey(committed), 0).state
-    let commits = 0
-    for (let wall = 16; wall <= wallMs; wall += 16) {
-      const source = selectRealCloudSource(start + wall * speed, NOW)
-      const r = stepCloudDay(s, sourceKey(source), wall, settleMsFor(source, committed))
-      s = r.state
-      if (r.commit) {
-        commits++
-        committed = source
-      }
-    }
-    return commits
-  }
-
-  test('real-time playback refetches every 10 minutes', () => {
-    // 00:10 to 00:50, each GEO_NEAR_SETTLE_MS after it starts.
-    expect(commitsDuringPlayback(1, 3_600_000)).toBe(5)
-  })
-
-  test('fast playback refetches at most every GEO_NEAR_MS of sim time', () => {
-    // A sim hour per wall minute for 10 minutes: 10 sim hours.
-    expect(commitsDuringPlayback(60, 600_000)).toBeLessThanOrEqual(3)
-    // A sim day per wall minute: each slot lasts 0.4 s, so nothing settles.
-    expect(commitsDuringPlayback(1440, 60_000)).toBe(0)
   })
 })

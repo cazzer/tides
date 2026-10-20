@@ -3,9 +3,10 @@ import { meshBounds, useTexture } from '@react-three/drei'
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
-import { realClouds, useRealClouds } from './realCloudTextures'
+import { realCloudBlend, realClouds, useRealCloudsActive } from './realCloudTextures'
+import { pickBlend } from '../cloud-frames'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
-import { createCloudLayer } from './cloudShaders'
+import { createCloudLayer, type CloudLayer } from './cloudShaders'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
@@ -56,7 +57,7 @@ export default function EarthRenderer({
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
   const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
   const real = useStore((s) => s.weatherSource) === 'real'
-  const { texture: realCloudsTexture } = useRealClouds(real)
+  useRealCloudsActive(real)
   // The Moon's shadow during solar eclipses, on the ground and the clouds.
   const eclipseShadow = useEclipseShadowState('earth')
   // Clouds with relief, and their shadows on the ground (tides-y2e).
@@ -81,13 +82,9 @@ export default function EarthRenderer({
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
   }, [groundPatch])
-  const cloudMap = real && realCloudsTexture ? realCloudsTexture : cloudsTexture
-  clouds.uniforms.uCloudMap.value = cloudMap
-  // Only geostationary textures carry cloud-top heights (R) and their
-  // confidence (B); the static and daily textures are grey.
-  const measured = Boolean(cloudMap.userData.geo)
-  clouds.uniforms.uCloudMeasured.value = measured ? 1 : 0
-  clouds.uniforms.uCloudMaxKm.value = maxTopKm(measured)
+  // The static clouds, and with Real weather until the frame loop has a blend
+  // to show, so the first frame isn't missing its map.
+  if (!real || !clouds.uniforms.uCloudMap.value) setCloudMap(clouds, cloudsTexture, false)
   clouds.uniforms.uTerrainMap.value = bumpTexture
   clouds.uniforms.uSeaLevel.value = diameter
 
@@ -97,7 +94,7 @@ export default function EarthRenderer({
   // The static clouds drift east, slower than the Earth turns; the shader
   // offsets the texture rather than turning the mesh, so the ground's shadows
   // drift with them.
-  useFrame(() => {
+  useFrame(({ clock, gl }) => {
     if (!real) {
       drift.current += STATIC_DRIFT_PER_FRAME
       clouds.uniforms.uCloudShift.value = driftOffset(drift.current)
@@ -105,15 +102,22 @@ export default function EarthRenderer({
     }
     // Real clouds sit on the geography they were photographed over.
     clouds.uniforms.uCloudShift.value = 0
-    const { timestamp, jumpDate } = useStore.getState()
+    const { timestamp, jumpDate, timeScale } = useStore.getState()
     if (timestamp == null) return
-    realClouds.tick(
-      timestamp,
-      jumpDate?.getTime() ?? null,
-      performance.now(),
-      Date.now(),
-      textureSet.clouds
+    // Every View runs this; the shared clock keeps the second and third calls
+    // in a frame no-ops.
+    const wallMs = clock.elapsedTime * 1000
+    const jumpToMs = jumpDate?.getTime() ?? null
+    realClouds.tick(timestamp, jumpToMs, timeScale, wallMs, Date.now(), textureSet.clouds)
+    const pick = pickBlend(realClouds.getSnapshot().frames, jumpToMs ?? timestamp)
+    const texture = (t: THREE.Texture | 'static') => (t === 'static' ? cloudsTexture : t)
+    const out = realCloudBlend.update(
+      gl,
+      pick && { a: texture(pick.a), b: texture(pick.b), mix: pick.mix },
+      cloudsTexture,
+      wallMs
     )
+    setCloudMap(clouds, out?.texture ?? cloudsTexture, out?.measured ?? false)
   })
 
   return (
@@ -176,6 +180,14 @@ export default function EarthRenderer({
       </mesh> */}
     </group>
   )
+}
+
+/** Only geostationary imagery carries cloud-top heights (R) and their
+ * confidence (B); the static and daily textures are grey. */
+function setCloudMap(clouds: CloudLayer, map: THREE.Texture, measured: boolean) {
+  clouds.uniforms.uCloudMap.value = map
+  clouds.uniforms.uCloudMeasured.value = measured ? 1 : 0
+  clouds.uniforms.uCloudMaxKm.value = maxTopKm(measured)
 }
 
 const _position = new THREE.Vector3()
