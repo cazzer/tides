@@ -98,6 +98,7 @@ export default function SolarSystem({
       <Starfield
         fromSurface={earthCamera}
         radius={mainViewRange(interactive && showPlanets).starRadius}
+        depth={interactive}
       />
 
       <OrbitingBody

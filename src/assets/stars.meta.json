@@ -15,5 +15,10 @@
       "offset": 6,
       "components": 1
     }
+  },
+  "distance": {
+    "unit": "pc",
+    "fromParallax": 1575,
+    "minParallax": 0.02
   }
 }
