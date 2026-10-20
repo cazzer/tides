@@ -188,10 +188,8 @@ export default function App() {
             onChange={setMainPanel}
           />
         )}
-        <div className="viewport-credits">
-          {weatherSource === 'real' && <CloudAttribution />}
-          {showPlanets && <PlanetAttribution />}
-        </div>
+        {weatherSource === 'real' && <CloudAttribution />}
+        {showPlanets && <PlanetAttribution below={weatherSource === 'real'} />}
       </div>
     </div>
   )
