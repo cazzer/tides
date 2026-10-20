@@ -297,7 +297,7 @@ body {
 /* Same pill as the cloud credit, same corner; stacks under it when both show. */
 .planet-attribution {
   position: absolute;
-  top: 6px;
+  top: calc(6px + env(safe-area-inset-top));
   right: 8px;
   max-width: calc(100% - 16px);
   margin: 0;
@@ -312,7 +312,7 @@ body {
 }
 
 .planet-attribution.below {
-  top: 30px;
+  top: calc(30px + env(safe-area-inset-top));
 }
 
 .planet-attribution a {
