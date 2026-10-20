@@ -3,10 +3,13 @@
 // how much cloud there will be where; the latest geostationary image says what
 // it looks like now. A forecast frame keeps the observed clouds, thinned where
 // cover falls and grown where it rises, and fades towards synthetic cloud as
-// the lead time grows. The synthetic cloud is the static clouds' texture
-// ranked into a uniform field and thresholded to the forecast cover, so it
-// covers the right fraction of each cell; it drifts with the prevailing winds
-// (easterly trades, westerlies) so a long forecast doesn't sit still.
+// the lead time grows. The synthetic cloud is the static clouds' texture,
+// ranked and mapped onto the observation's own distribution of cloud alpha
+// (so the same amount of cloud, veils and thick cloud alike), shifted up or
+// down by the local change in forecast cover. It drifts with the prevailing
+// winds for a day and a half (easterly trades, westerlies), then evolves by
+// cross-fading to an unrelated part of the same texture and back every two
+// days, so a long forecast neither sits still nor shears into streaks.
 //
 // The grid is one request for all 648 points, hourly from yesterday to
 // FORECAST_DAYS ahead, kept for FORECAST_TTL_MS and shared by every tab;
@@ -28,8 +31,11 @@ export const OPEN_METEO_SITE = 'https://open-meteo.com/'
 /** How fast the frame hands over from evolved observation to synthetic cloud:
  * 1 - 1/e of the way after this lead time. */
 export const FORECAST_TAU_MS = 18 * HOUR_MS
-/** Half-width of the threshold that turns the ranked field into cloud. */
-export const SYNTH_EDGE = 0.04
+/** Synthetic cloud drifts for this long, then stays put... */
+export const DRIFT_MAX_MS = 36 * HOUR_MS
+/** ...and evolves by cross-fading to another part of the texture and back
+ * over this period. */
+export const RESAMPLE_PERIOD_MS = 48 * HOUR_MS
 /** A grid with more missing or out-of-range values than this is refused. */
 export const MAX_INVALID_FRACTION = 0.1
 /** After a failed fetch, wait this long before asking again, doubling with
@@ -198,14 +204,39 @@ export function leadWeight(leadMs: number): number {
 }
 
 /** Prevailing zonal drift (degrees of longitude per hour, east positive):
- * easterly trades within 25° of the equator, westerlies at 35-65°, smooth in
- * between and fading out towards the poles. */
+ * easterly trades near the equator turning gently into westerlies by 45°,
+ * fading out towards the poles. Gentle, so neighbouring latitudes don't
+ * shear apart. */
 export function zonalDriftDegPerHour(latDeg: number): number {
   const a = Math.abs(latDeg)
-  const speed =
-    a <= 25 ? -5 : a < 35 ? -5 + 15 * smoothstep(25, 35, a) : 10 * (1 - smoothstep(65, 90, a))
+  const speed = (-4 + 11 * smoothstep(5, 45, a)) * (1 - smoothstep(45, 80, a))
   const kmPerDeg = 111.32 * Math.max(Math.cos((latDeg * Math.PI) / 180), 0.2)
   return (speed * 3.6) / kmPerDeg
+}
+
+/** How far (output pixels, east positive) the synthetic cloud has drifted
+ * at a latitude after a lead time: never more than DRIFT_MAX_MS's worth. */
+export function driftPx(latDeg: number, leadMs: number): number {
+  const hours = Math.min(Math.max(0, leadMs), DRIFT_MAX_MS) / HOUR_MS
+  return (zonalDriftDegPerHour(latDeg) * hours * OUT_W) / 360
+}
+
+/** 0..1: how far the synthetic cloud has cross-faded to its second sampling. */
+export function resampleWeight(leadMs: number): number {
+  if (leadMs <= DRIFT_MAX_MS) return 0
+  return 0.5 - 0.5 * Math.cos((2 * Math.PI * (leadMs - DRIFT_MAX_MS)) / RESAMPLE_PERIOD_MS)
+}
+
+/** (1 - b) u1 + b u2 for independent uniform u1, u2, made uniform again (its
+ * CDF), so a cross-faded rank is still a rank. */
+export function mixUniform(u1: number, u2: number, b: number): number {
+  const t = (1 - b) * u1 + b * u2
+  const lo = Math.min(b, 1 - b)
+  const hi = 1 - lo
+  if (lo < 1e-6) return t
+  if (t <= lo) return (t * t) / (2 * lo * hi)
+  if (t >= hi) return 1 - ((1 - t) * (1 - t)) / (2 * lo * hi)
+  return (t - lo / 2) / hi
 }
 
 interface Lerp {
@@ -275,29 +306,27 @@ function valueNoise(cells: number, seed: number): Float32Array {
   return out
 }
 
-// Weight of the noise in the rank, against the blurred alpha's 0..255 per
-// term: enough to order the cloudless areas (the Sahara, inland Australia)
+// Weight of the noise in the rank, in alpha levels: a tie-break. It orders
+// the static texture's flat, cloudless areas (the Sahara, inland Australia)
 // into cloud-like patches instead of one tie, which would fill as a sheet,
-// while barely reordering the clouds themselves.
-const RANK_NOISE = 24
+// and barely reorders anything with texture.
+const RANK_NOISE = 3
 
 /**
  * The static clouds' texture (one alpha byte per output pixel) as a uniform
- * rank, 0..65535: the order of a blur that keeps its cloud shapes, plus a wide
- * one and a little fixed noise to order the clear areas too. Thresholding it
- * at 1 - c covers a fraction c of the globe in cloud-shaped areas.
+ * rank, 0..65535: its own order, lightly smoothed so it keeps its fine
+ * texture, with fixed noise to break ties.
  */
 export function structureRank(staticAlpha: ArrayLike<number>): Uint16Array {
-  const fine = boxBlur(staticAlpha, OUT_W, OUT_H, 4)
-  const coarse = boxBlur(staticAlpha, OUT_W, OUT_H, 32)
-  const broad = valueNoise(48, 1)
-  const detail = valueNoise(192, 2)
-  const bins = 16384
-  const max = 255 * 1.25 + RANK_NOISE
+  const fine = boxBlur(staticAlpha, OUT_W, OUT_H, 1)
+  const noise = [valueNoise(48, 1), valueNoise(192, 2), valueNoise(768, 3)]
+  const bins = 65536
+  const max = 255 + RANK_NOISE
   const bin = new Uint16Array(fine.length)
   const counts = new Float64Array(bins)
   for (let p = 0; p < fine.length; p++) {
-    const v = fine[p] + 0.25 * coarse[p] + RANK_NOISE * (0.6 * broad[p] + 0.4 * detail[p])
+    const n = 0.5 * noise[0][p] + 0.3 * noise[1][p] + 0.2 * noise[2][p]
+    const v = fine[p] + RANK_NOISE * n
     bin[p] = Math.min(bins - 1, Math.floor((v / max) * bins))
     counts[bin[p]]++
   }
@@ -312,6 +341,42 @@ export function structureRank(staticAlpha: ArrayLike<number>): Uint16Array {
   return rank
 }
 
+/** Entries in alphaQuantiles' table. */
+const QUANTILES = 1024
+
+/**
+ * The observation's cloud alpha by quantile, area-weighted: entry i is the
+ * alpha (0..255) that a fraction i / (QUANTILES - 1) of the globe is below.
+ * Mapping a uniform rank through it gives cloud with the observation's mean
+ * and its mix of clear sky, veils and thick cloud. observed is RGBA (alpha in
+ * green).
+ */
+export function alphaQuantiles(observed: ArrayLike<number>): Float32Array {
+  const hist = new Float64Array(256)
+  for (let y = 0; y < OUT_H; y++) {
+    const weight = Math.cos((pixelLat(y) * Math.PI) / 180)
+    for (let x = 0, i = y * OUT_W * 4 + 1; x < OUT_W; x++, i += 4) hist[observed[i]] += weight
+  }
+  const total = hist.reduce((a, b) => a + b, 0)
+  const table = new Float32Array(QUANTILES)
+  // Each level's share spreads evenly over [level - 0.5, level + 0.5].
+  let g = 0
+  let below = 0
+  for (let i = 0; i < QUANTILES; i++) {
+    const u = (i / (QUANTILES - 1)) * total
+    while (g < 255 && (hist[g] === 0 || below + hist[g] < u)) below += hist[g++]
+    const within = hist[g] > 0 ? (u - below) / hist[g] : 0.5
+    table[i] = Math.min(255, Math.max(0, g - 0.5 + within))
+  }
+  return table
+}
+
+function quantileAt(table: Float32Array, u: number): number {
+  const f = Math.min(1, Math.max(0, u)) * (QUANTILES - 1)
+  const i = Math.min(QUANTILES - 2, Math.floor(f))
+  return table[i] + (table[i + 1] - table[i]) * (f - i)
+}
+
 /**
  * Forecast cloud alpha (0..1) for a pixel: observed alpha a0 under cover c0,
  * scaled down where the forecast cover ct is less, and grown into the
@@ -324,10 +389,10 @@ export function forecastAlpha(a0: number, c0: number, ct: number, s: number, w: 
   return (1 - w) * observed + w * s
 }
 
-/** Scale from the model's cover to the satellite's cloud alpha, so synthetic
- * cloud doesn't brighten the globe: area-weighted mean alpha over mean cover,
- * clamped to CALIBRATION_RANGE. observed is RGBA (alpha in green). Worked out
- * once per observation, not per frame. */
+/** Scale from the model's cover to the satellite's cloud alpha (how much a
+ * change in cover changes the cloud): area-weighted mean alpha over mean
+ * cover, clamped to CALIBRATION_RANGE. observed is RGBA (alpha in green).
+ * Worked out once per observation, not per frame. */
 export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<number>): number {
   let alpha = 0
   let cover = 0
@@ -352,13 +417,14 @@ export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<numb
 /**
  * Writes a forecast frame into out (RGBA, top row first, alpha in green, no
  * heights). observed is the latest observation's RGBA (top row first, alpha
- * in green), c0 and ct the grid's cover then and at the frame's time, rank
- * from structureRank, leadMs the time between them, calibration from
- * coverCalibration.
+ * in green), quantiles its alphaQuantiles, c0 and ct the grid's cover then
+ * and at the frame's time, rank from structureRank, leadMs the time between
+ * them, calibration from coverCalibration.
  */
 export function synthesiseForecast(
   {
     observed,
+    quantiles,
     c0,
     ct,
     rank,
@@ -366,6 +432,7 @@ export function synthesiseForecast(
     calibration: k,
   }: {
     observed: ArrayLike<number>
+    quantiles: Float32Array
     c0: ArrayLike<number>
     ct: ArrayLike<number>
     rank: ArrayLike<number>
@@ -375,20 +442,24 @@ export function synthesiseForecast(
   out: Uint8ClampedArray
 ): void {
   const w = leadWeight(leadMs)
+  const b = resampleWeight(leadMs)
   const cols = Array.from({ length: OUT_W }, (_, x) => colLerp(pixelLon(x)))
-  const hours = leadMs / HOUR_MS
   for (let y = 0; y < OUT_H; y++) {
     const lat = pixelLat(y)
     const row = rowLerp(lat)
-    const shift = Math.round(((zonalDriftDegPerHour(lat) * hours) / 360) * OUT_W)
+    const shift = Math.round(driftPx(lat, leadMs))
     const shiftMod = ((shift % OUT_W) + OUT_W) % OUT_W
+    // The second sampling: half way round the globe and mirrored north-south.
+    const rowB = (OUT_H - 1 - y) * OUT_W
     for (let x = 0, p = y * OUT_W; x < OUT_W; x++, p++) {
-      const cover0 = Math.min(1, k * bilinear(c0, row, cols[x]))
-      const coverT = Math.min(1, k * bilinear(ct, row, cols[x]))
+      const c0k = k * bilinear(c0, row, cols[x])
+      const ctk = k * bilinear(ct, row, cols[x])
       // The field moves east by shift: what's here came from shift to the west.
-      const r = rank[y * OUT_W + ((x - shiftMod + OUT_W) % OUT_W)] / 65535
-      const s = smoothstep(1 - coverT - SYNTH_EDGE, 1 - coverT + SYNTH_EDGE, r)
-      const a = forecastAlpha(observed[p * 4 + 1] / 255, cover0, coverT, s, w)
+      const from = (x - shiftMod + OUT_W) % OUT_W
+      const ra = rank[y * OUT_W + from] / 65535
+      const q = b > 0 ? mixUniform(ra, rank[rowB + ((from + OUT_W / 2) % OUT_W)] / 65535, b) : ra
+      const s = quantileAt(quantiles, q + ctk - c0k) / 255
+      const a = forecastAlpha(observed[p * 4 + 1] / 255, Math.min(1, c0k), Math.min(1, ctk), s, w)
       const i = p * 4
       out[i] = 0
       out[i + 1] = Math.round(255 * a)

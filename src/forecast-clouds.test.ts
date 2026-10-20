@@ -19,6 +19,11 @@ import {
   structureRank,
   synthesiseForecast,
   zonalDriftDegPerHour,
+  alphaQuantiles,
+  DRIFT_MAX_MS,
+  driftPx,
+  mixUniform,
+  resampleWeight,
   type FetchBackoff,
 } from './forecast-clouds'
 import { FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W } from './real-clouds'
@@ -172,8 +177,8 @@ test('zonalDriftDegPerHour: trades west, westerlies east, still at the poles', (
   expect(zonalDriftDegPerHour(-50)).toBeCloseTo(zonalDriftDegPerHour(50))
   expect(zonalDriftDegPerHour(-10)).toBeCloseTo(zonalDriftDegPerHour(10))
   expect(Math.abs(zonalDriftDegPerHour(90))).toBeLessThan(1e-9)
-  // 10 m/s at 60° is about 0.65°/h.
-  expect(zonalDriftDegPerHour(60)).toBeCloseTo(0.647, 2)
+  // About 4.2 m/s at 60°: 0.27°/h.
+  expect(zonalDriftDegPerHour(60)).toBeCloseTo(0.275, 2)
 })
 
 test('structureRank is uniform and keeps the order', () => {
@@ -203,97 +208,122 @@ test('structureRank orders a cloudless region into patches, not one tie', () => 
   expect(new Set(clear).size).toBeGreaterThan(clear.length / 4)
 })
 
+test('drift is capped and gentle from one latitude to the next', () => {
+  expect(driftPx(50, 48 * HOUR_MS)).toBe(driftPx(50, DRIFT_MAX_MS))
+  expect(driftPx(50, 120 * HOUR_MS)).toBe(driftPx(50, DRIFT_MAX_MS))
+  const lead = 120 * HOUR_MS
+  let steepest = 0
+  for (let y = 0; y + 1 < OUT_H; y++) {
+    const lat = (row: number) => 90 - ((row + 0.5) / OUT_H) * 180
+    steepest = Math.max(steepest, Math.abs(driftPx(lat(y + 1), lead) - driftPx(lat(y), lead)))
+  }
+  expect(steepest).toBeLessThan(1)
+})
+
+test('resampling cross-fades away and back, keeping a rank uniform', () => {
+  expect(resampleWeight(DRIFT_MAX_MS)).toBe(0)
+  expect(resampleWeight(DRIFT_MAX_MS + 24 * HOUR_MS)).toBeCloseTo(1)
+  expect(resampleWeight(DRIFT_MAX_MS + 48 * HOUR_MS)).toBeCloseTo(0)
+  for (const b of [0.2, 0.5]) {
+    let low = 0
+    let n = 0
+    for (let i = 0; i < 100; i++) {
+      for (let j = 0; j < 100; j++) {
+        const u = mixUniform((i + 0.5) / 100, (j + 0.5) / 100, b)
+        if (u < 0.25) low++
+        n++
+      }
+    }
+    expect(low / n).toBeCloseTo(0.25, 2)
+  }
+})
+
 describe('synthesis', () => {
   const pixels = OUT_W * OUT_H
+  const hash = (p: number) => (Math.imul(p, 2654435761) >>> 0) / 4294967296
   const uniformRank = () => {
     const rank = new Uint16Array(pixels)
     for (let p = 0; p < pixels; p++) rank[p] = (p * 40503) & 0xffff
     return rank
   }
-  const LONG = 30 * FORECAST_TAU_MS
-  const meanAlpha = (out: Uint8ClampedArray, fromRow = 0, toRow = OUT_H) => {
-    let sum = 0
-    for (let p = fromRow * OUT_W; p < toRow * OUT_W; p++) sum += out[p * 4 + 1]
-    return sum / ((toRow - fromRow) * OUT_W) / 255
+  /** Mostly thin cloud, some thick: alpha = 255 r². */
+  const skewed = () => {
+    const observed = new Uint8ClampedArray(pixels * 4)
+    for (let p = 0; p < pixels; p++) observed[p * 4 + 1] = Math.floor(255 * hash(p) ** 2)
+    return observed
   }
-
-  test('synthetic cloud covers the forecast fraction', () => {
+  const LONG = 30 * FORECAST_TAU_MS
+  const alphas = (rgba: Uint8ClampedArray, fromRow = 0, toRow = OUT_H) => {
+    const values: number[] = []
+    for (let p = fromRow * OUT_W; p < toRow * OUT_W; p += 7) values.push(rgba[p * 4 + 1])
+    return values
+  }
+  const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length / 255
+  const quartiles = (v: number[]) => {
+    const sorted = [...v].sort((a, b) => a - b)
+    return [0.25, 0.5, 0.75].map((f) => sorted[Math.floor(f * sorted.length)])
+  }
+  const synthesise = (
+    observed: Uint8ClampedArray,
+    c0: Float32Array,
+    ct: Float32Array,
+    { rank = uniformRank(), leadMs = LONG, calibration = 1 } = {}
+  ) => {
     const out = new Uint8ClampedArray(pixels * 4)
     synthesiseForecast(
-      {
-        observed: new Uint8ClampedArray(pixels * 4),
-        c0: new Float32Array(GRID_POINTS),
-        ct: new Float32Array(GRID_POINTS).fill(0.3),
-        rank: uniformRank(),
-        leadMs: LONG,
-        calibration: 1,
-      },
+      { observed, quantiles: alphaQuantiles(observed), c0, ct, rank, leadMs, calibration },
       out
     )
-    expect(meanAlpha(out)).toBeGreaterThan(0.28)
-    expect(meanAlpha(out)).toBeLessThan(0.32)
+    return out
+  }
+
+  test('at unchanged cover, synthetic cloud has the observation\'s alpha distribution', () => {
+    const observed = skewed()
+    const cover = new Float32Array(GRID_POINTS).fill(0.5)
+    const out = synthesise(observed, cover, cover)
+    expect(Math.abs(mean(alphas(out)) - mean(alphas(observed)))).toBeLessThan(0.01)
+    const [a, b] = [quartiles(alphas(out)), quartiles(alphas(observed))]
+    a.forEach((q, i) => expect(Math.abs(q - b[i])).toBeLessThanOrEqual(3))
     expect([out[0], out[2], out[3]]).toEqual([0, 0, 255])
   })
 
-  test('the grid is north up: a cloudy top row clouds the top of the image', () => {
-    const ct = new Float32Array(GRID_POINTS)
-    ct.fill(1, 0, 36)
-    const out = new Uint8ClampedArray(pixels * 4)
-    synthesiseForecast(
-      {
-        observed: new Uint8ClampedArray(pixels * 4),
-        c0: new Float32Array(GRID_POINTS),
-        ct,
-        rank: uniformRank(),
-        leadMs: LONG,
-        calibration: 1,
-      },
-      out
-    )
-    expect(meanAlpha(out, 0, 32)).toBeGreaterThan(0.9)
-    expect(meanAlpha(out, OUT_H - 32)).toBeLessThan(0.05)
+  test('more forecast cover, more cloud; and the grid is north up', () => {
+    const observed = skewed()
+    const c0 = new Float32Array(GRID_POINTS).fill(0.3)
+    const ct = Float32Array.from(c0)
+    ct.fill(0.8, 0, 36)
+    const out = synthesise(observed, c0, ct)
+    expect(mean(alphas(out, 0, 32))).toBeGreaterThan(mean(alphas(out, OUT_H - 32)) + 0.2)
   })
 
   test('synthetic cloud drifts east in the westerlies and west in the trades', () => {
     const x0 = 1000
     const rank = new Uint16Array(pixels)
     for (let y = 0; y < OUT_H; y++) rank[y * OUT_W + x0] = 65535
-    const out = new Uint8ClampedArray(pixels * 4)
-    const leadMs = 48 * HOUR_MS
-    synthesiseForecast(
-      {
-        observed: new Uint8ClampedArray(pixels * 4),
-        c0: new Float32Array(GRID_POINTS),
-        ct: new Float32Array(GRID_POINTS).fill(0.02),
-        rank,
-        leadMs,
-        calibration: 1,
-      },
-      out
-    )
+    // 2% thick cloud, the rest clear: only the top rank is cloud.
+    const observed = new Uint8ClampedArray(pixels * 4)
+    for (let p = 0; p < pixels; p++) observed[p * 4 + 1] = hash(p) < 0.02 ? 255 : 0
+    const cover = new Float32Array(GRID_POINTS).fill(0.3)
+    const out = synthesise(observed, cover, cover, { rank, leadMs: DRIFT_MAX_MS })
     const cloudAt = (lat: number) => {
       const y = Math.round(((90 - lat) / 180) * OUT_H - 0.5)
       let best = 0
       for (let x = 1; x < OUT_W; x++) if (out[(y * OUT_W + x) * 4 + 1] > out[(y * OUT_W + best) * 4 + 1]) best = x
-      return { x: best, expected: (zonalDriftDegPerHour(lat) * 48 * OUT_W) / 360 }
+      return { x: best, expected: driftPx(lat, DRIFT_MAX_MS) }
     }
     const west = cloudAt(50)
     expect(west.x).toBeGreaterThan(x0)
-    expect(west.x - x0).toBeCloseTo(west.expected, -1)
+    expect(Math.abs(west.x - x0 - west.expected)).toBeLessThan(2)
     const trades = cloudAt(-10)
     expect(trades.x).toBeLessThan(x0)
-    expect(trades.x - x0).toBeCloseTo(trades.expected, -1)
+    expect(Math.abs(trades.x - x0 - trades.expected)).toBeLessThan(2)
   })
 
   test('the observation passes through at no lead and unchanged cover', () => {
     const observed = new Uint8ClampedArray(pixels * 4)
     for (let p = 0; p < pixels; p++) observed[p * 4 + 1] = p % 256
     const cover = new Float32Array(GRID_POINTS).fill(0.5)
-    const out = new Uint8ClampedArray(pixels * 4)
-    synthesiseForecast(
-      { observed, c0: cover, ct: cover, rank: uniformRank(), leadMs: 0, calibration: 0.8 },
-      out
-    )
+    const out = synthesise(observed, cover, cover, { leadMs: 0, calibration: 0.8 })
     expect(out[1001 * 4 + 1]).toBe(1001 % 256)
   })
 
@@ -307,16 +337,14 @@ describe('synthesis', () => {
     expect(coverCalibration(observed(0.5), cover(0))).toBe(1)
   })
 
-  test('calibrated, a long forecast keeps the observed mean alpha', () => {
-    const observed = new Uint8ClampedArray(pixels * 4).fill(89)
+  test('a long forecast at the observed cover keeps the observed mean alpha', () => {
+    const observed = skewed()
     const cover = new Float32Array(GRID_POINTS).fill(0.66)
-    const out = new Uint8ClampedArray(pixels * 4)
     const calibration = coverCalibration(observed, cover)
-    synthesiseForecast(
-      { observed, c0: cover, ct: cover, rank: uniformRank(), leadMs: LONG, calibration },
-      out
-    )
-    expect(Math.abs(meanAlpha(out) - 89 / 255)).toBeLessThan(0.035)
+    for (const leadMs of [24 * HOUR_MS, 5 * 24 * HOUR_MS]) {
+      const out = synthesise(observed, cover, cover, { leadMs, calibration })
+      expect(Math.abs(mean(alphas(out)) - mean(alphas(observed)))).toBeLessThan(0.035)
+    }
   })
 })
 

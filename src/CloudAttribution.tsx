@@ -42,7 +42,14 @@ export function CloudAttribution() {
   const loading = !shown && (frames.length === 0 || frames.some((f) => f.status === 'loading'))
   return (
     <p className="cloud-attribution">
-      Clouds: {described && <CloudSourceText {...described} />}
+      Clouds:{' '}
+      {described && (
+        <CloudSourceText
+          source={described.source}
+          status={described.status}
+          texture={described.texture}
+        />
+      )}
       {loading && (described ? ' · loading…' : 'loading…')}
       {forecast && (
         <>

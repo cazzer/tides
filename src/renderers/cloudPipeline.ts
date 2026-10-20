@@ -38,6 +38,7 @@ import {
   type GibsSource,
 } from '../real-clouds'
 import {
+  alphaQuantiles,
   coverAt,
   coverCalibration,
   structureRank,
@@ -679,6 +680,8 @@ interface Observed {
   geo: GeoTextureInfo | null
   /** coverCalibration, once per grid. */
   calibration?: { grid: CoverGrid; k: number }
+  /** alphaQuantiles, once. */
+  quantiles?: Float32Array
 }
 
 interface BaseEntry {
@@ -789,8 +792,17 @@ async function buildForecastImage(
     observed.calibration = { grid, k: coverCalibration(observed.rgba, c0) }
   }
   const out = new Uint8ClampedArray(OUT_W * OUT_H * 4)
+  observed.quantiles ??= alphaQuantiles(observed.rgba)
   synthesiseForecast(
-    { observed: observed.rgba, c0, ct, rank, leadMs: toMs - fromMs, calibration: observed.calibration.k },
+    {
+      observed: observed.rgba,
+      quantiles: observed.quantiles,
+      c0,
+      ct,
+      rank,
+      leadMs: toMs - fromMs,
+      calibration: observed.calibration.k,
+    },
     out
   )
   await yieldToFrame()
