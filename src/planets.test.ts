@@ -9,7 +9,12 @@ import {
   RotationAxis,
   Rotation_EQJ_ECT,
 } from 'astronomy-engine'
-import { EARTH_ORBIT_RADIUS, MOON_UNITS_PER_KM } from './ephemeris'
+import {
+  EARTH_ORBIT_RADIUS,
+  MOON_UNITS_PER_KM,
+  earthPosition,
+  moonOrientation,
+} from './ephemeris'
 import {
   PLANETS,
   PLANET_KEYS,
@@ -216,5 +221,75 @@ describe('bodyOrientation', () => {
     const venus = bodyOrientation(Body.Venus)(DATES[0])
     expect(mars).not.toBe(venus)
     expect(mars.angleTo(venus)).toBeGreaterThan(0.1)
+  })
+})
+
+// Oppositions and conjunctions line planets up with the Earth's own scene
+// position, so the two share one frame. Times from astronomy-engine's
+// SearchRelativeLongitude (Saturn: 2025-09-21T05:30Z).
+describe('shares the Earth’s frame', () => {
+  test.each([
+    ['mars', '2025-01-16T02:38:00Z', 0],
+    ['jupiter', '2024-12-07T21:00:00Z', 0],
+    ['saturn', '2025-09-21T05:30:00Z', 0],
+    ['venus', '2025-03-23T01:00:00Z', 0],
+    ['jupiter', '2025-06-24T15:20:00Z', 180],
+  ] as const)('%s at %s is %i° from the Earth', (key, iso, separation) => {
+    const t = Date.parse(iso)
+    const planet = planetPosition(PLANETS[key].body)(t)
+    const [planetLon] = sceneLonLat(planet)
+    const [earthLon] = sceneLonLat(earthPosition(t))
+    expect(Math.abs(wrap180(planetLon - earthLon - separation))).toBeLessThan(
+      0.05
+    )
+    const r = Math.hypot(...planet)
+    if (key === 'venus') expect(r).toBeLessThan(EARTH_ORBIT_RADIUS)
+    else expect(r).toBeGreaterThan(EARTH_ORBIT_RADIUS)
+  })
+})
+
+// The IAU north pole is on the north side of the invariable plane, so for
+// Venus and Uranus the spin vector is −Y; obliquity is measured from the spin
+// vector (right-hand rule) to the orbit normal.
+describe('obliquity', () => {
+  const OBLIQUITY = {
+    mercury: 0.03,
+    venus: 177.36,
+    mars: 25.19,
+    jupiter: 3.13,
+    saturn: 26.73,
+    uranus: 97.77,
+    neptune: 28.32,
+  }
+  const spin = new THREE.Vector3()
+  const meridian = new THREE.Vector3()
+  const later = new THREE.Vector3()
+
+  test.each(PLANET_KEYS)('%s spin axis is tilted as measured', (key) => {
+    const { body } = PLANETS[key]
+    const t = DATES[2]
+    const at = bodyOrientation(body)
+    spin.set(0, 1, 0).applyQuaternion(at(t))
+    meridian.set(1, 0, 0).applyQuaternion(at(t))
+    later.set(1, 0, 0).applyQuaternion(at(t + 60_000))
+    if (meridian.cross(later).dot(spin) < 0) spin.negate()
+    // Remapping lengths keeps directions, so r × v's direction survives.
+    const position = planetPosition(body)
+    const r = new THREE.Vector3(...position(t))
+    const normal = r.cross(new THREE.Vector3(...position(t + MS_PER_DAY)))
+    expect(Math.abs(spin.angleTo(normal) * DEG - OBLIQUITY[key])).toBeLessThan(
+      0.5
+    )
+  })
+})
+
+describe('orientation buffers', () => {
+  test('bodyOrientation does not write into moonOrientation’s quaternion', () => {
+    const t = DATES[1]
+    const moon = moonOrientation(t)
+    const before = moon.clone()
+    bodyOrientation(Body.Mars)(t)
+    expect(moon.equals(before)).toBe(true)
+    expect(moonOrientation(t).equals(before)).toBe(true)
   })
 })

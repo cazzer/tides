@@ -123,12 +123,12 @@ export const PLANET_KEYS = Object.keys(PLANETS) as readonly PlanetKey[]
 // by sceneDistance. Writes into `out`.
 function heliocentricScene(
   body: Body,
-  t: number,
+  date: Date,
   rot: RotationMatrix,
   out: Float32Array | Vec3,
   offset: number
 ): void {
-  const { x, y, z } = HelioVector(body, new Date(t))
+  const { x, y, z } = HelioVector(body, date)
   const r = rot.rot
   const ex = r[0][0] * x + r[1][0] * y + r[2][0] * z
   const ey = r[0][1] * x + r[1][1] * y + r[2][1] * z
@@ -143,8 +143,9 @@ function heliocentricScene(
 
 export function planetPosition(body: Body): (t: number) => Vec3 {
   return (t) => {
+    const date = new Date(t)
     const out: Vec3 = [0, 0, 0]
-    heliocentricScene(body, t, Rotation_EQJ_ECT(new Date(t)), out, 0)
+    heliocentricScene(body, date, Rotation_EQJ_ECT(date), out, 0)
     return out
   }
 }
@@ -162,7 +163,7 @@ export function planetOrbitPath(
   const points = new Float32Array(segments * 3)
   for (let i = 0; i < segments; i++) {
     const ti = t + (i / segments - 0.5) * period
-    heliocentricScene(body, ti, rot, points, i * 3)
+    heliocentricScene(body, new Date(ti), rot, points, i * 3)
   }
   return points
 }
