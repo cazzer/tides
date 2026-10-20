@@ -3,10 +3,17 @@
 // frames. Building a texture is injected, so this module needs no DOM. Which
 // keyframes are wanted comes from ../cloud-frames.ts (tides-kzj.4.1): a frame
 // is a day of the daily composite, a geostationary slot over one (tides-1zj)
-// or a forecast from the latest of them (tides-kzj.4.3). Up to MAX_IN_FLIGHT of them build at once, most wanted first,
-// and the last MAX_CACHED_FRAMES are kept. Slow builds lengthen the frames
+// or a forecast from the latest of them (tides-kzj.4.3). Up to MAX_IN_FLIGHT
+// of them build at once, most wanted first, and the last MAX_CACHED_FRAMES are
+// kept. The average build time (warm builds only) lengthens the frames
 // (BUILD_MARGIN), and a frame that finishes after playback has moved past it
 // is still shown while it is the latest there is.
+//
+// Fallbacks: a build that finds no imagery marks its frame failed while it is
+// wanted, and the blend uses the frames that did load, or the static clouds
+// once all of them failed. A geostationary build without any satellite falls
+// back to its day's composite (renderers/cloudPipeline.ts), and a forecast
+// without forecast data to the latest observation.
 import {
   initialPlanState,
   isSteady,

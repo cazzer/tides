@@ -1,15 +1,25 @@
-// Which real cloud keyframes to show, and when (tides-kzj.4.1). Playback steps
-// through real frames at a cadence that gives each at least MIN_FRAME_WALL_MS
-// of wall time, and the GPU cross-fades the two that bracket the sim time
-// (renderers/cloudBlend.ts). Inside the geostationary archive the frames sit
-// on the cadence's grid; before it, on the daily composites' noons. Stepping
-// on to the next frames commits at once and lets the builds in flight finish,
-// so fast playback keeps moving; jumps, scrubs and rate changes settle first.
-// Too fast for any cadence, one frame is held and refreshed now and then. The
-// controller lengthens the shortest frame when builds are slow, so the frames
-// keep loading before playback passes them. Past the latest geostationary
-// slot the frames are forecasts (tides-kzj.4.3) on the hours of the grid.
-// Pure logic; the fetching lives in renderers/realCloudController.ts.
+// Which real cloud keyframes to show, and when (tides-kzj.4.1). The GPU
+// cross-fades the two loaded frames that bracket the sim time
+// (renderers/cloudBlend.ts), so the clouds evolve between them.
+//
+// Frames sit on a cadence from the ladder 10 min, 30 min, 1 h, 3 h, 6 h,
+// 12 h, 1 day: the finest that gives each frame at least MIN_FRAME_WALL_MS of
+// wall time at the playback rate, or 1.2 times the average build when builds
+// are slower (the controller passes that in). Paused shows the finest. Which
+// source a frame comes from is ../real-clouds.ts: on the cadence's grid in the
+// geostationary archive, at the composites' noons before it (a day apart
+// whatever the cadence), and forecasts on the grid's hours (tides-kzj.4.3)
+// after the latest slot. The plan is the frame at or before the sim time, the
+// one after, and one more ahead while playing.
+//
+// When even a day goes by in under the minimum (about a day per second and
+// faster), there is no cadence: one frame of the moment is held, and replaced
+// every HOLD_REFRESH_MS once it has loaded.
+//
+// Stepping on to the next frames commits at once and lets the builds in
+// flight finish, so fast playback keeps moving; jumps, scrubs and rate
+// changes settle for SETTLE_MS first. Pure logic; the fetching lives in
+// renderers/realCloudController.ts.
 import {
   DAY_MS,
   GEO_ARCHIVE_MS,
@@ -243,16 +253,8 @@ export function stepCloudPlan(
   return same ? keep(prev) : keep({ ...prev, candidate: next, since })
 }
 
-/**
- * The two loaded frames to cross-fade for a sim time: the latest at or before
- * it and the earliest after, mix 0..1 between them. With only one of them, that
- * one alone. 'static' stands for the static clouds. Null while nothing has
- * loaded yet (keep showing what was there); static once everything failed.
- */
-export function pickBlend<T>(
-  frames: readonly FrameView<T>[],
-  simMs: number
-): { a: T | 'static'; b: T | 'static'; mix: number } | null {
+/** The latest loaded frame at or before a sim time, and the earliest after. */
+function bracket<T>(frames: readonly FrameView<T>[], simMs: number) {
   let before: FrameView<T> | null = null
   let after: FrameView<T> | null = null
   for (const f of frames) {
@@ -263,16 +265,39 @@ export function pickBlend<T>(
       after = f
     }
   }
+  const mix =
+    before && after
+      ? Math.min(1, Math.max(0, (simMs - before.timeMs) / (after.timeMs - before.timeMs)))
+      : 0
+  return { before, after, mix }
+}
+
+/**
+ * The two loaded frames to cross-fade for a sim time: the latest at or before
+ * it and the earliest after, mix 0..1 between them. With only one of them, that
+ * one alone. 'static' stands for the static clouds. Null while nothing has
+ * loaded yet (keep showing what was there); static once everything failed.
+ */
+export function pickBlend<T>(
+  frames: readonly FrameView<T>[],
+  simMs: number
+): { a: T | 'static'; b: T | 'static'; mix: number } | null {
+  const { before, after, mix } = bracket(frames, simMs)
   const show = (f: FrameView<T>): T | 'static' =>
     f.source.kind === 'static' || f.texture === null ? 'static' : f.texture
-  if (before && after) {
-    const mix = (simMs - before.timeMs) / (after.timeMs - before.timeMs)
-    return { a: show(before), b: show(after), mix: Math.min(1, Math.max(0, mix)) }
-  }
+  if (before && after) return { a: show(before), b: show(after), mix }
   const only = before ?? after
   if (only) return { a: show(only), b: show(only), mix: 0 }
   if (frames.length > 0 && frames.every((f) => f.status === 'failed')) {
     return { a: 'static', b: 'static', mix: 0 }
   }
   return null
+}
+
+/** The loaded frame that most of what pickBlend shows comes from, for the
+ * attribution; null while none is loaded. */
+export function shownFrame<T>(frames: readonly FrameView<T>[], simMs: number): FrameView<T> | null {
+  const { before, after, mix } = bracket(frames, simMs)
+  if (before && after) return mix < 0.5 ? before : after
+  return before ?? after
 }

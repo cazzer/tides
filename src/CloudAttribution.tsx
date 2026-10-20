@@ -1,31 +1,49 @@
 import { useId } from 'react'
+import type * as THREE from 'three'
+import { shownFrame, type CloudStatus } from './cloud-frames'
 import { OPEN_METEO_SITE } from './forecast-clouds'
-import { isLatestStandIn, MODIS_FROM, utcDayKey, type GibsSource } from './real-clouds'
+import { isLatestStandIn, MODIS_FROM, utcDayKey, type CloudSource, type GibsSource } from './real-clouds'
 import { useStore } from './store'
-import {
-  useRealCloudSnapshot,
-  type GeoTextureInfo,
-  type RealCloudSnapshot,
-} from './renderers/realCloudTextures'
+import { useRealCloudSnapshot, type GeoTextureInfo } from './renderers/realCloudTextures'
 
 const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
 // Wording requested by the GIBS documentation.
 const ACKNOWLEDGEMENT =
   "We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS)."
 
-/** Where the clouds in Real weather come from. Mount only in Real mode. */
+type StoreState = ReturnType<typeof useStore.getState>
+const simTime = (s: StoreState) => (s.timestamp == null ? null : (s.jumpDate?.getTime() ?? s.timestamp))
+
+interface Described {
+  source: CloudSource
+  status: CloudStatus
+  texture: THREE.Texture | null
+}
+
+/** Where the clouds on screen in Real weather come from: the loaded frame
+ * nearer the sim time of the two being blended (tides-kzj.4.4), or, before
+ * any has loaded, the one being fetched. Mount only in Real mode. */
 export function CloudAttribution() {
-  const snapshot = useRealCloudSnapshot()
-  const { source, status } = snapshot
-  // Credited whenever a forecast is on screen, not only as the primary frame,
-  // unless it is only the latest observation held for want of forecast data.
-  const forecast = snapshot.frames.some(
+  const { frames, source, status, texture } = useRealCloudSnapshot()
+  // A key, so the per-frame timestamp only re-renders when the frame changes.
+  const shownKey = useStore((s) => {
+    const sim = simTime(s)
+    return sim == null ? null : (shownFrame(frames, sim)?.key ?? null)
+  })
+  const shown = frames.find((f) => f.key === shownKey) ?? null
+  const described: Described | null = shown ?? (source && { source, status, texture })
+  // Credited whenever forecast data is on screen, not only as the nearer
+  // frame, unless a frame only holds the latest observation for want of it.
+  const forecast = frames.some(
     (f) => f.source.kind === 'forecast' && f.status === 'ready' && !f.texture?.userData.held
   )
+  // Only while nothing loaded is on screen: frames turning over during fast
+  // playback aren't worth a flicker.
+  const loading = !shown && (frames.length === 0 || frames.some((f) => f.status === 'loading'))
   return (
     <p className="cloud-attribution">
-      Clouds: <CloudSourceText snapshot={snapshot} />
-      {status === 'loading' && (source ? ' · loading…' : 'loading…')}
+      Clouds: {described && <CloudSourceText {...described} />}
+      {loading && (described ? ' · loading…' : 'loading…')}
       {forecast && (
         <>
           {' · '}
@@ -47,15 +65,13 @@ const instrument = (source: GibsSource) => source.layer.split('_')[0]
 /** 2026-10-18T18:00:00Z -> 2026-10-18 18:00 UTC */
 const slotLabel = (time: string) => `${time.slice(0, 10)} ${time.slice(11, 16)} UTC`
 
-function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: RealCloudSnapshot }) {
+function CloudSourceText({ source, status, texture }: Described) {
   const acknowledgementId = useId()
   // A boolean, so the per-frame timestamp only re-renders when it flips.
-  const latest = useStore(
-    (s) =>
-      s.timestamp != null &&
-      isLatestStandIn(source, s.jumpDate?.getTime() ?? s.timestamp, Date.now())
-  )
-  if (!source) return null
+  const latest = useStore((s) => {
+    const sim = simTime(s)
+    return sim != null && isLatestStandIn(source, sim, Date.now())
+  })
   if (source.kind === 'static') {
     return source.reason === 'before-coverage'
       ? <>simulated (before {utcDayKey(MODIS_FROM)})</>
@@ -74,7 +90,6 @@ function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: 
     return <>simulated ({what} unavailable)</>
   }
   // Geostationary satellites where they see, the daily composite elsewhere.
-  // While loading, the texture is still the previous source's.
   const geo =
     source.kind === 'geo' && status === 'ready'
       ? (texture?.userData.geo as GeoTextureInfo | null | undefined)
@@ -89,7 +104,7 @@ function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: 
         : `forecast ${slotLabel(source.time)} from ${observedLabel}`
       : geo
         ? `${geo.satellites.join(', ')} ${slotLabel(geo.time)} + ${instrument(daily)} ${daily.date}`
-        : source.kind === 'geo' && status === 'loading'
+        : source.kind === 'geo'
           ? slotLabel(source.time)
           : `${instrument(daily)} ${daily.date}`
   return (

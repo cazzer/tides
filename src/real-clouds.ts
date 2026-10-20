@@ -10,6 +10,14 @@
 // which layers, days and slots there are, the tile URLs, the gap fill and the
 // cloud-alpha maths. Which of them to show when is ../cloud-frames.ts; the
 // browser side lives in renderers/cloudPipeline.ts.
+//
+// What Real weather shows for a sim time (selectRealCloudSource):
+// - before 2000-02-24: the static clouds;
+// - from then: the day's composite, MODIS Terra, VIIRS from 2015-11-24;
+// - the last ~89 days: the geostationary slot (every 10 minutes) over it;
+// - from the first hour after the latest published slot (40-50 minutes
+//   behind now): a forecast, hourly, out to about 7 days (forecastHorizon);
+// - past that: the static clouds again.
 
 export const DAY_MS = 86_400_000
 

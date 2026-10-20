@@ -8,6 +8,7 @@ import {
   isSteady,
   pickBlend,
   planCloudFrames,
+  shownFrame,
   SETTLE_MS,
   stepCloudPlan,
   type CloudPlan,
@@ -317,6 +318,14 @@ describe('pickBlend', () => {
   test('skips a frame still loading in the middle', () => {
     const frames = [frame(0, 'ready'), frame(100, 'loading'), frame(200, 'ready')]
     expect(pickBlend(frames, 150)).toEqual({ a: 't0', b: 't200', mix: 0.75 })
+  })
+
+  test('shownFrame names the nearer of the frames being blended', () => {
+    const frames = [frame(0, 'ready'), frame(100, 'loading'), frame(200, 'ready')]
+    expect(shownFrame(frames, 90)?.key).toBe('k0')
+    expect(shownFrame(frames, 110)?.key).toBe('k200')
+    expect(shownFrame(frames, 300)?.key).toBe('k200')
+    expect(shownFrame([frame(0, 'loading')], 10)).toBeNull()
   })
 
   test('a static frame shows the static clouds', () => {

@@ -6,9 +6,14 @@
 // the lead time grows. The synthetic cloud is the static clouds' texture
 // ranked into a uniform field and thresholded to the forecast cover, so it
 // covers the right fraction of each cell; it drifts with the prevailing winds
-// (easterly trades, westerlies) so a long forecast doesn't sit still. Pure
-// logic; the fetching is renderers/forecastGrid.ts and the build
-// renderers/cloudPipeline.ts.
+// (easterly trades, westerlies) so a long forecast doesn't sit still.
+//
+// The grid is one request for all 648 points, hourly from yesterday to
+// FORECAST_DAYS ahead, kept for FORECAST_TTL_MS and shared by every tab;
+// failures back off from FORECAST_RETRY_MS to FORECAST_RETRY_MAX_MS, while a
+// stale grid serves for up to a day. Without a grid that covers the frame the
+// latest observation is held, uncredited. Pure logic; the fetching is
+// renderers/forecastGrid.ts and the build renderers/cloudPipeline.ts.
 import { boxBlur, FORECAST_DAYS, FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W, smoothstep } from './real-clouds'
 
 /** Grid point latitudes, north first, and longitudes, west first: one point
