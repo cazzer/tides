@@ -29,6 +29,16 @@ const RINGS: RingProfile = {
   texture: ringTexture,
 }
 
+// The strip's colours are dark for this lighting: at 2030-01-01 (Sun ~23°
+// from the ring plane) albedo 3 brings the B ring's lit face to ~75% of
+// the globe's brightness, as in telescope images, with the Cassini
+// Division still near black. Thick particle layers (Lommel–Seeliger)
+// stay bright under a low Sun when seen, as from the Earth, from near the
+// ring plane. The B ring is too thick for much light to get through, so
+// its unlit face is far darker: 0.1 keeps it as dark as before the boost.
+const RING_ALBEDO = 3
+const RING_UNLIT_FACE = 0.1
+
 export function Saturn() {
   return (
     <>
@@ -42,6 +52,9 @@ export function Saturn() {
       <PlanetRings
         planet={SATURN}
         {...RINGS}
+        law="lommel-seeliger"
+        albedo={RING_ALBEDO}
+        unlitFace={RING_UNLIT_FACE}
       />
     </>
   )

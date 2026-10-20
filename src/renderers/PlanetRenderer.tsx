@@ -315,7 +315,16 @@ export interface PlanetRingsProps extends Partial<RingProfile> {
   color?: THREE.ColorRepresentation
   /** Brightness of the face turned away from the Sun. Default 0.3. */
   unlitFace?: number
+  /** Scales the texture (or colour), lit and ambient alike. Default 1. */
+  albedo?: number
+  /** How the lit face's brightness follows the Sun's and the viewer's
+   * angles from the ring plane: 'lambert' (default) dims with the Sun's
+   * alone; 'lommel-seeliger', for thick rings of particles, keeps them
+   * bright under a low Sun when seen from near the ring plane. */
+  law?: RingLightingLaw
 }
+
+export type RingLightingLaw = 'lambert' | 'lommel-seeliger'
 
 /** The planet's rings in its equatorial plane, shadowed by the globe. */
 export function PlanetRings(props: PlanetRingsProps) {
@@ -348,6 +357,8 @@ function RingsMesh({
   opacity = 1,
   color = planet.color,
   unlitFace = 0.3,
+  albedo = 1,
+  law = 'lambert',
   map,
 }: PlanetRingsProps & { map: THREE.Texture | null }) {
   if (inner === undefined || outer === undefined) {
@@ -364,9 +375,11 @@ function RingsMesh({
       new THREE.ShaderMaterial({
         vertexShader: ringVertex,
         fragmentShader: ringFragment,
-        defines: map
-          ? { USE_RING_MAP: '', MAX_RING_BANDS }
-          : { MAX_RING_BANDS },
+        defines: {
+          ...(map && { USE_RING_MAP: '' }),
+          MAX_RING_BANDS,
+          ...(law === 'lommel-seeliger' && { USE_LOMMEL_SEELIGER: '' }),
+        },
         uniforms: {
           uSunDir: sun.uniform,
           uColor: { value: new THREE.Color() },
@@ -375,6 +388,7 @@ function RingsMesh({
           uAmbient: { value: AMBIENT },
           uPlanetRadius: { value: 0 },
           uUnlitFace: { value: 0.3 },
+          uAlbedo: { value: 1 },
           uRingMap: { value: map },
           ...bandUniforms(),
         },
@@ -382,7 +396,7 @@ function RingsMesh({
         transparent: true,
         depthWrite: false,
       }),
-    [map, sun.uniform]
+    [map, law, sun.uniform]
   )
   useEffect(() => () => material.dispose(), [material])
   useEffect(() => () => geometry.dispose(), [geometry])
@@ -390,9 +404,14 @@ function RingsMesh({
   useLayoutEffect(() => {
     const u = material.uniforms
     u.uColor.value.set(color)
-    setUniforms(u, { uOpacity: opacity, uPlanetRadius: R, uUnlitFace: unlitFace })
+    setUniforms(u, {
+      uOpacity: opacity,
+      uPlanetRadius: R,
+      uUnlitFace: unlitFace,
+      uAlbedo: albedo,
+    })
     setBands(u, { inner, outer, bands })
-  }, [material, color, opacity, R, unlitFace, inner, outer, bands])
+  }, [material, color, opacity, R, unlitFace, albedo, inner, outer, bands])
 
   return (
     <mesh
