@@ -35,6 +35,33 @@ export function pivotDepth(rotateSpeed: number): number {
   return 1 - Math.min(1, rotateSpeed) ** 2
 }
 
+/**
+ * Below this pivot depth the surface no longer fills the view and a tilt
+ * would only tip the whole system about Earth's centre, so the pivot takes no
+ * input and the tilt and heading ease back to zero.
+ */
+export const MIN_PIVOT_DEPTH = 0.5
+
+const PIVOT_EASE = 0.05
+
+const easeToZero = (value: number) =>
+  Math.abs(value) < 1e-4 ? 0 : value * (1 - PIVOT_EASE)
+
+export const canPivot = (pivot: Pivot) => pivot.depth >= MIN_PIVOT_DEPTH
+
+/**
+ * Steps `pivot` one frame. `depth` is pivotDepth at the current zoom in Earth
+ * focus, or null elsewhere. Zoomed out past MIN_PIVOT_DEPTH, or outside Earth
+ * focus, the tilt and heading ease back so the orbit is the untilted one again.
+ */
+export function settlePivot(pivot: Pivot, depth: number | null): void {
+  pivot.depth = depth ?? easeToZero(pivot.depth)
+  if (depth === null || depth < MIN_PIVOT_DEPTH) {
+    pivot.tilt = easeToZero(pivot.tilt)
+    pivot.heading = easeToZero(pivot.heading)
+  }
+}
+
 const _worldUp = new Vector3(0, 1, 0)
 
 /**

@@ -32,9 +32,11 @@ import {
   planetsNear,
 } from './main-view'
 import {
+  canPivot,
   clampTilt,
   pivotDepth,
   pixelsToPivot,
+  settlePivot,
   tiltControls,
   wrapAngle,
   type Pivot,
@@ -70,8 +72,6 @@ export function surfaceGrabRotateSpeed(
 ): number {
   return Math.min(1, (worldPerPixel * domHeight) / (2 * Math.PI * radius))
 }
-
-const PIVOT_EASE = 0.05
 
 const inEarthFocus = () => useStore.getState().cameraFocus === 'earth'
 
@@ -111,6 +111,7 @@ function listenForPivot(
   const doc = dom.ownerDocument
 
   const turn = (dx: number, dy: number) => {
+    if (!canPivot(pivot)) return
     const delta = pixelsToPivot(dx, dy, dom.clientHeight)
     pivot.tilt = clampTilt(pivot.tilt + delta.tilt)
     pivot.heading = wrapAngle(pivot.heading + delta.heading)
@@ -206,15 +207,12 @@ function listenForPivot(
   }
 }
 
-const easeToZero = (value: number) =>
-  Math.abs(value) < 1e-4 ? 0 : value * (1 - PIVOT_EASE)
-
 /**
  * Earth focus: a right-drag (two-finger click-drag on a trackpad), a
- * middle-drag or a two-finger touch drag tilts the camera toward the horizon and turns its heading
- * (tides-7yt). Leaving Earth focus eases both back to zero. `dom` is the
- * element OrbitControls listens on, which drei swaps when the View's event
- * layer reconnects.
+ * middle-drag or a two-finger touch drag tilts the camera toward the horizon
+ * and turns its heading (tides-7yt). Zooming out or leaving Earth focus eases
+ * both back to zero (tides-nqy). `dom` is the element OrbitControls listens
+ * on, which drei swaps when the View's event layer reconnects.
  */
 function useEarthPivot(
   camera: Camera,
@@ -251,14 +249,10 @@ function useEarthPivot(
 
   useFrame(() => {
     if (!controls) return
-    const p = pivot.current
-    if (inEarthFocus()) {
-      p.depth = pivotDepth(controls.rotateSpeed)
-    } else {
-      p.tilt = easeToZero(p.tilt)
-      p.heading = easeToZero(p.heading)
-      p.depth = easeToZero(p.depth)
-    }
+    settlePivot(
+      pivot.current,
+      inEarthFocus() ? pivotDepth(controls.rotateSpeed) : null
+    )
   })
 }
 
