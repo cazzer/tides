@@ -199,6 +199,9 @@ function SettingsDialog({
   const setLayout = useStore((s) => s.setLayout)
   const showPlanets = useStore((s) => s.showPlanets)
   const setShowPlanets = useStore((s) => s.setShowPlanets)
+  const constellationsHintId = useId()
+  const showConstellations = useStore((s) => s.showConstellations)
+  const setShowConstellations = useStore((s) => s.setShowConstellations)
 
   useEffect(() => {
     const dialog = ref.current
@@ -268,6 +271,18 @@ function SettingsDialog({
             options={PLANETS_OPTIONS}
             onChange={(value) => setShowPlanets(value === 'on')}
           />
+        </SettingGroup>
+        <SettingGroup aria-describedby={constellationsHintId}>
+          <SettingLegend>Constellations</SettingLegend>
+          <SegmentedControl
+            name="constellations"
+            value={showConstellations ? 'on' : 'off'}
+            options={PLANETS_OPTIONS}
+            onChange={(value) => setShowConstellations(value === 'on')}
+          />
+          <SettingHint id={constellationsHintId}>
+            Lines for the major constellations in the View from Earth panel.
+          </SettingHint>
         </SettingGroup>
       </DialogBody>
     </Dialog>
