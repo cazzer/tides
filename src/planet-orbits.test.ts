@@ -48,6 +48,18 @@ describe('orbitPathIsStale', () => {
   })
 })
 
+describe('planetOrbitPath', () => {
+  it('fills a given buffer in place with the same points', () => {
+    const t = DATES[1]
+    const out = new Float32Array(PLANET_ORBIT_SEGMENTS * 3)
+    const filled = planetOrbitPath(PLANETS.mars.body, t, PLANET_ORBIT_SEGMENTS, out)
+    expect(filled).toBe(out)
+    expect(Array.from(out)).toEqual(
+      Array.from(planetOrbitPath(PLANETS.mars.body, t, PLANET_ORBIT_SEGMENTS))
+    )
+  })
+})
+
 describe('planet orbit lines', () => {
   // The bead's bar: planet centre within 0.5% of its orbit radius of the line,
   // for every sim time the line is kept (up to the refresh threshold).

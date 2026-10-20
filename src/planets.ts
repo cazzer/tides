@@ -151,16 +151,18 @@ export function planetPosition(body: Body): (t: number) => Vec3 {
 }
 
 // One sidereal period of positions centred on t, as xyz triples for a closed
-// THREE.LineLoop. Every point uses the ecliptic of date t (the scene's frame
-// at t), so the loop stays fixed while the planet moves along it.
+// THREE.LineLoop, written into `out` (segments × 3 long) when given. Every
+// point uses the ecliptic of date t (the scene's frame at t), so the loop
+// stays fixed while the planet moves along it.
 export function planetOrbitPath(
   body: Body,
   t: number,
-  segments: number
+  segments: number,
+  out?: Float32Array
 ): Float32Array {
   const period = PlanetOrbitalPeriod(body) * MS_PER_DAY
   const rot = Rotation_EQJ_ECT(new Date(t))
-  const points = new Float32Array(segments * 3)
+  const points = out ?? new Float32Array(segments * 3)
   for (let i = 0; i < segments; i++) {
     const ti = t + (i / segments - 0.5) * period
     heliocentricScene(body, new Date(ti), rot, points, i * 3)
