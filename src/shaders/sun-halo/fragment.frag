@@ -11,6 +11,10 @@ varying vec3 vLayer1;
 varying vec3 vLayer2;
 varying vec3 vNormal;
 varying vec3 vEyeVector;
+// Ortho eye: with planets on, the main view's eye can sit hundreds of units
+// from the Sun, where cameraPosition - P grazes it; use the view direction.
+uniform vec3 uOrthoEye;
+uniform float uUseOrthoEye;
 varying vec3 vWorldPosition;
 float PI = 3.1415926535897932384626433832795;
 
@@ -21,7 +25,7 @@ vec3 brightnessToColor(float b) {
 
 void main() {
   // Calculate eye vector per-fragment
-  vec3 eyeVector = normalize(cameraPosition - vWorldPosition);
+  vec3 eyeVector = uUseOrthoEye > 0.5 ? uOrthoEye : normalize(cameraPosition - vWorldPosition);
   vec3 normal = normalize(vNormal);
   
   // Debug: Visualize the dot product directly

@@ -7,6 +7,10 @@ varying vec3 vLayer0;
 varying vec3 vLayer1;
 varying vec3 vLayer2;
 varying vec3 vEyeVector;
+// Ortho eye: with planets on, the main view's eye can sit hundreds of units
+// from the Sun, where cameraPosition - P grazes it; use the view direction.
+uniform vec3 uOrthoEye;
+uniform float uUseOrthoEye;
 varying vec3 vWorldPosition;
 float PI = 3.1415926535897932384626433832795;
 
@@ -22,7 +26,7 @@ void main() {
   vWorldPosition = worldPosition.xyz;
   
   // Calculate eye vector in world space
-  vEyeVector = normalize(cameraPosition - vWorldPosition);
+  vEyeVector = uUseOrthoEye > 0.5 ? uOrthoEye : normalize(cameraPosition - vWorldPosition);
   
   // Transform normal to world space
   vNormal = normalize(normalMatrix * normal);

@@ -8,6 +8,7 @@ import sunFragment from '../shaders/sun/fragment.frag'
 import haloVertex from '../shaders/sun-halo/vertex.glsl'
 import haloFragment from '../shaders/sun-halo/fragment.frag'
 import { CubeCamera, meshBounds } from '@react-three/drei'
+import { useStore } from '../store'
 
 // https://www.youtube.com/watch?v=3krH52AhPqk
 // ended at 1:04:24
@@ -38,6 +39,8 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
         uPerlin: { value: null },
         cameraPosition: { value: new THREE.Vector3() },
         objectCenter: { value: new THREE.Vector3() }, // Sun's world position
+        uOrthoEye: { value: new THREE.Vector3() },
+        uUseOrthoEye: { value: 0 },
       },
       vertexShader: sunVertex,
       fragmentShader: sunFragment,
@@ -54,6 +57,8 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
       uniforms: {
         time: { value: 0 },
         uPerlin: { value: null },
+        uOrthoEye: { value: new THREE.Vector3() },
+        uUseOrthoEye: { value: 0 },
       },
     })
   }, [])
@@ -73,6 +78,17 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
     sunMaterial.uniforms.cameraPosition.value.copy(state.camera.position)
     if (sunRef.current) {
       sunMaterial.uniforms.objectCenter.value.copy(sunRef.current.position)
+    }
+
+    // Only with planets on: off keeps today's perspective-style eye exactly.
+    const orthoEye =
+      useStore.getState().showPlanets &&
+      (state.camera as THREE.OrthographicCamera).isOrthographicCamera === true
+    for (const material of [sunMaterial, sunHaloMaterial]) {
+      material.uniforms.uUseOrthoEye.value = orthoEye ? 1 : 0
+      if (orthoEye) {
+        state.camera.getWorldDirection(material.uniforms.uOrthoEye.value).negate()
+      }
     }
   })
 
