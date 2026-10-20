@@ -8,6 +8,7 @@ import AuroraRenderer from './renderers/AuroraRenderer'
 import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
+import ConstellationLines from './renderers/ConstellationLines'
 import SceneLights from './renderers/SceneLights'
 import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
@@ -63,6 +64,7 @@ export default function SolarSystem({
   const moon = useRef(null)
   const location = useStore((s) => s.location)
   const showPlanets = useStore((s) => s.showPlanets)
+  const showConstellations = useStore((s) => s.showConstellations)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
 
   // From the surface, the Sun and Moon move to their true directions on a sky
@@ -99,6 +101,7 @@ export default function SolarSystem({
         fromSurface={earthCamera}
         radius={mainViewRange(interactive && showPlanets).starRadius}
       />
+      {earthCamera && showConstellations && <ConstellationLines />}
 
       <OrbitingBody
         ref={sun}
