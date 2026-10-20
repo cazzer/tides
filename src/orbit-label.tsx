@@ -44,6 +44,11 @@ export const labelMaterial = new THREE.MeshBasicMaterial({
   depthWrite: false,
 })
 
+// Mercury and Venus orbit through the clock's band (planets.ts), so with
+// planets on the clock is drawn over them rather than cut by their globes.
+const clockOverPlanetsMaterial = labelMaterial.clone()
+clockOverPlanetsMaterial.depthTest = false
+
 type TroikaText = THREE.Mesh & {
   text: string
   fillOpacity: number
@@ -81,6 +86,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
   const monthRefs = useRef<(TroikaText | null)[]>([])
   const { handleFocus } = useCamera()
   const setPlanet = useStore((s) => s.setPlanet)
+  const showPlanets = useStore((s) => s.showPlanets)
 
   useEffect(() => {
     setPlanet('clock', clockRef)
@@ -168,7 +174,8 @@ export function OrbitLabel({ radius }: { radius: number }) {
         ref={clockTextRef}
         userData-focus="clock"
         onClick={handleFocus}
-        material={labelMaterial}
+        material={showPlanets ? clockOverPlanetsMaterial : labelMaterial}
+        renderOrder={showPlanets ? 3 : 0}
         scale={[2, 2, 2]}
         color="white" // default
         // Thin white strokes wash out over the Sun without a dark edge.
