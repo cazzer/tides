@@ -62,7 +62,10 @@ function PlanetBody({
       orientationAt={orientationAt}
       interactive={interactive}
     >
-      {/* The body registers (and can be focused) while its textures load. */}
+      {/* The body registers (and can be focused) while its textures load.
+          Anything else that suspends here (e.g. drei Text name labels,
+          tides-kzj.2.5) needs its own Suspense beside this one, so a font
+          load doesn't hide the globe or a texture load the label. */}
       <Suspense fallback={null}>
         <Renderer />
       </Suspense>

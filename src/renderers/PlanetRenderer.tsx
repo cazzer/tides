@@ -7,12 +7,21 @@
 // is wrong for every other planet, so none of these use scene lights: each
 // takes the Sun's direction in the body's frame from its world matrix just
 // before it renders, with the Sun at the world origin.
-import { useEffect, useMemo } from 'react'
-import { useLoader, useThree } from '@react-three/fiber'
+//
+// Each material is built once per shader variant (which textures, whether
+// the rings shadow the globe); props only change uniform values.
+import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { meshBounds } from '@react-three/drei'
 import * as THREE from 'three'
 import type { Planet } from '../planets'
-import { ringGeometry, sunDirectionLocal } from './planetFrame'
+import {
+  MAX_RING_BANDS,
+  ringBandUniforms,
+  ringGeometry,
+  sunDirectionInFrame,
+  type RingBand,
+} from './planetFrame'
+import { usePlanetTextures } from './planetTextures'
 import {
   AMBIENT_COLOR,
   AMBIENT_INTENSITY,
@@ -25,38 +34,22 @@ import ringFragment from '../shaders/ring/fragment.frag'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 
-// Colour textures arrive tagged sRGB (a uniform isn't tagged the way a
-// material map is) with the anisotropy set by the last component to use it.
-class PlanetTextureLoader extends THREE.TextureLoader {
-  anisotropy = 1
-
-  load(
-    url: string,
-    onLoad?: (texture: THREE.Texture) => void,
-    onProgress?: (event: ProgressEvent) => void,
-    onError?: (err: unknown) => void
-  ): THREE.Texture {
-    return super.load(
-      url,
-      (texture) => {
-        texture.colorSpace = THREE.SRGBColorSpace
-        texture.anisotropy = this.anisotropy
-        onLoad?.(texture)
-      },
-      onProgress,
-      onError
-    )
-  }
-}
-
-// Its own manager: planet textures load only once the planets are switched
-// on, and must not drive the app's loading overlay (useProgress watches
-// THREE.DefaultLoadingManager).
-const textureLoader = new PlanetTextureLoader(new THREE.LoadingManager())
+export type { RingBand } from './planetFrame'
 
 const AMBIENT = new THREE.Color(AMBIENT_COLOR).multiplyScalar(AMBIENT_INTENSITY)
 
+/** Below this the Minnaert limb term brightens the limb without bound. */
+const MIN_MINNAERT = 0.5
+
 const noRaycast = () => null
+
+// Uniform values change in place: the materials are built once per variant.
+function setUniforms(
+  uniforms: Record<string, THREE.IUniform>,
+  values: Record<string, unknown>
+) {
+  for (const [name, value] of Object.entries(values)) uniforms[name].value = value
+}
 
 /**
  * A `uSunDir` uniform and the mesh's onBeforeRender that keeps it current,
@@ -67,7 +60,7 @@ function useSunDirection() {
   return useMemo(() => {
     const uniform = { value: new THREE.Vector3(1, 0, 0) }
     function onBeforeRender(this: THREE.Object3D) {
-      sunDirectionLocal(this, uniform.value)
+      sunDirectionInFrame(this, uniform.value)
     }
     return { uniform, onBeforeRender }
   }, [])
@@ -83,21 +76,46 @@ function isLowQuality(): boolean {
 
 const SPHERE_SEGMENTS = isLowQuality() ? 64 : 128
 
-/**
- * Loads a colour texture (or none, for an undefined url) through the planets'
- * own loader. Suspends while it loads.
- */
-function usePlanetTexture(url: string | undefined): THREE.Texture | null {
-  const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
-  // useLoader can't be skipped conditionally; an empty list loads nothing.
-  const [texture = null] = useLoader(
-    textureLoader,
-    url ? [url] : [],
-    (loader) => {
-      loader.anisotropy = maxAnisotropy
-    }
+/** A ring system's extent and opacity, shared by PlanetRings and the
+ * shadow it casts (PlanetSurface's ringShadow). */
+export interface RingProfile {
+  /** Planet radii. */
+  inner: number
+  outer: number
+  /** A radial strip, inner edge at u = 0: colour in RGB, opacity in alpha. */
+  texture?: string
+  /** Without a texture: the rings and ringlets, radii in planet radii (at
+   * most 16). Default: one opaque band across the whole ring. */
+  bands?: readonly RingBand[]
+  /** Scales the opacity. Default 1. */
+  opacity?: number
+}
+
+type BandUniforms = {
+  uBands: { value: THREE.Vector3[] }
+  uBandCount: { value: number }
+}
+
+function bandUniforms(): BandUniforms {
+  return {
+    uBands: {
+      value: Array.from({ length: MAX_RING_BANDS }, () => new THREE.Vector3()),
+    },
+    uBandCount: { value: 0 },
+  }
+}
+
+function setBands(
+  uniforms: Record<string, THREE.IUniform>,
+  { inner, outer, bands }: Pick<RingProfile, 'inner' | 'outer' | 'bands'>
+) {
+  const u = uniforms as unknown as BandUniforms
+  u.uBandCount.value = ringBandUniforms(
+    bands ?? [{ inner, outer, opacity: 1 }],
+    inner,
+    outer,
+    u.uBands.value
   )
-  return texture
 }
 
 export interface PlanetSurfaceProps {
@@ -107,38 +125,100 @@ export interface PlanetSurfaceProps {
   texture?: string
   /** Scales the texture (or colour) as MOON_ALBEDO does the Moon's. */
   albedo?: number
-  /** Minnaert exponent: 1 is Lambert, > 1 darkens the limb. */
+  /** Minnaert exponent: 1 (default) is Lambert, > 1 darkens the limb;
+   * clamped to ≥ 0.5. */
   limbDarkening?: number
+  /** Rings that shade the globe; pass the same profile as PlanetRings. */
+  ringShadow?: RingProfile
 }
 
 /** The planet's globe: Sun-lit diffuse with the scene's ambient fill. */
-export function PlanetSurface({
+export function PlanetSurface(props: PlanetSurfaceProps) {
+  // Untextured globes never suspend, so they show from the first frame.
+  return props.texture || props.ringShadow?.texture ? (
+    <TexturedSurface {...props} />
+  ) : (
+    <SurfaceMesh
+      {...props}
+      map={null}
+      ringMap={null}
+    />
+  )
+}
+
+function TexturedSurface(props: PlanetSurfaceProps) {
+  const [map, ringMap] = usePlanetTextures([
+    props.texture,
+    props.ringShadow?.texture,
+  ])
+  return (
+    <SurfaceMesh
+      {...props}
+      map={map}
+      ringMap={ringMap}
+    />
+  )
+}
+
+function SurfaceMesh({
   planet,
-  texture,
   albedo = 1,
   limbDarkening = 1,
-}: PlanetSurfaceProps) {
-  const map = usePlanetTexture(texture)
+  ringShadow,
+  map,
+  ringMap,
+}: PlanetSurfaceProps & {
+  map: THREE.Texture | null
+  ringMap: THREE.Texture | null
+}) {
   const sun = useSunDirection()
-  const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        vertexShader: planetVertex,
-        fragmentShader: planetFragment,
-        defines: map ? { USE_PLANET_MAP: '' } : {},
-        uniforms: {
-          uSunDir: sun.uniform,
-          uColor: { value: new THREE.Color(planet.color) },
-          uAlbedo: { value: albedo },
-          uSunIntensity: { value: SUNLIGHT_INTENSITY },
-          uAmbient: { value: AMBIENT },
-          uMinnaert: { value: limbDarkening },
-          uMap: { value: map },
-        },
-      }),
-    [map, sun.uniform, planet.color, albedo, limbDarkening]
-  )
+  const shadowed = ringShadow !== undefined
+  const material = useMemo(() => {
+    const defines: Record<string, unknown> = {}
+    if (map) defines.USE_PLANET_MAP = ''
+    if (shadowed) {
+      defines.USE_RING_SHADOW = ''
+      defines.MAX_RING_BANDS = MAX_RING_BANDS
+    }
+    if (ringMap) defines.USE_RING_MAP = ''
+    return new THREE.ShaderMaterial({
+      vertexShader: planetVertex,
+      fragmentShader: planetFragment,
+      defines,
+      uniforms: {
+        uSunDir: sun.uniform,
+        uColor: { value: new THREE.Color() },
+        uAlbedo: { value: 1 },
+        uSunIntensity: { value: SUNLIGHT_INTENSITY },
+        uAmbient: { value: AMBIENT },
+        uMinnaert: { value: 1 },
+        uMap: { value: map },
+        uRingMap: { value: ringMap },
+        uRingInner: { value: 0 },
+        uRingOuter: { value: 0 },
+        uRingOpacity: { value: 1 },
+        ...bandUniforms(),
+      },
+    })
+  }, [map, ringMap, shadowed, sun.uniform])
   useEffect(() => () => material.dispose(), [material])
+
+  useLayoutEffect(() => {
+    const u = material.uniforms
+    u.uColor.value.set(planet.color)
+    setUniforms(u, {
+      uAlbedo: albedo,
+      uMinnaert: Math.max(limbDarkening, MIN_MINNAERT),
+    })
+    if (ringShadow) {
+      setUniforms(u, {
+        uRingInner: ringShadow.inner,
+        uRingOuter: ringShadow.outer,
+        uRingOpacity: ringShadow.opacity ?? 1,
+      })
+      setBands(u, ringShadow)
+    }
+  }, [material, planet.color, albedo, limbDarkening, ringShadow])
 
   return (
     <mesh
@@ -184,19 +264,19 @@ export function PlanetAtmosphere({
         vertexShader: shellVertex,
         fragmentShader: atmosphereFragment,
         uniforms: {
-          uSurface: { value: R * surface },
-          uOuter: { value: R * outer },
-          uScaleHeight: { value: R * scaleHeight },
+          uSurface: { value: 0 },
+          uOuter: { value: 0 },
+          uScaleHeight: { value: 0 },
           uSun: sun.uniform,
-          uGain: { value: gain },
-          uSky: { value: new THREE.Color(sky) },
-          uDusk: { value: new THREE.Color(dusk) },
+          uGain: { value: 1 },
+          uSky: { value: new THREE.Color() },
+          uDusk: { value: new THREE.Color() },
         },
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
-    [R, surface, outer, scaleHeight, sun.uniform, gain, sky, dusk]
+    [sun.uniform]
   )
   const geometry = useMemo(
     () => new THREE.SphereGeometry(R * outer, 96, 48),
@@ -204,6 +284,18 @@ export function PlanetAtmosphere({
   )
   useEffect(() => () => material.dispose(), [material])
   useEffect(() => () => geometry.dispose(), [geometry])
+
+  useLayoutEffect(() => {
+    const u = material.uniforms
+    setUniforms(u, {
+      uSurface: R * surface,
+      uOuter: R * outer,
+      uScaleHeight: R * scaleHeight,
+      uGain: gain,
+    })
+    u.uSky.value.set(sky)
+    u.uDusk.value.set(dusk)
+  }, [material, R, surface, outer, scaleHeight, gain, sky, dusk])
 
   return (
     <mesh
@@ -216,26 +308,51 @@ export function PlanetAtmosphere({
   )
 }
 
-export interface PlanetRingsProps {
-  /** Must have `rings` in the catalog. */
+export interface PlanetRingsProps extends Partial<RingProfile> {
+  /** Its catalog `rings` give inner and outer unless they're passed. */
   planet: Planet
-  /** A radial strip, inner edge at u = 0: colour in RGB, opacity in alpha.
-   * Without one the rings get placeholder bands in `color`. */
-  texture?: string
+  /** The ring colour without a texture. Default: the planet's. */
   color?: THREE.ColorRepresentation
-  opacity?: number
+  /** Brightness of the face turned away from the Sun. Default 0.3. */
+  unlitFace?: number
 }
 
-/** The planet's rings at the catalog radii, shadowed by the globe. */
-export function PlanetRings({
+/** The planet's rings in its equatorial plane, shadowed by the globe. */
+export function PlanetRings(props: PlanetRingsProps) {
+  // Untextured rings never suspend, so they show from the first frame.
+  return props.texture ? (
+    <TexturedRings {...props} />
+  ) : (
+    <RingsMesh
+      {...props}
+      map={null}
+    />
+  )
+}
+
+function TexturedRings(props: PlanetRingsProps) {
+  const [map] = usePlanetTextures([props.texture])
+  return (
+    <RingsMesh
+      {...props}
+      map={map}
+    />
+  )
+}
+
+function RingsMesh({
   planet,
-  texture,
-  color = planet.color,
+  inner = planet.rings?.inner,
+  outer = planet.rings?.outer,
+  bands,
   opacity = 1,
-}: PlanetRingsProps) {
-  if (!planet.rings) throw new Error(`${planet.name} has no rings in the catalog`)
-  const { inner, outer } = planet.rings
-  const map = usePlanetTexture(texture)
+  color = planet.color,
+  unlitFace = 0.3,
+  map,
+}: PlanetRingsProps & { map: THREE.Texture | null }) {
+  if (inner === undefined || outer === undefined) {
+    throw new Error(`${planet.name} has no ring radii`)
+  }
   const sun = useSunDirection()
   const R = planet.radius
   const geometry = useMemo(
@@ -247,24 +364,35 @@ export function PlanetRings({
       new THREE.ShaderMaterial({
         vertexShader: ringVertex,
         fragmentShader: ringFragment,
-        defines: map ? { USE_RING_MAP: '' } : {},
+        defines: map
+          ? { USE_RING_MAP: '', MAX_RING_BANDS }
+          : { MAX_RING_BANDS },
         uniforms: {
           uSunDir: sun.uniform,
-          uColor: { value: new THREE.Color(color) },
-          uOpacity: { value: opacity },
+          uColor: { value: new THREE.Color() },
+          uOpacity: { value: 1 },
           uSunIntensity: { value: SUNLIGHT_INTENSITY },
           uAmbient: { value: AMBIENT },
-          uPlanetRadius: { value: R },
-          uMap: { value: map },
+          uPlanetRadius: { value: 0 },
+          uUnlitFace: { value: 0.3 },
+          uRingMap: { value: map },
+          ...bandUniforms(),
         },
         side: THREE.DoubleSide,
         transparent: true,
         depthWrite: false,
       }),
-    [map, sun.uniform, color, opacity, R]
+    [map, sun.uniform]
   )
   useEffect(() => () => material.dispose(), [material])
   useEffect(() => () => geometry.dispose(), [geometry])
+
+  useLayoutEffect(() => {
+    const u = material.uniforms
+    u.uColor.value.set(color)
+    setUniforms(u, { uOpacity: opacity, uPlanetRadius: R, uUnlitFace: unlitFace })
+    setBands(u, { inner, outer, bands })
+  }, [material, color, opacity, R, unlitFace, inner, outer, bands])
 
   return (
     <mesh
