@@ -465,6 +465,12 @@ export function createCoverGridSource(deps: CoverGridDeps) {
     await adoptStored()
     if (age() < FORECAST_TTL_MS) return
     const failed = await backoff()
+    if (failed && failed.retryAt > now() + FORECAST_RETRY_MAX_MS) {
+      // Stored by a clock that was wrong: bounded, and stored so, or the
+      // bound would move along with the clock.
+      failed.retryAt = now() + FORECAST_RETRY_MAX_MS
+      await writeBackoff(failed).catch(() => {})
+    }
     if (failed && now() < failed.retryAt) {
       nextCheckAt = failed.retryAt
       return

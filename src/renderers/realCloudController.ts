@@ -152,11 +152,14 @@ export function createRealCloudController<T>({ build, dispose, isCold }: CloudCo
     inFlight.set(frame.key, current)
     build(source, staticUrl, current.abort.signal).then(
       (texture) => finish(current, texture),
-      (err) => {
-        if (!current.abort.signal.aborted) {
+      (err: unknown) => {
+        // A build can also be abandoned from inside: a forecast whose base
+        // was replaced by the next hour's. Neither is a failure.
+        const abandoned = (err as { name?: unknown } | null)?.name === 'AbortError'
+        if (!current.abort.signal.aborted && !abandoned) {
           console.error('[clouds] building the GIBS cloud texture failed', err)
         }
-        finish(current, null)
+        finish(current, null, abandoned)
       }
     )
   }
@@ -195,7 +198,7 @@ export function createRealCloudController<T>({ build, dispose, isCold }: CloudCo
     }
   }
 
-  function finish(done: Build, texture: T | null) {
+  function finish(done: Build, texture: T | null, abandoned = false) {
     if (done.abort.signal.aborted) {
       // Aborted or deactivated: never touches the snapshot or the cache.
       if (texture) dispose(texture)
@@ -205,7 +208,7 @@ export function createRealCloudController<T>({ build, dispose, isCold }: CloudCo
     if (texture) {
       cache.set(done.key, { frame: done.frame, texture, lastUsed: ++useCount })
       if (last && !isCold?.(texture)) recordBuildTime(last.wallMs - done.startedAt)
-    } else if (planFrames().some((f) => f.key === done.key)) failed.add(done.key)
+    } else if (!abandoned && planFrames().some((f) => f.key === done.key)) failed.add(done.key)
     evict()
     publish()
     pump()

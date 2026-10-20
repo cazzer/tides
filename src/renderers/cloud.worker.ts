@@ -31,7 +31,12 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     (err: unknown) => {
       jobs.delete(id)
       if (abort.signal.aborted) return
-      reply({ type: 'error', id, message: err instanceof Error ? err.message : String(err) })
+      reply({
+        type: 'error',
+        id,
+        message: err instanceof Error ? err.message : String(err),
+        name: err instanceof Error ? err.name : undefined,
+      })
     }
   )
 }

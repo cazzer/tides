@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import {
   HOLD_REFRESH_MS,
   MAX_CACHED_FRAMES,
@@ -25,6 +25,7 @@ interface FakeBuild {
   startedAt: number
   done: boolean
   resolve: (t: FakeTexture | null) => void
+  reject: (err: unknown) => void
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -45,8 +46,16 @@ function setup() {
   let wall = 0
   const controller = createRealCloudController<FakeTexture>({
     build: (source, _staticUrl, signal) =>
-      new Promise((resolve) => {
-        builds.push({ key: sourceKey(source), source, signal, startedAt: wall, done: false, resolve })
+      new Promise((resolve, reject) => {
+        builds.push({
+          key: sourceKey(source),
+          source,
+          signal,
+          startedAt: wall,
+          done: false,
+          resolve,
+          reject,
+        })
       }),
     dispose: (t) => {
       t.disposed = true
@@ -181,6 +190,20 @@ describe('realCloudController', () => {
     await flush()
     expect(late.disposed).toBe(false)
     expect(elsewhere.map((t) => t.disposed)).toEqual([true, false, false, false])
+  })
+
+  test('a build abandoned from inside is neither an error nor a failure', async () => {
+    const { builds, go, snap } = setup()
+    go('2024-10-09T12:00:00Z')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    builds[0].done = true
+    builds[0].reject(new DOMException('replaced', 'AbortError'))
+    await flush()
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
+    expect(snap().status).toBe('loading')
+    // Still wanted, so it is built again.
+    expect(builds.map((b) => b.key)).toEqual([builds[0].key, builds[1].key, builds[0].key])
   })
 
   test('forecast frames build like any other, two at a time', () => {

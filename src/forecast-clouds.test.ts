@@ -438,6 +438,16 @@ describe('createCoverGridSource', () => {
     expect(fetchJson).not.toHaveBeenCalled()
   })
 
+  test('a stored backoff is bounded by the longest delay', async () => {
+    const store = storage()
+    store.backoff = { failures: 3, retryAt: NOW + 100 * HOUR_MS }
+    const { fetchJson, get, advance } = setup({ store })
+    await get()
+    advance(FORECAST_RETRY_MAX_MS)
+    await get()
+    expect(fetchJson).toHaveBeenCalledTimes(1)
+  })
+
   test('a success clears the backoff', async () => {
     const store = storage()
     store.backoff = { failures: 3, retryAt: NOW - 1 }

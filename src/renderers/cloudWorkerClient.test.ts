@@ -55,6 +55,14 @@ describe('createCloudImageBuilder', () => {
     await expect(b).resolves.toBeNull()
   })
 
+  test('an abort inside the worker rejects as an AbortError', async () => {
+    const fake = fakeWorker()
+    const build = createCloudImageBuilder({ createWorker: () => fake.worker, inThread: vi.fn(), assets })
+    const a = build(source, 'u', new AbortController().signal)
+    fake.reply({ type: 'error', id: 1, message: 'replaced', name: 'AbortError' })
+    await expect(a).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
   test('aborting cancels the worker job and ignores its late reply', async () => {
     const fake = fakeWorker()
     const build = createCloudImageBuilder({ createWorker: () => fake.worker, inThread: vi.fn(), assets })

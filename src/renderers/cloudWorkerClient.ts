@@ -14,7 +14,7 @@ export type WorkerRequest =
 
 export type WorkerReply =
   | { type: 'done'; id: number; image: CloudImage | null }
-  | { type: 'error'; id: number; message: string }
+  | { type: 'error'; id: number; message: string; name?: string }
 
 /** The part of Worker the client uses. */
 export interface CloudWorker {
@@ -75,7 +75,9 @@ export function createCloudImageBuilder({
         if (!job) return
         jobs.delete(data.id)
         if (data.type === 'done') job.resolve(data.image)
-        else job.reject(new Error(data.message))
+        // The name survives, so an AbortError (a build abandoned inside the
+        // worker) is still recognisable as one.
+        else job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
       })
       w.addEventListener('error', fallBack)
       return w
