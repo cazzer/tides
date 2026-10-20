@@ -17,8 +17,11 @@ const ACKNOWLEDGEMENT =
 export function CloudAttribution() {
   const snapshot = useRealCloudSnapshot()
   const { source, status } = snapshot
-  // Credited whenever a forecast is on screen, not only as the primary frame.
-  const forecast = snapshot.frames.some((f) => f.source.kind === 'forecast' && f.status === 'ready')
+  // Credited whenever a forecast is on screen, not only as the primary frame,
+  // unless it is only the latest observation held for want of forecast data.
+  const forecast = snapshot.frames.some(
+    (f) => f.source.kind === 'forecast' && f.status === 'ready' && !f.texture?.userData.held
+  )
   return (
     <p className="cloud-attribution">
       Clouds: <CloudSourceText snapshot={snapshot} />
@@ -76,11 +79,14 @@ function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: 
     source.kind === 'geo' && status === 'ready'
       ? (texture?.userData.geo as GeoTextureInfo | null | undefined)
       : null
+  const observedLabel =
+    observed.kind === 'geo' ? slotLabel(observed.time) : `${instrument(daily)} ${daily.date}`
+  const held = source.kind === 'forecast' && status === 'ready' && Boolean(texture?.userData.held)
   const what =
     source.kind === 'forecast'
-      ? `forecast ${slotLabel(source.time)} from ${
-          observed.kind === 'geo' ? slotLabel(observed.time) : `${instrument(daily)} ${daily.date}`
-        }`
+      ? held
+        ? `${observedLabel} (no forecast)`
+        : `forecast ${slotLabel(source.time)} from ${observedLabel}`
       : geo
         ? `${geo.satellites.join(', ')} ${slotLabel(geo.time)} + ${instrument(daily)} ${daily.date}`
         : source.kind === 'geo' && status === 'loading'

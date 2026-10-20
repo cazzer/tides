@@ -50,7 +50,7 @@ const buildImage = createCloudImageBuilder({
   assets,
 })
 
-function textureOf({ rgba, geo }: CloudImage): THREE.DataTexture {
+function textureOf({ rgba, geo, cold, held }: CloudImage): THREE.DataTexture {
   // Bottom row first, so no flipY; filtered and mipmapped like an image.
   const texture = new THREE.DataTexture(rgba, OUT_W, OUT_H, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearMipmapLinearFilter
@@ -59,6 +59,8 @@ function textureOf({ rgba, geo }: CloudImage): THREE.DataTexture {
   // alphaMap is data, not colour.
   texture.colorSpace = THREE.NoColorSpace
   texture.userData.geo = geo
+  texture.userData.cold = Boolean(cold)
+  texture.userData.held = Boolean(held)
   texture.needsUpdate = true
   return texture
 }
@@ -78,6 +80,7 @@ export type RealCloudSnapshot = CloudSnapshot<THREE.Texture>
 export const realClouds = createRealCloudController<THREE.Texture>({
   build: buildCloudTexture,
   dispose: (texture) => texture.dispose(),
+  isCold: (texture) => Boolean(texture.userData.cold),
 })
 
 export const realCloudBlend = createCloudBlender()

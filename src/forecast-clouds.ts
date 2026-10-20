@@ -27,12 +27,17 @@ export const FORECAST_TAU_MS = 18 * HOUR_MS
 export const SYNTH_EDGE = 0.04
 /** A grid with more missing or out-of-range values than this is refused. */
 export const MAX_INVALID_FRACTION = 0.1
-/** After a failed fetch, wait this long before asking again. */
+/** After a failed fetch, wait this long before asking again, doubling with
+ * each further failure up to FORECAST_RETRY_MAX_MS. */
 export const FORECAST_RETRY_MS = 10 * 60_000
+export const FORECAST_RETRY_MAX_MS = 3 * HOUR_MS
+/** A stored grid claiming to be from further in the future than this is
+ * ignored (a clock that was wrong when it was stored). */
+const STORED_CLOCK_SLACK_MS = 5 * 60_000
 /** A grid older than this isn't used even when a fetch fails. */
 export const FORECAST_STALE_MAX_MS = 24 * HOUR_MS
 /** Bounds on scaling the model's cover to the satellite's cloud alpha. */
-export const CALIBRATION_RANGE = [0.6, 1.2] as const
+export const CALIBRATION_RANGE = [0.4, 1.2] as const
 
 /** Every grid point at once, hourly, from yesterday (the latest observation
  * can be just before midnight) to FORECAST_DAYS ahead, in UTC epoch seconds. */
@@ -235,21 +240,59 @@ export function sampleCover(values: ArrayLike<number>, latDeg: number, lonDeg: n
 const pixelLat = (y: number) => 90 - ((y + 0.5) / OUT_H) * 180
 const pixelLon = (x: number) => -180 + ((x + 0.5) / OUT_W) * 360
 
+/** Deterministic lattice value in 0..1. */
+function latticeValue(ix: number, iy: number, seed: number): number {
+  let h = Math.imul(ix, 0x27d4eb2d) ^ Math.imul(iy, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1)
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295
+}
+
+/** Smooth value noise over the output image, cells x cells / 2 lattice
+ * squares, wrapping in longitude; 0..1. */
+function valueNoise(cells: number, seed: number): Float32Array {
+  const rows = cells / 2
+  const out = new Float32Array(OUT_W * OUT_H)
+  for (let y = 0; y < OUT_H; y++) {
+    const fy = (y / OUT_H) * rows
+    const iy = Math.floor(fy)
+    const ty = smoothstep(0, 1, fy - iy)
+    for (let x = 0; x < OUT_W; x++) {
+      const fx = (x / OUT_W) * cells
+      const ix = Math.floor(fx)
+      const tx = smoothstep(0, 1, fx - ix)
+      const ix1 = (ix + 1) % cells
+      const top = latticeValue(ix, iy, seed) * (1 - tx) + latticeValue(ix1, iy, seed) * tx
+      const bottom = latticeValue(ix, iy + 1, seed) * (1 - tx) + latticeValue(ix1, iy + 1, seed) * tx
+      out[y * OUT_W + x] = top * (1 - ty) + bottom * ty
+    }
+  }
+  return out
+}
+
+// Weight of the noise in the rank, against the blurred alpha's 0..255 per
+// term: enough to order the cloudless areas (the Sahara, inland Australia)
+// into cloud-like patches instead of one tie, which would fill as a sheet,
+// while barely reordering the clouds themselves.
+const RANK_NOISE = 24
+
 /**
  * The static clouds' texture (one alpha byte per output pixel) as a uniform
  * rank, 0..65535: the order of a blur that keeps its cloud shapes, plus a wide
- * one to order the clear areas too. Thresholding it at 1 - c covers a fraction
- * c of the globe in cloud-shaped areas.
+ * one and a little fixed noise to order the clear areas too. Thresholding it
+ * at 1 - c covers a fraction c of the globe in cloud-shaped areas.
  */
 export function structureRank(staticAlpha: ArrayLike<number>): Uint16Array {
   const fine = boxBlur(staticAlpha, OUT_W, OUT_H, 4)
   const coarse = boxBlur(staticAlpha, OUT_W, OUT_H, 32)
-  const bins = 4096
-  const max = 255 * 1.25
+  const broad = valueNoise(48, 1)
+  const detail = valueNoise(192, 2)
+  const bins = 16384
+  const max = 255 * 1.25 + RANK_NOISE
   const bin = new Uint16Array(fine.length)
   const counts = new Float64Array(bins)
   for (let p = 0; p < fine.length; p++) {
-    const v = fine[p] + 0.25 * coarse[p]
+    const v = fine[p] + 0.25 * coarse[p] + RANK_NOISE * (0.6 * broad[p] + 0.4 * detail[p])
     bin[p] = Math.min(bins - 1, Math.floor((v / max) * bins))
     counts[bin[p]]++
   }
@@ -278,7 +321,8 @@ export function forecastAlpha(a0: number, c0: number, ct: number, s: number, w: 
 
 /** Scale from the model's cover to the satellite's cloud alpha, so synthetic
  * cloud doesn't brighten the globe: area-weighted mean alpha over mean cover,
- * clamped to CALIBRATION_RANGE. observed is RGBA (alpha in green). */
+ * clamped to CALIBRATION_RANGE. observed is RGBA (alpha in green). Worked out
+ * once per observation, not per frame. */
 export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<number>): number {
   let alpha = 0
   let cover = 0
@@ -304,7 +348,8 @@ export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<numb
  * Writes a forecast frame into out (RGBA, top row first, alpha in green, no
  * heights). observed is the latest observation's RGBA (top row first, alpha
  * in green), c0 and ct the grid's cover then and at the frame's time, rank
- * from structureRank, leadMs the time between them.
+ * from structureRank, leadMs the time between them, calibration from
+ * coverCalibration.
  */
 export function synthesiseForecast(
   {
@@ -313,16 +358,17 @@ export function synthesiseForecast(
     ct,
     rank,
     leadMs,
+    calibration: k,
   }: {
     observed: ArrayLike<number>
     c0: ArrayLike<number>
     ct: ArrayLike<number>
     rank: ArrayLike<number>
     leadMs: number
+    calibration: number
   },
   out: Uint8ClampedArray
 ): void {
-  const k = coverCalibration(observed, c0)
   const w = leadWeight(leadMs)
   const cols = Array.from({ length: OUT_W }, (_, x) => colLerp(pixelLon(x)))
   const hours = leadMs / HOUR_MS
@@ -347,70 +393,106 @@ export function synthesiseForecast(
   }
 }
 
+/** Consecutive failed fetches and when the next may be tried. */
+export interface FetchBackoff {
+  failures: number
+  retryAt: number
+}
+
 export interface CoverGridDeps {
   fetchJson: () => Promise<unknown>
   readStored: () => Promise<{ fetchedAt: number; body: unknown } | null>
   writeStored: (fetchedAt: number, body: unknown) => Promise<void>
+  /** Backoff is stored too, so a reload doesn't retry a failing fetch at once. */
+  readBackoff: () => Promise<FetchBackoff | null>
+  writeBackoff: (backoff: FetchBackoff | null) => Promise<void>
+  /** Runs fn holding a lock shared by every tab, so they take turns. */
+  exclusive: <T>(fn: () => Promise<T>) => Promise<T>
   now: () => number
 }
 
+/** How long to wait after the nth failure in a row. */
+export function retryDelayMs(failures: number): number {
+  return Math.min(FORECAST_RETRY_MAX_MS, FORECAST_RETRY_MS * 2 ** Math.max(0, failures - 1))
+}
+
 /**
- * The cover grid, fetched at most once per FORECAST_TTL_MS: from memory, else
- * from storage, else one fetch shared by everyone waiting. A failed fetch
- * isn't retried for FORECAST_RETRY_MS; meanwhile a stale grid serves if it is
- * under FORECAST_STALE_MAX_MS old. get resolves null when no usable grid
- * covers the times asked for.
+ * The cover grid, fetched at most once per FORECAST_TTL_MS across tabs: from
+ * memory, else from storage, else one fetch. Storage is re-read under a lock
+ * shared by every tab right before fetching, so a grid another tab just
+ * fetched is used instead. Failures back off exponentially (stored);
+ * meanwhile a stale grid serves if it is under FORECAST_STALE_MAX_MS old. get
+ * resolves null when no usable grid covers the times asked for.
  */
-export function createCoverGridSource({ fetchJson, readStored, writeStored, now }: CoverGridDeps) {
+export function createCoverGridSource(deps: CoverGridDeps) {
+  const { fetchJson, readStored, writeStored, readBackoff, writeBackoff, exclusive, now } = deps
   let current: { grid: CoverGrid; fetchedAt: number } | null = null
-  let storedLoad: Promise<void> | null = null
-  let fetching: Promise<void> | null = null
-  let failedAt = -Infinity
+  let refreshing: Promise<void> | null = null
+  // Not before this (wall clock): a failed fetch is backing off.
+  let nextCheckAt = -Infinity
 
   const covers = (grid: CoverGrid, fromMs: number, toMs: number) =>
     grid.startMs <= fromMs && toMs <= grid.startMs + (grid.hours - 1) * HOUR_MS
   const age = () => (current ? now() - current.fetchedAt : Infinity)
 
-  function loadStored(): Promise<void> {
-    storedLoad ??= readStored().then(
-      (stored) => {
-        if (!stored || !Number.isFinite(stored.fetchedAt)) return
-        try {
-          const grid = parseCoverGrid(stored.body)
-          if (!current || stored.fetchedAt > current.fetchedAt) current = { grid, fetchedAt: stored.fetchedAt }
-        } catch (err) {
-          console.warn('[clouds] ignoring the stored cloud cover forecast', err)
-        }
-      },
-      (err: unknown) => console.warn('[clouds] no stored cloud cover forecast', err)
-    )
-    return storedLoad
+  async function adoptStored() {
+    let stored: { fetchedAt: number; body: unknown } | null
+    try {
+      stored = await readStored()
+    } catch (err) {
+      console.warn('[clouds] no stored cloud cover forecast', err)
+      return
+    }
+    if (!stored || !Number.isFinite(stored.fetchedAt)) return
+    if (stored.fetchedAt > now() + STORED_CLOCK_SLACK_MS) return
+    if (current && stored.fetchedAt <= current.fetchedAt) return
+    try {
+      current = { grid: parseCoverGrid(stored.body), fetchedAt: stored.fetchedAt }
+    } catch (err) {
+      console.warn('[clouds] ignoring the stored cloud cover forecast', err)
+    }
   }
 
-  function refetch(): Promise<void> {
-    fetching ??= (async () => {
-      try {
-        const body = await fetchJson()
-        const grid = parseCoverGrid(body)
-        const fetchedAt = now()
-        current = { grid, fetchedAt }
-        writeStored(fetchedAt, body).catch((err: unknown) =>
-          console.warn('[clouds] could not store the cloud cover forecast', err)
-        )
-      } catch (err) {
-        failedAt = now()
-        console.warn('[clouds] fetching the cloud cover forecast failed', err)
-      } finally {
-        fetching = null
-      }
-    })()
-    return fetching
+  async function backoff(): Promise<FetchBackoff | null> {
+    try {
+      return await readBackoff()
+    } catch {
+      return null
+    }
+  }
+
+  async function refresh() {
+    await adoptStored()
+    if (age() < FORECAST_TTL_MS) return
+    const failed = await backoff()
+    if (failed && now() < failed.retryAt) {
+      nextCheckAt = failed.retryAt
+      return
+    }
+    try {
+      const body = await fetchJson()
+      const grid = parseCoverGrid(body)
+      const fetchedAt = now()
+      current = { grid, fetchedAt }
+      await Promise.all([writeStored(fetchedAt, body), failed && writeBackoff(null)]).catch(
+        (err: unknown) => console.warn('[clouds] could not store the cloud cover forecast', err)
+      )
+    } catch (err) {
+      const failures = (failed?.failures ?? 0) + 1
+      nextCheckAt = now() + retryDelayMs(failures)
+      console.warn('[clouds] fetching the cloud cover forecast failed', err)
+      await writeBackoff({ failures, retryAt: nextCheckAt }).catch(() => {})
+    }
   }
 
   return {
     async get(fromMs: number, toMs: number): Promise<CoverGrid | null> {
-      if (age() >= FORECAST_TTL_MS) await loadStored()
-      if (age() >= FORECAST_TTL_MS && now() - failedAt >= FORECAST_RETRY_MS) await refetch()
+      if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) {
+        refreshing ??= exclusive(refresh).finally(() => {
+          refreshing = null
+        })
+        await refreshing
+      }
       if (!current || age() >= FORECAST_STALE_MAX_MS) return null
       return covers(current.grid, fromMs, toMs) ? current.grid : null
     },

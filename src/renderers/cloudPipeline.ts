@@ -37,7 +37,13 @@ import {
   type GeoSource,
   type GibsSource,
 } from '../real-clouds'
-import { coverAt, structureRank, synthesiseForecast } from '../forecast-clouds'
+import {
+  coverAt,
+  coverCalibration,
+  structureRank,
+  synthesiseForecast,
+  type CoverGrid,
+} from '../forecast-clouds'
 import {
   composeGeoClouds,
   daylitTiles,
@@ -162,8 +168,25 @@ const staticAlphas = new Map<string, Promise<Uint8Array>>()
 // The forecast's synthetic cloud structure, 2 bytes per output pixel.
 const staticRanks = new Map<string, Promise<Uint16Array>>()
 
+// Shared work (the masks, the static rank, the forecast's base) that a build
+// may wait on. A build that does is cold: its time says nothing about the
+// next one's, so the controller doesn't learn from it.
+let sharedPending = 0
+let sharedStarted = 0
+
+function shared<T>(promise: Promise<T>): Promise<T> {
+  sharedPending++
+  sharedStarted++
+  promise
+    .finally(() => {
+      sharedPending--
+    })
+    .catch(() => {})
+  return promise
+}
+
 function memo<T>(make: () => Promise<T>, store: (p: Promise<T> | null) => void) {
-  const promise = make()
+  const promise = shared(make())
   store(promise)
   // A failed load is retried by the next build rather than cached.
   promise.catch(() => store(null))
@@ -468,6 +491,11 @@ export interface GeoTextureInfo {
 export interface CloudImage {
   rgba: Uint8ClampedArray<ArrayBuffer>
   geo: GeoTextureInfo | null
+  /** The build waited on shared work (see shared()). */
+  cold?: boolean
+  /** A forecast frame that is only the latest observation, held for want of
+   * forecast data. */
+  held?: boolean
 }
 
 /** Reverses the rows of an OUT_W-wide RGBA image in place. */
@@ -640,15 +668,54 @@ async function buildGeoRgba(
 }
 
 // The latest observation every forecast frame of the hour evolves, built once
-// and kept until the base changes. Failures are kept too, so a missing base
-// isn't retried by every frame. Read-only: the daily composite in it is shared.
-type Observed = { rgba: Uint8ClampedArray; geo: GeoTextureInfo | null }
-let base: { key: string; promise: Promise<Observed | null>; abort: AbortController } | null = null
+// and kept until the base changes or it goes unused for BASE_IDLE_MS. A
+// failure is kept for BASE_RETRY_MS, so a missing base isn't retried by every
+// frame. Read-only: the daily composite in it is shared.
+const BASE_RETRY_MS = 2 * 60_000
+const BASE_IDLE_MS = 5 * 60_000
 
+interface Observed {
+  rgba: Uint8ClampedArray
+  geo: GeoTextureInfo | null
+  /** coverCalibration, once per grid. */
+  calibration?: { grid: CoverGrid; k: number }
+}
+
+interface BaseEntry {
+  key: string
+  promise: Promise<Observed | null>
+  abort: AbortController
+  settled: boolean
+  failedAt: number | null
+  idle?: ReturnType<typeof setTimeout>
+}
+let base: BaseEntry | null = null
+
+function releaseBase() {
+  if (!base) return
+  clearTimeout(base.idle)
+  base.abort.abort()
+  base = null
+}
+
+function keepBase(entry: BaseEntry) {
+  clearTimeout(entry.idle)
+  entry.idle = setTimeout(() => {
+    if (base !== entry) return
+    if (entry.settled) releaseBase()
+    else keepBase(entry)
+  }, BASE_IDLE_MS)
+}
+
+/** Rejects when a newer base replaces this one before it is built. */
 function acquireBase(source: GeoSource | GibsSource, staticUrl: string): Promise<Observed | null> {
   const key = `${sourceKey(source)}|${staticUrl}`
-  if (base?.key === key) return base.promise
-  base?.abort.abort()
+  const retry = base?.failedAt != null && performance.now() - base.failedAt >= BASE_RETRY_MS
+  if (base?.key === key && !retry) {
+    keepBase(base)
+    return base.promise
+  }
+  releaseBase()
   const abort = new AbortController()
   const build: Promise<Observed | null> =
     source.kind === 'geo'
@@ -656,12 +723,25 @@ function acquireBase(source: GeoSource | GibsSource, staticUrl: string): Promise
       : acquireDaily(source, staticUrl, abort.signal).then((data) =>
           data ? { rgba: data, geo: null } : null
         )
-  const promise = build.catch((err: unknown) => {
-    if (!abort.signal.aborted) console.error('[clouds] building the forecast base failed', err)
-    return null
-  })
-  base = { key, promise, abort }
-  return promise
+  const entry: BaseEntry = { key, promise: build, abort, settled: false, failedAt: null }
+  entry.promise = shared(
+    build
+      .catch((err: unknown) => {
+        if (abort.signal.aborted) throw err
+        console.error('[clouds] building the forecast base failed', err)
+        return null
+      })
+      .then((observed) => {
+        if (!observed) entry.failedAt = performance.now()
+        return observed
+      })
+      .finally(() => {
+        entry.settled = true
+      })
+  )
+  base = entry
+  keepBase(entry)
+  return entry.promise
 }
 
 /** The promise, or a rejection as soon as signal aborts. */
@@ -703,10 +783,16 @@ async function buildForecastImage(
   const ct = grid && coverAt(grid, toMs)
   if (!c0 || !ct || !rank) {
     console.warn(`[clouds] no forecast for ${source.time}; holding the latest observation`)
-    return imageOf(new Uint8ClampedArray(observed.rgba), observed.geo)
+    return { ...imageOf(new Uint8ClampedArray(observed.rgba), observed.geo), held: true }
+  }
+  if (observed.calibration?.grid !== grid) {
+    observed.calibration = { grid, k: coverCalibration(observed.rgba, c0) }
   }
   const out = new Uint8ClampedArray(OUT_W * OUT_H * 4)
-  synthesiseForecast({ observed: observed.rgba, c0, ct, rank, leadMs: toMs - fromMs }, out)
+  synthesiseForecast(
+    { observed: observed.rgba, c0, ct, rank, leadMs: toMs - fromMs, calibration: observed.calibration.k },
+    out
+  )
   await yieldToFrame()
   signal.throwIfAborted()
   return imageOf(out, null)
@@ -715,15 +801,20 @@ async function buildForecastImage(
 /** The texture's pixels for a source, or null when there's neither imagery
  * nor a daily composite to fall back on. Throws when aborted. staticUrl must
  * be absolute. */
-export function buildCloudImage(
+export async function buildCloudImage(
   source: ImagerySource,
   staticUrl: string,
   urls: CloudAssets,
   signal: AbortSignal
 ): Promise<CloudImage | null> {
   assets = urls
-  if (source.kind === 'forecast') return buildForecastImage(source, staticUrl, signal)
-  return source.kind === 'geo'
-    ? buildGeoImage(source, staticUrl, signal)
-    : buildDailyImage(source, staticUrl, signal)
+  const waiting = sharedPending > 0
+  const started = sharedStarted
+  const image =
+    source.kind === 'forecast'
+      ? await buildForecastImage(source, staticUrl, signal)
+      : source.kind === 'geo'
+        ? await buildGeoImage(source, staticUrl, signal)
+        : await buildDailyImage(source, staticUrl, signal)
+  return image && { ...image, cold: waiting || sharedStarted !== started }
 }

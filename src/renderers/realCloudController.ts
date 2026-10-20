@@ -55,6 +55,9 @@ export interface CloudControllerDeps<T> {
   /** Resolves null when no imagery could be had; may reject once aborted. */
   build: (source: ImagerySource, staticCloudsUrl: string, signal: AbortSignal) => Promise<T | null>
   dispose: (texture: T) => void
+  /** True for a texture whose build waited on one-off shared work, so its
+   * time isn't learnt from. */
+  isCold?: (texture: T) => boolean
 }
 
 interface Build {
@@ -64,7 +67,7 @@ interface Build {
   abort: AbortController
 }
 
-export function createRealCloudController<T>({ build, dispose }: CloudControllerDeps<T>) {
+export function createRealCloudController<T>({ build, dispose, isCold }: CloudControllerDeps<T>) {
   let plan: PlanState = initialPlanState
   let staticUrl = ''
   // Builds survive the plan moving on (they finish into the cache) unless a
@@ -181,7 +184,9 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     }
   }
 
-  function recordBuildTime(ms: number) {
+  function recordBuildTime(sample: number) {
+    // One slow outlier (a stalled tile) moves the average only so far.
+    const ms = buildMsAverage === null ? sample : Math.min(sample, 2 * buildMsAverage)
     buildMsAverage =
       buildMsAverage === null ? ms : buildMsAverage + BUILD_AVERAGE_WEIGHT * (ms - buildMsAverage)
     const target = Math.max(MIN_FRAME_WALL_MS, BUILD_MARGIN * buildMsAverage)
@@ -199,7 +204,7 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     inFlight.delete(done.key)
     if (texture) {
       cache.set(done.key, { frame: done.frame, texture, lastUsed: ++useCount })
-      if (last) recordBuildTime(last.wallMs - done.startedAt)
+      if (last && !isCold?.(texture)) recordBuildTime(last.wallMs - done.startedAt)
     } else if (planFrames().some((f) => f.key === done.key)) failed.add(done.key)
     evict()
     publish()

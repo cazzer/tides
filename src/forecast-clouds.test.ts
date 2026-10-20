@@ -5,6 +5,7 @@ import {
   coverCalibration,
   coverRequestBody,
   createCoverGridSource,
+  FORECAST_RETRY_MAX_MS,
   FORECAST_RETRY_MS,
   FORECAST_TAU_MS,
   forecastAlpha,
@@ -13,10 +14,12 @@ import {
   GRID_POINTS,
   leadWeight,
   parseCoverGrid,
+  retryDelayMs,
   sampleCover,
   structureRank,
   synthesiseForecast,
   zonalDriftDegPerHour,
+  type FetchBackoff,
 } from './forecast-clouds'
 import { FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W } from './real-clouds'
 
@@ -184,12 +187,34 @@ test('structureRank is uniform and keeps the order', () => {
   expect(rank[row + 600]).toBeLessThan(rank[row + 1800])
 })
 
+test('structureRank orders a cloudless region into patches, not one tie', () => {
+  // The west half has no cloud at all.
+  const alpha = new Uint8Array(OUT_W * OUT_H)
+  for (let p = 0; p < alpha.length; p++) alpha[p] = p % OUT_W < OUT_W / 2 ? 0 : 128 + (p % 97)
+  const rank = structureRank(alpha)
+  const clear: number[] = []
+  for (let y = 100; y < OUT_H - 100; y += 37) {
+    for (let x = 100; x < OUT_W / 2 - 100; x += 41) clear.push(rank[y * OUT_W + x])
+  }
+  const lo = Math.min(...clear)
+  const hi = Math.max(...clear)
+  // Spread over most of the half of the ranks the clear region holds.
+  expect(hi - lo).toBeGreaterThan(0.3 * 65535)
+  expect(new Set(clear).size).toBeGreaterThan(clear.length / 4)
+})
+
 describe('synthesis', () => {
   const pixels = OUT_W * OUT_H
   const uniformRank = () => {
     const rank = new Uint16Array(pixels)
     for (let p = 0; p < pixels; p++) rank[p] = (p * 40503) & 0xffff
     return rank
+  }
+  const LONG = 30 * FORECAST_TAU_MS
+  const meanAlpha = (out: Uint8ClampedArray, fromRow = 0, toRow = OUT_H) => {
+    let sum = 0
+    for (let p = fromRow * OUT_W; p < toRow * OUT_W; p++) sum += out[p * 4 + 1]
+    return sum / ((toRow - fromRow) * OUT_W) / 255
   }
 
   test('synthetic cloud covers the forecast fraction', () => {
@@ -200,15 +225,64 @@ describe('synthesis', () => {
         c0: new Float32Array(GRID_POINTS),
         ct: new Float32Array(GRID_POINTS).fill(0.3),
         rank: uniformRank(),
-        leadMs: 30 * FORECAST_TAU_MS,
+        leadMs: LONG,
+        calibration: 1,
       },
       out
     )
-    let sum = 0
-    for (let p = 0; p < pixels; p++) sum += out[p * 4 + 1]
-    expect(sum / pixels / 255).toBeGreaterThan(0.28)
-    expect(sum / pixels / 255).toBeLessThan(0.32)
+    expect(meanAlpha(out)).toBeGreaterThan(0.28)
+    expect(meanAlpha(out)).toBeLessThan(0.32)
     expect([out[0], out[2], out[3]]).toEqual([0, 0, 255])
+  })
+
+  test('the grid is north up: a cloudy top row clouds the top of the image', () => {
+    const ct = new Float32Array(GRID_POINTS)
+    ct.fill(1, 0, 36)
+    const out = new Uint8ClampedArray(pixels * 4)
+    synthesiseForecast(
+      {
+        observed: new Uint8ClampedArray(pixels * 4),
+        c0: new Float32Array(GRID_POINTS),
+        ct,
+        rank: uniformRank(),
+        leadMs: LONG,
+        calibration: 1,
+      },
+      out
+    )
+    expect(meanAlpha(out, 0, 32)).toBeGreaterThan(0.9)
+    expect(meanAlpha(out, OUT_H - 32)).toBeLessThan(0.05)
+  })
+
+  test('synthetic cloud drifts east in the westerlies and west in the trades', () => {
+    const x0 = 1000
+    const rank = new Uint16Array(pixels)
+    for (let y = 0; y < OUT_H; y++) rank[y * OUT_W + x0] = 65535
+    const out = new Uint8ClampedArray(pixels * 4)
+    const leadMs = 48 * HOUR_MS
+    synthesiseForecast(
+      {
+        observed: new Uint8ClampedArray(pixels * 4),
+        c0: new Float32Array(GRID_POINTS),
+        ct: new Float32Array(GRID_POINTS).fill(0.02),
+        rank,
+        leadMs,
+        calibration: 1,
+      },
+      out
+    )
+    const cloudAt = (lat: number) => {
+      const y = Math.round(((90 - lat) / 180) * OUT_H - 0.5)
+      let best = 0
+      for (let x = 1; x < OUT_W; x++) if (out[(y * OUT_W + x) * 4 + 1] > out[(y * OUT_W + best) * 4 + 1]) best = x
+      return { x: best, expected: (zonalDriftDegPerHour(lat) * 48 * OUT_W) / 360 }
+    }
+    const west = cloudAt(50)
+    expect(west.x).toBeGreaterThan(x0)
+    expect(west.x - x0).toBeCloseTo(west.expected, -1)
+    const trades = cloudAt(-10)
+    expect(trades.x).toBeLessThan(x0)
+    expect(trades.x - x0).toBeCloseTo(trades.expected, -1)
   })
 
   test('the observation passes through at no lead and unchanged cover', () => {
@@ -216,7 +290,10 @@ describe('synthesis', () => {
     for (let p = 0; p < pixels; p++) observed[p * 4 + 1] = p % 256
     const cover = new Float32Array(GRID_POINTS).fill(0.5)
     const out = new Uint8ClampedArray(pixels * 4)
-    synthesiseForecast({ observed, c0: cover, ct: cover, rank: uniformRank(), leadMs: 0 }, out)
+    synthesiseForecast(
+      { observed, c0: cover, ct: cover, rank: uniformRank(), leadMs: 0, calibration: 0.8 },
+      out
+    )
     expect(out[1001 * 4 + 1]).toBe(1001 % 256)
   })
 
@@ -229,27 +306,50 @@ describe('synthesis', () => {
     expect(coverCalibration(observed(0.9), cover(0.4))).toBe(CALIBRATION_RANGE[1])
     expect(coverCalibration(observed(0.5), cover(0))).toBe(1)
   })
+
+  test('calibrated, a long forecast keeps the observed mean alpha', () => {
+    const observed = new Uint8ClampedArray(pixels * 4).fill(89)
+    const cover = new Float32Array(GRID_POINTS).fill(0.66)
+    const out = new Uint8ClampedArray(pixels * 4)
+    const calibration = coverCalibration(observed, cover)
+    synthesiseForecast(
+      { observed, c0: cover, ct: cover, rank: uniformRank(), leadMs: LONG, calibration },
+      out
+    )
+    expect(Math.abs(meanAlpha(out) - 89 / 255)).toBeLessThan(0.035)
+  })
 })
 
 describe('createCoverGridSource', () => {
-  function setup({ stored = null as { fetchedAt: number; body: unknown } | null, fails = false } = {}) {
-    let now = NOW
+  /** Storage shared by every source (tab) made from it. */
+  function storage(stored: { fetchedAt: number; body: unknown } | null = null) {
+    return { stored, backoff: null as FetchBackoff | null }
+  }
+
+  function setup({ store = storage(), fails = false, startAt = NOW } = {}) {
+    let now = startAt
     const fetchJson = vi.fn(async () => {
       if (fails) throw new Error('offline')
       return response()
     })
-    const writeStored = vi.fn<(fetchedAt: number, body: unknown) => Promise<void>>(async () => {})
     const source = createCoverGridSource({
       fetchJson,
-      readStored: async () => stored,
-      writeStored,
+      readStored: async () => store.stored,
+      writeStored: async (fetchedAt, body) => {
+        store.stored = { fetchedAt, body }
+      },
+      readBackoff: async () => store.backoff,
+      writeBackoff: async (backoff) => {
+        store.backoff = backoff
+      },
+      exclusive: (fn) => fn(),
       now: () => now,
     })
     const get = () => source.get(START + HOUR_MS, START + 40 * HOUR_MS)
     return {
       source,
+      store,
       fetchJson,
-      writeStored,
       get,
       advance: (ms: number) => {
         now += ms
@@ -258,12 +358,12 @@ describe('createCoverGridSource', () => {
   }
 
   test('one fetch for everyone waiting, stored for next time', async () => {
-    const { fetchJson, writeStored, get } = setup()
+    const { fetchJson, store, get } = setup()
     const [a, b] = await Promise.all([get(), get()])
     expect(a).not.toBeNull()
     expect(b).toBe(a)
     expect(fetchJson).toHaveBeenCalledTimes(1)
-    expect(writeStored).toHaveBeenCalledWith(NOW, expect.any(Array))
+    expect(store.stored?.fetchedAt).toBe(NOW)
   })
 
   test('a fresh grid is never fetched again', async () => {
@@ -278,32 +378,72 @@ describe('createCoverGridSource', () => {
   })
 
   test('a fresh stored grid saves the fetch; a stale one is refetched', async () => {
-    const fresh = setup({ stored: { fetchedAt: NOW - HOUR_MS, body: response() } })
+    const fresh = setup({ store: storage({ fetchedAt: NOW - HOUR_MS, body: response() }) })
     expect(await fresh.get()).not.toBeNull()
     expect(fresh.fetchJson).not.toHaveBeenCalled()
-    const stale = setup({ stored: { fetchedAt: NOW - FORECAST_TTL_MS, body: response() } })
+    const stale = setup({ store: storage({ fetchedAt: NOW - FORECAST_TTL_MS, body: response() }) })
     await stale.get()
     expect(stale.fetchJson).toHaveBeenCalledTimes(1)
   })
 
-  test('an invalid stored body is ignored', async () => {
-    const { fetchJson, get } = setup({ stored: { fetchedAt: NOW, body: { nope: 1 } } })
-    expect(await get()).not.toBeNull()
-    expect(fetchJson).toHaveBeenCalledTimes(1)
+  test('a grid another tab stored is used instead of fetching', async () => {
+    const store = storage()
+    const first = setup({ store })
+    await first.get()
+    // A second tab whose copy has gone stale finds the first tab's newer one.
+    const second = setup({ store, startAt: NOW - FORECAST_TTL_MS })
+    await second.get()
+    expect(second.fetchJson).toHaveBeenCalledTimes(1)
+    first.advance(FORECAST_TTL_MS)
+    store.stored = { fetchedAt: NOW + FORECAST_TTL_MS - 60_000, body: response() }
+    await first.get()
+    expect(first.fetchJson).toHaveBeenCalledTimes(1)
   })
 
-  test('a failed fetch backs off, and a stale grid serves meanwhile', async () => {
-    const { fetchJson, get, advance } = setup({
-      stored: { fetchedAt: NOW - 5 * HOUR_MS, body: response() },
+  test('invalid or future-dated stored grids are ignored', async () => {
+    const invalid = setup({ store: storage({ fetchedAt: NOW, body: { nope: 1 } }) })
+    expect(await invalid.get()).not.toBeNull()
+    expect(invalid.fetchJson).toHaveBeenCalledTimes(1)
+    const future = setup({ store: storage({ fetchedAt: NOW + HOUR_MS, body: response() }) })
+    await future.get()
+    expect(future.fetchJson).toHaveBeenCalledTimes(1)
+  })
+
+  test('failures back off exponentially, a stale grid serving meanwhile', async () => {
+    const { fetchJson, get, advance, store } = setup({
+      store: storage({ fetchedAt: NOW - 5 * HOUR_MS, body: response() }),
       fails: true,
     })
     expect(await get()).not.toBeNull()
+    expect(store.backoff).toEqual({ failures: 1, retryAt: NOW + FORECAST_RETRY_MS })
     advance(FORECAST_RETRY_MS - 1)
     await get()
     expect(fetchJson).toHaveBeenCalledTimes(1)
     advance(1)
     await get()
     expect(fetchJson).toHaveBeenCalledTimes(2)
+    expect(store.backoff?.failures).toBe(2)
+    advance(2 * FORECAST_RETRY_MS - 1)
+    await get()
+    expect(fetchJson).toHaveBeenCalledTimes(2)
+    expect(retryDelayMs(20)).toBe(FORECAST_RETRY_MAX_MS)
+  })
+
+  test('the backoff survives a reload', async () => {
+    const store = storage()
+    store.backoff = { failures: 3, retryAt: NOW + HOUR_MS }
+    const { fetchJson, get } = setup({ store })
+    expect(await get()).toBeNull()
+    await get()
+    expect(fetchJson).not.toHaveBeenCalled()
+  })
+
+  test('a success clears the backoff', async () => {
+    const store = storage()
+    store.backoff = { failures: 3, retryAt: NOW - 1 }
+    const { get } = setup({ store })
+    expect(await get()).not.toBeNull()
+    expect(store.backoff).toBeNull()
   })
 
   test('null when nothing usable covers the times', async () => {

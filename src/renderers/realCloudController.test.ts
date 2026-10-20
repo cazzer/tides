@@ -15,6 +15,7 @@ const at = (iso: string) => Date.parse(iso)
 interface FakeTexture {
   name: string
   disposed: boolean
+  cold?: boolean
 }
 
 interface FakeBuild {
@@ -50,6 +51,7 @@ function setup() {
     dispose: (t) => {
       t.disposed = true
     },
+    isCold: (t) => Boolean(t.cold),
   })
   const tick = (
     sim: number,
@@ -227,7 +229,14 @@ describe('realCloudController', () => {
   /** Plays at `timeScale` from `from` for wallMs, ticking every 16 ms, with
    * builds that take buildMs. Returns the builds, the primary frames shown in
    * order, and when the frame the blend starts from changed. */
-  async function play(from: string, timeScale: number, wallMs: number, buildMs: number) {
+  async function play(
+    from: string,
+    timeScale: number,
+    wallMs: number,
+    buildMs: number | ((index: number) => number),
+    cold: (index: number) => boolean = () => false
+  ) {
+    const msFor = typeof buildMs === 'number' ? () => buildMs : buildMs
     const { builds, tick, snap, setWall } = setup()
     const start = at(from)
     const shown: string[] = []
@@ -236,8 +245,8 @@ describe('realCloudController', () => {
       setWall(wall)
       const sim = start + wall * timeScale
       tick(sim, { timeScale })
-      const due = builds.filter((b) => !b.done && wall - b.startedAt >= buildMs)
-      for (const b of due) finish(b, texture(b.key))
+      const due = builds.filter((b, i) => !b.done && wall - b.startedAt >= msFor(i))
+      for (const b of due) finish(b, { ...texture(b.key), cold: cold(builds.indexOf(b)) })
       if (due.length) await flush()
       const { source, status } = snap()
       const key = source ? sourceKey(source) : null
@@ -273,6 +282,23 @@ describe('realCloudController', () => {
     for (const b of later) {
       if (b.source.kind === 'geo') expect(Date.parse(b.source.time) % (12 * 3_600_000)).toBe(0)
     }
+  })
+
+  /** Whether every geostationary build after `after` is on a grid of `hours`. */
+  const onGrid = (builds: FakeBuild[], hours: number, after = 20_000) =>
+    builds
+      .filter((b) => b.startedAt > after && b.source.kind === 'geo')
+      .every((b) => b.source.kind === 'geo' && Date.parse(b.source.time) % (hours * 3_600_000) === 0)
+
+  test('cold builds teach the cadence nothing', async () => {
+    const { builds } = await play('2026-10-10T00:00:00Z', 3600, 60_000, 7000, () => true)
+    expect(onGrid(builds, 6)).toBe(false)
+  })
+
+  test('one stalled build barely moves the cadence', async () => {
+    const { builds } = await play('2026-10-10T00:00:00Z', 3600, 70_000, (i) => (i === 4 ? 30_000 : 1000))
+    // After the stalled build is done.
+    expect(onGrid(builds, 6, 45_000)).toBe(false)
   })
 
   test('a day per second refreshes the held frame no faster than HOLD_REFRESH_MS', async () => {
