@@ -405,6 +405,30 @@ export function decodeIr(rgba: ArrayLike<number>, w: number, h: number): Float32
   return out
 }
 
+/**
+ * Fills, in place, each missing pixel of an OUT_W-wide mosaic (decodeIr's
+ * NaN, visibleGrey's 0) that has data either side of it in x, wrapping across
+ * 180°, with their mean. GIBS draws Himawari's last column before the
+ * antimeridian (179.86°E) about seven-eighths opaque in both bands, which
+ * decodes as no data, so without this Himawari dropped out of that one column
+ * and left a seam down the Pacific (tides-uwv). Wider gaps, and the limbs,
+ * stay missing.
+ */
+export function bridgeGaps<T extends Float32Array | Uint8Array>(
+  values: T,
+  missing: (v: number) => boolean
+): T {
+  for (let row = 0; row < values.length; row += OUT_W) {
+    for (let x = 0; x < OUT_W; x++) {
+      if (!missing(values[row + x])) continue
+      const west = values[row + ((x - 1 + OUT_W) % OUT_W)]
+      const east = values[row + ((x + 1) % OUT_W)]
+      if (!missing(west) && !missing(east)) values[row + x] = (west + east) / 2
+    }
+  }
+  return values
+}
+
 // --- Sun ------------------------------------------------------------------
 
 /** Subsolar latitude/longitude (degrees) from the NOAA low-precision solar

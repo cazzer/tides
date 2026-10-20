@@ -46,6 +46,7 @@ import {
   type CoverGrid,
 } from '../forecast-clouds'
 import {
+  bridgeGaps,
   composeGeoClouds,
   daylitTiles,
   decodeIr,
@@ -633,11 +634,11 @@ async function buildGeoRgba(
       const index = GEO_SATELLITES.indexOf(s.sat)
       ctx.clearRect(0, 0, OUT_W, OUT_H)
       mosaic(ctx, s.ir)
-      temps[index] = decodeIr(ctx.getImageData(0, 0, OUT_W, OUT_H).data, OUT_W, OUT_H)
+      temps[index] = bridgeGaps(decodeIr(ctx.getImageData(0, 0, OUT_W, OUT_H).data, OUT_W, OUT_H), Number.isNaN)
       if (s.vis.some(Boolean)) {
         ctx.clearRect(0, 0, OUT_W, OUT_H)
         mosaic(ctx, s.vis)
-        vis[index] = visibleGrey(ctx.getImageData(0, 0, OUT_W, OUT_H).data)
+        vis[index] = bridgeGaps(visibleGrey(ctx.getImageData(0, 0, OUT_W, OUT_H).data), (v) => v === 0)
       }
       await yieldToFrame()
       signal.throwIfAborted()
