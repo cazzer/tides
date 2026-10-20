@@ -21,6 +21,7 @@ const moonTarget = new THREE.Vector3()
 interface OrbitingBodyProps {
   positionAt?: (t: number) => Vec3
   spinAt?: (t: number) => number
+  tiltAt?: (t: number) => number
   orientationAt?: (t: number) => THREE.Quaternion
   axialTilt?: number
 
@@ -43,6 +44,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   {
     positionAt,
     spinAt,
+    tiltAt,
     orientationAt,
     axialTilt = 0,
     diameter = 5, // Default diameter
@@ -105,7 +107,7 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     if (ref && 'current' in ref && ref.current) {
       applyBodyTransform(
         ref.current,
-        { axialTilt, spinAt, orientationAt, positionAt },
+        { axialTilt, tiltAt, spinAt, orientationAt, positionAt },
         simulationTime
       )
       if (focusKey) ref.current.userData.focus = focusKey

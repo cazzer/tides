@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { afterAll, describe, expect, test } from 'vitest'
-import { EARTH_AXIAL_TILT, earthSpin } from './ephemeris'
+import { earthSpin, earthTilt } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import {
@@ -29,7 +29,7 @@ function sunVisibleAt(t: number, lat: number, lon: number): number {
   const body = new THREE.Object3D()
   applyBodyTransform(
     body,
-    { axialTilt: EARTH_AXIAL_TILT, spinAt: earthSpin },
+    { tiltAt: earthTilt, spinAt: earthSpin },
     t
   )
   const { position } = calculateLocationAndRotationForLatLng(lat, lon, 1)
