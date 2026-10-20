@@ -13,6 +13,13 @@ body,
   padding: 0;
 }
 
+:root {
+  /* The floating control dock (src/controls.tsx) and the room it takes. */
+  --dock-height: 52px;
+  --dock-bottom: max(12px, env(safe-area-inset-bottom));
+  --dock-clearance: calc(var(--dock-bottom) + var(--dock-height) + 8px);
+}
+
 body {
   background: #f0f0f0;
   font-family: inter;
@@ -59,6 +66,22 @@ body {
   position: relative;
 }
 
+/* Panels on the screen's bottom edge lift their label above the floating dock. */
+.viewports > .panel[data-area='main'] > .panel-label,
+.viewports > .panel[data-area='bottom'] > .panel-label {
+  bottom: var(--dock-clearance);
+}
+
+@media only screen and (max-width: 600px) {
+  .viewports > .panel[data-area='main'] > .panel-label {
+    bottom: 6px;
+  }
+
+  .viewports > .panel[data-area='top'] > .panel-label {
+    bottom: var(--dock-clearance);
+  }
+}
+
 .panel-label {
   position: absolute;
   bottom: 6px;
@@ -86,7 +109,7 @@ body {
 
 .view-menu {
   position: absolute;
-  bottom: 6px;
+  bottom: var(--dock-clearance);
   left: 8px;
   z-index: 1;
 }
@@ -227,11 +250,11 @@ body {
   }
 }
 
-/* Top-right of the viewports: panel labels and the view menu sit bottom-left,
- * and no layout puts anything else up there. */
+/* Top-right of the viewports: panel labels, the view menu and the control dock
+ * sit at the bottom, and no layout puts anything else up there. */
 .cloud-attribution {
   position: absolute;
-  top: 6px;
+  top: calc(6px + env(safe-area-inset-top));
   right: 8px;
   max-width: calc(100% - 16px);
   margin: 0;

@@ -408,24 +408,70 @@ function FocusDropdown({
   )
 }
 
+// A floating glass capsule; --dock-* live in index.css so panel labels can clear it.
 const ControlContainer = styled.section`
-  position: relative;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--dock-bottom);
   z-index: 10;
-  height: 58px;
-  flex-shrink: 0;
-  width: 100%;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  height: var(--dock-height);
+  margin: 0 auto;
   display: flex;
-  justify-content: center;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  background-color: #1a1a1a;
-  border-bottom: 1px solid #333;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.35),
+    0 2px 8px rgba(0, 0, 0, 0.25);
+
+  /* The glass sits on a pseudo-element: backdrop-filter on the bar itself would
+   * make it the backdrop root, and the menus inside could only blur the bar. */
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+      rgba(30, 30, 34, 0.38);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.3),
+      inset 0 -1px 1px rgba(255, 255, 255, 0.06);
+    pointer-events: none;
+  }
+
+  /* Specular rim: a 1px gradient ring, brightest where light catches the top-left edge. */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.55),
+      rgba(255, 255, 255, 0.1) 35%,
+      rgba(255, 255, 255, 0.04) 65%,
+      rgba(255, 255, 255, 0.28)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
 
   /* Five controls fit a 320px phone only with tighter spacing. */
-  @media (max-width: 400px) {
-    gap: 8px;
-    padding: 0 8px;
+  @media (max-width: 360px) {
+    gap: 4px;
   }
 `
 
@@ -433,23 +479,35 @@ const FocusDropdownWrap = styled.div`
   position: relative;
 `
 
-const FocusTrigger = styled.button`
+const glassButton = `
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
   padding: 0;
   margin: 0;
-  background-color: black;
-  color: gray;
-  border: 1px gray solid;
-  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  border: none;
+  border-radius: 999px;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 
   &:hover {
-    color: #aaa;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #fff;
   }
+
+  &:focus-visible {
+    outline: 2px solid #4c9ffe;
+    outline-offset: 1px;
+  }
+`
+
+const FocusTrigger = styled.button`
+  ${glassButton}
 `
 
 const FocusTriggerIconWrap = styled.span`
@@ -472,42 +530,47 @@ const FocusTriggerBadge = styled.span`
 `
 
 const IconButton = styled.button`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  margin: 0;
-  background-color: black;
-  color: gray;
-  border: 1px gray solid;
-  border-radius: 8px;
-  cursor: pointer;
-
-  &:hover {
-    color: #aaa;
-  }
+  ${glassButton}
 `
 
+const glassPanel = `
+  background-color: rgba(30, 30, 34, 0.55);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 10px 30px rgba(0, 0, 0, 0.4);
+`
+
+// Floats above the bar so a long message never widens it past a phone screen.
 const LocationError = styled.span`
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 6px 12px;
   font-size: 12px;
-  color: #c66;
+  color: #f99;
+  border-radius: 12px;
+  ${glassPanel}
 `
 
+// Opens upward: the bar sits on the bottom edge. The margin clears the bar's rim.
 const FocusMenu = styled.div`
   position: absolute;
-  top: 100%;
+  bottom: 100%;
   left: 0;
-  margin-top: 4px;
+  margin-bottom: 14px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 4px;
-  background-color: black;
-  border: 1px gray solid;
-  border-radius: 8px;
+  padding: 6px;
+  border-radius: 18px;
   z-index: 100;
+  ${glassPanel}
 `
 
 const FocusOption = styled.button`
@@ -520,14 +583,14 @@ const FocusOption = styled.button`
   padding: 0 10px;
   margin: 0;
   background: transparent;
-  color: gray;
+  color: rgba(255, 255, 255, 0.78);
   border: none;
-  border-radius: 6px;
+  border-radius: 12px;
   cursor: pointer;
 
   &:hover {
-    background-color: #222;
-    color: #aaa;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #fff;
   }
 `
 
@@ -539,34 +602,47 @@ const SpeedOptionButton = styled.button`
   text-align: left;
   font-size: 14px;
   background: transparent;
-  color: gray;
+  color: rgba(255, 255, 255, 0.78);
   border: none;
-  border-radius: 6px;
+  border-radius: 12px;
   cursor: pointer;
 
   &:hover {
-    background-color: #222;
-    color: #aaa;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #fff;
   }
 `
 
+// Shrinks first so the bar fits a 320px phone.
 const DateForm = styled.form`
+  flex: 0 1 120px;
   margin: 0;
-  min-width: 0;
+  min-width: 96px;
 `
 
 const DateInput = styled.input`
-  padding: 6px 10px;
-  width: 120px;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
   font-size: 16px;
-  background-color: black;
-  color: gray;
+  text-align: center;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
   outline: none;
-  border: 1px gray solid;
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
 
   &::placeholder {
-    color: #555;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  &:focus {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.35);
+  }
+
+  @media (max-width: 360px) {
+    padding: 0 6px;
   }
 `
 

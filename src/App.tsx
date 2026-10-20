@@ -357,6 +357,7 @@ const Panel = forwardRef(
         // @ts-ignore
         ref={fref}
         className="panel"
+        data-area={gridArea}
         style={{ gridArea }}
       >
         <View
