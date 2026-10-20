@@ -7,7 +7,7 @@ import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
 import { ToneMappingMode, BlendFunction } from 'postprocessing'
 
 import SolarSystem from './solar-system'
-import { useStore, type CameraFocus, type PanelKey } from './store'
+import { parseFocus, useStore, type PanelKey } from './store'
 import Controls from './controls'
 import { PIN_LAYER } from './LocationPin'
 import LoadingOverlay from './LoadingOverlay'
@@ -16,14 +16,7 @@ import ViewMenu from './ViewMenu'
 import { CloudAttribution } from './CloudAttribution'
 import { PlanetAttribution } from './PlanetAttribution'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
-
-const FOCUS_VALUES: CameraFocus[] = [
-  'clock',
-  'earth',
-  'sun',
-  'moon',
-  'location',
-]
+import { MAIN_ZOOM, mainViewRange } from './main-view'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -50,9 +43,12 @@ export default function App() {
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
-    const focus = new URLSearchParams(window.location.search).get('focus')
-    if (focus && FOCUS_VALUES.includes(focus as CameraFocus)) {
-      setCameraFocus(focus as CameraFocus)
+    const focus = parseFocus(
+      new URLSearchParams(window.location.search).get('focus'),
+      useStore.getState().showPlanets
+    )
+    if (focus) {
+      setCameraFocus(focus)
     }
     const panel = new URLSearchParams(window.location.search).get('panel')
     if (panel && PANEL_VALUES.includes(panel as PanelKey)) {
@@ -293,12 +289,15 @@ function SceneReadySignal({ onReady }: { onReady: () => void }) {
 }
 
 function MainCamera() {
+  const showPlanets = useStore((s) => s.showPlanets)
+  const { near, far } = mainViewRange(showPlanets)
   return (
     <OrthographicCamera
       makeDefault
       position={[100, 80, 80]}
-      zoom={10}
-      near={0}
+      zoom={MAIN_ZOOM}
+      near={near}
+      far={far}
     />
   )
 }

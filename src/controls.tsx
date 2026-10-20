@@ -6,6 +6,7 @@ import {
   IconSun,
   IconMoon,
   IconMapPin,
+  IconPlanet,
   IconPlayerTrackNext,
   IconEye,
   IconSettings,
@@ -13,6 +14,7 @@ import {
 } from '@tabler/icons-react'
 import { DateTime } from 'luxon'
 import {
+  PLANET_FOCUS_KEYS,
   useStore,
   type CameraFocus,
   type Layout,
@@ -38,6 +40,14 @@ const FOCUS_OPTIONS: {
   { value: 'moon', Icon: IconMoon, title: 'Moon' },
 ]
 
+const PLANET_FOCUS_OPTIONS: typeof FOCUS_OPTIONS = PLANET_FOCUS_KEYS.map(
+  (value) => ({
+    value,
+    Icon: IconPlanet,
+    title: value[0].toUpperCase() + value.slice(1),
+  })
+)
+
 export default function Controls() {
   // Per-field selectors: the whole store changes every frame (timestamp).
   const timeScale = useStore((s) => s.timeScale)
@@ -47,6 +57,7 @@ export default function Controls() {
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const setLocation = useStore((s) => s.setLocation)
   const location = useStore((s) => s.location)
+  const showPlanets = useStore((s) => s.showPlanets)
   const [locationError, setLocationError] = useState<string | null>(null)
   const [dateInput, setDateInput] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -91,18 +102,19 @@ export default function Controls() {
       <FocusDropdown
         value={cameraFocus}
         onChange={setCameraFocus}
-        options={
-          location
+        options={[
+          ...FOCUS_OPTIONS,
+          ...(location
             ? [
-                ...FOCUS_OPTIONS,
                 {
                   value: 'location' as const,
                   Icon: IconMapPin,
                   title: 'My Location',
                 },
               ]
-            : FOCUS_OPTIONS
-        }
+            : []),
+          ...(showPlanets ? PLANET_FOCUS_OPTIONS : []),
+        ]}
       />
       <SpeedDropdown
         value={timeScale}

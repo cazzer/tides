@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import { degreesToRadians } from './utils'
 import { moonPosition, type Vec3 } from './ephemeris'
 import { useCamera } from './camera'
-import { useStore } from './store'
+import { useStore, type CameraFocus } from './store'
 import { LocationPin } from './LocationPin'
 import { applyBodyTransform } from './body-transform'
 import {
@@ -34,7 +34,7 @@ interface OrbitingBodyProps {
   // Interaction properties
   interactive?: boolean
   storeLabel?: string
-  focusKey?: 'clock' | 'earth' | 'sun' | 'moon'
+  focusKey?: Exclude<CameraFocus, 'location'>
 
   // Visual renderer
   children: React.ReactNode

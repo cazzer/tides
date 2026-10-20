@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import {
+  MathUtils,
   Vector3,
   Matrix4,
   type Camera,
@@ -16,9 +17,15 @@ import {
   type OrthographicCamera,
 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
-import { useStore, type CameraFocus } from './store'
+import {
+  FOCUS_VALUES,
+  isPlanetFocus,
+  useStore,
+  type CameraFocus,
+} from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
+import { focusedRef, planetFramingZoom } from './main-view'
 import {
   clampTilt,
   pivotDepth,
@@ -32,20 +39,12 @@ const CameraContext = createContext({
   handleFocus: null,
 })
 
-const FOCUS_VALUES: CameraFocus[] = [
-  'clock',
-  'earth',
-  'sun',
-  'moon',
-  'location',
-]
-
 function getFocusForObject(object: Object3D): CameraFocus | null {
   let o: Object3D | null = object
   while (o) {
     const focus = (o as Object3D & { userData?: { focus?: string } }).userData
       ?.focus
-    if (focus && FOCUS_VALUES.includes(focus as CameraFocus)) {
+    if (focus && (FOCUS_VALUES as readonly string[]).includes(focus)) {
       return focus as CameraFocus
     }
     o = o.parent
@@ -258,6 +257,43 @@ function useEarthPivot(
   })
 }
 
+const FRAMING_EASE = 0.05
+
+/**
+ * Choosing a planet eases the zoom to planetFramingZoom once the planet has
+ * registered its mesh (with userData.radius). Any other zoom change, i.e. the
+ * user scrolling or pinching, ends the framing so it never fights them.
+ */
+function usePlanetFraming(cameraFocus: CameraFocus) {
+  // The zoom this hook last wrote; null until the first step.
+  const framing = useRef<{ written: number | null } | null>(null)
+
+  useEffect(() => {
+    framing.current = isPlanetFocus(cameraFocus) ? { written: null } : null
+  }, [cameraFocus])
+
+  // Only the main view has controls; the other panels' cameras stay put.
+  useFrame(({ camera, controls }) => {
+    const f = framing.current
+    const ortho = camera as OrthographicCamera
+    if (!f || !controls || !ortho.isOrthographicCamera) return
+    if (f.written !== null && ortho.zoom !== f.written) {
+      framing.current = null
+      return
+    }
+    if (!isPlanetFocus(cameraFocus)) return
+    const state = useStore.getState()
+    const radius = state[cameraFocus]?.current?.userData?.radius
+    if (!(radius > 0) || state.earthRadius == null) return
+    const goal = planetFramingZoom(radius, state.earthRadius)
+    const next = MathUtils.lerp(ortho.zoom, goal, FRAMING_EASE)
+    const done = Math.abs(goal - next) < goal * 1e-3
+    ortho.zoom = done ? goal : next
+    ortho.updateProjectionMatrix()
+    framing.current = done ? null : { written: ortho.zoom }
+  })
+}
+
 export const useCamera = () => useContext(CameraContext)
 
 export const CameraProvider = ({ children }: { children: any }) => {
@@ -272,9 +308,6 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const earth = useStore((s) => s.earth)
-  const sun = useStore((s) => s.sun)
-  const moon = useStore((s) => s.moon)
-  const clock = useStore((s) => s.clock)
   const locationPin = useStore((s) => s.locationPin)
   const location = useStore((s) => s.location)
   const earthRadius = useStore((s) => s.earthRadius)
@@ -290,10 +323,12 @@ export const CameraProvider = ({ children }: { children: any }) => {
     cameraFocus,
     connected || canvas
   )
+  usePlanetFraming(cameraFocus)
 
   useFrame((state) => {
     const target = new Vector3()
     let hasTarget = false
+    let ref: { current?: Object3D | null } | undefined
 
     if (cameraFocus) {
       if (cameraFocus === 'location') {
@@ -311,14 +346,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
           hasTarget = true
         }
       } else {
-        const ref =
-          cameraFocus === 'clock'
-            ? clock
-            : cameraFocus === 'earth'
-            ? earth
-            : cameraFocus === 'sun'
-            ? sun
-            : moon
+        ref = focusedRef(useStore.getState(), cameraFocus)
         if (ref?.current) {
           if (cameraFocus === 'clock') {
             ref.current.getWorldPosition(target)
@@ -345,7 +373,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
 
     if (hasTarget && controls) {
       const smoothness = 0.05
-      if (cameraFocus === 'clock' && clock?.current) {
+      if (cameraFocus === 'clock' && ref?.current) {
         rideWithClock(
           camera.position,
           // @ts-ignore

@@ -1,6 +1,42 @@
 import { create } from 'zustand'
+import type { Object3D } from 'three'
 
-export type CameraFocus = 'clock' | 'earth' | 'sun' | 'moon' | 'location'
+/** Solar order; each key is also the store slot its mesh ref registers under. */
+export const PLANET_FOCUS_KEYS = [
+  'mercury',
+  'venus',
+  'mars',
+  'jupiter',
+  'saturn',
+  'uranus',
+  'neptune',
+] as const
+export type PlanetFocus = (typeof PLANET_FOCUS_KEYS)[number]
+
+export const FOCUS_VALUES = [
+  'clock',
+  'earth',
+  'sun',
+  'moon',
+  'location',
+  ...PLANET_FOCUS_KEYS,
+] as const
+export type CameraFocus = (typeof FOCUS_VALUES)[number]
+
+export function isPlanetFocus(focus: string): focus is PlanetFocus {
+  return (PLANET_FOCUS_KEYS as readonly string[]).includes(focus)
+}
+
+/** Planet keys only count while the planets are shown. */
+export function parseFocus(
+  value: string | null,
+  showPlanets: boolean
+): CameraFocus | null {
+  if (value == null || !(FOCUS_VALUES as readonly string[]).includes(value)) {
+    return null
+  }
+  return !showPlanets && isPlanetFocus(value) ? null : (value as CameraFocus)
+}
 export type PanelKey = 'main' | 'top' | 'bottom'
 export type WeatherSource = 'static' | 'real'
 export type Layout = 'single' | 'triple'
@@ -29,9 +65,7 @@ function getInitialTimestamp(): number | null {
 function getInitialCameraFocus(): CameraFocus {
   if (typeof window === 'undefined') return 'clock'
   const focus = new URLSearchParams(window.location.search).get('focus')
-  return (focus === 'clock' || focus === 'earth' || focus === 'sun' || focus === 'moon' || focus === 'location')
-    ? focus
-    : 'clock'
+  return parseFocus(focus, getInitialShowPlanets()) ?? 'clock'
 }
 
 function getInitialPanel(): PanelKey {
@@ -108,7 +142,7 @@ export const useStore = create<{
   jumpDate: Date | null
   jumpDateSetAt: Date | null
   setJumpDate: (date: Date | null) => void
-}>((set) => ({
+} & Partial<Record<PlanetFocus, { current: Object3D | null }>>>((set) => ({
   earth: undefined,
   moon: undefined,
   sun: undefined,
@@ -131,7 +165,11 @@ export const useStore = create<{
   setMainPanel: (mainPanel: PanelKey) => set({ mainPanel }),
   setWeatherSource: (weatherSource: WeatherSource) => set({ weatherSource }),
   setLayout: (layout: Layout) => set({ layout }),
-  setShowPlanets: (showPlanets: boolean) => set({ showPlanets }),
+  setShowPlanets: (showPlanets: boolean) =>
+    set((s) => ({
+      showPlanets,
+      cameraFocus: !showPlanets && isPlanetFocus(s.cameraFocus) ? 'sun' : s.cameraFocus,
+    })),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,

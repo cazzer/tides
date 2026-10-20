@@ -12,6 +12,7 @@ import SceneLights from './renderers/SceneLights'
 import { scaleLog } from 'd3'
 import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
+import { mainViewRange } from './main-view'
 import { OrbitLabel } from './orbit-label'
 import { useStore } from './store'
 import {
@@ -60,6 +61,7 @@ export default function SolarSystem({
   const earth = useRef(null)
   const moon = useRef(null)
   const location = useStore((s) => s.location)
+  const showPlanets = useStore((s) => s.showPlanets)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
 
   // From the surface, the Sun and Moon move to their true directions on a sky
@@ -91,7 +93,11 @@ export default function SolarSystem({
     <CameraProvider>
       <SceneLights />
 
-      <Starfield fromSurface={earthCamera} />
+      {/* Only the main view widens for the planets. */}
+      <Starfield
+        fromSurface={earthCamera}
+        radius={mainViewRange(interactive && showPlanets).starRadius}
+      />
 
       <OrbitingBody
         ref={sun}
