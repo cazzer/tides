@@ -21,7 +21,8 @@ export const MONTHS = [
   'December',
 ]
 
-// Clear of the sun halo (radius ~14). September at scale 3.5 is ~16.9 units
+// Clear of the Sun (radius ~10) and its corona's bright inner glow; only the
+// faint outer haze reaches this far. September at scale 3.5 is ~16.9 units
 // long and the clock ~16.4, so both end by ~37.5, inside the Moon's band.
 export const LABEL_INNER_RADIUS = 20
 export const CLOCK_INNER_RADIUS = LABEL_INNER_RADIUS + 1

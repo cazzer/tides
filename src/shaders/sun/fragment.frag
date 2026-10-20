@@ -1,42 +1,33 @@
-uniform float time;
-uniform float progress;
-uniform sampler2D texture1;
-uniform vec4 resolution;
 uniform samplerCube uPerlin;
-varying vec2 vUv;
-varying vec3 vPosition;
+varying vec3 vNormal;
+varying vec3 vViewPosition;
 varying vec3 vLayer0;
 varying vec3 vLayer1;
 varying vec3 vLayer2;
-varying vec3 vNormal;
-varying vec3 vEyeVector;
-varying vec3 vWorldPosition;
-float PI = 3.1415926535897932384626433832795;
-
-vec3 brightnessToColor(float b) {
-  b *= .25;
-  return (vec3(b, b * b, b*b*b*b) / .25) * 0.6;
-}
 
 float supersun() {
   float sum = 0.0;
   sum += textureCube(uPerlin, vLayer0).r;
   sum += textureCube(uPerlin, vLayer1).r;
   sum += textureCube(uPerlin, vLayer2).r;
-  sum *=.33;
-  return sum;
-}
-
-float Fresnel(vec3 eyeVector, vec3 worldNormal) {
-  return pow(1.0 - dot(eyeVector, worldNormal), 3.0);
+  return sum * .33;
 }
 
 void main() {
-  float brightness = supersun();
-  brightness = brightness * 3. + 1.7;
+  // View space, so it holds in both the ortho main view and the perspective
+  // panels, wherever the camera sits.
+  vec3 eye = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
+  float mu = clamp(dot(normalize(vNormal), eye), 0.0, 1.0);
 
-  vec3 col = brightnessToColor(brightness);
+  // Limb darkening: at the edge we see cooler, higher gas, so it's dimmer...
+  float I = 1.0 - 0.75 * (1.0 - mu);
+  float b = min((supersun() * 3. + 1.7) * .25, 1.0);
+  // ...and redder: a cooler blackbody loses green and blue faster than red.
+  b *= mix(0.45, 1.0, mu);
 
+  // Bright enough that the centre sits in ACES's shoulder, white-yellow.
+  gl_FragColor = vec4(vec3(b, b * b, b * b * b * b) * 4.0 * I, 1.0);
 
-  gl_FragColor = vec4(col, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }

@@ -1,14 +1,13 @@
-import { useRef, useMemo, useEffect } from 'react'
-import { useFrame, useLoader } from '@react-three/fiber'
+import { useMemo, useEffect } from 'react'
+import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import noiseVertex from '../shaders/sun-noise/vertex.glsl'
 import noiseFragment from '../shaders/sun-noise/fragment.frag'
 import sunVertex from '../shaders/sun/vertex.glsl'
 import sunFragment from '../shaders/sun/fragment.frag'
-import haloVertex from '../shaders/sun-halo/vertex.glsl'
-import haloFragment from '../shaders/sun-halo/fragment.frag'
+import coronaVertex from '../shaders/sun-corona/vertex.glsl'
+import coronaFragment from '../shaders/sun-corona/fragment.frag'
 import { CubeCamera, meshBounds } from '@react-three/drei'
-import { useStore } from '../store'
 
 // https://www.youtube.com/watch?v=3krH52AhPqk
 // ended at 1:04:24
@@ -20,8 +19,6 @@ interface SunRendererProps {
 }
 
 export default function SunRenderer({ diameter }: SunRendererProps) {
-  const noiseRef = useRef<THREE.Mesh>(null)
-  const sunRef = useRef<THREE.Mesh>(null)
   const noiseMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       vertexShader: noiseVertex,
@@ -37,59 +34,41 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
       uniforms: {
         time: { value: 0 },
         uPerlin: { value: null },
-        cameraPosition: { value: new THREE.Vector3() },
-        objectCenter: { value: new THREE.Vector3() }, // Sun's world position
-        uOrthoEye: { value: new THREE.Vector3() },
-        uUseOrthoEye: { value: 0 },
       },
       vertexShader: sunVertex,
       fragmentShader: sunFragment,
     })
   }, [])
-  const sunHaloMaterial = useMemo(() => {
+  const coronaMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
-      vertexShader: haloVertex,
-      fragmentShader: haloFragment,
-      side: THREE.BackSide,
+      vertexShader: coronaVertex,
+      fragmentShader: coronaFragment,
       transparent: true,
+      blending: THREE.AdditiveBlending,
       // A glow, not a surface: writing depth would hide labels behind it.
       depthWrite: false,
+      // The Sun's near side hides the quad's middle, so only the limb glows.
+      depthTest: true,
       uniforms: {
         time: { value: 0 },
-        uPerlin: { value: null },
-        uOrthoEye: { value: new THREE.Vector3() },
-        uUseOrthoEye: { value: 0 },
+        uRadius: { value: diameter },
       },
     })
-  }, [])
+  }, [diameter])
 
   useEffect(() => {
     return () => {
       noiseMaterial.dispose()
       sunMaterial.dispose()
-      sunHaloMaterial.dispose()
     }
-  }, [noiseMaterial, sunMaterial, sunHaloMaterial])
+  }, [noiseMaterial, sunMaterial])
+  useEffect(() => () => coronaMaterial.dispose(), [coronaMaterial])
 
-  // Update the shader time uniform for animation
   useFrame((state) => {
-    noiseMaterial.uniforms.time.value = state.clock.elapsedTime
-    sunMaterial.uniforms.time.value = state.clock.elapsedTime
-    sunMaterial.uniforms.cameraPosition.value.copy(state.camera.position)
-    if (sunRef.current) {
-      sunMaterial.uniforms.objectCenter.value.copy(sunRef.current.position)
-    }
-
-    // Only with planets on: off keeps today's perspective-style eye exactly.
-    const orthoEye =
-      useStore.getState().showPlanets &&
-      (state.camera as THREE.OrthographicCamera).isOrthographicCamera === true
-    for (const material of [sunMaterial, sunHaloMaterial]) {
-      material.uniforms.uUseOrthoEye.value = orthoEye ? 1 : 0
-      if (orthoEye) {
-        state.camera.getWorldDirection(material.uniforms.uOrthoEye.value).negate()
-      }
-    }
+    const t = state.clock.elapsedTime
+    noiseMaterial.uniforms.time.value = t
+    sunMaterial.uniforms.time.value = t
+    coronaMaterial.uniforms.time.value = t
   })
 
   return (
@@ -109,35 +88,33 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
         {(texture) => {
           sunMaterial.uniforms.uPerlin.value = texture
           return (
-            <>
-              <mesh
-                position={[0, 0, 0]}
-                raycast={meshBounds}
-              >
-                <sphereGeometry args={[diameter + 4, 128, 128]} />
-                <primitive
-                  object={sunHaloMaterial}
-                  attach="material"
-                />
-              </mesh>
-              <mesh
-                ref={sunRef}
-                position={[0, 0, 0]}
-                raycast={meshBounds}
-              >
-                <sphereGeometry args={[diameter, 128, 128]} />
-                <primitive
-                  object={sunMaterial}
-                  attach="material"
-                />
-              </mesh>
-            </>
+            <mesh
+              position={[0, 0, 0]}
+              raycast={meshBounds}
+            >
+              <sphereGeometry args={[diameter, 128, 128]} />
+              <primitive
+                object={sunMaterial}
+                attach="material"
+              />
+            </mesh>
           )
         }}
       </CubeCamera>
+      {/* Corona: a billboard the vertex shader sizes and turns to the eye. */}
+      <mesh
+        frustumCulled={false}
+        renderOrder={-1}
+        raycast={() => null}
+      >
+        <planeGeometry args={[2, 2]} />
+        <primitive
+          object={coronaMaterial}
+          attach="material"
+        />
+      </mesh>
       {/* Noise sphere - only visible to CubeCamera */}
       <mesh
-        ref={noiseRef}
         position={[0, 0, 0]}
         layers={REFLECTION_LAYER}
       >

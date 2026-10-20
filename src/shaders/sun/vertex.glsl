@@ -1,54 +1,35 @@
 uniform float time;
-varying vec2 vUv;
-varying vec3 vPosition;
-uniform vec2 pixels;
 varying vec3 vNormal;
+varying vec3 vViewPosition;
 varying vec3 vLayer0;
 varying vec3 vLayer1;
 varying vec3 vLayer2;
-varying vec3 vEyeVector;
-// Ortho eye: with planets on, the main view's eye can sit hundreds of units
-// from the Sun, where cameraPosition - P grazes it; use the view direction.
-uniform vec3 uOrthoEye;
-uniform float uUseOrthoEye;
-varying vec3 vWorldPosition;
-float PI = 3.1415926535897932384626433832795;
 
-mat2 rotate( float a) {
+mat2 rotate(float a) {
   float s = sin(a);
   float c = cos(a);
   return mat2(c, -s, s, c);
 }
 
 void main() {
-  // Calculate world position
-  vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-  vWorldPosition = worldPosition.xyz;
-  
-  // Calculate eye vector in world space
-  vEyeVector = uUseOrthoEye > 0.5 ? uOrthoEye : normalize(cameraPosition - vWorldPosition);
-  
-  // Transform normal to world space
-  vNormal = normalize(normalMatrix * normal);
-
+  // Three copies of the noise cube, each turning on its own axis, so the
+  // surface churns instead of sliding.
   float t = time * .005;
 
   vec3 p0 = position;
-  mat2 rot1 = rotate(t);
-  p0.yz = rot1*p0.yz;
+  p0.yz = rotate(t) * p0.yz;
   vLayer0 = p0;
 
   vec3 p1 = position;
-  mat2 rot2 = rotate(t + .6);
-  p1.xz = rot2*p1.xz;
+  p1.xz = rotate(t + .6) * p1.xz;
   vLayer1 = p1;
 
   vec3 p2 = position;
-  mat2 rot3 = rotate(t + 1.2);
-  p2.xy = rot3*p2.xy;
+  p2.xy = rotate(t + 1.2) * p2.xy;
   vLayer2 = p2;
 
-  vUv = uv;
-  vPosition = position;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  vNormal = normalize(normalMatrix * normal);
+  vViewPosition = -mvPosition.xyz;
+  gl_Position = projectionMatrix * mvPosition;
 }
