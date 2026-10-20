@@ -4,15 +4,19 @@ import * as THREE from 'three'
 import { MakeTime, RotateVector, Rotation_EQJ_ECT, Vector } from 'astronomy-engine'
 
 import starsBinUrl from '../assets/stars.bin?url'
+import starsDistanceUrl from '../assets/stars.distance.bin?url'
 import starsMeta from '../assets/stars.meta.json'
 import { eclipticToScene } from '../ephemeris'
 import { useStore } from '../store'
+import { depthAmount, shellDepth, shellPointVertex, shellPositions } from './starDepth'
 
 type StarfieldProps = {
   radius?: number
   size?: number
   opacity?: number
   fromSurface?: boolean
+  /** Spread the stars into a depth shell as this view zooms out (starDepth.ts). */
+  depth?: boolean
 }
 
 export const DEFAULT_RADIUS = 1000
@@ -85,6 +89,25 @@ if (uExtinction > 0.5) {
 }
 `
 
+type StarGeometry = {
+  geom: THREE.BufferGeometry
+  directions: Float32Array
+  depths: Float32Array
+  /** The shell amount the positions are spread to. */
+  amount: number
+}
+
+// Moves the stars out to their places in the depth shell (starDepth.ts) when
+// the amount changes.
+function spreadIntoShell(stars: StarGeometry, uDepth: { value: number }, amount: number) {
+  uDepth.value = amount
+  if (amount === stars.amount) return
+  stars.amount = amount
+  const position = stars.geom.getAttribute('position') as THREE.BufferAttribute
+  shellPositions(stars.directions, stars.depths, amount, position.array as Float32Array)
+  position.needsUpdate = true
+}
+
 // The surface camera's parent is the observer, whose +Y is the zenith.
 function zenithOf(camera: THREE.Camera, target: THREE.Vector3) {
   return camera.parent
@@ -97,17 +120,24 @@ export default function Starfield({
   size = DEFAULT_SIZE,
   opacity = 1,
   fromSurface = false,
+  depth = false,
 }: StarfieldProps) {
-  const buffer = useLoader(THREE.FileLoader, starsBinUrl, (loader) => {
-    loader.setResponseType('arraybuffer')
-  }) as ArrayBuffer
+  const [buffer, distanceBuffer] = useLoader(
+    THREE.FileLoader,
+    [starsBinUrl, starsDistanceUrl],
+    (loader) => {
+      loader.setResponseType('arraybuffer')
+    }
+  ) as ArrayBuffer[]
 
   const geometry = useMemo(() => {
     const floatData = new Float32Array(buffer)
     const stride = starsMeta.stride ?? 7
     const starCount = Math.floor(floatData.length / stride)
 
-    const positions = starDirectionsEQJ(floatData, stride)
+    const directions = starDirectionsEQJ(floatData, stride)
+    const distances = new Float32Array(distanceBuffer)
+    const depths = new Float32Array(starCount).map((_, i) => shellDepth(distances[i]))
     const colors = new Float32Array(starCount * 3)
 
     for (let i = 0; i < starCount; i += 1) {
@@ -126,21 +156,23 @@ export default function Starfield({
     }
 
     const geom = new THREE.BufferGeometry()
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geom.setAttribute('position', new THREE.BufferAttribute(directions.slice(), 3))
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    geom.setAttribute('starDepth', new THREE.BufferAttribute(depths, 1))
     geom.computeBoundingSphere()
 
-    return geom
-  }, [buffer])
+    return { geom, directions, depths, amount: 0 } satisfies StarGeometry
+  }, [buffer, distanceBuffer])
 
   useEffect(() => {
-    return () => geometry.dispose()
+    return () => geometry.geom.dispose()
   }, [geometry])
 
   const uniforms = useMemo(
     () => ({
       uZenith: { value: new THREE.Vector3(0, 1, 0) },
       uExtinction: { value: fromSurface ? 1 : 0 },
+      uDepth: { value: 0 },
     }),
     [fromSurface]
   )
@@ -148,17 +180,24 @@ export default function Starfield({
     () => (shader: THREE.WebGLProgramParametersWithUniforms) => {
       Object.assign(shader.uniforms, uniforms)
       shader.vertexShader = shader.vertexShader
-        .replace('void main() {', 'uniform vec3 uZenith;\nuniform float uExtinction;\nvoid main() {')
+        .replace(
+          'void main() {',
+          'uniform vec3 uZenith;\nuniform float uExtinction;\nuniform float uDepth;\nattribute float starDepth;\nvoid main() {'
+        )
         .replace('#include <color_vertex>', extinctionVertex)
+        .replace('gl_PointSize = size;', shellPointVertex)
     },
     [uniforms]
   )
 
   const stars = useRef<THREE.Points>(null)
-  useFrame(() => {
+  useFrame(({ camera }) => {
     if (stars.current) {
       orientStarfield(stars.current, useStore.getState().timestamp ?? Date.now())
     }
+    const ortho = camera as THREE.OrthographicCamera
+    const amount = depth && ortho.isOrthographicCamera ? depthAmount(ortho.zoom) : 0
+    spreadIntoShell(geometry, uniforms.uDepth, amount)
   })
 
   return (
@@ -174,7 +213,7 @@ export default function Starfield({
     >
       <primitive
         attach="geometry"
-        object={geometry}
+        object={geometry.geom}
       />
       <pointsMaterial
         size={size}
