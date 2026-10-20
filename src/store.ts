@@ -100,6 +100,16 @@ function getInitialShowConstellations(): boolean {
   return new URLSearchParams(window.location.search).get('constellations') === '1'
 }
 
+function getInitialShowLunar(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('lunar') === '1'
+}
+
+function getInitialShowZodiac(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('zodiac') === '1'
+}
+
 import { truncateLatLon } from './utils'
 
 export type Location = { lat: number; lon: number }
@@ -138,6 +148,9 @@ export const useStore = create<{
   showPlanets: boolean
   /** Major constellation stick figures, drawn in View from Earth only. */
   showConstellations: boolean
+  /** Moon-phase and zodiac rings around the month ring (tides-28u). */
+  showLunar: boolean
+  showZodiac: boolean
   location: Location | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
@@ -148,6 +161,8 @@ export const useStore = create<{
   setLayout: (layout: Layout) => void
   setShowPlanets: (showPlanets: boolean) => void
   setShowConstellations: (showConstellations: boolean) => void
+  setShowLunar: (showLunar: boolean) => void
+  setShowZodiac: (showZodiac: boolean) => void
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
@@ -168,6 +183,8 @@ export const useStore = create<{
   layout: getInitialLayout(),
   showPlanets: getInitialShowPlanets(),
   showConstellations: getInitialShowConstellations(),
+  showLunar: getInitialShowLunar(),
+  showZodiac: getInitialShowZodiac(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
@@ -182,6 +199,8 @@ export const useStore = create<{
       cameraFocus: !showPlanets && isPlanetFocus(s.cameraFocus) ? 'sun' : s.cameraFocus,
     })),
   setShowConstellations: (showConstellations: boolean) => set({ showConstellations }),
+  setShowLunar: (showLunar: boolean) => set({ showLunar }),
+  setShowZodiac: (showZodiac: boolean) => set({ showZodiac }),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,

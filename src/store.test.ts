@@ -76,3 +76,20 @@ describe('setShowPlanets', () => {
     expect(useStore.getState().cameraFocus).toBe('moon')
   })
 })
+
+describe('calendar ring toggles', () => {
+  it('starts off without URL params and toggles each ring on its own', () => {
+    const { setShowLunar, setShowZodiac } = useStore.getState()
+    expect(useStore.getState().showLunar).toBe(false)
+    expect(useStore.getState().showZodiac).toBe(false)
+    setShowLunar(true)
+    expect(useStore.getState().showLunar).toBe(true)
+    expect(useStore.getState().showZodiac).toBe(false)
+    setShowZodiac(true)
+    setShowLunar(false)
+    expect(useStore.getState().showLunar).toBe(false)
+    expect(useStore.getState().showZodiac).toBe(true)
+    setShowZodiac(false)
+    expect(useStore.getState().showZodiac).toBe(false)
+  })
+})

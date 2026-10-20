@@ -41,6 +41,8 @@ export default function App() {
   const layout = useStore((s) => s.layout)
   const showPlanets = useStore((s) => s.showPlanets)
   const showConstellations = useStore((s) => s.showConstellations)
+  const showLunar = useStore((s) => s.showLunar)
+  const showZodiac = useStore((s) => s.showZodiac)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
@@ -80,6 +82,16 @@ export default function App() {
     } else {
       params.delete('constellations')
     }
+    if (showLunar) {
+      params.set('lunar', '1')
+    } else {
+      params.delete('lunar')
+    }
+    if (showZodiac) {
+      params.set('zodiac', '1')
+    } else {
+      params.delete('zodiac')
+    }
     if (location) {
       params.set('lat', String(location.lat))
       params.set('lon', String(location.lon))
@@ -89,7 +101,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showLunar, showZodiac])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {

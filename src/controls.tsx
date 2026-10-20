@@ -202,6 +202,10 @@ function SettingsDialog({
   const constellationsHintId = useId()
   const showConstellations = useStore((s) => s.showConstellations)
   const setShowConstellations = useStore((s) => s.setShowConstellations)
+  const showLunar = useStore((s) => s.showLunar)
+  const setShowLunar = useStore((s) => s.setShowLunar)
+  const showZodiac = useStore((s) => s.showZodiac)
+  const setShowZodiac = useStore((s) => s.setShowZodiac)
 
   useEffect(() => {
     const dialog = ref.current
@@ -283,6 +287,24 @@ function SettingsDialog({
           <SettingHint id={constellationsHintId}>
             Lines for the major constellations in the View from Earth panel.
           </SettingHint>
+        </SettingGroup>
+        <SettingGroup>
+          <SettingLegend>Moon phases</SettingLegend>
+          <SegmentedControl
+            name="lunar"
+            value={showLunar ? 'on' : 'off'}
+            options={PLANETS_OPTIONS}
+            onChange={(value) => setShowLunar(value === 'on')}
+          />
+        </SettingGroup>
+        <SettingGroup>
+          <SettingLegend>Zodiac</SettingLegend>
+          <SegmentedControl
+            name="zodiac"
+            value={showZodiac ? 'on' : 'off'}
+            options={PLANETS_OPTIONS}
+            onChange={(value) => setShowZodiac(value === 'on')}
+          />
         </SettingGroup>
       </DialogBody>
     </Dialog>
