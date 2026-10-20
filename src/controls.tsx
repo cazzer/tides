@@ -12,7 +12,6 @@ import {
   IconSettings,
   IconX,
 } from '@tabler/icons-react'
-import { DateTime } from 'luxon'
 import {
   PLANET_FOCUS_KEYS,
   useStore,
@@ -21,13 +20,7 @@ import {
   type WeatherSource,
 } from './store'
 import { truncateLatLon } from './utils'
-
-function formatDateInput(value: string): string {
-  const digits = value.replace(/\D/g, '').slice(0, 8)
-  if (digits.length <= 2) return digits
-  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`
-  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
-}
+import DateTimePicker from './DateTimePicker'
 
 const FOCUS_OPTIONS: {
   value: CameraFocus
@@ -55,32 +48,13 @@ export default function Controls() {
   // Per-field selectors: the whole store changes every frame (timestamp).
   const timeScale = useStore((s) => s.timeScale)
   const setTimeScale = useStore((s) => s.setTimeScale)
-  const setJumpDate = useStore((s) => s.setJumpDate)
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const setLocation = useStore((s) => s.setLocation)
   const location = useStore((s) => s.location)
   const showPlanets = useStore((s) => s.showPlanets)
   const [locationError, setLocationError] = useState<string | null>(null)
-  const [dateInput, setDateInput] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
-
-  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setDateInput(formatDateInput(e.target.value))
-  }
-
-  const handleDateSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    const dt = DateTime.fromFormat(dateInput, 'MM/dd/yyyy')
-    if (dt.isValid) {
-      const date = dt.toJSDate()
-      setJumpDate(date)
-      // Only jumps write ?t=; the running clock would change it every frame.
-      const params = new URLSearchParams(window.location.search)
-      params.set('t', date.toISOString())
-      window.history.replaceState(null, '', `${window.location.pathname}?${params}`)
-    }
-  }
 
   const handleLocationClick = () => {
     setLocationError(null)
@@ -136,16 +110,7 @@ export default function Controls() {
         />
       </IconButton>
       {locationError && <LocationError>{locationError}</LocationError>}
-      <DateForm onSubmit={handleDateSubmit}>
-        <DateInput
-          type="text"
-          inputMode="numeric"
-          placeholder="mm/dd/yyyy"
-          value={dateInput}
-          onChange={handleDateChange}
-          maxLength={10}
-        />
-      </DateForm>
+      <DateTimePicker />
       <IconButton
         type="button"
         onClick={() => setSettingsOpen(true)}
@@ -663,39 +628,6 @@ const SpeedOptionButton = styled.button`
   &:hover {
     background-color: rgba(255, 255, 255, 0.14);
     color: #fff;
-  }
-`
-
-// Shrinks first so the bar fits a 320px phone.
-const DateForm = styled.form`
-  flex: 0 1 120px;
-  margin: 0;
-  min-width: 96px;
-`
-
-const DateInput = styled.input`
-  width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  font-size: 16px;
-  text-align: center;
-  background-color: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
-  outline: none;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-
-  &::placeholder {
-    color: rgba(255, 255, 255, 0.4);
-  }
-
-  &:focus {
-    background-color: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.35);
-  }
-
-  @media (max-width: 360px) {
-    padding: 0 6px;
   }
 `
 
