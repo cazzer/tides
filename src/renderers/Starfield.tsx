@@ -12,6 +12,7 @@ type StarfieldProps = {
   radius?: number
   size?: number
   opacity?: number
+  fromSurface?: boolean
 }
 
 export const DEFAULT_RADIUS = 1000
@@ -59,10 +60,43 @@ export function centreStarfieldOn(stars: THREE.Object3D, camera: THREE.Object3D)
   stars.updateMatrixWorld()
 }
 
+// Magnitudes a star loses per airmass through a clear sky (V band). From the
+// surface, stars fade into the horizon rather than running sharp up to the
+// ground, which read as the starfield being cut off.
+export const EXTINCTION_PER_AIRMASS = 0.25
+
+// Rozenberg's airmass: 1 at the zenith, ~40 (not infinite) at the horizon.
+export function airmass(sinAltitude: number) {
+  const s = Math.max(sinAltitude, 0)
+  return 1 / (s + 0.025 * Math.exp(-11 * s))
+}
+
+// Share of a star's zenith brightness left at this altitude.
+export function extinction(sinAltitude: number) {
+  return 10 ** (-0.4 * EXTINCTION_PER_AIRMASS * (airmass(sinAltitude) - 1))
+}
+
+const extinctionVertex = /* glsl */ `
+#include <color_vertex>
+if (uExtinction > 0.5) {
+  float s = max(dot(normalize(mat3(modelMatrix) * position), uZenith), 0.0);
+  float airmass = 1.0 / (s + 0.025 * exp(-11.0 * s));
+  vColor.rgb *= pow(10.0, -0.4 * ${EXTINCTION_PER_AIRMASS.toFixed(3)} * (airmass - 1.0));
+}
+`
+
+// The surface camera's parent is the observer, whose +Y is the zenith.
+function zenithOf(camera: THREE.Camera, target: THREE.Vector3) {
+  return camera.parent
+    ? target.set(0, 1, 0).transformDirection(camera.parent.matrixWorld)
+    : target.set(0, 1, 0)
+}
+
 export default function Starfield({
   radius = DEFAULT_RADIUS,
   size = DEFAULT_SIZE,
   opacity = 1,
+  fromSurface = false,
 }: StarfieldProps) {
   const buffer = useLoader(THREE.FileLoader, starsBinUrl, (loader) => {
     loader.setResponseType('arraybuffer')
@@ -103,6 +137,23 @@ export default function Starfield({
     return () => geometry.dispose()
   }, [geometry])
 
+  const uniforms = useMemo(
+    () => ({
+      uZenith: { value: new THREE.Vector3(0, 1, 0) },
+      uExtinction: { value: fromSurface ? 1 : 0 },
+    }),
+    [fromSurface]
+  )
+  const onBeforeCompile = useMemo(
+    () => (shader: THREE.WebGLProgramParametersWithUniforms) => {
+      Object.assign(shader.uniforms, uniforms)
+      shader.vertexShader = shader.vertexShader
+        .replace('void main() {', 'uniform vec3 uZenith;\nuniform float uExtinction;\nvoid main() {')
+        .replace('#include <color_vertex>', extinctionVertex)
+    },
+    [uniforms]
+  )
+
   const stars = useRef<THREE.Points>(null)
   useFrame(() => {
     if (stars.current) {
@@ -113,9 +164,11 @@ export default function Starfield({
   return (
     <points
       ref={stars}
-      onBeforeRender={(_renderer, _scene, camera) =>
-        stars.current && centreStarfieldOn(stars.current, camera)
-      }
+      onBeforeRender={(_renderer, _scene, camera) => {
+        if (!stars.current) return
+        centreStarfieldOn(stars.current, camera)
+        if (fromSurface) zenithOf(camera, uniforms.uZenith.value)
+      }}
       frustumCulled={false}
       scale={[radius, radius, radius]}
     >
@@ -130,6 +183,7 @@ export default function Starfield({
         transparent={opacity < 1}
         opacity={opacity}
         depthWrite={false}
+        onBeforeCompile={onBeforeCompile}
       />
     </points>
   )

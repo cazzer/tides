@@ -91,7 +91,7 @@ export default function SolarSystem({
     <CameraProvider>
       <SceneLights />
 
-      <Starfield />
+      <Starfield fromSurface={earthCamera} />
 
       <OrbitingBody
         ref={sun}

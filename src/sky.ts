@@ -49,6 +49,31 @@ export function surfaceView(lat: number) {
 // distance, so whatever has set is hidden.
 export const GROUND_RADIUS = 5
 
+// Airglow and scattered light brighten the sky toward the horizon; without it
+// the ground met the stars on a hard, featureless edge. Added over the sky, so
+// a linear colour at the horizon, falling off by e every HORIZON_GLOW_HEIGHT
+// degrees and gone by HORIZON_GLOW_TOP.
+export const HORIZON_GLOW = new THREE.Color(0.032, 0.04, 0.06)
+export const HORIZON_GLOW_HEIGHT = 6
+const HORIZON_GLOW_TOP = 30
+
+// The glow as a band of the observer's sky (+Y the zenith), BackSide-facing,
+// coloured per vertex by altitude.
+export function horizonGlowGeometry(radius: number) {
+  const top = HORIZON_GLOW_TOP * DEG
+  const geometry = new THREE.SphereGeometry(radius, 64, 30, 0, Math.PI * 2, Math.PI / 2 - top, top)
+  const position = geometry.getAttribute('position')
+  const colors = new Float32Array(position.count * 3)
+  const color = new THREE.Color()
+  for (let i = 0; i < position.count; i += 1) {
+    const altitude = Math.asin(THREE.MathUtils.clamp(position.getY(i) / radius, -1, 1)) / DEG
+    const fade = altitude >= HORIZON_GLOW_TOP - 1e-6 ? 0 : Math.exp(-altitude / HORIZON_GLOW_HEIGHT)
+    color.copy(HORIZON_GLOW).multiplyScalar(fade).toArray(colors, i * 3)
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  return geometry
+}
+
 const zenith = new THREE.Vector3()
 const north = new THREE.Vector3()
 const east = new THREE.Vector3()

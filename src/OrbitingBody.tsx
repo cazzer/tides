@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useEffect } from 'react'
+import { forwardRef, useRef, useEffect, useMemo } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
@@ -12,6 +12,7 @@ import {
   DEFAULT_SURFACE_LOCATION,
   GROUND_RADIUS,
   SURFACE_FOV,
+  horizonGlowGeometry,
   placeSurfaceCamera,
 } from './sky'
 
@@ -58,6 +59,11 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
   const surfaceCameraRef = useRef<any>(null)
   const moonCameraRef = useRef<any>(null)
   const surfaceCameraContainerRef = useRef<THREE.Mesh>(null)
+  const horizonGlow = useMemo(
+    () => (surfaceCamera ? horizonGlowGeometry(GROUND_RADIUS) : undefined),
+    [surfaceCamera]
+  )
+  useEffect(() => () => horizonGlow?.dispose(), [horizonGlow])
   const flagRef = useRef<THREE.Group>(null)
   const set = useThree((s) => s.set)
   const location = useStore((s) => s.location)
@@ -168,6 +174,17 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
                 <meshBasicMaterial
                   color="#161a14"
                   side={THREE.BackSide}
+                />
+              </mesh>
+            )}
+            {horizonGlow && (
+              <mesh geometry={horizonGlow}>
+                <meshBasicMaterial
+                  vertexColors
+                  side={THREE.BackSide}
+                  transparent
+                  blending={THREE.AdditiveBlending}
+                  depthWrite={false}
                 />
               </mesh>
             )}
