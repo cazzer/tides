@@ -5,6 +5,7 @@ import {
   frameAtOrBefore,
   HOLD_REFRESH_MS,
   initialPlanState,
+  isSteady,
   pickBlend,
   planCloudFrames,
   SETTLE_MS,
@@ -36,6 +37,25 @@ describe('cadenceFor', () => {
     [2_592_000, null],
   ])('%s', (timeScale, expected) => {
     expect(cadenceFor(timeScale)).toBe(expected)
+  })
+
+  test('slow builds stretch the shortest frame', () => {
+    expect(cadenceFor(3600, 8400)).toBe(12 * HOUR)
+    expect(cadenceFor(1, 8400)).toBe(10 * MIN)
+  })
+})
+
+describe('isSteady', () => {
+  const prev = { simMs: 0, wallMs: 0 }
+  test('playback at the clock rate is steady', () => {
+    expect(isSteady(prev, 16 * 3600, 16, 3600)).toBe(true)
+    expect(isSteady(prev, 16, 16, 1)).toBe(true)
+    expect(isSteady(prev, 0, 16, 0)).toBe(true)
+  })
+  test('a scrub or a jump is not', () => {
+    expect(isSteady(prev, 10 * MIN, 16, 0)).toBe(false)
+    expect(isSteady(prev, -HOUR, 16, 3600)).toBe(false)
+    expect(isSteady(null, 0, 16, 0)).toBe(false)
   })
 })
 
@@ -152,7 +172,7 @@ describe('planCloudFrames', () => {
 
 describe('stepCloudPlan', () => {
   const plan = (iso: string, timeScale = 0) => planCloudFrames(at(iso), timeScale, NOW)
-  const idle = { jumping: false, settled: false }
+  const idle = { jumping: false, settled: false, steady: true }
   const committed = (p: CloudPlan, wall = 0): PlanState =>
     stepCloudPlan(initialPlanState, p, wall, idle).state
 
@@ -174,6 +194,18 @@ describe('stepCloudPlan', () => {
     const s = committed(plan('2026-10-17T12:05:00Z', 1))
     const next = plan('2026-10-17T12:15:00Z', 1)
     expect(stepCloudPlan(s, next, 16, idle)).toMatchObject({ commit: next, abortUnwanted: false })
+  })
+
+  test('a scrub to the next frames settles like a jump', () => {
+    const s = committed(plan('2026-10-17T12:05:00Z'))
+    const scrubbed = plan('2026-10-17T12:15:00Z')
+    const scrub = { ...idle, steady: false }
+    const r = stepCloudPlan(s, scrubbed, 16, scrub)
+    expect(r.commit).toBeNull()
+    expect(stepCloudPlan(r.state, scrubbed, 16 + SETTLE_MS, scrub)).toMatchObject({
+      commit: scrubbed,
+      abortUnwanted: true,
+    })
   })
 
   test('a jump settles for SETTLE_MS, then commits and aborts the rest', () => {
@@ -209,9 +241,9 @@ describe('stepCloudPlan', () => {
   test('a held frame refreshes only after HOLD_REFRESH_MS, once loaded', () => {
     const s = committed(plan('2026-09-01T12:00:00Z', 86_400))
     const later = plan('2026-09-05T12:00:00Z', 86_400)
-    expect(stepCloudPlan(s, later, HOLD_REFRESH_MS - 1, { jumping: false, settled: true }).commit).toBeNull()
-    expect(stepCloudPlan(s, later, HOLD_REFRESH_MS, { jumping: false, settled: false }).commit).toBeNull()
-    expect(stepCloudPlan(s, later, HOLD_REFRESH_MS, { jumping: false, settled: true })).toMatchObject({
+    expect(stepCloudPlan(s, later, HOLD_REFRESH_MS - 1, { jumping: false, settled: true, steady: true }).commit).toBeNull()
+    expect(stepCloudPlan(s, later, HOLD_REFRESH_MS, { jumping: false, settled: false, steady: true }).commit).toBeNull()
+    expect(stepCloudPlan(s, later, HOLD_REFRESH_MS, { jumping: false, settled: true, steady: true })).toMatchObject({
       commit: later,
       abortUnwanted: false,
     })

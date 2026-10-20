@@ -4,11 +4,15 @@
 // keyframes are wanted comes from ../cloud-frames.ts (tides-kzj.4.1): a frame
 // is a day of the daily composite or a geostationary slot over one
 // (tides-1zj). Up to MAX_IN_FLIGHT of them build at once, most wanted first,
-// and the last MAX_CACHED_FRAMES are kept.
+// and the last MAX_CACHED_FRAMES are kept. Slow builds lengthen the frames
+// (BUILD_MARGIN), and a frame that finishes after playback has moved past it
+// is still shown while it is the latest there is.
 import {
   initialPlanState,
+  isSteady,
   MAX_CACHED_FRAMES,
   MAX_IN_FLIGHT,
+  MIN_FRAME_WALL_MS,
   planCloudFrames,
   stepCloudPlan,
   type CloudFrame,
@@ -22,8 +26,16 @@ export type { CloudStatus, FrameView, GibsSource }
 /** A source that needs imagery fetched. */
 export type ImagerySource = GibsSource | GeoSource
 
+/** A frame lasts at least this many times the average build. */
+export const BUILD_MARGIN = 1.2
+// The average follows new builds this fast, and moves the frame minimum only
+// when it is this far off, so the cadence doesn't flip back and forth.
+const BUILD_AVERAGE_WEIGHT = 0.3
+const MIN_FRAME_HYSTERESIS = 0.25
+
 export interface CloudSnapshot<T> {
-  /** The committed frames in time order; empty until the first tick. */
+  /** The committed frames, and loaded ones just behind them that playback
+   * has moved past, in time order; empty until the first tick. */
   frames: readonly FrameView<T>[]
   /** The rest describe the frame at or before the sim time (for attribution):
    * its texture, null while it loads or for the static clouds. */
@@ -41,6 +53,8 @@ export interface CloudControllerDeps<T> {
 
 interface Build {
   key: string
+  frame: CloudFrame
+  startedAt: number
   abort: AbortController
 }
 
@@ -50,10 +64,15 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
   // Builds survive the plan moving on (they finish into the cache) unless a
   // discontinuous commit or deactivate aborts them.
   const inFlight = new Map<string, Build>()
-  const cache = new Map<string, { texture: T; lastUsed: number }>()
+  const cache = new Map<string, { frame: CloudFrame; texture: T; lastUsed: number }>()
   // Frames in the plan whose build found no imagery; forgotten once they leave.
   const failed = new Set<string>()
   let useCount = 0
+  let buildMsAverage: number | null = null
+  let minFrameWallMs = MIN_FRAME_WALL_MS
+  // The last tick's inputs: playback vs scrubbing, and what pump() aims for.
+  let last: { simMs: number; wallMs: number; jumpToMs: number | null; timeScale: number } | null =
+    null
   const listeners = new Set<() => void>()
   const initialSnapshot: CloudSnapshot<T> = { frames: [], texture: null, source: null, status: 'loading' }
   let snapshot = initialSnapshot
@@ -70,8 +89,22 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     listeners.forEach((l) => l())
   }
 
+  /** Loaded frames outside the plan but at most two steps behind it. */
+  function nearbyCached(): CloudFrame[] {
+    const committed = plan.committed
+    if (committed?.mode !== 'bracket') return []
+    const [first, second] = committed.frames
+    const step = Math.max(committed.cadenceMs, second ? second.timeMs - first.timeMs : 0)
+    const from = first.timeMs - 2 * step
+    const to = Math.max(...committed.frames.map((f) => f.timeMs))
+    const inPlan = new Set(committed.frames.map((f) => f.key))
+    return [...cache.values()]
+      .map((e) => e.frame)
+      .filter((f) => !inPlan.has(f.key) && f.timeMs >= from && f.timeMs <= to)
+  }
+
   function publish() {
-    const frames = [...planFrames()]
+    const frames = [...planFrames(), ...nearbyCached()]
       .sort((a, b) => a.timeMs - b.timeMs)
       .map((f) => ({ ...f, status: statusOf(f), texture: cache.get(f.key)?.texture ?? null }))
     const unchanged =
@@ -99,9 +132,14 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     }
   }
 
-  function start(key: string, source: ImagerySource) {
-    const current: Build = { key, abort: new AbortController() }
-    inFlight.set(key, current)
+  function start(frame: CloudFrame, source: ImagerySource) {
+    const current: Build = {
+      key: frame.key,
+      frame,
+      startedAt: last?.wallMs ?? 0,
+      abort: new AbortController(),
+    }
+    inFlight.set(frame.key, current)
     build(source, staticUrl, current.abort.signal).then(
       (texture) => finish(current, texture),
       (err) => {
@@ -113,13 +151,35 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
     )
   }
 
+  /** True when playback will pass the frame after `frame` before a build of
+   * `frame` would finish, so building it is wasted. */
+  function outrun(frame: CloudFrame): boolean {
+    if (!last || last.timeScale <= 0 || buildMsAverage === null) return false
+    const frames = planFrames()
+    const next = frames[frames.indexOf(frame) + 1]
+    if (!next) return false
+    const simMs = last.jumpToMs ?? last.simMs
+    return (next.timeMs - simMs) / last.timeScale < buildMsAverage
+  }
+
   /** Starts builds for the plan's frames, in priority order, while there is
    * room. */
   function pump() {
-    for (const { key, source } of planFrames()) {
+    for (const frame of planFrames()) {
       if (inFlight.size >= MAX_IN_FLIGHT) return
+      const { key, source } = frame
       if (source.kind === 'static' || cache.has(key) || inFlight.has(key) || failed.has(key)) continue
-      start(key, source)
+      if (outrun(frame)) continue
+      start(frame, source)
+    }
+  }
+
+  function recordBuildTime(ms: number) {
+    buildMsAverage =
+      buildMsAverage === null ? ms : buildMsAverage + BUILD_AVERAGE_WEIGHT * (ms - buildMsAverage)
+    const target = Math.max(MIN_FRAME_WALL_MS, BUILD_MARGIN * buildMsAverage)
+    if (Math.abs(target - minFrameWallMs) > MIN_FRAME_HYSTERESIS * minFrameWallMs) {
+      minFrameWallMs = target
     }
   }
 
@@ -130,8 +190,10 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
       return
     }
     inFlight.delete(done.key)
-    if (texture) cache.set(done.key, { texture, lastUsed: ++useCount })
-    else if (planFrames().some((f) => f.key === done.key)) failed.add(done.key)
+    if (texture) {
+      cache.set(done.key, { frame: done.frame, texture, lastUsed: ++useCount })
+      if (last) recordBuildTime(last.wallMs - done.startedAt)
+    } else if (planFrames().some((f) => f.key === done.key)) failed.add(done.key)
     evict()
     publish()
     pump()
@@ -149,12 +211,33 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
       nowMs: number,
       staticCloudsUrl: string
     ) {
+      if (
+        last &&
+        last.wallMs === wallMs &&
+        last.simMs === simMs &&
+        last.jumpToMs === jumpToMs &&
+        last.timeScale === timeScale
+      ) {
+        return
+      }
       staticUrl = staticCloudsUrl
       // During a jump the clock tweens through everything in between; only
       // the target matters.
-      const next = planCloudFrames(jumpToMs ?? simMs, timeScale, nowMs)
+      const target = jumpToMs ?? simMs
+      const steady = isSteady(
+        last && { simMs: last.jumpToMs ?? last.simMs, wallMs: last.wallMs },
+        target,
+        wallMs,
+        timeScale
+      )
+      last = { simMs, wallMs, jumpToMs, timeScale }
+      const next = planCloudFrames(target, timeScale, nowMs, minFrameWallMs)
       const settled = planFrames().every((f) => statusOf(f) !== 'loading')
-      const step = stepCloudPlan(plan, next, wallMs, { jumping: jumpToMs !== null, settled })
+      const step = stepCloudPlan(plan, next, wallMs, {
+        jumping: jumpToMs !== null,
+        settled,
+        steady,
+      })
       plan = step.state
       if (!step.commit) return
       const wanted = new Set(step.commit.frames.map((f) => f.key))
@@ -179,6 +262,7 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
       inFlight.clear()
       failed.clear()
       plan = initialPlanState
+      last = null
       if (snapshot !== initialSnapshot) notify(initialSnapshot)
     },
     subscribe(listener: () => void) {

@@ -46,7 +46,9 @@ export function planBlendPass(
       (next.a === prev.b && prev.mix >= 1 - MAX_MIX_JUMP && next.mix <= MAX_MIX_JUMP))
   const fadeStart = continuous ? prev.fadeStart : wallMs
   const fade = smoothstep(0, 1, (wallMs - fadeStart) / FADE_MS)
-  const drawn = `${next.a}|${next.b}|${Math.round(next.mix * 255)}|${Math.round(fade * 255)}`
+  // fade >= 1 too: 8 bits round to the end of the fade a little early, and
+  // the last pass is what drops the frozen output's measured heights.
+  const drawn = `${next.a}|${next.b}|${Math.round(next.mix * 255)}|${Math.round(fade * 255)}|${fade >= 1}`
   const state = { ...next, fadeStart, drawn }
   if (continuous && drawn === prev.drawn) return { state, pass: null }
   return { state, pass: { swap: !continuous, fade } }

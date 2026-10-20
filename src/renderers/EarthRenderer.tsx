@@ -1,4 +1,4 @@
-import { useLoader, useFrame } from '@react-three/fiber'
+import { useLoader, useFrame, useThree } from '@react-three/fiber'
 import { meshBounds, useTexture } from '@react-three/drei'
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
@@ -58,6 +58,15 @@ export default function EarthRenderer({
   const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
   const real = useStore((s) => s.weatherSource) === 'real'
   useRealCloudsActive(real)
+  // A lost context comes back with blank render targets, and nothing redraws
+  // them while paused.
+  const gl = useThree((s) => s.gl)
+  useEffect(() => {
+    const canvas = gl.domElement
+    const restart = () => realCloudBlend.release()
+    canvas.addEventListener('webglcontextrestored', restart)
+    return () => canvas.removeEventListener('webglcontextrestored', restart)
+  }, [gl])
   // The Moon's shadow during solar eclipses, on the ground and the clouds.
   const eclipseShadow = useEclipseShadowState('earth')
   // Clouds with relief, and their shadows on the ground (tides-y2e).

@@ -27,6 +27,14 @@ describe('planBlendPass', () => {
     expect(end.pass).toEqual({ swap: false, fade: 1 })
   })
 
+  test('the fade always ends with a pass at exactly 1', () => {
+    const first = planBlendPass(null, { a: '1', b: '2', mix: 0.2 }, 0)
+    const nearly = planBlendPass(first.state, { a: '1', b: '2', mix: 0.2 }, FADE_MS - 4)
+    expect(Math.round((nearly.pass?.fade ?? 0) * 255)).toBe(255)
+    const end = planBlendPass(nearly.state, { a: '1', b: '2', mix: 0.2 }, FADE_MS)
+    expect(end.pass).toEqual({ swap: false, fade: 1 })
+  })
+
   test('a small step in mix draws without a swap', () => {
     const r = planBlendPass(settled('1', '2', 0.2), { a: '1', b: '2', mix: 0.25 }, 1000)
     expect(r.pass).toEqual({ swap: false, fade: 1 })

@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest'
-import { HOLD_REFRESH_MS, MAX_CACHED_FRAMES, planCloudFrames, SETTLE_MS } from '../cloud-frames'
+import {
+  HOLD_REFRESH_MS,
+  MAX_CACHED_FRAMES,
+  pickBlend,
+  planCloudFrames,
+  SETTLE_MS,
+} from '../cloud-frames'
 import { sourceKey } from '../real-clouds'
 import { createRealCloudController, type ImagerySource } from './realCloudController'
 
@@ -96,19 +102,19 @@ describe('realCloudController', () => {
 
   test('stepping on keeps builds going; a jump aborts the ones it does not need', async () => {
     const { builds, tick, go, pending, setWall } = setup()
-    tick(at('2026-10-17T06:43:00Z'))
-    const [first, second] = keys('2026-10-17T06:43:00Z')
-    // Ten sim minutes on: the next step along commits at once.
-    setWall(16)
-    tick(at('2026-10-17T06:53:00Z'))
+    tick(at('2026-10-17T06:43:00Z'), { timeScale: 1 })
+    const [first, second] = keys('2026-10-17T06:43:00Z', 1)
+    // Ten minutes of real-time playback on: the next step along commits at once.
+    setWall(600_000)
+    tick(at('2026-10-17T06:53:00Z'), { timeScale: 1 })
     expect(builds.map((b) => b.signal.aborted)).toEqual([false, false])
     const ta = texture('A')
     finish(builds[0], ta)
     await flush()
     // The freed slot goes to the new plan's next frame.
-    expect(builds.map((b) => b.key)).toEqual([first, second, keys('2026-10-17T06:53:00Z')[1]])
+    expect(builds.map((b) => b.key)).toEqual([first, second, keys('2026-10-17T06:53:00Z', 1)[1]])
 
-    setWall(1000)
+    setWall(601_000)
     go('2024-10-09T12:00:00Z')
     expect(builds[1].signal.aborted).toBe(true)
     expect(builds[2].signal.aborted).toBe(true)
@@ -180,23 +186,29 @@ describe('realCloudController', () => {
   })
 
   /** Plays at `timeScale` from `from` for wallMs, ticking every 16 ms, with
-   * builds that take buildMs. Returns the builds and the primary frames shown,
-   * in order. */
+   * builds that take buildMs. Returns the builds, the primary frames shown in
+   * order, and when the frame the blend starts from changed. */
   async function play(from: string, timeScale: number, wallMs: number, buildMs: number) {
     const { builds, tick, snap, setWall } = setup()
     const start = at(from)
     const shown: string[] = []
+    const blendChanges: { wall: number; name: string }[] = []
     for (let wall = 0; wall <= wallMs; wall += 16) {
       setWall(wall)
-      tick(start + wall * timeScale, { timeScale })
+      const sim = start + wall * timeScale
+      tick(sim, { timeScale })
       const due = builds.filter((b) => !b.done && wall - b.startedAt >= buildMs)
       for (const b of due) finish(b, texture(b.key))
       if (due.length) await flush()
       const { source, status } = snap()
       const key = source ? sourceKey(source) : null
       if (key && status === 'ready' && shown[shown.length - 1] !== key) shown.push(key)
+      const pick = pickBlend(snap().frames, sim)
+      if (pick && pick.a !== 'static' && blendChanges[blendChanges.length - 1]?.name !== pick.a.name) {
+        blendChanges.push({ wall, name: pick.a.name })
+      }
     }
-    return { builds, shown }
+    return { builds, shown, blendChanges }
   }
 
   test('an hour per second moves on every few seconds', async () => {
@@ -205,6 +217,23 @@ describe('realCloudController', () => {
     // A 3-hour cadence over 30 sim hours, plus the bracket and prefetch.
     expect(builds.length).toBeLessThanOrEqual(14)
     expect(builds.every((b) => !b.signal.aborted)).toBe(true)
+  })
+
+  test('slow builds at an hour per second still move on', async () => {
+    const { builds, blendChanges } = await play('2026-10-10T00:00:00Z', 3600, 60_000, 7000)
+    expect(blendChanges.length).toBeGreaterThanOrEqual(4)
+    expect(blendChanges[blendChanges.length - 1].wall).toBeGreaterThan(40_000)
+    expect(builds.length).toBeLessThanOrEqual(10)
+  })
+
+  test('the average build time stretches the cadence', async () => {
+    const { builds } = await play('2026-10-10T00:00:00Z', 3600, 60_000, 7000)
+    // 7 s builds need 8.4 s frames: 12 sim hours at an hour per second.
+    const later = builds.filter((b) => b.startedAt > 20_000 && b.source.kind === 'geo')
+    expect(later.length).toBeGreaterThan(0)
+    for (const b of later) {
+      if (b.source.kind === 'geo') expect(Date.parse(b.source.time) % (12 * 3_600_000)).toBe(0)
+    }
   })
 
   test('a day per second refreshes the held frame no faster than HOLD_REFRESH_MS', async () => {

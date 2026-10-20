@@ -5,7 +5,9 @@
 // on the cadence's grid; before it, on the daily composites' noons. Stepping
 // on to the next frames commits at once and lets the builds in flight finish,
 // so fast playback keeps moving; jumps, scrubs and rate changes settle first.
-// Too fast for any cadence, one frame is held and refreshed now and then.
+// Too fast for any cadence, one frame is held and refreshed now and then. The
+// controller lengthens the shortest frame when builds are slow, so the frames
+// keep loading before playback passes them.
 // Pure logic; the fetching lives in renderers/realCloudController.ts.
 import {
   DAY_MS,
@@ -30,8 +32,12 @@ export const CADENCES_MS = [
   12 * HOUR_MS,
   DAY_MS,
 ] as const
-/** Shortest wall time a frame may last: about what a build takes. */
+/** Shortest wall time a frame may last: about what a build takes on a good
+ * connection. */
 export const MIN_FRAME_WALL_MS = 3000
+/** Sim time (ms) a tick may drift from steady playback and still count as
+ * playback rather than a scrub, on top of half the expected step. */
+const STEADY_SLACK_MS = 60_000
 /** Too fast for any cadence, the held frame is replaced this often at most. */
 export const HOLD_REFRESH_MS = 4000
 /** A plan that isn't the next step along must be wanted this long (wall
@@ -66,11 +72,12 @@ function frameOf(source: CloudSource, timeMs: number): CloudFrame {
   return { key: sourceKey(source), timeMs, source }
 }
 
-/** The keyframe spacing for a playback rate (sim seconds per wall second), or
- * null when even a day goes by too fast. Paused shows the finest. */
-export function cadenceFor(timeScale: number): number | null {
+/** The keyframe spacing for a playback rate (sim seconds per wall second)
+ * that gives each frame at least minFrameWallMs, or null when even a day goes
+ * by too fast. Paused shows the finest. */
+export function cadenceFor(timeScale: number, minFrameWallMs = MIN_FRAME_WALL_MS): number | null {
   if (timeScale === 0) return CADENCES_MS[0]
-  return CADENCES_MS.find((c) => c / Math.abs(timeScale) >= MIN_FRAME_WALL_MS) ?? null
+  return CADENCES_MS.find((c) => c / Math.abs(timeScale) >= minFrameWallMs) ?? null
 }
 
 const noonAtOrBefore = (t: number) => Math.floor((t - DAY_MS / 2) / DAY_MS) * DAY_MS + DAY_MS / 2
@@ -109,8 +116,13 @@ export function frameAfter(t: number, cadenceMs: number, nowMs: number): CloudFr
   return next.source.kind === 'static' || next.key === at.key ? null : next
 }
 
-export function planCloudFrames(simMs: number, timeScale: number, nowMs: number): CloudPlan {
-  const cadenceMs = cadenceFor(timeScale)
+export function planCloudFrames(
+  simMs: number,
+  timeScale: number,
+  nowMs: number,
+  minFrameWallMs = MIN_FRAME_WALL_MS
+): CloudPlan {
+  const cadenceMs = cadenceFor(timeScale, minFrameWallMs)
   if (cadenceMs === null) {
     return { mode: 'hold', frames: [frameOf(selectRealCloudSource(simMs, nowMs), simMs)] }
   }
@@ -145,6 +157,19 @@ export function isContinuation(prev: CloudPlan, next: CloudPlan): boolean {
   )
 }
 
+/** True when the sim time moved from prev as playback at timeScale would
+ * have, rather than being scrubbed or jumped. */
+export function isSteady(
+  prev: { simMs: number; wallMs: number } | null,
+  simMs: number,
+  wallMs: number,
+  timeScale: number
+): boolean {
+  if (!prev) return false
+  const expected = timeScale * (wallMs - prev.wallMs)
+  return Math.abs(simMs - prev.simMs - expected) <= Math.abs(expected) / 2 + STEADY_SLACK_MS
+}
+
 export interface PlanState {
   committed: CloudPlan | null
   /** Wall-clock ms of the last commit. */
@@ -165,7 +190,8 @@ export const initialPlanState: PlanState = {
 
 /**
  * Decides when the wanted plan replaces the committed one. The first commits
- * at once, as does the next step along; a held frame is refreshed every
+ * at once, as does the next step along during steady playback (isSteady); a
+ * held frame is refreshed every
  * HOLD_REFRESH_MS once it has loaded (settled: ready or failed); anything
  * else must be wanted for SETTLE_MS, and then the builds it doesn't need are
  * aborted. Returns the same state object when nothing changed, so calling it
@@ -175,7 +201,7 @@ export function stepCloudPlan(
   prev: PlanState,
   next: CloudPlan,
   wallMs: number,
-  { jumping, settled }: { jumping: boolean; settled: boolean }
+  { jumping, settled, steady }: { jumping: boolean; settled: boolean; steady: boolean }
 ): { state: PlanState; commit: CloudPlan | null; abortUnwanted: boolean } {
   const commit = (abortUnwanted: boolean) => ({
     state: { committed: next, committedAt: wallMs, candidate: null, since: wallMs },
@@ -191,7 +217,7 @@ export function stepCloudPlan(
   if (committed.mode === 'hold' && next.mode === 'hold' && !jumping) {
     return wallMs - prev.committedAt >= HOLD_REFRESH_MS && settled ? commit(false) : stay()
   }
-  if (isContinuation(committed, next)) return commit(false)
+  if (steady && isContinuation(committed, next)) return commit(false)
 
   const candidate = prev.candidate
   const same = candidate !== null && samePlan(candidate, next)
