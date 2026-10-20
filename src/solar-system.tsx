@@ -14,6 +14,7 @@ import { CameraProvider } from './camera'
 import { mainViewRange } from './main-view'
 import { OrbitLabel } from './orbit-label'
 import { PlanetBodies } from './PlanetBodies'
+import { PlanetOrbits } from './planet-orbits'
 import { sceneRadius } from './planets'
 import { useStore } from './store'
 import {
@@ -151,6 +152,9 @@ export default function SolarSystem({
         <Suspense fallback={null}>
           <PlanetBodies interactive={interactive} />
         </Suspense>
+      )}
+      {showPlanets && showOrbitLabels && !earthCamera && !moonCamera && (
+        <PlanetOrbits />
       )}
     </CameraProvider>
   )

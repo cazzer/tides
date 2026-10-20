@@ -168,6 +168,25 @@ export function planetOrbitPath(
   return points
 }
 
+/** Points per drawn orbit loop (Earth's ring uses as many). */
+export const PLANET_ORBIT_SEGMENTS = 256
+
+/** Share of a period the sim clock moves before an orbit line is redrawn. */
+export const ORBIT_REFRESH_FRACTION = 0.1
+
+// The loop is a whole period of true positions, so the planet stays on it
+// long after t moves off the loop's centre: what drifts is only the frame
+// (ecliptic of date) and the elements, ~0.01% of the radius at 10% of a
+// period (planet-orbits.test.ts). Even Mercury at a month per second then
+// redraws a few times a second, not every frame.
+export function orbitPathIsStale(
+  pathT: number,
+  t: number,
+  periodDays: number
+): boolean {
+  return Math.abs(t - pathT) > ORBIT_REFRESH_FRACTION * periodDays * MS_PER_DAY
+}
+
 // Local +Y is the IAU north pole, +X the prime meridian, −Z east. Returns a
 // quaternion owned by this closure, valid until its next call.
 export function bodyOrientation(body: Body): (t: number) => THREE.Quaternion {

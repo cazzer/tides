@@ -6,7 +6,7 @@ import { useCamera } from './camera'
 import { useStore } from './store'
 import { earthAngle, monthStartAngles } from './ephemeris'
 
-const MONTHS = [
+export const MONTHS = [
   'January',
   'February',
   'March',
@@ -23,21 +23,21 @@ const MONTHS = [
 
 // Clear of the sun halo (radius ~14). September at scale 3.5 is ~16.9 units
 // long and the clock ~16.4, so both end by ~37.5, inside the Moon's band.
-const LABEL_INNER_RADIUS = 20
-const CLOCK_INNER_RADIUS = LABEL_INNER_RADIUS + 1
-const MONTH_SCALE = 3.5
+export const LABEL_INNER_RADIUS = 20
+export const CLOCK_INNER_RADIUS = LABEL_INNER_RADIUS + 1
+export const MONTH_SCALE = 3.5
 // Solid grey reads like the old 25%-opaque white on black, but stays visible
 // over the Sun, where translucent white blends into its bright surface.
 const MONTH_COLOR = '#404040'
 // Roughly half the clock text's width (~16.4 units at scale 2), so the camera
 // centres on the text rather than its left-anchored inner end.
-const CLOCK_HALF_WIDTH = 8
+export const CLOCK_HALF_WIDTH = 8
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
 
 // Depth-tested so the Sun, Earth and Moon hide labels behind them, but not
 // depth-written so overlapping glyphs and later transparents still blend.
-const labelMaterial = new THREE.MeshBasicMaterial({
+export const labelMaterial = new THREE.MeshBasicMaterial({
   color: 0xffffff,
   side: THREE.DoubleSide,
   transparent: true,
