@@ -2,8 +2,8 @@
 // Every View's EarthRenderer ticks one controller, and they all show the same
 // frames. Building a texture is injected, so this module needs no DOM. Which
 // keyframes are wanted comes from ../cloud-frames.ts (tides-kzj.4.1): a frame
-// is a day of the daily composite or a geostationary slot over one
-// (tides-1zj). Up to MAX_IN_FLIGHT of them build at once, most wanted first,
+// is a day of the daily composite, a geostationary slot over one (tides-1zj)
+// or a forecast from the latest of them (tides-kzj.4.3). Up to MAX_IN_FLIGHT of them build at once, most wanted first,
 // and the last MAX_CACHED_FRAMES are kept. Slow builds lengthen the frames
 // (BUILD_MARGIN), and a frame that finishes after playback has moved past it
 // is still shown while it is the latest there is.
@@ -20,11 +20,17 @@ import {
   type FrameView,
   type PlanState,
 } from '../cloud-frames'
-import { pickEvictions, type CloudSource, type GeoSource, type GibsSource } from '../real-clouds'
+import {
+  pickEvictions,
+  type CloudSource,
+  type ForecastSource,
+  type GeoSource,
+  type GibsSource,
+} from '../real-clouds'
 
 export type { CloudStatus, FrameView, GibsSource }
-/** A source that needs imagery fetched. */
-export type ImagerySource = GibsSource | GeoSource
+/** A source that needs imagery fetched (or, for a forecast, synthesised). */
+export type ImagerySource = GibsSource | GeoSource | ForecastSource
 
 /** A frame lasts at least this many times the average build. */
 export const BUILD_MARGIN = 1.2
@@ -125,7 +131,8 @@ export function createRealCloudController<T>({ build, dispose }: CloudController
 
   function evict() {
     const entries = [...cache].map(([key, e]) => ({ key, lastUsed: e.lastUsed }))
-    const keep = new Set(planFrames().map((f) => f.key))
+    // Shown frames stay: the plan's, and the late ones still on screen.
+    const keep = new Set([...planFrames(), ...nearbyCached()].map((f) => f.key))
     for (const key of pickEvictions(entries, keep, MAX_CACHED_FRAMES)) {
       dispose(cache.get(key)!.texture)
       cache.delete(key)

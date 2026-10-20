@@ -6,8 +6,10 @@
 // day's where they have gaps and along the antimeridian, with sunglint taken
 // out (tides-a7w) and the seams between them feathered (tides-g29). A
 // geostationary slot (tides-1zj) is each satellite's IR, and visible where
-// it's day, over that day's composite. The maths is in ../real-clouds.ts and
-// ../geo-clouds.ts; ./realCloudTextures.ts makes the texture.
+// it's day, over that day's composite. A forecast (tides-kzj.4.3) evolves
+// the latest of those with forecast cloud cover. The maths is in
+// ../real-clouds.ts, ../geo-clouds.ts and ../forecast-clouds.ts;
+// ./realCloudTextures.ts makes the texture.
 import {
   blendDaily,
   COLS,
@@ -21,6 +23,7 @@ import {
   growNoData,
   iceWeight,
   isRetryable,
+  observedTimeMs,
   OUT_H,
   OUT_W,
   ROWS,
@@ -30,9 +33,11 @@ import {
   TILE_TIMEOUT_MS,
   tilesToFill,
   tileUrls,
+  type ForecastSource,
   type GeoSource,
   type GibsSource,
 } from '../real-clouds'
+import { coverAt, structureRank, synthesiseForecast } from '../forecast-clouds'
 import {
   composeGeoClouds,
   daylitTiles,
@@ -47,6 +52,7 @@ import {
   type GeoSatellite,
   type Terrain,
 } from '../geo-clouds'
+import { coverGrids } from './forecastGrid'
 import type { ImagerySource } from './realCloudController'
 
 /** Absolute URLs of the static textures the masks come from. A worker
@@ -153,6 +159,8 @@ let iceMask: Promise<Uint8Array> | null = null
 let landMask: Promise<Uint8Array> | null = null
 let terrain: Promise<Terrain> | null = null
 const staticAlphas = new Map<string, Promise<Uint8Array>>()
+// The forecast's synthetic cloud structure, 2 bytes per output pixel.
+const staticRanks = new Map<string, Promise<Uint16Array>>()
 
 function memo<T>(make: () => Promise<T>, store: (p: Promise<T> | null) => void) {
   const promise = make()
@@ -228,6 +236,17 @@ function getStaticAlpha(url: string): Promise<Uint8Array> {
         return alpha
       },
       (p) => (p ? staticAlphas.set(url, p) : staticAlphas.delete(url))
+    )
+  )
+}
+
+/** The static clouds ranked for the forecast's synthetic cloud. */
+function getStaticRank(url: string): Promise<Uint16Array> {
+  return (
+    staticRanks.get(url) ??
+    memo(
+      async () => structureRank(await getStaticAlpha(url)),
+      (p) => (p ? staticRanks.set(url, p) : staticRanks.delete(url))
     )
   )
 }
@@ -524,13 +543,28 @@ async function loadSatellite(
   return null
 }
 
-/** Null when there's neither geostationary nor daily imagery. Throws when
- * aborted. */
+/** A build's pixels before they become a CloudImage: RGBA, top row first. */
+interface CloudRgba {
+  rgba: Uint8ClampedArray<ArrayBuffer>
+  geo: GeoTextureInfo | null
+}
+
 async function buildGeoImage(
   source: GeoSource,
   staticUrl: string,
   signal: AbortSignal
 ): Promise<CloudImage | null> {
+  const built = await buildGeoRgba(source, staticUrl, signal)
+  return built ? imageOf(built.rgba, built.geo) : null
+}
+
+/** Null when there's neither geostationary nor daily imagery. Throws when
+ * aborted. */
+async function buildGeoRgba(
+  source: GeoSource,
+  staticUrl: string,
+  signal: AbortSignal
+): Promise<CloudRgba | null> {
   const slotMs = Date.parse(source.time)
   const daily = acquireDaily(source.fallback, staticUrl, signal).catch((err: unknown) => {
     if (signal.aborted) throw err
@@ -559,7 +593,7 @@ async function buildGeoImage(
     if (!found.length) {
       const fallback = await daily
       signal.throwIfAborted()
-      return fallback ? imageOf(new Uint8ClampedArray(fallback), null) : null
+      return fallback ? { rgba: new Uint8ClampedArray(fallback), geo: null } : null
     }
 
     // One satellite at a time, so only one full-size mosaic is held at once.
@@ -597,12 +631,85 @@ async function buildGeoImage(
     await yieldToFrame()
     signal.throwIfAborted()
     const times = found.map((s) => s.time).sort()
-    return imageOf(out, { satellites: found.map((s) => s.sat.label), time: times[0] })
+    return { rgba: out, geo: { satellites: found.map((s) => s.sat.label), time: times[0] } }
   } finally {
     for (const s of satellites) {
       for (const tile of [...(s?.ir ?? []), ...(s?.vis ?? [])]) tile?.close()
     }
   }
+}
+
+// The latest observation every forecast frame of the hour evolves, built once
+// and kept until the base changes. Failures are kept too, so a missing base
+// isn't retried by every frame. Read-only: the daily composite in it is shared.
+type Observed = { rgba: Uint8ClampedArray; geo: GeoTextureInfo | null }
+let base: { key: string; promise: Promise<Observed | null>; abort: AbortController } | null = null
+
+function acquireBase(source: GeoSource | GibsSource, staticUrl: string): Promise<Observed | null> {
+  const key = `${sourceKey(source)}|${staticUrl}`
+  if (base?.key === key) return base.promise
+  base?.abort.abort()
+  const abort = new AbortController()
+  const build: Promise<Observed | null> =
+    source.kind === 'geo'
+      ? buildGeoRgba(source, staticUrl, abort.signal)
+      : acquireDaily(source, staticUrl, abort.signal).then((data) =>
+          data ? { rgba: data, geo: null } : null
+        )
+  const promise = build.catch((err: unknown) => {
+    if (!abort.signal.aborted) console.error('[clouds] building the forecast base failed', err)
+    return null
+  })
+  base = { key, promise, abort }
+  return promise
+}
+
+/** The promise, or a rejection as soon as signal aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise
+      .finally(() => signal.removeEventListener('abort', onAbort))
+      .then(resolve, reject)
+  })
+}
+
+/** The latest observation evolved with the forecast cover; the observation
+ * itself (held) when there's no forecast to evolve it with. Null without an
+ * observation. Throws when aborted. */
+async function buildForecastImage(
+  source: ForecastSource,
+  staticUrl: string,
+  signal: AbortSignal
+): Promise<CloudImage | null> {
+  const fromMs = observedTimeMs(source.base)
+  const toMs = Date.parse(source.time)
+  const [observed, grid, rank] = await Promise.all([
+    untilAborted(acquireBase(source.base, staticUrl), signal),
+    coverGrids.get(fromMs, toMs).catch((err: unknown) => {
+      console.warn('[clouds] no cloud cover forecast', err)
+      return null
+    }),
+    getStaticRank(staticUrl).catch((err: unknown) => {
+      console.warn('[clouds] no cloud structure for the forecast', err)
+      return null
+    }),
+  ])
+  signal.throwIfAborted()
+  if (!observed) return null
+  const c0 = grid && coverAt(grid, fromMs)
+  const ct = grid && coverAt(grid, toMs)
+  if (!c0 || !ct || !rank) {
+    console.warn(`[clouds] no forecast for ${source.time}; holding the latest observation`)
+    return imageOf(new Uint8ClampedArray(observed.rgba), observed.geo)
+  }
+  const out = new Uint8ClampedArray(OUT_W * OUT_H * 4)
+  synthesiseForecast({ observed: observed.rgba, c0, ct, rank, leadMs: toMs - fromMs }, out)
+  await yieldToFrame()
+  signal.throwIfAborted()
+  return imageOf(out, null)
 }
 
 /** The texture's pixels for a source, or null when there's neither imagery
@@ -615,6 +722,7 @@ export function buildCloudImage(
   signal: AbortSignal
 ): Promise<CloudImage | null> {
   assets = urls
+  if (source.kind === 'forecast') return buildForecastImage(source, staticUrl, signal)
   return source.kind === 'geo'
     ? buildGeoImage(source, staticUrl, signal)
     : buildDailyImage(source, staticUrl, signal)

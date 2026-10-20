@@ -4,8 +4,9 @@
 // filled from the previous day before falling back to the static clouds
 // (tides-2t9), feathered rather than cut (tides-g29), and sunglint is taken
 // out over the sea (tides-a7w). Within the last ~90 days geostationary imagery
-// matched to the sim time goes over the top (tides-1zj, geo-clouds.ts). Pure
-// logic only:
+// matched to the sim time goes over the top (tides-1zj, geo-clouds.ts), and
+// past the latest of it the clouds are synthesised from a forecast of cloud
+// cover (tides-kzj.4.3, forecast-clouds.ts). Pure logic only:
 // which layers, days and slots there are, the tile URLs, the gap fill and the
 // cloud-alpha maths. Which of them to show when is ../cloud-frames.ts; the
 // browser side lives in renderers/cloudPipeline.ts.
@@ -55,15 +56,20 @@ export type GibsSource = { kind: 'gibs'; layer: string; snowLayer: SnowLayer; da
 /** Geostationary imagery at a 10-minute slot (tides-1zj, geo-clouds.ts), over
  * the daily composite where the satellites don't see. */
 export type GeoSource = { kind: 'geo'; time: string; fallback: GibsSource }
+/** The latest observation (base) evolved to an hour after it with forecast
+ * cloud cover (tides-kzj.4.3). */
+export type ForecastSource = { kind: 'forecast'; time: string; base: GeoSource | GibsSource }
 export type CloudSource =
   | { kind: 'static'; reason: 'before-coverage' | 'after-latest' }
   | GibsSource
   | GeoSource
+  | ForecastSource
 
 // Geostationary full disks come every 10 minutes. GIBS keeps a rolling ~90
 // days (older times 404 although DescribeDomains lists them) and publishes
 // 20-35 minutes after the scan.
 const MINUTE_MS = 60_000
+export const HOUR_MS = 60 * MINUTE_MS
 export const GEO_SLOT_MS = 10 * MINUTE_MS
 export const GEO_ARCHIVE_MS = 89 * DAY_MS
 export const GEO_LATENCY_MS = 40 * MINUTE_MS
@@ -84,6 +90,40 @@ export function selectGeoSlot(simMs: number, nowMs: number): number | null {
   return slot < nowMs - GEO_ARCHIVE_MS ? null : slot
 }
 
+/** The latest published geostationary slot. */
+export function latestGeoSlot(nowMs: number): number {
+  return geoSlot(nowMs - GEO_LATENCY_MS)
+}
+
+// Open-Meteo's hourly cloud cover, from yesterday to FORECAST_DAYS ahead,
+// refetched after FORECAST_TTL_MS: the models update every 3-6 hours, and
+// each fetch counts as hundreds of calls against the free tier.
+export const FORECAST_DAYS = 7
+export const FORECAST_TTL_MS = 3 * HOUR_MS
+
+/** The last forecast hour any grid that isn't stale yet covers. */
+export function forecastHorizon(nowMs: number): number {
+  return utcDay(nowMs - FORECAST_TTL_MS) + FORECAST_DAYS * DAY_MS - HOUR_MS
+}
+
+/** When an observation was taken: the slot, or noon of the composite's day. */
+export function observedTimeMs(base: GeoSource | GibsSource): number {
+  return base.kind === 'geo' ? Date.parse(base.time) : Date.parse(base.date) + DAY_MS / 2
+}
+
+const hourKey = (ms: number) =>
+  new Date(Math.floor(ms / HOUR_MS) * HOUR_MS).toISOString().slice(0, 19) + 'Z'
+
+/** The forecast for an hour after the latest observation, or static past the
+ * horizon. Its base is the latest observation on the hour, so its key changes
+ * once an hour rather than with every new slot. */
+export function selectForecastSource(gridMs: number, nowMs: number): CloudSource {
+  if (gridMs > forecastHorizon(nowMs)) return { kind: 'static', reason: 'after-latest' }
+  const base = selectRealCloudSource(Math.floor(latestGeoSlot(nowMs) / HOUR_MS) * HOUR_MS, nowMs)
+  if (base.kind !== 'geo' && base.kind !== 'gibs') return base
+  return { kind: 'forecast', time: hourKey(gridMs), base }
+}
+
 /** The daily composite alone; see selectRealCloudSource for what Real
  * weather shows. */
 export function selectCloudSource(simMs: number, nowMs: number): CloudSource {
@@ -101,8 +141,12 @@ export function selectCloudSource(simMs: number, nowMs: number): CloudSource {
 }
 
 /** Geostationary imagery for the sim time's 10-minute slot within the
- * archive, over the daily composite; the daily composite alone outside it. */
+ * archive, over the daily composite; the daily composite alone outside it.
+ * From the first hour after the latest slot, the forecast; until then, the
+ * latest slot. */
 export function selectRealCloudSource(simMs: number, nowMs: number): CloudSource {
+  const hour = Math.floor(simMs / HOUR_MS) * HOUR_MS
+  if (hour > latestGeoSlot(nowMs)) return selectForecastSource(hour, nowMs)
   const daily = selectCloudSource(simMs, nowMs)
   if (daily.kind !== 'gibs') return daily
   const slot = selectGeoSlot(simMs, nowMs)
@@ -133,6 +177,7 @@ export function fillDate(source: GibsSource): string | null {
 /** snowLayer follows from layer, so it isn't part of the key. */
 export function sourceKey(source: CloudSource): string {
   if (source.kind === 'static') return `static:${source.reason}`
+  if (source.kind === 'forecast') return `forecast/${source.time}/${sourceKey(source.base)}`
   if (source.kind === 'geo') return `geo/${source.time}/${sourceKey(source.fallback)}`
   return `${source.layer}/${source.date}`
 }

@@ -149,6 +149,45 @@ describe('realCloudController', () => {
     expect(made.filter((t) => !t.disposed)).toHaveLength(MAX_CACHED_FRAMES)
   })
 
+  test('a late frame still on screen is not evicted', async () => {
+    const { builds, tick, go, pending, setWall, snap } = setup()
+    tick(at('2026-10-17T06:43:00Z'), { timeScale: 1 })
+    const late = texture('06:40')
+    finish(builds[0], late)
+    await flush()
+    // Real-time playback moves on; 06:40 is behind the plan but still shown.
+    setWall(600_000)
+    tick(at('2026-10-17T06:53:00Z'), { timeScale: 1 })
+    expect(snap().frames.map((f) => f.texture)).toContain(late)
+    // Four more recently used frames elsewhere fill the cache...
+    const elsewhere: FakeTexture[] = []
+    for (const day of ['2024-10-01', '2024-10-03']) {
+      go(`${day}T12:00:00Z`)
+      for (const b of pending()) {
+        const t = texture(b.key)
+        elsewhere.push(t)
+        finish(b, t)
+      }
+      await flush()
+    }
+    // ...and coming back adds a sixth.
+    setWall(700_000)
+    tick(at('2026-10-17T06:53:00Z'), { timeScale: 1 })
+    setWall(700_000 + SETTLE_MS)
+    tick(at('2026-10-17T06:53:00Z'), { timeScale: 1 })
+    finish(pending()[0], texture('06:50'))
+    await flush()
+    expect(late.disposed).toBe(false)
+    expect(elsewhere.map((t) => t.disposed)).toEqual([true, false, false, false])
+  })
+
+  test('forecast frames build like any other, two at a time', () => {
+    const { builds, tick } = setup()
+    tick(at('2026-10-18T16:05:00Z'), { timeScale: 1 })
+    expect(builds.map((b) => b.source.kind)).toEqual(['forecast', 'forecast'])
+    expect(builds.map((b) => b.key)).toEqual(keys('2026-10-18T16:05:00Z', 1).slice(0, 2))
+  })
+
   test('deactivate aborts builds and keeps the cache', async () => {
     const { controller, builds, go, snap } = setup()
     go('2024-10-09T12:00:00Z')

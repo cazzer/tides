@@ -8,6 +8,7 @@ import {
   DATELINE_FEATHER_PX,
   FEATHER_PX,
   fillDate,
+  forecastHorizon,
   GLINT_CLEAR,
   glintFloor,
   glintSunGate,
@@ -761,6 +762,8 @@ describe('pickEvictions', () => {
 describe('geostationary slots (tides-1zj)', () => {
   const geo = (time: string, date: string) =>
     ({ kind: 'geo', time, fallback: viirs(date) }) as const
+  const forecast = (time: string) =>
+    ({ kind: 'forecast', time, base: geo('2026-10-18T14:00:00Z', '2026-10-17') }) as const
 
   test('geoSlot and geoTimeKey floor to 10 minutes', () => {
     expect(geoTimeKey(at('2026-10-18T00:07:59Z'))).toBe('2026-10-18T00:00:00Z')
@@ -772,16 +775,20 @@ describe('geostationary slots (tides-1zj)', () => {
     // The slot over that day's composite; today over yesterday's.
     ['2026-10-17T06:43:00Z', geo('2026-10-17T06:40:00Z', '2026-10-17')],
     ['2026-10-18T14:49:00Z', geo('2026-10-18T14:40:00Z', '2026-10-17')],
-    // After the latest published slot (NOW - latency): that one.
-    ['2026-10-18T15:30:00Z', geo('2026-10-18T14:50:00Z', '2026-10-17')],
-    ['2026-10-18T22:00:00Z', geo('2026-10-18T14:50:00Z', '2026-10-17')],
+    // After the latest published slot (NOW - latency): that one until the
+    // next hour, then the forecast from the latest slot on the hour.
+    ['2026-10-18T14:55:00Z', geo('2026-10-18T14:50:00Z', '2026-10-17')],
+    ['2026-10-18T15:30:00Z', forecast('2026-10-18T15:00:00Z')],
+    ['2026-10-18T22:00:00Z', forecast('2026-10-18T22:00:00Z')],
+    ['2026-10-19T00:00:00Z', forecast('2026-10-19T00:00:00Z')],
+    ['2026-10-24T23:00:00Z', forecast('2026-10-24T23:00:00Z')],
     // Inside the rolling archive...
     ['2026-07-22T00:00:00Z', geo('2026-07-22T00:00:00Z', '2026-07-22')],
     // ...and before it, the daily composite alone.
     ['2026-07-19T12:00:00Z', viirs('2026-07-19')],
     ['2024-10-09T18:00:00Z', viirs('2024-10-09')],
     ['1999-12-31T12:00:00Z', { kind: 'static', reason: 'before-coverage' }],
-    ['2026-10-19T00:00:00Z', { kind: 'static', reason: 'after-latest' }],
+    ['2026-10-25T00:00:00Z', { kind: 'static', reason: 'after-latest' }],
   ])('selectRealCloudSource %s', (iso, expected) => {
     expect(selectRealCloudSource(at(iso), NOW)).toEqual(expected)
   })
@@ -798,8 +805,23 @@ describe('geostationary slots (tides-1zj)', () => {
     )
   })
 
+  test('sourceKey names a forecast\'s hour and its base', () => {
+    expect(sourceKey(forecast('2026-10-18T15:00:00Z'))).toBe(
+      `forecast/2026-10-18T15:00:00Z/geo/2026-10-18T14:00:00Z/${VIIRS}/2026-10-17`
+    )
+  })
+
+  test('the forecast horizon is what a grid fetched up to 3 hours ago covers', () => {
+    expect(forecastHorizon(at('2026-10-18T01:00:00Z'))).toBe(at('2026-10-23T23:00:00Z'))
+    expect(forecastHorizon(at('2026-10-18T03:00:00Z'))).toBe(at('2026-10-24T23:00:00Z'))
+  })
+
   test('isLatestStandIn: a slot before the sim time today', () => {
-    expect(isLatestStandIn(selectRealCloudSource(NOW, NOW), NOW, NOW)).toBe(true)
+    // The latest slot is 14:20, and stands in until the forecast takes over.
+    const now = at('2026-10-18T15:00:00Z')
+    const late = at('2026-10-18T14:45:00Z')
+    expect(isLatestStandIn(selectRealCloudSource(late, now), late, now)).toBe(true)
+    expect(isLatestStandIn(selectRealCloudSource(NOW, NOW), NOW, NOW)).toBe(false)
     const morning = selectRealCloudSource(at('2026-10-18T09:00:00Z'), NOW)
     expect(isLatestStandIn(morning, at('2026-10-18T09:05:00Z'), NOW)).toBe(false)
     const yesterday = selectRealCloudSource(at('2026-10-17T09:00:00Z'), NOW)

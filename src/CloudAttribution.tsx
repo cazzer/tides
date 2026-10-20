@@ -1,4 +1,5 @@
 import { useId } from 'react'
+import { OPEN_METEO_SITE } from './forecast-clouds'
 import { isLatestStandIn, MODIS_FROM, utcDayKey, type GibsSource } from './real-clouds'
 import { useStore } from './store'
 import {
@@ -16,10 +17,24 @@ const ACKNOWLEDGEMENT =
 export function CloudAttribution() {
   const snapshot = useRealCloudSnapshot()
   const { source, status } = snapshot
+  // Credited whenever a forecast is on screen, not only as the primary frame.
+  const forecast = snapshot.frames.some((f) => f.source.kind === 'forecast' && f.status === 'ready')
   return (
     <p className="cloud-attribution">
       Clouds: <CloudSourceText snapshot={snapshot} />
       {status === 'loading' && (source ? ' · loading…' : 'loading…')}
+      {forecast && (
+        <>
+          {' · '}
+          <a
+            href={OPEN_METEO_SITE}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Weather data by Open-Meteo.com
+          </a>
+        </>
+      )}
     </p>
   )
 }
@@ -43,9 +58,16 @@ function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: 
       ? <>simulated (before {utcDayKey(MODIS_FROM)})</>
       : <>simulated (no imagery yet)</>
   }
-  const daily = source.kind === 'geo' ? source.fallback : source
+  // A forecast evolves the latest observation, which is GIBS imagery too.
+  const observed = source.kind === 'forecast' ? source.base : source
+  const daily = observed.kind === 'geo' ? observed.fallback : observed
   if (status === 'failed') {
-    const what = source.kind === 'geo' ? slotLabel(source.time) : `${instrument(daily)} ${daily.date}`
+    const what =
+      source.kind === 'forecast'
+        ? `forecast ${slotLabel(source.time)}`
+        : source.kind === 'geo'
+          ? slotLabel(source.time)
+          : `${instrument(daily)} ${daily.date}`
     return <>simulated ({what} unavailable)</>
   }
   // Geostationary satellites where they see, the daily composite elsewhere.
@@ -54,11 +76,16 @@ function CloudSourceText({ snapshot: { source, status, texture } }: { snapshot: 
     source.kind === 'geo' && status === 'ready'
       ? (texture?.userData.geo as GeoTextureInfo | null | undefined)
       : null
-  const what = geo
-    ? `${geo.satellites.join(', ')} ${slotLabel(geo.time)} + ${instrument(daily)} ${daily.date}`
-    : source.kind === 'geo' && status === 'loading'
-      ? slotLabel(source.time)
-      : `${instrument(daily)} ${daily.date}`
+  const what =
+    source.kind === 'forecast'
+      ? `forecast ${slotLabel(source.time)} from ${
+          observed.kind === 'geo' ? slotLabel(observed.time) : `${instrument(daily)} ${daily.date}`
+        }`
+      : geo
+        ? `${geo.satellites.join(', ')} ${slotLabel(geo.time)} + ${instrument(daily)} ${daily.date}`
+        : source.kind === 'geo' && status === 'loading'
+          ? slotLabel(source.time)
+          : `${instrument(daily)} ${daily.date}`
   return (
     <>
       <a

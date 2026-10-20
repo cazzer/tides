@@ -7,13 +7,17 @@
 // so fast playback keeps moving; jumps, scrubs and rate changes settle first.
 // Too fast for any cadence, one frame is held and refreshed now and then. The
 // controller lengthens the shortest frame when builds are slow, so the frames
-// keep loading before playback passes them.
+// keep loading before playback passes them. Past the latest geostationary
+// slot the frames are forecasts (tides-kzj.4.3) on the hours of the grid.
 // Pure logic; the fetching lives in renderers/realCloudController.ts.
 import {
   DAY_MS,
   GEO_ARCHIVE_MS,
   GEO_SLOT_MS,
+  HOUR_MS,
+  latestGeoSlot,
   selectCloudSource,
+  selectForecastSource,
   selectGeoSlot,
   selectRealCloudSource,
   sourceKey,
@@ -21,7 +25,6 @@ import {
 } from './real-clouds'
 
 const MINUTE_MS = 60_000
-const HOUR_MS = 60 * MINUTE_MS
 
 export const CADENCES_MS = [
   10 * MINUTE_MS,
@@ -85,11 +88,19 @@ const noonAtOrBefore = (t: number) => Math.floor((t - DAY_MS / 2) / DAY_MS) * DA
 /** The first geostationary slot inside the archive. */
 const archiveStart = (nowMs: number) => Math.ceil((nowMs - GEO_ARCHIVE_MS) / GEO_SLOT_MS) * GEO_SLOT_MS
 
-/** The frame on the cadence's grid at or before t: a geostationary slot (the
- * latest published one past it) inside the archive, the daily composite's noon
- * before it, static outside the imagery. */
+/** The frame on the cadence's grid at or before t: a geostationary slot
+ * inside the archive, the daily composite's noon before it, a forecast on the
+ * hours after the latest slot (the latest slot until the first of them), and
+ * static outside all of it. */
 export function frameAtOrBefore(t: number, cadenceMs: number, nowMs: number): CloudFrame {
   const g = Math.floor(t / cadenceMs) * cadenceMs
+  const latest = latestGeoSlot(nowMs)
+  if (g > latest) {
+    const forecastCadence = Math.max(cadenceMs, HOUR_MS)
+    const gf = Math.floor(t / forecastCadence) * forecastCadence
+    if (gf <= latest) return frameOf(selectRealCloudSource(latest, nowMs), latest)
+    return frameOf(selectForecastSource(gf, nowMs), gf)
+  }
   const slot = selectGeoSlot(g, nowMs)
   if (slot !== null) {
     const source = selectRealCloudSource(g, nowMs)
@@ -105,8 +116,14 @@ export function frameAfter(t: number, cadenceMs: number, nowMs: number): CloudFr
   const at = frameAtOrBefore(t, cadenceMs, nowMs)
   if (at.source.kind === 'static') return null
   const g = Math.floor(t / cadenceMs) * cadenceMs
+  const latest = latestGeoSlot(nowMs)
   let next: CloudFrame
-  if (selectGeoSlot(g, nowMs) !== null) {
+  if (at.timeMs >= latest) {
+    // The latest slot or a forecast: on to the next forecast hour.
+    const forecastCadence = Math.max(cadenceMs, HOUR_MS)
+    const from = Math.floor(Math.max(t, latest) / forecastCadence) * forecastCadence
+    next = frameAtOrBefore(from + forecastCadence, cadenceMs, nowMs)
+  } else if (selectGeoSlot(g, nowMs) !== null) {
     next = frameAtOrBefore(g + cadenceMs, cadenceMs, nowMs)
   } else {
     // The next noon, or the first slot of the archive if that comes first.

@@ -25,6 +25,9 @@ const VIIRS_SNOW = 'VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1'
 const viirs = (date: string) =>
   ({ kind: 'gibs', layer: VIIRS, snowLayer: VIIRS_SNOW, date }) as const
 const geo = (time: string, date: string) => ({ kind: 'geo', time, fallback: viirs(date) }) as const
+// The latest slot is 14:50; forecasts start from 14:00, on the hour.
+const forecast = (time: string) =>
+  ({ kind: 'forecast', time, base: geo('2026-10-18T14:00:00Z', '2026-10-17') }) as const
 
 const at = (iso: string) => Date.parse(iso)
 
@@ -93,33 +96,55 @@ describe('frameAtOrBefore / frameAfter', () => {
     })
   })
 
-  test('past the latest published slot there is nothing to blend towards', () => {
-    const t = at('2026-10-18T15:10:00Z')
-    expect(frameAtOrBefore(t, 10 * MIN, NOW)).toMatchObject({
+  test('from the latest slot into the forecast, on the hours', () => {
+    expect(frameAtOrBefore(at('2026-10-18T14:55:00Z'), 10 * MIN, NOW)).toMatchObject({
       timeMs: at('2026-10-18T14:50:00Z'),
       source: geo('2026-10-18T14:50:00Z', '2026-10-17'),
     })
-    expect(frameAfter(t, 10 * MIN, NOW)).toBeNull()
+    expect(frameAfter(at('2026-10-18T14:55:00Z'), 10 * MIN, NOW)).toMatchObject({
+      timeMs: at('2026-10-18T15:00:00Z'),
+      source: forecast('2026-10-18T15:00:00Z'),
+    })
+    expect(frameAtOrBefore(at('2026-10-18T15:10:00Z'), 10 * MIN, NOW).source).toEqual(
+      forecast('2026-10-18T15:00:00Z')
+    )
+    expect(frameAfter(at('2026-10-18T15:10:00Z'), 10 * MIN, NOW)?.source).toEqual(
+      forecast('2026-10-18T16:00:00Z')
+    )
   })
 
-  test('the next frame clamps to the latest slot, and the prefetch dedupes', () => {
-    const t = at('2026-10-18T13:00:00Z')
-    expect(frameAfter(t, 3 * HOUR, NOW)).toMatchObject({ timeMs: at('2026-10-18T14:50:00Z') })
-    const plan = planCloudFrames(t, 3600, NOW)
-    expect(plan.frames.map((f) => f.timeMs)).toEqual([
-      at('2026-10-18T12:00:00Z'),
-      at('2026-10-18T14:50:00Z'),
+  test('a 3-hour cadence steps from the last slots into the forecast', () => {
+    const plan = planCloudFrames(at('2026-10-18T13:00:00Z'), 3600, NOW)
+    expect(plan.frames.map((f) => f.source)).toEqual([
+      geo('2026-10-18T12:00:00Z', '2026-10-17'),
+      forecast('2026-10-18T15:00:00Z'),
+      forecast('2026-10-18T18:00:00Z'),
     ])
   })
 
-  test('never blends towards the static clouds after today', () => {
-    expect(frameAfter(at('2026-10-18T22:00:00Z'), 3 * HOUR, NOW)).toBeNull()
-    const tomorrow = at('2026-10-19T01:00:00Z')
-    expect(frameAtOrBefore(tomorrow, 3 * HOUR, NOW).source).toEqual({
+  test('the last forecast hour holds, then the static clouds', () => {
+    const plan = planCloudFrames(at('2026-10-24T22:30:00Z'), 3600, NOW)
+    expect(plan.frames.map((f) => f.source)).toEqual([forecast('2026-10-24T21:00:00Z')])
+    expect(frameAtOrBefore(at('2026-10-25T01:00:00Z'), 3 * HOUR, NOW).source).toEqual({
       kind: 'static',
       reason: 'after-latest',
     })
-    expect(frameAfter(tomorrow, 3 * HOUR, NOW)).toBeNull()
+  })
+
+  test('a 1-day cadence past the latest slot', () => {
+    expect(frameAfter(at('2026-10-18T05:00:00Z'), DAY_MS, NOW)?.source).toEqual(
+      forecast('2026-10-19T00:00:00Z')
+    )
+    const t = at('2026-10-19T05:00:00Z')
+    expect(frameAtOrBefore(t, DAY_MS, NOW).source).toEqual(forecast('2026-10-19T00:00:00Z'))
+    expect(frameAfter(t, DAY_MS, NOW)?.source).toEqual(forecast('2026-10-20T00:00:00Z'))
+  })
+
+  test('forecast keys stay put as new slots come in, and move on the hour', () => {
+    const keys = (now: number) =>
+      planCloudFrames(at('2026-10-18T16:05:00Z'), 0, now).frames.map((f) => f.key)
+    expect(keys(NOW - 10 * MIN)).toEqual(keys(NOW))
+    expect(keys(NOW + 10 * MIN)).not.toEqual(keys(NOW))
   })
 
   test('static before MODIS, with nothing after it', () => {
@@ -154,6 +179,11 @@ describe('planCloudFrames', () => {
     const plan = planCloudFrames(t, 1, NOW)
     expect(new Set(plan.frames.map((f) => f.key)).size).toBe(3)
     expect(plan.frames[2].timeMs).toBe(at('2026-10-17T12:20:00Z'))
+  })
+
+  test('a day per second holds the forecast past the latest slot', () => {
+    const plan = planCloudFrames(at('2026-10-20T12:00:00Z'), 86_400, NOW)
+    expect(plan).toMatchObject({ mode: 'hold', frames: [{ source: forecast('2026-10-20T12:00:00Z') }] })
   })
 
   test('a day per second holds the frame of the moment', () => {
