@@ -95,6 +95,16 @@ function getInitialShowPlanets(): boolean {
   return new URLSearchParams(window.location.search).get('planets') === '1'
 }
 
+function getInitialShowLunar(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('lunar') === '1'
+}
+
+function getInitialShowZodiac(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('zodiac') === '1'
+}
+
 import { truncateLatLon } from './utils'
 
 export type Location = { lat: number; lon: number }
@@ -131,6 +141,9 @@ export const useStore = create<{
   weatherSource: WeatherSource
   layout: Layout
   showPlanets: boolean
+  /** Moon-phase and zodiac rings around the month ring (tides-28u). */
+  showLunar: boolean
+  showZodiac: boolean
   location: Location | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
@@ -140,6 +153,8 @@ export const useStore = create<{
   setWeatherSource: (weatherSource: WeatherSource) => void
   setLayout: (layout: Layout) => void
   setShowPlanets: (showPlanets: boolean) => void
+  setShowLunar: (showLunar: boolean) => void
+  setShowZodiac: (showZodiac: boolean) => void
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
@@ -159,6 +174,8 @@ export const useStore = create<{
   weatherSource: getInitialWeatherSource(),
   layout: getInitialLayout(),
   showPlanets: getInitialShowPlanets(),
+  showLunar: getInitialShowLunar(),
+  showZodiac: getInitialShowZodiac(),
   location: getInitialLocation(),
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
@@ -172,6 +189,8 @@ export const useStore = create<{
       showPlanets,
       cameraFocus: !showPlanets && isPlanetFocus(s.cameraFocus) ? 'sun' : s.cameraFocus,
     })),
+  setShowLunar: (showLunar: boolean) => set({ showLunar }),
+  setShowZodiac: (showZodiac: boolean) => set({ showZodiac }),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,

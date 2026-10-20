@@ -199,6 +199,10 @@ function SettingsDialog({
   const setLayout = useStore((s) => s.setLayout)
   const showPlanets = useStore((s) => s.showPlanets)
   const setShowPlanets = useStore((s) => s.setShowPlanets)
+  const showLunar = useStore((s) => s.showLunar)
+  const setShowLunar = useStore((s) => s.setShowLunar)
+  const showZodiac = useStore((s) => s.showZodiac)
+  const setShowZodiac = useStore((s) => s.setShowZodiac)
 
   useEffect(() => {
     const dialog = ref.current
@@ -267,6 +271,24 @@ function SettingsDialog({
             value={showPlanets ? 'on' : 'off'}
             options={PLANETS_OPTIONS}
             onChange={(value) => setShowPlanets(value === 'on')}
+          />
+        </SettingGroup>
+        <SettingGroup>
+          <SettingLegend>Moon phases</SettingLegend>
+          <SegmentedControl
+            name="lunar"
+            value={showLunar ? 'on' : 'off'}
+            options={PLANETS_OPTIONS}
+            onChange={(value) => setShowLunar(value === 'on')}
+          />
+        </SettingGroup>
+        <SettingGroup>
+          <SettingLegend>Zodiac</SettingLegend>
+          <SegmentedControl
+            name="zodiac"
+            value={showZodiac ? 'on' : 'off'}
+            options={PLANETS_OPTIONS}
+            onChange={(value) => setShowZodiac(value === 'on')}
           />
         </SettingGroup>
       </DialogBody>

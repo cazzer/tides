@@ -13,6 +13,8 @@ import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
 import { mainViewRange } from './main-view'
 import { OrbitLabel } from './orbit-label'
+import { LunarRing } from './LunarRing'
+import { ZodiacRing } from './ZodiacRing'
 import { PlanetBodies } from './PlanetBodies'
 import { PlanetOrbits } from './planet-orbits'
 import { sceneRadius } from './planets'
@@ -63,6 +65,8 @@ export default function SolarSystem({
   const moon = useRef(null)
   const location = useStore((s) => s.location)
   const showPlanets = useStore((s) => s.showPlanets)
+  const showLunar = useStore((s) => s.showLunar)
+  const showZodiac = useStore((s) => s.showZodiac)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
 
   // From the surface, the Sun and Moon move to their true directions on a sky
@@ -134,6 +138,8 @@ export default function SolarSystem({
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
       </OrbitingBody>
       {showOrbitLabels && <OrbitLabel radius={EARTH_ORBIT_RADIUS} />}
+      {showOrbitLabels && showLunar && <LunarRing />}
+      {showOrbitLabels && showZodiac && <ZodiacRing />}
       <OrbitingBody
         ref={moon}
         focusKey="moon"
