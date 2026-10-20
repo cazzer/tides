@@ -10,10 +10,10 @@ import {
   Observer,
 } from 'astronomy-engine'
 import {
-  EARTH_AXIAL_TILT,
   MOON_UNITS_PER_KM,
   earthPosition,
   earthSpin,
+  earthTilt,
   moonPosition,
   moonOrientation,
 } from './ephemeris'
@@ -58,7 +58,7 @@ function earthAt(t: number): THREE.Object3D {
   const earth = new THREE.Object3D()
   applyBodyTransform(
     earth,
-    { axialTilt: EARTH_AXIAL_TILT, spinAt: earthSpin, positionAt: earthPosition },
+    { tiltAt: earthTilt, spinAt: earthSpin, positionAt: earthPosition },
     t
   )
   earth.updateMatrixWorld()
@@ -152,8 +152,9 @@ describe('scene geometry vs JPL Horizons', () => {
       'ecliptic lon err°': +eclError.toFixed(4),
     })
 
-    // Measured max 0.011° (2100), from the fixed J2000 tilt.
-    expect(Math.abs(latError)).toBeLessThan(0.015)
+    // Measured max 0.0011°, mostly the fixture site's 8.8″ solar parallax;
+    // the old fixed J2000 tilt was 0.011° off by 2100.
+    expect(Math.abs(latError)).toBeLessThan(0.005)
     expect(Math.abs(lonError)).toBeLessThan(0.25)
     expect(Math.abs(eclError)).toBeLessThan(0.05)
   })
@@ -324,7 +325,7 @@ describe('View from Earth vs astronomy-engine Horizon()', () => {
         'alt err°': +altError.toFixed(4),
         'az err° (arc)': +azError.toFixed(4),
       })
-      // The ticket asks for 0.5°; measured max is 0.011°, and 0.05° still
+      // The ticket asks for 0.5°; measured max is 0.006°, and 0.05° still
       // catches a J2000/of-date mix-up (~0.36° by 2026).
       expect(Math.abs(altError)).toBeLessThan(0.05)
       expect(Math.abs(azError)).toBeLessThan(0.05)

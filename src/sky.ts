@@ -8,10 +8,10 @@ import {
   Rotation_EQD_ECT,
 } from 'astronomy-engine'
 import {
-  EARTH_AXIAL_TILT,
   EARTH_ORBIT_RADIUS,
   earthPosition,
   earthSpin,
+  earthTilt,
   eclipticToScene,
   type Vec3,
 } from './ephemeris'
@@ -142,7 +142,7 @@ export function skyPositionAt(
     // The Earth's transform, as OrbitingBody applies it.
     applyBodyTransform(
       earth,
-      { axialTilt: EARTH_AXIAL_TILT, spinAt: earthSpin, positionAt: earthPosition },
+      { tiltAt: earthTilt, spinAt: earthSpin, positionAt: earthPosition },
       t
     )
     earth.updateMatrix()

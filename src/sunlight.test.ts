@@ -3,9 +3,9 @@ import { scaleLog } from 'd3'
 import { Body, Illumination } from 'astronomy-engine'
 import { describe, expect, test, afterAll } from 'vitest'
 import {
-  EARTH_AXIAL_TILT,
   earthPosition,
   earthSpin,
+  earthTilt,
   moonPosition,
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
@@ -56,7 +56,7 @@ function earthAt(t: number): THREE.Object3D {
   const earth = new THREE.Object3D()
   applyBodyTransform(
     earth,
-    { axialTilt: EARTH_AXIAL_TILT, spinAt: earthSpin, positionAt: earthPosition },
+    { tiltAt: earthTilt, spinAt: earthSpin, positionAt: earthPosition },
     t
   )
   earth.updateMatrixWorld()

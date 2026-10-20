@@ -7,7 +7,7 @@
 // is within a few degrees of CGM at auroral latitudes, which is far below what
 // the oval's own variability makes visible.
 import * as THREE from 'three'
-import { EARTH_AXIAL_TILT, earthPosition, earthSpin } from './ephemeris'
+import { earthPosition, earthSpin, earthTilt } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 
 const DEG = Math.PI / 180
@@ -135,7 +135,7 @@ const inverse = new THREE.Quaternion()
 export function sunDirectionLocal(ms: number, out = new THREE.Vector3()): THREE.Vector3 {
   applyBodyTransform(
     earthFrame,
-    { axialTilt: EARTH_AXIAL_TILT, spinAt: earthSpin },
+    { tiltAt: earthTilt, spinAt: earthSpin },
     ms
   )
   earthFrame.updateMatrix()

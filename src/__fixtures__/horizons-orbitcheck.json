@@ -1,0 +1,2328 @@
+{
+  "source": "JPL Horizons API (scripts/fetch-orbitcheck-fixtures.mjs)",
+  "fetchedAt": "2026-10-20T22:46:21.458Z",
+  "epochs": [
+    {
+      "label": "1900",
+      "t": "1900-01-01T12:00:00.000Z"
+    },
+    {
+      "label": "1950",
+      "t": "1950-07-01T00:00:00.000Z"
+    },
+    {
+      "label": "J2000",
+      "t": "2000-01-01T12:00:00.000Z"
+    },
+    {
+      "label": "2026 perihelion",
+      "t": "2026-01-03T16:42:00.000Z"
+    },
+    {
+      "label": "2026 Mar equinox",
+      "t": "2026-03-20T14:46:00.000Z"
+    },
+    {
+      "label": "2026 Jun solstice",
+      "t": "2026-06-21T08:25:00.000Z"
+    },
+    {
+      "label": "2026 Sep equinox",
+      "t": "2026-09-23T00:06:00.000Z"
+    },
+    {
+      "label": "2026 lunar node",
+      "t": "2026-10-07T01:19:00.000Z"
+    },
+    {
+      "label": "2026-10-20",
+      "t": "2026-10-20T00:00:00.000Z"
+    },
+    {
+      "label": "2026 Dec solstice",
+      "t": "2026-12-21T20:50:00.000Z"
+    },
+    {
+      "label": "2050",
+      "t": "2050-07-01T00:00:00.000Z"
+    },
+    {
+      "label": "2100",
+      "t": "2100-01-01T12:00:00.000Z"
+    }
+  ],
+  "earth": [
+    {
+      "t": "1900-01-01T12:00:00.000Z",
+      "horizonsDate": "1900-Jan-01 12:00:00.000",
+      "raDeg": 281.598363802,
+      "decDeg": -23.02305928,
+      "sunRangeAu": 0.98326444706119,
+      "sunEclipticLonDeg": 280.6632209,
+      "sunEclipticLatDeg": 0.0000843,
+      "gastHours": 18.7120719017
+    },
+    {
+      "t": "1950-07-01T00:00:00.000Z",
+      "horizonsDate": "1950-Jul-01 00:00:00.000",
+      "raDeg": 99.357749227,
+      "decDeg": 23.169087328,
+      "sunRangeAu": 1.01666584469024,
+      "sunEclipticLonDeg": 98.5970524,
+      "sunEclipticLatDeg": -0.0000659,
+      "gastHours": 18.5651905286
+    },
+    {
+      "t": "2000-01-01T12:00:00.000Z",
+      "horizonsDate": "2000-Jan-01 12:00:00.000",
+      "raDeg": 281.278375239,
+      "decDeg": -23.03243013,
+      "sunRangeAu": 0.98332762652701,
+      "sunEclipticLonDeg": 280.3689092,
+      "sunEclipticLatDeg": 0.0002381,
+      "gastHours": 18.6972361132
+    },
+    {
+      "t": "2026-01-03T16:42:00.000Z",
+      "horizonsDate": "2026-Jan-03 16:42:00.000",
+      "raDeg": 284.464384753,
+      "decDeg": -22.771906936,
+      "sunRangeAu": 0.98330205105068,
+      "sunEclipticLonDeg": 283.3152472,
+      "sunEclipticLatDeg": 0.0001623,
+      "gastHours": 23.5879874378
+    },
+    {
+      "t": "2026-03-20T14:46:00.000Z",
+      "horizonsDate": "2026-Mar-20 14:46:00.000",
+      "raDeg": 359.999976875,
+      "decDeg": 0.00009446,
+      "sunRangeAu": 0.99591755037036,
+      "sunEclipticLonDeg": 0.0000164,
+      "sunEclipticLatDeg": 0.0000959,
+      "gastHours": 2.6433061498
+    },
+    {
+      "t": "2026-06-21T08:25:00.000Z",
+      "horizonsDate": "2026-Jun-21 08:25:00.000",
+      "raDeg": 90.000342995,
+      "decDeg": 23.437933362,
+      "sunRangeAu": 1.01619388647652,
+      "sunEclipticLonDeg": 90.0003147,
+      "sunEclipticLatDeg": -0.0000526,
+      "gastHours": 2.38694838
+    },
+    {
+      "t": "2026-09-23T00:06:00.000Z",
+      "horizonsDate": "2026-Sep-23 00:06:00.000",
+      "raDeg": 180.000471163,
+      "decDeg": -0.000213565,
+      "sunRangeAu": 1.00357668858771,
+      "sunEclipticLonDeg": 180.0005172,
+      "sunEclipticLatDeg": -0.0000085,
+      "gastHours": 0.2242476174
+    },
+    {
+      "t": "2026-10-07T01:19:00.000Z",
+      "horizonsDate": "2026-Oct-07 01:19:00.000",
+      "raDeg": 192.700287974,
+      "decDeg": -5.44447923,
+      "sunRangeAu": 0.99963223454943,
+      "sunEclipticLonDeg": 193.8004456,
+      "sunEclipticLatDeg": 0.000031,
+      "gastHours": 2.3641730292
+    },
+    {
+      "t": "2026-10-20T00:00:00.000Z",
+      "horizonsDate": "2026-Oct-20 00:00:00.000",
+      "raDeg": 204.693386071,
+      "decDeg": -10.265640829,
+      "sunRangeAu": 0.99592621817091,
+      "sunEclipticLonDeg": 206.6181548,
+      "sunEclipticLatDeg": -0.0000136,
+      "gastHours": 1.8981194045
+    },
+    {
+      "t": "2026-12-21T20:50:00.000Z",
+      "horizonsDate": "2026-Dec-21 20:50:00.000",
+      "raDeg": 269.999803753,
+      "decDeg": -23.437415475,
+      "sunRangeAu": 0.98373136489739,
+      "sunEclipticLonDeg": 269.9998199,
+      "sunEclipticLatDeg": 0.0002314,
+      "gastHours": 2.8625087466
+    },
+    {
+      "t": "2050-07-01T00:00:00.000Z",
+      "horizonsDate": "2050-Jul-01 00:00:00.000",
+      "raDeg": 100.226247258,
+      "decDeg": 23.098002909,
+      "sunRangeAu": 1.01658595138359,
+      "sunEclipticLonDeg": 99.3986939,
+      "sunEclipticLatDeg": 0.0000477,
+      "gastHours": 18.6167161287
+    },
+    {
+      "t": "2100-01-01T12:00:00.000Z",
+      "horizonsDate": "2100-Jan-01 12:00:00.000",
+      "raDeg": 282.08403691,
+      "decDeg": -22.963804055,
+      "sunRangeAu": 0.98335134485193,
+      "sunEclipticLonDeg": 281.1136517,
+      "sunEclipticLatDeg": 0.0000681,
+      "gastHours": 18.748756277
+    }
+  ],
+  "bodies": {
+    "sun": {
+      "command": "10",
+      "frame": "IAU_SUN",
+      "longitude": "east",
+      "radiiKm": [
+        695700,
+        695700,
+        695700
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 34.144727,
+          "subLatDeg": -3.193225,
+          "northPoleAngleDeg": 1.9229,
+          "rangeAu": 0.98326444706119,
+          "lightTimeMin": 8.17756105,
+          "eclipticLonDeg": 280.6632209,
+          "eclipticLatDeg": 0.0000843
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 335.592396,
+          "subLatDeg": 2.882248,
+          "northPoleAngleDeg": 357.0533,
+          "rangeAu": 1.01666584469024,
+          "lightTimeMin": 8.455352,
+          "eclipticLonDeg": 98.5970524,
+          "eclipticLatDeg": -0.0000659
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 1.43319,
+          "subLatDeg": -3.013791,
+          "northPoleAngleDeg": 2.1377,
+          "rangeAu": 0.98332762652701,
+          "lightTimeMin": 8.1780865,
+          "eclipticLonDeg": 280.3689092,
+          "eclipticLatDeg": 0.0002381
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 263.603297,
+          "subLatDeg": -3.310013,
+          "northPoleAngleDeg": 0.755,
+          "rangeAu": 0.98330205105068,
+          "lightTimeMin": 8.17787379,
+          "eclipticLonDeg": 283.3152472,
+          "eclipticLatDeg": 0.0001623
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 343.708752,
+          "subLatDeg": -7.038943,
+          "northPoleAngleDeg": 334.8115,
+          "rangeAu": 0.99591755037036,
+          "lightTimeMin": 8.2827937,
+          "eclipticLonDeg": 0.0000164,
+          "eclipticLatDeg": 0.0000959
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 198.095763,
+          "subLatDeg": 1.737255,
+          "northPoleAngleDeg": 352.9578,
+          "rangeAu": 1.01619388647652,
+          "lightTimeMin": 8.45142684,
+          "eclipticLonDeg": 90.0003147,
+          "eclipticLatDeg": -0.0000526
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 39.887337,
+          "subLatDeg": 7.039077,
+          "northPoleAngleDeg": 25.1874,
+          "rangeAu": 1.00357668858771,
+          "lightTimeMin": 8.34649281,
+          "eclipticLonDeg": 180.0005172,
+          "eclipticLatDeg": -0.0000085
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 214.468011,
+          "subLatDeg": 6.417887,
+          "northPoleAngleDeg": 26.2155,
+          "rangeAu": 0.99963223454943,
+          "lightTimeMin": 8.31368779,
+          "eclipticLonDeg": 193.8004456,
+          "eclipticLatDeg": 0.000031
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 43.70364,
+          "subLatDeg": 5.507753,
+          "northPoleAngleDeg": 25.9101,
+          "rangeAu": 0.99592621817091,
+          "lightTimeMin": 8.28286579,
+          "eclipticLonDeg": 206.6181548,
+          "eclipticLatDeg": -0.0000136
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 295.0016,
+          "subLatDeg": -1.736532,
+          "northPoleAngleDeg": 7.0427,
+          "rangeAu": 0.98373136489739,
+          "lightTimeMin": 8.18144428,
+          "eclipticLonDeg": 269.9998199,
+          "eclipticLatDeg": 0.0002314
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 289.778693,
+          "subLatDeg": 2.825147,
+          "northPoleAngleDeg": 357.3653,
+          "rangeAu": 1.01658595138359,
+          "lightTimeMin": 8.45468755,
+          "eclipticLonDeg": 99.3986939,
+          "eclipticLatDeg": 0.0000477
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 315.567134,
+          "subLatDeg": -2.950406,
+          "northPoleAngleDeg": 1.8552,
+          "rangeAu": 0.98335134485193,
+          "lightTimeMin": 8.17828375,
+          "eclipticLonDeg": 281.1136517,
+          "eclipticLatDeg": 0.0000681
+        }
+      ]
+    },
+    "moon": {
+      "command": "301",
+      "frame": "MOON_ME",
+      "longitude": "east",
+      "radiiKm": [
+        1737.4,
+        1737.4,
+        1737.4
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 355.962398,
+          "subLatDeg": -2.248999,
+          "northPoleAngleDeg": 357.3407,
+          "rangeAu": 0.00245051859856,
+          "lightTimeMin": 0.02038034,
+          "eclipticLonDeg": 279.6163189,
+          "eclipticLatDeg": 1.7442764
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 5.202909,
+          "subLatDeg": 6.047695,
+          "northPoleAngleDeg": 350.0453,
+          "rangeAu": 0.00246794449584,
+          "lightTimeMin": 0.02052527,
+          "eclipticLonDeg": 294.4614723,
+          "eclipticLatDeg": -4.6373198
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 5.025824,
+          "subLatDeg": -6.720739,
+          "northPoleAngleDeg": 16.8913,
+          "rangeAu": 0.00268998925442,
+          "lightTimeMin": 0.02237196,
+          "eclipticLonDeg": 223.323786,
+          "eclipticLatDeg": 5.1707422
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 3.715802,
+          "subLatDeg": -5.310998,
+          "northPoleAngleDeg": 6.6332,
+          "rangeAu": 0.00242709169656,
+          "lightTimeMin": 0.02018551,
+          "eclipticLonDeg": 107.1477736,
+          "eclipticLatDeg": 4.0769239
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 356.570747,
+          "subLatDeg": -4.493062,
+          "northPoleAngleDeg": 338.8173,
+          "rangeAu": 0.00246506290186,
+          "lightTimeMin": 0.0205013,
+          "eclipticLonDeg": 20.51578,
+          "eclipticLatDeg": 3.483394
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 7.46078,
+          "subLatDeg": 2.418506,
+          "northPoleAngleDeg": 21.8339,
+          "rangeAu": 0.00257510648588,
+          "lightTimeMin": 0.02141651,
+          "eclipticLonDeg": 173.2802544,
+          "eclipticLatDeg": -1.8574266
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 356.000921,
+          "subLatDeg": 1.616461,
+          "northPoleAngleDeg": 344.1563,
+          "rangeAu": 0.00264373507058,
+          "lightTimeMin": 0.02198727,
+          "eclipticLonDeg": 315.7279711,
+          "eclipticLatDeg": -1.2544934
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 4.221264,
+          "subLatDeg": 0.07016,
+          "northPoleAngleDeg": 18.8814,
+          "rangeAu": 0.00251353216398,
+          "lightTimeMin": 0.02090441,
+          "eclipticLonDeg": 149.1091855,
+          "eclipticLatDeg": 0.0002911
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 355.773122,
+          "subLatDeg": 1.92561,
+          "northPoleAngleDeg": 345.4253,
+          "rangeAu": 0.00266591052999,
+          "lightTimeMin": 0.0221717,
+          "eclipticLonDeg": 311.1978795,
+          "eclipticLatDeg": -1.4832368
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 355.143369,
+          "subLatDeg": -6.5854,
+          "northPoleAngleDeg": 346.8157,
+          "rangeAu": 0.00242407997408,
+          "lightTimeMin": 0.02016046,
+          "eclipticLonDeg": 58.9978538,
+          "eclipticLatDeg": 5.0702962
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 353.601102,
+          "subLatDeg": -0.116546,
+          "northPoleAngleDeg": 16.8461,
+          "rangeAu": 0.0025778475485,
+          "lightTimeMin": 0.0214393,
+          "eclipticLonDeg": 230.8122402,
+          "eclipticLatDeg": 0.0847631
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 358.235838,
+          "subLatDeg": -0.668739,
+          "northPoleAngleDeg": 21.1647,
+          "rangeAu": 0.00248101327526,
+          "lightTimeMin": 0.02063396,
+          "eclipticLonDeg": 164.4237531,
+          "eclipticLatDeg": 0.4783108
+        }
+      ]
+    },
+    "mercury": {
+      "command": "199",
+      "frame": "IAU_MERCURY",
+      "longitude": "west",
+      "radiiKm": [
+        2440.53,
+        2440.53,
+        2438.26
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 335.809528,
+          "subLatDeg": -4.841826,
+          "northPoleAngleDeg": 10.3716,
+          "rangeAu": 1.15056092663608,
+          "lightTimeMin": 9.56892344,
+          "eclipticLonDeg": 259.6392831,
+          "eclipticLatDeg": 1.0559217,
+          "helioLonJ2000Deg": 204.432061,
+          "helioLatJ2000Deg": 2.86631,
+          "helioRangeAu": 0.423051762877
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 318.827842,
+          "subLatDeg": 4.519191,
+          "northPoleAngleDeg": 353.0909,
+          "rangeAu": 1.23051106531516,
+          "lightTimeMin": 10.23384847,
+          "eclipticLonDeg": 86.6915772,
+          "eclipticLatDeg": -0.0853583,
+          "helioLonJ2000Deg": 45.725885,
+          "helioLatJ2000Deg": -0.327681,
+          "helioRangeAu": 0.315522046363
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 247.693887,
+          "subLatDeg": -3.868321,
+          "northPoleAngleDeg": 4.2714,
+          "rangeAu": 1.41546946904999,
+          "lightTimeMin": 11.77210061,
+          "eclipticLonDeg": 271.8892699,
+          "eclipticLatDeg": -0.994819,
+          "helioLonJ2000Deg": 253.762526,
+          "helioLatJ2000Deg": -3.020507,
+          "helioRangeAu": 0.466468841931
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 238.090922,
+          "subLatDeg": -4.057877,
+          "northPoleAngleDeg": 3.8334,
+          "rangeAu": 1.39594769268307,
+          "lightTimeMin": 11.60974294,
+          "eclipticLonDeg": 272.785373,
+          "eclipticLatDeg": -0.8568482,
+          "helioLonJ2000Deg": 249.700769,
+          "helioLatJ2000Deg": -2.566694,
+          "helioRangeAu": 0.465628921115
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 278.127843,
+          "subLatDeg": -7.661489,
+          "northPoleAngleDeg": 335.6704,
+          "rangeAu": 0.68740141743191,
+          "lightTimeMin": 5.71694326,
+          "eclipticLonDeg": 338.4927108,
+          "eclipticLatDeg": 1.035123,
+          "helioLonJ2000Deg": 214.891907,
+          "helioLatJ2000Deg": 1.631447,
+          "helioRangeAu": 0.436725119104
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 352.621982,
+          "subLatDeg": 6.462293,
+          "northPoleAngleDeg": 6.8646,
+          "rangeAu": 0.73282352218562,
+          "lightTimeMin": 6.09470739,
+          "eclipticLonDeg": 113.6093988,
+          "eclipticLatDeg": -0.072003,
+          "helioLonJ2000Deg": 229.22265,
+          "helioLatJ2000Deg": -0.113619,
+          "helioRangeAu": 0.452722024758
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 121.193603,
+          "subLatDeg": 4.170248,
+          "northPoleAngleDeg": 28.4339,
+          "rangeAu": 1.26734585969752,
+          "lightTimeMin": 10.54019411,
+          "eclipticLonDeg": 199.4765287,
+          "eclipticLatDeg": -0.7538126,
+          "helioLonJ2000Deg": 245.287258,
+          "helioLatJ2000Deg": -2.055783,
+          "helioRangeAu": 0.464034657641
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 188.534055,
+          "subLatDeg": 3.664141,
+          "northPoleAngleDeg": 25.9494,
+          "rangeAu": 1.09022740268665,
+          "lightTimeMin": 9.06714482,
+          "eclipticLonDeg": 218.2778487,
+          "eclipticLatDeg": -2.4232511,
+          "helioLonJ2000Deg": 284.479919,
+          "helioLatJ2000Deg": -5.827486,
+          "helioRangeAu": 0.453729868632
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 256.388428,
+          "subLatDeg": 3.013092,
+          "northPoleAngleDeg": 22.9567,
+          "rangeAu": 0.86466841675558,
+          "lightTimeMin": 7.19122794,
+          "eclipticLonDeg": 229.8796772,
+          "eclipticLatDeg": -3.1945489,
+          "helioLonJ2000Deg": 326.988824,
+          "helioLatJ2000Deg": -6.923731,
+          "helioRangeAu": 0.399605036109
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 248.788447,
+          "subLatDeg": -3.207952,
+          "northPoleAngleDeg": 8.405,
+          "rangeAu": 1.43171326495052,
+          "lightTimeMin": 11.90719614,
+          "eclipticLonDeg": 263.889877,
+          "eclipticLatDeg": -0.8659256,
+          "helioLonJ2000Deg": 250.51279,
+          "helioLatJ2000Deg": -2.659284,
+          "helioRangeAu": 0.465842305788
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 223.889949,
+          "subLatDeg": 4.392257,
+          "northPoleAngleDeg": 6.1524,
+          "rangeAu": 1.26078244659886,
+          "lightTimeMin": 10.48560787,
+          "eclipticLonDeg": 111.9693093,
+          "eclipticLatDeg": 1.8940077,
+          "helioLonJ2000Deg": 150.819637,
+          "helioLatJ2000Deg": 6.836204,
+          "helioRangeAu": 0.349922228724
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 161.164283,
+          "subLatDeg": -3.942674,
+          "northPoleAngleDeg": 355.5017,
+          "rangeAu": 1.38153823248893,
+          "lightTimeMin": 11.48990312,
+          "eclipticLonDeg": 288.8176386,
+          "eclipticLatDeg": -2.1234914,
+          "helioLonJ2000Deg": 305.40735,
+          "helioLatJ2000Deg": -6.826869,
+          "helioRangeAu": 0.430030431401
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 32.281507,
+          "subLatDeg": 0.002283,
+          "lightTimeMin": 3.51857618
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 0.292267,
+          "subLatDeg": 0.010205,
+          "lightTimeMin": 2.62398302
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 265.554951,
+          "subLatDeg": -0.024358,
+          "lightTimeMin": 3.87951906
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 260.54785,
+          "subLatDeg": -0.022738,
+          "lightTimeMin": 3.8725523
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 41.651362,
+          "subLatDeg": -0.003929,
+          "lightTimeMin": 3.63217976
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 236.470906,
+          "subLatDeg": -0.012251,
+          "lightTimeMin": 3.76521153
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 75.17296,
+          "subLatDeg": -0.02063,
+          "lightTimeMin": 3.85930571
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 122.14368,
+          "subLatDeg": -0.033164,
+          "lightTimeMin": 3.77347514
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 159.36032,
+          "subLatDeg": -0.029904,
+          "lightTimeMin": 3.32329209
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 261.543295,
+          "subLatDeg": -0.023045,
+          "lightTimeMin": 3.87432458
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 184.364243,
+          "subLatDeg": 0.028758,
+          "lightTimeMin": 2.91045784
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 143.049079,
+          "subLatDeg": -0.033806,
+          "lightTimeMin": 3.57625732
+        }
+      ]
+    },
+    "venus": {
+      "command": "299",
+      "frame": "IAU_VENUS",
+      "longitude": "east",
+      "radiiKm": [
+        6051.8,
+        6051.8,
+        6051.8
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 220.163029,
+          "subLatDeg": 1.518629,
+          "northPoleAngleDeg": 346.4549,
+          "rangeAu": 1.46241011797501,
+          "lightTimeMin": 12.16249408,
+          "eclipticLonDeg": 306.9960853,
+          "eclipticLatDeg": -1.6864262,
+          "helioLonJ2000Deg": 345.310912,
+          "helioLatJ2000Deg": -3.394188,
+          "helioRangeAu": 0.727397135309
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 296.739773,
+          "subLatDeg": 0.711134,
+          "northPoleAngleDeg": 348.7159,
+          "rangeAu": 1.28065570183191,
+          "lightTimeMin": 10.65088869,
+          "eclipticLonDeg": 64.1770969,
+          "eclipticLatDeg": -1.7360239,
+          "helioLonJ2000Deg": 12.40105,
+          "helioLatJ2000Deg": -3.062792,
+          "helioRangeAu": 0.725684593726
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 258.810154,
+          "subLatDeg": -1.008679,
+          "northPoleAngleDeg": 12.1618,
+          "rangeAu": 1.13757924245212,
+          "lightTimeMin": 9.46095807,
+          "eclipticLonDeg": 241.5657794,
+          "eclipticLatDeg": 2.0663548,
+          "helioLonJ2000Deg": 182.593466,
+          "helioLatJ2000Deg": 3.264759,
+          "helioRangeAu": 0.720212286809
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 331.316441,
+          "subLatDeg": 0.982683,
+          "northPoleAngleDeg": 355.7516,
+          "rangeAu": 1.71055887374298,
+          "lightTimeMin": 14.22628435,
+          "eclipticLonDeg": 282.598487,
+          "eclipticLatDeg": -0.6043211,
+          "helioLonJ2000Deg": 281.270366,
+          "helioLatJ2000Deg": -1.417795,
+          "helioRangeAu": 0.727566401024
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 178.749937,
+          "subLatDeg": -0.335034,
+          "northPoleAngleDeg": 337.8586,
+          "rangeAu": 1.60683578149379,
+          "lightTimeMin": 13.3636457,
+          "eclipticLonDeg": 17.5847971,
+          "eclipticLatDeg": -0.8711207,
+          "helioLonJ2000Deg": 41.819106,
+          "helioLatJ2000Deg": -1.938157,
+          "helioRangeAu": 0.723275591288
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 67.737202,
+          "subLatDeg": -1.796208,
+          "northPoleAngleDeg": 14.2675,
+          "rangeAu": 1.11487459932677,
+          "lightTimeMin": 9.27212931,
+          "eclipticLonDeg": 129.158505,
+          "eclipticLatDeg": 1.9846202,
+          "helioLonJ2000Deg": 191.841719,
+          "helioLatJ2000Deg": 3.071085,
+          "helioRangeAu": 0.720873898836
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 293.864714,
+          "subLatDeg": 7.444874,
+          "northPoleAngleDeg": 19.9508,
+          "rangeAu": 0.39598628271529,
+          "lightTimeMin": 3.29331749,
+          "eclipticLonDeg": 216.5726011,
+          "eclipticLatDeg": -6.2153685,
+          "helioLonJ2000Deg": 340.790436,
+          "helioLatJ2000Deg": -3.37691,
+          "helioRangeAu": 0.727598846773
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 316.329947,
+          "subLatDeg": 8.70011,
+          "northPoleAngleDeg": 19.7688,
+          "rangeAu": 0.31696576905805,
+          "lightTimeMin": 2.63612392,
+          "eclipticLonDeg": 218.2147341,
+          "eclipticLatDeg": -7.4748621,
+          "helioLonJ2000Deg": 3.111121,
+          "helioLatJ2000Deg": -3.254768,
+          "helioRangeAu": 0.726360628421
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 330.515655,
+          "subLatDeg": 8.341127,
+          "northPoleAngleDeg": 20.6955,
+          "rangeAu": 0.27657159946046,
+          "lightTimeMin": 2.30017585,
+          "eclipticLonDeg": 213.2391155,
+          "eclipticLatDeg": -7.1057062,
+          "helioLonJ2000Deg": 23.742033,
+          "helioLatJ2000Deg": -2.707093,
+          "helioRangeAu": 0.724808861761
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 74.176905,
+          "subLatDeg": -1.965179,
+          "northPoleAngleDeg": 17.4189,
+          "rangeAu": 0.57673076271905,
+          "lightTimeMin": 4.79652349,
+          "eclipticLonDeg": 223.7977796,
+          "eclipticLatDeg": 3.168438,
+          "helioLonJ2000Deg": 125.011661,
+          "helioLatJ2000Deg": 2.540016,
+          "helioRangeAu": 0.718490516205
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 119.73431,
+          "subLatDeg": -1.302453,
+          "northPoleAngleDeg": 17.74,
+          "rangeAu": 0.99111029674726,
+          "lightTimeMin": 8.24281299,
+          "eclipticLonDeg": 141.5285704,
+          "eclipticLatDeg": 1.7432502,
+          "helioLonJ2000Deg": 211.680498,
+          "helioLatJ2000Deg": 2.395533,
+          "helioRangeAu": 0.72246443955
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 83.559933,
+          "subLatDeg": 1.427864,
+          "northPoleAngleDeg": 342.4671,
+          "rangeAu": 1.12256012403383,
+          "lightTimeMin": 9.33604787,
+          "eclipticLonDeg": 320.6717014,
+          "eclipticLatDeg": -1.841127,
+          "helioLonJ2000Deg": 19.122389,
+          "helioLatJ2000Deg": -2.856137,
+          "helioRangeAu": 0.725150313153
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 257.104378,
+          "subLatDeg": 2.515727,
+          "lightTimeMin": 6.04957535
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 244.308757,
+          "subLatDeg": 1.882778,
+          "lightTimeMin": 6.03533182
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 199.881441,
+          "subLatDeg": -2.16643,
+          "lightTimeMin": 5.98982541
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 330.381701,
+          "subLatDeg": 1.819442,
+          "lightTimeMin": 6.05098841
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 203.355431,
+          "subLatDeg": 0.724219,
+          "lightTimeMin": 6.01529343
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 130.771626,
+          "subLatDeg": -1.894865,
+          "lightTimeMin": 5.99532813
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 58.480854,
+          "subLatDeg": 2.570147,
+          "lightTimeMin": 6.05125581
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 101.592855,
+          "subLatDeg": 2.151507,
+          "lightTimeMin": 6.04095882
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 141.378397,
+          "subLatDeg": 1.476065,
+          "lightTimeMin": 6.02805383
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 335.830216,
+          "subLatDeg": -2.435196,
+          "lightTimeMin": 5.97550356
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 190.564388,
+          "subLatDeg": -1.156841,
+          "lightTimeMin": 6.00855566
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 143.387709,
+          "subLatDeg": 1.640005,
+          "lightTimeMin": 6.03088877
+        }
+      ]
+    },
+    "mars": {
+      "command": "499",
+      "frame": "IAU_MARS",
+      "longitude": "west",
+      "radiiKm": [
+        3396.19,
+        3396.19,
+        3376.2
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 131.296965,
+          "subLatDeg": -9.177084,
+          "northPoleAngleDeg": 18.7299,
+          "rangeAu": 2.40070817201686,
+          "lightTimeMin": 19.96608104,
+          "eclipticLonDeg": 284.2529683,
+          "eclipticLatDeg": -0.928232,
+          "helioLonJ2000Deg": 288.134739,
+          "helioLatJ2000Deg": -1.580476,
+          "helioRangeAu": 1.4209249338
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 192.592735,
+          "subLatDeg": 25.902269,
+          "northPoleAngleDeg": 30.9973,
+          "rangeAu": 1.18126076279897,
+          "lightTimeMin": 9.82424619,
+          "eclipticLonDeg": 188.0264215,
+          "eclipticLatDeg": 0.0078221,
+          "helioLonJ2000Deg": 229.680243,
+          "helioLatJ2000Deg": 0.000725,
+          "helioRangeAu": 1.550752430533
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 69.543497,
+          "subLatDeg": -23.259282,
+          "northPoleAngleDeg": 351.6251,
+          "rangeAu": 1.84968786270204,
+          "lightTimeMin": 15.38338487,
+          "eclipticLonDeg": 327.9632921,
+          "eclipticLatDeg": -1.0677752,
+          "helioLonJ2000Deg": 359.44106,
+          "helioLatJ2000Deg": -1.419797,
+          "helioRangeAu": 1.391202576247
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 63.044496,
+          "subLatDeg": -8.78465,
+          "northPoleAngleDeg": 18.6836,
+          "rangeAu": 2.40851579230052,
+          "lightTimeMin": 20.03101504,
+          "eclipticLonDeg": 284.7565449,
+          "eclipticLatDeg": -0.9076879,
+          "helioLonJ2000Deg": 285.391446,
+          "helioLatJ2000Deg": -1.53015,
+          "helioRangeAu": 1.425947800001
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 2.567208,
+          "subLatDeg": -25.552293,
+          "northPoleAngleDeg": 341.7834,
+          "rangeAu": 2.31252944040819,
+          "lightTimeMin": 19.23272089,
+          "eclipticLonDeg": 344.1891246,
+          "eclipticLatDeg": -1.0759508,
+          "helioLonJ2000Deg": 332.493208,
+          "helioLatJ2000Deg": -1.800078,
+          "helioRangeAu": 1.381492643669
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 69.163778,
+          "subLatDeg": -12.177608,
+          "northPoleAngleDeg": 322.1399,
+          "rangeAu": 2.13398613206989,
+          "lightTimeMin": 17.74782148,
+          "eclipticLonDeg": 54.6476191,
+          "eclipticLatDeg": -0.4115489,
+          "helioLonJ2000Deg": 30.027497,
+          "helioLatJ2000Deg": -0.615486,
+          "helioRangeAu": 1.431547947735
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 114.975635,
+          "subLatDeg": 13.80755,
+          "northPoleAngleDeg": 348.5611,
+          "rangeAu": 1.71870661282407,
+          "lightTimeMin": 14.29404703,
+          "eclipticLonDeg": 116.96705,
+          "eclipticLatDeg": 0.8806383,
+          "helioLonJ2000Deg": 81.296618,
+          "helioLatJ2000Deg": 0.974201,
+          "helioRangeAu": 1.548268470924
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 357.444662,
+          "subLatDeg": 16.628754,
+          "northPoleAngleDeg": 353.7181,
+          "rangeAu": 1.6231375947674,
+          "lightTimeMin": 13.49922374,
+          "eclipticLonDeg": 125.1799342,
+          "eclipticLatDeg": 1.1209908,
+          "helioLonJ2000Deg": 88.316162,
+          "helioLatJ2000Deg": 1.158751,
+          "helioRangeAu": 1.565659259566
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 212.793699,
+          "subLatDeg": 18.793086,
+          "northPoleAngleDeg": 358.3267,
+          "rangeAu": 1.52725219646807,
+          "lightTimeMin": 12.7017692,
+          "eclipticLonDeg": 132.3621915,
+          "eclipticLatDeg": 1.359939,
+          "helioLonJ2000Deg": 94.650486,
+          "helioLatJ2000Deg": 1.310433,
+          "helioRangeAu": 1.580944174439
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 286.474835,
+          "subLatDeg": 23.067119,
+          "northPoleAngleDeg": 14.8377,
+          "rangeAu": 0.99687237133425,
+          "lightTimeMin": 8.2907347,
+          "eclipticLonDeg": 158.1778849,
+          "eclipticLatDeg": 2.9336766,
+          "helioLonJ2000Deg": 123.942918,
+          "helioLatJ2000Deg": 1.779957,
+          "helioRangeAu": 1.64007395216
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 31.084645,
+          "subLatDeg": -19.026821,
+          "northPoleAngleDeg": 352.8479,
+          "rangeAu": 0.50413978987748,
+          "lightTimeMin": 4.19280278,
+          "eclipticLonDeg": 325.4257459,
+          "eclipticLatDeg": -4.6746373,
+          "helioLonJ2000Deg": 293.525014,
+          "helioLatJ2000Deg": -1.660413,
+          "helioRangeAu": 1.413165499195
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 335.006464,
+          "subLatDeg": -22.593461,
+          "northPoleAngleDeg": 322.8461,
+          "rangeAu": 0.87444256208572,
+          "lightTimeMin": 7.27251703,
+          "eclipticLonDeg": 29.7293429,
+          "eclipticLatDeg": 0.9614072,
+          "helioLonJ2000Deg": 66.440014,
+          "helioLatJ2000Deg": 0.544216,
+          "helioRangeAu": 1.510072175918
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 130.721483,
+          "subLatDeg": -9.636944,
+          "lightTimeMin": 11.81742787
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 149.752146,
+          "subLatDeg": 14.462107,
+          "lightTimeMin": 12.8972361
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 35.996227,
+          "subLatDeg": -25.373976,
+          "lightTimeMin": 11.57028968
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 63.854318,
+          "subLatDeg": -8.6359,
+          "lightTimeMin": 11.8591982
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 16.682806,
+          "subLatDeg": -23.403175,
+          "lightTimeMin": 11.48951952
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 94.333015,
+          "subLatDeg": -20.625507,
+          "lightTimeMin": 11.905856
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 147.442768,
+          "subLatDeg": -1.588556,
+          "lightTimeMin": 12.87656606
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 31.329543,
+          "subLatDeg": 1.433981,
+          "lightTimeMin": 13.02119394
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 247.897877,
+          "subLatDeg": 4.146888,
+          "lightTimeMin": 13.14830848
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 320.253151,
+          "subLatDeg": 15.697235,
+          "lightTimeMin": 13.64005768
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 60.888137,
+          "subLatDeg": -11.8879,
+          "lightTimeMin": 11.75297808
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 297.116059,
+          "subLatDeg": -7.81726,
+          "lightTimeMin": 12.55884631
+        }
+      ]
+    },
+    "jupiter": {
+      "command": "599",
+      "frame": "IAU_JUPITER",
+      "longitude": "west",
+      "radiiKm": [
+        71492,
+        71492,
+        66854
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 292.974628,
+          "subLatDeg": -3.440175,
+          "northPoleAngleDeg": 11.9307,
+          "rangeAu": 6.10782601917143,
+          "lightTimeMin": 50.79724004,
+          "eclipticLonDeg": 241.2335461,
+          "eclipticLatDeg": 0.8144197,
+          "helioLonJ2000Deg": 235.968938,
+          "helioLatJ2000Deg": 0.912418,
+          "helioRangeAu": 5.384787848087
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 146.50912,
+          "subLatDeg": 1.264179,
+          "northPoleAngleDeg": 335.896,
+          "rangeAu": 4.41822744580282,
+          "lightTimeMin": 36.74527719,
+          "eclipticLonDeg": 337.4265052,
+          "eclipticLatDeg": -1.0944373,
+          "helioLonJ2000Deg": 328.136632,
+          "helioLatJ2000Deg": -0.966139,
+          "helioRangeAu": 5.02040757758
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 55.395133,
+          "subLatDeg": 3.308067,
+          "northPoleAngleDeg": 337.1642,
+          "rangeAu": 4.62117524331177,
+          "lightTimeMin": 38.43314256,
+          "eclipticLonDeg": 25.2530685,
+          "eclipticLatDeg": -1.2621868,
+          "helioLonJ2000Deg": 36.292229,
+          "helioLatJ2000Deg": -1.174611,
+          "helioRangeAu": 4.965377642079
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 163.87704,
+          "subLatDeg": 1.580451,
+          "northPoleAngleDeg": 10.3546,
+          "rangeAu": 4.2367242419493,
+          "lightTimeMin": 35.23576108,
+          "eclipticLonDeg": 111.0026173,
+          "eclipticLatDeg": 0.2456651,
+          "helioLonJ2000Deg": 109.188175,
+          "helioLatJ2000Deg": 0.196542,
+          "helioRangeAu": 5.21286288767
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 16.97445,
+          "subLatDeg": 1.610445,
+          "northPoleAngleDeg": 7.8514,
+          "rangeAu": 4.88984485139054,
+          "lightTimeMin": 40.66759955,
+          "eclipticLonDeg": 105.2325158,
+          "eclipticLatDeg": 0.3627623,
+          "helioLonJ2000Deg": 115.429927,
+          "helioLatJ2000Deg": 0.33551,
+          "helioRangeAu": 5.240245746221
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 87.282476,
+          "subLatDeg": 1.142526,
+          "northPoleAngleDeg": 13.2789,
+          "rangeAu": 6.14725779373668,
+          "lightTimeMin": 51.12518411,
+          "eclipticLonDeg": 118.1223481,
+          "eclipticLatDeg": 0.4293933,
+          "helioLonJ2000Deg": 122.967331,
+          "helioLatJ2000Deg": 0.497871,
+          "helioRangeAu": 5.272853183724
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 236.722291,
+          "subLatDeg": 0.212037,
+          "northPoleAngleDeg": 20.0214,
+          "rangeAu": 6.0089572521762,
+          "lightTimeMin": 49.97497358,
+          "eclipticLonDeg": 138.1171688,
+          "eclipticLatDeg": 0.5770317,
+          "helioLonJ2000Deg": 130.488235,
+          "helioLatJ2000Deg": 0.651295,
+          "helioRangeAu": 5.304337152393
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 226.640928,
+          "subLatDeg": 0.06451,
+          "northPoleAngleDeg": 20.6999,
+          "rangeAu": 5.84770041843298,
+          "lightTimeMin": 48.63384139,
+          "eclipticLonDeg": 140.6490571,
+          "eclipticLatDeg": 0.613354,
+          "helioLonJ2000Deg": 131.609082,
+          "helioLatJ2000Deg": 0.673262,
+          "helioRangeAu": 5.308904264062
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 334.664136,
+          "subLatDeg": -0.06596,
+          "northPoleAngleDeg": 21.2205,
+          "rangeAu": 5.67512895601621,
+          "lightTimeMin": 47.1986083,
+          "eclipticLonDeg": 142.7071812,
+          "eclipticLatDeg": 0.6511495,
+          "helioLonJ2000Deg": 132.640053,
+          "helioLatJ2000Deg": 0.693241,
+          "helioRangeAu": 5.313070916858
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 344.145885,
+          "subLatDeg": -0.517642,
+          "northPoleAngleDeg": 22.204,
+          "rangeAu": 4.73133148879119,
+          "lightTimeMin": 39.34928411,
+          "eclipticLonDeg": 146.8969461,
+          "eclipticLatDeg": 0.888906,
+          "helioLonJ2000Deg": 137.624772,
+          "helioLatJ2000Deg": 0.786553,
+          "helioRangeAu": 5.332703900333
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 36.910729,
+          "subLatDeg": 0.65114,
+          "northPoleAngleDeg": 16.6697,
+          "rangeAu": 6.18014502266593,
+          "lightTimeMin": 51.39869885,
+          "eclipticLonDeg": 127.3184131,
+          "eclipticLatDeg": 0.582845,
+          "helioLonJ2000Deg": 131.763916,
+          "helioLatJ2000Deg": 0.674678,
+          "helioRangeAu": 5.303337879091
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 283.627821,
+          "subLatDeg": -3.166498,
+          "northPoleAngleDeg": 23.5836,
+          "rangeAu": 5.53789779508545,
+          "lightTimeMin": 46.05729154,
+          "eclipticLonDeg": 201.2591621,
+          "eclipticLatDeg": 1.2784452,
+          "helioLonJ2000Deg": 189.631063,
+          "helioLatJ2000Deg": 1.302218,
+          "helioRangeAu": 5.451436118051
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 303.2797,
+          "subLatDeg": -3.521808,
+          "lightTimeMin": 44.78390585
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 153.447467,
+          "subLatDeg": 0.676052,
+          "lightTimeMin": 41.75346449
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 42.616458,
+          "subLatDeg": 3.501802,
+          "lightTimeMin": 41.29578448
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 160.412173,
+          "subLatDeg": 1.675911,
+          "lightTimeMin": 43.35404266
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 4.646406,
+          "subLatDeg": 1.323803,
+          "lightTimeMin": 43.58179
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 86.470585,
+          "subLatDeg": 0.878088,
+          "lightTimeMin": 43.85299823
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 247.519722,
+          "subLatDeg": 0.418289,
+          "lightTimeMin": 44.11483902
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 238.012809,
+          "subLatDeg": 0.34896,
+          "lightTimeMin": 44.15281985
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 346.171781,
+          "subLatDeg": 0.285072,
+          "lightTimeMin": 44.18747005
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 350.001316,
+          "subLatDeg": -0.024735,
+          "lightTimeMin": 44.35073816
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 36.175384,
+          "subLatDeg": 0.340836,
+          "lightTimeMin": 44.10652997
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 294.297007,
+          "subLatDeg": -2.826339,
+          "lightTimeMin": 45.33821185
+        }
+      ]
+    },
+    "saturn": {
+      "command": "699",
+      "frame": "IAU_SATURN",
+      "longitude": "west",
+      "radiiKm": [
+        60268,
+        60268,
+        54364
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 190.047551,
+          "subLatDeg": 31.644939,
+          "northPoleAngleDeg": 6.0061,
+          "rangeAu": 11.0228212890434,
+          "lightTimeMin": 91.67400924,
+          "eclipticLonDeg": 267.7748827,
+          "eclipticLatDeg": 1.0073267,
+          "helioLonJ2000Deg": 267.923668,
+          "helioLatJ2000Deg": 1.089959,
+          "helioRangeAu": 10.06688032258
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 46.487802,
+          "subLatDeg": -4.747977,
+          "northPoleAngleDeg": 354.7319,
+          "rangeAu": 9.77692364439602,
+          "lightTimeMin": 81.3121945,
+          "eclipticLonDeg": 164.3795756,
+          "eclipticLatDeg": 2.0043882,
+          "helioLonJ2000Deg": 170.734356,
+          "helioLatJ2000Deg": 2.083788,
+          "helioRangeAu": 9.40590797053
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 270.867645,
+          "subLatDeg": -23.025474,
+          "northPoleAngleDeg": 0.217,
+          "rangeAu": 8.65279676096631,
+          "lightTimeMin": 71.96311629,
+          "eclipticLonDeg": 40.3956366,
+          "eclipticLatDeg": -2.4448533,
+          "helioLonJ2000Deg": 45.720442,
+          "helioLatJ2000Deg": -2.303224,
+          "helioRangeAu": 9.183858256403
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 357.199456,
+          "subLatDeg": -1.273118,
+          "northPoleAngleDeg": 4.4272,
+          "rangeAu": 9.75823992982969,
+          "lightTimeMin": 81.15680678,
+          "eclipticLonDeg": 356.3300496,
+          "eclipticLatDeg": -2.250012,
+          "helioLonJ2000Deg": 1.641552,
+          "helioLatJ2000Deg": -2.307098,
+          "helioRangeAu": 9.517726187132
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 341.952144,
+          "subLatDeg": -5.837047,
+          "northPoleAngleDeg": 3.8424,
+          "rangeAu": 10.4866099503755,
+          "lightTimeMin": 87.21447552,
+          "eclipticLonDeg": 4.1273876,
+          "eclipticLatDeg": -2.1237069,
+          "helioLonJ2000Deg": 4.197925,
+          "helioLatJ2000Deg": -2.346322,
+          "helioRangeAu": 9.494300286443
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 286.450219,
+          "subLatDeg": -10.815674,
+          "northPoleAngleDeg": 3.0381,
+          "rangeAu": 9.65452943363586,
+          "lightTimeMin": 80.29427288,
+          "eclipticLonDeg": 13.700629,
+          "eclipticLatDeg": -2.3404273,
+          "helioLonJ2000Deg": 7.337733,
+          "helioLatJ2000Deg": -2.388098,
+          "helioRangeAu": 9.465759896687
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 266.947762,
+          "subLatDeg": -9.613707,
+          "northPoleAngleDeg": 3.1529,
+          "rangeAu": 8.45473812795696,
+          "lightTimeMin": 70.31591287,
+          "eclipticLonDeg": 12.196493,
+          "eclipticLatDeg": -2.7038485,
+          "helioLonJ2000Deg": 10.527679,
+          "helioLatJ2000Deg": -2.423201,
+          "helioRangeAu": 9.437105843333
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 140.242098,
+          "subLatDeg": -9.015855,
+          "northPoleAngleDeg": 3.2464,
+          "rangeAu": 8.43519320946014,
+          "lightTimeMin": 70.15336274,
+          "eclipticLonDeg": 11.1027278,
+          "eclipticLatDeg": -2.7141021,
+          "helioLonJ2000Deg": 11.007876,
+          "helioLatJ2000Deg": -2.427835,
+          "helioRangeAu": 9.432825640395
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 196.814357,
+          "subLatDeg": -8.488665,
+          "northPoleAngleDeg": 3.3311,
+          "rangeAu": 8.47076862316201,
+          "lightTimeMin": 70.44923443,
+          "eclipticLonDeg": 10.1103668,
+          "eclipticLatDeg": -2.7061925,
+          "helioLonJ2000Deg": 11.450661,
+          "helioLatJ2000Deg": -2.431956,
+          "helioRangeAu": 9.428885531234
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 48.287336,
+          "subLatDeg": -7.586981,
+          "northPoleAngleDeg": 3.5135,
+          "rangeAu": 9.22194184485766,
+          "lightTimeMin": 76.69655161,
+          "eclipticLonDeg": 8.0393385,
+          "eclipticLatDeg": -2.4989757,
+          "helioLonJ2000Deg": 13.606118,
+          "helioLatJ2000Deg": -2.44996,
+          "helioRangeAu": 9.409835706197
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 193.530836,
+          "subLatDeg": 23.026757,
+          "northPoleAngleDeg": 6.6121,
+          "rangeAu": 9.05001129034048,
+          "lightTimeMin": 75.26664879,
+          "eclipticLonDeg": 307.5016907,
+          "eclipticLatDeg": -0.5062547,
+          "helioLonJ2000Deg": 304.032174,
+          "helioLatJ2000Deg": -0.455002,
+          "helioRangeAu": 9.958312741478
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 28.170045,
+          "subLatDeg": 16.222421,
+          "northPoleAngleDeg": 357.8136,
+          "rangeAu": 9.86597562124427,
+          "lightTimeMin": 82.0528172,
+          "eclipticLonDeg": 205.6604692,
+          "eclipticLatDeg": 2.4242812,
+          "helioLonJ2000Deg": 198.606828,
+          "helioLatJ2000Deg": 2.479935,
+          "helioRangeAu": 9.666263536642
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 195.924474,
+          "subLatDeg": 31.653313,
+          "lightTimeMin": 83.7236955
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 43.190523,
+          "subLatDeg": -1.566021,
+          "lightTimeMin": 78.22655424
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 263.022613,
+          "subLatDeg": -25.016372,
+          "lightTimeMin": 76.3798269
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 353.272501,
+          "subLatDeg": -4.44397,
+          "lightTimeMin": 79.15650486
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 346.110764,
+          "subLatDeg": -5.837286,
+          "lightTimeMin": 78.96166656
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 292.727048,
+          "subLatDeg": -7.532128,
+          "lightTimeMin": 78.72431564
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 263.637738,
+          "subLatDeg": -9.230745,
+          "lightTimeMin": 78.48602458
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 135.438931,
+          "subLatDeg": -9.484116,
+          "lightTimeMin": 78.45042742
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 190.894427,
+          "subLatDeg": -9.717162,
+          "lightTimeMin": 78.41765793
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 42.05417,
+          "subLatDeg": -10.843128,
+          "lightTimeMin": 78.25921427
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 192.025104,
+          "subLatDeg": 24.124106,
+          "lightTimeMin": 82.82076912
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 34.362414,
+          "subLatDeg": 13.3966,
+          "lightTimeMin": 80.3918665
+        }
+      ]
+    },
+    "uranus": {
+      "command": "799",
+      "frame": "IAU_URANUS",
+      "longitude": "east",
+      "radiiKm": [
+        25559,
+        25559,
+        24973
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 333.880074,
+          "subLatDeg": -80.656444,
+          "northPoleAngleDeg": 46.579,
+          "rangeAu": 19.8335481327694,
+          "lightTimeMin": 164.95058998,
+          "eclipticLonDeg": 250.1667884,
+          "eclipticLatDeg": 0.0633404,
+          "helioLonJ2000Deg": 250.05801,
+          "helioLatJ2000Deg": 0.053527,
+          "helioRangeAu": 18.99287133505
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 264.73741,
+          "subLatDeg": 70.775988,
+          "northPoleAngleDeg": 68.4625,
+          "rangeAu": 19.9284878092227,
+          "lightTimeMin": 165.74017919,
+          "eclipticLonDeg": 95.4072816,
+          "eclipticLatDeg": 0.2682308,
+          "helioLonJ2000Deg": 95.933029,
+          "helioLatJ2000Deg": 0.288976,
+          "helioRangeAu": 18.91349240735
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 265.786212,
+          "subLatDeg": -33.600879,
+          "northPoleAngleDeg": 262.533,
+          "rangeAu": 20.7271711300464,
+          "lightTimeMin": 172.38262582,
+          "eclipticLonDeg": 314.809168,
+          "eclipticLatDeg": -0.658324,
+          "helioLonJ2000Deg": 316.417339,
+          "helioLatJ2000Deg": -0.684836,
+          "helioRangeAu": 19.92401502353
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 274.634352,
+          "subLatDeg": 69.451214,
+          "northPoleAngleDeg": 278.06,
+          "rangeAu": 18.7872289587498,
+          "lightTimeMin": 156.24861876,
+          "eclipticLonDeg": 57.8777452,
+          "eclipticLatDeg": -0.1968424,
+          "helioLonJ2000Deg": 59.569102,
+          "helioLatJ2000Deg": -0.192813,
+          "helioRangeAu": 19.48967588207
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 159.465165,
+          "subLatDeg": 69.831463,
+          "northPoleAngleDeg": 278.6566,
+          "rangeAu": 19.9810582844731,
+          "lightTimeMin": 166.1773945,
+          "eclipticLonDeg": 58.3050299,
+          "eclipticLatDeg": -0.1738854,
+          "helioLonJ2000Deg": 60.4336,
+          "helioLatJ2000Deg": -0.181499,
+          "helioRangeAu": 19.4762100222
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 199.997524,
+          "subLatDeg": 74.128422,
+          "northPoleAngleDeg": 286.4187,
+          "rangeAu": 20.3613134269116,
+          "lightTimeMin": 169.33988009,
+          "eclipticLonDeg": 63.2068973,
+          "eclipticLatDeg": -0.1571422,
+          "helioLonJ2000Deg": 61.491097,
+          "helioLatJ2000Deg": -0.167601,
+          "helioRangeAu": 19.45962232324
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 343.770352,
+          "subLatDeg": 76.145859,
+          "northPoleAngleDeg": 291.6484,
+          "rangeAu": 19.0070595453001,
+          "lightTimeMin": 158.076894,
+          "eclipticLonDeg": 65.6338827,
+          "eclipticLatDeg": -0.1536861,
+          "helioLonJ2000Deg": 62.560802,
+          "helioLatJ2000Deg": -0.153484,
+          "helioRangeAu": 19.44273917157
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 185.541933,
+          "subLatDeg": 75.961808,
+          "northPoleAngleDeg": 291.1161,
+          "rangeAu": 18.8035009119529,
+          "lightTimeMin": 156.38394847,
+          "eclipticLonDeg": 65.4108995,
+          "eclipticLatDeg": -0.1531237,
+          "helioLonJ2000Deg": 62.721434,
+          "helioLatJ2000Deg": -0.151359,
+          "helioRangeAu": 19.44019531163
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 192.905424,
+          "subLatDeg": 75.68497,
+          "northPoleAngleDeg": 290.3398,
+          "rangeAu": 18.6480005755405,
+          "lightTimeMin": 155.0906916,
+          "eclipticLonDeg": 65.0763538,
+          "eclipticLatDeg": -0.1523376,
+          "helioLonJ2000Deg": 62.869458,
+          "helioLatJ2000Deg": -0.1494,
+          "helioRangeAu": 19.43784903629
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 15.949768,
+          "subLatDeg": 73.62091,
+          "northPoleAngleDeg": 285.386,
+          "rangeAu": 18.547555191277,
+          "lightTimeMin": 154.25531282,
+          "eclipticLonDeg": 62.6392957,
+          "eclipticLatDeg": -0.1430507,
+          "helioLonJ2000Deg": 63.588749,
+          "helioLatJ2000Deg": -0.139866,
+          "helioRangeAu": 19.42641680764
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 242.846844,
+          "subLatDeg": 1.064716,
+          "northPoleAngleDeg": 105.2085,
+          "rangeAu": 18.6425451528197,
+          "lightTimeMin": 155.04532024,
+          "eclipticLonDeg": 167.2258175,
+          "eclipticLatDeg": 0.7539504,
+          "helioLonJ2000Deg": 169.470397,
+          "helioLatJ2000Deg": 0.768094,
+          "helioRangeAu": 18.28311067515
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 230.009942,
+          "subLatDeg": 29.637665,
+          "northPoleAngleDeg": 256.0366,
+          "rangeAu": 19.8333037212068,
+          "lightTimeMin": 164.94855727,
+          "eclipticLonDeg": 17.7436852,
+          "eclipticLatDeg": -0.6291498,
+          "helioLonJ2000Deg": 19.148427,
+          "helioLatJ2000Deg": -0.630178,
+          "helioRangeAu": 19.97062509767
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 329.960735,
+          "subLatDeg": -79.705538,
+          "lightTimeMin": 157.95890356
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 267.433054,
+          "subLatDeg": 70.921312,
+          "lightTimeMin": 157.29871929
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 268.389995,
+          "subLatDeg": -31.986921,
+          "lightTimeMin": 165.70296671
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 274.831447,
+          "subLatDeg": 71.291897,
+          "lightTimeMin": 162.09069051
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 163.754511,
+          "subLatDeg": 72.051076,
+          "lightTimeMin": 161.97868723
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 200.549187,
+          "subLatDeg": 72.969896,
+          "lightTimeMin": 161.84072727
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 337.615414,
+          "subLatDeg": 73.886719,
+          "lightTimeMin": 161.70032545
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 179.531133,
+          "subLatDeg": 74.023188,
+          "lightTimeMin": 161.67917045
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 187.36931,
+          "subLatDeg": 74.148649,
+          "lightTimeMin": 161.6596583
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 15.605704,
+          "subLatDeg": 74.754058,
+          "lightTimeMin": 161.56457958
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 244.268593,
+          "subLatDeg": -2.000926,
+          "lightTimeMin": 152.05600109
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 230.097629,
+          "subLatDeg": 32.472588,
+          "lightTimeMin": 166.09062221
+        }
+      ]
+    },
+    "neptune": {
+      "command": "899",
+      "frame": "IAU_NEPTUNE",
+      "longitude": "west",
+      "radiiKm": [
+        24764,
+        24764,
+        24341
+      ],
+      "geocentric": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 52.371369,
+          "subLatDeg": 18.814104,
+          "northPoleAngleDeg": 335.061,
+          "rangeAu": 28.9225197002309,
+          "lightTimeMin": 240.54126152,
+          "eclipticLonDeg": 85.2050798,
+          "eclipticLatDeg": -1.2994826,
+          "helioLonJ2000Deg": 87.094402,
+          "helioLatJ2000Deg": -1.245122,
+          "helioRangeAu": 29.87107943299
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 343.769345,
+          "subLatDeg": 14.009966,
+          "northPoleAngleDeg": 46.8522,
+          "rangeAu": 30.1740114573308,
+          "lightTimeMin": 250.94960108,
+          "eclipticLonDeg": 194.5820223,
+          "eclipticLatDeg": 1.6183964,
+          "helioLonJ2000Deg": 197.186414,
+          "helioLatJ2000Deg": 1.609242,
+          "helioRangeAu": 30.29674480292
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 56.925608,
+          "subLatDeg": -28.401366,
+          "northPoleAngleDeg": 354.9652,
+          "rangeAu": 31.024498221734,
+          "lightTimeMin": 258.02288381,
+          "eclipticLonDeg": 303.1930007,
+          "eclipticLatDeg": 0.2350026,
+          "helioLonJ2000Deg": 303.927798,
+          "helioLatJ2000Deg": 0.242038,
+          "helioRangeAu": 30.12058818217
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 311.318616,
+          "subLatDeg": -20.786131,
+          "northPoleAngleDeg": 317.3937,
+          "rangeAu": 30.1035848218206,
+          "lightTimeMin": 250.36388061,
+          "eclipticLonDeg": 359.5424109,
+          "eclipticLatDeg": -1.3307097,
+          "helioLonJ2000Deg": 1.01052,
+          "helioLatJ2000Deg": -1.340697,
+          "helioRangeAu": 29.88474313658
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 349.68619,
+          "subLatDeg": -20.043217,
+          "northPoleAngleDeg": 316.6025,
+          "rangeAu": 30.877977698494,
+          "lightTimeMin": 256.80430978,
+          "eclipticLonDeg": 1.7735019,
+          "eclipticLatDeg": -1.3060722,
+          "helioLonJ2000Deg": 1.470264,
+          "helioLatJ2000Deg": -1.349933,
+          "helioRangeAu": 29.88282274111
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 132.918354,
+          "subLatDeg": -19.075526,
+          "northPoleAngleDeg": 315.7829,
+          "rangeAu": 29.9402414769023,
+          "lightTimeMin": 249.00539544,
+          "eclipticLonDeg": 4.3472773,
+          "eclipticLatDeg": -1.35782,
+          "helioLonJ2000Deg": 2.031841,
+          "helioLatJ2000Deg": -1.3611,
+          "helioRangeAu": 29.88051866766
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 57.143134,
+          "subLatDeg": -19.478482,
+          "northPoleAngleDeg": 316.1875,
+          "rangeAu": 28.8763622881575,
+          "lightTimeMin": 240.15738203,
+          "eclipticLonDeg": 3.0836717,
+          "eclipticLatDeg": -1.4193714,
+          "helioLonJ2000Deg": 2.598941,
+          "helioLatJ2000Deg": -1.372245,
+          "helioRangeAu": 29.87825027856
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 100.853748,
+          "subLatDeg": -19.616404,
+          "northPoleAngleDeg": 316.3133,
+          "rangeAu": 28.896701273483,
+          "lightTimeMin": 240.32653621,
+          "eclipticLonDeg": 2.6962608,
+          "eclipticLatDeg": -1.4200988,
+          "helioLonJ2000Deg": 2.684014,
+          "helioLatJ2000Deg": -1.373904,
+          "helioRangeAu": 29.87791333107
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 266.097128,
+          "subLatDeg": -19.738046,
+          "northPoleAngleDeg": 316.4243,
+          "rangeAu": 28.9671630488687,
+          "lightTimeMin": 240.91254893,
+          "eclipticLonDeg": 2.3590253,
+          "eclipticLatDeg": -1.4182312,
+          "helioLonJ2000Deg": 2.762391,
+          "helioLatJ2000Deg": -1.375431,
+          "helioRangeAu": 29.87760474364
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 84.504868,
+          "subLatDeg": -20.024912,
+          "northPoleAngleDeg": 316.6651,
+          "rangeAu": 29.8319501691019,
+          "lightTimeMin": 248.10476409,
+          "eclipticLonDeg": 1.6359864,
+          "eclipticLatDeg": -1.3844797,
+          "helioLonJ2000Deg": 3.142987,
+          "helioLatJ2000Deg": -1.382811,
+          "helioRangeAu": 29.87611744047
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 176.056964,
+          "subLatDeg": 5.209156,
+          "northPoleAngleDeg": 318.5897,
+          "rangeAu": 30.5640947329056,
+          "lightTimeMin": 254.19382476,
+          "eclipticLonDeg": 57.398103,
+          "eclipticLatDeg": -1.6727962,
+          "helioLonJ2000Deg": 55.385165,
+          "helioLatJ2000Deg": -1.720594,
+          "helioRangeAu": 29.81674107136
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 243.679281,
+          "subLatDeg": 25.155517,
+          "northPoleAngleDeg": 36.3271,
+          "rangeAu": 29.7970259914354,
+          "lightTimeMin": 247.81430856,
+          "eclipticLonDeg": 167.2868565,
+          "eclipticLatDeg": 0.964217,
+          "helioLonJ2000Deg": 164.179584,
+          "helioLatJ2000Deg": 0.948824,
+          "helioRangeAu": 30.20774153663
+        }
+      ],
+      "fromSun": [
+        {
+          "t": "1900-01-01T12:00:00.000Z",
+          "horizonsDate": "1900-Jan-01 12:00:00.000",
+          "subLonDeg": 48.901558,
+          "subLatDeg": 18.975438,
+          "lightTimeMin": 248.43018184
+        },
+        {
+          "t": "1950-07-01T00:00:00.000Z",
+          "horizonsDate": "1950-Jul-01 00:00:00.000",
+          "subLonDeg": 341.593804,
+          "subLatDeg": 13.202319,
+          "lightTimeMin": 251.9703299
+        },
+        {
+          "t": "2000-01-01T12:00:00.000Z",
+          "horizonsDate": "2000-Jan-01 12:00:00.000",
+          "subLonDeg": 58.940906,
+          "subLatDeg": -28.512807,
+          "lightTimeMin": 250.50526526
+        },
+        {
+          "t": "2026-01-03T16:42:00.000Z",
+          "horizonsDate": "2026-Jan-03 16:42:00.000",
+          "subLonDeg": 310.170914,
+          "subLatDeg": -20.149246,
+          "lightTimeMin": 248.54380895
+        },
+        {
+          "t": "2026-03-20T14:46:00.000Z",
+          "horizonsDate": "2026-Mar-20 14:46:00.000",
+          "subLonDeg": 352.753266,
+          "subLatDeg": -19.980477,
+          "lightTimeMin": 248.52783705
+        },
+        {
+          "t": "2026-06-21T08:25:00.000Z",
+          "horizonsDate": "2026-Jun-21 08:25:00.000",
+          "subLonDeg": 135.02881,
+          "subLatDeg": -19.772763,
+          "lightTimeMin": 248.50867702
+        },
+        {
+          "t": "2026-09-23T00:06:00.000Z",
+          "horizonsDate": "2026-Sep-23 00:06:00.000",
+          "subLonDeg": 54.096554,
+          "subLatDeg": -19.561256,
+          "lightTimeMin": 248.48981375
+        },
+        {
+          "t": "2026-10-07T01:19:00.000Z",
+          "horizonsDate": "2026-Oct-07 01:19:00.000",
+          "subLonDeg": 97.403609,
+          "subLatDeg": -19.529376,
+          "lightTimeMin": 248.48701151
+        },
+        {
+          "t": "2026-10-20T00:00:00.000Z",
+          "horizonsDate": "2026-Oct-20 00:00:00.000",
+          "subLonDeg": 262.4571,
+          "subLatDeg": -19.499969,
+          "lightTimeMin": 248.48444507
+        },
+        {
+          "t": "2026-12-21T20:50:00.000Z",
+          "horizonsDate": "2026-Dec-21 20:50:00.000",
+          "subLonDeg": 82.493548,
+          "subLatDeg": -19.356692,
+          "lightTimeMin": 248.4720754
+        },
+        {
+          "t": "2050-07-01T00:00:00.000Z",
+          "horizonsDate": "2050-Jul-01 00:00:00.000",
+          "subLonDeg": 179.566375,
+          "subLatDeg": 4.603528,
+          "lightTimeMin": 247.97825814
+        },
+        {
+          "t": "2100-01-01T12:00:00.000Z",
+          "horizonsDate": "2100-Jan-01 12:00:00.000",
+          "subLonDeg": 244.221163,
+          "subLatDeg": 25.560519,
+          "lightTimeMin": 251.23011486
+        }
+      ]
+    }
+  }
+}

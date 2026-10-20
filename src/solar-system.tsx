@@ -29,13 +29,13 @@ import earthTextureLow from './assets/earth-day-2k.jpg'
 import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
 import {
-  EARTH_AXIAL_TILT,
   EARTH_ORBIT_RADIUS,
   earthPosition,
   earthSpin,
+  earthTilt,
   moonPosition,
   moonOrientation,
-  sunSpin,
+  sunOrientation,
 } from './ephemeris'
 
 const EARTH_DIAMETER = sceneRadius(12742000)
@@ -104,7 +104,7 @@ export default function SolarSystem({
         ref={sun}
         focusKey="sun"
         positionAt={sunPositionAt}
-        spinAt={sunSpin}
+        orientationAt={sunOrientation}
         interactive={interactive}
       >
         <SunRenderer
@@ -120,7 +120,7 @@ export default function SolarSystem({
         diameter={EARTH_DIAMETER}
         positionAt={earthPosition}
         spinAt={earthSpin}
-        axialTilt={EARTH_AXIAL_TILT}
+        tiltAt={earthTilt}
         interactive={interactive}
       >
         {/* From the surface, the ground stands in for the globe. */}

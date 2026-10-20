@@ -3,21 +3,21 @@ import {
   Body,
   EclipticGeoMoon,
   KM_PER_AU,
-  MakeTime,
   RotateVector,
   RotationAxis,
+  Rotation_EQD_ECT,
   Rotation_EQJ_ECT,
   SiderealTime,
   SunPosition,
   Vector,
 } from 'astronomy-engine'
+import './delta-t'
 
 export type Vec3 = [number, number, number]
 
 export const EARTH_ORBIT_RADIUS = 50
-// Mean obliquity at J2000. The true obliquity of date drifts about
-// −0.013°/century and nods ±0.003°, so a fixed tilt is within ~0.012° over
-// 1950–2100.
+// Mean obliquity at J2000, for nominal use; the Earth's mesh tilts by
+// earthTilt(t).
 export const EARTH_AXIAL_TILT = 23.4393
 export const MOON_UNITS_PER_KM = 10 / 384400
 const DEG = Math.PI / 180
@@ -35,6 +35,17 @@ export function earthPosition(t: number): Vec3 {
     0,
     -EARTH_ORBIT_RADIUS * Math.sin(a),
   ]
+}
+
+// True obliquity of date, degrees: the tilt of the true equator of date to
+// the scene's true ecliptic of date (the frame the Sun, Moon, planets and
+// stars are placed in). Tilting about scene X keeps the true equinox at
+// λ = 0°, where earthSpin measures from. It drifts −0.013°/century and nods
+// ±0.003°, which the J2000 constant missed by up to 0.016° by 1900.
+export function earthTilt(t: number): number {
+  // The equator's pole (0, 0, 1) rotated into the ecliptic is rot[2].
+  const { rot } = Rotation_EQD_ECT(new Date(t))
+  return Math.atan2(rot[2][1], rot[2][2]) / DEG
 }
 
 export function earthSpin(t: number): number {
@@ -105,9 +116,12 @@ export function moonOrientation(t: number): THREE.Quaternion {
   return axisOrientation(Body.Moon, t, moonQuaternion)
 }
 
-// IAU prime meridian angle W for the Sun.
-export function sunSpin(t: number): number {
-  return (84.176 + 14.1844 * MakeTime(new Date(t)).tt) * DEG
+const sunQuaternion = new THREE.Quaternion()
+
+// The Sun's IAU pole (7.25° from the ecliptic's) and prime meridian, like
+// moonOrientation. Returns a shared quaternion, valid until the next call.
+export function sunOrientation(t: number): THREE.Quaternion {
+  return axisOrientation(Body.Sun, t, sunQuaternion)
 }
 
 // Local midnight, to match the locale-formatted clock.
