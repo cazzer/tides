@@ -17,6 +17,7 @@ import {
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 import { calculateLocationAndRotationForLatLng } from './utils'
+import type { SkyLook } from './sky-look'
 
 const DEG = Math.PI / 180
 
@@ -139,15 +140,18 @@ const right = new THREE.Vector3()
 const basis = new THREE.Matrix4()
 
 // Stands `observer` (in the Earth's frame) at lat/lon on the surface, level
-// with the horizon: +Y is the zenith and −Z faces surfaceView(lat).azimuth.
-// `camera`, its child, is pitched up to surfaceView(lat).altitude, so its up
-// axis leans toward the zenith and the horizon stays level on screen.
+// with the horizon: +Y is the zenith and −Z faces surfaceView(lat).azimuth,
+// so the ground it carries stays put while the view turns. `camera`, its
+// child, turns to `look` (by default surfaceView(lat)): heading about the
+// zenith, then pitch about its own right axis, never roll, so the horizon
+// stays level on screen.
 export function placeSurfaceCamera(
   observer: THREE.Object3D,
   camera: THREE.Object3D,
   lat: number,
   lon: number,
-  radius: number
+  radius: number,
+  look: SkyLook = surfaceView(lat)
 ) {
   const { position } = calculateLocationAndRotationForLatLng(lat, lon, radius)
   observer.position.set(position.x, position.y, position.z)
@@ -167,15 +171,14 @@ export function placeSurfaceCamera(
   )
   east.crossVectors(north, zenith)
 
-  const { azimuth, altitude } = surfaceView(lat)
-  const a = azimuth * DEG
+  const a = surfaceView(lat).azimuth * DEG
   ahead.copy(north).multiplyScalar(Math.cos(a)).addScaledVector(east, Math.sin(a))
   right.crossVectors(ahead, zenith)
   basis.makeBasis(right, zenith, ahead.negate())
   observer.quaternion.setFromRotationMatrix(basis)
 
   camera.position.set(0, 0, 0)
-  camera.rotation.set(altitude * DEG, 0, 0)
+  camera.rotation.set(look.altitude * DEG, a - look.azimuth * DEG, 0, 'YXZ')
 }
 
 const eye = new THREE.Vector3()

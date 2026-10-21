@@ -135,7 +135,8 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
         surfaceCameraRef.current,
         lat,
         lon,
-        diameter
+        diameter,
+        useStore.getState().skyLook ?? undefined
       )
     }
   })

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Object3D } from 'three'
+import type { SkyLook } from './sky-look'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
 export const PLANET_FOCUS_KEYS = [
@@ -164,6 +165,9 @@ export const useStore = create<{
   showLunar: boolean
   showZodiac: boolean
   location: Location | null
+  /** Where View from Earth looks; null until dragged, facing the equator.
+   * Written per pointer move: read it with getState() inside useFrame. */
+  skyLook: SkyLook | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
@@ -200,6 +204,7 @@ export const useStore = create<{
   showLunar: getInitialShowLunar(),
   showZodiac: getInitialShowZodiac(),
   location: getInitialLocation(),
+  skyLook: null,
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),

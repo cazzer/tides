@@ -106,6 +106,47 @@ describe('Sun and Moon discs in View from Earth (tides-39l)', () => {
   }
 })
 
+describe('Sun and Moon discs while looking around (tides-2dp)', () => {
+  const looks = [
+    { azimuth: 0, altitude: 0 },
+    { azimuth: 75, altitude: 25 },
+    { azimuth: 200, altitude: 60 },
+    { azimuth: 300, altitude: -5 },
+    { azimuth: 120, altitude: 90 },
+  ]
+  for (const body of bodies) {
+    it(`stay round at any heading and pitch, up to the zenith: ${body.name}`, () => {
+      const { width, height } = panels[0]
+      for (const look of looks) {
+        const earth = new THREE.Object3D()
+        const observer = new THREE.Object3D()
+        const camera = new THREE.PerspectiveCamera(SURFACE_FOV, width / height, 0.01, 1000)
+        earth.add(observer)
+        observer.add(camera)
+        placeSurfaceCamera(observer, camera, 51.5, 20, 2.95, look)
+        earth.updateMatrixWorld()
+
+        const eye = camera.getWorldPosition(new THREE.Vector3())
+        // The zenith itself, plus spots across the panel.
+        const zenith = observer.localToWorld(new THREE.Vector3(0, body.distance, 0))
+        const centers = [
+          zenith,
+          ...spots.map(([x, y]) =>
+            new THREE.Vector3(x, y, 0.5).unproject(camera).sub(eye).setLength(body.distance).add(eye)
+          ),
+        ]
+        for (const center of centers) {
+          const toward = center.clone().sub(eye).normalize()
+          if (toward.dot(camera.getWorldDirection(new THREE.Vector3())) < 0.3) continue
+          const squash = roundDiscMatrix(new THREE.Matrix4(), center, camera)
+          const after = discExtents(camera, width, height, center, body.radius, squash)
+          expect(Math.abs(after.radial / after.across - 1)).toBeLessThan(0.02)
+        }
+      }
+    })
+  }
+})
+
 describe('the horizon in View from Earth (tides-c7d)', () => {
   it(`crosses every panel level, ${HORIZON_ROW * 100}% of the way down`, () => {
     for (const lat of [-89.9, -30, 0, 51.5, 89.9]) {
