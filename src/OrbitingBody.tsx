@@ -12,6 +12,7 @@ import {
   DEFAULT_SURFACE_LOCATION,
   GROUND_RADIUS,
   SURFACE_FOV,
+  groundGeometry,
   horizonGlowGeometry,
   placeSurfaceCamera,
 } from './sky'
@@ -66,6 +67,12 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     [surfaceCamera]
   )
   useEffect(() => () => horizonGlow?.dispose(), [horizonGlow])
+  // Inside the glow's radius, so the hills hide the glow behind them.
+  const ground = useMemo(
+    () => (surfaceCamera ? groundGeometry(GROUND_RADIUS * 0.98) : undefined),
+    [surfaceCamera]
+  )
+  useEffect(() => () => ground?.dispose(), [ground])
   const flagRef = useRef<THREE.Group>(null)
   const set = useThree((s) => s.set)
   const location = useStore((s) => s.location)
@@ -168,14 +175,11 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
               fov={SURFACE_FOV}
               ref={surfaceCameraRef}
             />
-            {surfaceCamera && (
-              <mesh>
-                <sphereGeometry
-                  args={[GROUND_RADIUS, 64, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2]}
-                />
+            {ground && (
+              <mesh geometry={ground}>
                 <meshBasicMaterial
-                  color="#161a14"
-                  side={THREE.BackSide}
+                  vertexColors
+                  side={THREE.DoubleSide}
                 />
               </mesh>
             )}

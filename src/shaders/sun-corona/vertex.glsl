@@ -1,27 +1,41 @@
-// A camera-facing quad around the Sun, sized from its silhouette so the glow
-// hugs the limb in the ortho main view and the perspective panels alike.
+// A quad around the Sun in the image plane, sized and centred on its
+// silhouette so the glow hugs the limb in the ortho main view and the
+// perspective panels alike.
 uniform float uRadius;
 varying vec2 vPlane;
 varying float vOuter;
 
 void main() {
   vec3 c = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-  vec3 w = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-c);
-  // Screen up, unless the Sun sits straight above or below the eye.
-  vec3 up = abs(w.y) > 0.999 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
-  vec3 u = normalize(cross(up, w));
-  vec3 v = cross(w, u);
-
-  // Apparent radius: in perspective the silhouette is the tangent circle,
-  // a little wider than the radius at the centre's depth.
-  float limb = isOrthographic
-    ? uRadius
-    : uRadius * inversesqrt(max(1.0 - uRadius * uRadius / dot(c, c), 1e-4));
+  vec2 centre = c.xy;
+  float limb = uRadius;
+  float push = 1.0;
+  if (!isOrthographic) {
+    // Off axis by theta, View from Earth squashes the Sun by cos(theta) to keep
+    // its disc round (RoundSkyDiscs); elsewhere the Sun sits near the axis,
+    // where the squash is ~1. The silhouette then spans tan(theta -+ beta) out
+    // from the centre of view, with tan(beta) = cos(theta) tan(alpha) and alpha
+    // the Sun's angular radius.
+    float depth = max(-c.z, 1e-4);
+    float off = length(c.xy) / depth;
+    float theta = atan(off);
+    float tanAlpha = uRadius * inversesqrt(max(dot(c, c) - uRadius * uRadius, 1e-8));
+    float beta = atan(cos(theta) * tanAlpha);
+    float far = tan(min(theta + beta, 1.55));
+    float near = tan(theta - beta);
+    vec2 outward = off > 1e-6 ? c.xy / (off * depth) : vec2(1.0, 0.0);
+    centre = outward * 0.5 * (far + near) * depth;
+    limb = 0.5 * (far - near) * depth;
+    // Parallel to the screen through the centre, the quad would cut in front
+    // of the limb nearest the centre of view; slid back along the eye's rays
+    // behind the whole Sun, it projects the same and stays hidden there.
+    push = (depth + uRadius) / depth;
+  }
   // Perspective panels show the Sun ~43x real size; a 3R corona would fill
   // the sky.
   float outer = isOrthographic ? 3.0 : 1.6;
 
   vPlane = position.xy * outer;
   vOuter = outer;
-  gl_Position = projectionMatrix * vec4(c + (u * vPlane.x + v * vPlane.y) * limb, 1.0);
+  gl_Position = projectionMatrix * vec4(vec3(centre + vPlane * limb, c.z) * push, 1.0);
 }
