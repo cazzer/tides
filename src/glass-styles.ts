@@ -1,13 +1,16 @@
-// Copies of the dock's glass styles in controls.tsx, which can't be imported
-// from there without a circular import (tides follow-up: dedupe).
+// The dock's glass styles, shared by the dock (controls.tsx), its toggle and
+// the date picker.
+
+/** The phone breakpoint, as in index.css. */
+export const PHONE = '@media (max-width: 600px)'
 
 export const glassButton = `
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: var(--dock-button-size, 40px);
+  height: var(--dock-button-size, 40px);
   padding: 0;
   margin: 0;
   background: transparent;
