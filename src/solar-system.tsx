@@ -19,6 +19,7 @@ import { LunarRing } from './LunarRing'
 import { ZodiacRing } from './ZodiacRing'
 import { PlanetBodies } from './PlanetBodies'
 import { PlanetOrbits } from './planet-orbits'
+import { RoundSkyDiscs } from './RoundSkyDiscs'
 import { sceneRadius } from './planets'
 import { useStore } from './store'
 import {
@@ -65,6 +66,7 @@ export default function SolarSystem({
   const sun = useRef(null)
   const earth = useRef(null)
   const moon = useRef(null)
+  const skyDiscs = useMemo(() => [sun, moon], [])
   const location = useStore((s) => s.location)
   const showPlanets = useStore((s) => s.showPlanets)
   const showConstellations = useStore((s) => s.showConstellations)
@@ -110,6 +112,7 @@ export default function SolarSystem({
       />
       {earthCamera && showConstellations && showConstellationArt && <ConstellationArt />}
       {earthCamera && showConstellations && <ConstellationLines />}
+      {earthCamera && <RoundSkyDiscs bodies={skyDiscs} />}
 
       <OrbitingBody
         ref={sun}

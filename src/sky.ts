@@ -35,19 +35,76 @@ export const MOON_SKY_DISTANCE = 10
 // The surface camera's vertical field of view, in degrees.
 export const SURFACE_FOV = 90
 
-// Face the equator, tilted halfway up to where the celestial equator crosses
-// the meridian (at most 30°), so the horizon stays in view below the Sun's and
-// Moon's daily arcs. Degrees; azimuth from north through east.
+// Where the horizon crosses the panel, as a fraction of its height from the
+// top: low, leaving a sliver of ground under the sky (tides-c7d).
+export const HORIZON_ROW = 0.9
+
+// Face the equator, tilted up so the horizon sits at HORIZON_ROW whatever the
+// panel's shape (the FOV is vertical). Degrees; azimuth from north through east.
 export function surfaceView(lat: number) {
+  const halfFov = (SURFACE_FOV / 2) * DEG
   return {
     azimuth: lat < 0 ? 0 : 180,
-    altitude: Math.min(30, (90 - Math.abs(lat)) / 2),
+    altitude: Math.atan((2 * HORIZON_ROW - 1) * Math.tan(halfFov)) / DEG,
   }
 }
 
 // Below the horizon: a dome around the observer, inside the sky Moon's
 // distance, so whatever has set is hidden.
 export const GROUND_RADIUS = 5
+
+// Hills on the horizon, at most this high (degrees): enough to read as a
+// landscape, low enough that rising and setting stay close to the true times.
+export const HILL_HEIGHT = 1.5
+const GROUND_NEAR = new THREE.Color(0.014, 0.017, 0.016)
+const GROUND_FAR = new THREE.Color(0.003, 0.004, 0.003)
+
+// A seamless, fixed ridgeline around the observer, 0..HILL_HEIGHT degrees.
+export function hillAltitude(azimuth: number) {
+  const ridge =
+    0.5 +
+    0.28 * Math.sin(3 * azimuth + 1) +
+    0.14 * Math.sin(7 * azimuth + 2.3) +
+    0.08 * Math.sin(19 * azimuth + 4.1)
+  return HILL_HEIGHT * THREE.MathUtils.clamp(ridge, 0, 1)
+}
+
+// The ground as a bowl of the observer's sky (+Y the zenith) rising to the
+// hills, coloured per vertex: hazy toward the horizon, dark underfoot. Drawn a
+// little inside the horizon glow so the hills cover it.
+export function groundGeometry(radius: number) {
+  const columns = 256
+  const rows = [0, -1, -3, -8, -20, -45, -90]
+  const positions: number[] = []
+  const colors: number[] = []
+  const color = new THREE.Color()
+  for (let i = 0; i <= columns; i += 1) {
+    const azimuth = (i / columns) * Math.PI * 2
+    for (const [row, below] of rows.entries()) {
+      const altitude = (row === 0 ? hillAltitude(azimuth) : below) * DEG
+      positions.push(
+        radius * Math.cos(altitude) * Math.sin(azimuth),
+        radius * Math.sin(altitude),
+        -radius * Math.cos(altitude) * Math.cos(azimuth)
+      )
+      const depth = Math.min(1, Math.abs(Math.min(below, 0)) / 20)
+      color.copy(GROUND_NEAR).lerp(GROUND_FAR, depth).toArray(colors, colors.length)
+    }
+  }
+  const index: number[] = []
+  for (let i = 0; i < columns; i += 1) {
+    for (let j = 0; j < rows.length - 1; j += 1) {
+      const a = i * rows.length + j
+      const b = a + rows.length
+      index.push(a, b, a + 1, b, b + 1, a + 1)
+    }
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+  geometry.setIndex(index)
+  return geometry
+}
 
 // Airglow and scattered light brighten the sky toward the horizon; without it
 // the ground met the stars on a hard, featureless edge. Added over the sky, so
@@ -119,6 +176,41 @@ export function placeSurfaceCamera(
 
   camera.position.set(0, 0, 0)
   camera.rotation.set(altitude * DEG, 0, 0)
+}
+
+const eye = new THREE.Vector3()
+const forward = new THREE.Vector3()
+const outward = new THREE.Vector3()
+const toCenter = new THREE.Vector3()
+
+// A sphere θ off a perspective camera's axis projects as an ellipse stretched
+// away from the centre of view by about 1/cos θ: 1.4x at the side of the 90°
+// surface view (tides-39l). Squashing the body by cos θ along that direction,
+// about its centre, keeps the disc round (within 2% to 70° off axis for the
+// Sun's ~11°) and on its true direction. Writes the world-space squash into
+// `target`.
+export function roundDiscMatrix(
+  target: THREE.Matrix4,
+  center: THREE.Vector3,
+  camera: THREE.Object3D
+) {
+  camera.getWorldPosition(eye)
+  camera.getWorldDirection(forward)
+  toCenter.subVectors(center, eye).normalize()
+  const cos = toCenter.dot(forward)
+  outward.copy(toCenter).multiplyScalar(cos).sub(forward)
+  if (cos <= 0 || outward.lengthSq() < 1e-12) return target.identity()
+  outward.normalize()
+
+  const s = cos - 1
+  const { x, y, z } = outward
+  const along = outward.dot(center) * s
+  return target.set(
+    1 + s * x * x, s * x * y, s * x * z, -along * x,
+    s * y * x, 1 + s * y * y, s * y * z, -along * y,
+    s * z * x, s * z * y, 1 + s * z * z, -along * z,
+    0, 0, 0, 1
+  )
 }
 
 const earth = new THREE.Object3D()
