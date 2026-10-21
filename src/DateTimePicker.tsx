@@ -24,6 +24,7 @@ import {
 } from './datetime-mask'
 import { monthGrid, type DayCell } from './month-grid'
 import { glassButton, glassPanel } from './glass-styles'
+import { opensDownOnPhone } from './dock-disclosure'
 
 type Month = { year: number; month: number }
 type Day = { year: number; month: number; day: number }
@@ -628,7 +629,7 @@ const VisuallyHidden = styled.span`
   white-space: nowrap;
 `
 
-// Opens upward over the bar, like the dock's menus, and scrolls if the view is short.
+// Opens away from the bar, like the dock's menus, and scrolls if the view is short.
 const Panel = styled.div`
   position: absolute;
   bottom: 100%;
@@ -646,6 +647,7 @@ const Panel = styled.div`
   z-index: 100;
   color: rgba(255, 255, 255, 0.85);
   ${glassPanel}
+  ${opensDownOnPhone}
 `
 
 const CalendarHeader = styled.div`

@@ -18,6 +18,24 @@ body,
   --dock-height: 52px;
   --dock-bottom: max(12px, env(safe-area-inset-bottom));
   --dock-clearance: calc(var(--dock-bottom) + var(--dock-height) + 8px);
+  /* On a phone the dock folds into a button at the top-left instead. */
+  --dock-top: max(8px, env(safe-area-inset-top));
+  --dock-inset-left: max(8px, env(safe-area-inset-left));
+  --dock-inset-right: max(8px, env(safe-area-inset-right));
+}
+
+@media only screen and (max-width: 600px) {
+  :root {
+    --dock-clearance: max(6px, env(safe-area-inset-bottom));
+  }
+}
+
+/* The dock's buttons (src/glass-styles.ts) shrink to fit a 320px phone. */
+@media only screen and (max-width: 360px) {
+  :root {
+    --dock-height: 48px;
+    --dock-button-size: 36px;
+  }
 }
 
 body {
@@ -313,6 +331,14 @@ body {
 
 .planet-attribution.below {
   top: calc(30px + env(safe-area-inset-top));
+}
+
+/* Clear the folded dock's button in the top-left. */
+@media only screen and (max-width: 600px) {
+  .cloud-attribution,
+  .planet-attribution {
+    max-width: calc(100% - 16px - var(--dock-inset-left) - var(--dock-height));
+  }
 }
 
 .planet-attribution a {

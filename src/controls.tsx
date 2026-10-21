@@ -21,6 +21,9 @@ import {
 } from './store'
 import { truncateLatLon } from './utils'
 import DateTimePicker from './DateTimePicker'
+import { glassButton, glassPanel, PHONE } from './glass-styles'
+import DockToggle from './DockToggle'
+import { opensDownOnPhone, phoneDock, useDockDisclosure } from './dock-disclosure'
 
 const FOCUS_OPTIONS: {
   value: CameraFocus
@@ -55,6 +58,7 @@ export default function Controls() {
   const showPlanets = useStore((s) => s.showPlanets)
   const [locationError, setLocationError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { dockRef, dockProps, toggleProps } = useDockDisclosure()
 
   const handleLocationClick = () => {
     setLocationError(null)
@@ -75,7 +79,11 @@ export default function Controls() {
   }
 
   return (
-    <ControlContainer>
+    <ControlContainer
+      ref={dockRef}
+      {...dockProps}
+    >
+      <DockToggle {...toggleProps} />
       <FocusDropdown
         value={cameraFocus}
         onChange={setCameraFocus}
@@ -305,6 +313,17 @@ function SegmentedControl<T extends string>({
   )
 }
 
+/** Escape closes an open menu, and only the menu: the phone dock stays open. */
+function closeOnEscape(
+  e: React.KeyboardEvent,
+  open: boolean,
+  setOpen: (open: boolean) => void
+) {
+  if (e.key !== 'Escape' || !open) return
+  e.preventDefault()
+  setOpen(false)
+}
+
 const SPEED_OPTIONS = [
   { value: 1, label: 'Real Time' },
   { value: 60 * 60, label: '1 Hour per Second' },
@@ -339,7 +358,10 @@ function SpeedDropdown({
   const label = current?.label ?? 'Real Time'
 
   return (
-    <FocusDropdownWrap ref={ref}>
+    <FocusDropdownWrap
+      ref={ref}
+      onKeyDown={(e) => closeOnEscape(e, open, setOpen)}
+    >
       <FocusTrigger
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -397,7 +419,10 @@ function FocusDropdown({
   const label = current?.title ?? 'Clock'
 
   return (
-    <FocusDropdownWrap ref={ref}>
+    <FocusDropdownWrap
+      ref={ref}
+      onKeyDown={(e) => closeOnEscape(e, open, setOpen)}
+    >
       <FocusTrigger
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -507,37 +532,12 @@ const ControlContainer = styled.section`
   @media (max-width: 360px) {
     gap: 4px;
   }
+
+  ${phoneDock}
 `
 
 const FocusDropdownWrap = styled.div`
   position: relative;
-`
-
-const glassButton = `
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.78);
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
-
-  &:hover {
-    background-color: rgba(255, 255, 255, 0.14);
-    color: #fff;
-  }
-
-  &:focus-visible {
-    outline: 2px solid #4c9ffe;
-    outline-offset: 1px;
-  }
 `
 
 const FocusTrigger = styled.button`
@@ -567,16 +567,6 @@ const IconButton = styled.button`
   ${glassButton}
 `
 
-const glassPanel = `
-  background-color: rgba(30, 30, 34, 0.55);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 10px 30px rgba(0, 0, 0, 0.4);
-`
-
 // Floats above the bar so a long message never widens it past a phone screen.
 const LocationError = styled.span`
   position: absolute;
@@ -590,6 +580,11 @@ const LocationError = styled.span`
   color: #f99;
   border-radius: 12px;
   ${glassPanel}
+
+  ${PHONE} {
+    top: calc(100% + 8px);
+    bottom: auto;
+  }
 `
 
 // Opens upward: the bar sits on the bottom edge. The margin clears the bar's rim.
@@ -607,6 +602,7 @@ const FocusMenu = styled.div`
   border-radius: 18px;
   z-index: 100;
   ${glassPanel}
+  ${opensDownOnPhone}
 
   /* Scroll rather than squash the options when the menu is taller than the view. */
   & > * {
