@@ -154,6 +154,15 @@ const PLANETS_OPTIONS: { value: 'off' | 'on'; label: string }[] = [
   { value: 'on', label: 'Show' },
 ]
 
+const CONSTELLATIONS_OPTIONS: { value: 'off' | 'lines' | 'art'; label: string }[] = [
+  { value: 'off', label: 'Hide' },
+  { value: 'lines', label: 'Lines' },
+  { value: 'art', label: 'Lines + art' },
+]
+
+const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/skycultures/modern'
+const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
+
 /** A native modal dialog: showModal() supplies the focus trap, Esc, and focus return. */
 function SettingsDialog({
   open,
@@ -175,6 +184,8 @@ function SettingsDialog({
   const constellationsHintId = useId()
   const showConstellations = useStore((s) => s.showConstellations)
   const setShowConstellations = useStore((s) => s.setShowConstellations)
+  const showConstellationArt = useStore((s) => s.showConstellationArt)
+  const setShowConstellationArt = useStore((s) => s.setShowConstellationArt)
   const showLunar = useStore((s) => s.showLunar)
   const setShowLunar = useStore((s) => s.setShowLunar)
   const showZodiac = useStore((s) => s.showZodiac)
@@ -253,12 +264,32 @@ function SettingsDialog({
           <SettingLegend>Constellations</SettingLegend>
           <SegmentedControl
             name="constellations"
-            value={showConstellations ? 'on' : 'off'}
-            options={PLANETS_OPTIONS}
-            onChange={(value) => setShowConstellations(value === 'on')}
+            value={showConstellations ? (showConstellationArt ? 'art' : 'lines') : 'off'}
+            options={CONSTELLATIONS_OPTIONS}
+            onChange={(value) => {
+              setShowConstellations(value !== 'off')
+              setShowConstellationArt(value === 'art')
+            }}
           />
           <SettingHint id={constellationsHintId}>
             Lines for the major constellations in the View from Earth panel.
+            Art by Johan Meuris for{' '}
+            <a
+              href={STELLARIUM_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Stellarium
+            </a>{' '}
+            (
+            <a
+              href={FREE_ART_LICENSE_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Free Art License
+            </a>
+            ).
           </SettingHint>
         </SettingGroup>
         <SettingGroup>
@@ -742,6 +773,14 @@ const SettingHint = styled.p`
   margin: 0;
   font-size: 12px;
   color: #888;
+
+  a {
+    color: inherit;
+  }
+
+  a:hover {
+    color: #bbb;
+  }
 `
 
 const Segments = styled.div`

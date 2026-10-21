@@ -41,6 +41,7 @@ export default function App() {
   const layout = useStore((s) => s.layout)
   const showPlanets = useStore((s) => s.showPlanets)
   const showConstellations = useStore((s) => s.showConstellations)
+  const showConstellationArt = useStore((s) => s.showConstellationArt)
   const showLunar = useStore((s) => s.showLunar)
   const showZodiac = useStore((s) => s.showZodiac)
 
@@ -78,7 +79,7 @@ export default function App() {
       params.delete('planets')
     }
     if (showConstellations) {
-      params.set('constellations', '1')
+      params.set('constellations', showConstellationArt ? 'art' : '1')
     } else {
       params.delete('constellations')
     }
@@ -101,7 +102,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showLunar, showZodiac])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {
