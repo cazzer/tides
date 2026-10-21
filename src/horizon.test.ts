@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { airmass, extinction } from './renderers/Starfield'
+import {
+  DRAWN_MAGNITUDE_SCALE,
+  airmass,
+  extinction,
+  starBrightness,
+} from './renderers/Starfield'
 import { HORIZON_GLOW, HORIZON_GLOW_HEIGHT, horizonGlowGeometry } from './sky'
 
 const sinDeg = (deg: number) => Math.sin((deg * Math.PI) / 180)
@@ -12,10 +17,22 @@ describe('star extinction from the surface', () => {
   })
 
   it('fades stars into the horizon instead of cutting them off', () => {
-    // ~1 airmass at 30°, so barely dimmer; nearly gone on the horizon.
-    expect(extinction(sinDeg(30))).toBeGreaterThan(0.75)
+    // ~2 airmasses at 30°, so barely dimmer; mostly gone on the horizon.
+    expect(extinction(sinDeg(30))).toBeGreaterThan(0.9)
     expect(extinction(sinDeg(10))).toBeGreaterThan(extinction(sinDeg(5)))
-    expect(extinction(0)).toBeLessThan(0.001)
+    expect(extinction(0)).toBeLessThan(0.1)
+  })
+
+  it('dims on the drawn magnitude scale, so stars reach the horizon (tides-clo)', () => {
+    // The scale maps the brightness ramp's magnitudes onto drawn flux.
+    const loss = (from: number, to: number) => starBrightness(to) / starBrightness(from)
+    expect(10 ** (-0.4 * DRAWN_MAGNITUDE_SCALE * 7.2)).toBeCloseTo(loss(-1.5, 5.7), 6)
+    // Starting on the floor, as most of the catalogue does, a star keeps about
+    // half its brightness 5° up and a third 3° up. In full flux it kept 9% at
+    // 4°, which went black and left an empty band above the horizon.
+    expect(extinction(sinDeg(5))).toBeGreaterThan(0.45)
+    expect(extinction(sinDeg(3))).toBeGreaterThan(0.3)
+    expect(starBrightness(9)).toBe(starBrightness(5.7))
   })
 })
 

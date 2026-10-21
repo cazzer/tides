@@ -64,10 +64,31 @@ export function centreStarfieldOn(stars: THREE.Object3D, camera: THREE.Object3D)
   stars.updateMatrixWorld()
 }
 
+// Drawn brightness is linear in magnitude, not flux: 1 at magnitude -1.5,
+// down to a floor of 0.1 at 5.7, where the faint ~60% of the catalogue sits.
+const BRIGHTEST_MAGNITUDE = -1.5
+const MAGNITUDES_TO_BLACK = 8
+const BRIGHTNESS_FLOOR = 0.1
+export function starBrightness(vmag: number) {
+  return THREE.MathUtils.clamp(
+    1 - (vmag - BRIGHTEST_MAGNITUDE) / MAGNITUDES_TO_BLACK,
+    BRIGHTNESS_FLOOR,
+    1
+  )
+}
+
+// So the 7.2 magnitudes down to the floor span one decade of drawn brightness,
+// the flux of 2.5. A magnitude lost to the sky dims a drawn star by this much
+// of one: in full, extinction took the floor stars out of the bottom ~10° of
+// sky and left an empty band above the horizon (tides-clo).
+export const DRAWN_MAGNITUDE_SCALE =
+  (2.5 * Math.log10(1 / BRIGHTNESS_FLOOR)) / ((1 - BRIGHTNESS_FLOOR) * MAGNITUDES_TO_BLACK)
+
 // Magnitudes a star loses per airmass through a clear sky (V band). From the
 // surface, stars fade into the horizon rather than running sharp up to the
 // ground, which read as the starfield being cut off.
 export const EXTINCTION_PER_AIRMASS = 0.25
+const DRAWN_EXTINCTION_PER_AIRMASS = EXTINCTION_PER_AIRMASS * DRAWN_MAGNITUDE_SCALE
 
 // Rozenberg's airmass: 1 at the zenith, ~40 (not infinite) at the horizon.
 export function airmass(sinAltitude: number) {
@@ -75,9 +96,9 @@ export function airmass(sinAltitude: number) {
   return 1 / (s + 0.025 * Math.exp(-11 * s))
 }
 
-// Share of a star's zenith brightness left at this altitude.
+// Share of a star's drawn zenith brightness left at this altitude.
 export function extinction(sinAltitude: number) {
-  return 10 ** (-0.4 * EXTINCTION_PER_AIRMASS * (airmass(sinAltitude) - 1))
+  return 10 ** (-0.4 * DRAWN_EXTINCTION_PER_AIRMASS * (airmass(sinAltitude) - 1))
 }
 
 const extinctionVertex = /* glsl */ `
@@ -85,7 +106,7 @@ const extinctionVertex = /* glsl */ `
 if (uExtinction > 0.5) {
   float s = max(dot(normalize(mat3(modelMatrix) * position), uZenith), 0.0);
   float airmass = 1.0 / (s + 0.025 * exp(-11.0 * s));
-  vColor.rgb *= pow(10.0, -0.4 * ${EXTINCTION_PER_AIRMASS.toFixed(3)} * (airmass - 1.0));
+  vColor.rgb *= pow(10.0, -0.4 * ${DRAWN_EXTINCTION_PER_AIRMASS.toFixed(5)} * (airmass - 1.0));
 }
 `
 
@@ -148,7 +169,7 @@ export default function Starfield({
       const b = floatData[baseIndex + 5]
       const vmag = floatData[baseIndex + 6]
 
-      const brightness = THREE.MathUtils.clamp(1 - (vmag + 1.5) / 8, 0.1, 1)
+      const brightness = starBrightness(vmag)
 
       colors[positionIndex] = r * brightness
       colors[positionIndex + 1] = g * brightness
