@@ -18,10 +18,10 @@ import { useStore } from '../store'
 import { constellationArtGeometry } from '../constellationArt'
 
 const ART_COLOR = '#a8bde0'
-const ART_OPACITY = 0.18
+const ART_OPACITY = 0.1
 // Strokes are thresholded here rather than drawn as sampled, so a figure
 // spread over a wide sky keeps thin, crisp lines instead of blurred ones.
-const STROKE_EDGE = 0.6
+const STROKE_EDGE = 0.7
 
 // Additive, so the figures only ever lighten the sky, and fading into the
 // horizon with the same extinction as the stars.
