@@ -3,6 +3,7 @@ import {
   FOCUS_VALUES,
   PLANET_FOCUS_KEYS,
   isPlanetFocus,
+  parseConstellations,
   parseFocus,
   useStore,
 } from './store'
@@ -91,5 +92,14 @@ describe('calendar ring toggles', () => {
     expect(useStore.getState().showZodiac).toBe(true)
     setShowZodiac(false)
     expect(useStore.getState().showZodiac).toBe(false)
+  })
+})
+
+describe('parseConstellations', () => {
+  it('keeps ?constellations=1 as lines only and adds the art with =art', () => {
+    expect(parseConstellations(null)).toEqual({ lines: false, art: false })
+    expect(parseConstellations('1')).toEqual({ lines: true, art: false })
+    expect(parseConstellations('art')).toEqual({ lines: true, art: true })
+    expect(parseConstellations('0')).toEqual({ lines: false, art: false })
   })
 })

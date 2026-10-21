@@ -97,7 +97,17 @@ function getInitialShowPlanets(): boolean {
 
 function getInitialShowConstellations(): boolean {
   if (typeof window === 'undefined') return false
-  return new URLSearchParams(window.location.search).get('constellations') === '1'
+  return parseConstellations(new URLSearchParams(window.location.search).get('constellations')).lines
+}
+
+/** `?constellations=1` is the stick figures; `art` adds the line-art figures. */
+export function parseConstellations(param: string | null) {
+  return { lines: param === '1' || param === 'art', art: param === 'art' }
+}
+
+function getInitialShowConstellationArt(): boolean {
+  if (typeof window === 'undefined') return false
+  return parseConstellations(new URLSearchParams(window.location.search).get('constellations')).art
 }
 
 function getInitialShowLunar(): boolean {
@@ -148,6 +158,8 @@ export const useStore = create<{
   showPlanets: boolean
   /** Major constellation stick figures, drawn in View from Earth only. */
   showConstellations: boolean
+  /** Line-art figures under the stick figures (tides-sie); only drawn with them. */
+  showConstellationArt: boolean
   /** Moon-phase and zodiac rings around the month ring (tides-28u). */
   showLunar: boolean
   showZodiac: boolean
@@ -161,6 +173,7 @@ export const useStore = create<{
   setLayout: (layout: Layout) => void
   setShowPlanets: (showPlanets: boolean) => void
   setShowConstellations: (showConstellations: boolean) => void
+  setShowConstellationArt: (showConstellationArt: boolean) => void
   setShowLunar: (showLunar: boolean) => void
   setShowZodiac: (showZodiac: boolean) => void
   setLocation: (location: Location | null) => void
@@ -183,6 +196,7 @@ export const useStore = create<{
   layout: getInitialLayout(),
   showPlanets: getInitialShowPlanets(),
   showConstellations: getInitialShowConstellations(),
+  showConstellationArt: getInitialShowConstellationArt(),
   showLunar: getInitialShowLunar(),
   showZodiac: getInitialShowZodiac(),
   location: getInitialLocation(),
@@ -199,6 +213,7 @@ export const useStore = create<{
       cameraFocus: !showPlanets && isPlanetFocus(s.cameraFocus) ? 'sun' : s.cameraFocus,
     })),
   setShowConstellations: (showConstellations: boolean) => set({ showConstellations }),
+  setShowConstellationArt: (showConstellationArt: boolean) => set({ showConstellationArt }),
   setShowLunar: (showLunar: boolean) => set({ showLunar }),
   setShowZodiac: (showZodiac: boolean) => set({ showZodiac }),
   setLocation: (location: Location | null) =>

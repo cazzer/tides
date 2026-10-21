@@ -109,7 +109,7 @@ function spreadIntoShell(stars: StarGeometry, uDepth: { value: number }, amount:
 }
 
 // The surface camera's parent is the observer, whose +Y is the zenith.
-function zenithOf(camera: THREE.Camera, target: THREE.Vector3) {
+export function zenithOf(camera: THREE.Camera, target: THREE.Vector3) {
   return camera.parent
     ? target.set(0, 1, 0).transformDirection(camera.parent.matrixWorld)
     : target.set(0, 1, 0)

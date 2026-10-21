@@ -9,6 +9,7 @@ import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
 import ConstellationLines from './renderers/ConstellationLines'
+import ConstellationArt from './renderers/ConstellationArt'
 import SceneLights from './renderers/SceneLights'
 import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
@@ -67,6 +68,7 @@ export default function SolarSystem({
   const location = useStore((s) => s.location)
   const showPlanets = useStore((s) => s.showPlanets)
   const showConstellations = useStore((s) => s.showConstellations)
+  const showConstellationArt = useStore((s) => s.showConstellationArt)
   const showLunar = useStore((s) => s.showLunar)
   const showZodiac = useStore((s) => s.showZodiac)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
@@ -106,6 +108,7 @@ export default function SolarSystem({
         radius={mainViewRange(interactive && showPlanets).starRadius}
         depth={interactive}
       />
+      {earthCamera && showConstellations && showConstellationArt && <ConstellationArt />}
       {earthCamera && showConstellations && <ConstellationLines />}
 
       <OrbitingBody
