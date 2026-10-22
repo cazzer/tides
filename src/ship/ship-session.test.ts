@@ -6,13 +6,20 @@ import { createShipBodies, updateShipBodies } from './ship-bodies'
 import {
   enterShipPatch,
   exitShipPatch,
+  framingDistance,
+  narrowHalfFov,
   persistedView,
   SHIP_FAR,
   SHIP_STAR_RADIUS,
+  shipFar,
   shipNear,
+  SPAWN_EARTH_SHARE,
+  SPAWN_MIN_DISTANCE,
+  SPAWN_MOON_GAP,
   spawnPose,
   type ShipSessionState,
 } from './ship-session'
+import type { ShipState, Body as FlightBody } from './flight'
 
 // The store also holds a pending date jump, which entry clears.
 type View = ShipSessionState & { jumpDate: Date | null }
@@ -96,56 +103,102 @@ describe('persistedView', () => {
 })
 
 describe('spawnPose', () => {
-  // A year in 11-day steps, so the Moon and the inner planets come round.
+  // A year in 11-day steps, so the Moon and the inner planets come round,
+  // on a laptop and on a 390 × 844 portrait phone.
   const times = Array.from({ length: 34 }, (_, i) => Date.UTC(2026, 0, 1) + i * 11 * 86_400_000)
+  const ASPECTS = { laptop: 16 / 9, phone: 390 / 844 }
+  const cases = times.flatMap((t) =>
+    Object.entries(ASPECTS).map(([screen, aspect]) => ({ t, screen, aspect }))
+  )
 
-  it.each(times)('starts by Earth on the Sun side, facing Earth, clear of everything (%i)', (t) => {
+  function spawnAt(t: number, aspect: number) {
     const bodies = createShipBodies()
     updateShipBodies(bodies, t)
-    const [sun, earth] = bodies
-    const ship = spawnPose(bodies)
+    const byKey = (key: string) => bodies.find((b) => b.key === key)!
+    return { bodies, sun: byKey('sun'), earth: byKey('earth'), moon: byKey('moon'), ship: spawnPose(bodies, aspect) }
+  }
+
+  const gap = (ship: ShipState, body: FlightBody) =>
+    ship.position.distanceTo(body.position) - body.radius
+  const nose = (ship: ShipState) => new THREE.Vector3(0, 0, -1).applyQuaternion(ship.orientation)
+  // Angle off the view axis of a body's far edge, radians.
+  const edgeOffAxis = (ship: ShipState, body: FlightBody) => {
+    const to = body.position.clone().sub(ship.position)
+    return nose(ship).angleTo(to) + Math.asin(body.radius / to.length())
+  }
+
+  it.each(cases)('frames Earth from its day side, nearest bar the Moon ($screen, $t)', ({ t, aspect }) => {
+    const { bodies, sun, earth, moon, ship } = spawnAt(t, aspect)
 
     const fromEarth = ship.position.distanceTo(earth.position)
-    expect(fromEarth).toBeGreaterThan(14)
-    expect(fromEarth).toBeLessThan(25)
-    expect(ship.position.distanceTo(sun.position)).toBeLessThan(
-      earth.position.distanceTo(sun.position)
-    )
+    expect(fromEarth).toBeGreaterThanOrEqual(SPAWN_MIN_DISTANCE - 1e-9)
+    expect(fromEarth).toBeLessThanOrEqual(framingDistance(earth.radius, aspect) + 1e-9)
+    // Earth whole in frame and filling about SPAWN_EARTH_SHARE of the short side.
+    const half = narrowHalfFov(aspect)
+    expect(edgeOffAxis(ship, earth)).toBeLessThan(half)
+    const share = earth.radius / (fromEarth * Math.tan(half))
+    expect(share).toBeGreaterThanOrEqual(SPAWN_EARTH_SHARE - 1e-9)
+    expect(share).toBeLessThan(0.65)
 
-    const nose = new THREE.Vector3(0, 0, -1).applyQuaternion(ship.orientation)
-    const toEarth = earth.position.clone().sub(ship.position).normalize()
-    expect(nose.dot(toEarth)).toBeGreaterThan(0.99)
+    // Day side, off the Sun line (a terminator shows) and above the ecliptic.
+    const toShip = ship.position.clone().sub(earth.position)
+    const toSun = sun.position.clone().sub(earth.position)
+    expect(toShip.angleTo(toSun)).toBeGreaterThan((25 * Math.PI) / 180)
+    expect(toShip.angleTo(toSun)).toBeLessThan((70 * Math.PI) / 180)
+    expect(ship.position.y - earth.position.y).toBeGreaterThan(3)
 
+    // Earth sets the cruise cap: only the Moon may be nearer, and not too near.
     for (const body of bodies) {
-      expect(ship.position.distanceTo(body.position)).toBeGreaterThan(
-        body.radius * COLLISION_MARGIN
-      )
+      if (body === earth) continue
+      if (body === moon) expect(gap(ship, moon)).toBeGreaterThanOrEqual(SPAWN_MOON_GAP)
+      else expect(gap(ship, body)).toBeGreaterThanOrEqual(gap(ship, earth))
     }
+
     expect(ship.velocity.length()).toBe(0)
     expect(ship.angularVelocity.length()).toBe(0)
   })
 
+  it('brings the Moon into frame on most days', () => {
+    for (const aspect of Object.values(ASPECTS)) {
+      const framed = times.filter((t) => {
+        const { moon, ship } = spawnAt(t, aspect)
+        return edgeOffAxis(ship, moon) < narrowHalfFov(aspect)
+      })
+      expect(framed.length / times.length).toBeGreaterThan(0.5)
+    }
+  })
+
+  it('stands further off on a narrow screen', () => {
+    const t = Date.UTC(2026, 9, 22)
+    const laptop = spawnAt(t, ASPECTS.laptop)
+    const phone = spawnAt(t, ASPECTS.phone)
+    expect(phone.ship.position.distanceTo(phone.earth.position)).toBeGreaterThan(
+      laptop.ship.position.distanceTo(laptop.earth.position) * 1.5
+    )
+  })
+
   it('keeps the ship level (up toward ecliptic north)', () => {
-    const bodies = createShipBodies()
-    updateShipBodies(bodies, Date.UTC(2026, 9, 22))
-    const ship = spawnPose(bodies)
+    const { ship } = spawnAt(Date.UTC(2026, 9, 22), ASPECTS.laptop)
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(ship.orientation)
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(ship.orientation)
     expect(right.y).toBeCloseTo(0, 9)
-    expect(up.y).toBeGreaterThan(0.9)
+    expect(up.y).toBeGreaterThan(0)
   })
 
-  it('climbs off the ecliptic when a body crowds the spawn point', () => {
-    const bodies = createShipBodies()
-    updateShipBodies(bodies, Date.UTC(2026, 9, 22))
-    const [sun, earth] = bodies
+  it('keeps Venus further than Earth at its October 2026 inferior conjunction', () => {
+    for (const aspect of Object.values(ASPECTS)) {
+      const { bodies, earth, ship } = spawnAt(Date.UTC(2026, 9, 24), aspect)
+      const venus = bodies.find((b) => b.key === 'venus')!
+      expect(gap(ship, venus)).toBeGreaterThanOrEqual(gap(ship, earth))
+    }
+  })
+
+  it('moves off when a body sits on the spawn point', () => {
+    const { bodies, earth, ship: free } = spawnAt(Date.UTC(2026, 9, 22), ASPECTS.laptop)
     const venus = bodies.find((b) => b.key === 'venus')!
-    const toSun = sun.position.clone().sub(earth.position).normalize()
-    venus.position.copy(earth.position).addScaledVector(toSun, 15)
-    const ship = spawnPose(bodies)
-    expect(ship.position.distanceTo(venus.position)).toBeGreaterThanOrEqual(
-      1.5 * venus.radius
-    )
+    venus.position.copy(free.position)
+    const moved = spawnPose(bodies, ASPECTS.laptop)
+    expect(gap(moved, venus)).toBeGreaterThanOrEqual(gap(moved, earth))
   })
 })
 
@@ -160,12 +213,20 @@ describe('ship camera range', () => {
     }
   })
 
-  it('bounds the near plane', () => {
-    expect(shipNear(Infinity)).toBe(1)
+  it('bounds the near plane, keeping far/near within 8e4 in the system', () => {
+    expect(shipNear(Infinity)).toBe(0.1)
     expect(shipNear(-1)).toBe(0.002)
+    expect(SHIP_FAR / shipNear(Infinity)).toBeLessThanOrEqual(8e4)
   })
 
   it('draws the star sphere inside the far plane', () => {
     expect(SHIP_STAR_RADIUS).toBeLessThan(SHIP_FAR)
+  })
+
+  it('moves the far plane out with the ship past the system', () => {
+    expect(shipFar(0)).toBe(SHIP_FAR)
+    expect(shipFar(3000)).toBe(SHIP_FAR)
+    // Neptune orbits ~325 from the Sun, so it stays inside from anywhere.
+    for (const d of [5000, 1e5, 1e7]) expect(shipFar(d)).toBeGreaterThan(d + 325)
   })
 })

@@ -49,7 +49,6 @@ export default function App() {
   const showLunar = useStore((s) => s.showLunar)
   const showZodiac = useStore((s) => s.showZodiac)
   const shipMode = useStore((s) => s.shipMode)
-  const shipSaved = useStore((s) => s.shipSaved)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
@@ -74,16 +73,9 @@ export default function App() {
       return
     }
     // Ship mode forces planets and speed: the URL keeps the user's own view,
-    // so leaving ship mode leaves it as it was.
-    const view = persistedView({
-      layout,
-      mainPanel,
-      cameraFocus,
-      timeScale,
-      showPlanets,
-      shipMode,
-      shipSaved,
-    })
+    // so leaving ship mode leaves it as it was. The deps below cover it:
+    // shipSaved changes only with shipMode.
+    const view = persistedView(useStore.getState())
     const params = new URLSearchParams(window.location.search)
     params.set('focus', view.cameraFocus)
     params.set('speed', String(view.timeScale))
@@ -124,7 +116,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, shipMode, shipSaved])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, shipMode])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {

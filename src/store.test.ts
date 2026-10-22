@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   FOCUS_VALUES,
   PLANET_FOCUS_KEYS,
@@ -153,6 +153,23 @@ describe('ship mode', () => {
     expect(shipInput.flightAssist).toBe(true)
     expect(getShipTarget()).toBeNull()
     expect(shipTelemetry.speed).toBe(0)
+  })
+
+  it('enters ship mode from ?ship=1 before the first render, saving the URL view', async () => {
+    vi.resetModules()
+    vi.stubGlobal('window', { location: { search: '?ship=1&speed=3600&layout=single' } })
+    try {
+      const { useStore: fresh } = await import('./store')
+      expect(fresh.getState()).toMatchObject({
+        shipMode: true,
+        timeScale: 1,
+        showPlanets: true,
+        shipSaved: { timeScale: 3600, layout: 'single', showPlanets: false },
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
   })
 
   it('ignores a repeated entry and a stray exit', () => {

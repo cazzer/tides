@@ -14,8 +14,10 @@ export function ShipButton() {
       <Button
         type="button"
         onClick={enterShip}
-        aria-label="Fly the ship"
+        aria-label="Enter ship mode"
         title="Fly through the solar system"
+        // ShipView returns focus here on exit.
+        data-ship-button
       >
         <IconRocket
           size={20}
