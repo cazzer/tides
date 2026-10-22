@@ -32,6 +32,7 @@ import {
   nextGibsPatchOrigin,
   type GibsPatchOrigin,
   type GibsPatchTile,
+  type GibsTile,
 } from '../gibs-patch'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 import type { MaterialPatch } from './eclipseShadow'
@@ -95,7 +96,7 @@ uniform float uGibsActive;
 
 // A slot's fade-in, for unwrapped tile coordinates.
 float gibsMask(ivec2 tile) {
-  return texelFetch(uGibsMask, ((tile % ${side}) + ${side}) % ${side}, 0).r;
+  return texelFetch(uGibsMask, tile & ${side - 1}, 0).r;
 }
 `
 
@@ -131,8 +132,12 @@ if (uGibsActive > 0.5) {
       * mix(1.0, gibsMask(cell + ivec2(0, toward.y)), ramp.y)
       * mix(1.0, gibsMask(cell + toward), ramp.x * ramp.y);
     float lat = (vMapUv.y - 0.5) * 180.0;
+    // Faded over the last mip before the day map resolves as much, so the
+    // ground detail's octaves come back gradually (the cut-off is in uv, so
+    // off the equator it falls inside the detail's range).
     gibsCover = mask * smoothstep(0.0, ${f(EDGE_TILES)}, gibsEdge)
-      * (1.0 - smoothstep(${f(POLE_SMOOTH_FROM)}, ${f(POLE_SMOOTH_TO)}, abs(lat)));
+      * (1.0 - smoothstep(${f(POLE_SMOOTH_FROM)}, ${f(POLE_SMOOTH_TO)}, abs(lat)))
+      * (1.0 - smoothstep(gibsMapLod - 1.0, gibsMapLod, gibsPixelLod));
     if (gibsCover > 0.0) {
       vec2 st = q / GIBS_SIDE;
       vec2 gx = gibsDx / GIBS_SIDE;
@@ -207,8 +212,13 @@ export function createGibsPatch(side: number): GibsPatch {
     uGibsOrigin: { value: new THREE.Vector2() },
     uGibsActive: { value: 0 },
   }
+  // In range (allocated on the first tile, so offline holds no texture).
+  let active = false
   let target: THREE.WebGLRenderTarget | null = null
   let origin: GibsPatchOrigin | null = null
+  let centre: GibsTile | null = null
+  // The patch's tiles, nearest the ship first, for the current origin and centre.
+  let tiles: GibsPatchTile[] = []
   let slots: Slot[] = Array.from({ length: side * side }, () => ({ state: 'empty' }))
   let inFlight = 0
   // Bumped by release, so loads it orphaned drop their bitmaps.
@@ -216,6 +226,23 @@ export function createGibsPatch(side: number): GibsPatch {
 
   const local = new THREE.Vector3()
   const at = new THREE.Vector2()
+
+  function createTarget(gl: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
+    const created = new THREE.WebGLRenderTarget(side * GIBS_TILE_PX, side * GIBS_TILE_PX, {
+      colorSpace: THREE.SRGBColorSpace,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+      magFilter: THREE.LinearFilter,
+      wrapS: THREE.RepeatWrapping,
+      wrapT: THREE.RepeatWrapping,
+      anisotropy: gl.capabilities.getMaxAnisotropy(),
+      depthBuffer: false,
+    })
+    gl.initRenderTarget(created)
+    uniforms.uGibsPatch.value = created.texture
+    uniforms.uGibsActive.value = 1
+    return created
+  }
 
   function release() {
     generation++
@@ -225,14 +252,17 @@ export function createGibsPatch(side: number): GibsPatch {
     mask.needsUpdate = true
     target?.dispose()
     target = null
+    active = false
     origin = null
+    centre = null
+    tiles = []
     inFlight = 0
     uniforms.uGibsPatch.value = null
     uniforms.uGibsActive.value = 0
     setShown(false)
   }
 
-  function load(index: number, tile: GibsPatchTile) {
+  function load(index: number, tile: GibsPatchTile, now: number) {
     const loadedIn = generation
     slots[index] = { state: 'loading', tile }
     inFlight++
@@ -255,7 +285,7 @@ export function createGibsPatch(side: number): GibsPatch {
           warned = true
           const slot = slots[index]
           if (slot.state === 'loading' && slot.tile === tile) {
-            slots[index] = { state: 'failed', tile, retryAt: performance.now() + RETRY_MS }
+            slots[index] = { state: 'failed', tile, retryAt: now + RETRY_MS }
           }
         }
       )
@@ -264,36 +294,26 @@ export function createGibsPatch(side: number): GibsPatch {
   function update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number) {
     ground.worldToLocal(local.copy(camera.position))
     const gap = local.length() / radius - 1
-    if (target ? gap > GIBS_PATCH_RELEASE : gap > GIBS_PATCH_RANGE) {
-      if (target) release()
+    if (active ? gap > GIBS_PATCH_RELEASE : gap > GIBS_PATCH_RANGE) {
+      if (active) release()
       return
     }
-    if (!target) {
-      target = new THREE.WebGLRenderTarget(side * GIBS_TILE_PX, side * GIBS_TILE_PX, {
-        colorSpace: THREE.SRGBColorSpace,
-        generateMipmaps: true,
-        minFilter: THREE.LinearMipmapLinearFilter,
-        magFilter: THREE.LinearFilter,
-        wrapS: THREE.RepeatWrapping,
-        wrapT: THREE.RepeatWrapping,
-        anisotropy: gl.capabilities.getMaxAnisotropy(),
-        depthBuffer: false,
-      })
-      gl.initRenderTarget(target)
-      uniforms.uGibsPatch.value = target.texture
-      uniforms.uGibsActive.value = 1
-    }
+    active = true
 
     // The sub-point, as the day map's coordinate (SphereGeometry's uv).
     local.normalize()
     at.set(Math.atan2(local.z, -local.x) / (2 * Math.PI), 0.5 + Math.asin(local.y) / Math.PI)
-    const centre = gibsTileAt(at.x, at.y)
-    const next = nextGibsPatchOrigin(centre, side, origin)
+    const under = gibsTileAt(at.x, at.y)
+    const next = nextGibsPatchOrigin(under, side, origin)
     let maskChanged = false
+    if (next !== origin || under.row !== centre?.row || under.col !== centre.col) {
+      centre = under
+      tiles = gibsPatchTiles(next, side, under)
+    }
     if (next !== origin) {
       origin = next
       uniforms.uGibsOrigin.value.set(next.col, next.row)
-      for (const tile of gibsPatchTiles(next, side, centre)) {
+      for (const tile of tiles) {
         const slot = slots[tile.slot]
         if (slot.state !== 'empty' && slot.tile.url === tile.url) continue
         if (slot.state === 'ready') slot.bitmap.close()
@@ -304,27 +324,29 @@ export function createGibsPatch(side: number): GibsPatch {
     }
 
     // Fetch the nearest missing tiles first.
-    if (inFlight < MAX_IN_FLIGHT) {
-      for (const tile of gibsPatchTiles(origin, side, centre)) {
-        if (inFlight >= MAX_IN_FLIGHT) break
-        const slot = slots[tile.slot]
-        if (slot.state === 'empty' || (slot.state === 'failed' && now >= slot.retryAt)) load(tile.slot, tile)
-      }
+    for (const tile of tiles) {
+      if (inFlight >= MAX_IN_FLIGHT) break
+      const slot = slots[tile.slot]
+      if (slot.state === 'empty' || (slot.state === 'failed' && now >= slot.retryAt)) load(tile.slot, tile, now)
     }
 
     // Straight into the slot: three uploads a never-used texture's image with
     // texSubImage2D. The mips are rebuilt once, with the frame's last.
-    const ready = slots.flatMap((slot, i) => (slot.state === 'ready' ? [i] : [])).slice(0, UPLOADS_PER_FRAME)
-    ready.forEach((i, k) => {
+    _ready.length = 0
+    for (let i = 0; i < slots.length && _ready.length < UPLOADS_PER_FRAME; i++) {
+      if (slots[i].state === 'ready') _ready.push(i)
+    }
+    _ready.forEach((i, k) => {
       const slot = slots[i]
-      if (slot.state !== 'ready' || !target) return
-      target.texture.generateMipmaps = k === ready.length - 1
+      if (slot.state !== 'ready') return
+      target ??= createTarget(gl)
+      target.texture.generateMipmaps = k === _ready.length - 1
       _offset.set((slot.tile.col % side) * GIBS_TILE_PX, (slot.tile.row % side) * GIBS_TILE_PX)
       gl.copyTextureToTexture(new THREE.Texture(slot.bitmap), target.texture, null, _offset)
+      target.texture.generateMipmaps = true
       slot.bitmap.close()
       slots[i] = { state: 'shown', tile: slot.tile, since: now }
     })
-    target.texture.generateMipmaps = true
 
     let shownAny = false
     slots.forEach((slot, i) => {
@@ -362,6 +384,7 @@ export function createGibsPatch(side: number): GibsPatch {
 }
 
 const _offset = new THREE.Vector2()
+const _ready: number[] = []
 
 /**
  * The patch for the ground mesh in `ground` (local sphere of `radius`): in
@@ -377,6 +400,13 @@ export function useGibsPatch(ground: RefObject<THREE.Object3D | null>, radius: n
   )
   const patch = useMemo(() => createGibsPatch(side), [side])
   useEffect(() => () => patch.release(), [patch])
+  // A restored context has lost the texture (as for the cloud blend).
+  useEffect(() => {
+    const canvas = gl.domElement
+    const restart = () => patch.release()
+    canvas.addEventListener('webglcontextrestored', restart)
+    return () => canvas.removeEventListener('webglcontextrestored', restart)
+  }, [gl, patch])
   useFrame(({ camera, gl }) => {
     if (ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
   })

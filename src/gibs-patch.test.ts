@@ -44,7 +44,25 @@ describe('GIBS patch placement', () => {
     expect(nextGibsPatchOrigin({ row: 19, col: 39 }, 8, start)).toBe(start)
     expect(nextGibsPatchOrigin({ row: 20, col: 40 }, 8, start)).toBe(start)
     expect(nextGibsPatchOrigin({ row: 20, col: 41 }, 8, start)).toEqual({ row: 16, col: 37 })
-    expect(nextGibsPatchOrigin({ row: 18, col: 40 }, 8, start)).toEqual({ row: 14, col: 36 })
+    expect(nextGibsPatchOrigin({ row: 21, col: 40 }, 8, start)).toEqual({ row: 17, col: 36 })
+  })
+
+  it('moves a tile at a time going west and north too, and a jitter back does not move it', () => {
+    const start = { row: 16, col: 36 }
+    const west = nextGibsPatchOrigin({ row: 20, col: 38 }, 8, start)
+    expect(west).toEqual({ row: 16, col: 35 })
+    expect(nextGibsPatchOrigin({ row: 20, col: 39 }, 8, west)).toBe(west)
+    const north = nextGibsPatchOrigin({ row: 18, col: 40 }, 8, start)
+    expect(north).toEqual({ row: 15, col: 36 })
+    expect(nextGibsPatchOrigin({ row: 19, col: 40 }, 8, north)).toBe(north)
+    // Westward across the antimeridian, the short way round.
+    expect(nextGibsPatchOrigin({ row: 40, col: 159 }, 8, { row: 36, col: 157 })).toEqual({ row: 36, col: 156 })
+    // A jump far from the patch still lands the ship in its middle.
+    const far = nextGibsPatchOrigin({ row: 60, col: 100 }, 8, start)
+    expect(100 - far.col).toBeGreaterThanOrEqual(3)
+    expect(100 - far.col).toBeLessThanOrEqual(4)
+    expect(60 - far.row).toBeGreaterThanOrEqual(3)
+    expect(60 - far.row).toBeLessThanOrEqual(4)
   })
 
   it('wraps across the antimeridian and stops at the poles', () => {

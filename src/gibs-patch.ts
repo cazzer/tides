@@ -57,9 +57,9 @@ const wrapCol = (col: number) => ((col % GIBS_COLS) + GIBS_COLS) % GIBS_COLS
 
 /**
  * Where the patch sits for the ship over `tile`: unchanged while the tile is
- * one of the patch's middle two columns and rows, so it moves a tile at a
- * time; else centred on it. Near a pole it stops at the pole rather than
- * run past it.
+ * one of the patch's middle two columns and rows, else moved the least that
+ * puts it back in them (a tile a step, either way); centred on it at first.
+ * Near a pole it stops at the pole rather than run past it.
  */
 export function nextGibsPatchOrigin(
   tile: GibsTile,
@@ -68,14 +68,14 @@ export function nextGibsPatchOrigin(
 ): GibsPatchOrigin {
   const half = side / 2
   const rowFor = (row: number) => Math.min(GIBS_ROWS - side, Math.max(0, row))
-  if (current) {
-    const dc = wrapCol(tile.col - current.col)
-    const dr = tile.row - current.row
-    // Or held against a pole.
-    const rowKept = (dr >= half - 1 && dr <= half) || rowFor(tile.row - half) === current.row
-    if (dc >= half - 1 && dc <= half && rowKept) return current
-  }
-  return { row: rowFor(tile.row - half), col: wrapCol(tile.col - half) }
+  if (!current) return { row: rowFor(tile.row - half), col: wrapCol(tile.col - half) }
+  // The tile's offset into the patch, columns signed the short way round.
+  const dc = wrapCol(tile.col - current.col + GIBS_COLS / 2) - GIBS_COLS / 2
+  const dr = tile.row - current.row
+  const shift = (d: number) => (d < half - 1 ? d - (half - 1) : d > half ? d - half : 0)
+  const col = wrapCol(current.col + shift(dc))
+  const row = rowFor(current.row + shift(dr))
+  return col === current.col && row === current.row ? current : { row, col }
 }
 
 export interface GibsPatchTile extends GibsTile {
