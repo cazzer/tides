@@ -24,11 +24,14 @@ import { PLANET_KEYS } from '../planets'
 import { useStore } from '../store'
 import {
   AU_RINGS,
+  RING_TEXT_OFFSET,
+  clearRingLabels,
   drawnRings,
+  publishRingLabelBounds,
+  publishRingLabels,
   ringArrays,
   ringLabel,
-  ringLabelAngles,
-  ringLabelPosition,
+  ringLabelPositions,
 } from './ecliptic-grid'
 import { worldUnitsPerPixel } from './pixel-scale'
 import type { SystemAidProps } from './types'
@@ -44,9 +47,6 @@ export const RING_LABEL_OPACITY = 0.7 // [TUNE]
  * phone, and small beside the planet labels.
  */
 export const RING_LABEL_PX = 13 // [TUNE]
-// The label starts just off its ring, up and to the right on screen, in ems.
-const TEXT_OFFSET: [number, number, number] = [0.35, 0.15, 0]
-
 const LABEL_BODIES = ['earth', ...PLANET_KEYS] as const
 
 function createRings(distance: (au: number) => number): THREE.BufferGeometry {
@@ -60,7 +60,7 @@ function createRings(distance: (au: number) => number): THREE.BufferGeometry {
 
 // Where the labels go, clear of the planets where they are at mount (they
 // move a few degrees a year at most, outside a fast clock).
-function labelPositions(scale: DistanceScale): [number, number, number][] {
+function labelPositions(scale: DistanceScale): Vec3[] {
   const { distance, positionAt } = positionsFor(scale)
   const t = useStore.getState().timestamp ?? Date.now()
   // Copies: positionAt hands back shared arrays.
@@ -68,8 +68,7 @@ function labelPositions(scale: DistanceScale): [number, number, number][] {
     const [x, y, z] = positionAt[key](t)
     return [x, y, z]
   })
-  const angles = ringLabelAngles(distance, bodies)
-  return AU_RINGS.map((au, i) => ringLabelPosition(distance, au, angles[i]))
+  return ringLabelPositions(distance, bodies)
 }
 
 interface Materials {
@@ -122,6 +121,11 @@ function Rings({ distanceScale }: { distanceScale: DistanceScale }) {
   const labels = useRef<(THREE.Group | null)[]>([])
 
   useEffect(() => () => rings.dispose(), [rings])
+  // BodyLabels keeps names off these labels (ringLabelLayout).
+  useEffect(() => {
+    publishRingLabels(positions, RING_LABEL_PX)
+    return clearRingLabels
+  }, [positions])
   useEffect(
     () => () => {
       materials.ring.dispose()
@@ -152,10 +156,14 @@ function Rings({ distanceScale }: { distanceScale: DistanceScale }) {
             color={GRID_COLOR}
             fillOpacity={RING_LABEL_OPACITY}
             fontSize={1}
-            position={TEXT_OFFSET}
+            position={RING_TEXT_OFFSET as Vec3}
             anchorX="left"
             anchorY="bottom"
             raycast={noRaycast}
+            onSync={(text: { textRenderInfo?: { blockBounds: readonly number[] } }) => {
+              const block = text.textRenderInfo?.blockBounds
+              if (block) publishRingLabelBounds(i, block)
+            }}
           >
             {ringLabel(au)}
           </Text>

@@ -9,7 +9,13 @@ import {
   LABEL_NUDGE,
   RING_DASHES,
   RING_SEGMENTS,
+  RING_TEXT_OFFSET,
+  clearRingLabels,
   drawnRings,
+  publishRingLabelBounds,
+  publishRingLabels,
+  ringLabelLayout,
+  ringLabelPositions,
   ringArrays,
   ringLabel,
   ringLabelAngles,
@@ -122,5 +128,20 @@ describe('ringLabelAngles', () => {
     const angle = Math.PI - 0.01
     const nudged = ringLabelAngles(d, [at(d(5), angle)])
     expect(nudged).toEqual(AU_RINGS.map(() => LABEL_ANGLE))
+  })
+})
+
+describe('ringLabelLayout', () => {
+  it('publishes the anchors ringLabelPositions gives and the text boxes from them', () => {
+    const anchors = ringLabelPositions(sceneDistance, [])
+    expect(anchors[0]).toEqual(ringLabelPosition(sceneDistance, 1))
+    publishRingLabels(anchors, 13)
+    expect(ringLabelLayout.count).toBe(AU_RINGS.length)
+    expect([...ringLabelLayout.anchors.subarray(3, 6)]).toEqual(anchors[1])
+    publishRingLabelBounds(2, [0, 0, 2.5, 1.2])
+    const [dx, dy] = RING_TEXT_OFFSET
+    expect([...ringLabelLayout.bounds.subarray(8, 12)]).toEqual([dx, dy, 2.5 + dx, 1.2 + dy])
+    clearRingLabels()
+    expect(ringLabelLayout.count).toBe(0)
   })
 })
