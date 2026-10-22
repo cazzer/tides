@@ -51,7 +51,6 @@ interface Readouts {
   nearest: HTMLElement | null
   targetCell: HTMLElement | null
   target: HTMLElement | null
-  eta: HTMLElement | null
   markerLabel: HTMLElement | null
   announcer: HTMLElement | null
 }
@@ -77,7 +76,6 @@ export function ShipHud() {
     nearest: null,
     targetCell: null,
     target: null,
-    eta: null,
     markerLabel: null,
     announcer: null,
   })
@@ -122,7 +120,7 @@ export function ShipHud() {
         r.assist.setAttribute('aria-pressed', String(assist))
         set(r.assistValue, assist ? 'On' : 'Off')
       }
-      const nearest = shipTelemetry.nearest.key
+      const nearest = shipNav.nearestKey
       set(r.nearest, nearest ? `${bodyName(nearest)} · ${formatDistance(shipNav.nearestKm)}` : '—')
 
       const target = getShipTarget()
@@ -136,12 +134,34 @@ export function ShipHud() {
         set(r.markerLabel, target ? bodyName(target) : '')
       }
       if (target) {
-        set(r.target, `${bodyName(target)} · ${formatDistance(shipNav.targetKm)}`)
-        set(r.eta, formatEta(shipTelemetry.target?.etaSeconds ?? Infinity))
+        const eta = shipTelemetry.target?.etaSeconds ?? Infinity
+        const range = `${bodyName(target)} · ${formatDistance(shipNav.targetKm)}`
+        // No ETA while not closing on it.
+        set(r.target, Number.isFinite(eta) ? `${range} · ETA ${formatEta(eta)}` : range)
       }
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
+  }, [])
+
+  // The marker's frame loop needs the view's size and the strip's bottom
+  // edge; reading layout every frame would force a reflow each time.
+  const markerLayer = useRef<HTMLDivElement>(null)
+  const strip = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const layer = markerLayer.current
+    const hud = strip.current
+    if (!layer || !hud) return
+    const measure = () => {
+      targetMarker.width = layer.clientWidth
+      targetMarker.height = layer.clientHeight
+      targetMarker.hudBottom = hud.offsetTop + hud.offsetHeight
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(layer)
+    observer.observe(hud)
+    return () => observer.disconnect()
   }, [])
 
   const toggleAssist = () => {
@@ -158,7 +178,10 @@ export function ShipHud() {
 
   return (
     <>
-      <MarkerLayer aria-hidden>
+      <MarkerLayer
+        ref={markerLayer}
+        aria-hidden
+      >
         <Marker
           ref={(element) => {
             targetMarker.current = element
@@ -178,6 +201,11 @@ export function ShipHud() {
       <HelpButton
         type="button"
         onClick={() => setControlsOpen(true)}
+        // A held Enter would repeat into the dialog it opens and press its
+        // button, closing it again.
+        onKeyDown={(event) => {
+          if (event.repeat) event.preventDefault()
+        }}
         aria-label="Show ship controls"
         aria-haspopup="dialog"
         title="Controls"
@@ -188,12 +216,7 @@ export function ShipHud() {
         />
       </HelpButton>
       <Strip
-        ref={(element) => {
-          targetMarker.hud = element
-          return () => {
-            targetMarker.hud = null
-          }
-        }}
+        ref={strip}
         role="group"
         aria-label="Flight instruments"
         data-ship-ui
@@ -221,13 +244,16 @@ export function ShipHud() {
             aria-pressed="true"
             title="Flight assist (Z)"
           >
-            <Label as="span">Flight assist</Label>
-            <Value
-              as="span"
-              ref={bind('assistValue')}
-            >
-              On
-            </Value>
+            <Switch aria-hidden />
+            <AssistText>
+              <Label as="span">Flight assist</Label>
+              <Value
+                as="span"
+                ref={bind('assistValue')}
+              >
+                On
+              </Value>
+            </AssistText>
           </AssistButton>
         </Row>
         <Row>
@@ -240,9 +266,7 @@ export function ShipHud() {
             $grow
             hidden
           >
-            <Label>
-              Target · ETA <span ref={bind('eta')}>—</span>
-            </Label>
+            <Label>Target</Label>
             <TargetLine>
               <Value ref={bind('target')} />
               <ClearButton
@@ -349,8 +373,8 @@ const Cell = styled.div<{ $grow?: boolean }>`
 `
 
 const Label = styled.div`
-  font-size: 10px;
-  line-height: 13px;
+  font-size: 11px;
+  line-height: 14px;
   color: rgba(255, 255, 255, 0.6);
   white-space: nowrap;
 `
@@ -425,32 +449,92 @@ const Reverse = styled.div`
   transform-origin: right;
 `
 
+// A pill with a switch, so it reads as something to tap; off is amber all
+// over, not just in its text.
+const AMBER = '#f0a640'
 const AssistButton = styled.button`
   ${glassButton}
   width: auto;
   height: auto;
-  min-height: 32px;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 0 10px;
+  min-height: 34px;
+  gap: 8px;
+  padding: 2px 10px 2px 8px;
   margin-left: auto;
-  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.08);
   font: inherit;
   color: rgba(255, 255, 255, 0.92);
   line-height: 16px;
   text-align: left;
 
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.16);
+  }
+
   &[aria-pressed='false'] {
-    color: #f0a640;
+    color: ${AMBER};
+    border-color: rgba(240, 166, 64, 0.7);
+    background-color: rgba(240, 166, 64, 0.14);
   }
 
-  &[aria-pressed='false'] > :first-child {
-    color: rgba(240, 166, 64, 0.8);
+  &[aria-pressed='false'] ${Label} {
+    color: rgba(240, 166, 64, 0.85);
   }
 
+  /* Touch keeps :hover after a tap. */
   @media (hover: none) {
     &:hover {
-      background-color: transparent;
+      background-color: rgba(255, 255, 255, 0.08);
+    }
+
+    &[aria-pressed='false']:hover {
+      background-color: rgba(240, 166, 64, 0.14);
+    }
+  }
+`
+
+const AssistText = styled.span`
+  display: flex;
+  flex-direction: column;
+`
+
+const Switch = styled.span`
+  position: relative;
+  flex-shrink: 0;
+  width: 24px;
+  height: 14px;
+  border-radius: 7px;
+  background-color: #4c9ffe;
+  transition: background-color 150ms ease;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 12px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #fff;
+    transition: left 150ms ease;
+  }
+
+  [aria-pressed='false'] > & {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1.5px ${AMBER};
+  }
+
+  [aria-pressed='false'] > &::after {
+    left: 2px;
+    background-color: ${AMBER};
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+
+    &::after {
+      transition: none;
     }
   }
 `

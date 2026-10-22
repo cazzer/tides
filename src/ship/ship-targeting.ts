@@ -177,19 +177,30 @@ export function edgePoint(dirX: number, dirY: number, bounds: Bounds): EdgePoint
  * NaN until measured.
  */
 export interface ShipNav {
+  /** The body with the smallest true range; null until measured. */
+  nearestKey: string | null
   nearestKm: number
   targetKm: number
   kmPerUnit: number
 }
 
-export const shipNav: ShipNav = { nearestKm: NaN, targetKm: NaN, kmPerUnit: NaN }
+export const shipNav: ShipNav = {
+  nearestKey: null,
+  nearestKm: NaN,
+  targetKm: NaN,
+  kmPerUnit: NaN,
+}
 
 /**
  * The marker element (rendered by the HUD) that ShipTargeting positions each
- * frame, straight after the camera moves, so it never lags the scene, and the
- * HUD strip, which an edge arrow keeps below.
+ * frame, straight after the camera moves, so it never lags the scene; and the
+ * size of the layer it sits in and the bottom of the HUD strip (which an edge
+ * arrow keeps below), px, kept by the HUD's ResizeObserver so the frame loop
+ * never reads layout.
  */
-export const targetMarker: { current: HTMLElement | null; hud: HTMLElement | null } = {
-  current: null,
-  hud: null,
-}
+export const targetMarker: {
+  current: HTMLElement | null
+  width: number
+  height: number
+  hudBottom: number
+} = { current: null, width: 0, height: 0, hudBottom: 0 }

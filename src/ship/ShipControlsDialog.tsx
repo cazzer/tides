@@ -1,7 +1,6 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
 import styled from 'styled-components'
 import { IconX } from '@tabler/icons-react'
-import { shipInput } from './ship-input'
 
 const COARSE_POINTER = '(pointer: coarse)'
 
@@ -25,24 +24,51 @@ const Key = styled.kbd`
 `
 
 const KEYBOARD_ROWS: readonly [ReactNode, string][] = [
-  ['Mouse', 'Steer: move away from the centre to turn'],
-  [<><Key>W</Key> <Key>S</Key></>, 'Throttle up and down (it stays set)'],
+  ['Mouse', 'Bring the pointer to the centre, then move away from it to turn: further is faster'],
+  [
+    <>
+      <Key>W</Key> <Key>S</Key>
+    </>,
+    'Throttle up and down. It stays set; S stops at zero, press again to reverse',
+  ],
   [<Key>X</Key>, 'Zero throttle'],
-  [<><Key>A</Key> <Key>D</Key></>, 'Slide left and right'],
-  [<><Key>R</Key> <Key>F</Key></>, 'Slide up and down'],
-  [<><Key>Q</Key> <Key>E</Key></>, 'Roll left and right'],
-  [<Key>L</Key>, 'Level out (hold)'],
+  [
+    <>
+      <Key>A</Key> <Key>D</Key>
+    </>,
+    'Slide left and right',
+  ],
+  [
+    <>
+      <Key>R</Key> <Key>F</Key>
+    </>,
+    'Slide up and down',
+  ],
+  [
+    <>
+      <Key>Q</Key> <Key>E</Key>
+    </>,
+    'Roll left and right',
+  ],
+  [<Key>L</Key>, 'Hold to level out'],
   [<Key>Z</Key>, 'Flight assist on or off'],
-  [<>Click a planet or <Key>T</Key></>, 'Lock a target'],
+  [<Key>T</Key>, "Target what's nearest the centre; press again for the next"],
+  ['Click a planet', 'Target it'],
   [<Key>Esc</Key>, 'Leave the ship'],
 ]
 
 const TOUCH_ROWS: readonly [ReactNode, string][] = [
-  ['Left thumb', 'Steer: drag to pitch and turn'],
-  ['Right thumb', 'Drag up or down to set the throttle (it stays set); left or right to roll'],
-  ['Level', 'Roll back level'],
-  ['FA', 'Flight assist on or off'],
-  ['Tap a planet', 'Lock a target'],
+  ['Left stick', 'Steer: push up to pitch the nose up, sideways to turn'],
+  [
+    'Right pad',
+    'Drag up or down to set the throttle (it holds; a short drag locks to one direction). Left or right to roll (springs back)',
+  ],
+  ['Level', 'Hold to turn upright'],
+  [
+    'Flight assist (top bar)',
+    'Tap to switch: on, the ship slows and straightens itself; off, it drifts',
+  ],
+  ['Tap a planet', 'Target it'],
   ['×', 'Leave the ship'],
 ]
 
@@ -60,34 +86,44 @@ export function ShipControlsDialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   const pressedBackdrop = useRef(false)
+  const done = useRef<HTMLButtonElement>(null)
   const titleId = useId()
   const touch = prefersTouch()
+
+  // A backdrop press must start and end within one opening.
+  const close = useCallback(() => {
+    pressedBackdrop.current = false
+    onClose()
+  }, [onClose])
 
   useEffect(() => {
     const dialog = ref.current
     if (!dialog) return
     if (open && !dialog.open) {
       dialog.showModal()
-      // The mouse's turn demand holds until the pointer next moves, and the
-      // dialog stops it moving over the view: don't spin behind the dialog.
-      shipInput.pitch = 0
-      shipInput.yaw = 0
+      // The main action, not the close button showModal() picks first.
+      done.current?.focus()
     }
     if (!open && dialog.open) dialog.close()
   }, [open])
 
   // Escape closes the dialog only. The capture phase runs before ShipView's
   // window listener, which skips a defaultPrevented Escape instead of exiting.
+  // A key held from opening the dialog repeats into it: ignore it rather than
+  // let it press a button.
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      onClose()
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        close()
+      } else if (event.repeat && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault()
+      }
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [open, onClose])
+  }, [open, close])
 
   const isBackdrop = (e: React.MouseEvent) => e.target === e.currentTarget
 
@@ -95,12 +131,12 @@ export function ShipControlsDialog({
     <Dialog
       ref={ref}
       aria-labelledby={titleId}
-      onClose={onClose}
+      onClose={close}
       onMouseDown={(e) => {
         pressedBackdrop.current = isBackdrop(e)
       }}
       onClick={(e) => {
-        if (pressedBackdrop.current && isBackdrop(e)) onClose()
+        if (pressedBackdrop.current && isBackdrop(e)) close()
       }}
     >
       <Body>
@@ -108,7 +144,7 @@ export function ShipControlsDialog({
           <Title id={titleId}>How to fly</Title>
           <CloseButton
             type="button"
-            onClick={onClose}
+            onClick={close}
             aria-label="Close"
           >
             <IconX
@@ -119,7 +155,9 @@ export function ShipControlsDialog({
         </Header>
         <Intro>
           Speed scales with distance: the further you are from everything, the
-          faster you go. Lock a target and you slow down as you arrive.
+          faster you go, up to many times c (c = speed of light). Lock a target
+          and you slow down as you arrive. Flight assist, on to start, slows
+          and straightens the ship when you let go; off, it drifts.
         </Intro>
         <Table>
           <tbody>
@@ -132,8 +170,9 @@ export function ShipControlsDialog({
           </tbody>
         </Table>
         <Done
+          ref={done}
           type="button"
-          onClick={onClose}
+          onClick={close}
         >
           Fly
         </Done>
@@ -230,7 +269,7 @@ const Table = styled.table`
     font-weight: 500;
     color: #ddd;
     text-align: left;
-    white-space: nowrap;
+    width: 36%;
   }
 `
 

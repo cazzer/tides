@@ -3,8 +3,8 @@ import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useStore } from '../store'
 import { createShipBodies, updateShipBodies } from './ship-bodies'
-import { createShipRanges, measureRanges, trueSeparations } from './ship-distances'
-import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
+import { createShipRanges, measureRanges, trueBodies, type TrueBodies } from './ship-distances'
+import { getShipTarget, setShipTarget } from './ship-telemetry'
 import {
   createScreenBody,
   cycleTarget,
@@ -17,8 +17,9 @@ import {
 
 // As ShipController: at 1× bodies barely move between refreshes.
 const BODY_REFRESH_MS = 250
-// True separations change by a few thousand km a minute at most.
-const SEPARATION_REFRESH_MS = 10_000
+// True positions move tens of km a second; the ranges they give are only
+// as good as the scene's compression anyway.
+const TRUTH_REFRESH_MS = 10_000
 // A press that moves further than this is a drag (steering), not a tap.
 const TAP_SLOP_PX = 8
 // The marker brackets a body this much wider than its disc, and no smaller.
@@ -47,8 +48,8 @@ export function ShipTargeting() {
   const screen = useMemo(() => bodies.map(() => createScreenBody()), [bodies])
   const ranges = useMemo(() => createShipRanges(bodies.length), [bodies])
   const bodiesAt = useRef<number | null>(null)
-  const separations = useRef<Float64Array | null>(null)
-  const separationsAt = useRef<number | null>(null)
+  const truth = useRef<TrueBodies | null>(null)
+  const truthAt = useRef<number | null>(null)
 
   useFrame(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return
@@ -58,34 +59,34 @@ export function ShipTargeting() {
       bodiesAt.current = t
     }
     if (
-      separationsAt.current == null ||
-      Math.abs(t - separationsAt.current) >= SEPARATION_REFRESH_MS
+      truth.current == null ||
+      truthAt.current == null ||
+      Math.abs(t - truthAt.current) >= TRUTH_REFRESH_MS
     ) {
-      separations.current = trueSeparations(
+      truth.current = trueBodies(
         bodies.map((b) => b.key),
         t
       )
-      separationsAt.current = t
+      truthAt.current = t
     }
     camera.updateMatrixWorld()
 
     const target = getShipTarget()
-    measureRanges(camera.position, bodies, separations.current!, ranges)
-    const nearest = bodies.findIndex((b) => b.key === shipTelemetry.nearest.key)
+    measureRanges(camera.position, bodies, truth.current, ranges)
+    const nearest = ranges.nearest
     const targetIndex = bodies.findIndex((b) => b.key === target)
+    shipNav.nearestKey = nearest >= 0 ? bodies[nearest].key : null
     shipNav.nearestKm = nearest >= 0 ? ranges.km[nearest] : NaN
     shipNav.targetKm = targetIndex >= 0 ? ranges.km[targetIndex] : NaN
     shipNav.kmPerUnit = ranges.kmPerUnit
 
     const marker = targetMarker.current
     if (!marker) return
-    const host = marker.parentElement
-    if (targetIndex < 0 || !host) {
+    const { width, height, hudBottom } = targetMarker
+    if (targetIndex < 0 || width === 0 || height === 0) {
       marker.hidden = true
       return
     }
-    const width = host.clientWidth
-    const height = host.clientHeight
     const s = projectBody(bodies[targetIndex], camera, width, height, screen[targetIndex])
     marker.hidden = false
     const onScreen =
@@ -98,8 +99,6 @@ export function ShipTargeting() {
       marker.style.transform = `translate(${s.x - size / 2}px, ${s.y - size / 2}px)`
     } else {
       // Below the HUD strip, which would hide an arrow along the top.
-      const hud = targetMarker.hud
-      const hudBottom = hud ? hud.offsetTop + hud.offsetHeight : 0
       const edge = edgePoint(s.dirX, s.dirY, {
         left: EDGE_INSET_PX,
         top: Math.max(EDGE_INSET_PX, hudBottom + EDGE_INSET_PX),
@@ -115,32 +114,35 @@ export function ShipTargeting() {
 
   // Tap or click on the scene: lock the body under it. A miss keeps the
   // current target (clearing is the HUD's ×), so a stray tap costs nothing.
+  // The body is picked where the press lands: on a desktop the mouse steers,
+  // so the view turns under a held click. It only counts as a tap if the
+  // pointer then lifts nearby. Presses are tracked per pointer, so a tap
+  // works while the other thumb holds the steer stick.
   useEffect(() => {
     if (!surface) return
-    let press: { id: number; x: number; y: number } | null = null
+    const presses = new Map<number, { x: number; y: number; key: string | null }>()
     const onDown = (event: PointerEvent) => {
-      const onControl = (event.target as Element | null)?.closest?.(INTERACTIVE)
-      press =
-        event.isPrimary && event.button === 0 && !onControl
-          ? { id: event.pointerId, x: event.clientX, y: event.clientY }
-          : null
-    }
-    const onUp = (event: PointerEvent) => {
-      const start = press
-      press = null
-      if (!start || start.id !== event.pointerId) return
-      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP_PX) return
+      if (event.button !== 0) return
+      if ((event.target as Element | null)?.closest?.(INTERACTIVE)) return
       if (!(camera instanceof THREE.PerspectiveCamera)) return
       const rect = surface.getBoundingClientRect()
       camera.updateMatrixWorld()
-      bodies.forEach((body, i) =>
-        projectBody(body, camera, rect.width, rect.height, screen[i])
-      )
-      const key = pickBody(screen, event.clientX - rect.left, event.clientY - rect.top)
-      if (key) setShipTarget(key)
+      bodies.forEach((body, i) => projectBody(body, camera, rect.width, rect.height, screen[i]))
+      presses.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+        key: pickBody(screen, event.clientX - rect.left, event.clientY - rect.top),
+      })
     }
-    const onCancel = () => {
-      press = null
+    const onUp = (event: PointerEvent) => {
+      const press = presses.get(event.pointerId)
+      presses.delete(event.pointerId)
+      if (!press?.key) return
+      if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > TAP_SLOP_PX) return
+      setShipTarget(press.key)
+    }
+    const onCancel = (event: PointerEvent) => {
+      presses.delete(event.pointerId)
     }
     surface.addEventListener('pointerdown', onDown)
     surface.addEventListener('pointerup', onUp)
@@ -155,9 +157,10 @@ export function ShipTargeting() {
   // T: the next body out from the screen centre.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 't' && event.key !== 'T') return
+      // By position, as the flight keys (desktop-keys.ts); Shift is allowed.
+      if (event.code !== 'KeyT') return
       if (event.repeat || event.defaultPrevented) return
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      if (event.altKey || event.ctrlKey || event.metaKey) return
       if (document.querySelector('dialog[open]')) return
       const target = event.target as Element | null
       if (target?.closest?.('input, select, textarea, [contenteditable="true"]')) return
