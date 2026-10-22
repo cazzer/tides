@@ -81,7 +81,18 @@ function smoothstep(x: number, edge0: number, edge1: number): number {
   return t * t * (3 - 2 * t)
 }
 
-export function OrbitLabel({ radius }: { radius: number }) {
+/**
+ * Earth's orbit line, with the clock riding it and the month names around it
+ * unless `calendar` is false (ship mode), which leaves just the line: no
+ * 'clock' focus ref is registered and nothing is clickable.
+ */
+export function OrbitLabel({
+  radius,
+  calendar = true,
+}: {
+  radius: number
+  calendar?: boolean
+}) {
   const clockRef = useRef<THREE.Object3D>(null)
   const clockTextRef = useRef<TroikaText>(null)
   const monthRefs = useRef<(TroikaText | null)[]>([])
@@ -90,8 +101,8 @@ export function OrbitLabel({ radius }: { radius: number }) {
   const showPlanets = useStore((s) => s.showPlanets)
 
   useEffect(() => {
-    setPlanet('clock', clockRef)
-  }, [setPlanet])
+    if (calendar) setPlanet('clock', clockRef)
+  }, [setPlanet, calendar])
 
   const lineGeometry = useMemo(() => {
     const eclipsePoints = []
@@ -114,6 +125,7 @@ export function OrbitLabel({ radius }: { radius: number }) {
   const lastSecond = useRef<number | null>(null)
 
   useFrame(() => {
+    if (!calendar) return
     // Unset until SimClock's first frame, which starts from Date.now().
     const timestamp = useStore.getState().timestamp ?? Date.now()
     const angle = earthAngle(timestamp)
@@ -167,49 +179,53 @@ export function OrbitLabel({ radius }: { radius: number }) {
           opacity={0.2}
         />
       </line>
-      <object3D
-        ref={clockRef}
-        userData-focus="clock"
-      />
-      <Text
-        ref={clockTextRef}
-        userData-focus="clock"
-        onClick={handleFocus}
-        material={showPlanets ? clockOverPlanetsMaterial : labelMaterial}
-        renderOrder={showPlanets ? 3 : 0}
-        scale={[2, 2, 2]}
-        color="white" // default
-        // Thin white strokes wash out over the Sun without a dark edge.
-        outlineWidth="6%"
-        outlineColor="black"
-        anchorX="left"
-        anchorY="middle" // default
-        textAlign="left"
-      >
-        {''}
-      </Text>
+      {calendar && (
+        <>
+          <object3D
+            ref={clockRef}
+            userData-focus="clock"
+          />
+          <Text
+            ref={clockTextRef}
+            userData-focus="clock"
+            onClick={handleFocus}
+            material={showPlanets ? clockOverPlanetsMaterial : labelMaterial}
+            renderOrder={showPlanets ? 3 : 0}
+            scale={[2, 2, 2]}
+            color="white" // default
+            // Thin white strokes wash out over the Sun without a dark edge.
+            outlineWidth="6%"
+            outlineColor="black"
+            anchorX="left"
+            anchorY="middle" // default
+            textAlign="left"
+          >
+            {''}
+          </Text>
 
-      {MONTHS.map((month, m) => (
-        <Text
-          key={month}
-          ref={(text: TroikaText | null) => {
-            monthRefs.current[m] = text
-          }}
-          material={labelMaterial}
-          scale={[MONTH_SCALE, MONTH_SCALE, MONTH_SCALE]}
-          color={MONTH_COLOR}
-          anchorX="left"
-          anchorY="middle" // default
-          position={[
-            LABEL_INNER_RADIUS * Math.cos(angles[m]),
-            0,
-            -LABEL_INNER_RADIUS * Math.sin(angles[m]),
-          ]}
-          rotation={[-Math.PI / 2, 0, angles[m]]}
-        >
-          {month}
-        </Text>
-      ))}
+          {MONTHS.map((month, m) => (
+            <Text
+              key={month}
+              ref={(text: TroikaText | null) => {
+                monthRefs.current[m] = text
+              }}
+              material={labelMaterial}
+              scale={[MONTH_SCALE, MONTH_SCALE, MONTH_SCALE]}
+              color={MONTH_COLOR}
+              anchorX="left"
+              anchorY="middle" // default
+              position={[
+                LABEL_INNER_RADIUS * Math.cos(angles[m]),
+                0,
+                -LABEL_INNER_RADIUS * Math.sin(angles[m]),
+              ]}
+              rotation={[-Math.PI / 2, 0, angles[m]]}
+            >
+              {month}
+            </Text>
+          ))}
+        </>
+      )}
     </group>
   )
 }

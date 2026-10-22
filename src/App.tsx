@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { forwardRef, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { forwardRef, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { View, OrbitControls, OrthographicCamera } from '@react-three/drei'
 import useRefs from 'react-use-refs'
@@ -18,6 +18,9 @@ import { CloudAttribution } from './CloudAttribution'
 import { PlanetAttribution } from './PlanetAttribution'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
 import { MAIN_ZOOM, mainViewRange } from './main-view'
+import { ShipView } from './ship/ShipView'
+import { ShipButton } from './ship/ShipButton'
+import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -45,6 +48,8 @@ export default function App() {
   const showConstellationArt = useStore((s) => s.showConstellationArt)
   const showLunar = useStore((s) => s.showLunar)
   const showZodiac = useStore((s) => s.showZodiac)
+  const shipMode = useStore((s) => s.shipMode)
+  const shipSaved = useStore((s) => s.shipSaved)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
@@ -68,13 +73,24 @@ export default function App() {
       isFirstWrite.current = false
       return
     }
+    // Ship mode forces planets and speed: the URL keeps the user's own view,
+    // so leaving ship mode leaves it as it was.
+    const view = persistedView({
+      layout,
+      mainPanel,
+      cameraFocus,
+      timeScale,
+      showPlanets,
+      shipMode,
+      shipSaved,
+    })
     const params = new URLSearchParams(window.location.search)
-    params.set('focus', cameraFocus)
-    params.set('speed', String(timeScale))
-    params.set('panel', mainPanel)
+    params.set('focus', view.cameraFocus)
+    params.set('speed', String(view.timeScale))
+    params.set('panel', view.mainPanel)
     params.set('weather', weatherSource)
-    params.set('layout', layout)
-    if (showPlanets) {
+    params.set('layout', view.layout)
+    if (view.showPlanets) {
       params.set('planets', '1')
     } else {
       params.delete('planets')
@@ -101,9 +117,14 @@ export default function App() {
       params.delete('lat')
       params.delete('lon')
     }
+    if (shipMode) {
+      params.set('ship', '1')
+    } else {
+      params.delete('ship')
+    }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, shipMode, shipSaved])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {
@@ -134,8 +155,8 @@ export default function App() {
   return (
     <div className="container">
       <LoadingOverlay sceneReady={sceneReady} />
-      <Controls />
-      <div className={single ? 'viewports viewports--single' : 'viewports'}>
+      {!shipMode && <Controls />}
+      <div className={single || shipMode ? 'viewports viewports--single' : 'viewports'}>
         <Canvas
           shadows
           eventSource={document.getElementById('root')}
@@ -148,10 +169,25 @@ export default function App() {
           <SimClock running={sceneReady} />
           <View.Port />
         </Canvas>
-        {showPanel('main') && (
+        {shipMode && (
+          <ShipView>
+            <Scene
+              background="black"
+              matrix={matrix}
+              showOrbitLabels
+              calendar={false}
+              starRadius={SHIP_STAR_RADIUS}
+              onReady={handleSceneReady}
+            />
+          </ShipView>
+        )}
+        {!shipMode && showPanel('main') && (
           <Panel
             ref={solarSystemView}
             {...panelProps('main')}
+            overlay={
+              panelProps('main').gridArea === 'main' ? <ShipButton /> : undefined
+            }
           >
             <MainCamera />
             <EnablePinLayerForCamera />
@@ -170,7 +206,7 @@ export default function App() {
             />
           </Panel>
         )}
-        {showPanel('top') && (
+        {!shipMode && showPanel('top') && (
           <Panel
             ref={earthView}
             {...panelProps('top')}
@@ -184,7 +220,7 @@ export default function App() {
             />
           </Panel>
         )}
-        {showPanel('bottom') && (
+        {!shipMode && showPanel('bottom') && (
           <Panel
             ref={moonView}
             {...panelProps('bottom')}
@@ -198,14 +234,14 @@ export default function App() {
           </Panel>
         )}
         {/* Outside the panels, so it (and its focus) survives the view switch. */}
-        {single && (
+        {single && !shipMode && (
           <ViewMenu
             value={mainPanel}
             options={PANEL_OPTIONS}
             onChange={setMainPanel}
           />
         )}
-        {single && mainPanel === 'top' && <CompassButton />}
+        {single && !shipMode && mainPanel === 'top' && <CompassButton />}
         {weatherSource === 'real' && <CloudAttribution />}
         {showPlanets && <PlanetAttribution below={weatherSource === 'real'} />}
       </div>
@@ -367,6 +403,7 @@ const Panel = forwardRef(
       label,
       panelKey,
       onSwap,
+      overlay,
       children,
       ...props
     }: {
@@ -374,6 +411,8 @@ const Panel = forwardRef(
       label?: string
       panelKey: PanelKey
       onSwap: (panelKey: PanelKey) => void
+      /** DOM controls over the view, e.g. the ship button. */
+      overlay?: ReactNode
       children: any
     },
     fref
@@ -406,6 +445,7 @@ const Panel = forwardRef(
             {label}
           </button>
         )}
+        {overlay}
       </div>
     )
   }

@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import type { Object3D } from 'three'
 import type { SkyLook } from './sky-look'
+import { enterShipPatch, exitShipPatch, type ShipSaved } from './ship/ship-session'
+import { resetShipInput } from './ship/ship-input'
+import { resetShipTelemetry, setShipTarget } from './ship/ship-telemetry'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
 export const PLANET_FOCUS_KEYS = [
@@ -96,6 +99,11 @@ function getInitialShowPlanets(): boolean {
   return new URLSearchParams(window.location.search).get('planets') === '1'
 }
 
+function getInitialShipMode(): boolean {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('ship') === '1'
+}
+
 function getInitialShowConstellations(): boolean {
   if (typeof window === 'undefined') return false
   return parseConstellations(new URLSearchParams(window.location.search).get('constellations')).lines
@@ -174,6 +182,12 @@ export const useStore = create<{
   /** Compass mode (tides-d5j): skyLook follows the phone's orientation.
    * Not in the URL; a look-around drag or double tap turns it off. */
   compass: boolean
+  /** First-person ship mode (tides-3bl) fills the screen in place of the panels. */
+  shipMode: boolean
+  /** The view ship mode overrode, restored on exit; null outside it. */
+  shipSaved: ShipSaved | null
+  enterShip: () => void
+  exitShip: () => void
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
@@ -190,7 +204,7 @@ export const useStore = create<{
   jumpDate: Date | null
   jumpDateSetAt: Date | null
   setJumpDate: (date: Date | null) => void
-} & Partial<Record<PlanetFocus, { current: Object3D | null }>>>((set) => ({
+} & Partial<Record<PlanetFocus, { current: Object3D | null }>>>((set, get) => ({
   earth: undefined,
   moon: undefined,
   sun: undefined,
@@ -213,6 +227,22 @@ export const useStore = create<{
   skyLook: null,
   skyFov: null,
   compass: false,
+  shipMode: false,
+  shipSaved: null,
+  enterShip: () => {
+    const patch = enterShipPatch(get())
+    if (!patch) return
+    resetShipInput()
+    set(patch)
+  },
+  exitShip: () => {
+    const patch = exitShipPatch(get())
+    if (!patch) return
+    resetShipInput()
+    resetShipTelemetry()
+    setShipTarget(null)
+    set(patch)
+  },
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),
@@ -239,3 +269,6 @@ export const useStore = create<{
   setJumpDate: (date: Date | null) =>
     set(date ? { jumpDate: date, jumpDateSetAt: new Date() } : { jumpDate: null }),
 }))
+
+// Before the first render, so a ?ship=1 link never flashes the panels.
+if (getInitialShipMode()) useStore.getState().enterShip()

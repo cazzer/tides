@@ -53,11 +53,17 @@ export default function SolarSystem({
   moonCamera = false,
   interactive = false,
   showOrbitLabels,
+  calendar = true,
+  starRadius,
 }: {
   earthCamera?: boolean
   moonCamera?: boolean
   interactive?: boolean
   showOrbitLabels?: boolean
+  /** The clock text and month names on Earth's orbit line (off in ship mode). */
+  calendar?: boolean
+  /** Overrides the starfield's radius (ship mode's camera roams the system). */
+  starRadius?: number
 }) {
   const earthTexture = getEarthTexture()
   const moonTexture = getMoonTexture()
@@ -108,7 +114,7 @@ export default function SolarSystem({
       {/* Only the main view widens for the planets. */}
       <Starfield
         fromSurface={earthCamera}
-        radius={mainViewRange(interactive && showPlanets).starRadius}
+        radius={starRadius ?? mainViewRange(interactive && showPlanets).starRadius}
         depth={interactive}
       />
       {earthCamera && showConstellations && showConstellationArt && <ConstellationArt />}
@@ -149,7 +155,12 @@ export default function SolarSystem({
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
       </OrbitingBody>
-      {showOrbitLabels && <OrbitLabel radius={EARTH_ORBIT_RADIUS} />}
+      {showOrbitLabels && (
+        <OrbitLabel
+          radius={EARTH_ORBIT_RADIUS}
+          calendar={calendar}
+        />
+      )}
       {showOrbitLabels && showLunar && <LunarRing />}
       {showOrbitLabels && showZodiac && <ZodiacRing />}
       <OrbitingBody

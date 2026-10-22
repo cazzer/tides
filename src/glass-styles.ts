@@ -40,3 +40,36 @@ export const glassPanel = `
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
     0 10px 30px rgba(0, 0, 0, 0.4);
 `
+
+/** A quiet round glass button floating over a view, like the compass. */
+export const glassFloatingButton = `
+  ${glassButton}
+  ${glassPanel}
+  position: relative;
+  color: rgba(255, 255, 255, 0.6);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+
+  /* A 48px tap target around the 40px disc. */
+  &::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+  }
+
+  /* Touch keeps :hover after a tap. */
+  @media (hover: none) {
+    &:hover {
+      background-color: rgba(30, 30, 34, 0.55);
+      color: rgba(255, 255, 255, 0.6);
+    }
+  }
+
+  &:focus-visible {
+    outline-color: #fff;
+    outline-offset: 3px;
+  }
+`

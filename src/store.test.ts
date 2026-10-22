@@ -7,6 +7,8 @@ import {
   parseFocus,
   useStore,
 } from './store'
+import { shipInput } from './ship/ship-input'
+import { getShipTarget, setShipTarget, shipTelemetry } from './ship/ship-telemetry'
 
 describe('focus keys', () => {
   it('lists the planets in solar order', () => {
@@ -101,5 +103,64 @@ describe('parseConstellations', () => {
     expect(parseConstellations('1')).toEqual({ lines: true, art: false })
     expect(parseConstellations('art')).toEqual({ lines: true, art: true })
     expect(parseConstellations('0')).toEqual({ lines: false, art: false })
+  })
+})
+
+describe('ship mode', () => {
+  it('forces planets on at 1× and restores the view on exit', () => {
+    useStore.setState({
+      layout: 'single',
+      mainPanel: 'bottom',
+      cameraFocus: 'moon',
+      timeScale: 86400,
+      showPlanets: false,
+      jumpDate: new Date(Date.UTC(2030, 0, 1)),
+    })
+    useStore.getState().enterShip()
+    expect(useStore.getState()).toMatchObject({
+      shipMode: true,
+      showPlanets: true,
+      timeScale: 1,
+      jumpDate: null,
+    })
+    useStore.getState().exitShip()
+    expect(useStore.getState()).toMatchObject({
+      shipMode: false,
+      shipSaved: null,
+      layout: 'single',
+      mainPanel: 'bottom',
+      cameraFocus: 'moon',
+      timeScale: 86400,
+      showPlanets: false,
+    })
+  })
+
+  it('keeps a planet focus that was valid on entry', () => {
+    useStore.setState({ showPlanets: true, cameraFocus: 'jupiter' })
+    useStore.getState().enterShip()
+    useStore.getState().exitShip()
+    expect(useStore.getState()).toMatchObject({ showPlanets: true, cameraFocus: 'jupiter' })
+  })
+
+  it('resets the pilot input and target on exit', () => {
+    useStore.getState().enterShip()
+    shipInput.throttle = 1
+    shipInput.flightAssist = false
+    setShipTarget('mars')
+    shipTelemetry.speed = 42
+    useStore.getState().exitShip()
+    expect(shipInput.throttle).toBe(0)
+    expect(shipInput.flightAssist).toBe(true)
+    expect(getShipTarget()).toBeNull()
+    expect(shipTelemetry.speed).toBe(0)
+  })
+
+  it('ignores a repeated entry and a stray exit', () => {
+    useStore.setState({ timeScale: 3600 })
+    useStore.getState().enterShip()
+    useStore.getState().enterShip()
+    useStore.getState().exitShip()
+    useStore.getState().exitShip()
+    expect(useStore.getState()).toMatchObject({ shipMode: false, timeScale: 3600 })
   })
 })
