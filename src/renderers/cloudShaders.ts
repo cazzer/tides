@@ -217,7 +217,8 @@ float cloudCorner(uint h) {
   return float(h) * (1.0 / 4294967295.0);
 }
 
-// Value noise, 0..1, and its gradient (Quilez's analytic derivatives).
+// Value noise, 0..1, and its gradient (Quilez's analytic derivatives; checked
+// by hand, not by a test: re-check the k terms after any edit).
 vec4 cloudNoise(vec3 p) {
   vec3 i = floor(p);
   vec3 f = p - i;
@@ -282,7 +283,10 @@ vec3 cloudFrame(vec3 v, float turns) {
 
 void main() {
   vec3 d = normalize(vRayDir);
+  // Derivatives before any discard: after one they are undefined.
   float footprint = max(length(dFdx(vLocal)), length(dFdy(vLocal)));
+  // The ray's spread, a pixel's angle; unlike vLocal's, smooth across facets.
+  float spread = max(length(dFdx(d)), length(dFdy(d)));
   float lod = cloudLod(footprint);
 
 #ifdef CLOUD_FLAT
@@ -346,13 +350,11 @@ void main() {
   vec4 col = cloudColumn(uv, lod, terrain);
   if (col.x < 0.02) discard;
   float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
-  // A pixel's width where the ray meets the top, from the ray's spread (which,
-  // unlike vLocal's, is smooth across the shell's facets), stretched by the
-  // slant. vRayDir is the eye's offset: the Earth group is unscaled.
+  // A pixel's width where the ray meets the top, stretched by the slant.
+  // vRayDir is the eye's offset: the Earth group is unscaled.
   float topFootprint = isOrthographic
     ? footprint
-    : max(length(dFdx(d)), length(dFdy(d))) * (length(vRayDir) + length(p - vLocal))
-      / max(abs(dot(d, up)), 0.05);
+    : spread * (length(vRayDir) + length(p - vLocal)) / max(abs(dot(d, up)), 0.05);
   vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
   float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
   if (alpha < 0.02) discard;
