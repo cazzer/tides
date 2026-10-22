@@ -6,7 +6,7 @@ import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
 import { createShipBodies, updateShipBodies } from './ship-bodies'
 import { shipFar, shipNear, spawnPose } from './ship-session'
-import { disposeLimbSpheres, setLimbBody } from './limb-detail'
+import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -26,7 +26,7 @@ export function ShipController() {
 
   useEffect(
     () => () => {
-      setLimbBody(null)
+      clearLimbView()
       disposeLimbSpheres()
     },
     []
@@ -34,7 +34,7 @@ export function ShipController() {
 
   // Priority 0: after SimClock (−1) has set this frame's time, before drei's
   // View renders (≥ 1), so the frame draws where the ship is now.
-  useFrame(({ camera, size }, delta) => {
+  useFrame(({ camera, size, viewport }, delta) => {
     if (!('isPerspectiveCamera' in camera)) return
     const t = useStore.getState().timestamp ?? Date.now()
     if (bodiesAt.current == null || Math.abs(t - bodiesAt.current) >= BODY_REFRESH_MS) {
@@ -46,7 +46,7 @@ export function ShipController() {
     ship.current ??= spawnPose(bodies, size.width / size.height)
     const state = ship.current
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
-    setLimbBody(shipTelemetry.nearest.key)
+    updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
 
     camera.position.copy(state.position)
     camera.quaternion.copy(state.orientation)
