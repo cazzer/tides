@@ -102,6 +102,34 @@ export function distanceToRadius(r0: number, mu: number, r: number): number {
 }
 
 /**
+ * The stretch of a view ray the cloud march covers within the ship camera's
+ * reach of the shell (tides-01v.8.4; cloudShaders.ts' FLIP_SIDED branch), as
+ * distances along the unit `dir` from `eye` (both in the body's frame, about
+ * its centre): from `near`, the near plane's distance along the ray, or from
+ * where the ray comes within `outer` of the centre if that is further, to
+ * where it leaves that sphere or drops below the lowest base anywhere. Null
+ * when no part of the ray past the near plane comes within `outer`.
+ */
+export function marchSpanFromEye(
+  eye: Vec3,
+  dir: Vec3,
+  seaLevel: number,
+  outer: number,
+  near: number
+): { start: number; end: number } | null {
+  const b = eye[0] * dir[0] + eye[1] * dir[1] + eye[2] * dir[2]
+  const eye2 = eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]
+  const discOuter = b * b - (eye2 - outer * outer)
+  if (discOuter <= 0) return null
+  const start = Math.max(-b - Math.sqrt(discOuter), near)
+  let end = -b + Math.sqrt(discOuter)
+  const inner = seaLevel + CLOUD_CLEARANCE
+  const discInner = b * b - (eye2 - inner * inner)
+  if (discInner > 0 && -b - Math.sqrt(discInner) > start) end = -b - Math.sqrt(discInner)
+  return end > start ? { start, end } : null
+}
+
+/**
  * Where a sunbeam to the ground point (unit direction `ground`, at radius r0)
  * crosses the altitude `altitude` above radius `seaLevel`: the cloud that
  * would shade the point from there. Toward the Sun, by about
