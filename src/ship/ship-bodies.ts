@@ -39,7 +39,7 @@ export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
 /**
  * Masses, kg, for the flight model's gravity wells (flight.ts wellFactor).
- * Moons of other planets carry their own (massKg in their table).
+ * Moons of other planets (tides-2hv.8) will set mass from their own table.
  */
 export const BODY_MASS_KG: Readonly<Record<'sun' | 'earth' | 'moon' | PlanetKey, number>> = {
   sun: 1.989e30,

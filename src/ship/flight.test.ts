@@ -700,6 +700,27 @@ describe('dt', () => {
 })
 
 describe('telemetry', () => {
+  test('reports the body whose well sets the cap, which can be other than the nearest', () => {
+    // As in speedCap: 100 units off a Sun-mass body, 20 off a Moon-mass one.
+    const sun: Body = { key: 'sun', position: new THREE.Vector3(), radius: 3, mass: BODY_MASS_KG.sun }
+    const moon: Body = {
+      key: 'moon',
+      position: new THREE.Vector3(124, 0, 0),
+      radius: 1,
+      mass: BODY_MASS_KG.moon,
+    }
+    const state = createShipState()
+    state.position.set(103, 0, 0)
+    const telemetry = createShipTelemetry()
+    stepShip(state, input(), FRAME, env([sun, moon]), telemetry)
+    expect(telemetry.nearest.key).toBe('moon')
+    expect(telemetry.well.key).toBe('sun')
+    expect(telemetry.well.factor).toBe(wellFactor(BODY_MASS_KG.sun))
+
+    stepShip(state, input(), FRAME, env([]), telemetry)
+    expect(telemetry.well).toEqual({ key: null, factor: 1 })
+  })
+
   test('reports the clamped throttle it flew with', () => {
     const telemetry = createShipTelemetry()
     stepShip(createShipState(), input({ throttle: -3 }), FRAME, env([]), telemetry)
@@ -784,7 +805,10 @@ interface Trip {
   hit: boolean
 }
 
-function trip(key: string, { date = TRIP_DATE, locked = true, limit = 600 } = {}): Trip {
+function trip(
+  key: string,
+  { date = TRIP_DATE, locked = true, limit = 600, dt = FRAME } = {}
+): Trip {
   const bodies = flightBodies(date)
   const earth = bodies.find((b) => b.key === 'earth')!
   const target = bodies.find((b) => b.key === key)!
@@ -798,8 +822,8 @@ function trip(key: string, { date = TRIP_DATE, locked = true, limit = 600 } = {}
   const result: Trip = { seconds: 0, peakSpeed: 0, arrivalFraction: 0, peakFraction: 0, hit: false }
   let gap: number
   do {
-    stepShip(state, input({ throttle: 1 }), FRAME, flightEnv, telemetry)
-    result.seconds += FRAME
+    stepShip(state, input({ throttle: 1 }), dt, flightEnv, telemetry)
+    result.seconds += dt
     expectFinite(state, telemetry)
     gap = state.position.distanceTo(target.position) - target.radius
     const fraction = telemetry.speed / telemetry.speedCap
@@ -828,6 +852,13 @@ describe('trip times at the flight scale', () => {
     expect(peakSpeed).toBeLessThanOrEqual(V_TOP * (1 + 1e-9))
     // Locked: never over the cap, so no overshoot.
     expect(peakFraction).toBeLessThanOrEqual(1 + 1e-9)
+  })
+
+  test('is frame-rate independent: the Moon trip at 60 fps and at MAX_DT agree within 0.5 s', () => {
+    const smooth = trip('moon').seconds
+    const choppy = trip('moon', { dt: MAX_DT }).seconds
+    console.log(`Earth → moon: ${smooth.toFixed(2)} s at 60 fps, ${choppy.toFixed(2)} s at ${1 / MAX_DT} fps`)
+    expect(Math.abs(choppy - smooth)).toBeLessThan(0.5)
   })
 
   // Log only: the targets are for TRIP_DATE. Mars at opposition is closer;

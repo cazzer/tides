@@ -265,6 +265,9 @@ interface Proximity {
   targetGap: number
   /** min over bodies of max(0, gap) / wellFactor; Infinity with no bodies. */
   wellDistance: number
+  /** The body that sets wellDistance (d_eff), and its wellFactor. */
+  wellKey: string | null
+  wellBodyFactor: number
 }
 
 const proximity: Proximity = {
@@ -273,6 +276,8 @@ const proximity: Proximity = {
   target: null,
   targetGap: Infinity,
   wellDistance: Infinity,
+  wellKey: null,
+  wellBodyFactor: 1,
 }
 
 function measure(
@@ -285,6 +290,8 @@ function measure(
   proximity.target = null
   proximity.targetGap = Infinity
   proximity.wellDistance = Infinity
+  proximity.wellKey = null
+  proximity.wellBodyFactor = 1
   for (const body of bodies) {
     const gap = position.distanceTo(body.position) - body.radius
     // A NaN gap never wins the nearest or well comparisons, so it can't
@@ -293,8 +300,13 @@ function measure(
       proximity.nearest = body
       proximity.nearestGap = gap
     }
-    const well = Math.max(0, gap) / wellFactor(body.mass)
-    if (well < proximity.wellDistance) proximity.wellDistance = well
+    const factor = wellFactor(body.mass)
+    const well = Math.max(0, gap) / factor
+    if (well < proximity.wellDistance) {
+      proximity.wellDistance = well
+      proximity.wellKey = body.key
+      proximity.wellBodyFactor = factor
+    }
     if (targetKey != null && body.key === targetKey) {
       proximity.target = body
       proximity.targetGap = gap
@@ -532,7 +544,7 @@ function fillTelemetry(
   out: ShipTelemetry,
   state: ShipState,
   input: Readonly<ShipInput>,
-  { nearest, nearestGap, target, targetGap }: Proximity,
+  { nearest, nearestGap, target, targetGap, wellKey, wellBodyFactor }: Proximity,
   cap: number,
   colliding: boolean
 ): void {
@@ -545,6 +557,8 @@ function fillTelemetry(
 
   out.nearest.key = nearest ? nearest.key : null
   out.nearest.surfaceDistance = nearestGap
+  out.well.key = wellKey
+  out.well.factor = wellBodyFactor
 
   if (!target) {
     out.target = null

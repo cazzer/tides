@@ -12,8 +12,9 @@ export interface ShipTelemetry {
   /** |velocity|, scene units per second. */
   speed: number
   /**
-   * The cruise speed limit this frame, scene units/s. A locked target further
-   * limits only the speed toward it (see approachCap in flight.ts).
+   * The speed limit where the step ended, scene units/s (the well cap in
+   * flight.ts). A locked target further limits only the speed toward it
+   * (see approachCap in flight.ts).
    */
   speedCap: number
   /** The throttle the step used: the input clamped to −0.25..1. */
@@ -26,6 +27,13 @@ export interface ShipTelemetry {
    * case surfaceDistance is Infinity.
    */
   nearest: { key: string | null; surfaceDistance: number }
+  /**
+   * The body whose gravity well sets speedCap (smallest gap / wellFactor in
+   * flight.ts), which a heavy body far off can be rather than the nearest:
+   * crawling past the Sun, it is the Sun. key is null only with no bodies;
+   * factor is that body's wellFactor (1 then).
+   */
+  well: { key: string | null; factor: number }
   /**
    * The locked target, or null without one (or when its key matches no body).
    * etaSeconds is surface distance over closing speed; Infinity when not
@@ -48,6 +56,7 @@ export function createShipTelemetry(): ShipTelemetry {
     flightAssist: true,
     velocity: new THREE.Vector3(),
     nearest: { key: null, surfaceDistance: Infinity },
+    well: { key: null, factor: 1 },
     target: null,
     colliding: false,
   }
@@ -55,7 +64,7 @@ export function createShipTelemetry(): ShipTelemetry {
 
 export const shipTelemetry: ShipTelemetry = createShipTelemetry()
 
-/** Zero the singleton in place, keeping its velocity and nearest objects. */
+/** Zero the singleton in place, keeping its velocity, nearest and well objects. */
 export function resetShipTelemetry(): void {
   shipTelemetry.speed = 0
   shipTelemetry.speedCap = 0
@@ -64,6 +73,8 @@ export function resetShipTelemetry(): void {
   shipTelemetry.velocity.set(0, 0, 0)
   shipTelemetry.nearest.key = null
   shipTelemetry.nearest.surfaceDistance = Infinity
+  shipTelemetry.well.key = null
+  shipTelemetry.well.factor = 1
   shipTelemetry.target = null
   shipTelemetry.colliding = false
 }
