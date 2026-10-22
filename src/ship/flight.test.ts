@@ -620,7 +620,8 @@ describe('collision', () => {
         }
       }
     }
-  })
+    // ~2 s alone with the moons' wells; the parallel suite can push it past 5 s.
+  }, 20_000)
 
   test('a step covers at most 20% of the mass-weighted gap, so it cannot tunnel', () => {
     // |v| ≤ OVERSPEED_MAX · cap and cap ≤ K_WELL · gap / wellFactor (≥ 1).
