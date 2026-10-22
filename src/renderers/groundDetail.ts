@@ -8,8 +8,10 @@
 // mask (open water, left smooth so its glint is untouched) and the albedo's
 // colour (ice, given a gentler grain). Night lights (emissive) and the clouds'
 // shadows (applied to the lit result) are untouched. A finer albedo source
-// over part of the ground (tides-01v.7) lowers groundDetailTexel there, which
-// drops the octaves it already resolves.
+// over part of the ground (the GIBS patch, tides-01v.7, ./gibsPatch.ts) sets
+// groundDetailFine and groundDetailFineTexel there, which fade out the
+// octaves it already resolves. Changing groundDetailTexel itself across the
+// ground would warp the noise.
 //
 // Spread through composePatches onto the ground's Phong material.
 import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
@@ -53,8 +55,9 @@ ${DETAIL_NOISE_GLSL}
 #define GROUND_DETAIL_MAX_SLOPE 0.5
 
 // fBm at p (scene units, the Earth's frame) seen at footprint over a map of
-// texel: x in about -1..1, yzw its gradient per scene unit.
-vec4 groundDetail(vec3 p, float footprint, float texel) {
+// texel, a fraction fine of it also covered by a source of fineTexel: x in
+// about -1..1, yzw its gradient per scene unit.
+vec4 groundDetail(vec3 p, float footprint, float texel, float fineTexel, float fine) {
   float wavelength = ${f(DETAIL_BASE_TEXELS)} * texel;
   float amp = 0.5;
   float rough = 0.5;
@@ -62,6 +65,7 @@ vec4 groundDetail(vec3 p, float footprint, float texel) {
   for (int k = 0; k < GROUND_DETAIL_OCTAVES; k++) {
     float weight = 1.0 - smoothstep(${f(DETAIL_FADE_START)}, ${f(DETAIL_FADE_END)}, footprint / wavelength);
     if (weight <= 0.0) break;
+    weight *= 1.0 - fine * smoothstep(0.5, 1.0, wavelength / (${f(DETAIL_BASE_TEXELS)} * fineTexel));
     vec4 o = detailNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 23.17);
     sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
     wavelength *= 0.5;
@@ -73,10 +77,12 @@ vec4 groundDetail(vec3 p, float footprint, float texel) {
 `
 
 // The albedo source's texel (scene units). A finer source over part of the
-// ground (tides-01v.7) lowers it there, by a patch after this one's.
+// ground (tides-01v.7) sets the fine pair, by a patch after this one's.
 const TEXEL_BODY = /* glsl */ `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP)
 float groundDetailTexel = 6.283185307 * length(vGroundDetailPos) / float(textureSize(map, 0).x);
+float groundDetailFineTexel = groundDetailTexel;
+float groundDetailFine = 0.0;
 #endif
 `
 
@@ -96,7 +102,7 @@ const FRAGMENT_BODY = /* glsl */ `
   float groundLand = 1.0 - specularStrength;
   if (groundLand > 0.0
       && groundFootprint < ${f(DETAIL_FADE_END * DETAIL_BASE_TEXELS)} * groundDetailTexel) {
-    vec4 detail = groundDetail(vGroundDetailPos, groundFootprint, groundDetailTexel);
+    vec4 detail = groundDetail(vGroundDetailPos, groundFootprint, groundDetailTexel, groundDetailFineTexel, groundDetailFine);
     // Ice and snow: bright and colourless.
     vec3 albedo = diffuseColor.rgb;
     float chroma = max(albedo.r, max(albedo.g, albedo.b)) - min(albedo.r, min(albedo.g, albedo.b));

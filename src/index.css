@@ -461,6 +461,11 @@ body {
   top: calc(30px + env(safe-area-inset-top));
 }
 
+/* The GIBS ground credit in flight (tides-01v.7), under whichever show. */
+.ground-attribution {
+  top: calc(6px + var(--attribution-slot, 0) * 24px + env(safe-area-inset-top));
+}
+
 /* Clear the folded dock's button in the top-left. */
 @media only screen and (max-width: 600px) {
   .cloud-attribution,
