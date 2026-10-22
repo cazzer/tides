@@ -12,7 +12,8 @@ void main() {
   vNormalView = normalize(normalMatrix * normal);
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   vViewPosition = -mvPosition.xyz;
-  // The sphere is centred on the origin, so its radius is |position|.
+  // The sphere is centred on the origin and scaled uniformly, so its
+  // radius is |position|.
   vRadiusView = length((modelViewMatrix * vec4(position, 0.0)).xyz);
   gl_Position = projectionMatrix * mvPosition;
 }

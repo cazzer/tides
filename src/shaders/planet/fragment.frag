@@ -83,9 +83,10 @@ void planetDetail(vec3 n, float fp, float texel, out float d, out vec3 dh) {
       float s = snoise3(p + float(i) * 7.31, g);
       d += w * amp * s;
       // Height scales with wavelength, so every octave is as steep and,
-      // in p, the slope needs no per-octave factor. It fades out an
-      // octave before the albedo: a low Sun exaggerates its aliasing.
-      float wb = gate * smoothstep(4.0, 8.0, wavelength / fp);
+      // in p, the slope needs no per-octave factor. It fades out about an
+      // octave before the albedo: rock's ridges come at half the
+      // wavelength, and a low Sun exaggerates their aliasing.
+      float wb = gate * smoothstep(5.0, 10.0, wavelength / fp);
       slope += wb * amp * (rock ? -2.0 * s : 1.0) * g;
     }
     amp *= gain;
@@ -132,7 +133,10 @@ void main() {
     float pixel = isOrthographic
       ? max(length(dFdx(vViewPosition.xy)), length(dFdy(vViewPosition.xy)))
       : max(length(dFdx(viewDir)), length(dFdy(viewDir))) * length(vViewPosition);
-    float fp = pixel / (vRadiusView * cosE);
+    // Not cosE: its floor would shrink fp at the limb, where the
+    // foreshortening must fade the fine octaves out.
+    float cosF = max(dot(normalize(vNormalView), viewDir), 1e-3);
+    float fp = pixel / (vRadiusView * cosF);
     float texel = 3.141592653589793 / float(textureSize(uMap, 0).y);
     float d;
     vec3 dh;
