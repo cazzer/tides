@@ -7,17 +7,45 @@
       type="image/svg+xml"
       href="/tides/vite.svg"
     />
+    <!-- viewport-fit=cover lets the canvas run behind the notch and the home
+         indicator; overlays keep clear of them with env(safe-area-inset-*). -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <!-- Space black, so browser chrome tinted from it blends into the scene. -->
+    <meta
+      name="theme-color"
+      content="#000000"
     />
     <meta
-      name="viewport"
-      content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width, height=device-height, target-densitydpi=device-dpi, viewport-fit=cover"
+      name="apple-mobile-web-app-capable"
+      content="yes"
+    />
+    <meta
+      name="mobile-web-app-capable"
+      content="yes"
+    />
+    <!-- Draws the status bar over the page, so the scene shows behind it. -->
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta
+      name="apple-mobile-web-app-title"
+      content="Tides"
+    />
+    <link
+      rel="manifest"
+      href="/tides/manifest.webmanifest"
+    />
+    <link
+      rel="apple-touch-icon"
+      href="/tides/apple-touch-icon.png"
     />
     <title>Tides (Clock)</title>
-    <script type="module" crossorigin src="/tides/assets/index-xbqSZFEJ.js"></script>
-    <link rel="stylesheet" crossorigin href="/tides/assets/index-B8kLKTCX.css">
+    <script type="module" crossorigin src="/tides/assets/index-BuUdfuXO.js"></script>
+    <link rel="stylesheet" crossorigin href="/tides/assets/index-DaZ2GYKk.css">
   </head>
   <body>
     <div id="root"></div>
