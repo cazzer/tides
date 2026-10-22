@@ -1,0 +1,37 @@
+import { describe, expect, test } from 'vitest'
+import { V_TOP } from './flight'
+import { formatSpeed } from './ship-distances'
+import { approachAnnouncement, approachTail, speedParts, wellSuffix } from './hud-format'
+
+describe('speedParts', () => {
+  test('splits formatSpeed into number and unit', () => {
+    expect(speedParts(formatSpeed(15_500))).toEqual([formatSpeed(15_500).replace(/\s*km\/s$/, ''), 'km/s'])
+    expect(speedParts(formatSpeed(16 * 299_792.458))).toEqual(['16', 'c'])
+    expect(speedParts(formatSpeed(NaN))).toEqual(['—', ''])
+  })
+})
+
+describe('wellSuffix', () => {
+  test('names the well only while it holds the cap down', () => {
+    expect(wellSuffix('sun', 40)).toBe(" · Sun's well")
+    expect(wellSuffix('io', 1)).toBe(" · Io's well")
+    expect(wellSuffix('sun', V_TOP)).toBe('')
+    expect(wellSuffix(null, 1)).toBe('')
+  })
+})
+
+describe('approachTail', () => {
+  test('the ETA, or the warning in its place', () => {
+    expect(approachTail('closing', 9.2)).toBe('ETA 9 s')
+    expect(approachTail('locked', 9.2)).toBe('ETA 9 s')
+    expect(approachTail('open', Infinity)).toBe('')
+    expect(approachTail('fast', 9.2)).toBe('Too fast')
+    expect(approachTail('over', 9.2)).toBe('Overshooting')
+  })
+
+  test('announces only the warnings', () => {
+    expect(approachAnnouncement('fast', 'moon')).toBe('Too fast to stop at Moon')
+    expect(approachAnnouncement('over', 'moon')).toBe('Overshooting Moon')
+    expect(approachAnnouncement('closing', 'moon')).toBeNull()
+  })
+})

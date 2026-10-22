@@ -5,8 +5,18 @@ import { glassButton, glassFloatingButton, glassPanel, PHONE } from '../glass-st
 import { BLUE_ZONE, speedFraction, turnRateMultiplier } from './flight'
 import { shipInput, THROTTLE_MAX, THROTTLE_MIN, throttlePercent } from './ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
-import { bodyName, formatDistance, formatEta, formatSpeed } from './ship-distances'
+import { bodyName, formatDistance, formatSpeed } from './ship-distances'
 import { shipNav, targetMarker } from './ship-targeting'
+import { shipApproach } from './approach'
+import { approachAnnouncement, approachTail, speedParts, wellSuffix } from './hud-format'
+import {
+  IMPACT_FLASH_COOLDOWN_MS,
+  IMPACT_FLASH_MS,
+  IMPACT_FLASH_REDUCED,
+  shipImpacts,
+} from './impact'
+import { prefersReducedMotion } from './reduced-motion'
+import { BodyMarkers } from './BodyMarkers'
 import { ShipControlsDialog } from './ShipControlsDialog'
 
 // Text redraws this often; the throttle bar follows every frame. Faster text
@@ -46,17 +56,26 @@ const at = (throttle: number) => `${((throttle - THROTTLE_MIN) / SPAN) * 100}%`
 
 interface Readouts {
   speed: HTMLElement | null
+  speedUnit: HTMLElement | null
   wideTurn: HTMLElement | null
+  well: HTMLElement | null
   bar: HTMLElement | null
+  safeTick: HTMLElement | null
+  tooFast: HTMLElement | null
   throttle: HTMLElement | null
   forward: HTMLElement | null
   reverse: HTMLElement | null
   assist: HTMLButtonElement | null
   assistValue: HTMLElement | null
   nearest: HTMLElement | null
-  targetCell: HTMLElement | null
-  target: HTMLElement | null
+  nearestCell: HTMLElement | null
+  subjectCell: HTMLElement | null
+  subjectLabel: HTMLElement | null
+  subjectRange: HTMLElement | null
+  subjectTail: HTMLElement | null
+  clearTarget: HTMLElement | null
   markerLabel: HTMLElement | null
+  impactFlash: HTMLElement | null
   announcer: HTMLElement | null
 }
 
@@ -73,17 +92,26 @@ export function ShipHud() {
   const [controlsOpen, setControlsOpen] = useState(false)
   const readouts = useRef<Readouts>({
     speed: null,
+    speedUnit: null,
     wideTurn: null,
+    well: null,
     bar: null,
+    safeTick: null,
+    tooFast: null,
     throttle: null,
     forward: null,
     reverse: null,
     assist: null,
     assistValue: null,
     nearest: null,
-    targetCell: null,
-    target: null,
+    nearestCell: null,
+    subjectCell: null,
+    subjectLabel: null,
+    subjectRange: null,
+    subjectTail: null,
+    clearTarget: null,
     markerLabel: null,
+    impactFlash: null,
     announcer: null,
   })
 
@@ -108,6 +136,27 @@ export function ShipHud() {
     let targetShown: string | null | undefined
     let assistShown: boolean | undefined
     let wideShown: boolean | undefined
+    // The safe-arrival tick's share (null: hidden), and the coral fill past it.
+    let safeShown: number | null | undefined
+    let tooFastShown = NaN
+    let subjectShown: string | null | undefined
+    let lockedShown: boolean | undefined
+    let statusShown: string | undefined
+    let warningShown: string | null = null
+    let impactsSeen = shipImpacts.count
+    let flashAt = -Infinity
+    // A live region speaks only when its text changes, so the text is
+    // cleared first and set a frame later: a second "Impact" is spoken too.
+    let announceFrame = 0
+    const announce = (text: string) => {
+      const element = r.announcer
+      if (!element) return
+      cancelAnimationFrame(announceFrame)
+      element.textContent = ''
+      announceFrame = requestAnimationFrame(() => {
+        element.textContent = text
+      })
+    }
 
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick)
@@ -117,10 +166,59 @@ export function ShipHud() {
         r.forward.style.transform = `scaleX(${Math.max(0, throttle) / THROTTLE_MAX})`
         r.reverse.style.transform = `scaleX(${Math.max(0, -throttle) / -THROTTLE_MIN})`
       }
+
+      // Every frame, with the throttle: the safe-arrival tick, while closing
+      // on a body unlocked that can be overshot; past it, the fill is coral.
+      // With FA off the throttle is thrust, not a share of the cap, so the
+      // tick would mean nothing there.
+      const a = shipApproach
+      const safe =
+        a.key != null &&
+        !a.locked &&
+        a.status !== 'open' &&
+        a.safeShare < 1 &&
+        shipTelemetry.flightAssist
+          ? a.safeShare
+          : null
+      if (safe !== safeShown && r.safeTick && r.tooFast) {
+        safeShown = safe
+        r.safeTick.hidden = safe == null
+        if (safe != null) {
+          r.safeTick.style.left = at(safe)
+          r.tooFast.style.left = at(safe)
+        }
+        tooFastShown = NaN
+      }
+      const over = safe != null ? Math.max(0, throttle - safe) / (THROTTLE_MAX - safe) : 0
+      if (over !== tooFastShown && r.tooFast) {
+        tooFastShown = over
+        r.tooFast.hidden = !(over > 0)
+        r.tooFast.style.transform = `scaleX(${over})`
+      }
+
+      // A hit: flash the vignette, unless one has just flashed.
+      if (shipImpacts.count !== impactsSeen) {
+        impactsSeen = shipImpacts.count
+        if (now - flashAt >= IMPACT_FLASH_COOLDOWN_MS && r.impactFlash) {
+          flashAt = now
+          const peak = prefersReducedMotion() ? IMPACT_FLASH_REDUCED : 1
+          r.impactFlash.animate([{ opacity: peak }, { opacity: 0 }], {
+            duration: IMPACT_FLASH_MS,
+            easing: 'ease-out',
+          })
+          announce('Impact')
+        }
+      }
+
       if (now - textAt < TEXT_INTERVAL_MS) return
       textAt = now
 
-      set(r.speed, formatSpeed(shipTelemetry.speed * shipNav.kmPerUnit))
+      const [speed, unit] = speedParts(formatSpeed(shipTelemetry.speed * shipNav.kmPerUnit))
+      set(r.speed, speed)
+      set(r.speedUnit, unit && ` ${unit}`)
+      const well = wellSuffix(shipTelemetry.well.key, shipTelemetry.speedCap)
+      set(r.well, well)
+      if (r.well) r.well.hidden = well === ''
       set(r.throttle, throttlePercent(throttle))
       // From speed, as the flight model does: with FA off a ship coasting
       // fast turns wide whatever the throttle says.
@@ -130,7 +228,7 @@ export function ShipHud() {
       if (wide !== wideShown) {
         // Nothing to announce on the first pass, as for the target.
         if (wideShown !== undefined) {
-          set(r.announcer, wide ? 'Turn rate reduced at high speed' : 'Full turn rate')
+          announce(wide ? 'Turn rate reduced at high speed' : 'Full turn rate')
         }
         wideShown = wide
         r.bar?.toggleAttribute('data-wide-turn', wide)
@@ -149,21 +247,46 @@ export function ShipHud() {
       if (target !== targetShown) {
         // An announcement on the first pass would only repeat the default.
         if (targetShown !== undefined) {
-          set(r.announcer, target ? `Target locked: ${bodyName(target)}` : 'Target cleared')
+          announce(target ? `Target locked: ${bodyName(target)}` : 'Target cleared')
         }
         targetShown = target
-        if (r.targetCell) r.targetCell.hidden = !target
         set(r.markerLabel, target ? bodyName(target) : '')
       }
-      if (target) {
-        const eta = shipTelemetry.target?.etaSeconds ?? Infinity
-        const range = `${bodyName(target)} · ${formatDistance(shipNav.targetKm)}`
-        // No ETA while not closing on it.
-        set(r.target, Number.isFinite(eta) ? `${range} · ETA ${formatEta(eta)}` : range)
+
+      // The approach cell: the locked target, or the body ahead.
+      if (a.key !== subjectShown) {
+        subjectShown = a.key
+        if (r.subjectCell) r.subjectCell.hidden = a.key == null
+      }
+      if (a.locked !== lockedShown) {
+        lockedShown = a.locked
+        r.subjectCell?.toggleAttribute('data-locked', a.locked)
+        set(r.subjectLabel, a.locked ? 'Target' : 'Ahead')
+        if (r.clearTarget) r.clearTarget.hidden = !a.locked
+      }
+      if (a.status !== statusShown) {
+        statusShown = a.status
+        r.subjectCell?.setAttribute('data-status', a.status)
+      }
+      // Nearest says the same thing when it is the approach subject.
+      if (r.nearestCell) r.nearestCell.hidden = a.key != null && a.key === nearest
+      if (a.key != null) {
+        set(r.subjectRange, `${bodyName(a.key)} · ${formatDistance(a.km)}`)
+        const tail = approachTail(a.status, a.eta)
+        set(r.subjectTail, tail && ` · ${tail}`)
+      }
+      // Each warning is announced once on the way in.
+      const warning = a.key != null ? approachAnnouncement(a.status, a.key) : null
+      if (warning !== warningShown) {
+        if (warning) announce(warning)
+        warningShown = warning
       }
     }
     frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(frame)
+      cancelAnimationFrame(announceFrame)
+    }
   }, [])
 
   // The marker's frame loop needs the view's size and the strip's bottom
@@ -200,10 +323,15 @@ export function ShipHud() {
 
   return (
     <>
+      <ImpactFlash
+        ref={bind('impactFlash')}
+        aria-hidden
+      />
       <MarkerLayer
         ref={markerLayer}
         aria-hidden
       >
+        <BodyMarkers />
         <Marker
           ref={(element) => {
             targetMarker.current = element
@@ -247,14 +375,21 @@ export function ShipHud() {
           <Cell>
             <Label>
               Speed
-              <span
+              <WideTurn
                 ref={bind('wideTurn')}
                 hidden
               >
                 {' · wide turns'}
-              </span>
+              </WideTurn>
+              <WellName
+                ref={bind('well')}
+                hidden
+              />
             </Label>
-            <Value ref={bind('speed')}>—</Value>
+            <Value>
+              <span ref={bind('speed')}>—</span>
+              <Unit ref={bind('speedUnit')} />
+            </Value>
           </Cell>
           <Cell $grow>
             <Label>
@@ -269,6 +404,14 @@ export function ShipHud() {
               <Reverse ref={bind('reverse')} />
               <Forward ref={bind('forward')} />
               <PastBand />
+              <TooFast
+                ref={bind('tooFast')}
+                hidden
+              />
+              <SafeTick
+                ref={bind('safeTick')}
+                hidden
+              />
             </Bar>
           </Cell>
           <AssistButton
@@ -291,23 +434,31 @@ export function ShipHud() {
           </AssistButton>
         </Row>
         <Row>
-          <Cell $grow>
+          <Cell
+            ref={bind('nearestCell')}
+            $grow
+          >
             <Label>Nearest</Label>
             <Value ref={bind('nearest')}>—</Value>
           </Cell>
-          <Cell
-            ref={bind('targetCell')}
+          <SubjectCell
+            ref={bind('subjectCell')}
             $grow
             hidden
           >
-            <Label>Target</Label>
+            <Label ref={bind('subjectLabel')}>Ahead</Label>
             <TargetLine>
-              <Value ref={bind('target')} />
+              <ApproachLine>
+                <ApproachRange ref={bind('subjectRange')} />
+                <ApproachTail ref={bind('subjectTail')} />
+              </ApproachLine>
               <ClearButton
+                ref={bind('clearTarget')}
                 type="button"
                 onClick={() => setShipTarget(null)}
                 aria-label="Clear target"
                 title="Clear target"
+                hidden
               >
                 <IconX
                   size={14}
@@ -315,7 +466,7 @@ export function ShipHud() {
                 />
               </ClearButton>
             </TargetLine>
-          </Cell>
+          </SubjectCell>
         </Row>
       </Strip>
       <VisuallyHidden
@@ -340,8 +491,13 @@ const TOP = `calc(var(--dock-top) + ${EXIT_INSET})`
 const LEFT = `calc(var(--dock-inset-left) + ${EXIT_INSET})`
 const BUTTON = 'var(--dock-button-size, 40px)'
 const GAP = '8px'
-// The texture credit owns the top-right corner (index.css).
-const CREDIT_ROOM = '270px'
+// The texture credit owns the top-right corner (index.css), inside the right
+// safe-area inset: a fixed width ignored the inset, and in landscape on a
+// notched phone the credit overlapped the strip's end (tides-2hv.2).
+const CREDIT_ROOM = 'calc(var(--dock-inset-right) + 262px)'
+// Warnings: nothing else in the HUD is this colour (amber means reverse and
+// FA off, blue the target and the blue zone).
+const CORAL = '#ff6b6b'
 
 const HelpButton = styled.button`
   ${glassFloatingButton}
@@ -377,6 +533,9 @@ const Strip = styled.div`
     right: calc(var(--dock-inset-right) + ${EXIT_INSET});
     max-width: none;
     flex-direction: column;
+    /* One column: wrapping would size each row to its content, not the
+       strip, and a long approach line would push past the edge. */
+    flex-wrap: nowrap;
     gap: 4px;
     padding: 6px 6px 6px 12px;
     border-radius: 16px;
@@ -420,12 +579,61 @@ const Value = styled.div`
   white-space: nowrap;
 `
 
+// The speed's unit, dimmed like a label so the number reads first.
+const Unit = styled.span`
+  color: rgba(255, 255, 255, 0.6);
+`
+
+const WideTurn = styled.span``
+
+// " · Sun's well". Short of a desktop's width row 1 has no room for both
+// cues (in landscape on a phone the strip is ~360 px between the buttons and
+// the credit), and the wide-turn one is the one to act on.
+const NARROW = '@media (max-width: 1000px)'
+const WellName = styled.span`
+  ${NARROW} {
+    ${WideTurn}:not([hidden]) ~ & {
+      display: none;
+    }
+  }
+`
+
 const TargetLine = styled.div`
   display: flex;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  color: #8fd8ff;
+`
+
+// The approach cell: "Ahead" in white, "Target" in target blue, and the
+// warnings in coral either way.
+const ApproachTail = styled.span`
+  flex: none;
+  white-space: pre;
+`
+
+// The range gives way first, so a warning is never cut off.
+const ApproachRange = styled.span`
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+`
+
+const ApproachLine = styled.div`
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+`
+
+const SubjectCell = styled(Cell)`
+  &[data-locked] ${TargetLine} {
+    color: #8fd8ff;
+  }
+
+  &[data-status='fast'] ${ApproachTail}, &[data-status='over'] ${ApproachTail} {
+    color: ${CORAL};
+    font-weight: 600;
+  }
 `
 
 const Bar = styled.div`
@@ -488,6 +696,37 @@ const PastBand = styled.div`
 
   [data-wide-turn] > & {
     display: block;
+  }
+`
+
+// The safe-arrival share (approach.ts safeShare): above it, closing on the
+// body ahead unlocked, the ship will overshoot it. The fill past it turns
+// coral.
+const SafeTick = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background-color: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+
+  &[hidden] {
+    display: none;
+  }
+`
+
+const TooFast = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background-color: ${CORAL};
+  transform: scaleX(0);
+  transform-origin: left;
+
+  &[hidden] {
+    display: none;
   }
 `
 
@@ -606,6 +845,21 @@ const ClearButton = styled.button`
     position: absolute;
     inset: -8px;
   }
+
+  /* Only a locked target can be cleared; "Ahead" has nothing to clear. */
+  &[hidden] {
+    display: none;
+  }
+`
+
+// A coral edge glow over the whole view on impact, animated by the frame
+// loop (Web Animations), transparent otherwise.
+const ImpactFlash = styled.div`
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: inset 0 0 96px 24px rgba(255, 107, 107, 0.7);
 `
 
 const MarkerLayer = styled.div`

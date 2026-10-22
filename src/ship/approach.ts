@@ -1,0 +1,375 @@
+// The approach indicator (tides-2hv.12): which body the ship is closing on,
+// when it will get there, and whether it is coming in too fast to stop, the
+// way Elite's supercruise warns before you overshoot a station. Pure maths
+// over the flight model's exports; flight.ts itself is untouched.
+//
+// Why a prediction. Unlocked, Flight Assist rides the velocity down a
+// falling speed cap at no more than WELL_BRAKE, so diving at a light body
+// faster than its well can shed carries the ship in over the cap (flight.ts,
+// "overshoot"). That is decided at the well's edge, seconds before the HUD's
+// speed shows anything wrong, so the HUD needs to know in advance: wouldOvershoot
+// flies the same speed-share maths ahead in log gap, and safeShare is the
+// throttle at which it starts to.
+//
+// Why a better ETA. gap / closing sticks at the well time during a locked
+// approach, because the gap e-folds; approachEta follows the profile instead.
+
+import * as THREE from 'three'
+import {
+  K_WELL,
+  V_NORMAL,
+  V_TOP,
+  WELL_BRAKE,
+  velocityTau,
+  wellFactor,
+  type Body,
+} from './flight'
+import { IMPACT_MIN_SPEED } from './impact'
+
+/**
+ * [TUNE] Unlocked, a body counts as "ahead" within this angle of the
+ * velocity, radians (30°); the one already shown keeps its place out to
+ * AHEAD_KEEP_CONE so a slow drift doesn't drop it.
+ */
+export const AHEAD_CONE = (30 * Math.PI) / 180
+export const AHEAD_KEEP_CONE = (35 * Math.PI) / 180
+/**
+ * [TUNE] Another body ahead replaces the shown one only when its gap is this
+ * share of the shown one's or less, so two bodies at similar range don't
+ * flicker.
+ */
+export const AHEAD_SWITCH = 0.8
+/**
+ * Below this speed, units/s, nothing is ahead (there is no heading to read),
+ * and below this closing speed there is no ETA: resting on a surface the
+ * ship still creeps in by a hair each step before the collision cancels it,
+ * which over a gap of a few hundredths read as hours.
+ */
+export const AHEAD_MIN_SPEED = 0.05 * V_NORMAL
+
+/**
+ * [TUNE] "Too fast" warns this many seconds before the ship reaches the edge
+ * of the subject's well (where the cap starts to fall, gap V_TOP · wellTime),
+ * and all the way in. Earlier, a cruise across the system would warn about
+ * every planet on the line.
+ */
+export const FAST_WINDOW_S = 10
+
+/**
+ * Speed over the cap, as a share of it, that reads as overshooting: the
+ * share that hits the surface hard (impact.ts IMPACT_MIN_SPEED at the
+ * V_NORMAL floor), so a warning means a crash. Full throttle at Earth or
+ * Venus peaks at ~1.1× the cap and still lands gently; that is not one.
+ * "Too fast" predicts reaching OVER_ON.
+ */
+export const OVER_ON = IMPACT_MIN_SPEED / V_NORMAL
+/**
+ * Overshooting clears once the speed is back down to about the cap. Just
+ * above 1, not under it: Flight Assist settles at throttle · cap, exactly
+ * the cap at full throttle, so a threshold under 1 would never clear.
+ */
+export const OVER_OFF = 1.02
+/** "Too fast" clears once the predicted peak is this far under OVER_ON. */
+export const FAST_OFF = OVER_ON - 0.1
+
+/**
+ * A safe-arrival throttle this close to full reads as full: the tick at the
+ * end of the bar would only be noise.
+ */
+export const SAFE_SHARE_FULL = 0.95
+
+/**
+ * - over: above the cap now, so the well can't stop the ship (overshooting).
+ * - locked: the subject is the locked target, whose approach cap means it
+ *   can't be overshot.
+ * - fast: on course to be over the cap inside the subject's well.
+ * - closing / open: closing on it at a safe speed, or not closing.
+ */
+export type ApproachStatus = 'over' | 'locked' | 'fast' | 'closing' | 'open'
+
+/** Seconds per e-fold of the gap at the cap, for a wellFactor (flight.ts wellTime). */
+function wellTimeOf(factor: number): number {
+  return factor / K_WELL
+}
+
+// Steps over the well's depth in log gap, V_TOP · T down to V_NORMAL · T
+// (ln 600 ≈ 6.4 e-folds): enough that halving it moves safeShare < 0.01.
+const PREDICT_STEPS = 96
+
+/**
+ * The highest speed share (speed / cap) the ship reaches on a straight run
+ * into a body with wellFactor `factor`, from `gap` with speed share `share`
+ * of the body's cap there, holding `throttle` with Flight Assist on or off
+ * and no target locked. Mirrors flight.ts per unit of log gap:
+ * - FA on, the velocity eases toward throttle · cap over velocityTau, and the
+ *   ride scales it down at most e^(−WELL_BRAKE·dt) while the cap falls at
+ *   closing / gap = share / T, so the share grows by share / T − WELL_BRAKE
+ *   when that is positive;
+ * - FA off, thrust adds throttle · cap / τ up to the cap, nothing rides, and
+ *   speed over the cap bleeds at WELL_BRAKE.
+ * The run ends at the V_NORMAL floor, where the cap stops falling.
+ */
+export function peakShare(
+  factor: number,
+  gap: number,
+  share: number,
+  throttle: number,
+  flightAssist = true
+): number {
+  const T = wellTimeOf(factor)
+  const top = Math.log(V_TOP * T)
+  const floor = Math.log(V_NORMAL * T)
+  const start = Math.min(Math.log(Math.max(gap, 1e-9)), top)
+  let s = Math.max(0, share)
+  let peak = s
+  if (!(start > floor)) return peak
+  const dLog = (start - floor) / PREDICT_STEPS
+  for (let i = 0; i < PREDICT_STEPS && s > 0; i++) {
+    const cap = Math.exp(start - i * dLog) / T
+    const tau = velocityTau(cap)
+    // Time to fall dLog in log gap: closing / gap = s / T.
+    const dt = (dLog * T) / s
+    if (flightAssist) {
+      s = throttle + (s - throttle) * Math.exp(-dt / tau)
+      s *= Math.exp(Math.max(0, s / T - WELL_BRAKE) * dt)
+    } else {
+      const thrust = s + (throttle * dt) / tau
+      s = s > 1 ? s : Math.min(1, Math.max(0, thrust))
+      s *= Math.exp((s / T - (s > 1 ? WELL_BRAKE : 0)) * dt)
+    }
+    if (!Number.isFinite(s)) return Infinity
+    peak = Math.max(peak, s)
+  }
+  return peak
+}
+
+const safeShares = new Map<number, number>()
+
+/**
+ * The safe-arrival throttle for a body of wellFactor `factor`: the highest
+ * Flight Assist throttle that rides its well down without overshooting
+ * (peakShare ≤ OVER_ON) from its edge; 1 from SAFE_SHARE_FULL up. Above it,
+ * unlocked, the ship overshoots. ~0.72 at the Moon, ~0.85 at Mercury, ~0.92
+ * at Mars, 1 for Venus, Earth and heavier. The HUD's throttle bar marks it.
+ */
+export function safeShare(factor: number): number {
+  const known = safeShares.get(factor)
+  if (known !== undefined) return known
+  const T = wellTimeOf(factor)
+  const edge = V_TOP * T
+  const over = (throttle: number) => peakShare(factor, edge, throttle, throttle) > OVER_ON
+  let result = 1
+  if (over(1)) {
+    let lo = 0
+    let hi = 1
+    for (let i = 0; i < 20; i++) {
+      const mid = (lo + hi) / 2
+      if (over(mid)) hi = mid
+      else lo = mid
+    }
+    result = lo >= SAFE_SHARE_FULL ? 1 : lo
+  }
+  safeShares.set(factor, result)
+  return result
+}
+
+/**
+ * Predicted seconds to reach the surface `gap` away, closing at `closing`,
+ * for a body whose gap e-folds every `wellTime` s at the cap, with speed
+ * `share` of the cap (the throttle, in steady Flight Assist flight). The
+ * ship holds its closing speed until share · gap / wellTime (the cap
+ * there) falls below it, then the gap e-folds every wellTime / share down to
+ * the V_NORMAL floor (gap V_NORMAL · wellTime), which it crosses at
+ * share · V_NORMAL. Infinity when not closing (under AHEAD_MIN_SPEED).
+ */
+export function approachEta(gap: number, closing: number, wellTime: number, share = 1): number {
+  if (!(closing >= AHEAD_MIN_SPEED) || !(wellTime > 0)) return Infinity
+  const g = Math.max(0, gap)
+  const s = THREE.MathUtils.clamp(share, 1e-3, 1)
+  const floorGap = V_NORMAL * wellTime
+  const holdGap = Math.max(floorGap, (closing * wellTime) / s)
+  let eta = 0
+  if (g > holdGap) eta += (g - holdGap) / closing
+  const mid = Math.min(g, holdGap)
+  if (mid > floorGap) eta += (wellTime / s) * Math.log(mid / floorGap)
+  eta += Math.min(g, floorGap) / Math.min(closing, s * V_NORMAL)
+  return eta
+}
+
+export interface ApproachInput {
+  /** |velocity| and the cap where the ship is (shipTelemetry). */
+  speed: number
+  cap: number
+  /** Speed toward the subject's centre, units/s; ≤ 0 when not closing. */
+  closing: number
+  /** To the subject's surface, scene units. */
+  gap: number
+  /** The subject's wellFactor. */
+  factor: number
+  locked: boolean
+  throttle: number
+  flightAssist: boolean
+}
+
+/**
+ * The subject's approach state, in priority order (see ApproachStatus).
+ * `previous` gives over and fast their hysteresis.
+ */
+export function approachStatus(a: ApproachInput, previous: ApproachStatus | null): ApproachStatus {
+  const ratio = a.speed / Math.max(a.cap, 1e-9)
+  if (ratio > (previous === 'over' ? OVER_OFF : OVER_ON)) return 'over'
+  if (a.locked) return 'locked'
+  if (!(a.closing > 0)) return 'open'
+  const T = wellTimeOf(a.factor)
+  const edge = V_TOP * T
+  if ((a.gap - edge) / a.closing > FAST_WINDOW_S) return 'closing'
+  // As a share of the subject's own cap where the ship is; the run starts
+  // at the well's edge if it is still outside.
+  const subjectCap = THREE.MathUtils.clamp(a.gap / T, V_NORMAL, V_TOP)
+  const peak = peakShare(a.factor, a.gap, a.closing / subjectCap, a.throttle, a.flightAssist)
+  return peak > (previous === 'fast' ? FAST_OFF : OVER_ON) ? 'fast' : 'closing'
+}
+
+/** What ShipTargeting hands the HUD each frame. */
+export interface ShipApproach {
+  /** The subject: the locked target, or the body ahead; null for none. */
+  key: string | null
+  locked: boolean
+  /** True range to the subject, km (ship-distances.ts); NaN until measured. */
+  km: number
+  /** Predicted seconds to arrive (approachEta); Infinity when not closing. */
+  eta: number
+  status: ApproachStatus
+  /** The subject's safe-arrival throttle (safeShare); 1 for none. */
+  safeShare: number
+}
+
+export const shipApproach: ShipApproach = {
+  key: null,
+  locked: false,
+  km: NaN,
+  eta: Infinity,
+  status: 'open',
+  safeShare: 1,
+}
+
+export function resetShipApproach(): void {
+  shipApproach.key = null
+  shipApproach.locked = false
+  shipApproach.km = NaN
+  shipApproach.eta = Infinity
+  shipApproach.status = 'open'
+  shipApproach.safeShare = 1
+}
+
+const toBody = new THREE.Vector3()
+
+function gapTo(body: Body, position: THREE.Vector3): number {
+  return position.distanceTo(body.position) - body.radius
+}
+
+/**
+ * Index of the approach subject in `bodies`, or −1: the locked target when it
+ * is among them, else the body ahead. Ahead is within AHEAD_CONE of the
+ * velocity, by smallest surface gap: the body the ship reaches first. Not
+ * by well distance: diving at the Moon from beyond it, Earth's heavier well
+ * is the "nearer" one, but the Moon is what fills the view and gets hit.
+ * `current` keeps its place out to AHEAD_KEEP_CONE until another is
+ * AHEAD_SWITCH nearer.
+ */
+export function approachSubject(
+  bodies: readonly Body[],
+  position: THREE.Vector3,
+  velocity: THREE.Vector3,
+  targetKey: string | null,
+  current: string | null
+): number {
+  if (targetKey != null) {
+    const index = bodies.findIndex((b) => b.key === targetKey)
+    if (index >= 0) return index
+  }
+  const speed = velocity.length()
+  if (!(speed > AHEAD_MIN_SPEED)) return -1
+  const cosCone = Math.cos(AHEAD_CONE)
+  const cosKeep = Math.cos(AHEAD_KEEP_CONE)
+  let best = -1
+  let bestScore = Infinity
+  let kept = -1
+  let keptScore = Infinity
+  for (let i = 0; i < bodies.length; i++) {
+    const body = bodies[i]
+    const distance = toBody.subVectors(body.position, position).length()
+    if (!(distance > 0)) continue
+    const cos = toBody.dot(velocity) / (distance * speed)
+    const score = Math.max(0, gapTo(body, position))
+    if (body.key === current && cos >= cosKeep) {
+      kept = i
+      keptScore = score
+    }
+    if (cos >= cosCone && score < bestScore) {
+      best = i
+      bestScore = score
+    }
+  }
+  if (kept >= 0 && !(bestScore < AHEAD_SWITCH * keptScore)) return kept
+  return best
+}
+
+export interface ApproachFrame {
+  bodies: readonly Body[]
+  position: THREE.Vector3
+  velocity: THREE.Vector3
+  speed: number
+  cap: number
+  throttle: number
+  flightAssist: boolean
+  targetKey: string | null
+  /** True range per body, km, in `bodies` order (ship-distances.ts). */
+  km: ArrayLike<number>
+}
+
+/** Fill `out` (shipApproach) for this frame. Allocates nothing. */
+export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApproach): void {
+  const index = approachSubject(
+    frame.bodies,
+    frame.position,
+    frame.velocity,
+    frame.targetKey,
+    out.key
+  )
+  if (index < 0) {
+    resetShipApproach()
+    return
+  }
+  const body = frame.bodies[index]
+  const previous = out.key === body.key ? out.status : null
+  const distance = toBody.subVectors(body.position, frame.position).length()
+  const closing = distance > 0 ? frame.velocity.dot(toBody) / distance : 0
+  const gap = distance - body.radius
+  const factor = wellFactor(body.mass)
+  const locked = body.key === frame.targetKey
+  out.key = body.key
+  out.locked = locked
+  out.km = frame.km[index]
+  out.safeShare = safeShare(factor)
+  out.status = approachStatus(
+    {
+      speed: frame.speed,
+      cap: frame.cap,
+      closing,
+      gap,
+      factor,
+      locked,
+      throttle: frame.throttle,
+      flightAssist: frame.flightAssist,
+    },
+    previous
+  )
+  // With Flight Assist on the speed settles at throttle · cap however the
+  // cap moves (flight.ts rideWell), so the throttle is the steady share; the
+  // measured one dips for a frame each time the cap starts to fall.
+  const share = frame.flightAssist
+    ? frame.throttle
+    : frame.speed / Math.max(frame.cap, 1e-9)
+  out.eta = approachEta(gap, closing, wellTimeOf(factor), share)
+}

@@ -53,6 +53,21 @@ describe('projectBody', () => {
 })
 
 describe('pickBody', () => {
+  it("prefers a planet's dot to a sub-pixel moon beside it, unless the moon is the target", () => {
+    // Jupiter and Io from afar, Io this side: both well under a px.
+    const screen = project([body('jupiter', 0, 0, -4000, 7), body('io', 0.2, 0, -3990, 0.4)])
+    const io = screen[1]
+    expect(pickBody(screen, io.x, io.y)).toBe('jupiter')
+    expect(pickBody(screen, io.x, io.y, 'io')).toBe('io')
+    // Off on its own, even a sub-pixel moon is.
+    const lone = project([body('jupiter', 0, 0, -4000, 7), body('io', 400, 0, -3990, 0.4)])
+    expect(lone[1].radiusPx).toBeLessThan(1.5)
+    expect(pickBody(lone, lone[1].x, lone[1].y)).toBe('io')
+    // Close enough to see, the moon is fair game.
+    const near = project([body('jupiter', 0, 0, -40, 7), body('io', 12, 0, -40, 0.4)])
+    expect(pickBody(near, near[1].x, near[1].y)).toBe('io')
+  })
+
   it('picks a small far body within the minimum radius', () => {
     const screen = project([body('far', 0, 0, -1000, 1)])
     expect(pickBody(screen, WIDTH / 2 + 20, HEIGHT / 2)).toBe('far')
