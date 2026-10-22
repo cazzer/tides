@@ -77,19 +77,37 @@ describe('GIBS patch streaming', () => {
       bitmaps.push(bitmap)
       return bitmap
     }))
-    const uploads: { x: number; y: number; mips: boolean }[] = []
+    // Each tile is drawn, recoloured, into the slot the target's viewport frames.
+    const uploads: { x: number; y: number; width: number; scissored: boolean; mips: boolean; autoClear: boolean }[] = []
+    const passes: THREE.Scene[] = []
+    let bound: THREE.WebGLRenderTarget | null = null
     const gl = {
+      autoClear: true,
       capabilities: { getMaxAnisotropy: () => 1 },
       initRenderTarget: vi.fn(),
-      copyTextureToTexture: vi.fn((_src: THREE.Texture, dst: THREE.Texture, _r: null, at: THREE.Vector2) => {
-        uploads.push({ x: at.x, y: at.y, mips: dst.generateMipmaps })
+      getRenderTarget: () => bound,
+      setRenderTarget: vi.fn((t: THREE.WebGLRenderTarget | null) => {
+        bound = t
+      }),
+      render: vi.fn((scene: THREE.Scene) => {
+        if (!bound) throw new Error('drew a tile to the screen')
+        const material = (scene.children[0] as THREE.Mesh).material as THREE.ShaderMaterial
+        const tile = material.uniforms.uTile.value as THREE.Texture
+        // Read raw, unflipped, and still open when drawn.
+        expect(tile.colorSpace).toBe(THREE.NoColorSpace)
+        expect(tile.flipY).toBe(false)
+        expect((tile.image as { close: ReturnType<typeof vi.fn> }).close).not.toHaveBeenCalled()
+        passes.push(scene)
+        const { x, y, z } = bound.viewport
+        const scissored = bound.scissorTest && bound.scissor.equals(bound.viewport)
+        uploads.push({ x, y, width: z, scissored, mips: bound.texture.generateMipmaps, autoClear: gl.autoClear })
       }),
     } as unknown as THREE.WebGLRenderer
     const camera = new THREE.PerspectiveCamera()
     camera.position.copy(at)
     const ground = new THREE.Object3D()
     ground.updateMatrixWorld()
-    return { bitmaps, uploads, gl, camera, ground }
+    return { bitmaps, uploads, passes, gl, camera, ground }
   }
   const settle = async () => {
     for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
@@ -97,7 +115,7 @@ describe('GIBS patch streaming', () => {
 
   it('fetches six at a time, uploads two a frame with one mip rebuild, and frees everything on release', async () => {
     let n = 0
-    const { bitmaps, uploads, gl, camera, ground } = setup(async (url) => {
+    const { bitmaps, uploads, passes, gl, camera, ground } = setup(async (url) => {
       n++
       return new Response(url)
     })
@@ -109,14 +127,28 @@ describe('GIBS patch streaming', () => {
     patch.update(gl, camera, ground, 1, 16)
     expect(gl.initRenderTarget).toHaveBeenCalledTimes(1)
     expect(uploads.map((u) => u.mips)).toEqual([false, true])
-    // Tiles land in their slots, 512 px apart.
+    // Tiles land in their slots, 512 px apart, without clearing the rest,
+    // and the renderer is left as it was.
     for (const u of uploads) {
       expect(u.x % 512).toBe(0)
       expect(u.y % 512).toBe(0)
+      expect(u.width).toBe(512)
+      expect(u.scissored).toBe(true)
+      expect(u.autoClear).toBe(false)
     }
+    expect(gl.getRenderTarget()).toBeNull()
+    expect(gl.autoClear).toBe(true)
     expect(bitmaps.filter((b) => b.close.mock.calls.length > 0)).toHaveLength(2)
+    // The recolour's textures and program go with the patch.
+    const material = (passes[0].children[0] as THREE.Mesh).material as THREE.ShaderMaterial
+    const disposed = [material, material.uniforms.uTile.value, material.uniforms.uLut.value].map((o: THREE.EventDispatcher<{ dispose: object }>) => {
+      const listener = vi.fn()
+      o.addEventListener('dispose', listener)
+      return listener
+    })
     patch.release()
     expect(bitmaps.every((b) => b.close.mock.calls.length > 0)).toBe(true)
+    for (const listener of disposed) expect(listener).toHaveBeenCalled()
     patch.release()
   })
 
