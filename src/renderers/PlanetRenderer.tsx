@@ -53,7 +53,6 @@ function setUniforms(
   for (const [name, value] of Object.entries(values)) uniforms[name].value = value
 }
 
-
 function isLowQuality(): boolean {
   if (typeof window === 'undefined') return false
   const quality = new URLSearchParams(window.location.search).get('quality')

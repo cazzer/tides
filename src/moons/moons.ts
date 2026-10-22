@@ -134,7 +134,15 @@ export const MOONS: Readonly<Record<MoonKey, Moon>> = {
   dione: moon('dione', 'Dione', 'saturn', 377_396, 2.736915, 0.019, 561.4, 1.095e21, '#cfcac2', 328.0),
   rhea: moon('rhea', 'Rhea', 'saturn', 527_108, 4.518212, 0.345, 763.8, 2.307e21, '#c6c0b6', 209.5),
   titan: moon('titan', 'Titan', 'saturn', 1_221_870, 15.945421, 0.349, 2574.7, 1.345e23, '#d8a24a', 168.6),
-  iapetus: moon('iapetus', 'Iapetus', 'saturn', 3_560_820, 79.3215, 15.47, 734.5, 1.806e21, '#8c7f6d', 55.8),
+  // Iapetus is the one inclined orbit whose node matters: at node 0 its pole
+  // sits 43.5° from the ecliptic's, against ~17–18° in reality. Node 214°
+  // puts it 17.3° off and within ~1.5° of the J2000 pole the JPL mean
+  // elements give (Laplace pole RA 288.7°, Dec 78.9°; i 7.6°, node 86.5°);
+  // node 146° gives the same tilt to the ecliptic but ~17° from that pole.
+  iapetus: {
+    ...moon('iapetus', 'Iapetus', 'saturn', 3_560_820, 79.3215, 15.47, 734.5, 1.806e21, '#8c7f6d', 55.8),
+    nodeDeg: 214,
+  },
   miranda: moon('miranda', 'Miranda', 'uranus', 129_390, 1.413479, 4.232, 235.8, 6.4e19, '#aaa69f', 328.7),
   ariel: moon('ariel', 'Ariel', 'uranus', 190_020, 2.520379, 0.26, 578.9, 1.251e21, '#bbb6ae', 203.1),
   umbriel: moon('umbriel', 'Umbriel', 'uranus', 266_000, 4.144177, 0.128, 584.7, 1.275e21, '#6c6761', 251.2),

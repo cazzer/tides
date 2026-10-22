@@ -314,6 +314,31 @@ describe('measureRanges in the other moon systems (tides-2hv.8)', () => {
     expect(Math.abs(centres / MOONS.titan.aKm - 1)).toBeLessThan(1e-9)
   })
 
+  // Straight in from well past each system's hand-over, the parent's range
+  // only ever falls. The blended position mixes anchors whose scene
+  // directions disagree, which ran it backwards by up to ~280 000 km near
+  // Jupiter and Saturn.
+  it.each(['earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
+    'falls steadily on a straight run in to %s, on 40 dates',
+    (key) => {
+      let worst = 0
+      for (let day = 0; day < 120; day += 3) {
+        const { bodies, truth, ranges } = setup(DATES[0] + day * 86_400_000)
+        const planet = find(bodies, key)
+        const from = find(bodies, key === 'earth' ? 'sun' : 'earth').body
+        const dir = from.position.clone().sub(planet.body.position).normalize()
+        const position = new THREE.Vector3()
+        let previous = Infinity
+        for (let d = 1000; d >= shellOf(planet.body) + 0.02; d -= d > 100 ? 10 : 0.5) {
+          measureRanges(position.copy(planet.body.position).addScaledVector(dir, d), bodies, truth, ranges)
+          worst = Math.max(worst, ranges.km[planet.index] - previous)
+          previous = ranges.km[planet.index]
+        }
+      }
+      expect(worst).toBeLessThanOrEqual(1e-6)
+    }
+  )
+
   // The moons' scales are 3–30× off the planets' (~14 000 km a unit between
   // Saturn and Mimas): counted all the way out, 1000 units from Saturn read
   // ~10× short.

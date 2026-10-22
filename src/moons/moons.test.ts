@@ -170,6 +170,25 @@ describe('orbit sense and plane', () => {
     expect(deg('titan')).toBeLessThan(0.5)
   })
 
+  it('tilts Iapetus’s orbit ~17.3° to the ecliptic, as the real one is', () => {
+    for (const t of DATES) {
+      const deg = THREE.MathUtils.radToDeg(orbitNormal('iapetus', t).angleTo(new THREE.Vector3(0, 1, 0)))
+      expect(deg).toBeGreaterThan(16.5)
+      expect(deg).toBeLessThan(18.5)
+    }
+  })
+
+  // The equator's node on the ecliptic (e1 = Y × pole, normalised) is only
+  // well defined while no parent's pole is near the ecliptic's.
+  it('has every mean-orbit parent’s pole well off the ecliptic pole', () => {
+    for (const parent of ['mars', 'saturn', 'uranus', 'neptune'] as const) {
+      for (const t of DATES) {
+        const cross = new THREE.Vector3(0, 1, 0).cross(spinPole(parent, t)).length()
+        expect(cross, parent).toBeGreaterThan(0.3)
+      }
+    }
+  })
+
   it('comes back to the same place after one period', () => {
     const t = DATES[0]
     for (const key of MOON_KEYS) {

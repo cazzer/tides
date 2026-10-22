@@ -8,14 +8,15 @@
 // one useFrame that places them all without allocating.
 import { createRef, useEffect, useMemo, type FC, type RefObject } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
-import { meshBounds } from '@react-three/drei'
 import * as THREE from 'three'
 import type { DistanceScale } from '../distance-scale'
 import { positionsFor } from '../flight-scale'
 import { useCamera } from '../camera'
 import { useStore } from '../store'
 import { planetSurfaceMaterial, sunDirection } from '../renderers/planetMaterials'
+import { PLANETS } from '../planets'
 import { MOONS, MOON_KEYS, moonOffsetInto, moonRadius } from './moons'
+import { moonRaycast, type MoonPickData } from './moon-pick'
 
 export interface MoonBodiesProps {
   /** Which planet positions the moons follow. */
@@ -41,6 +42,7 @@ function placeMoons(meshes: readonly RefObject<THREE.Mesh | null>[], t: number, 
     mesh.position.x += parent[0]
     mesh.position.y += parent[1]
     mesh.position.z += parent[2]
+    ;(mesh.userData as MoonPickData).parentPosition.fromArray(parent)
   }
 }
 
@@ -54,7 +56,15 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         const sun = sunDirection()
         const material = planetSurfaceMaterial(sun.uniform)
         material.uniforms.uColor.value.set(MOONS[key].color)
-        return { material, onBeforeRender: sun.onBeforeRender }
+        // The camera frames a focused moon by `radius`; moonRaycast reads
+        // the rest.
+        const userData: MoonPickData & { focus: string } = {
+          focus: key,
+          radius: moonRadius(key),
+          parentPosition: new THREE.Vector3(),
+          parentRadius: PLANETS[MOONS[key].parent].radius,
+        }
+        return { material, onBeforeRender: sun.onBeforeRender, userData }
       }),
     []
   )
@@ -79,23 +89,19 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
 
   return (
     <>
-      {MOON_KEYS.map((key, i) => {
-        const radius = moonRadius(key)
-        return (
-          <mesh
-            key={key}
-            ref={refs[i]}
-            geometry={SPHERE}
-            material={looks[i].material}
-            scale={radius}
-            // The camera frames a focused moon by this radius.
-            userData={{ focus: key, radius }}
-            raycast={meshBounds}
-            onBeforeRender={looks[i].onBeforeRender}
-            onPointerDown={onPointerDown}
-          />
-        )
-      })}
+      {MOON_KEYS.map((key, i) => (
+        <mesh
+          key={key}
+          ref={refs[i]}
+          geometry={SPHERE}
+          material={looks[i].material}
+          scale={looks[i].userData.radius}
+          userData={looks[i].userData}
+          raycast={moonRaycast}
+          onBeforeRender={looks[i].onBeforeRender}
+          onPointerDown={onPointerDown}
+        />
+      ))}
     </>
   )
 }

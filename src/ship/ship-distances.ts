@@ -32,7 +32,17 @@
 //      to be as near in the scene. (Venus can't be, near Earth at the flight
 //      scale: it never comes within ~260 units. The boost dates from the
 //      compressed scale, where it passed ~14 units from Earth.)
-//   4. range(B) = |true B − true ship| − B's true radius.
+//   4. range(B) = |true B − true ship| − B's true radius. A moon system's
+//      parent is the exception: near it, its range is its own anchor's gap
+//      (a·gap plus the hand-over term), handing over to the formula above
+//      only far out (RANGE_HAND_OVER). The blended position mixes anchors
+//      whose scene directions and scales disagree (the log map bends the
+//      moons' geometry), and on a straight run in to Jupiter or Saturn it
+//      read the range going backwards by up to ~280 000 km; the anchor's gap
+//      only shrinks as the ship closes, at k × its radial speed. A moon's
+//      own anchor is no good for this (its scale is set by its nearest
+//      neighbour, so Mimas from Saturn would read ~4× long), so the moons
+//      keep the blended range: exact from the parent's surface, 0 on arrival.
 //
 // Gaps are to the collision shell, the closest the ship can get, and the
 // anchor then puts the ship on R's true surface: a range reads 0 on arrival,
@@ -48,6 +58,8 @@
 // ship is), so it is the rate the ranges change at. Inside a system with
 // several moons, ranges between members are approximate (up to ~1.4×), as
 // the log map's chords don't scale linearly; they still read 0 on arrival.
+// The moon systems also nudge ranges outside them: Mars's moons' anchors
+// shift Earth's and Mars's ranges by 1–11% for a ship 200–400 units out.
 
 import {
   Body,
@@ -93,6 +105,14 @@ const MIN_GAP = 1e-3
 const MOON_SYSTEM_INNER = 30
 const MOON_SYSTEM_EXTENT_FACTOR = 1.5
 const MOON_SYSTEM_BOOST = 1e4
+
+// Out to `outer` a parent's range is its own anchor's gap; from there to
+// RANGE_HAND_OVER × outer it hands over to the blended position's. The
+// members' anchors disagree by millions of km (each counts the hand-over
+// band at its own scale), so a quick hand-over ran Jupiter's range
+// backwards; spread this wide its rate never drops below ~70% of the
+// planets' scale. [TUNE]
+const RANGE_HAND_OVER = 10
 
 interface MoonSystem {
   parent: string
@@ -218,6 +238,12 @@ const systemDeparture: number[] = []
 const systemBoost: number[] = []
 const systemKm: number[] = []
 const systemIntegral: number[] = []
+// Per system: how far the parent's range has handed over from its own
+// anchor's gap to the blended position's (0 to 1, from outer to
+// RANGE_HAND_OVER × outer).
+const systemHandOver: number[] = []
+// Per body: the surface gap its own anchor puts the ship at, km.
+const anchorGapKm: number[] = []
 const anchor = new THREE.Vector3()
 const direction = new THREE.Vector3()
 
@@ -271,6 +297,7 @@ export function measureRanges(
   const n = bodies.length
   gaps.length = n
   logScales.length = n
+  anchorGapKm.length = n
   for (let i = 0; i < n; i++) {
     gaps[i] = Math.max(0, position.distanceTo(bodies[i].position) - collisionRadius(bodies[i]))
   }
@@ -297,6 +324,11 @@ export function measureRanges(
     // members' km per unit hands over to on the way out.
     systemKm[s] = departure > 0 ? Math.exp(neighbourLogScale(parent, bodies, truth, -1, s)) : 0
     systemIntegral[s] = departureIntegral(fromParent, system)
+    systemHandOver[s] = THREE.MathUtils.smoothstep(
+      fromParent,
+      system.outer,
+      RANGE_HAND_OVER * system.outer
+    )
   }
   for (let i = 0; i < n; i++) {
     if (systemOf[i] >= 0 && systemParent[systemOf[i]] < 0) systemOf[i] = -1
@@ -327,6 +359,7 @@ export function measureRanges(
     }
     direction.subVectors(position, bodies[r].position)
     if (direction.lengthSq() > 0) direction.normalize()
+    anchorGapKm[r] = gapKm
     anchor.copy(truth.positions[r]).addScaledVector(direction, truth.radii[r] + gapKm)
     out.position.addScaledVector(anchor, w)
     weightSum += w
@@ -335,9 +368,16 @@ export function measureRanges(
   if (weightSum > 0) out.position.divideScalar(weightSum)
   out.kmPerUnit = weightSum > 0 ? Math.exp(logSum / weightSum) : NaN
 
+  // A moon system's parent reads its own anchor's gap near it, handing over
+  // to the blended position's far out (see the header).
   out.nearest = -1
   for (let b = 0; b < n; b++) {
-    out.km[b] = Math.max(0, truth.positions[b].distanceTo(out.position) - truth.radii[b])
+    const km = Math.max(0, truth.positions[b].distanceTo(out.position) - truth.radii[b])
+    const s = systemOf[b]
+    out.km[b] =
+      s >= 0 && systemParent[s] === b
+        ? THREE.MathUtils.lerp(anchorGapKm[b], km, systemHandOver[s])
+        : km
     if (out.nearest < 0 || out.km[b] < out.km[out.nearest]) out.nearest = b
   }
   return out
