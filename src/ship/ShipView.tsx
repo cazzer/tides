@@ -6,6 +6,8 @@ import { useStore } from '../store'
 import { glassFloatingButton } from '../glass-styles'
 import { ShipController } from './ShipController'
 import { DesktopShipControls } from './DesktopShipControls'
+import { SpaceDust } from './SpaceDust'
+import { SpeedFov } from './useSpeedFov'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
 import { TouchShipControls } from './TouchShipControls'
 
@@ -84,6 +86,8 @@ export function ShipView({ children }: { children: ReactNode }) {
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust and the
             speed FOV kick (tides-3bl.6). */}
+        <SpaceDust />
+        <SpeedFov />
       </View>
       <ExitButton
         ref={exitButton}
