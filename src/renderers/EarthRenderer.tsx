@@ -16,10 +16,9 @@ import {
   STATIC_DRIFT_PER_FRAME,
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
+import { isLowQuality } from '../quality'
 
 // Import assets directly
-import earthNormalMapHigh from '../assets/earth-normal.jpg'
-import earthNormalMapLow from '../assets/earth-normal-2k.jpg'
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
 import earthSpecularMapLow from '../assets/earth-specular-2k.jpg'
 import earthCloudsTextureHigh from '../assets/earth-clouds.jpg'
@@ -40,7 +39,6 @@ export default function EarthRenderer({
 }: EarthRendererProps) {
   const textureSet = getEarthTextureSet(texture)
 
-  useTexture.preload(textureSet.normal)
   useTexture.preload(textureSet.specular)
   useTexture.preload(textureSet.clouds)
   useTexture.preload(textureSet.night)
@@ -51,16 +49,20 @@ export default function EarthRenderer({
 
   // Load textures using imported paths
   const earthTexture = useLoader(THREE.TextureLoader, texture)
-  const normalMap = useLoader(THREE.TextureLoader, textureSet.normal)
   const specularMap = useLoader(THREE.TextureLoader, textureSet.specular)
   const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
   const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
+  const gl = useThree((s) => s.gl)
+  prepareMaps(
+    gl.capabilities.getMaxAnisotropy(),
+    [earthTexture, nightTexture, cloudsTexture],
+    [specularMap, bumpTexture]
+  )
   const real = useStore((s) => s.weatherSource) === 'real'
   useRealCloudsActive(real)
   // A lost context comes back with blank render targets, and nothing redraws
   // them while paused.
-  const gl = useThree((s) => s.gl)
   useEffect(() => {
     const canvas = gl.domElement
     const restart = () => realCloudBlend.release()
@@ -153,9 +155,6 @@ export default function EarthRenderer({
           ref={groundMaterial}
           {...groundPatch}
           map={earthTexture}
-          // normalMap={normalMap}
-          // normalMapType={0}
-          // normalScale={normalScale}
           specularMap={specularMap}
           // specular="#aaddff"
           emissiveMap={nightTexture}
@@ -199,31 +198,28 @@ function setCloudMap(clouds: CloudLayer, map: THREE.Texture, measured: boolean) 
   clouds.uniforms.uCloudMaxKm.value = maxTopKm(measured)
 }
 
+/**
+ * Sets what three reads at a map's first upload (tides-01v.1): the full
+ * anisotropy, which grazing views of the ground need, and one channel for
+ * the grey data maps (the specular mask and the bump), a quarter of the
+ * VRAM. The material and the cloud shader read their red channel.
+ */
+function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Texture[]) {
+  for (const map of colour) map.anisotropy = anisotropy
+  for (const map of grey) {
+    map.anisotropy = anisotropy
+    map.format = THREE.RedFormat
+  }
+}
+
 const _position = new THREE.Vector3()
 const _quaternion = new THREE.Quaternion()
 const _scale = new THREE.Vector3()
 
 function getEarthTextureSet(baseTexture: string) {
-  if (typeof window === 'undefined') {
+  if (!isLowQuality()) {
     return {
       day: baseTexture,
-      normal: earthNormalMapHigh,
-      specular: earthSpecularMapHigh,
-      clouds: earthCloudsTextureHigh,
-      night: earthNightTextureHigh,
-      bump: earthBumpMapHigh,
-      low: false,
-    }
-  }
-
-  const quality = getQualityOverride()
-  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
-  const useLow = quality === 'low' || (quality !== 'high' && isMobile)
-
-  if (!useLow) {
-    return {
-      day: baseTexture,
-      normal: earthNormalMapHigh,
       specular: earthSpecularMapHigh,
       clouds: earthCloudsTextureHigh,
       night: earthNightTextureHigh,
@@ -234,18 +230,10 @@ function getEarthTextureSet(baseTexture: string) {
 
   return {
     day: baseTexture,
-    normal: earthNormalMapLow,
     specular: earthSpecularMapLow,
     clouds: earthCloudsTextureLow,
     night: earthNightTextureLow,
     bump: earthBumpMapLow,
     low: true,
   }
-}
-
-function getQualityOverride() {
-  if (typeof window === 'undefined') return null
-  const value = new URLSearchParams(window.location.search).get('quality')
-  if (value === 'low' || value === 'high') return value
-  return null
 }

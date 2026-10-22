@@ -68,6 +68,22 @@ export function usePlanetTextures(
   return urls.map((url) => (url === undefined ? null : loaded[defined.indexOf(url)]))
 }
 
+// Decodes off the main thread, flipped as TextureLoader's images are on
+// upload (three never flips an ImageBitmap), so the frame a moon's map
+// arrives in only uploads it (tides-2hv.18). Safari before 17 and Firefox
+// before 98 mishandle createImageBitmap's options, so they keep the image
+// path, as three's GLTFLoader does.
+const bitmapLoader = canFlipBitmaps() ? new THREE.ImageBitmapLoader(manager) : null
+bitmapLoader?.setOptions({ imageOrientation: 'flipY', premultiplyAlpha: 'none' })
+
+function canFlipBitmaps(): boolean {
+  if (typeof createImageBitmap === 'undefined' || typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent
+  if (/^((?!chrome|android).)*safari/i.test(ua)) return Number(ua.match(/Version\/(\d+)/)?.[1] ?? 0) >= 17
+  const firefox = ua.match(/Firefox\/(\d+)/)
+  return !firefox || Number(firefox[1]) >= 98
+}
+
 /**
  * Loads a colour texture without suspending, for maps that may arrive after
  * the body first shows (the moons, MoonBodies). Like usePlanetTextures, it
@@ -79,6 +95,22 @@ export function loadColorTexture(
   onLoad: (texture: THREE.Texture) => void,
   onError: (err: unknown) => void
 ): void {
-  colorTextureLoader.anisotropy = anisotropy
-  colorTextureLoader.load(url, onLoad, undefined, onError)
+  if (!bitmapLoader) {
+    colorTextureLoader.anisotropy = anisotropy
+    colorTextureLoader.load(url, onLoad, undefined, onError)
+    return
+  }
+  bitmapLoader.load(
+    url,
+    (bitmap) => {
+      const texture = new THREE.Texture(bitmap)
+      texture.flipY = false
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.anisotropy = anisotropy
+      texture.needsUpdate = true
+      onLoad(texture)
+    },
+    undefined,
+    onError
+  )
 }

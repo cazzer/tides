@@ -16,7 +16,6 @@ fi
 INPUTS=(
   "earth-day.jpg"
   "earth-night.jpg"
-  "earth-normal.jpg"
   "earth-specular.jpg"
   "earth-clouds.jpg"
   "earth-clouds-alpha.jpg"

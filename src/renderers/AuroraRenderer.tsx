@@ -21,6 +21,7 @@ import { blendOvalTable, ovationWeight, type OvationFit } from '../aurora-ovatio
 import { kpFeed } from './kpFeed'
 import { ovationFeed } from './ovationFeed'
 import { AURORA_GAIN } from '../lighting'
+import { isLowQuality } from '../quality'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
 import { AURORA_SHELL_OUTER } from './earth-shells'
@@ -43,16 +44,6 @@ function ease(delta: number, seconds: number) {
   return 1 - Math.exp(-Math.min(delta, 0.25) / seconds)
 }
 
-function useLowQuality() {
-  return useMemo(() => {
-    if (typeof window === 'undefined') return false
-    const q = new URLSearchParams(window.location.search).get('quality')
-    if (q === 'low') return true
-    if (q === 'high') return false
-    return /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
-  }, [])
-}
-
 const noRaycast = () => null
 
 interface AuroraRendererProps {
@@ -62,7 +53,7 @@ interface AuroraRendererProps {
 
 export default function AuroraRenderer({ radius }: AuroraRendererProps) {
   const real = useStore((s) => s.weatherSource) === 'real'
-  const low = useLowQuality()
+  const low = useMemo(isLowQuality, [])
   const kp = useRef(DEFAULT_KP)
   const tableKp = useRef(Number.NaN)
   /** The nowcast last seen, kept while its weight fades out. */

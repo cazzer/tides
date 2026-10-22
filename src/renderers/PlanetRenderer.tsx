@@ -22,6 +22,7 @@ import {
 } from './planetFrame'
 import { usePlanetTextures } from './planetTextures'
 import { SUNLIGHT_INTENSITY } from '../lighting'
+import { isLowQuality } from '../quality'
 import {
   AMBIENT,
   bandUniforms,
@@ -51,14 +52,6 @@ function setUniforms(
   values: Record<string, unknown>
 ) {
   for (const [name, value] of Object.entries(values)) uniforms[name].value = value
-}
-
-function isLowQuality(): boolean {
-  if (typeof window === 'undefined') return false
-  const quality = new URLSearchParams(window.location.search).get('quality')
-  if (quality === 'low') return true
-  if (quality === 'high') return false
-  return /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
 }
 
 const SPHERE_SEGMENTS = isLowQuality() ? 64 : 128

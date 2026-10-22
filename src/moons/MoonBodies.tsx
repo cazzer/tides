@@ -11,7 +11,7 @@
 // (moon-textures.ts) when that arrives, so the maps never hold up the view.
 // Every moon is turned tidally locked, longitude 0 toward its parent
 // (moonOrientationInto).
-import { createRef, useEffect, useMemo, type FC, type RefObject } from 'react'
+import { createRef, useEffect, useMemo, useRef, type FC, type RefObject } from 'react'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { DistanceScale } from '../distance-scale'
@@ -22,7 +22,8 @@ import { planetSurfaceMaterial, sunDirection } from '../renderers/planetMaterial
 import { loadColorTexture } from '../renderers/planetTextures'
 import { PLANETS } from '../planets'
 import { MOONS, MOON_KEYS, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
-import { lowQualityMoonTextures, moonTextureUrl } from './moon-textures'
+import { moonTextureUrl } from './moon-textures'
+import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 
 export interface MoonBodiesProps {
@@ -37,7 +38,7 @@ export interface MoonBodiesProps {
 // them, where a coarser one shows its facets. Shared for the app's life.
 const SPHERE = new THREE.SphereGeometry(1, 64, 32)
 
-const URLS = MOON_KEYS.map((key) => moonTextureUrl(key, lowQualityMoonTextures()))
+const URLS = MOON_KEYS.map((key) => moonTextureUrl(key, isLowQuality()))
 
 // The maps by url, kept for the app's life as useLoader keeps the planets',
 // so a remount (planets toggled, a panel leaving the Earth's camera) shows
@@ -109,13 +110,18 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   )
   useEffect(() => () => looks.forEach(({ material }) => material.dispose()), [looks])
 
+  // Arrived maps upload one per frame (useFrame below), up front rather than
+  // when each moon first comes into view, so maps that arrive or come into
+  // view together never stack their uploads into one long frame
+  // (tides-2hv.18).
+  const arrived = useRef<{ material: THREE.ShaderMaterial; map: THREE.Texture }[]>([])
   const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
   useEffect(() => {
     let mounted = true
     MOON_KEYS.forEach((key, i) => {
       moonMap(URLS[i], maxAnisotropy).then(
         (map) => {
-          if (mounted) applyMap(looks[i].material, map)
+          if (mounted) arrived.current.push({ material: looks[i].material, map })
         },
         // The moon keeps its catalog colour.
         (err) => console.warn(`Moon texture for ${key} failed to load`, err)
@@ -133,7 +139,12 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     return () => MOON_KEYS.forEach((key) => setPlanet(key, undefined))
   }, [interactive, refs, setPlanet])
 
-  useFrame(() => {
+  useFrame(({ gl }) => {
+    const next = arrived.current.shift()
+    if (next) {
+      gl.initTexture(next.map)
+      applyMap(next.material, next.map)
+    }
     const t = useStore.getState().timestamp
     if (t != null) placeMoons(refs, t, distanceScale)
   })
