@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { shipTelemetry } from './ship-telemetry'
+import { prefersReducedMotion } from './reduced-motion'
 import {
   EDGE_FADE,
   NEAR_FADE,
+  REDUCED_MOTION_OPACITY,
   STREAK_ENERGY_FLOOR,
   dustLevel,
   layerHalfSize,
@@ -31,10 +32,17 @@ function glsl(x: number): string {
   return Number.isInteger(x) ? `${x}.0` : `${x}`
 }
 
+// Draw after the planets' translucent shells (clouds, atmosphere, aurora use
+// renderOrder 1–2), so those don't blend over motes in front of a planet.
+const DUST_RENDER_ORDER = 10
+
+const viewport = new THREE.Vector4()
+
 // Each mote is a capsule quad built in screen space from its head (where it
 // is) to its tail (where it was a shutter-time ago), so the CPU sets only
 // uniforms per frame. `position` holds the quad corner: x 0 at the head, 1 at
-// the tail; y the side, ±1.
+// the tail; y the side, ±1. The fade and streak-energy lines are GLSL copies
+// of distanceFade and streakEnergy in dust.ts: keep them in step.
 const vertexShader = /* glsl */ `
   uniform vec3 uOffset;
   uniform float uHalf;
@@ -172,7 +180,6 @@ const SLOTS = [0, 1] as const
  * View; reads shipTelemetry and the rendering camera only.
  */
 export function SpaceDust() {
-  const size = useThree((s) => s.size)
   const geometry = useMemo(() => {
     const coarse =
       typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
@@ -189,10 +196,6 @@ export function SpaceDust() {
     [geometry, materials]
   )
 
-  useEffect(() => {
-    for (const material of materials) material.uniforms.uResolution.value.set(size.width, size.height)
-  }, [materials, size.width, size.height])
-
   // At render time, after every useFrame (ShipController included) has run,
   // with the camera actually drawing this frame. A wrap offset a frame behind
   // the camera would carry the motes along with the ship.
@@ -201,14 +204,20 @@ export function SpaceDust() {
       const mesh = meshes.current[slot]
       if (!mesh) continue
       const uniforms = materials[slot].uniforms
-      mesh.onBeforeRender = (_renderer, _scene, camera) => {
+      mesh.onBeforeRender = (renderer, _scene, camera) => {
         const { speed, velocity } = shipTelemetry
         const level = dustLevel(speed)
         const { layer, weight } = slotLayer(level, slot)
         const half = layerHalfSize(layer)
-        const opacity = weight * motionOpacity(speed, level) * DUST_OPACITY
+        const reduced = prefersReducedMotion() ? REDUCED_MOTION_OPACITY : 1
+        const opacity = weight * motionOpacity(speed, level) * DUST_OPACITY * reduced
         uniforms.uOpacity.value = opacity
         if (opacity <= 0) return
+        // The View's live viewport, in CSS pixels, so resizes and rotation
+        // track without a React render.
+        renderer.getCurrentViewport(viewport)
+        const ratio = renderer.getPixelRatio()
+        uniforms.uResolution.value.set(viewport.z / ratio, viewport.w / ratio)
         const p = camera.position
         uniforms.uHalf.value = half
         uniforms.uOffset.value.set(wrapOffset(p.x, half), wrapOffset(p.y, half), wrapOffset(p.z, half))
@@ -232,6 +241,7 @@ export function SpaceDust() {
           geometry={geometry}
           material={materials[slot]}
           frustumCulled={false}
+          renderOrder={DUST_RENDER_ORDER}
         />
       ))}
     </>

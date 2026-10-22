@@ -31,7 +31,7 @@ export const DUST_HALF_SIZE = 1
 /** Streak shutter at layer level 0, seconds; it opens by this much per level. */
 export const STREAK_TIME = 0.015
 /** Longest streak, as a share of its layer's half-size. */
-export const MAX_STREAK_SHARE = 0.15
+export const MAX_STREAK_SHARE = 0.1
 
 // Fades by distance from the camera as a share of the layer's half-size.
 // Near, by straight-line distance: the near plane reaches 0.1 units
@@ -43,16 +43,31 @@ export const MAX_STREAK_SHARE = 0.15
 export const NEAR_FADE: readonly [number, number] = [0.12, 0.3]
 export const EDGE_FADE: readonly [number, number] = [0.7, 1]
 
-/** Dust opacity at rest, as a share of moving: there, but not more stars. */
-export const STOPPED_OPACITY = 0.6
-/** How much the dust dims by high cruise, and the layer levels it dims over. */
-export const CRUISE_DIM = 0.5
-export const CRUISE_DIM_LEVELS: readonly [number, number] = [2.5, 5.5]
+/**
+ * Dust opacity at rest, as a share of moving: barely there, so parked motes
+ * don't read as specks on a planet's disc or as extra stars.
+ */
+export const STOPPED_OPACITY = 0.22
+/**
+ * How much the dust dims by high cruise, and the layer levels it dims over
+ * (~4 to ~130 units/s). The heading stays dark: motes there come head-on and
+ * barely streak.
+ */
+export const CRUISE_DIM = 0.65
+export const CRUISE_DIM_LEVELS: readonly [number, number] = [2, 4.5]
+/** Dust opacity under prefers-reduced-motion, as a share of normal. */
+export const REDUCED_MOTION_OPACITY = 0.5
 /** A streak's brightness never falls below this share of a dot's. */
 export const STREAK_ENERGY_FLOOR = 0.45
 
 /** Extra vertical FOV at the cruise cap, degrees. */
 export const FOV_KICK = 10
+/**
+ * Dust levels over which the kick comes in (~1 to ~16 units/s). The cap
+ * scales with distance, so full throttle past the Moon is still a crawl and
+ * gets no kick; it is for real speed.
+ */
+export const FOV_KICK_LEVELS: readonly [number, number] = [1, 3]
 /** Time constant of the FOV's ease toward its speed target, seconds. */
 export const FOV_TAU = 0.5
 
@@ -174,7 +189,22 @@ export function speedFraction(speed: number, speedCap: number): number {
   return speedCap > 0 ? clamp01(speed / speedCap) : 0
 }
 
-/** The ship camera's vertical FOV, degrees, for a (smoothed) speed fraction. */
-export function speedFov(fraction: number): number {
-  return SHIP_FOV + FOV_KICK * smoothstep(0, 1, fraction)
+/**
+ * How much of the FOV kick `speed` earns, 0..1: its share of the cruise cap,
+ * weighted by how fast it is in absolute terms (FOV_KICK_LEVELS).
+ */
+export function fovKickShare(speed: number, speedCap: number): number {
+  return (
+    speedFraction(speed, speedCap) *
+    smoothstep(FOV_KICK_LEVELS[0], FOV_KICK_LEVELS[1], dustLevel(speed))
+  )
+}
+
+/**
+ * The ship camera's vertical FOV, degrees, for a (smoothed) kick share. No
+ * kick under prefers-reduced-motion.
+ */
+export function speedFov(share: number, reducedMotion = false): number {
+  if (reducedMotion) return SHIP_FOV
+  return SHIP_FOV + FOV_KICK * smoothstep(0, 1, share)
 }

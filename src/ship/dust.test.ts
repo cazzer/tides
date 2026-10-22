@@ -5,6 +5,7 @@ import {
   DUST_HALF_SIZE,
   DUST_SIZE_BASE,
   DUST_SPEED_BASE,
+  FOV_KICK_LEVELS,
   EDGE_FADE,
   FOV_KICK,
   MAX_STREAK_SHARE,
@@ -14,6 +15,7 @@ import {
   distanceFade,
   dustLevel,
   easeToward,
+  fovKickShare,
   layerHalfSize,
   motionOpacity,
   positiveMod,
@@ -191,7 +193,7 @@ describe('fades', () => {
     expect(motionOpacity(0, 0)).toBeCloseTo(STOPPED_OPACITY)
     expect(motionOpacity(V_NORMAL, 0)).toBeCloseTo(1)
     expect(motionOpacity(500, dustLevel(500))).toBeLessThan(1)
-    expect(motionOpacity(500, dustLevel(500))).toBeGreaterThan(0.5)
+    expect(motionOpacity(500, dustLevel(500))).toBeGreaterThan(0.25)
   })
 })
 
@@ -200,6 +202,24 @@ describe('speed FOV', () => {
     expect(speedFraction(0.125, 0.25)).toBeCloseTo(0.5)
     expect(speedFraction(10, 5)).toBe(1)
     expect(speedFraction(1, 0)).toBe(0)
+  })
+
+  test('the kick needs real speed, not just a full throttle', () => {
+    // Full throttle crawling past the Moon: at the cap, but slow.
+    expect(fovKickShare(V_NORMAL, V_NORMAL)).toBe(0)
+    expect(fovKickShare(0.8, 0.8)).toBe(0)
+    // Cruise at the cap.
+    expect(fovKickShare(50, 50)).toBe(1)
+    // Fast but well under the cap.
+    expect(fovKickShare(25, 50)).toBeCloseTo(0.5)
+    const top = V_NORMAL * DUST_SPEED_BASE ** FOV_KICK_LEVELS[1]
+    expect(fovKickShare(top / 2, top)).toBeGreaterThan(0)
+    expect(fovKickShare(top / 2, top)).toBeLessThan(0.5)
+  })
+
+  test('no kick under prefers-reduced-motion', () => {
+    expect(speedFov(1, true)).toBe(SHIP_FOV)
+    expect(speedFov(0.5, true)).toBe(SHIP_FOV)
   })
 
   test('SHIP_FOV at rest, +FOV_KICK at the cap, monotonic between', () => {
