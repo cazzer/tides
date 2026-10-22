@@ -228,6 +228,15 @@ export function detailOctaveWeights(footprint: number, texel: number, octaves: n
   return weights
 }
 
+/** A local direction turned into the clouds' own frame for a drift of
+ * `turns` (uCloudShift): directionToUv of the result is the texture
+ * coordinate the cloud there was painted at. The detail noise lives here. */
+export function cloudFrame([x, y, z]: Vec3, turns: number): Vec3 {
+  const c = Math.cos(2 * Math.PI * turns)
+  const s = Math.sin(2 * Math.PI * turns)
+  return [x * c - z * s, y, z * c + x * s]
+}
+
 /** The static clouds drift east at this many radians per frame. */
 export const STATIC_DRIFT_PER_FRAME = 0.0001
 

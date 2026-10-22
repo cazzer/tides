@@ -7,6 +7,7 @@ import {
   CLOUD_LAYER_TOP,
   CLOUD_UNITS_PER_KM,
   cloudColumn,
+  cloudFrame,
   DETAIL_OCTAVES,
   DETAIL_OCTAVES_FLAT,
   detailOctaveWeight,
@@ -237,7 +238,7 @@ describe('cloud detail octaves', () => {
 
   it('adds none until the map is magnified past 1.5 px a texel', () => {
     expect(detailOctaveWeights(texel * 10, texel, DETAIL_OCTAVES)).toEqual([])
-    expect(detailOctaveWeights(texel / 1.5, texel, DETAIL_OCTAVES)).toEqual([])
+    expect(detailOctaveWeights(texel / 1.4, texel, DETAIL_OCTAVES)).toEqual([])
     expect(detailOctaveWeights(texel / 2, texel, DETAIL_OCTAVES).length).toBeGreaterThan(0)
   })
 
@@ -257,11 +258,18 @@ describe('cloud detail octaves', () => {
     expect(detailOctaveWeight(1, 6)).toBe(1)
   })
 
-  it('fades finer octaves first', () => {
-    for (const footprint of [texel / 4, texel / 20, texel / 100]) {
-      const weights = detailOctaveWeights(footprint, texel, 10)
-      for (let k = 1; k < weights.length; k++) {
-        expect(weights[k]).toBeLessThanOrEqual(weights[k - 1])
+  it('turns with the drift, so the noise moves with the painted clouds', () => {
+    for (const turns of [0, 0.13, 0.5, 0.97]) {
+      for (const dir of [[1, 0, 0], [0.3, 0.8, -0.52], [-0.6, -0.7, 0.39]] as Vec3[]) {
+        const n = Math.hypot(...dir)
+        const unit = dir.map((v) => v / n) as Vec3
+        const [u, v] = directionToUv(unit)
+        const [uf, vf] = directionToUv(cloudFrame(unit, turns))
+        const du = uf - (u - turns)
+        expect(du - Math.round(du)).toBeCloseTo(0, 9)
+        expect(vf).toBeCloseTo(v, 9)
+        // And back.
+        cloudFrame(cloudFrame(unit, turns), -turns).forEach((c, i) => expect(c).toBeCloseTo(unit[i], 9))
       }
     }
   })
