@@ -241,6 +241,8 @@ const twoFigures = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 
 /** "766,000 km", "2.03 million km" from a million km, "1.52 AU" from 0.1 AU. */
 export function formatDistance(km: number): string {
   if (!Number.isFinite(km)) return '—'
+  // Whole km below 1000, so a ship at rest on a surface reads "0 km".
+  if (km < 1000) return `${threeFigures.format(Math.round(km))} km`
   if (km < MILLION) return `${threeFigures.format(km)} km`
   if (km < AU_FROM) return `${threeFigures.format(km / MILLION)} million km`
   return `${threeFigures.format(km / KM_PER_AU)} AU`

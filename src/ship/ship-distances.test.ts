@@ -219,6 +219,8 @@ describe('formatting', () => {
   it('formats distances as km, million km, then AU', () => {
     expect(formatDistance(765_622)).toMatch(/^766.000 km$/)
     expect(formatDistance(999)).toBe('999 km')
+    expect(formatDistance(2.07e-9)).toBe('0 km')
+    expect(formatDistance(6.4)).toBe('6 km')
     expect(formatDistance(6_371.4)).toMatch(/^6.370 km$/)
     expect(formatDistance(2_030_400)).toBe('2.03 million km')
     expect(formatDistance(0.099 * KM_PER_AU)).toBe('14.8 million km')
