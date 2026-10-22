@@ -67,3 +67,18 @@ export function usePlanetTextures(
   )
   return urls.map((url) => (url === undefined ? null : loaded[defined.indexOf(url)]))
 }
+
+/**
+ * Loads a colour texture without suspending, for maps that may arrive after
+ * the body first shows (the moons, MoonBodies). Like usePlanetTextures, it
+ * stays off the app's loading overlay.
+ */
+export function loadColorTexture(
+  url: string,
+  anisotropy: number,
+  onLoad: (texture: THREE.Texture) => void,
+  onError: (err: unknown) => void
+): void {
+  colorTextureLoader.anisotropy = anisotropy
+  colorTextureLoader.load(url, onLoad, undefined, onError)
+}

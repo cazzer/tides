@@ -6,16 +6,23 @@
 // geometry scaled per moon, one material per moon (they share the planets'
 // compiled program, lit the same way, from the Sun's actual direction), and
 // one useFrame that places them all without allocating.
+//
+// Each moon starts as its catalog colour and picks up its surface map
+// (moon-textures.ts) when that arrives, so the maps never hold up the view.
+// Every moon is turned tidally locked, longitude 0 toward its parent
+// (moonOrientationInto).
 import { createRef, useEffect, useMemo, type FC, type RefObject } from 'react'
-import { useFrame, type ThreeEvent } from '@react-three/fiber'
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { DistanceScale } from '../distance-scale'
 import { positionsFor } from '../flight-scale'
 import { useCamera } from '../camera'
 import { useStore } from '../store'
 import { planetSurfaceMaterial, sunDirection } from '../renderers/planetMaterials'
+import { loadColorTexture } from '../renderers/planetTextures'
 import { PLANETS } from '../planets'
-import { MOONS, MOON_KEYS, moonOffsetInto, moonRadius } from './moons'
+import { MOONS, MOON_KEYS, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
+import { lowQualityMoonTextures, moonTextureUrl } from './moon-textures'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 
 export interface MoonBodiesProps {
@@ -26,8 +33,30 @@ export interface MoonBodiesProps {
 }
 
 // A unit sphere, scaled to each moon's radius; even the largest moon is a
-// few pixels across until the camera frames it. Shared for the app's life.
-const SPHERE = new THREE.SphereGeometry(1, 32, 16)
+// few pixels across until the camera frames it, but ship mode flies up to
+// them, where a coarser one shows its facets. Shared for the app's life.
+const SPHERE = new THREE.SphereGeometry(1, 64, 32)
+
+const URLS = MOON_KEYS.map((key) => moonTextureUrl(key, lowQualityMoonTextures()))
+
+// The maps by url, kept for the app's life as useLoader keeps the planets',
+// so a remount (planets toggled, a panel leaving the Earth's camera) shows
+// them at once instead of reloading.
+const loadedMaps = new Map<string, THREE.Texture>()
+const pendingMaps = new Map<string, Promise<THREE.Texture>>()
+
+function moonMap(url: string, anisotropy: number): Promise<THREE.Texture> {
+  let pending = pendingMaps.get(url)
+  if (!pending) {
+    pending = new Promise((resolve, reject) => loadColorTexture(url, anisotropy, resolve, reject))
+    pending.then(
+      (map) => loadedMaps.set(url, map),
+      () => pendingMaps.delete(url)
+    )
+    pendingMaps.set(url, pending)
+  }
+  return pending
+}
 
 // Each moon at its parent's position at `scale` plus its offset. Module
 // level, so the meshes behind the memoised refs aren't mutated in a hook.
@@ -39,11 +68,21 @@ function placeMoons(meshes: readonly RefObject<THREE.Mesh | null>[], t: number, 
     const key = MOON_KEYS[i]
     const parent = positionAt[MOONS[key].parent](t)
     moonOffsetInto(key, t, mesh.position)
+    moonOrientationInto(key, t, mesh.quaternion)
     mesh.position.x += parent[0]
     mesh.position.y += parent[1]
     mesh.position.z += parent[2]
     ;(mesh.userData as MoonPickData).parentPosition.fromArray(parent)
   }
+}
+
+// Switches a moon's material to its map (one shared compiled program for
+// every textured moon). Module level, like placeMoons.
+function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
+  if (material.uniforms.uMap.value === map) return
+  material.uniforms.uMap.value = map
+  material.defines.USE_PLANET_MAP = ''
+  material.needsUpdate = true
 }
 
 export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) => {
@@ -52,9 +91,9 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   const refs = useMemo(() => MOON_KEYS.map(() => createRef<THREE.Mesh>()), [])
   const looks = useMemo(
     () =>
-      MOON_KEYS.map((key) => {
+      MOON_KEYS.map((key, i) => {
         const sun = sunDirection()
-        const material = planetSurfaceMaterial(sun.uniform)
+        const material = planetSurfaceMaterial(sun.uniform, { map: loadedMaps.get(URLS[i]) ?? null })
         material.uniforms.uColor.value.set(MOONS[key].color)
         // The camera frames a focused moon by `radius`; moonRaycast reads
         // the rest.
@@ -69,6 +108,23 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     []
   )
   useEffect(() => () => looks.forEach(({ material }) => material.dispose()), [looks])
+
+  const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
+  useEffect(() => {
+    let mounted = true
+    MOON_KEYS.forEach((key, i) => {
+      moonMap(URLS[i], maxAnisotropy).then(
+        (map) => {
+          if (mounted) applyMap(looks[i].material, map)
+        },
+        // The moon keeps its catalog colour.
+        (err) => console.warn(`Moon texture for ${key} failed to load`, err)
+      )
+    })
+    return () => {
+      mounted = false
+    }
+  }, [looks, maxAnisotropy])
 
   // Only the main panel's camera focuses bodies; the store keys are the moons'.
   useEffect(() => {

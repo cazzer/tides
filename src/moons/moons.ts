@@ -435,3 +435,30 @@ export function moonOrbitPath(
   return points
 }
 
+
+// --- Orientation ---------------------------------------------------------
+
+const toParent = new THREE.Vector3()
+const pole = new THREE.Vector3()
+const ahead = new THREE.Vector3()
+const basis = new THREE.Matrix4()
+
+/**
+ * The moon's tidally locked orientation at t, into `out`: its local frame as
+ * SphereGeometry's UVs map a surface map (+Y north, longitude 0 at +X, east
+ * toward −Z) turned so longitude 0 faces the parent, as every one of these
+ * moons keeps its sub-parent point near 0°. North is the IAU pole: along the
+ * orbit's angular momentum, or against it for Uranus' moons (POLE_SENSE) and
+ * Triton (retrograde). Librations and pole tilts off the orbit plane are
+ * ignored.
+ */
+export function moonOrientationInto(key: MoonKey, t: number, out: THREE.Quaternion): THREE.Quaternion {
+  computeAll(t)
+  const { parent, retrograde } = MOONS[key]
+  const i = INDEX[key] * 3
+  toParent.fromArray(unitP, i).negate()
+  ahead.fromArray(unitQ, i)
+  pole.crossVectors(ahead, toParent).multiplyScalar(POLE_SENSE[parent] * (retrograde ? -1 : 1))
+  ahead.crossVectors(toParent, pole)
+  return out.setFromRotationMatrix(basis.makeBasis(toParent, pole, ahead))
+}

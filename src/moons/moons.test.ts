@@ -13,6 +13,7 @@ import {
   clampedSceneRadius,
   moonOffsetInto,
   moonOrbitPath,
+  moonOrientationInto,
   moonOrbitRadius,
   moonPosition,
   moonRadius,
@@ -325,5 +326,33 @@ describe('system view clearance, 1900–2100', () => {
       if (centres[a][i].distanceTo(centres[b][i]) < reach) touching++
     }
     expect(touching / times.length).toBeLessThan(0.03)
+  })
+})
+
+describe('tidally locked orientation', () => {
+  const X = new THREE.Vector3(1, 0, 0)
+  const Y = new THREE.Vector3(0, 1, 0)
+  const Z = new THREE.Vector3(0, 0, 1)
+
+  it.each(DATES)('turns longitude 0 toward the parent and north to the IAU pole (%i)', (t) => {
+    const q = new THREE.Quaternion()
+    for (const key of MOON_KEYS) {
+      const { parent, retrograde } = MOONS[key]
+      moonOrientationInto(key, t, q)
+      const lon0 = X.clone().applyQuaternion(q)
+      const north = Y.clone().applyQuaternion(q)
+      expect(lon0.dot(offset(key, t).normalize())).toBeCloseTo(-1, 6)
+      // Triton's orbit is 23° off Neptune's equator, Iapetus' 15.47° off Saturn's.
+      const iau = eclipticToScene(
+        RotateVector(Rotation_EQJ_ECT(new Date(t)), RotationAxis(PLANETS[parent].body, new Date(t)).north),
+        new THREE.Vector3()
+      )
+      expect(north.dot(iau)).toBeGreaterThan(0.9)
+      // Seen from IAU north, a moon orbiting counterclockwise leads with
+      // 90° W (local +Z); Uranus' moons and Triton orbit clockwise.
+      const leading = Z.clone().applyQuaternion(q).dot(orbitNormal(key, t).cross(offset(key, t)).normalize())
+      const clockwise = parent === 'uranus' || retrograde
+      expect(leading).toBeCloseTo(clockwise ? -1 : 1, 2)
+    }
   })
 })
