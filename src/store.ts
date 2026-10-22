@@ -160,6 +160,9 @@ export const DEFAULT_SYSTEM_AIDS: Readonly<SystemAids> = {
  * `?aids=` lists the aids that are on, comma-separated (`aids=orbits,grid`);
  * an empty value turns them all off. No param means the defaults, and unknown
  * names are ignored.
+ *
+ * Caveat: the param lists only what is on, so an aid key added later reads as
+ * off in an older shared link that carries `aids=`, whatever its default.
  */
 export function parseSystemAids(param: string | null): SystemAids {
   if (param == null) return { ...DEFAULT_SYSTEM_AIDS }

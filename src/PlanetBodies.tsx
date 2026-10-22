@@ -1,7 +1,14 @@
 // The seven planets in the orbital views (tides-kzj.2.4). Mounted only while
 // they are switched on, as siblings of the Sun, Earth and Moon: the camera
 // reads a focused body's local position as its world position.
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import {
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type FC,
+} from 'react'
 import type * as THREE from 'three'
 import OrbitingBody from './OrbitingBody'
 import {
@@ -15,25 +22,21 @@ import { PLANET_RENDERERS } from './renderers/planets'
 import { useStore } from './store'
 import type { DistanceScale } from './distance-scale'
 
-export function PlanetBodies({
-  interactive,
-}: {
+export const PlanetBodies: FC<{
   interactive: boolean
-  /** Inert until tides-2hv.6 adds the 'flight' positions. */
+  /** Not read until tides-2hv.6 adds the 'flight' positions. */
   distanceScale: DistanceScale
-}) {
-  return (
-    <>
-      {PLANET_KEYS.map((key) => (
-        <PlanetBody
-          key={key}
-          planetKey={key}
-          interactive={interactive}
-        />
-      ))}
-    </>
-  )
-}
+}> = ({ interactive }) => (
+  <>
+    {PLANET_KEYS.map((key) => (
+      <PlanetBody
+        key={key}
+        planetKey={key}
+        interactive={interactive}
+      />
+    ))}
+  </>
+)
 
 function PlanetBody({
   planetKey,
