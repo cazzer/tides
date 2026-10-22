@@ -46,6 +46,19 @@ describe('ground detail patch', () => {
     clouds.dispose()
   })
 
+  it("tilts the land by the displacement map's relief before the detail's own tilt", () => {
+    const displaced = { ...phongShader(), displacementMap: true }
+    const flat = phongShader()
+    groundDetailPatch(false).onBeforeCompile(displaced, {} as THREE.WebGLRenderer)
+    groundDetailPatch(false).onBeforeCompile(flat, {} as THREE.WebGLRenderer)
+    const frag = displaced.fragmentShader
+    const relief = frag.indexOf('groundRelief(vMapUv, vGroundDetailPos, groundFootprint)')
+    expect(frag).toContain('#define GROUND_RELIEF\n')
+    expect(frag.indexOf('float groundFootprint =')).toBeLessThan(relief)
+    expect(relief).toBeLessThan(frag.indexOf('vec4 detail = groundDetail('))
+    expect(flat.fragmentShader).not.toContain('uniform sampler2D displacementMap;')
+  })
+
   it('takes fewer octaves on the low tier, with its own program', () => {
     const high = phongShader()
     const low = phongShader()
