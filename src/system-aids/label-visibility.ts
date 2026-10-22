@@ -189,8 +189,8 @@ export function labelClearance(key: LabelKey): number {
 }
 
 // How far out a system's outermost body reaches, scene units, for the
-// "resolvable" gate.
-function systemExtent(system: LabelSystem): number {
+// "resolvable" gate (and the main view's near plane, camera.tsx).
+export function systemExtent(system: LabelSystem): number {
   if (system === 'earth') return MOON_ORBIT + MOON_RADIUS
   if (system === 'sun' || system === 'mercury' || system === 'venus') return 0
   return moonSystemExtent(system)

@@ -27,10 +27,18 @@ import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
 import {
   MAIN_ZOOM,
+  clearNear,
   focusedRef,
   planetFramingZoom,
   planetsNear,
+  type BodyDepth,
 } from './main-view'
+import {
+  LABEL_KEYS,
+  bodyReach,
+  systemExtent,
+} from './system-aids/label-visibility'
+import { isMoonKey } from './moons/moon-keys'
 import {
   canPivot,
   clampTilt,
@@ -256,20 +264,55 @@ function useEarthPivot(
   })
 }
 
+// Covers Earth's atmosphere and aurora shells beyond its sphere.
+const NEAR_CLEARANCE = 1.1
+
+// How far each body reaches for the near plane: a planet with moons counts
+// its whole system, so the moons go with it (tides-2hv.16).
+const NEAR_REACH = LABEL_KEYS.map(
+  (key) =>
+    NEAR_CLEARANCE *
+    (key === 'moon' || isMoonKey(key)
+      ? bodyReach(key)
+      : Math.max(bodyReach(key), systemExtent(key)))
+)
+
 /**
  * With planets on, moves the main view's near plane with the zoom
- * (planetsNear); off, it stays at 0 as it always was.
+ * (planetsNear), stepping it clear of any body it would cut (clearNear);
+ * off, it stays at 0 as it always was.
  */
 function usePlanetsNear() {
+  const bodies = useMemo<BodyDepth[]>(
+    () => LABEL_KEYS.map(() => ({ depth: 0, reach: 0 })),
+    []
+  )
+  const forward = useMemo(() => new Vector3(), [])
+  const centre = useMemo(() => new Vector3(), [])
   useFrame(({ camera, controls }) => {
     const ortho = camera as OrthographicCamera
     if (!controls || !ortho.isOrthographicCamera) return
-    const near = useStore.getState().showPlanets
-      ? planetsNear(
-          ortho.zoom,
-          ortho.position.distanceTo((controls as OrbitControlsImpl).target)
-        )
-      : 0
+    const state = useStore.getState()
+    let near = 0
+    if (state.showPlanets) {
+      const eyeDistance = ortho.position.distanceTo(
+        (controls as OrbitControlsImpl).target
+      )
+      ortho.getWorldDirection(forward)
+      LABEL_KEYS.forEach((key, i) => {
+        const object = (state[key] as { current?: Object3D | null } | undefined)
+          ?.current
+        const body = bodies[i]
+        if (object) {
+          object.getWorldPosition(centre)
+          body.depth = centre.sub(ortho.position).dot(forward)
+          body.reach = NEAR_REACH[i]
+        } else {
+          body.reach = 0
+        }
+      })
+      near = clearNear(planetsNear(ortho.zoom, eyeDistance), bodies, eyeDistance)
+    }
     if (near !== ortho.near) {
       ortho.near = near
       ortho.updateProjectionMatrix()
