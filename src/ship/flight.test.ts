@@ -8,15 +8,19 @@ import {
   K_CRUISE,
   MAX_DT,
   PITCH_RATE,
+  ROLL_RATE,
+  TURN_RATE_MIN_FACTOR,
   V_NORMAL,
   VELOCITY_TAU,
+  YAW_RATE,
   approachCap,
   collisionRadius,
   createShipState,
   nearestBody,
   speedCap,
+  speedFraction,
   stepShip,
-  turnRateFactor,
+  turnRateMultiplier,
   type Body,
   type FlightEnv,
   type ShipState,
@@ -140,27 +144,63 @@ describe('approachCap', () => {
   })
 })
 
-describe('turnRateFactor', () => {
-  test('peaks in the blue zone (throttle 0.5–0.75) and is lower at 0 and 1', () => {
-    let best = -Infinity
-    let bestAt = NaN
-    for (let t = 0; t <= 1.0001; t += 0.01) {
-      const f = turnRateFactor(t)
-      if (f > best + 1e-12) {
-        best = f
-        bestAt = t
-      }
-    }
-    expect(bestAt).toBeGreaterThanOrEqual(0.5 - 1e-9)
-    expect(bestAt).toBeLessThanOrEqual(0.75)
-    expect(turnRateFactor(BLUE_ZONE[0])).toBe(best)
-    expect(turnRateFactor(BLUE_ZONE[1])).toBe(best)
-    expect(turnRateFactor(0)).toBeLessThan(best)
-    expect(turnRateFactor(1)).toBeLessThan(best)
+describe('speedFraction', () => {
+  test('is speed over cap, clamped to 0..1', () => {
+    expect(speedFraction(0.3, 1.2)).toBeCloseTo(0.25, 12)
+    expect(speedFraction(2, 1)).toBe(1)
+    expect(speedFraction(0, 1)).toBe(0)
   })
 
-  test('reverse throttle uses its magnitude', () => {
-    expect(turnRateFactor(-0.25)).toBe(turnRateFactor(0.25))
+  test('a zero or infinite cap gives a number, never NaN', () => {
+    expect(speedFraction(0, 0)).toBe(0)
+    expect(speedFraction(1, 0)).toBe(1)
+    expect(speedFraction(1, Infinity)).toBe(0)
+    expect(speedFraction(Infinity, Infinity)).toBe(0)
+    expect(speedFraction(Infinity, 1)).toBe(1)
+    expect(speedFraction(NaN, 1)).toBe(0)
+  })
+})
+
+describe('turnRateMultiplier', () => {
+  test('is 1 from rest to the top of the blue zone: no low-speed penalty', () => {
+    for (let f = 0; f <= BLUE_ZONE[1] + 1e-9; f += 0.01) {
+      expect(turnRateMultiplier(f)).toBe(1)
+    }
+  })
+
+  test('falls to TURN_RATE_MIN_FACTOR at the cap, strictly decreasing above the band', () => {
+    expect(turnRateMultiplier(1)).toBeCloseTo(TURN_RATE_MIN_FACTOR, 12)
+    let previous = turnRateMultiplier(BLUE_ZONE[1])
+    for (let f = BLUE_ZONE[1] + 0.005; f <= 1 + 1e-9; f += 0.005) {
+      const m = turnRateMultiplier(f)
+      expect(m).toBeLessThan(previous)
+      expect(m).toBeGreaterThanOrEqual(TURN_RATE_MIN_FACTOR - 1e-12)
+      previous = m
+    }
+  })
+
+  test('is continuous with no kink at either end of the fall-off', () => {
+    const h = 1e-6
+    for (const edge of [BLUE_ZONE[1], 1]) {
+      const below = turnRateMultiplier(edge - h)
+      const above = turnRateMultiplier(edge + h)
+      expect(Math.abs(above - below)).toBeLessThan(1e-9)
+      // Slopes either side of the edge agree (both ~0 for a smoothstep).
+      const left = (turnRateMultiplier(edge) - turnRateMultiplier(edge - h)) / h
+      const right = (turnRateMultiplier(edge + h) - turnRateMultiplier(edge)) / h
+      expect(Math.abs(left - right)).toBeLessThan(1e-4)
+    }
+    // No jumps anywhere in between.
+    for (let f = 0; f < 1; f += 0.001) {
+      expect(Math.abs(turnRateMultiplier(f + 0.001) - turnRateMultiplier(f))).toBeLessThan(0.01)
+    }
+  })
+
+  test('out-of-range and non-finite fractions stay within the curve', () => {
+    expect(turnRateMultiplier(-1)).toBe(1)
+    expect(turnRateMultiplier(2)).toBeCloseTo(TURN_RATE_MIN_FACTOR, 12)
+    expect(turnRateMultiplier(Infinity)).toBeCloseTo(TURN_RATE_MIN_FACTOR, 12)
+    expect(turnRateMultiplier(NaN)).toBe(1)
   })
 })
 
@@ -256,6 +296,52 @@ describe('turn rates', () => {
     const yaw = turned({ yaw: 1 })
     expect(turned({ pitch: 1 })).toBeGreaterThan(yaw)
     expect(turned({ roll: 1 })).toBeGreaterThan(yaw)
+  })
+
+  // Settle at `throttle` (FA on, no bodies, so the cap is V_NORMAL), then hold
+  // full stick on `stick` and read the steady body rate.
+  function settledRates(throttle: number, stick: Partial<ShipInput>): THREE.Vector3 {
+    const state = fly(createShipState(), 10, input({ throttle }), env([]))
+    fly(state, 2, input({ ...stick, throttle }), env([]))
+    return state.angularVelocity.clone()
+  }
+
+  test('full rate from rest through the blue zone, TURN_RATE_MIN_FACTOR at full throttle', () => {
+    for (const throttle of [0, 0.25, BLUE_ZONE[0], 0.7]) {
+      expect(Math.abs(settledRates(throttle, { yaw: 1 }).y)).toBeCloseTo(YAW_RATE, 3)
+    }
+    // Yawing at the cap swings the velocity off the nose, so the speed (and
+    // with it the penalty) sits a hair under the cap's: within 2%.
+    const full = Math.abs(settledRates(1, { yaw: 1 }).y)
+    expect(full / YAW_RATE).toBeGreaterThan(TURN_RATE_MIN_FACTOR - 1e-9)
+    expect(full / YAW_RATE).toBeLessThan(TURN_RATE_MIN_FACTOR + 0.02)
+    expect(Math.abs(settledRates(1, { pitch: 1 }).x) / PITCH_RATE).toBeLessThan(
+      TURN_RATE_MIN_FACTOR + 0.02
+    )
+    expect(Math.abs(settledRates(1, { roll: 1 }).z) / ROLL_RATE).toBeCloseTo(
+      TURN_RATE_MIN_FACTOR,
+      3
+    )
+  })
+
+  test('keys off speed, not throttle: FA off, coasting at the cap turns slowly', () => {
+    const coasting = (speed: number) => {
+      const state = createShipState()
+      state.velocity.set(0, 0, -speed)
+      // A tenth of a second of full yaw from still, FA off: the rate builds
+      // at demand / ROTATION_TAU, well short of the raw clamp.
+      fly(state, 0.1, input({ yaw: 1, throttle: 0, flightAssist: false }), env([]))
+      return Math.abs(state.angularVelocity.y)
+    }
+    expect(coasting(V_NORMAL) / coasting(0)).toBeCloseTo(TURN_RATE_MIN_FACTOR, 6)
+  })
+
+  test('FA off still clamps to the raw max rate, so speeding up never brakes a spin', () => {
+    const state = createShipState()
+    fly(state, 3, input({ yaw: 1, flightAssist: false }), env([]))
+    expect(state.angularVelocity.y).toBeCloseTo(-YAW_RATE, 12)
+    fly(state, 10, input({ throttle: 1, flightAssist: false }), env([]))
+    expect(state.angularVelocity.y).toBeCloseTo(-YAW_RATE, 12)
   })
 })
 

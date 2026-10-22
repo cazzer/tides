@@ -25,6 +25,9 @@
 //     (plus strafe) and rotation eases toward the stick demand, so letting go
 //     stops the spin. Off: thrust adds to velocity and spin persists; only the
 //     speed cap still applies.
+//   • Turn rates are full up to the top of BLUE_ZONE (speed as a share of
+//     v_max) and ease off above it, to TURN_RATE_MIN_FACTOR at the cap.
+//     Slow is never penalised, so easing off is always the way to turn tight.
 //   • Bodies are hard spheres at radius · COLLISION_MARGIN: the ship is pushed
 //     back out along the normal and loses its inward velocity.
 //
@@ -125,9 +128,9 @@ export const VELOCITY_TAU = 1
 // jitter in mouse/touch input.
 export const ROTATION_TAU = 0.2
 
-// Max turn rates at turnRateFactor = 1, rad/s. Elite ships pitch roughly twice
-// as fast as they yaw and roll faster still, so pilots learn to roll then
-// pitch; the 2:1 ratio keeps that habit without making yaw useless on a
+// Max turn rates at turnRateMultiplier = 1, rad/s. Elite ships pitch roughly
+// twice as fast as they yaw and roll faster still, so pilots learn to roll
+// then pitch; the 2:1 ratio keeps that habit without making yaw useless on a
 // phone stick. Pitch ≈ 57°/s turns the ship around in ~3 s.
 export const PITCH_RATE = 1.0
 export const YAW_RATE = 0.5
@@ -142,12 +145,22 @@ export const STRAFE_SHARE = 0.25
 // a visible overshoot.
 export const LEVEL_GAIN = 2.5
 
-// Elite's blue zone: the throttle band with the best turn rate. Turning is
-// still decent at a standstill and worst at full throttle, which nudges
-// pilots to ease off for tight manoeuvres.
+// Elite's blue zone, as a share of the speed cap: its top is the fastest the
+// ship can fly and still turn at the full rate. Above it the rate eases down
+// to TURN_RATE_MIN_FACTOR at the cap; below it there is no penalty, so
+// slowing down is always the way to turn tighter. The lower edge doesn't
+// enter the physics: it is where the HUD and touch throttles start drawing
+// the band. They draw it on the throttle because with FA on and a steady cap
+// the speed settles to throttle · cap; a cap that shrinks on the way in to a
+// body leaves the speed above that (turning suffers sooner) and one that
+// grows on the way out leaves it below. [TUNE] the top sets where turning
+// starts to suffer.
 export const BLUE_ZONE: readonly [number, number] = [0.5, 0.75]
-export const TURN_FACTOR_IDLE = 0.7
-export const TURN_FACTOR_FULL = 0.6
+
+// Turn-rate multiplier at the speed cap. [TUNE] At 0.4 a 90° yaw at the cap
+// takes ~8 s against ~3.4 s in the band: enough that pilots ease off for
+// tight manoeuvres, not so much that a fast ship can't be steered.
+export const TURN_RATE_MIN_FACTOR = 0.4
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 
@@ -250,16 +263,24 @@ function usableThrottle(throttle: number): number {
 }
 
 /**
- * Turn-rate multiplier for a throttle setting: 1 across BLUE_ZONE, falling
- * linearly to TURN_FACTOR_IDLE at 0 and TURN_FACTOR_FULL at 1. Reverse
- * throttle uses its magnitude.
+ * `speed` as a share of `cap`, clamped to 0..1. A zero cap reads as 0 at
+ * rest and 1 when moving; an infinite one as 0. Never NaN.
  */
-export function turnRateFactor(throttle: number): number {
-  const t = Number.isFinite(throttle) ? clamp(Math.abs(throttle), 0, 1) : 0
-  const [lo, hi] = BLUE_ZONE
-  if (t < lo) return lerp(TURN_FACTOR_IDLE, 1, t / lo)
-  if (t <= hi) return 1
-  return lerp(1, TURN_FACTOR_FULL, (t - hi) / (1 - hi))
+export function speedFraction(speed: number, cap: number): number {
+  const fraction = speed / Math.max(cap, 1e-9)
+  return Number.isNaN(fraction) ? 0 : clamp(fraction, 0, 1)
+}
+
+/**
+ * Turn-rate multiplier for a speed fraction (see speedFraction): 1 up to the
+ * top of BLUE_ZONE, then a smoothstep down to TURN_RATE_MIN_FACTOR at the
+ * cap. A smoothstep has no kink at either end, so accelerating out of the
+ * band never jolts a turn in progress.
+ */
+export function turnRateMultiplier(fraction: number): number {
+  const top = BLUE_ZONE[1]
+  const t = Number.isNaN(fraction) ? 0 : clamp((fraction - top) / (1 - top), 0, 1)
+  return 1 - (1 - TURN_RATE_MIN_FACTOR) * t * t * (3 - 2 * t)
 }
 
 const nose = new THREE.Vector3()
@@ -291,8 +312,16 @@ function levelRollRate(): number {
   return clamp(error * LEVEL_GAIN, -ROLL_RATE, ROLL_RATE)
 }
 
-function rotate(state: ShipState, input: Readonly<ShipInput>, dt: number): void {
-  const factor = turnRateFactor(input.throttle)
+// `fraction` is the speed as a share of the cap (speedFraction). Turning keys
+// off how fast the ship is going, not where the throttle sits, so with FA off
+// a ship coasting at the cap still turns wide.
+function rotate(
+  state: ShipState,
+  input: Readonly<ShipInput>,
+  dt: number,
+  fraction: number
+): void {
+  const factor = turnRateMultiplier(fraction)
   // Input +1 is nose up / nose right / roll right; in the body frame that is
   // +X, −Y, −Z (see ShipState.angularVelocity).
   demand.set(
@@ -309,8 +338,8 @@ function rotate(state: ShipState, input: Readonly<ShipInput>, dt: number): void 
     w.lerp(demand, ease)
   } else {
     // Full stick reaches the max rate in ROTATION_TAU; nothing damps it. The
-    // clamp is the raw max rate, deliberately not × turnRateFactor: moving
-    // the throttle with FA off must not brake a spin the pilot built up.
+    // clamp is the raw max rate, deliberately not × turnRateMultiplier:
+    // speeding up with FA off must not brake a spin the pilot built up.
     w.x = clamp(w.x + (demand.x * dt) / ROTATION_TAU, -PITCH_RATE, PITCH_RATE)
     w.y = clamp(w.y + (demand.y * dt) / ROTATION_TAU, -YAW_RATE, YAW_RATE)
     // Level is an assist of its own, so it damps roll even with FA off.
@@ -438,7 +467,7 @@ export function stepShip(
   const { target, targetGap } = here
   let colliding = false
   if (h > 0) {
-    rotate(state, input, h)
+    rotate(state, input, h, speedFraction(state.velocity.length(), cap))
     translate(state, input, h, cap, target, targetGap)
     state.position.addScaledVector(state.velocity, h)
     colliding = collide(state, env.bodies)

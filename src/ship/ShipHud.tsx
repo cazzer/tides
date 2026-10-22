@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import { IconChevronRight, IconQuestionMark, IconX } from '@tabler/icons-react'
 import { glassButton, glassFloatingButton, glassPanel, PHONE } from '../glass-styles'
-import { BLUE_ZONE } from './flight'
+import { BLUE_ZONE, speedFraction, turnRateMultiplier } from './flight'
 import { shipInput, THROTTLE_MAX, THROTTLE_MIN } from './ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
 import { bodyName, formatDistance, formatEta, formatSpeed } from './ship-distances'
@@ -12,6 +12,11 @@ import { ShipControlsDialog } from './ShipControlsDialog'
 // Text redraws this often; the throttle bar follows every frame. Faster text
 // is unreadable and flickers in the last digit.
 const TEXT_INTERVAL_MS = 100
+
+// The speed readout turns amber once the turn rate is below this share of
+// full (flight.ts turnRateMultiplier): just past the blue zone's top, but not
+// right on it, where a speed settling at the band edge would flicker the cue.
+const WIDE_TURN_BELOW = 0.99
 
 const SEEN_KEY = 'tides.shipControlsSeen'
 
@@ -42,7 +47,10 @@ function percent(throttle: number): string {
 }
 
 interface Readouts {
+  speedCell: HTMLElement | null
   speed: HTMLElement | null
+  wideTurn: HTMLElement | null
+  bar: HTMLElement | null
   throttle: HTMLElement | null
   forward: HTMLElement | null
   reverse: HTMLElement | null
@@ -67,7 +75,10 @@ interface Readouts {
 export function ShipHud() {
   const [controlsOpen, setControlsOpen] = useState(false)
   const readouts = useRef<Readouts>({
+    speedCell: null,
     speed: null,
+    wideTurn: null,
+    bar: null,
     throttle: null,
     forward: null,
     reverse: null,
@@ -100,6 +111,7 @@ export function ShipHud() {
     let throttleShown = NaN
     let targetShown: string | null | undefined
     let assistShown: boolean | undefined
+    let wideShown: boolean | undefined
 
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick)
@@ -114,6 +126,16 @@ export function ShipHud() {
 
       set(r.speed, formatSpeed(shipTelemetry.speed * shipNav.kmPerUnit))
       set(r.throttle, percent(throttle))
+      // From speed, as the flight model does: with FA off a ship coasting
+      // fast turns wide whatever the throttle says.
+      const fraction = speedFraction(shipTelemetry.speed, shipTelemetry.speedCap)
+      const wide = turnRateMultiplier(fraction) < WIDE_TURN_BELOW
+      if (wide !== wideShown) {
+        wideShown = wide
+        r.speedCell?.toggleAttribute('data-wide-turn', wide)
+        r.bar?.toggleAttribute('data-wide-turn', wide)
+        if (r.wideTurn) r.wideTurn.hidden = !wide
+      }
       const assist = shipInput.flightAssist
       if (assist !== assistShown && r.assist) {
         assistShown = assist
@@ -222,15 +244,25 @@ export function ShipHud() {
         data-ship-ui
       >
         <Row>
-          <Cell>
+          <SpeedCell ref={bind('speedCell')}>
             <Label>Speed</Label>
             <Value ref={bind('speed')}>—</Value>
-          </Cell>
+            <VisuallyHidden
+              as="span"
+              ref={bind('wideTurn')}
+              hidden
+            >
+              Above the blue zone: turn rate reduced
+            </VisuallyHidden>
+          </SpeedCell>
           <Cell $grow>
             <Label>
               Throttle <span ref={bind('throttle')}>0%</span>
             </Label>
-            <Bar aria-hidden>
+            <Bar
+              ref={bind('bar')}
+              aria-hidden
+            >
               <BlueZone />
               <ZeroMark />
               <Reverse ref={bind('reverse')} />
@@ -386,6 +418,15 @@ const Value = styled.div`
   white-space: nowrap;
 `
 
+// Above the blue zone the speed reads in pale amber: a caution, quieter than
+// FA off's full amber, that ties the wide turns to going fast.
+const WIDE_TURN = '#f5c77e'
+const SpeedCell = styled(Cell)`
+  &[data-wide-turn] ${Value} {
+    color: ${WIDE_TURN};
+  }
+`
+
 const TargetLine = styled.div`
   display: flex;
   align-items: center;
@@ -410,6 +451,10 @@ const Bar = styled.div`
   }
 `
 
+// BLUE_ZONE is a share of the speed cap, drawn on the throttle: with FA on the
+// speed settles to throttle · cap, so the throttle that holds the ship in the
+// band is the band. Past it, by speed (data-wide-turn), the forward fill takes
+// the speed readout's pale amber (see Forward).
 const BlueZone = styled.div`
   position: absolute;
   inset: 0 auto 0 ${at(BLUE_ZONE[0])};
@@ -435,6 +480,10 @@ const Forward = styled.div`
   background-color: rgba(255, 255, 255, 0.85);
   transform: scaleX(0);
   transform-origin: left;
+
+  [data-wide-turn] > & {
+    background-color: ${WIDE_TURN};
+  }
 `
 
 // Reverse thrust grows leftward from zero, in amber.
