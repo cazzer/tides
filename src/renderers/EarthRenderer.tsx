@@ -17,6 +17,7 @@ import {
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
+import { useBodySphere } from '../ship/limb-detail'
 
 // Import assets directly
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
@@ -77,6 +78,9 @@ export default function EarthRenderer({
     [eclipseShadow, textureSet.low]
   )
   useEffect(() => () => clouds.dispose(), [clouds])
+  // Both limbs show from the ship's stop, the cloud shell's the nearer.
+  const groundSphere = useBodySphere('earth', diameter, [128, 128])
+  const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   const groundPatch = useMemo(
     () =>
       composePatches(
@@ -135,6 +139,7 @@ export default function EarthRenderer({
     <group>
       {/* Land with topology - main Earth surface */}
       <mesh
+        geometry={groundSphere}
         raycast={meshBounds}
         onBeforeRender={() => {
           // The Sun in the Earth's frame, from this frame's final transform
@@ -150,7 +155,6 @@ export default function EarthRenderer({
             .applyQuaternion(_quaternion.invert())
         }}
       >
-        <sphereGeometry args={[diameter, 128, 128]} />
         <meshPhongMaterial
           ref={groundMaterial}
           {...groundPatch}
@@ -170,11 +174,10 @@ export default function EarthRenderer({
           texture is a uniform, never a material map: R3F would tag it sRGB. */}
       <mesh
         ref={cloudRef}
+        geometry={cloudSphere}
         raycast={meshBounds}
         material={clouds.material}
-      >
-        <sphereGeometry args={[diameter + clouds.shellAltitude, 96, 64]} />
-      </mesh>
+      />
 
       {/* Atmosphere glow */}
       {/* <mesh ref={atmosphereRef}>

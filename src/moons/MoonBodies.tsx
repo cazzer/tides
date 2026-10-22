@@ -21,10 +21,11 @@ import { useStore } from '../store'
 import { planetSurfaceMaterial, sunDirection } from '../renderers/planetMaterials'
 import { loadColorTexture } from '../renderers/planetTextures'
 import { PLANETS } from '../planets'
-import { MOONS, MOON_KEYS, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
+import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
 import { moonTextureUrl } from './moon-textures'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
+import { useLimbBodyAmong, useLimbSphere } from '../ship/limb-detail'
 
 export interface MoonBodiesProps {
   /** Which planet positions the moons follow. */
@@ -36,6 +37,7 @@ export interface MoonBodiesProps {
 // A unit sphere, scaled to each moon's radius; even the largest moon is a
 // few pixels across until the camera frames it, but ship mode flies up to
 // them, where a coarser one shows its facets. Shared for the app's life.
+// The ship's nearest moon gets the finer limb sphere (limb-detail.ts).
 const SPHERE = new THREE.SphereGeometry(1, 64, 32)
 
 const URLS = MOON_KEYS.map((key) => moonTextureUrl(key, isLowQuality()))
@@ -89,6 +91,8 @@ function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
 export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) => {
   const { handleFocus } = useCamera() as { handleFocus: ((event: ThreeEvent<PointerEvent>) => void) | null }
   const setPlanet = useStore((s) => s.setPlanet)
+  const limbMoon = useLimbBodyAmong(isMoonKey)
+  const limbSphere = useLimbSphere(1, limbMoon != null)
   const refs = useMemo(() => MOON_KEYS.map(() => createRef<THREE.Mesh>()), [])
   const looks = useMemo(
     () =>
@@ -161,7 +165,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         <mesh
           key={key}
           ref={refs[i]}
-          geometry={SPHERE}
+          geometry={key === limbMoon && limbSphere ? limbSphere : SPHERE}
           material={looks[i].material}
           scale={looks[i].userData.radius}
           userData={looks[i].userData}
