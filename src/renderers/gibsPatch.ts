@@ -1,6 +1,6 @@
 // The GIBS imagery patch under the ship (tides-01v.7; tiles in ../gibs-patch.ts),
-// on the ground's Phong material through composePatches. Tiles are uploaded
-// straight into one sRGB render-target texture, each into its slot (row and
+// on the ground's Phong material through composePatches. Tiles are drawn
+// into one sRGB render-target texture, each into its slot (row and
 // column mod the side), so moving the patch a tile refills one row or column
 // and every texture neighbour is a ground neighbour except across the patch's
 // own edge, which is faded out. An R8 mask, a texel a slot, holds each tile's
@@ -8,11 +8,15 @@
 // and its shown neighbours fade out toward it.
 //
 // No GIBS layer matches the day map's grading (its ocean is a lit teal, Blue
-// Marble's near black), so the patch adds only what the day map lacks: its
-// difference from itself blurred to the day map's texel, in sRGB. The large
-// scale stays the day map's, so nothing shows a seam, and the patch fades out
-// by itself wherever the day map already resolves the ground. Night lights,
-// the specular mask and the clouds are untouched.
+// Marble's near black), so each tile is recoloured as it is written, through
+// a lookup fitted from Blue Marble to the day map (tides-01v.15;
+// scripts/fit-gibs-colour.mjs), and its mips are of the recoloured imagery.
+// The fit is global and the two still differ region by region, so the patch
+// adds only what the day map lacks: its difference from itself blurred to the
+// day map's texel, in sRGB. The large scale stays the day map's, so nothing
+// shows a seam, and the patch fades out by itself wherever the day map
+// already resolves the ground. Night lights, the specular mask and the
+// clouds are untouched.
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useSyncExternalStore, type RefObject } from 'react'
 import * as THREE from 'three'
@@ -36,6 +40,7 @@ import {
 } from '../gibs-patch'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 import type { MaterialPatch } from './eclipseShadow'
+import colourLutUrl from '../assets/gibs-colour-lut.bin?url&inline'
 
 /** Fetches in flight at once, and tiles uploaded a frame (each regenerates
  * the texture's mips, and a 512 px upload is ~1 MB). */
@@ -85,6 +90,82 @@ export function useGibsPatchShown(): boolean {
 }
 
 const f = (x: number) => x.toFixed(6)
+
+/** The recolour's lookup: COLOUR_LUT_SIDE^3 sRGB entries, red fastest, each
+ * axis warped so entry k is at 255 (k / (side - 1))^2 of its channel. */
+const COLOUR_LUT_SIDE = 17
+
+function colourLut(): THREE.Data3DTexture {
+  const rgb = Uint8Array.from(atob(colourLutUrl.slice(colourLutUrl.indexOf(',') + 1)), (c) => c.charCodeAt(0))
+  const n = COLOUR_LUT_SIDE ** 3
+  if (rgb.length !== n * 3) throw new Error(`GIBS colour LUT: ${rgb.length} bytes, expected ${n * 3}`)
+  const rgba = new Uint8Array(n * 4).fill(255)
+  for (let i = 0; i < n; i++) rgba.set(rgb.subarray(i * 3, i * 3 + 3), i * 4)
+  const lut = new THREE.Data3DTexture(rgba, COLOUR_LUT_SIDE, COLOUR_LUT_SIDE, COLOUR_LUT_SIDE)
+  lut.magFilter = lut.minFilter = THREE.LinearFilter
+  lut.unpackAlignment = 1
+  lut.needsUpdate = true
+  return lut
+}
+
+// Draws a tile, recoloured, into the slot the target's viewport frames. Both
+// ends hold sRGB: the tile is read raw and the target encodes on write.
+const RECOLOUR_VERTEX = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`
+const RECOLOUR_FRAGMENT = /* glsl */ `
+uniform sampler2D uTile;
+uniform sampler3D uLut;
+varying vec2 vUv;
+void main() {
+  vec3 at = sqrt(texture2D(uTile, vUv).rgb);
+  vec3 colour = texture(uLut, (at * ${f(COLOUR_LUT_SIDE - 1)} + 0.5) / ${f(COLOUR_LUT_SIDE)}).rgb;
+  gl_FragColor = vec4(sRGBTransferEOTF(vec4(colour, 1.0)).rgb, 1.0);
+}
+`
+
+interface Recolour {
+  scene: THREE.Scene
+  camera: THREE.Camera
+  tile: THREE.Texture
+  /** Everything, where freeing the tile's 1 MB copy keeps the program and
+   * the LUT for the next approach. */
+  dispose(): void
+}
+
+function createRecolour(): Recolour {
+  const tile = new THREE.Texture()
+  tile.flipY = false
+  tile.generateMipmaps = false
+  tile.magFilter = tile.minFilter = THREE.NearestFilter
+  const lut = colourLut()
+  const material = new THREE.ShaderMaterial({
+    uniforms: { uTile: { value: tile }, uLut: { value: lut } },
+    vertexShader: RECOLOUR_VERTEX,
+    fragmentShader: RECOLOUR_FRAGMENT,
+    blending: THREE.NoBlending,
+    depthTest: false,
+    depthWrite: false,
+  })
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material)
+  quad.frustumCulled = false
+  const scene = new THREE.Scene().add(quad)
+  return {
+    scene,
+    camera: new THREE.Camera(),
+    tile,
+    dispose() {
+      tile.dispose()
+      lut.dispose()
+      material.dispose()
+      quad.geometry.dispose()
+    },
+  }
+}
 
 const fragmentHead = (side: number) => /* glsl */ `
 uniform sampler2D uGibsPatch;
@@ -215,6 +296,7 @@ export function createGibsPatch(side: number): GibsPatch {
   // In range (allocated on the first tile, so offline holds no texture).
   let active = false
   let target: THREE.WebGLRenderTarget | null = null
+  let recolour: Recolour | null = null
   let origin: GibsPatchOrigin | null = null
   let centre: GibsTile | null = null
   // The patch's tiles, nearest the ship first, for the current origin and centre.
@@ -252,6 +334,7 @@ export function createGibsPatch(side: number): GibsPatch {
     mask.needsUpdate = true
     target?.dispose()
     target = null
+    recolour?.tile.dispose()
     active = false
     origin = null
     centre = null
@@ -330,23 +413,45 @@ export function createGibsPatch(side: number): GibsPatch {
       if (slot.state === 'empty' || (slot.state === 'failed' && now >= slot.retryAt)) load(tile.slot, tile, now)
     }
 
-    // Straight into the slot: three uploads a never-used texture's image with
-    // texSubImage2D. The mips are rebuilt once, with the frame's last.
+    // Recoloured into the slot, without clearing the rest. The mips are
+    // rebuilt once, after the frame's last.
     _ready.length = 0
     for (let i = 0; i < slots.length && _ready.length < UPLOADS_PER_FRAME; i++) {
       if (slots[i].state === 'ready') _ready.push(i)
     }
-    _ready.forEach((i, k) => {
-      const slot = slots[i]
-      if (slot.state !== 'ready') return
-      target ??= createTarget(gl)
-      target.texture.generateMipmaps = k === _ready.length - 1
-      _offset.set((slot.tile.col % side) * GIBS_TILE_PX, (slot.tile.row % side) * GIBS_TILE_PX)
-      gl.copyTextureToTexture(new THREE.Texture(slot.bitmap), target.texture, null, _offset)
-      target.texture.generateMipmaps = true
-      slot.bitmap.close()
-      slots[i] = { state: 'shown', tile: slot.tile, since: now }
-    })
+    if (_ready.length > 0) {
+      const into = (target ??= createTarget(gl))
+      const pass = (recolour ??= createRecolour())
+      const previous = gl.getRenderTarget()
+      const autoClear = gl.autoClear
+      gl.autoClear = false
+      try {
+        _ready.forEach((i, k) => {
+          const slot = slots[i]
+          if (slot.state !== 'ready') return
+          into.texture.generateMipmaps = k === _ready.length - 1
+          into.viewport.set(
+            (slot.tile.col % side) * GIBS_TILE_PX,
+            (slot.tile.row % side) * GIBS_TILE_PX,
+            GIBS_TILE_PX,
+            GIBS_TILE_PX
+          )
+          // The scissor too, so tiled GPUs load and store only the slot.
+          into.scissor.copy(into.viewport)
+          into.scissorTest = true
+          pass.tile.image = slot.bitmap
+          pass.tile.needsUpdate = true
+          gl.setRenderTarget(into)
+          gl.render(pass.scene, pass.camera)
+          into.texture.generateMipmaps = true
+          slot.bitmap.close()
+          slots[i] = { state: 'shown', tile: slot.tile, since: now }
+        })
+      } finally {
+        gl.setRenderTarget(previous)
+        gl.autoClear = autoClear
+      }
+    }
 
     let shownAny = false
     slots.forEach((slot, i) => {
@@ -377,13 +482,14 @@ export function createGibsPatch(side: number): GibsPatch {
     update,
     release() {
       release()
+      recolour?.dispose()
+      recolour = null
       // three uploads it again if the patch is used after.
       mask.dispose()
     },
   }
 }
 
-const _offset = new THREE.Vector2()
 const _ready: number[] = []
 
 /**
