@@ -10,7 +10,7 @@
 //
 // Each material is built once per shader variant (which textures, whether
 // the rings shadow the globe); props only change uniform values.
-import { useEffect, useLayoutEffect, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { meshBounds } from '@react-three/drei'
 import * as THREE from 'three'
 import type { Planet } from '../planets'
@@ -21,6 +21,8 @@ import {
   type RingBand,
 } from './planetFrame'
 import { usePlanetTextures } from './planetTextures'
+import { useFlightTexture } from './useFlightTexture'
+import type { FlightTextureKey } from '../flight-textures'
 import { SUNLIGHT_INTENSITY } from '../lighting'
 import { isLowQuality } from '../quality'
 import {
@@ -102,6 +104,8 @@ export interface PlanetSurfaceProps {
   /** Detail finer than the texture, for close fly-bys. Keep it stable
    * (module level): it's an effect dependency. */
   detail?: PlanetDetail
+  /** The sharper map that replaces `texture` near the ship (tides-01v.6). */
+  flightTexture?: FlightTextureKey
 }
 
 /** The planet's globe: Sun-lit diffuse with the scene's ambient fill. */
@@ -123,12 +127,17 @@ function TexturedSurface(props: PlanetSurfaceProps) {
     props.texture,
     props.ringShadow?.texture,
   ])
+  const anchor = useRef<THREE.Group>(null)
+  const flightMap = useFlightTexture(props.flightTexture, anchor, props.planet.radius)
   return (
-    <SurfaceMesh
-      {...props}
-      map={map}
-      ringMap={ringMap}
-    />
+    <group ref={anchor}>
+      <SurfaceMesh
+        {...props}
+        map={map}
+        ringMap={ringMap}
+        flightMap={flightMap}
+      />
+    </group>
   )
 }
 
@@ -140,9 +149,11 @@ function SurfaceMesh({
   detail,
   map,
   ringMap,
+  flightMap = null,
 }: PlanetSurfaceProps & {
   map: THREE.Texture | null
   ringMap: THREE.Texture | null
+  flightMap?: THREE.Texture | null
 }) {
   const sun = useSunDirection()
   const shadowed = ringShadow !== undefined
@@ -151,6 +162,11 @@ function SurfaceMesh({
     [map, ringMap, shadowed, sun.uniform]
   )
   useEffect(() => () => material.dispose(), [material])
+  // A uniform swap, not a new material: that could drop and recompile a
+  // program only this planet uses (Saturn's ring-shadowed one).
+  useLayoutEffect(() => {
+    setUniforms(material.uniforms, { uMap: flightMap ?? map })
+  }, [material, flightMap, map])
   const geometry = useBodySphere(planet.key, planet.radius, [SPHERE_SEGMENTS, SPHERE_SEGMENTS])
 
   useLayoutEffect(() => {

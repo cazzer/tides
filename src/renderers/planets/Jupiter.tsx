@@ -1,6 +1,7 @@
 // Jupiter (tides-kzj.2.10). Texture: Solar System Scope, CC BY 4.0
 // (credited by PlanetAttribution),
 // https://www.solarsystemscope.com/textures/download/2k_jupiter.jpg
+// (flight tier: 8k_jupiter.jpg, scripts/build-flight-textures.sh)
 import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
@@ -21,6 +22,7 @@ export function Jupiter() {
       <PlanetSurface
         planet={JUPITER}
         texture={jupiterTexture}
+        flightTexture="jupiter"
         limbDarkening={LIMB_DARKENING}
         detail={DETAIL}
       />

@@ -2,6 +2,7 @@
 // (credited by PlanetAttribution),
 // https://www.solarsystemscope.com/textures/download/2k_saturn.jpg and
 // https://www.solarsystemscope.com/textures/download/2k_saturn_ring_alpha.png
+// (flight tier: 8k_saturn.jpg, scripts/build-flight-textures.sh)
 import { PLANETS } from '../../planets'
 import {
   PlanetRings,
@@ -51,6 +52,7 @@ export function Saturn() {
       <PlanetSurface
         planet={SATURN}
         texture={saturnTexture}
+        flightTexture="saturn"
         limbDarkening={1.1}
         ringShadow={RINGS}
         detail={DETAIL}

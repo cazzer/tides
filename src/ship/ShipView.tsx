@@ -12,6 +12,7 @@ import { ShipHud } from './ShipHud'
 import { ShipTargeting } from './ShipTargeting'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
 import { TouchShipControls } from './TouchShipControls'
+import { releaseFlightTextures } from '../renderers/useFlightTexture'
 
 // After the exit has rendered, focus the ship button if the three-body view
 // came back with one (it carries data-ship-button); otherwise focus falls to
@@ -67,6 +68,9 @@ export function ShipView({ children }: { children: ReactNode }) {
       focusShipButton()
     }
   }, [])
+
+  // The flight-only maps (tides-01v.6) last as long as the flight.
+  useEffect(() => releaseFlightTextures, [])
 
   return (
     <div
