@@ -47,15 +47,3 @@ export function moonTextureUrl(key: MoonKey, low: boolean): string {
   if (!url) throw new Error(`No surface map for ${key}`)
   return url
 }
-
-/**
- * The 1k maps on phones and tablets, or with ?quality=low; ?quality=high
- * forces the 2k ones. As PlanetRenderer decides its sphere detail.
- */
-export function lowQualityMoonTextures(): boolean {
-  if (typeof window === 'undefined') return false
-  const quality = new URLSearchParams(window.location.search).get('quality')
-  if (quality === 'low') return true
-  if (quality === 'high') return false
-  return /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
-}

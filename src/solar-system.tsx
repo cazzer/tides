@@ -27,6 +27,7 @@ import { RoundSkyDiscs } from './RoundSkyDiscs'
 import { SkyLookControls } from './SkyLookControls'
 import { sceneRadius } from './planets'
 import { useStore } from './store'
+import { isLowQuality } from './quality'
 import {
   DEFAULT_SURFACE_LOCATION,
   MOON_SKY_DISTANCE,
@@ -48,7 +49,7 @@ import {
 
 const EARTH_DIAMETER = sceneRadius(12742000)
 
-useTexture.preload(earthTextureHigh)
+useTexture.preload(getEarthTexture())
 
 export default function SolarSystem({
   earthCamera = false,
@@ -223,26 +224,11 @@ export default function SolarSystem({
 }
 
 function getMoonTexture() {
-  if (typeof window === 'undefined') return moonTextureHigh
-  const quality = getQualityOverride()
-  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
-  const useLow = quality === 'low' || (quality !== 'high' && isMobile)
-  return useLow ? moonTextureLow : moonTextureHigh
+  return isLowQuality() ? moonTextureLow : moonTextureHigh
 }
 
 function getEarthTexture() {
-  if (typeof window === 'undefined') return earthTextureHigh
-  const quality = getQualityOverride()
-  const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
-  const useLow = quality === 'low' || (quality !== 'high' && isMobile)
-  return useLow ? earthTextureLow : earthTextureHigh
-}
-
-function getQualityOverride() {
-  if (typeof window === 'undefined') return null
-  const value = new URLSearchParams(window.location.search).get('quality')
-  if (value === 'low' || value === 'high') return value
-  return null
+  return isLowQuality() ? earthTextureLow : earthTextureHigh
 }
 
 function fitCameraToObjects(camera, objects, controls) {
