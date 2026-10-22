@@ -5,28 +5,57 @@
 }
 
 html,
-body,
-#root {
+body {
   width: 100%;
   height: 100%;
   margin: 0;
   padding: 0;
 }
 
+/* Full-bleed on a phone: the canvas runs behind the notch and under the
+ * browser's bottom bar, so #root (the Canvas's event source) is pinned to the
+ * whole screen. The large viewport is the screen with the browser's bars
+ * retracted; 100% stops at their edge and left a strip of body showing.
+ * Without lvh, inset:0 alone sizes it to the visible area. */
+#root {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100lvh;
+}
+
 :root {
   /* The floating control dock (src/controls.tsx) and the room it takes. */
   --dock-height: 52px;
   --dock-bottom: max(12px, env(safe-area-inset-bottom));
-  --dock-clearance: calc(var(--dock-bottom) + var(--dock-height) + 8px);
+  /* How far #root (100lvh) runs past the visible area while the browser's bars
+   * show; 0 when they are retracted, in a home-screen app and on a desktop.
+   * The dock is position:fixed and already stops above the bars, but overlays
+   * placed inside #root have to add this to clear them. Set under @supports
+   * below, so a browser without lvh keeps a valid 0. */
+  --bars-overlap: 0px;
+  /* For overlays positioned absolutely inside #root only: a position:fixed
+   * consumer already stops above the bars and would count the overlap twice. */
+  --dock-clearance: calc(
+    var(--bars-overlap) + var(--dock-bottom) + var(--dock-height) + 8px
+  );
   /* On a phone the dock folds into a button at the top-left instead. */
   --dock-top: max(8px, env(safe-area-inset-top));
   --dock-inset-left: max(8px, env(safe-area-inset-left));
   --dock-inset-right: max(8px, env(safe-area-inset-right));
 }
 
+@supports (height: 1lvh) {
+  :root {
+    --bars-overlap: calc(100lvh - 100dvh);
+  }
+}
+
 @media only screen and (max-width: 600px) {
   :root {
-    --dock-clearance: max(6px, env(safe-area-inset-bottom));
+    --dock-clearance: calc(
+      var(--bars-overlap) + max(6px, env(safe-area-inset-bottom))
+    );
   }
 }
 
@@ -38,8 +67,14 @@ body,
   }
 }
 
+/* Space black, matching the scenes and theme-color, wherever the canvas does
+ * not reach (overscroll, before it mounts). */
+html,
 body {
-  background: #f0f0f0;
+  background: #000;
+}
+
+body {
   font-family: inter;
 }
 
@@ -67,7 +102,8 @@ body {
 @media only screen and (max-width: 600px) {
   .viewports {
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 200px;
+    /* The bottom row reaches under the browser's bars; keep 200px of it visible. */
+    grid-template-rows: 1fr calc(200px + var(--bars-overlap));
     grid-template-areas:
       'main main'
       'top bottom';
@@ -88,6 +124,11 @@ body {
 .viewports > .panel[data-area='main'] > .panel-label,
 .viewports > .panel[data-area='bottom'] > .panel-label {
   bottom: var(--dock-clearance);
+}
+
+/* The main panel is the one on the screen's left edge: clear a landscape notch. */
+.viewports > .panel[data-area='main'] > .panel-label {
+  left: var(--dock-inset-left);
 }
 
 @media only screen and (max-width: 600px) {
@@ -128,7 +169,7 @@ body {
 .view-menu {
   position: absolute;
   bottom: var(--dock-clearance);
-  left: 8px;
+  left: var(--dock-inset-left);
   z-index: 1;
 }
 
@@ -198,12 +239,14 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: darkslategray;
+  background-color: #000;
 }
 
 .loading-overlay {
   position: fixed;
   inset: 0;
+  /* Under the browser's bars too, like #root; inset:0 stops above them. */
+  height: 100lvh;
   z-index: 999;
   display: flex;
   align-items: center;
@@ -273,8 +316,8 @@ body {
 .cloud-attribution {
   position: absolute;
   top: calc(6px + env(safe-area-inset-top));
-  right: 8px;
-  max-width: calc(100% - 16px);
+  right: var(--dock-inset-right);
+  max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
   margin: 0;
   font-size: 10px;
   color: #666;
@@ -316,8 +359,8 @@ body {
 .planet-attribution {
   position: absolute;
   top: calc(6px + env(safe-area-inset-top));
-  right: 8px;
-  max-width: calc(100% - 16px);
+  right: var(--dock-inset-right);
+  max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
   margin: 0;
   font-size: 10px;
   color: #666;
@@ -337,7 +380,10 @@ body {
 @media only screen and (max-width: 600px) {
   .cloud-attribution,
   .planet-attribution {
-    max-width: calc(100% - 16px - var(--dock-inset-left) - var(--dock-height));
+    max-width: calc(
+      100% - var(--dock-inset-left) - var(--dock-height) - 8px -
+        var(--dock-inset-right)
+    );
   }
 }
 

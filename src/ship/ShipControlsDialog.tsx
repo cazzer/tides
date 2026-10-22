@@ -184,7 +184,10 @@ export function ShipControlsDialog({
 // Styled as the settings dialog (controls.tsx).
 const Dialog = styled.dialog`
   width: min(400px, calc(100vw - 32px));
-  max-height: calc(100dvh - 32px);
+  /* Keep clear of the notch and home indicator in a landscape phone. */
+  max-height: calc(
+    100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+  );
   padding: 0;
   background-color: #1a1a1a;
   color: #aaa;
