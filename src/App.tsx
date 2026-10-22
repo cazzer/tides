@@ -25,6 +25,7 @@ import { TONE_MAPPING_EXPOSURE } from './lighting'
 import { MAIN_ZOOM, mainViewRange } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
+import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
 import type { DistanceScale } from './distance-scale'
@@ -173,6 +174,7 @@ export default function App() {
           }}
         >
           <SimClock running={sceneReady} />
+          <RenderDiagnostics />
           <View.Port />
         </Canvas>
         {shipMode && (
