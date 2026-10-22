@@ -1,6 +1,7 @@
 // Mercury's surface map: Solar System Scope, CC BY 4.0 (credited by
 // PlanetAttribution), from
 // https://www.solarsystemscope.com/textures/download/2k_mercury.jpg
+// (flight tier: 8k_mercury.jpg, scripts/build-flight-textures.sh)
 import { PLANETS } from '../../planets'
 import { PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
@@ -22,6 +23,7 @@ export function Mercury() {
     <PlanetSurface
       planet={PLANETS.mercury}
       texture={mercuryTexture}
+      flightTexture="mercury"
       albedo={MERCURY_ALBEDO}
       detail={DETAIL}
     />
