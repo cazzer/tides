@@ -22,8 +22,9 @@ export const MOON_RADIUS = sceneRadius(3474800)
 
 /**
  * The outermost shell Earth draws: the cloud deck (over terrain displaced up
- * to TERRAIN_DISPLACEMENT), the atmosphere's glow and the aurora. Each is a
- * front-faced sphere, so from inside it is culled; inside the displaced
+ * to TERRAIN_DISPLACEMENT), the atmosphere's glow and the aurora. The cloud
+ * deck is a front-faced sphere, so from inside it is culled (the atmosphere
+ * and aurora are drawn from inside: tides-01v.8.2); inside the displaced
  * ground the whole planet vanishes (tides-3bl.7).
  */
 export const EARTH_SHELL_RADIUS = Math.max(

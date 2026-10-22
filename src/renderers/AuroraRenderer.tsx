@@ -24,7 +24,7 @@ import { AURORA_GAIN } from '../lighting'
 import { isLowQuality } from '../quality'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
-import { AURORA_SHELL_OUTER } from './earth-shells'
+import { AURORA_SHELL_OUTER, pickShellFaces, withinShellReach } from './earth-shells'
 
 // Shell heights as fractions of the Earth's radius. Real aurora spans ~100 to
 // ~300+ km (1.6-5%); the base sits just above the cloud layer (1.02) and the
@@ -87,6 +87,8 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
           uKp: { value: DEFAULT_KP },
           uTime: { value: 0 },
           uGain: { value: AURORA_GAIN },
+          // Where rays from below the shell meet the ground (DOUBLE_SIDED).
+          uGround: { value: 0 },
         },
         transparent: true,
         depthWrite: false,
@@ -94,25 +96,34 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         // ACES would wash the bright folds toward white; the shader's own
         // shoulder keeps them in range.
         toneMapped: false,
+        // Double-sided in ship mode (pickShellFaces), where the shader keeps
+        // one face per ray.
+        forceSinglePass: true,
       }),
     [low]
   )
 
-  const [north, south] = useMemo(() => {
+  // From inside the shell (or where the near plane clips it) a ray leaves by
+  // a back face that can lie anywhere, past the globe, so there the band
+  // between the caps is drawn too (tides-01v.8.2). Its ovals never reach it.
+  const [north, south, band] = useMemo(() => {
     const r = radius * SHELL_OUTER
     return [
       new THREE.SphereGeometry(r, 96, 32, 0, Math.PI * 2, 0, CAP_THETA),
       new THREE.SphereGeometry(r, 96, 32, 0, Math.PI * 2, Math.PI - CAP_THETA, CAP_THETA),
+      new THREE.SphereGeometry(r, 96, 16, 0, Math.PI * 2, CAP_THETA, Math.PI - 2 * CAP_THETA),
     ]
   }, [radius])
+  const bandMesh = useRef<THREE.Mesh>(null)
 
   useEffect(() => () => material.dispose(), [material])
   useEffect(
     () => () => {
       north.dispose()
       south.dispose()
+      band.dispose()
     },
-    [north, south]
+    [north, south, band]
   )
   useEffect(() => {
     if (!real) {
@@ -157,6 +168,12 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
 
     u.uInner.value = radius * SHELL_INNER
     u.uOuter.value = radius * SHELL_OUTER
+    u.uGround.value = radius
+    // ShipController's frame (same priority, mounted first) has already
+    // placed the camera.
+    if (bandMesh.current) {
+      bandMesh.current.visible = withinShellReach(mesh.current!, state.camera, u.uOuter.value)
+    }
     // Storm cues (red tops, folding) follow the nowcast's activity too.
     u.uKp.value = fit.current
       ? kp.current + nowcast.current * (fit.current.kp - kp.current)
@@ -172,6 +189,10 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
     steadyGeomagneticAxis(geomagneticAxis(timestamp, pole), sway.current, u.uPole.value)
   })
 
+  // The meshes share the material and the Earth's frame.
+  const pickFaces: THREE.Object3D['onBeforeRender'] = (_renderer, _scene, camera, _geometry, shader) =>
+    pickShellFaces(mesh.current!, shader, camera)
+
   return (
     <group>
       <mesh
@@ -180,8 +201,24 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         material={material}
         renderOrder={2}
         raycast={noRaycast}
+        onBeforeRender={pickFaces}
       />
-      <mesh geometry={south} material={material} renderOrder={2} raycast={noRaycast} />
+      <mesh
+        geometry={south}
+        material={material}
+        renderOrder={2}
+        raycast={noRaycast}
+        onBeforeRender={pickFaces}
+      />
+      <mesh
+        ref={bandMesh}
+        geometry={band}
+        material={material}
+        visible={false}
+        renderOrder={2}
+        raycast={noRaycast}
+        onBeforeRender={pickFaces}
+      />
     </group>
   )
 }

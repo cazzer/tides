@@ -5,6 +5,13 @@ varying vec3 vPos;
 // Perspective: the camera position. Orthographic (the main view): a point
 // well behind the fragment along the view direction.
 varying vec3 vRayOrigin;
+#ifdef DOUBLE_SIDED
+// Both faces drawn (Earth's shells in ship mode, earth-shells.ts): the
+// fragment's depth in front of the camera and the near plane's, so face.glsl
+// can tell where the near plane clips the front faces.
+varying float vViewDepth;
+varying float vNear;
+#endif
 
 uniform float uOuter;
 
@@ -20,5 +27,9 @@ void main() {
   } else {
     vRayOrigin = (toLocal * vec4(cameraPosition, 1.0)).xyz;
   }
+  #ifdef DOUBLE_SIDED
+  vViewDepth = -(modelViewMatrix * vec4(position, 1.0)).z;
+  vNear = ortho ? 0.0 : projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+  #endif
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
