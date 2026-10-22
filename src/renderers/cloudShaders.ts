@@ -28,11 +28,23 @@ import {
   TERRAIN_KM_PER_GREY,
 } from '../cloud-layer'
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
+import { sceneRadius } from '../planets'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 
 const f = (x: number) => x.toFixed(6)
+
+const MARCH_STEP = 0.011
+// Steps for the longest path a march can take: a ray grazing the layer's
+// base, from its top in and out again (sea level is Earth's scene radius,
+// as EarthRenderer sets it). Short of that, a grazing ray's samples
+// straddle the tops and the limb stair-steps along them (tides-01v.9).
+const SEA_LEVEL = sceneRadius(2000 * EARTH_RADIUS_KM)
+const MARCH_STEPS = Math.ceil(
+  (2 * Math.sqrt((SEA_LEVEL + CLOUD_LAYER_TOP) ** 2 - (SEA_LEVEL + CLOUD_CLEARANCE) ** 2)) /
+    MARCH_STEP
+)
 
 // Height field shared by the cloud shell and the ground's shadow.
 const FIELD = /* glsl */ `
@@ -132,7 +144,8 @@ varying vec3 vRayDir;
 #define RELIEF 1.2
 #define MAX_SLOPE 0.75
 #define WRAP 0.6
-#define MARCH_STEP 0.011
+#define MARCH_STEP ${f(MARCH_STEP)}
+#define MARCH_STEPS ${MARCH_STEPS}
 // How far the ground under a march may rise above the ground at its entry.
 #define TERRAIN_SLACK 0.01
 #ifdef CLOUD_FLAT
@@ -263,12 +276,12 @@ void main() {
   float inner = uSeaLevel + max(terrain - TERRAIN_SLACK, 0.0) + CLOUD_CLEARANCE;
   float discInner = b * b - (dot(vLocal, vLocal) - inner * inner);
   if (discInner > 0.0) tEnd = -b - sqrt(discInner);
-  int steps = int(clamp(ceil((tEnd - tIn) / MARCH_STEP), 3.0, 40.0));
+  int steps = int(clamp(ceil((tEnd - tIn) / MARCH_STEP), 3.0, float(MARCH_STEPS)));
   float dt = (tEnd - tIn) / float(steps);
   float tPrev = tIn;
   float gapPrev = 0.0;
   float tHit = -1.0;
-  for (int i = 0; i <= 40; i++) {
+  for (int i = 0; i <= MARCH_STEPS; i++) {
     if (i > steps) break;
     float t = tIn + dt * float(i);
     vec3 q = vLocal + d * t;
