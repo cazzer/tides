@@ -1,5 +1,5 @@
 import { MathUtils } from 'three'
-import { isPlanetFocus, type BodyFocus } from './store'
+import { isSystemFocus, type BodyFocus } from './store'
 
 /** The main view's default zoom (App's MainCamera); Earth's framing at it is the reference. */
 export const MAIN_ZOOM = 10
@@ -57,12 +57,12 @@ export function planetsNear(zoom: number, eyeDistance: number): number {
 
 /**
  * The store ref the camera follows for `focus` ('location' is placed
- * separately). A planet that hasn't registered yet falls back to the Sun.
+ * separately). A planet or moon that hasn't registered yet falls back to the Sun.
  */
 export function focusedRef<R extends { current?: unknown }>(
   refs: Partial<Record<BodyFocus, R | undefined>>,
   focus: BodyFocus
 ): R | undefined {
   const ref = refs[focus]
-  return isPlanetFocus(focus) && !ref?.current ? refs.sun : ref
+  return isSystemFocus(focus) && !ref?.current ? refs.sun : ref
 }

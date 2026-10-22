@@ -803,6 +803,8 @@ interface Trip {
   peakFraction: number
   /** A collision before arriving. */
   hit: boolean
+  /** Every body whose well set the cap on the way. */
+  wells: Set<string>
 }
 
 function trip(
@@ -819,7 +821,14 @@ function trip(
   const state = shipAt(earth.position.clone().addScaledVector(offset, 15), target.position)
   const telemetry = createShipTelemetry()
   const flightEnv = env(bodies, locked ? key : null)
-  const result: Trip = { seconds: 0, peakSpeed: 0, arrivalFraction: 0, peakFraction: 0, hit: false }
+  const result: Trip = {
+    seconds: 0,
+    peakSpeed: 0,
+    arrivalFraction: 0,
+    peakFraction: 0,
+    hit: false,
+    wells: new Set(),
+  }
   let gap: number
   do {
     stepShip(state, input({ throttle: 1 }), dt, flightEnv, telemetry)
@@ -831,20 +840,65 @@ function trip(
     result.peakFraction = Math.max(result.peakFraction, fraction)
     result.arrivalFraction = fraction
     if (telemetry.colliding) result.hit = true
+    if (telemetry.well.key) result.wells.add(telemetry.well.key)
   } while (gap > target.radius && result.seconds < limit)
   return result
 }
 
+// Jupiter's band is checked two days after TRIP_DATE, when the Earth →
+// Jupiter line runs clear of its moons (tides-2hv.8): it passes 10+ units off
+// every Galilean's shell, and Jupiter is as far as at TRIP_DATE. At
+// TRIP_DATE itself the line runs through Callisto (18.6 units out from
+// Jupiter): Callisto's well takes over ~18 units short and the locked ship
+// crawls through it at the V_NORMAL floor, ~20 s longer than the open
+// approach the band was set for (130 s against 109 s with no moons). The
+// moons' phases change the trip by tens of seconds from day to day, so the
+// band is for the open approach; crossing a moon system is tested on its own
+// below.
+const JUPITER_TRIP_DATE = '2026-10-24T12:00:00Z'
+
+const GALILEANS = ['io', 'europa', 'ganymede', 'callisto'] as const
+
+// How far the straight Earth → Jupiter trip (from 15 units out of Earth to
+// one Jupiter radius off its surface, as trip() flies it) passes from each
+// Galilean's collision shell at `date`; negative runs through it. The
+// pinned dates above depend on the moons' phases, so a [TUNE] change to the
+// log map or the moons' radii shows up here first.
+function galileanMisses(date: string): Record<(typeof GALILEANS)[number], number> {
+  const bodies = flightBodies(date)
+  const earth = bodies.find((b) => b.key === 'earth')!
+  const jupiter = bodies.find((b) => b.key === 'jupiter')!
+  const heading = jupiter.position.clone().sub(earth.position).normalize()
+  const line = new THREE.Line3(
+    earth.position.clone().addScaledVector(heading, 15),
+    jupiter.position.clone().addScaledVector(heading, -2 * jupiter.radius)
+  )
+  const closest = new THREE.Vector3()
+  return Object.fromEntries(
+    GALILEANS.map((key) => {
+      const moon = bodies.find((b) => b.key === key)!
+      line.closestPointToPoint(moon.position, true, closest)
+      return [key, closest.distanceTo(moon.position) - collisionRadius(moon)]
+    })
+  ) as Record<(typeof GALILEANS)[number], number>
+}
+
 describe('trip times at the flight scale', () => {
   test.each([
-    ['moon', 10, 15],
-    ['mars', 30, 60],
-    ['jupiter', 90, 120],
-    ['neptune', 180, 300],
-  ] as const)('Earth → %s at full throttle, locked, takes %s–%s s', (key, min, max) => {
-    const { seconds, peakSpeed, peakFraction, hit } = trip(key)
+    ['moon', 10, 15, TRIP_DATE],
+    ['mars', 30, 60, TRIP_DATE],
+    ['jupiter', 90, 120, JUPITER_TRIP_DATE],
+    ['neptune', 180, 300, TRIP_DATE],
+  ] as const)('Earth → %s at full throttle, locked, takes %s–%s s (%s)', (key, min, max, date) => {
+    if (key === 'jupiter') {
+      // The open approach: the line clears every Galilean's shell.
+      for (const [moon, miss] of Object.entries(galileanMisses(date))) {
+        expect(miss, moon).toBeGreaterThanOrEqual(5)
+      }
+    }
+    const { seconds, peakSpeed, peakFraction, hit } = trip(key, { date })
     console.log(
-      `Earth → ${key}: ${seconds.toFixed(1)} s, peak ${peakSpeed.toFixed(1)} u/s, peak speed/cap ${peakFraction.toFixed(3)}`
+      `Earth → ${key} (${date.slice(0, 10)}): ${seconds.toFixed(1)} s, peak ${peakSpeed.toFixed(1)} u/s, peak speed/cap ${peakFraction.toFixed(3)}`
     )
     expect(seconds).toBeGreaterThanOrEqual(min)
     expect(seconds).toBeLessThanOrEqual(max)
@@ -852,6 +906,31 @@ describe('trip times at the flight scale', () => {
     expect(peakSpeed).toBeLessThanOrEqual(V_TOP * (1 + 1e-9))
     // Locked: never over the cap, so no overshoot.
     expect(peakFraction).toBeLessThanOrEqual(1 + 1e-9)
+  })
+
+  // Locked, the ride down follows the cap whichever well takes over, so a
+  // straight line through a moon system drops hard at each moon instead of
+  // carrying the ship in over its cap (2.4× at Callisto with the braked
+  // ride). On 2027-02-26 the line passes 0.84 units off Ganymede's shell; at
+  // TRIP_DATE it runs through Callisto, so the ship meets Callisto's surface,
+  // at no more than the V_NORMAL floor, and slides round it: contact is
+  // allowed there, since only steering avoids it.
+  test.each([
+    { date: TRIP_DATE, moon: 'callisto', missAtMost: 0, contactAllowed: true },
+    { date: '2027-02-26T12:00:00Z', moon: 'ganymede', missAtMost: 2, contactAllowed: false },
+  ] as const)('locked across Jupiter’s moons ($date, past $moon) stays under every well’s cap', ({ date, moon, missAtMost, contactAllowed }) => {
+    // The premise: the line runs through (≤ 0) or just past the moon's shell.
+    const miss = galileanMisses(date)[moon]
+    expect(miss).toBeLessThanOrEqual(missAtMost)
+    if (!contactAllowed) expect(miss).toBeGreaterThan(0)
+    const { seconds, peakSpeed, peakFraction, hit, wells } = trip('jupiter', { date })
+    console.log(
+      `Earth → jupiter past ${moon} (${date.slice(0, 10)}): ${seconds.toFixed(1)} s, peak ${peakSpeed.toFixed(1)} u/s, peak speed/cap ${peakFraction.toFixed(3)}, contact ${hit}`
+    )
+    expect(wells.has(moon)).toBe(true)
+    expect(seconds).toBeLessThan(600)
+    expect(peakFraction).toBeLessThanOrEqual(1 + 1e-9)
+    if (!contactAllowed) expect(hit).toBe(false)
   })
 
   test('is frame-rate independent: the Moon trip at 60 fps and at MAX_DT agree within 0.5 s', () => {

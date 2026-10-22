@@ -13,22 +13,36 @@
 //      radius plus the ship's gap to R's shell × kmPerUnit(R).
 //   2. kmPerUnit(R) is the true surface gap over the scene shell gap between R
 //      and its neighbours, weighted to the nearest (1 / gap⁴, log space): the
-//      km a scene unit stands for around R. Near Earth (MOON_SYSTEM_*), Earth
-//      and the Moon use their own pair only, since the Moon orbits on its own
-//      scale; leaving, they hand over to Earth's planetary neighbours' scale,
-//      or Earth's range would under-read by the ratio of the two (~2.5×)
-//      all the way out. The hand-over is linear in km per unit, k(d), with d
-//      the ship's distance from Earth's centre, and their gap is measured
+//      km a scene unit stands for around R. Inside a moon system (Earth and
+//      the Moon; Mars, Jupiter, Saturn, Uranus or Neptune and their major
+//      moons, tides-2hv.8), its members count only their neighbours within
+//      the system, since moons orbit on their own scale (moons.ts' log map:
+//      ~14 000 km a unit between Saturn and Mimas against ~150 000 between
+//      planets). Leaving, they hand over to the parent's planetary
+//      neighbours' scale, or the parent's range would under-read by the
+//      ratio of the two (~2.5× for Earth, ~10× for Saturn) all the way out.
+//      The hand-over is linear in km per unit, k(d), with d the ship's
+//      distance from the parent's centre, and a member's gap is measured
 //      along it: a·gap + ∫(k − a) dd, so the range grows at k × the radial
 //      speed, the rate the HUD's speed reads (a·gap alone, scaled up as the
 //      ship leaves, would run ~2.5× faster than the speed through the band).
 //   3. The guesses blend with weights 1 / (ship's gap to R)⁴, so the anchor is
 //      whichever body the ship is near, handing over smoothly in between.
-//      Near Earth, Earth and the Moon outweigh a planet that happens to be
-//      as near in the scene. (Venus can't be, at the flight scale: it never
-//      comes within ~260 units. The boost dates from the compressed scale,
-//      where it passed ~14 units from Earth, and costs nothing to keep.)
-//   4. range(B) = |true B − true ship| − B's true radius.
+//      Inside a system its members outweigh a body outside it that happens
+//      to be as near in the scene. (Venus can't be, near Earth at the flight
+//      scale: it never comes within ~260 units. The boost dates from the
+//      compressed scale, where it passed ~14 units from Earth.)
+//   4. range(B) = |true B − true ship| − B's true radius. A moon system's
+//      parent is the exception: near it, its range is its own anchor's gap
+//      (a·gap plus the hand-over term), handing over to the formula above
+//      only far out (RANGE_HAND_OVER). The blended position mixes anchors
+//      whose scene directions and scales disagree (the log map bends the
+//      moons' geometry), and on a straight run in to Jupiter or Saturn it
+//      read the range going backwards by up to ~280 000 km; the anchor's gap
+//      only shrinks as the ship closes, at k × its radial speed. A moon's
+//      own anchor is no good for this (its scale is set by its nearest
+//      neighbour, so Mimas from Saturn would read ~4× long), so the moons
+//      keep the blended range: exact from the parent's surface, 0 on arrival.
 //
 // Gaps are to the collision shell, the closest the ship can get, and the
 // anchor then puts the ship on R's true surface: a range reads 0 on arrival,
@@ -40,8 +54,12 @@
 // local true scale. In deep space the pair scales all converge on
 // KM_PER_AU / FLIGHT_UNITS_PER_AU, so the position is true there. (They are
 // left to converge, not pinned to it: moon systems need their own local
-// scales, as Earth's does.) Speed uses the same blended scale (km per scene
-// unit where the ship is), so it is the rate the ranges change at.
+// scales.) Speed uses the same blended scale (km per scene unit where the
+// ship is), so it is the rate the ranges change at. Inside a system with
+// several moons, ranges between members are approximate (up to ~1.4×), as
+// the log map's chords don't scale linearly; they still read 0 on arrival.
+// The moon systems also nudge ranges outside them: Mars's moons' anchors
+// shift Earth's and Mars's ranges by 1–11% for a ship 200–400 units out.
 
 import {
   Body,
@@ -53,6 +71,15 @@ import {
 import * as THREE from 'three'
 import { eclipticToScene } from '../ephemeris'
 import { PLANETS } from '../planets'
+import {
+  MOONS,
+  MOON_KEYS,
+  MOON_PARENTS,
+  isMoonKey,
+  moonSystemExtent,
+  moonTrueOffsetKm,
+  moonsOf,
+} from '../moons/moons'
 import { collisionRadius, type Body as FlightBody } from './flight'
 
 /** Speed of light, km/s. */
@@ -64,27 +91,62 @@ const WEIGHT_POWER = 4
 // Gaps are floored here so a ship resting on a shell (gap 0) weights finitely.
 const MIN_GAP = 1e-3
 
-// Within MOON_SYSTEM_INNER of Earth's centre, Earth and the Moon weigh
-// MOON_SYSTEM_BOOST times as much as anchors and read on their own pair's
-// scale; past MOON_SYSTEM_OUTER, the same as any body, on the planets' scale;
-// between, a smooth blend. The Moon orbits ~10 units out; the spawn is ~12
-// out on a wide screen and ~28 on a portrait phone (Earth framed across the
-// short side). The boost has to be large because another body's guess is
-// tens of millions of km off (its scale is the planets'): 1e4 is a gap 10×
-// smaller, so with a planet as near as Earth the position moves ~2% instead
-// of ~50% (a boost of 100).
+// Within a moon system's `inner` of its parent's centre, the members weigh
+// MOON_SYSTEM_BOOST times as much as anchors and read on the system's own
+// scales; past `outer` (2 × inner), the same as any body, on the planets'
+// scale; between, a smooth blend. Earth's Moon orbits ~10 units out; the
+// spawn is ~12 out on a wide screen and ~28 on a portrait phone (Earth
+// framed across the short side), hence 30 to 60. The other systems can
+// reach further (moonSystemExtent: Saturn's ~31), so theirs start at
+// MOON_SYSTEM_EXTENT_FACTOR × that if it is more. The boost has to be large
+// because another body's guess is tens of millions of km off (its scale is
+// the planets'): 1e4 is a gap 10× smaller, so with a planet as near as Earth
+// the position moves ~2% instead of ~50% (a boost of 100).
 const MOON_SYSTEM_INNER = 30
-const MOON_SYSTEM_OUTER = 60
+const MOON_SYSTEM_EXTENT_FACTOR = 1.5
 const MOON_SYSTEM_BOOST = 1e4
-const MOON_SYSTEM_BAND = MOON_SYSTEM_OUTER - MOON_SYSTEM_INNER
 
-// ∫ smoothstep(x, INNER, OUTER) dx from INNER to d (0 inside INNER): with
-// u = (x − INNER) / BAND, ∫ (3u² − 2u³) BAND du = BAND (u³ − u⁴/2).
-function departureIntegral(d: number): number {
-  const u = THREE.MathUtils.clamp((d - MOON_SYSTEM_INNER) / MOON_SYSTEM_BAND, 0, 1)
-  return MOON_SYSTEM_BAND * (u ** 3 - u ** 4 / 2) + Math.max(0, d - MOON_SYSTEM_OUTER)
+// Out to `outer` a parent's range is its own anchor's gap; from there to
+// RANGE_HAND_OVER × outer it hands over to the blended position's. The
+// members' anchors disagree by millions of km (each counts the hand-over
+// band at its own scale), so a quick hand-over ran Jupiter's range
+// backwards; spread this wide its rate never drops below ~70% of the
+// planets' scale. [TUNE]
+const RANGE_HAND_OVER = 10
+
+interface MoonSystem {
+  parent: string
+  inner: number
+  outer: number
 }
 
+const MOON_SYSTEMS: readonly MoonSystem[] = [
+  { parent: 'earth', inner: MOON_SYSTEM_INNER, outer: 2 * MOON_SYSTEM_INNER },
+  ...MOON_PARENTS.map((parent) => {
+    const inner = Math.max(MOON_SYSTEM_INNER, MOON_SYSTEM_EXTENT_FACTOR * moonSystemExtent(parent))
+    return { parent, inner, outer: 2 * inner }
+  }),
+]
+
+// Ship body key → its index in MOON_SYSTEMS, for every parent and moon.
+const SYSTEM_OF_KEY = new Map<string, number>([
+  ['earth', 0],
+  ['moon', 0],
+  ...MOON_PARENTS.flatMap((parent, i) =>
+    [parent, ...moonsOf(parent)].map((key): [string, number] => [key, i + 1])
+  ),
+])
+
+// ∫ smoothstep(x, inner, outer) dx from inner to d (0 inside inner): with
+// u = (x − inner) / band, ∫ (3u² − 2u³) band du = band (u³ − u⁴/2).
+function departureIntegral(d: number, { inner, outer }: MoonSystem): number {
+  const band = outer - inner
+  const u = THREE.MathUtils.clamp((d - inner) / band, 0, 1)
+  return band * (u ** 3 - u ** 4 / 2) + Math.max(0, d - outer)
+}
+
+// The planets and Earth's Moon; a major moon is its parent plus
+// moonTrueOffsetKm.
 const ASTRO_BODIES: Record<string, Body> = {
   sun: Body.Sun,
   earth: Body.Earth,
@@ -101,6 +163,7 @@ const RADIUS_KM: Record<string, number> = {
   ...Object.fromEntries(
     Object.values(PLANETS).map((planet) => [planet.key, planet.diameter / 2000])
   ),
+  ...Object.fromEntries(MOON_KEYS.map((key) => [key, MOONS[key].radiusKm])),
 }
 
 /** Where the bodies truly are: km from the Sun along the scene's axes. */
@@ -113,19 +176,22 @@ export interface TrueBodies {
 /**
  * True heliocentric positions (km, scene axes: ecliptic of date, +Y north)
  * and radii of the bodies `keys` at `t`, epoch ms. Keys are ship body keys
- * ('sun', 'earth', 'moon' or a planet).
+ * ('sun', 'earth', 'moon', a planet or a major moon).
  */
 export function trueBodies(keys: readonly string[], t: number): TrueBodies {
   const date = new Date(t)
   const toEcliptic = Rotation_EQJ_ECT(date)
+  const offset = new THREE.Vector3()
   return {
     positions: keys.map((key) => {
-      const body = ASTRO_BODIES[key]
+      const moon = isMoonKey(key) ? MOONS[key] : undefined
+      const body = ASTRO_BODIES[moon?.parent ?? key]
       if (body === undefined) throw new Error(`No ephemeris for ${key}`)
-      return eclipticToScene(
+      const position = eclipticToScene(
         RotateVector(toEcliptic, HelioVector(body, date)),
         new THREE.Vector3()
       ).multiplyScalar(KM_PER_AU)
+      return moon ? position.add(moonTrueOffsetKm(moon.key, t, offset)) : position
     }),
     radii: keys.map((key) => RADIUS_KM[key]),
   }
@@ -161,6 +227,23 @@ export function createShipRanges(count: number): ShipRanges {
 
 const gaps: number[] = []
 const logScales: number[] = []
+// Per body: its index in MOON_SYSTEMS, or -1 outside every system.
+const systemOf: number[] = []
+// Per system: the parent's body index (-1 when it or all its moons are
+// missing from the bodies), the ship's departure (0 inside, 1 clear), its
+// members' weight boost, the parent's km per unit against the planets, and
+// ∫departure (departureIntegral).
+const systemParent: number[] = []
+const systemDeparture: number[] = []
+const systemBoost: number[] = []
+const systemKm: number[] = []
+const systemIntegral: number[] = []
+// Per system: how far the parent's range has handed over from its own
+// anchor's gap to the blended position's (0 to 1, from outer to
+// RANGE_HAND_OVER × outer).
+const systemHandOver: number[] = []
+// Per body: the surface gap its own anchor puts the ship at, km.
+const anchorGapKm: number[] = []
 const anchor = new THREE.Vector3()
 const direction = new THREE.Vector3()
 
@@ -176,18 +259,22 @@ function pairLogScale(
   return Math.log(Math.max(1, surfaceKm) / pairGap(bodies[a], bodies[b]))
 }
 
-// ln(km per scene unit) around r: its pair scales with every other body bar
-// `skip`, weighted to the nearest.
+// ln(km per scene unit) around r: its pair scales with the other bodies,
+// weighted to the nearest. With `within` ≥ 0 only that moon system's members
+// count; with `skip` ≥ 0 that system's members don't.
 function neighbourLogScale(
   r: number,
-  skip: number,
   bodies: readonly FlightBody[],
-  truth: TrueBodies
+  truth: TrueBodies,
+  within = -1,
+  skip = -1
 ): number {
   let weightSum = 0
   let logSum = 0
   for (let b = 0; b < bodies.length; b++) {
-    if (b === r || b === skip) continue
+    if (b === r) continue
+    if (within >= 0 && systemOf[b] !== within) continue
+    if (skip >= 0 && systemOf[b] === skip) continue
     const w = weight(pairGap(bodies[r], bodies[b]))
     weightSum += w
     logSum += w * pairLogScale(r, b, bodies, truth)
@@ -210,50 +297,69 @@ export function measureRanges(
   const n = bodies.length
   gaps.length = n
   logScales.length = n
+  anchorGapKm.length = n
   for (let i = 0; i < n; i++) {
     gaps[i] = Math.max(0, position.distanceTo(bodies[i].position) - collisionRadius(bodies[i]))
   }
 
-  const earth = bodies.findIndex((body) => body.key === 'earth')
-  const moon = bodies.findIndex((body) => body.key === 'moon')
-  const moonSystem = earth >= 0 && moon >= 0
-  const fromEarth = moonSystem ? position.distanceTo(bodies[earth].position) : Infinity
-  // 0 in the Earth–Moon system, 1 once clear of it.
-  const departure = moonSystem
-    ? THREE.MathUtils.smoothstep(fromEarth, MOON_SYSTEM_INNER, MOON_SYSTEM_OUTER)
-    : 1
-  const moonSystemBoost = moonSystem ? MOON_SYSTEM_BOOST ** (1 - departure) : 1
-  // Earth and the Moon's km per unit: a, their pair's, near Earth; a + (b − a)
-  // · departure leaving, b being Earth's against the planets (the Moon not
-  // counted). Their gaps take the extra (b − a) · ∫departure on top of a · gap
-  // (see the header). Both use Earth's b and d, so they stay a·(scene
-  // separation) apart, the Earth–Moon scale, however far out the ship is.
-  const moonSystemKm = moonSystem ? Math.exp(pairLogScale(earth, moon, bodies, truth)) : 0
-  const departureKm =
-    moonSystem && departure > 0
-      ? Math.exp(neighbourLogScale(earth, moon, bodies, truth)) - moonSystemKm
-      : 0
-  const moonSystemExtraKm = departureKm * departureIntegral(fromEarth)
-
-  for (let r = 0; r < n; r++) {
-    logScales[r] =
-      moonSystem && (r === earth || r === moon)
-        ? Math.log(moonSystemKm + departureKm * departure)
-        : neighbourLogScale(r, -1, bodies, truth)
+  // Which bodies form which moon system, and where the ship is in each.
+  for (let i = 0; i < n; i++) systemOf[i] = SYSTEM_OF_KEY.get(bodies[i].key) ?? -1
+  for (let s = 0; s < MOON_SYSTEMS.length; s++) {
+    const system = MOON_SYSTEMS[s]
+    let parent = -1
+    let size = 0
+    for (let i = 0; i < n; i++) {
+      if (systemOf[i] !== s) continue
+      size++
+      if (bodies[i].key === system.parent) parent = i
+    }
+    // A system needs its parent and a moon among the bodies to have a scale.
+    systemParent[s] = size >= 2 ? parent : -1
+    if (systemParent[s] < 0) continue
+    const fromParent = position.distanceTo(bodies[parent].position)
+    const departure = THREE.MathUtils.smoothstep(fromParent, system.inner, system.outer)
+    systemDeparture[s] = departure
+    systemBoost[s] = MOON_SYSTEM_BOOST ** (1 - departure)
+    // The parent against the planets (its moons not counted): what its
+    // members' km per unit hands over to on the way out.
+    systemKm[s] = departure > 0 ? Math.exp(neighbourLogScale(parent, bodies, truth, -1, s)) : 0
+    systemIntegral[s] = departureIntegral(fromParent, system)
+    systemHandOver[s] = THREE.MathUtils.smoothstep(
+      fromParent,
+      system.outer,
+      RANGE_HAND_OVER * system.outer
+    )
+  }
+  for (let i = 0; i < n; i++) {
+    if (systemOf[i] >= 0 && systemParent[systemOf[i]] < 0) systemOf[i] = -1
   }
 
+  // A member's km per unit is a, its scale among its own system, near the
+  // parent; a + (b − a) · departure leaving, b being systemKm. Its gap takes
+  // the extra (b − a) · ∫departure on top of a · gap (see the header). All of
+  // a system's members use the parent's b and d, so Earth and the Moon (one
+  // pair, one a) stay a·(scene separation) apart, the Earth–Moon scale,
+  // however far out the ship is.
   out.position.set(0, 0, 0)
   let weightSum = 0
   let logSum = 0
   for (let r = 0; r < n; r++) {
+    const s = systemOf[r]
     let w = weight(gaps[r])
-    if (r === earth || r === moon) w *= moonSystemBoost
+    let gapKm: number
+    if (s >= 0) {
+      const a = Math.exp(neighbourLogScale(r, bodies, truth, s))
+      const departureKm = systemDeparture[s] > 0 ? systemKm[s] - a : 0
+      logScales[r] = Math.log(a + departureKm * systemDeparture[s])
+      gapKm = gaps[r] * a + departureKm * systemIntegral[s]
+      w *= systemBoost[s]
+    } else {
+      logScales[r] = neighbourLogScale(r, bodies, truth)
+      gapKm = gaps[r] * Math.exp(logScales[r])
+    }
     direction.subVectors(position, bodies[r].position)
     if (direction.lengthSq() > 0) direction.normalize()
-    const gapKm =
-      moonSystem && (r === earth || r === moon)
-        ? gaps[r] * moonSystemKm + moonSystemExtraKm
-        : gaps[r] * Math.exp(logScales[r])
+    anchorGapKm[r] = gapKm
     anchor.copy(truth.positions[r]).addScaledVector(direction, truth.radii[r] + gapKm)
     out.position.addScaledVector(anchor, w)
     weightSum += w
@@ -262,9 +368,16 @@ export function measureRanges(
   if (weightSum > 0) out.position.divideScalar(weightSum)
   out.kmPerUnit = weightSum > 0 ? Math.exp(logSum / weightSum) : NaN
 
+  // A moon system's parent reads its own anchor's gap near it, handing over
+  // to the blended position's far out (see the header).
   out.nearest = -1
   for (let b = 0; b < n; b++) {
-    out.km[b] = Math.max(0, truth.positions[b].distanceTo(out.position) - truth.radii[b])
+    const km = Math.max(0, truth.positions[b].distanceTo(out.position) - truth.radii[b])
+    const s = systemOf[b]
+    out.km[b] =
+      s >= 0 && systemParent[s] === b
+        ? THREE.MathUtils.lerp(anchorGapKm[b], km, systemHandOver[s])
+        : km
     if (out.nearest < 0 || out.km[b] < out.km[out.nearest]) out.nearest = b
   }
   return out
@@ -309,6 +422,7 @@ const NAMES: Record<string, string> = {
   earth: 'Earth',
   moon: 'Moon',
   ...Object.fromEntries(Object.values(PLANETS).map((planet) => [planet.key, planet.name])),
+  ...Object.fromEntries(MOON_KEYS.map((key) => [key, MOONS[key].name])),
 }
 
 /** Display name for a ship body key. */

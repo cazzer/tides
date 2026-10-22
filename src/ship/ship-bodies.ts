@@ -7,6 +7,8 @@ import * as THREE from 'three'
 import type { Vec3 } from '../ephemeris'
 import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
+import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
+import { COLLISION_MARGIN } from './flight'
 import { CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
@@ -39,7 +41,7 @@ export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
 /**
  * Masses, kg, for the flight model's gravity wells (flight.ts wellFactor).
- * Moons of other planets (tides-2hv.8) will set mass from their own table.
+ * The other planets' moons (tides-2hv.8) take theirs from moons.ts' MOONS.
  */
 export const BODY_MASS_KG: Readonly<Record<'sun' | 'earth' | 'moon' | PlanetKey, number>> = {
   sun: 1.989e30,
@@ -59,7 +61,17 @@ export interface ShipBody extends FlightBody {
   positionAt: ((t: number) => Vec3) | null
 }
 
-/** Sun, Earth, Moon and the seven planets, positions unset until updated. */
+/**
+ * The ship's stop above a major moon (tides-2hv.8). COLLISION_MARGIN's 2%
+ * of Deimos' 0.23 is ~0.005 units, the near plane's own floor, so a moon's
+ * shell stands at least MOON_COLLISION_CLEARANCE off its sphere. [TUNE]
+ */
+export const MOON_COLLISION_CLEARANCE = 0.02
+
+/**
+ * Sun, Earth, Moon, the seven planets and their major moons, positions unset
+ * until updated.
+ */
 export function createShipBodies(): ShipBody[] {
   const { positionAt } = positionsFor('flight')
   return [
@@ -92,6 +104,17 @@ export function createShipBodies(): ShipBody[] {
       mass: BODY_MASS_KG[key],
       positionAt: positionAt[key],
     })),
+    ...MOON_KEYS.map((key) => {
+      const radius = moonRadius(key)
+      return {
+        key,
+        position: new THREE.Vector3(),
+        radius,
+        collisionRadius: Math.max(radius * COLLISION_MARGIN, radius + MOON_COLLISION_CLEARANCE),
+        mass: MOONS[key].massKg,
+        positionAt: (t: number) => moonPosition(key, t, 'flight'),
+      }
+    }),
   ]
 }
 

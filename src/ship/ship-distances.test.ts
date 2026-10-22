@@ -4,6 +4,7 @@ import { Body, GeoMoon, HelioVector, KM_PER_AU } from 'astronomy-engine'
 import { collisionRadius } from './flight'
 import { FLIGHT_KM_PER_UNIT } from '../flight-scale'
 import { createShipBodies, updateShipBodies, type ShipBody } from './ship-bodies'
+import { MOONS, isMoonKey, type MoonKey } from '../moons/moons'
 import { spawnPose } from './ship-session'
 import {
   C_KM_PER_S,
@@ -69,9 +70,9 @@ describe('trueBodies', () => {
   it('points the same way as the scene from the Sun', () => {
     const { bodies, truth } = setup(DATES[0])
     for (const [i, body] of bodies.entries()) {
-      // The Moon sits at its own scale around Earth, not at its own
-      // heliocentric direction.
-      if (body.key === 'sun' || body.key === 'moon') continue
+      // The moons sit at their own scales around their parents, not at
+      // their own heliocentric directions.
+      if (body.key === 'sun' || body.key === 'moon' || isMoonKey(body.key)) continue
       const scene = body.position.clone().normalize()
       const real = truth.positions[i].clone().normalize()
       // Flight positions are true directions (Earth included).
@@ -200,7 +201,7 @@ describe('measureRanges', () => {
     expect(ranges.km[neptune.index] / KM_PER_AU).toBeGreaterThan(1)
   })
 
-  it('gives a local scale near Earth set by the Earth–Moon gap, and the flight scale at Neptune', () => {
+  it('gives a local scale near Earth set by the Earth–Moon gap, and the flight scale past Neptune', () => {
     const { bodies, truth, ranges } = setup(DATES[0])
     const earth = find(bodies, 'earth').body
     const moon = find(bodies, 'moon').body
@@ -211,7 +212,8 @@ describe('measureRanges', () => {
     // ~376 000 km over a ~6 unit shell gap.
     expect(nearEarth).toBeGreaterThan(40_000)
     expect(nearEarth).toBeLessThan(120_000)
-    measureRanges(shellToward(neptune, sun, 0.5), bodies, truth, ranges)
+    // Clear of Triton's system (60 units), sunward.
+    measureRanges(shellToward(neptune, sun, 100), bodies, truth, ranges)
     // Deep space: every pair scale converges on KM_PER_AU / FLIGHT_UNITS_PER_AU.
     expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.01)
   })
@@ -275,6 +277,92 @@ describe('measureRanges', () => {
   })
 })
 
+describe('measureRanges in the other moon systems (tides-2hv.8)', () => {
+  const PAIRS: MoonKey[] = ['phobos', 'deimos', 'io', 'callisto', 'mimas', 'titan', 'iapetus', 'titania', 'triton']
+
+  it.each(DATES)('shows a moon’s true distance from its parent’s surface facing it (%i)', (t) => {
+    const { bodies, truth, ranges } = setup(t)
+    for (const key of PAIRS) {
+      const parent = find(bodies, MOONS[key].parent)
+      const moon = find(bodies, key)
+      measureRanges(shellToward(parent.body, moon.body), bodies, truth, ranges)
+      const surfaceKm =
+        truth.positions[parent.index].distanceTo(truth.positions[moon.index]) -
+        truth.radii[parent.index] -
+        truth.radii[moon.index]
+      expect(Math.abs(ranges.km[moon.index] / surfaceKm - 1), key).toBeLessThan(0.01)
+      expect(ranges.nearest).toBe(parent.index)
+    }
+  })
+
+  it('reads 0 on arrival at a moon, and names it nearest', () => {
+    const { bodies, truth, ranges } = setup(DATES[0])
+    for (const key of ['phobos', 'io', 'titan', 'miranda', 'triton']) {
+      const moon = find(bodies, key)
+      const parent = find(bodies, MOONS[key as MoonKey].parent).body
+      measureRanges(shellToward(moon.body, parent), bodies, truth, ranges)
+      expect(ranges.km[moon.index]).toBeCloseTo(0, 0)
+      expect(ranges.nearest).toBe(moon.index)
+    }
+  })
+
+  it('places a moon at its true distance from the parent: Titan from Saturn’s centre', () => {
+    const { truth, bodies } = setup(DATES[0])
+    const saturn = find(bodies, 'saturn').index
+    const titan = find(bodies, 'titan').index
+    const centres = truth.positions[saturn].distanceTo(truth.positions[titan])
+    expect(Math.abs(centres / MOONS.titan.aKm - 1)).toBeLessThan(1e-9)
+  })
+
+  // Straight in from well past each system's hand-over, the parent's range
+  // only ever falls. The blended position mixes anchors whose scene
+  // directions disagree, which ran it backwards by up to ~280 000 km near
+  // Jupiter and Saturn.
+  it.each(['earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
+    'falls steadily on a straight run in to %s, on 40 dates',
+    (key) => {
+      let worst = 0
+      for (let day = 0; day < 120; day += 3) {
+        const { bodies, truth, ranges } = setup(DATES[0] + day * 86_400_000)
+        const planet = find(bodies, key)
+        const from = find(bodies, key === 'earth' ? 'sun' : 'earth').body
+        const dir = from.position.clone().sub(planet.body.position).normalize()
+        const position = new THREE.Vector3()
+        let previous = Infinity
+        for (let d = 1000; d >= shellOf(planet.body) + 0.02; d -= d > 100 ? 10 : 0.5) {
+          measureRanges(position.copy(planet.body.position).addScaledVector(dir, d), bodies, truth, ranges)
+          worst = Math.max(worst, ranges.km[planet.index] - previous)
+          previous = ranges.km[planet.index]
+        }
+      }
+      expect(worst).toBeLessThanOrEqual(1e-6)
+    }
+  )
+
+  // The moons' scales are 3–30× off the planets' (~14 000 km a unit between
+  // Saturn and Mimas): counted all the way out, 1000 units from Saturn read
+  // ~10× short.
+  it.each(['mars', 'jupiter', 'saturn', 'uranus'])(
+    'reads 1000 units from %s on the planets’ scale, not its moons’',
+    (key) => {
+      for (const t of DATES) {
+        const { bodies, truth, ranges } = setup(t)
+        const planet = find(bodies, key)
+        const outward = planet.body.position.clone().normalize()
+        measureRanges(
+          planet.body.position.clone().addScaledVector(outward, 1000),
+          bodies,
+          truth,
+          ranges
+        )
+        const gapKm = (1000 - shellOf(planet.body)) * FLIGHT_KM_PER_UNIT
+        expect(Math.abs(ranges.km[planet.index] / gapKm - 1)).toBeLessThan(0.06)
+        expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.02)
+      }
+    }
+  )
+})
+
 describe('formatting', () => {
   it('formats distances as km, million km, then AU', () => {
     expect(formatDistance(765_622)).toMatch(/^766.000 km$/)
@@ -313,6 +401,7 @@ describe('formatting', () => {
   it('names bodies', () => {
     expect(bodyName('moon')).toBe('Moon')
     expect(bodyName('saturn')).toBe('Saturn')
+    expect(bodyName('titan')).toBe('Titan')
   })
 })
 

@@ -22,10 +22,14 @@
 //   • With Flight Assist on the velocity "rides" the cap: after each step it
 //     is scaled by how much the cap changed over it, so speed / cap tracks
 //     the throttle in steady flight however fast the cap is moving (turning
-//     keys off that share; see turnRateMultiplier). Riding down a well is
-//     rate-limited to WELL_BRAKE, so diving at a light body faster than its
-//     well can shed carries the ship in over the cap (overshoot), up to
-//     OVERSPEED_MAX × cap.
+//     keys off that share; see turnRateMultiplier). With no target locked,
+//     riding down a well is rate-limited to WELL_BRAKE, so diving at a light
+//     body faster than its well can shed carries the ship in over the cap
+//     (overshoot), up to OVERSPEED_MAX × cap. With a target locked the ride
+//     down is unlimited, so speed / cap ≤ 1 holds whichever well takes over:
+//     crossing a moon system on the way to a locked planet, the ship drops
+//     hard as each moon's well takes over, as Elite's supercruise does,
+//     rather than grazing the moon at twice its cap (tides-2hv.8).
 //   • With a target locked, the speed *toward* it is also capped at
 //     approachCap: the gap over the target's wellTime, which is the cap
 //     itself when the target sets d_eff. A locked approach therefore never
@@ -152,7 +156,9 @@ export const VELOCITY_TAU_WELL = 2
 // [TUNE] Diving into a well with FA on, speed / cap stays at the throttle as
 // long as throttle · K_WELL / wellFactor ≤ this: below half throttle at the
 // Moon, ~0.7 at Mars, any throttle at Earth or heavier. Faster than that and
-// the ship arrives over the cap: unlocked, that is the overshoot.
+// the ship arrives over the cap: unlocked, that is the overshoot. With a
+// target locked the ride isn't limited (rideWell), so this only applies
+// unlocked.
 export const WELL_BRAKE = 0.25
 
 // Hard ceiling on speed as a multiple of the cap, applied before and after
@@ -197,9 +203,9 @@ export const LEVEL_GAIN = 2.5
 // enter the physics: it is where the HUD and touch throttles start drawing
 // the band. They draw it on the throttle because with FA on the speed settles
 // to throttle · cap whether the cap is steady or moving (rideWell); only
-// diving at a light body faster than WELL_BRAKE can shed leaves it above
-// (overshoot: turning suffers sooner). [TUNE] the top sets where turning
-// starts to suffer.
+// diving unlocked at a light body faster than WELL_BRAKE can shed leaves it
+// above (overshoot: turning suffers sooner). [TUNE] the top sets where
+// turning starts to suffer.
 export const BLUE_ZONE: readonly [number, number] = [0.5, 0.75]
 
 // Turn-rate multiplier at the speed cap. [TUNE] At 0.4 a 90° yaw at the cap
@@ -503,18 +509,22 @@ function translate(
 // that share settles at the throttle even while the cap moves. Without this
 // the share lags a moving cap by ~K·τ / wellFactor: departing at full
 // throttle it sat at ~0.73 (no wide-turn penalty), arriving it hit 1 at half
-// throttle (tides-2hv.4). Riding down is rate-limited to WELL_BRAKE, which is
-// where overshoot comes from. FA off doesn't ride: the pilot owns the speed.
+// throttle (tides-2hv.4). Unlocked, riding down is rate-limited to
+// WELL_BRAKE, which is where overshoot comes from; locked, it follows the cap
+// all the way, so no well (the target's or one on the way) is overshot. FA
+// off doesn't ride: the pilot owns the speed.
 function rideWell(
   state: ShipState,
   input: Readonly<ShipInput>,
   dt: number,
   capBefore: number,
-  capAfter: number
+  capAfter: number,
+  locked: boolean
 ): void {
   const v = state.velocity
   if (input.flightAssist) {
-    v.multiplyScalar(Math.max(capAfter / capBefore, Math.exp(-WELL_BRAKE * dt)))
+    const ratio = capAfter / capBefore
+    v.multiplyScalar(locked ? ratio : Math.max(ratio, Math.exp(-WELL_BRAKE * dt)))
   }
   v.clampLength(0, OVERSPEED_MAX * capAfter)
 }
@@ -604,7 +614,7 @@ export function stepShip(
   // now is.
   const there = measure(state.position, env.bodies, env.targetKey)
   const capAfter = wellCap(there)
-  if (h > 0) rideWell(state, input, h, capBefore, capAfter)
+  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null)
   if (telemetry) fillTelemetry(telemetry, state, input, there, capAfter, colliding)
   return state
 }

@@ -4,6 +4,7 @@ import type { SkyLook } from './sky-look'
 import { enterShipPatch, exitShipPatch, type ShipSaved } from './ship/ship-session'
 import { resetShipInput } from './ship/ship-input'
 import { resetShipTelemetry, setShipTarget } from './ship/ship-telemetry'
+import { MOON_KEYS, isMoonKey, type MoonKey } from './moons/moon-keys'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
 export const PLANET_FOCUS_KEYS = [
@@ -24,6 +25,9 @@ export const FOCUS_VALUES = [
   'moon',
   'location',
   ...PLANET_FOCUS_KEYS,
+  // The major moons (tides-2hv.8): focused by tapping one or ?focus=titan,
+  // and kept out of the menu.
+  ...MOON_KEYS,
 ] as const
 export type CameraFocus = (typeof FOCUS_VALUES)[number]
 /** Foci that are a body's mesh ref; 'location' is a point on Earth instead. */
@@ -33,7 +37,12 @@ export function isPlanetFocus(focus: string): focus is PlanetFocus {
   return (PLANET_FOCUS_KEYS as readonly string[]).includes(focus)
 }
 
-/** Planet keys only count while the planets are shown. */
+/** A body drawn only with the planets on: a planet or one of their moons. */
+export function isSystemFocus(focus: string): focus is PlanetFocus | MoonKey {
+  return isPlanetFocus(focus) || isMoonKey(focus)
+}
+
+/** Planet and moon keys only count while the planets are shown. */
 export function parseFocus(
   value: string | null,
   showPlanets: boolean
@@ -41,7 +50,7 @@ export function parseFocus(
   if (value == null || !(FOCUS_VALUES as readonly string[]).includes(value)) {
     return null
   }
-  return !showPlanets && isPlanetFocus(value) ? null : (value as CameraFocus)
+  return !showPlanets && isSystemFocus(value) ? null : (value as CameraFocus)
 }
 export type PanelKey = 'main' | 'top' | 'bottom'
 export type WeatherSource = 'static' | 'real'
@@ -264,7 +273,7 @@ export const useStore = create<{
   jumpDate: Date | null
   jumpDateSetAt: Date | null
   setJumpDate: (date: Date | null) => void
-} & Partial<Record<PlanetFocus, { current: Object3D | null }>>>((set, get) => ({
+} & Partial<Record<PlanetFocus | MoonKey, { current: Object3D | null }>>>((set, get) => ({
   earth: undefined,
   moon: undefined,
   sun: undefined,
@@ -314,7 +323,7 @@ export const useStore = create<{
   setShowPlanets: (showPlanets: boolean) =>
     set((s) => ({
       showPlanets,
-      cameraFocus: !showPlanets && isPlanetFocus(s.cameraFocus) ? 'sun' : s.cameraFocus,
+      cameraFocus: !showPlanets && isSystemFocus(s.cameraFocus) ? 'sun' : s.cameraFocus,
     })),
   setShowConstellations: (showConstellations: boolean) => set({ showConstellations }),
   setShowConstellationArt: (showConstellationArt: boolean) => set({ showConstellationArt }),

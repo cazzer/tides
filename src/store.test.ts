@@ -5,6 +5,7 @@ import {
   PLANET_FOCUS_KEYS,
   SYSTEM_AID_KEYS,
   isPlanetFocus,
+  isSystemFocus,
   parseConstellations,
   parseFocus,
   parseSystemAids,
@@ -12,6 +13,7 @@ import {
   useStore,
   type SystemAids,
 } from './store'
+import { MOON_KEYS } from './moons/moon-keys'
 import { shipInput } from './ship/ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship/ship-telemetry'
 
@@ -28,7 +30,7 @@ describe('focus keys', () => {
     ])
   })
 
-  it('keeps the existing focus values first, then the planets', () => {
+  it('keeps the existing focus values first, then the planets, then their moons', () => {
     expect(FOCUS_VALUES).toEqual([
       'clock',
       'earth',
@@ -36,6 +38,7 @@ describe('focus keys', () => {
       'moon',
       'location',
       ...PLANET_FOCUS_KEYS,
+      ...MOON_KEYS,
     ])
   })
 
@@ -43,6 +46,15 @@ describe('focus keys', () => {
     expect(isPlanetFocus('jupiter')).toBe(true)
     expect(isPlanetFocus('earth')).toBe(false)
     expect(isPlanetFocus('pluto')).toBe(false)
+    expect(isPlanetFocus('titan')).toBe(false)
+  })
+
+  it('counts the planets and their moons as system foci, not Earth’s Moon', () => {
+    expect(isSystemFocus('jupiter')).toBe(true)
+    expect(isSystemFocus('titan')).toBe(true)
+    expect(isSystemFocus('triton')).toBe(true)
+    expect(isSystemFocus('moon')).toBe(false)
+    expect(isSystemFocus('charon')).toBe(false)
   })
 })
 
@@ -57,6 +69,8 @@ describe('parseFocus', () => {
   it('accepts planets only when planets are shown', () => {
     expect(parseFocus('saturn', true)).toBe('saturn')
     expect(parseFocus('saturn', false)).toBeNull()
+    expect(parseFocus('titan', true)).toBe('titan')
+    expect(parseFocus('titan', false)).toBeNull()
   })
 
   it('rejects missing and unknown values', () => {
