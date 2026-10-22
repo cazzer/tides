@@ -80,6 +80,56 @@ export function throttleFromDrag(
   return clamp(next, THROTTLE_MIN, THROTTLE_MAX)
 }
 
+/** Where a throttle drag is measured from: the setpoint and the finger's y then. */
+export interface ThrottleAnchor {
+  setpoint: number
+  y: number
+}
+
+/**
+ * The anchor for the next move. Past an end stop it follows the finger, so
+ * dragging back moves the throttle at once instead of after dead travel.
+ */
+export function rebaseThrottleAnchor(
+  anchor: ThrottleAnchor,
+  y: number,
+  trackPx: number
+): ThrottleAnchor {
+  const raw = anchor.setpoint + ((anchor.y - y) / Math.max(trackPx, 1)) * THROTTLE_SPAN
+  if (raw > THROTTLE_MAX) return { setpoint: THROTTLE_MAX, y }
+  if (raw < THROTTLE_MIN) return { setpoint: THROTTLE_MIN, y }
+  return anchor
+}
+
+/** Travel on the throttle pad before it decides which axes the drag drives. */
+export const AXIS_LOCK_PX = 12
+/** How much one axis must dominate the other for the drag to lock to it. */
+export const AXIS_LOCK_RATIO = 1.5
+
+export type PadAxes = 'throttle' | 'roll' | 'both'
+
+/**
+ * Which axes a throttle-pad drag drives, from its travel so far: null until
+ * it has moved AXIS_LOCK_PX, then throttle for a mostly vertical start, roll
+ * for a mostly horizontal one, both only for a clearly diagonal one. Keeps a
+ * throttle slide from rolling the ship and a roll from creeping the throttle.
+ */
+export function padAxes(dx: number, dy: number): PadAxes | null {
+  if (Math.hypot(dx, dy) < AXIS_LOCK_PX) return null
+  if (Math.abs(dy) > AXIS_LOCK_RATIO * Math.abs(dx)) return 'throttle'
+  if (Math.abs(dx) > AXIS_LOCK_RATIO * Math.abs(dy)) return 'roll'
+  return 'both'
+}
+
+/**
+ * Where the floating stick's base lands for a press at `point`: no closer to
+ * the zone's left and bottom edges than `minX`/`maxY` allow, so the knob can
+ * reach full deflection left and down.
+ */
+export function clampStickOrigin(point: Point, bounds: { minX: number; maxY: number }): Point {
+  return { x: Math.max(point.x, bounds.minX), y: Math.min(point.y, bounds.maxY) }
+}
+
 /** Roll demand from the throttle pad's sideways drag; right rolls right. */
 export function rollFromDrag(startX: number, x: number): number {
   return shapeAxis((x - startX) / ROLL_RANGE_PX, ROLL_DEAD_ZONE, CURVE_EXPONENT) + 0

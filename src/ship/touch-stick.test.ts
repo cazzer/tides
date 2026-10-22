@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { BLUE_ZONE } from './flight'
 import { THROTTLE_MAX, THROTTLE_MIN } from './ship-input'
 import {
+  AXIS_LOCK_PX,
+  AXIS_LOCK_RATIO,
   BLUE_BAND,
+  clampStickOrigin,
+  padAxes,
+  rebaseThrottleAnchor,
   CURVE_EXPONENT,
   DEAD_ZONE,
   ROLL_DEAD_ZONE,
@@ -128,5 +133,39 @@ describe('throttleToTrack', () => {
     expect(BLUE_BAND[0]).toBeCloseTo(throttleToTrack(BLUE_ZONE[0]), 12)
     expect(BLUE_BAND[1]).toBeCloseTo(throttleToTrack(BLUE_ZONE[1]), 12)
     expect(BLUE_BAND).toEqual([0.6, 0.8])
+  })
+})
+
+describe('rebaseThrottleAnchor', () => {
+  it('keeps the anchor within range and follows the finger past an end stop', () => {
+    const anchor = { setpoint: 0.5, y: 300 }
+    expect(rebaseThrottleAnchor(anchor, 260, 200)).toBe(anchor)
+    expect(rebaseThrottleAnchor(anchor, 100, 200)).toEqual({ setpoint: THROTTLE_MAX, y: 100 })
+    expect(rebaseThrottleAnchor(anchor, 800, 200)).toEqual({ setpoint: THROTTLE_MIN, y: 800 })
+  })
+})
+
+describe('padAxes', () => {
+  it('waits for AXIS_LOCK_PX of travel', () => {
+    expect(padAxes(0, 0)).toBeNull()
+    expect(padAxes(AXIS_LOCK_PX * 0.7, AXIS_LOCK_PX * 0.7)).toBeNull()
+  })
+
+  it('locks to the dominant axis, both only when clearly diagonal', () => {
+    expect(padAxes(0, -AXIS_LOCK_PX)).toBe('throttle')
+    expect(padAxes(10, 20)).toBe('throttle')
+    expect(padAxes(-AXIS_LOCK_PX, 0)).toBe('roll')
+    expect(padAxes(20, -10)).toBe('roll')
+    expect(padAxes(20, 20)).toBe('both')
+    expect(padAxes(-20, 15)).toBe('both')
+    expect(AXIS_LOCK_RATIO).toBe(1.5)
+  })
+})
+
+describe('clampStickOrigin', () => {
+  it('holds the base clear of the left and bottom edges only', () => {
+    const bounds = { minX: 70, maxY: 700 }
+    expect(clampStickOrigin({ x: 20, y: 780 }, bounds)).toEqual({ x: 70, y: 700 })
+    expect(clampStickOrigin({ x: 200, y: 300 }, bounds)).toEqual({ x: 200, y: 300 })
   })
 })

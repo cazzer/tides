@@ -7,11 +7,16 @@
 import type { ShipInput } from './ship-input'
 import {
   STICK_RADIUS_PX,
+  clampStickOrigin,
+  padAxes,
+  rebaseThrottleAnchor,
   rollFromDrag,
   stickDemand,
   stickKnob,
   throttleFromDrag,
+  type PadAxes,
   type Point,
+  type ThrottleAnchor,
 } from './touch-stick'
 
 export type ControlElement = Pick<
@@ -100,31 +105,52 @@ function bindPress(
   }
 }
 
+/** How the stick reports itself and where it may spawn. */
+export interface SteerOptions {
+  onStick?: StickListener
+  /** Read at each press: the base's leftmost x and lowest y, in client px. */
+  spawnBounds?: () => { minX: number; maxY: number }
+}
+
+export interface SteerBinding extends Binding {
+  /**
+   * Writes the held stick's demand again; a no-op when let go. Run each
+   * frame so another writer zeroing pitch/yaw (the desktop mouse on a
+   * hybrid) can't cancel a turn the thumb is still holding.
+   */
+  reassert(): void
+}
+
 /**
- * The floating steer stick: its base lands under the thumb, and the thumb's
- * offset from there is the pitch/yaw demand, back to 0 on release.
+ * The floating steer stick: its base lands under the thumb (clamped clear of
+ * the zone's edges), and the thumb's offset from there is the pitch/yaw
+ * demand, back to 0 on release.
  */
 export function bindSteer(
   element: ControlElement,
   input: ShipInput,
-  onStick: StickListener = () => {}
-): Binding {
+  { onStick = () => {}, spawnBounds }: SteerOptions = {}
+): SteerBinding {
   let origin: Point = { x: 0, y: 0 }
-  return bindPress(
+  let demand: { pitch: number; yaw: number } | null = null
+  const steerTo = (event: PointerEvent) => {
+    const current = { x: event.clientX, y: event.clientY }
+    demand = stickDemand(origin, current, STICK_RADIUS_PX)
+    input.pitch = demand.pitch
+    input.yaw = demand.yaw
+    onStick({ origin, knob: stickKnob(origin, current, STICK_RADIUS_PX) })
+  }
+  const binding = bindPress(
     element,
     {
       down(event) {
-        origin = { x: event.clientX, y: event.clientY }
-        onStick({ origin, knob: origin })
+        const thumb = { x: event.clientX, y: event.clientY }
+        origin = spawnBounds ? clampStickOrigin(thumb, spawnBounds()) : thumb
+        steerTo(event)
       },
-      move(event) {
-        const current = { x: event.clientX, y: event.clientY }
-        const { pitch, yaw } = stickDemand(origin, current, STICK_RADIUS_PX)
-        input.pitch = pitch
-        input.yaw = yaw
-        onStick({ origin, knob: stickKnob(origin, current, STICK_RADIUS_PX) })
-      },
+      move: steerTo,
       release() {
+        demand = null
         input.pitch = 0
         input.yaw = 0
         onStick(null)
@@ -132,28 +158,46 @@ export function bindSteer(
     },
     { touchOnly: true }
   )
+  return {
+    ...binding,
+    reassert() {
+      if (!demand) return
+      input.pitch = demand.pitch
+      input.yaw = demand.yaw
+    },
+  }
 }
 
 /**
  * The throttle/roll pad: vertical drag moves the throttle setpoint, which
- * stays where it's left; horizontal drag rolls and springs back to 0.
- * `trackPx` is the throttle track's height, read at each press.
+ * stays where it's left; horizontal drag rolls and springs back to 0. Once
+ * the drag has travelled a little it locks to the axis it mostly moves along
+ * (padAxes). `trackPx` is the throttle track's height, read at each press.
  */
 export function bindThrottle(
   element: ControlElement,
   input: ShipInput,
   trackPx: () => number
 ): Binding {
-  let start = { x: 0, y: 0, setpoint: 0, trackPx: 1 }
+  let start = { x: 0, y: 0, trackPx: 1 }
+  let anchor: ThrottleAnchor = { setpoint: 0, y: 0 }
+  let axes: PadAxes | null = null
   return bindPress(
     element,
     {
       down(event) {
-        start = { x: event.clientX, y: event.clientY, setpoint: input.throttle, trackPx: trackPx() }
+        start = { x: event.clientX, y: event.clientY, trackPx: trackPx() }
+        anchor = { setpoint: input.throttle, y: event.clientY }
+        axes = null
       },
       move(event) {
-        input.throttle = throttleFromDrag(start.setpoint, start.y, event.clientY, start.trackPx)
-        input.roll = rollFromDrag(start.x, event.clientX)
+        axes ??= padAxes(event.clientX - start.x, event.clientY - start.y)
+        if (!axes) return
+        if (axes !== 'roll') {
+          input.throttle = throttleFromDrag(anchor.setpoint, anchor.y, event.clientY, start.trackPx)
+          anchor = rebaseThrottleAnchor(anchor, event.clientY, start.trackPx)
+        }
+        if (axes !== 'throttle') input.roll = rollFromDrag(start.x, event.clientX)
       },
       release() {
         input.roll = 0
@@ -217,41 +261,51 @@ export function bindLevel(element: ControlElement, input: ShipInput): Binding {
   }
 }
 
-/** Toggles Flight Assist on click (tap, mouse or keyboard). */
-export function bindFlightAssist(element: ControlElement, input: ShipInput): () => void {
-  const stop = (event: Event) => event.stopPropagation()
-  const click = (event: Event) => {
-    event.stopPropagation()
-    input.flightAssist = !input.flightAssist
-  }
-  element.addEventListener('pointerdown', stop)
-  element.addEventListener('pointerup', stop)
-  element.addEventListener('click', click)
-  return () => {
-    element.removeEventListener('pointerdown', stop)
-    element.removeEventListener('pointerup', stop)
-    element.removeEventListener('click', click)
-  }
-}
-
 type EventSource = Pick<Window, 'addEventListener' | 'removeEventListener'>
 
 /**
  * Lets go of every control when the page loses focus or is hidden (an app
- * switch mid-drag delivers no pointerup), so no input sticks.
+ * switch mid-drag delivers no pointerup), or when the view resizes or the
+ * phone turns (the pads and track move out from under the thumbs), so no
+ * input sticks. `orientation` is screen.orientation where the browser has it.
  */
-export function releaseWhenBackgrounded(
-  win: EventSource,
-  doc: EventSource & Pick<Document, 'visibilityState'>,
+export function releaseOnInterruption(
+  {
+    win,
+    doc,
+    orientation,
+  }: {
+    win: EventSource
+    doc: EventSource & Pick<Document, 'visibilityState'>
+    orientation?: EventSource | null
+  },
   release: () => void
 ): () => void {
   const onVisibility = () => {
     if (doc.visibilityState === 'hidden') release()
   }
   win.addEventListener('blur', release)
+  win.addEventListener('resize', release)
   doc.addEventListener('visibilitychange', onVisibility)
+  orientation?.addEventListener('change', release)
   return () => {
     win.removeEventListener('blur', release)
+    win.removeEventListener('resize', release)
     doc.removeEventListener('visibilitychange', onVisibility)
+    orientation?.removeEventListener('change', release)
+  }
+}
+
+/**
+ * Keeps iOS Safari's own pinch (gesture events) off the page while the
+ * controls are up, wherever on the screen it starts.
+ */
+export function blockPagePinch(doc: EventSource): () => void {
+  const prevent = (event: Event) => event.preventDefault()
+  doc.addEventListener('gesturestart', prevent, { passive: false })
+  doc.addEventListener('gesturechange', prevent, { passive: false })
+  return () => {
+    doc.removeEventListener('gesturestart', prevent)
+    doc.removeEventListener('gesturechange', prevent)
   }
 }

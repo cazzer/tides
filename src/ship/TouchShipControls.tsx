@@ -3,11 +3,11 @@ import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { shipInput } from './ship-input'
 import {
-  bindFlightAssist,
   bindLevel,
   bindSteer,
   bindThrottle,
-  releaseWhenBackgrounded,
+  blockPagePinch,
+  releaseOnInterruption,
   type StickListener,
 } from './touch-controls'
 import { BLUE_BAND, STICK_RADIUS_PX, throttleToTrack } from './touch-stick'
@@ -39,7 +39,7 @@ function useTouchControlsVisible() {
 
 /**
  * Touch ship controls (tides-3bl.4): a floating steer stick on the left, a
- * throttle/roll pad on the right with Level and Flight Assist beside its
+ * throttle/roll pad on the right with a hold-to-level button above its
  * track. Writes only shipInput; mounted in ShipView's overlay.
  */
 export function TouchShipControls() {
@@ -57,8 +57,6 @@ function Controls() {
   const track = useRef<HTMLDivElement>(null)
   const thumb = useRef<HTMLDivElement>(null)
   const levelButton = useRef<HTMLButtonElement>(null)
-  const assistButton = useRef<HTMLButtonElement>(null)
-  const assistLabel = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     const overlay = root.current!
@@ -67,8 +65,6 @@ function Controls() {
     const trackEl = track.current!
     const thumbEl = thumb.current!
     const level = levelButton.current!
-    const assist = assistButton.current!
-    const assistText = assistLabel.current!
 
     // The stick's base jumps to the thumb, in the overlay's coordinates
     // (measured once per press), and goes back to its resting ghost after.
@@ -91,46 +87,59 @@ function Controls() {
       knob.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`
     }
 
+    // The base stays a stick's reach (plus the safe area, which the zone
+    // carries as padding) clear of the zone's left and bottom edges.
+    const steerEl = steerZone.current!
+    const spawnBounds = () => {
+      const zone = steerEl.getBoundingClientRect()
+      const style = getComputedStyle(steerEl)
+      return {
+        minX: zone.left + parseFloat(style.paddingLeft) + STICK_RADIUS_PX + SPAWN_MARGIN,
+        maxY: zone.bottom - parseFloat(style.paddingBottom) - STICK_RADIUS_PX - SPAWN_MARGIN,
+      }
+    }
+
+    const steer = bindSteer(steerEl, shipInput, { onStick, spawnBounds })
     const bindings = [
-      bindSteer(steerZone.current!, shipInput, onStick),
+      steer,
       bindThrottle(throttleZone.current!, shipInput, () => trackEl.clientHeight),
       bindLevel(level, shipInput),
     ]
     const releaseAll = () => bindings.forEach((binding) => binding.release())
-    const stopBackground = releaseWhenBackgrounded(window, document, releaseAll)
-    const stopAssist = bindFlightAssist(assist, shipInput)
+    const stopInterruptions = releaseOnInterruption(
+      { win: window, doc: document, orientation: screen.orientation ?? null },
+      releaseAll
+    )
+    const unblockPinch = blockPagePinch(document)
 
-    // Belt and braces for iOS: no page pinch, scroll, or long-press menu
-    // from the controls.
-    const blocked = ['gesturestart', 'gesturechange', 'touchmove', 'contextmenu']
+    // Belt and braces for iOS: no page scroll or long-press menu from the
+    // controls.
+    const blocked = ['touchmove', 'contextmenu']
     for (const type of blocked) overlay.addEventListener(type, preventDefault, { passive: false })
 
-    // Throttle and Flight Assist also change from the keyboard on hybrids,
-    // so the display follows shipInput rather than the touches.
-    let shown = { throttle: NaN, roll: NaN, assist: false, level: false, first: true }
+    // The throttle and level also change from the keyboard on hybrids, so
+    // the display follows shipInput rather than the touches.
+    let shown = { throttle: NaN, roll: NaN, level: false }
     let frame = requestAnimationFrame(function draw() {
-      const { throttle, roll, flightAssist, level: levelling } = shipInput
+      steer.reassert()
+      const { throttle, roll, level: levelling } = shipInput
       if (throttle !== shown.throttle || roll !== shown.roll) {
         thumbEl.style.bottom = `${throttleToTrack(throttle) * 100}%`
         thumbEl.style.transform = `translate(calc(-50% + ${roll * 10}px), 50%)`
       }
-      if (shown.first || flightAssist !== shown.assist) {
-        assist.setAttribute('aria-pressed', String(flightAssist))
-        assistText.textContent = flightAssist ? 'FA ON' : 'FA OFF'
-      }
-      if (shown.first || levelling !== shown.level) {
+      if (levelling !== shown.level) {
         if (levelling) level.dataset.active = ''
         else delete level.dataset.active
       }
-      shown = { throttle, roll, assist: flightAssist, level: levelling, first: false }
+      shown = { throttle, roll, level: levelling }
       frame = requestAnimationFrame(draw)
     })
 
     return () => {
       cancelAnimationFrame(frame)
       for (const type of blocked) overlay.removeEventListener(type, preventDefault)
-      stopAssist()
-      stopBackground()
+      unblockPinch()
+      stopInterruptions()
       bindings.forEach((binding) => binding.dispose())
     }
   }, [])
@@ -152,23 +161,17 @@ function Controls() {
         <StickKnob ref={stickKnob} />
       </StickBase>
       <ThrottleCluster>
-        <Buttons>
-          <Pill
-            ref={levelButton}
-            type="button"
-            aria-label="Level the ship (hold)"
-            title="Hold to level"
-          >
-            LEVEL
-          </Pill>
-          <Pill
-            ref={assistButton}
-            type="button"
-            aria-label="Flight assist"
-          >
-            <span ref={assistLabel} />
-          </Pill>
-        </Buttons>
+        {/* Above the track, out of the thumb's way. Flight Assist lives in
+            the HUD (tides-3bl.5), for touch and desktop alike. */}
+        <LevelButton
+          ref={levelButton}
+          type="button"
+          aria-label="Level, hold"
+          title="Hold to level"
+        >
+          LEVEL
+          <Sublabel>HOLD</Sublabel>
+        </LevelButton>
         <Track
           ref={track}
           aria-hidden
@@ -184,9 +187,11 @@ function Controls() {
 }
 
 const BLUE = '#4c9ffe'
-const AMBER = '#ffb347'
+const AMBER = '#ffa630'
 const ZERO = throttleToTrack(0)
 const KNOB_SIZE = 52
+// Extra room past full deflection between a spawned stick and the zone's edge.
+const SPAWN_MARGIN = 8
 
 // Covers the view without taking any presses itself; only the pads and
 // buttons do. Custom properties stay scoped here.
@@ -225,8 +230,12 @@ const Zone = styled.div`
   touch-action: none;
 `
 
+// The safe-area padding is only read back (spawnBounds), to keep the stick
+// off the screen's curved corner and home indicator.
 const SteerZone = styled(Zone)`
   left: 0;
+  box-sizing: border-box;
+  padding: 0 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
 `
 
 const ThrottleZone = styled(Zone)`
@@ -270,30 +279,30 @@ const StickKnob = styled.div`
   transform: translate(-50%, -50%);
 `
 
+// LEVEL sits above the track, right-aligned with it.
 const ThrottleCluster = styled.div`
   position: absolute;
   right: calc(var(--dock-inset-right) + 32px);
   bottom: var(--track-bottom);
-  height: var(--track-h);
-  display: flex;
-  gap: 16px;
-  pointer-events: none;
-`
-
-const Buttons = styled.div`
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 16px;
+  gap: 20px;
+  pointer-events: none;
 `
 
-// Pills 32px tall with a 48px tap target.
-const Pill = styled.button`
+// A glass pill with a tap target of at least 48px.
+const LevelButton = styled.button`
   ${glassPanel}
   position: relative;
-  min-width: 64px;
-  height: 32px;
-  padding: 0 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 72px;
+  min-height: 32px;
+  padding: 6px 12px;
   border-radius: 999px;
   color: rgba(255, 255, 255, 0.78);
   font: 600 12px/1 system-ui, sans-serif;
@@ -308,8 +317,7 @@ const Pill = styled.button`
     inset: -8px -4px;
   }
 
-  &[data-active],
-  &[aria-pressed='true'] {
+  &[data-active] {
     color: #fff;
     border-color: ${BLUE};
   }
@@ -320,11 +328,17 @@ const Pill = styled.button`
   }
 `
 
+const Sublabel = styled.span`
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  opacity: 0.6;
+`
+
 const Track = styled.div`
   position: relative;
   width: 14px;
-  height: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  height: var(--track-h);
+  border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.07);
 `
@@ -337,7 +351,7 @@ const Reverse = styled.div`
   height: ${ZERO * 100}%;
   border-radius: 0 0 6px 6px;
   background: ${AMBER};
-  opacity: 0.35;
+  opacity: 0.65;
 `
 
 const BlueBand = styled.div`

@@ -175,6 +175,16 @@ describe('desktop ship input binding (tides-3bl.3)', () => {
     expect(drawn.visible).toBe(false)
   })
 
+  it("leaves a touch stick's turn alone when the mouse wasn't steering (tides-3bl.4)", () => {
+    const { win, input, drawn } = setup()
+    // The touch stick holds a turn; another thumb lands on the throttle.
+    input.pitch = 0.4
+    input.yaw = -0.6
+    win.fire('pointerdown', { pointerType: 'touch' })
+    expect(input).toMatchObject({ pitch: 0.4, yaw: -0.6 })
+    expect(drawn.visible).toBe(false)
+  })
+
   it('shows the widget for a fine pointer, else only once a mouse moves', () => {
     expect(setup().drawn.visible).toBe(true)
     const { drawn, move } = setup({ fine: false })
