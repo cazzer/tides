@@ -4,8 +4,9 @@ import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
 import { CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
-import { COLLISION_MARGIN, collisionRadius } from './flight'
+import { COLLISION_MARGIN, collisionRadius, wellFactor } from './flight'
 import {
+  BODY_MASS_KG,
   EARTH_COLLISION_RADIUS,
   EARTH_SHELL_RADIUS,
   createShipBodies,
@@ -63,6 +64,17 @@ describe('ship bodies', () => {
       expect(b[key].position.y).toBeCloseTo(y, 9)
       expect(b[key].position.z).toBeCloseTo(z, 9)
     }
+  })
+
+  it('gives every body its mass, with the Moon the smallest well and the Sun the biggest', () => {
+    const bodies = createShipBodies()
+    for (const body of bodies) {
+      expect(body.mass).toBe(BODY_MASS_KG[body.key as keyof typeof BODY_MASS_KG])
+    }
+    const factors = bodies.map((b) => wellFactor(b.mass))
+    expect(wellFactor(BODY_MASS_KG.moon)).toBeCloseTo(1, 12)
+    expect(Math.min(...factors)).toBeCloseTo(1, 12)
+    expect(Math.max(...factors)).toBe(wellFactor(BODY_MASS_KG.sun))
   })
 
   it('moves the same vectors in place', () => {

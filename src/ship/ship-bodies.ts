@@ -5,7 +5,7 @@
 
 import * as THREE from 'three'
 import type { Vec3 } from '../ephemeris'
-import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
+import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
@@ -37,6 +37,23 @@ export const EARTH_SHELL_RADIUS = Math.max(
  */
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
+/**
+ * Masses, kg, for the flight model's gravity wells (flight.ts wellFactor).
+ * Moons of other planets carry their own (massKg in their table).
+ */
+export const BODY_MASS_KG: Readonly<Record<'sun' | 'earth' | 'moon' | PlanetKey, number>> = {
+  sun: 1.989e30,
+  earth: 5.972e24,
+  moon: 7.342e22,
+  mercury: 3.301e23,
+  venus: 4.867e24,
+  mars: 6.417e23,
+  jupiter: 1.898e27,
+  saturn: 5.683e26,
+  uranus: 8.681e25,
+  neptune: 1.024e26,
+}
+
 export interface ShipBody extends FlightBody {
   /** Null for the Sun, which stays at the origin. */
   positionAt: ((t: number) => Vec3) | null
@@ -46,19 +63,33 @@ export interface ShipBody extends FlightBody {
 export function createShipBodies(): ShipBody[] {
   const { positionAt } = positionsFor('flight')
   return [
-    { key: 'sun', position: new THREE.Vector3(), radius: SUN_RADIUS, positionAt: null },
+    {
+      key: 'sun',
+      position: new THREE.Vector3(),
+      radius: SUN_RADIUS,
+      mass: BODY_MASS_KG.sun,
+      positionAt: null,
+    },
     {
       key: 'earth',
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
       collisionRadius: EARTH_COLLISION_RADIUS,
+      mass: BODY_MASS_KG.earth,
       positionAt: positionAt.earth,
     },
-    { key: 'moon', position: new THREE.Vector3(), radius: MOON_RADIUS, positionAt: positionAt.moon },
+    {
+      key: 'moon',
+      position: new THREE.Vector3(),
+      radius: MOON_RADIUS,
+      mass: BODY_MASS_KG.moon,
+      positionAt: positionAt.moon,
+    },
     ...PLANET_KEYS.map((key) => ({
       key,
       position: new THREE.Vector3(),
       radius: PLANETS[key].radius,
+      mass: BODY_MASS_KG[key],
       positionAt: positionAt[key],
     })),
   ]

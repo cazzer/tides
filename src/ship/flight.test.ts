@@ -4,14 +4,17 @@ import { PLANETS, sceneRadius } from '../planets'
 import {
   BLUE_ZONE,
   COLLISION_MARGIN,
-  ETA_SECONDS,
-  K_CRUISE,
+  K_WELL,
   MAX_DT,
+  OVERSPEED_MAX,
   PITCH_RATE,
   ROLL_RATE,
   TURN_RATE_MIN_FACTOR,
   V_NORMAL,
-  VELOCITY_TAU,
+  V_TOP,
+  VELOCITY_TAU_OPEN,
+  VELOCITY_TAU_WELL,
+  WELL_BRAKE,
   YAW_RATE,
   approachCap,
   collisionRadius,
@@ -21,12 +24,16 @@ import {
   speedFraction,
   stepShip,
   turnRateMultiplier,
+  velocityTau,
+  wellFactor,
+  wellTime,
   type Body,
   type FlightEnv,
   type ShipState,
 } from './flight'
+import { BODY_MASS_KG, createShipBodies, updateShipBodies } from './ship-bodies'
 import type { ShipInput } from './ship-input'
-import { createShipTelemetry } from './ship-telemetry'
+import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 
 const FRAME = 1 / 60
 const Y = new THREE.Vector3(0, 1, 0)
@@ -76,6 +83,16 @@ function env(bodies: readonly Body[], targetKey: string | null = null): FlightEn
   return { bodies, targetKey }
 }
 
+// The ticket's trip-time targets are set at this instant.
+const TRIP_DATE = '2026-10-22T12:00:00Z'
+
+/** Ship mode's real bodies (masses, flight scale), frozen at `date`. */
+function flightBodies(date = TRIP_DATE): Body[] {
+  const bodies = createShipBodies()
+  updateShipBodies(bodies, Date.parse(date))
+  return bodies
+}
+
 // A ship at `position` with its nose on `target` and up as close to +Y as
 // the heading allows (three's lookAt puts −Z on the target for cameras).
 function shipAt(position: THREE.Vector3, target: THREE.Vector3): ShipState {
@@ -112,35 +129,107 @@ describe('speedCap', () => {
 
   test('is V_NORMAL close to a surface', () => {
     expect(speedCap(at(0.06), [body])).toBe(V_NORMAL)
-    expect(speedCap(at(V_NORMAL / K_CRUISE), [body])).toBeCloseTo(V_NORMAL, 12)
+    expect(speedCap(at(V_NORMAL / K_WELL), [body])).toBeCloseTo(V_NORMAL, 12)
   })
 
-  test('grows with distance to the nearest surface', () => {
-    const gaps = [1, 2, 5, 10, 50, 300, 2000]
+  test('grows with distance to the nearest surface, up to V_TOP', () => {
+    const gaps = [1, 2, 5, 10, 50, 250]
     const caps = gaps.map((g) => speedCap(at(g), [body]))
     for (let i = 1; i < caps.length; i++) expect(caps[i]).toBeGreaterThan(caps[i - 1])
-    expect(caps[caps.length - 1]).toBeCloseTo(K_CRUISE * 2000, 9)
+    expect(caps[caps.length - 1]).toBeCloseTo(K_WELL * 250, 9)
+    expect(speedCap(at(V_TOP / K_WELL), [body])).toBeCloseTo(V_TOP, 9)
+    expect(speedCap(at(2000), [body])).toBe(V_TOP)
   })
 
   test('uses the nearest body, not the first', () => {
     const near: Body = { key: 'near', position: new THREE.Vector3(10, 0, 0), radius: 1 }
     const p = new THREE.Vector3(14, 0, 0)
     expect(nearestBody(p, [body, near])?.body.key).toBe('near')
-    expect(speedCap(p, [body, near])).toBeCloseTo(K_CRUISE * 3, 12)
+    expect(speedCap(p, [body, near])).toBeCloseTo(K_WELL * 3, 12)
+  })
+
+  test('weights each gap by its well: a heavy body slows the ship from further out', () => {
+    // 100 units off a Sun-mass body against 20 off a Moon-mass one: the Sun's
+    // gap counts as 100 / 11 ≈ 9, so the Sun sets the cap, not the nearer Moon.
+    const sun: Body = { ...body, key: 'sun', mass: BODY_MASS_KG.sun }
+    const moon: Body = {
+      key: 'moon',
+      position: new THREE.Vector3(103 + 21, 0, 0),
+      radius: 1,
+      mass: BODY_MASS_KG.moon,
+    }
+    const p = at(100)
+    expect(nearestBody(p, [sun, moon])?.body.key).toBe('moon')
+    expect(speedCap(p, [sun, moon])).toBeCloseTo((K_WELL * 100) / wellFactor(BODY_MASS_KG.sun), 9)
+    expect(speedCap(p, [{ ...sun, mass: undefined }, moon])).toBeCloseTo(K_WELL * 20, 9)
   })
 
   test('is V_NORMAL with no bodies', () => {
     expect(nearestBody(new THREE.Vector3(), [])).toBeNull()
     expect(speedCap(new THREE.Vector3(1e6, 0, 0), [])).toBe(V_NORMAL)
   })
+})
 
+describe('wellFactor and wellTime', () => {
+  test('is 1 at the Moon and for missing or unusable masses', () => {
+    expect(wellFactor(BODY_MASS_KG.moon)).toBeCloseTo(1, 12)
+    for (const mass of [undefined, 0, -1, NaN, Infinity, 1]) expect(wellFactor(mass)).toBe(1)
+  })
+
+  test('grows with mass: the Sun and Jupiter have the biggest wells, Mercury a small one', () => {
+    const order = ['moon', 'mercury', 'mars', 'earth', 'neptune', 'saturn', 'jupiter', 'sun'] as const
+    const factors = order.map((key) => wellFactor(BODY_MASS_KG[key]))
+    for (let i = 1; i < factors.length; i++) expect(factors[i]).toBeGreaterThan(factors[i - 1])
+    expect(wellFactor(BODY_MASS_KG.sun)).toBeCloseTo(11, 0)
+    expect(wellFactor(BODY_MASS_KG.jupiter)).toBeCloseTo(4.15, 1)
+    expect(wellFactor(BODY_MASS_KG.mercury)).toBeLessThan(1.3)
+  })
+
+  test('wellTime is wellFactor / K_WELL', () => {
+    const jupiter: Body = { key: 'j', position: new THREE.Vector3(), radius: 6, mass: BODY_MASS_KG.jupiter }
+    expect(wellTime(jupiter)).toBeCloseTo(wellFactor(BODY_MASS_KG.jupiter) / K_WELL, 12)
+    expect(wellTime({ ...jupiter, mass: undefined })).toBe(1 / K_WELL)
+  })
+})
+
+describe('velocityTau', () => {
+  test('is quick in open space and heavy deep in a well', () => {
+    expect(velocityTau(V_TOP)).toBeCloseTo(VELOCITY_TAU_OPEN, 12)
+    expect(velocityTau(V_NORMAL)).toBeCloseTo(VELOCITY_TAU_WELL, 12)
+    let previous = velocityTau(V_TOP)
+    for (let cap = V_TOP / 2; cap > V_NORMAL; cap /= 2) {
+      expect(velocityTau(cap)).toBeGreaterThan(previous)
+      previous = velocityTau(cap)
+    }
+  })
+
+  test('clamps out-of-range caps and never returns NaN', () => {
+    expect(velocityTau(1e9)).toBe(VELOCITY_TAU_OPEN)
+    expect(velocityTau(0)).toBe(VELOCITY_TAU_WELL)
+    expect(velocityTau(-1)).toBe(VELOCITY_TAU_WELL)
+    expect(velocityTau(NaN)).toBe(VELOCITY_TAU_WELL)
+  })
 })
 
 describe('approachCap', () => {
-  test('is surface distance over ETA_SECONDS, floored at V_NORMAL', () => {
-    expect(approachCap(195)).toBeCloseTo(195 / ETA_SECONDS, 12)
-    expect(approachCap(0.01)).toBe(V_NORMAL)
-    expect(approachCap(-1)).toBe(V_NORMAL)
+  test('is surface distance over the ETA, floored at V_NORMAL', () => {
+    expect(approachCap(195, 7)).toBeCloseTo(195 / 7, 12)
+    expect(approachCap(195, 7, 1)).toBeCloseTo(195 / 8, 12)
+    expect(approachCap(0.01, 2)).toBe(V_NORMAL)
+    expect(approachCap(-1, 2)).toBe(V_NORMAL)
+  })
+
+  test("equals the cap when the target sets the well, at its wellTime", () => {
+    const neptune: Body = {
+      key: 'neptune',
+      position: new THREE.Vector3(),
+      radius: 5,
+      mass: BODY_MASS_KG.neptune,
+    }
+    for (const gap of [10, 100, 400]) {
+      const p = new THREE.Vector3(5 + gap, 0, 0)
+      expect(approachCap(gap, wellTime(neptune))).toBeCloseTo(speedCap(p, [neptune]), 9)
+    }
   })
 })
 
@@ -205,23 +294,42 @@ describe('turnRateMultiplier', () => {
 })
 
 describe('Flight Assist on', () => {
-  test('velocity converges to throttle × cap along the nose with a ~1 s e-fold', () => {
+  test('velocity converges to throttle × cap along the nose with a velocityTau e-fold', () => {
     // No bodies: the cap is V_NORMAL everywhere, so the target is fixed.
     const state = shipAt(new THREE.Vector3(), new THREE.Vector3(1, 2, -3))
     const target = noseOf(state).multiplyScalar(0.6 * V_NORMAL)
 
-    fly(state, VELOCITY_TAU, input({ throttle: 0.6 }), env([]))
+    fly(state, velocityTau(V_NORMAL), input({ throttle: 0.6 }), env([]))
     const remaining = state.velocity.distanceTo(target) / target.length()
     expect(remaining).toBeCloseTo(Math.exp(-1), 2)
 
-    fly(state, 10, input({ throttle: 0.6 }), env([]))
+    fly(state, 30, input({ throttle: 0.6 }), env([]))
     expect(state.velocity.distanceTo(target)).toBeLessThan(1e-4)
+  })
+
+  test('spools up freely in open space and heavily near mass', () => {
+    // Time to 63% of full throttle from rest, far from a body (cap V_TOP)
+    // and close to one (cap near V_NORMAL), flying tangentially so the cap
+    // barely moves.
+    const body: Body = { key: 'b', position: new THREE.Vector3(0, -1e4, 0), radius: 1 }
+    const spoolTime = (height: number) => {
+      const state = shipAt(new THREE.Vector3(0, height - 1e4, 0), new THREE.Vector3(0, height - 1e4, -1))
+      const telemetry = createShipTelemetry()
+      let t = 0
+      do {
+        stepShip(state, input({ throttle: 1 }), FRAME, env([body]), telemetry)
+        t += FRAME
+      } while (telemetry.speed / telemetry.speedCap < 1 - Math.exp(-1))
+      return t
+    }
+    expect(spoolTime(1e4)).toBeCloseTo(VELOCITY_TAU_OPEN, 1)
+    expect(spoolTime(2)).toBeGreaterThan(1.5)
   })
 
   test('cutting the throttle brings the ship to rest', () => {
     const state = shipAt(new THREE.Vector3(), new THREE.Vector3(0, 0, -1))
     fly(state, 5, input({ throttle: 1 }), env([]))
-    fly(state, 15, input({ throttle: 0 }), env([]))
+    fly(state, 40, input({ throttle: 0 }), env([]))
     expect(state.velocity.length()).toBeLessThan(1e-6)
   })
 
@@ -244,7 +352,7 @@ describe('Flight Assist on', () => {
     expect(raised.velocity.y).toBeGreaterThan(0)
     expect(raised.position.y).toBeGreaterThan(0)
 
-    const reversing = fly(createShipState(), 10, input({ throttle: -0.25 }), env([]))
+    const reversing = fly(createShipState(), 30, input({ throttle: -0.25 }), env([]))
     expect(reversing.velocity.z).toBeCloseTo(0.25 * V_NORMAL, 4)
     expect(reversing.position.z).toBeGreaterThan(0)
   })
@@ -301,7 +409,7 @@ describe('turn rates', () => {
   // Settle at `throttle` (FA on, no bodies, so the cap is V_NORMAL), then hold
   // full stick on `stick` and read the steady body rate.
   function settledRates(throttle: number, stick: Partial<ShipInput>): THREE.Vector3 {
-    const state = fly(createShipState(), 10, input({ throttle }), env([]))
+    const state = fly(createShipState(), 20, input({ throttle }), env([]))
     fly(state, 2, input({ ...stick, throttle }), env([]))
     return state.angularVelocity.clone()
   }
@@ -374,7 +482,7 @@ describe('level', () => {
   test('at full throttle it rolls exactly as at rest: no wide-turn penalty', () => {
     const atRest = fly(rolledShip(), 0.5, input({ level: true }), env([]))
     // Up to the cap first (no bodies: V_NORMAL), so the speed fraction is ~1.
-    const fast = fly(rolledShip(), 10, input({ throttle: 1 }), env([]))
+    const fast = fly(rolledShip(), 20, input({ throttle: 1 }), env([]))
     expect(fast.velocity.length() / V_NORMAL).toBeGreaterThan(0.999)
     fly(fast, 0.5, input({ level: true, throttle: 1 }), env([]))
     expect(levelError(fast)).toBeCloseTo(levelError(atRest), 9)
@@ -395,7 +503,7 @@ function closingSpeed(state: ShipState, body: Body): number {
 }
 
 describe('target approach', () => {
-  test('speed toward the target never exceeds max(V_NORMAL, gap / ETA) and it lands without passing inside', () => {
+  test('speed toward the target never exceeds max(V_NORMAL, gap / wellTime) and it lands without passing inside', () => {
     const start = EARTH.position.clone().add(new THREE.Vector3(-40, 0, 0))
     const state = shipAt(start, EARTH.position)
     const telemetry = createShipTelemetry()
@@ -406,7 +514,7 @@ describe('target approach', () => {
       stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, 'earth'), telemetry)
       const gap = telemetry.target!.surfaceDistance
       expect(closingSpeed(state, EARTH)).toBeLessThanOrEqual(
-        Math.max(V_NORMAL, gap / ETA_SECONDS) + 1e-12
+        Math.max(V_NORMAL, gap / wellTime(EARTH)) + 1e-12
       )
       expect(gap).toBeLessThanOrEqual(previous + 1e-12)
       expect(state.position.distanceTo(EARTH.position)).toBeGreaterThanOrEqual(shell - 1e-9)
@@ -440,14 +548,18 @@ describe('target approach', () => {
     expect(targeted).toBeCloseTo(untargeted, 6)
   })
 
-  test('reports a ~7 s ETA while at the target cap', () => {
-    const state = shipAt(new THREE.Vector3(0, 0, -200), NEPTUNE.position)
+  test("reports the target's wellTime as the ETA while at its cap", () => {
+    // Alone with a Neptune-mass body, inside its well (cap below V_TOP).
+    const neptune: Body = { ...NEPTUNE, mass: BODY_MASS_KG.neptune }
+    const start = neptune.position.clone().add(new THREE.Vector3(0, 0, 700))
+    const state = shipAt(start, neptune.position)
     const telemetry = createShipTelemetry()
     for (let i = 0; i < 10 * 60; i++) {
-      stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, 'neptune'), telemetry)
+      stepShip(state, input({ throttle: 1 }), FRAME, env([neptune], 'neptune'), telemetry)
     }
-    expect(telemetry.target!.etaSeconds).toBeGreaterThan(ETA_SECONDS - 0.1)
-    expect(telemetry.target!.etaSeconds).toBeLessThan(ETA_SECONDS + 0.1)
+    expect(telemetry.speedCap).toBeLessThan(V_TOP)
+    expect(telemetry.target!.etaSeconds).toBeGreaterThan(wellTime(neptune) - 0.1)
+    expect(telemetry.target!.etaSeconds).toBeLessThan(wellTime(neptune) + 0.1)
   })
 })
 
@@ -461,18 +573,22 @@ describe('collision', () => {
     }
   }
 
-  test('the ship never ends a step inside any body, for any input or dt', () => {
+  test.each([
+    ['test layout', BODIES, ['earth', 'moon', 'sun']],
+    ['flight bodies', flightBodies(), ['earth', 'moon', 'sun', 'jupiter']],
+  ] as const)('the ship never ends a step inside any body, for any input or dt (%s)', (_, bodies, keys) => {
     const rand = random(7)
     const dts = [FRAME, 0.05, MAX_DT, 0.5, 5, 1e6, Infinity, NaN, -1, 0]
     const telemetry = createShipTelemetry()
-    for (const body of [EARTH, MOON, SUN]) {
+    for (const key of keys) {
+      const body = bodies.find((b) => b.key === key)!
       for (let run = 0; run < 20; run++) {
         const start = body.position
           .clone()
           .add(
             new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5)
               .normalize()
-              .multiplyScalar(body.radius * (1.05 + 3 * rand()))
+              .multiplyScalar(Math.max(collisionRadius(body), body.radius * (1.05 + 3 * rand())))
           )
         const state = shipAt(start, body.position)
         // Some runs start already moving absurdly fast at the body.
@@ -491,18 +607,25 @@ describe('collision', () => {
               flightAssist: fa,
             }),
             dts[i % dts.length],
-            env(BODIES),
+            env(bodies),
             telemetry
           )
-          for (const b of BODIES) {
+          for (const b of bodies) {
             expect(state.position.distanceTo(b.position)).toBeGreaterThanOrEqual(
-              b.radius * COLLISION_MARGIN * (1 - 1e-12)
+              collisionRadius(b) * (1 - 1e-12)
             )
           }
           expect(state.position.toArray().every(Number.isFinite)).toBe(true)
+          expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * telemetry.speedCap + 1e-9)
         }
       }
     }
+  })
+
+  test('a step covers at most 20% of the mass-weighted gap, so it cannot tunnel', () => {
+    // |v| ≤ OVERSPEED_MAX · cap and cap ≤ K_WELL · gap / wellFactor (≥ 1).
+    expect(OVERSPEED_MAX * K_WELL * MAX_DT).toBeLessThanOrEqual(0.2)
+    expect(wellFactor(undefined)).toBeGreaterThanOrEqual(1)
   })
 
   test('defaults the hard sphere to radius × COLLISION_MARGIN', () => {
@@ -601,24 +724,186 @@ describe('telemetry', () => {
   })
 })
 
-describe('Earth → Neptune', () => {
-  test('a full-throttle trip with Neptune targeted takes 10–40 s', () => {
-    // From the ~15-unit spawn distance, nose on Neptune; arrived when one
-    // Neptune radius off its surface (it then spans 60° of the view).
-    const toNeptune = NEPTUNE.position.clone().sub(EARTH.position).normalize()
-    const state = shipAt(
-      EARTH.position.clone().addScaledVector(toNeptune, 15),
-      NEPTUNE.position
-    )
-    const telemetry = createShipTelemetry()
-    let t = 0
-    do {
-      stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, 'neptune'), telemetry)
-      t += FRAME
-    } while (telemetry.target!.surfaceDistance > NEPTUNE.radius && t < 120)
+function expectFinite(state: ShipState, telemetry: ShipTelemetry): void {
+  for (const v of [state.position, state.velocity, state.angularVelocity]) {
+    expect(v.toArray().every(Number.isFinite)).toBe(true)
+  }
+  expect(state.orientation.toArray().every(Number.isFinite)).toBe(true)
+  expect(Number.isFinite(telemetry.speed)).toBe(true)
+  expect(telemetry.speedCap).toBeGreaterThanOrEqual(V_NORMAL)
+  expect(telemetry.speedCap).toBeLessThanOrEqual(V_TOP)
+}
 
-    console.log(`Earth → Neptune: ${t.toFixed(1)} s`)
-    expect(t).toBeGreaterThanOrEqual(10)
-    expect(t).toBeLessThanOrEqual(40)
+describe('degenerate geometry', () => {
+  test('a ship at a body centre is pushed out with finite state', () => {
+    const state = createShipState()
+    state.position.copy(EARTH.position)
+    const telemetry = createShipTelemetry()
+    stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, 'earth'), telemetry)
+    expectFinite(state, telemetry)
+    expect(state.position.distanceTo(EARTH.position)).toBeCloseTo(collisionRadius(EARTH), 9)
+  })
+
+  test('coincident bodies and a NaN mass leave the cap finite', () => {
+    const twin: Body = { ...MOON, key: 'twin', position: MOON.position.clone(), mass: NaN }
+    const state = shipAt(MOON.position.clone().add(new THREE.Vector3(0, 5, 0)), MOON.position)
+    const telemetry = createShipTelemetry()
+    for (let i = 0; i < 600; i++) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env([MOON, twin], 'twin'), telemetry)
+      expectFinite(state, telemetry)
+    }
+    expect(state.position.distanceTo(MOON.position)).toBeGreaterThanOrEqual(
+      collisionRadius(MOON) * (1 - 1e-12)
+    )
+  })
+
+  test.each([0, NaN])('a first frame with dt %s fills finite telemetry without moving', (dt) => {
+    const state = shipAt(new THREE.Vector3(0, 0, 100), SUN.position)
+    const telemetry = createShipTelemetry()
+    stepShip(state, input({ throttle: 1 }), dt, env(BODIES, 'sun'), telemetry)
+    expectFinite(state, telemetry)
+    expect(state.position.toArray()).toEqual([0, 0, 100])
+    expect(telemetry.speed).toBe(0)
+    expect(telemetry.target?.etaSeconds).toBe(Infinity)
+  })
+})
+
+// Trips at tides-2hv.6's flight scale (1000 units per AU) between the real
+// flight bodies, frozen at TRIP_DATE: over a 5-minute trip Earth moves ~0.06
+// units. Start from rest 15 units from Earth's centre (about the spawn
+// distance) with the nose on the target, full throttle, FA on; arrived one
+// target radius off its surface, where it spans 60° of the view.
+interface Trip {
+  seconds: number
+  peakSpeed: number
+  /** speed / cap at arrival. */
+  arrivalFraction: number
+  /** Highest speed / cap on the way. */
+  peakFraction: number
+  /** A collision before arriving. */
+  hit: boolean
+}
+
+function trip(key: string, { date = TRIP_DATE, locked = true, limit = 600 } = {}): Trip {
+  const bodies = flightBodies(date)
+  const earth = bodies.find((b) => b.key === 'earth')!
+  const target = bodies.find((b) => b.key === key)!
+  const heading = target.position.clone().sub(earth.position).normalize()
+  // The Moon is ~10 units from Earth's centre: start off to the side of the
+  // Earth → Moon line rather than on it, so the path stays clear of Earth.
+  const offset = key === 'moon' ? heading.clone().cross(Y).normalize() : heading
+  const state = shipAt(earth.position.clone().addScaledVector(offset, 15), target.position)
+  const telemetry = createShipTelemetry()
+  const flightEnv = env(bodies, locked ? key : null)
+  const result: Trip = { seconds: 0, peakSpeed: 0, arrivalFraction: 0, peakFraction: 0, hit: false }
+  let gap: number
+  do {
+    stepShip(state, input({ throttle: 1 }), FRAME, flightEnv, telemetry)
+    result.seconds += FRAME
+    expectFinite(state, telemetry)
+    gap = state.position.distanceTo(target.position) - target.radius
+    const fraction = telemetry.speed / telemetry.speedCap
+    result.peakSpeed = Math.max(result.peakSpeed, telemetry.speed)
+    result.peakFraction = Math.max(result.peakFraction, fraction)
+    result.arrivalFraction = fraction
+    if (telemetry.colliding) result.hit = true
+  } while (gap > target.radius && result.seconds < limit)
+  return result
+}
+
+describe('trip times at the flight scale', () => {
+  test.each([
+    ['moon', 10, 15],
+    ['mars', 30, 60],
+    ['jupiter', 90, 120],
+    ['neptune', 180, 300],
+  ] as const)('Earth → %s at full throttle, locked, takes %s–%s s', (key, min, max) => {
+    const { seconds, peakSpeed, peakFraction, hit } = trip(key)
+    console.log(
+      `Earth → ${key}: ${seconds.toFixed(1)} s, peak ${peakSpeed.toFixed(1)} u/s, peak speed/cap ${peakFraction.toFixed(3)}`
+    )
+    expect(seconds).toBeGreaterThanOrEqual(min)
+    expect(seconds).toBeLessThanOrEqual(max)
+    expect(hit).toBe(false)
+    expect(peakSpeed).toBeLessThanOrEqual(V_TOP * (1 + 1e-9))
+    // Locked: never over the cap, so no overshoot.
+    expect(peakFraction).toBeLessThanOrEqual(1 + 1e-9)
+  })
+
+  // Log only: the targets are for TRIP_DATE. Mars at opposition is closer;
+  // at conjunction the straight line runs through the Sun's well (and over
+  // its surface at V_NORMAL), which is the pilot's cue to fly around it.
+  test.each(['2027-02-19T12:00:00Z', '2026-01-09T12:00:00Z'])('other dates arrive (%s)', (date) => {
+    const times = (['moon', 'mars', 'jupiter', 'neptune'] as const).map((key) => {
+      const { seconds } = trip(key, { date, limit: 900 })
+      expect(seconds).toBeLessThan(900)
+      return `${key} ${seconds.toFixed(0)} s`
+    })
+    console.log(`${date.slice(0, 10)}: ${times.join(', ')}`)
+  })
+})
+
+describe('overshoot', () => {
+  test('unlocked, full throttle at the Moon arrives over the cap and hits; locked it does not', () => {
+    const unlocked = trip('moon', { locked: false })
+    expect(unlocked.arrivalFraction).toBeGreaterThan(1.2)
+    expect(unlocked.peakFraction).toBeLessThanOrEqual(OVERSPEED_MAX)
+
+    const locked = trip('moon')
+    expect(locked.peakFraction).toBeLessThanOrEqual(1 + 1e-9)
+    expect(locked.hit).toBe(false)
+
+    // Keep going unlocked: it reaches the surface still over the floor.
+    const bodies = flightBodies()
+    const moon = bodies.find((b) => b.key === 'moon')!
+    const state = shipAt(moon.position.clone().add(new THREE.Vector3(0, 0, 20)), moon.position)
+    const telemetry = createShipTelemetry()
+    let hit = false
+    for (let i = 0; i < 60 * 30 && !hit; i++) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env(bodies), telemetry)
+      hit = telemetry.colliding
+    }
+    expect(hit).toBe(true)
+  })
+
+  test('below WELL_BRAKE · wellFactor / K_WELL throttle the dive tracks the cap', () => {
+    const bodies = flightBodies()
+    const moon = bodies.find((b) => b.key === 'moon')!
+    const throttle = (0.9 * WELL_BRAKE * wellTime(moon))
+    const state = shipAt(moon.position.clone().add(new THREE.Vector3(0, 0, 20)), moon.position)
+    const telemetry = createShipTelemetry()
+    let peak = 0
+    for (let i = 0; i < 60 * 30; i++) {
+      stepShip(state, input({ throttle }), FRAME, env(bodies), telemetry)
+      peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
+    }
+    expect(peak).toBeLessThanOrEqual(throttle + 1e-6)
+  })
+})
+
+describe('speed / cap tracks the throttle with FA on (tides-2hv.4 lag)', () => {
+  const bodies = flightBodies()
+  const earth = bodies.find((b) => b.key === 'earth')!
+  const jupiter = bodies.find((b) => b.key === 'jupiter')!
+
+  // 10 s at `throttle` from rest, nose from `from` toward `toward`.
+  function settled(from: THREE.Vector3, toward: THREE.Vector3, throttle: number): number {
+    const state = shipAt(from, toward)
+    const telemetry = createShipTelemetry()
+    for (let i = 0; i < 600; i++) stepShip(state, input({ throttle }), FRAME, env(bodies), telemetry)
+    return telemetry.speed / telemetry.speedCap
+  }
+
+  test.each([0.5, 0.75, 1])('departing Earth at throttle %s', (throttle) => {
+    // Straight up out of the ecliptic: away from Earth, the Moon and the Sun.
+    const from = earth.position.clone().add(new THREE.Vector3(0, 15, 0))
+    const fraction = settled(from, from.clone().add(Y), throttle)
+    expect(Math.abs(fraction - throttle)).toBeLessThan(0.03)
+  })
+
+  test.each([0.5, 0.75, 1])('closing on Jupiter at throttle %s', (throttle) => {
+    const from = jupiter.position.clone().add(new THREE.Vector3(0, 0, 600))
+    const fraction = settled(from, jupiter.position, throttle)
+    expect(Math.abs(fraction - throttle)).toBeLessThan(0.03)
   })
 })
