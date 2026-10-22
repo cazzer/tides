@@ -28,11 +28,15 @@ uniform vec4 uOval[24];
 uniform float uKp;
 uniform float uTime;
 uniform float uGain;
+#ifdef DOUBLE_SIDED
+uniform float uGround;
+#endif
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
 
 #include ./noise3.glsl
+#include ../shell/face.glsl
 
 const float TAU = 6.28318530718;
 const vec3 GREEN = vec3(0.2, 1.0, 0.3);
@@ -75,6 +79,12 @@ float arcProfile(float x, float width, float blur) {
 void main() {
   vec3 ro = vRayOrigin;
   vec3 rd = normalize(vPos - vRayOrigin);
+  #ifdef DOUBLE_SIDED
+  // A pixel's angular size, taken before any discard so its quad is whole.
+  float pixelAngle = length(fwidth(rd));
+  bool back = shellBackFace(ro, rd, uOuter);
+  if (gl_FrontFacing == back) discard;
+  #endif
 
   // Entry and exit of the outer sphere; stop early at the inner one.
   float b = dot(ro, rd);
@@ -88,6 +98,15 @@ void main() {
   if (hi > 0.0) {
     float tIn = -b - sqrt(hi);
     if (tIn > t0) t1 = min(t1, tIn);
+    #ifdef DOUBLE_SIDED
+    // From below the shell's base, start where the ray climbs into it,
+    // unless the ground stops it first (no depth test here: the back face
+    // lies past the globe).
+    else {
+      if (b < 0.0 && dot(ro, ro) - b * b < uGround * uGround) discard;
+      t0 = max(t0, -b + sqrt(hi));
+    }
+    #endif
   }
   float span = t1 - t0;
   if (span <= 0.0) discard;
@@ -113,6 +132,14 @@ void main() {
     vec3 p = ro + rd * (t0 + (float(s) + jitter) * dt);
     float r = length(p);
     vec3 n = p / r;
+    #ifdef DOUBLE_SIDED
+    // A back face lies beyond the emission (past the globe, looking down
+    // from inside), so its footprint is far too coarse: take each sample's.
+    if (back) {
+      pixelDeg = degrees(pixelAngle * (t0 + (float(s) + jitter) * dt) / r);
+      rayContrast = 1.0 - smoothstep(0.05, 0.25, pixelDeg);
+    }
+    #endif
 
     // Seen against a dark sky only: fade through twilight.
     float dark = smoothstep(0.1, -0.16, dot(n, uSun));

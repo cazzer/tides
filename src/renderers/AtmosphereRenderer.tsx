@@ -7,7 +7,7 @@ import { useStore } from '../store'
 import { sunDirectionLocal } from '../aurora'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
-import { ATMOSPHERE_OUTER } from './earth-shells'
+import { ATMOSPHERE_OUTER, pickShellFaces } from './earth-shells'
 import { useBodySphere } from '../ship/limb-detail'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
@@ -39,6 +39,9 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
+        // Double-sided in ship mode (pickShellFaces), where the shader keeps
+        // one face per ray.
+        forceSinglePass: true,
       }),
     []
   )
@@ -68,6 +71,9 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
       material={material}
       renderOrder={1}
       raycast={noRaycast}
+      onBeforeRender={(_renderer, _scene, camera, _geometry, shader) =>
+        pickShellFaces(mesh.current!, shader, camera)
+      }
     />
   )
 }

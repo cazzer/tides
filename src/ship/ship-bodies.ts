@@ -35,9 +35,10 @@ export const EARTH_SHELL_RADII: readonly number[] = [
 ]
 
 /**
- * The outermost shell Earth draws. Each is a front-faced sphere, so from
- * inside it is culled; inside the displaced ground the whole planet vanishes
- * (tides-3bl.7).
+ * The outermost shell Earth draws. The cloud deck is a front-faced sphere,
+ * so from inside it is culled (the atmosphere and aurora are drawn from
+ * inside: tides-01v.8.2); inside the displaced ground the whole planet
+ * vanishes (tides-3bl.7).
  */
 export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
 
