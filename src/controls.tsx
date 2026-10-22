@@ -22,6 +22,7 @@ import {
   type WeatherSource,
 } from './store'
 import { truncateLatLon } from './utils'
+import { isMoonKey } from './moons/moon-keys'
 import DateTimePicker from './DateTimePicker'
 import { glassButton, glassPanel, PHONE } from './glass-styles'
 import DockToggle from './DockToggle'
@@ -481,7 +482,10 @@ function FocusDropdown({
     return () => document.removeEventListener('mousedown', onOutside)
   }, [open])
 
-  const current = options.find((o) => o.value === value)
+  // A moon is focused by tapping it and has no menu entry; name it anyway.
+  const current =
+    options.find((o) => o.value === value) ??
+    (isMoonKey(value) ? { Icon: IconMoon, title: value[0].toUpperCase() + value.slice(1) } : undefined)
   const CurrentIcon = current?.Icon ?? IconClock
   const label = current?.title ?? 'Clock'
 

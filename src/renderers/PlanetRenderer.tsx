@@ -18,17 +18,17 @@ import {
   MAX_RING_BANDS,
   ringBandUniforms,
   ringGeometry,
-  sunDirectionInFrame,
   type RingBand,
 } from './planetFrame'
 import { usePlanetTextures } from './planetTextures'
+import { SUNLIGHT_INTENSITY } from '../lighting'
 import {
-  AMBIENT_COLOR,
-  AMBIENT_INTENSITY,
-  SUNLIGHT_INTENSITY,
-} from '../lighting'
-import planetVertex from '../shaders/planet/vertex.glsl'
-import planetFragment from '../shaders/planet/fragment.frag'
+  AMBIENT,
+  bandUniforms,
+  planetSurfaceMaterial,
+  sunDirection,
+  type BandUniforms,
+} from './planetMaterials'
 import ringVertex from '../shaders/ring/vertex.glsl'
 import ringFragment from '../shaders/ring/fragment.frag'
 import shellVertex from '../shaders/shell/vertex.glsl'
@@ -36,12 +36,14 @@ import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 
 export type { RingBand } from './planetFrame'
 
-const AMBIENT = new THREE.Color(AMBIENT_COLOR).multiplyScalar(AMBIENT_INTENSITY)
-
 /** Below this the Minnaert limb term brightens the limb without bound. */
 const MIN_MINNAERT = 0.5
 
 const noRaycast = () => null
+
+function useSunDirection() {
+  return useMemo(() => sunDirection(), [])
+}
 
 // Uniform values change in place: the materials are built once per variant.
 function setUniforms(
@@ -51,20 +53,6 @@ function setUniforms(
   for (const [name, value] of Object.entries(values)) uniforms[name].value = value
 }
 
-/**
- * A `uSunDir` uniform and the mesh's onBeforeRender that keeps it current,
- * from the mesh's final transform for this frame (three calls it with the
- * mesh as `this`).
- */
-function useSunDirection() {
-  return useMemo(() => {
-    const uniform = { value: new THREE.Vector3(1, 0, 0) }
-    function onBeforeRender(this: THREE.Object3D) {
-      sunDirectionInFrame(this, uniform.value)
-    }
-    return { uniform, onBeforeRender }
-  }, [])
-}
 
 function isLowQuality(): boolean {
   if (typeof window === 'undefined') return false
@@ -89,20 +77,6 @@ export interface RingProfile {
   bands?: readonly RingBand[]
   /** Scales the opacity. Default 1. */
   opacity?: number
-}
-
-type BandUniforms = {
-  uBands: { value: THREE.Vector3[] }
-  uBandCount: { value: number }
-}
-
-function bandUniforms(): BandUniforms {
-  return {
-    uBands: {
-      value: Array.from({ length: MAX_RING_BANDS }, () => new THREE.Vector3()),
-    },
-    uBandCount: { value: 0 },
-  }
 }
 
 function setBands(
@@ -173,34 +147,10 @@ function SurfaceMesh({
 }) {
   const sun = useSunDirection()
   const shadowed = ringShadow !== undefined
-  const material = useMemo(() => {
-    const defines: Record<string, unknown> = {}
-    if (map) defines.USE_PLANET_MAP = ''
-    if (shadowed) {
-      defines.USE_RING_SHADOW = ''
-      defines.MAX_RING_BANDS = MAX_RING_BANDS
-    }
-    if (ringMap) defines.USE_RING_MAP = ''
-    return new THREE.ShaderMaterial({
-      vertexShader: planetVertex,
-      fragmentShader: planetFragment,
-      defines,
-      uniforms: {
-        uSunDir: sun.uniform,
-        uColor: { value: new THREE.Color() },
-        uAlbedo: { value: 1 },
-        uSunIntensity: { value: SUNLIGHT_INTENSITY },
-        uAmbient: { value: AMBIENT },
-        uMinnaert: { value: 1 },
-        uMap: { value: map },
-        uRingMap: { value: ringMap },
-        uRingInner: { value: 0 },
-        uRingOuter: { value: 0 },
-        uRingOpacity: { value: 1 },
-        ...bandUniforms(),
-      },
-    })
-  }, [map, ringMap, shadowed, sun.uniform])
+  const material = useMemo(
+    () => planetSurfaceMaterial(sun.uniform, { map, ringMap, shadowed }),
+    [map, ringMap, shadowed, sun.uniform]
+  )
   useEffect(() => () => material.dispose(), [material])
 
   useLayoutEffect(() => {

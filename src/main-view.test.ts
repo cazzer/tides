@@ -100,9 +100,10 @@ describe('focusedRef', () => {
     expect(focusedRef({ sun, jupiter }, 'jupiter')).toBe(jupiter)
   })
 
-  it('falls back to the Sun for a planet that has not registered', () => {
+  it('falls back to the Sun for a planet or moon that has not registered', () => {
     expect(focusedRef({ sun, moon }, 'neptune')).toBe(sun)
     expect(focusedRef({ sun, moon, saturn: { current: null } }, 'saturn')).toBe(sun)
+    expect(focusedRef({ sun, moon }, 'titan')).toBe(sun)
   })
 
   it('does not swap an unregistered non-planet for the Sun', () => {

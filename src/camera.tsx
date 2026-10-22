@@ -19,7 +19,7 @@ import {
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import {
   FOCUS_VALUES,
-  isPlanetFocus,
+  isSystemFocus,
   useStore,
   type CameraFocus,
 } from './store'
@@ -279,9 +279,9 @@ function usePlanetsNear() {
 
 const FRAMING_EASE = 0.05
 
-/** The zoom framing eases toward, or null while a planet hasn't registered. */
+/** The zoom framing eases toward, or null while a planet or moon hasn't registered. */
 function framingGoal(focus: CameraFocus): number | null {
-  if (!isPlanetFocus(focus)) return MAIN_ZOOM
+  if (!isSystemFocus(focus)) return MAIN_ZOOM
   const { earthRadius, [focus]: ref } = useStore.getState()
   const radius = ref?.current?.userData?.radius
   return radius > 0 && earthRadius != null
@@ -303,10 +303,10 @@ function usePlanetFraming(cameraFocus: CameraFocus) {
 
   useEffect(() => {
     const leftPlanet =
-      previousFocus.current !== null && isPlanetFocus(previousFocus.current)
+      previousFocus.current !== null && isSystemFocus(previousFocus.current)
     previousFocus.current = cameraFocus
     framing.current =
-      isPlanetFocus(cameraFocus) || leftPlanet ? { written: null } : null
+      isSystemFocus(cameraFocus) || leftPlanet ? { written: null } : null
   }, [cameraFocus])
 
   // Only the main view has controls; the other panels' cameras stay put.
