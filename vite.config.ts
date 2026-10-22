@@ -6,7 +6,7 @@ import glsl from 'vite-plugin-glsl'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), glsl()],
-  base: 'tides',
+  base: '/tides/',
   resolve: {
     alias: {
       'use-sync-external-store/shim/with-selector.js': path.resolve(
