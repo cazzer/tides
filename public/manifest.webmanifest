@@ -4,8 +4,7 @@
   "description": "The Earth, Moon and planets as they are now, and the tides they raise.",
   "start_url": "./",
   "scope": "./",
-  "display": "fullscreen",
-  "display_override": ["fullscreen", "standalone"],
+  "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
   "icons": [
