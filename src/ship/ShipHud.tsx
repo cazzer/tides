@@ -13,10 +13,13 @@ import { ShipControlsDialog } from './ShipControlsDialog'
 // is unreadable and flickers in the last digit.
 const TEXT_INTERVAL_MS = 100
 
-// The speed readout turns amber once the turn rate is below this share of
-// full (flight.ts turnRateMultiplier): just past the blue zone's top, but not
-// right on it, where a speed settling at the band edge would flicker the cue.
-const WIDE_TURN_BELOW = 0.99
+// The wide-turn cue (speed label, dimmed fill past the blue zone) comes on
+// once the turn rate drops below this share of full (flight.ts
+// turnRateMultiplier) and goes off once it is back above WIDE_TURN_OFF. The
+// gap keeps a speed settling at the band's top from flickering the cue or
+// repeating its announcement.
+const WIDE_TURN_ON = 0.99
+const WIDE_TURN_OFF = 0.995
 
 const SEEN_KEY = 'tides.shipControlsSeen'
 
@@ -47,7 +50,6 @@ function percent(throttle: number): string {
 }
 
 interface Readouts {
-  speedCell: HTMLElement | null
   speed: HTMLElement | null
   wideTurn: HTMLElement | null
   bar: HTMLElement | null
@@ -75,7 +77,6 @@ interface Readouts {
 export function ShipHud() {
   const [controlsOpen, setControlsOpen] = useState(false)
   const readouts = useRef<Readouts>({
-    speedCell: null,
     speed: null,
     wideTurn: null,
     bar: null,
@@ -129,10 +130,14 @@ export function ShipHud() {
       // From speed, as the flight model does: with FA off a ship coasting
       // fast turns wide whatever the throttle says.
       const fraction = speedFraction(shipTelemetry.speed, shipTelemetry.speedCap)
-      const wide = turnRateMultiplier(fraction) < WIDE_TURN_BELOW
+      const turn = turnRateMultiplier(fraction)
+      const wide = wideShown ? turn < WIDE_TURN_OFF : turn < WIDE_TURN_ON
       if (wide !== wideShown) {
+        // Nothing to announce on the first pass, as for the target.
+        if (wideShown !== undefined) {
+          set(r.announcer, wide ? 'Turn rate reduced at high speed' : 'Full turn rate')
+        }
         wideShown = wide
-        r.speedCell?.toggleAttribute('data-wide-turn', wide)
         r.bar?.toggleAttribute('data-wide-turn', wide)
         if (r.wideTurn) r.wideTurn.hidden = !wide
       }
@@ -244,17 +249,18 @@ export function ShipHud() {
         data-ship-ui
       >
         <Row>
-          <SpeedCell ref={bind('speedCell')}>
-            <Label>Speed</Label>
+          <Cell>
+            <Label>
+              Speed
+              <span
+                ref={bind('wideTurn')}
+                hidden
+              >
+                {' · wide turns'}
+              </span>
+            </Label>
             <Value ref={bind('speed')}>—</Value>
-            <VisuallyHidden
-              as="span"
-              ref={bind('wideTurn')}
-              hidden
-            >
-              Above the blue zone: turn rate reduced
-            </VisuallyHidden>
-          </SpeedCell>
+          </Cell>
           <Cell $grow>
             <Label>
               Throttle <span ref={bind('throttle')}>0%</span>
@@ -267,6 +273,7 @@ export function ShipHud() {
               <ZeroMark />
               <Reverse ref={bind('reverse')} />
               <Forward ref={bind('forward')} />
+              <PastBand />
             </Bar>
           </Cell>
           <AssistButton
@@ -418,15 +425,6 @@ const Value = styled.div`
   white-space: nowrap;
 `
 
-// Above the blue zone the speed reads in pale amber: a caution, quieter than
-// FA off's full amber, that ties the wide turns to going fast.
-const WIDE_TURN = '#f5c77e'
-const SpeedCell = styled(Cell)`
-  &[data-wide-turn] ${Value} {
-    color: ${WIDE_TURN};
-  }
-`
-
 const TargetLine = styled.div`
   display: flex;
   align-items: center;
@@ -453,8 +451,8 @@ const Bar = styled.div`
 
 // BLUE_ZONE is a share of the speed cap, drawn on the throttle: with FA on the
 // speed settles to throttle · cap, so the throttle that holds the ship in the
-// band is the band. Past it, by speed (data-wide-turn), the forward fill takes
-// the speed readout's pale amber (see Forward).
+// band is the band. When the speed is past it (data-wide-turn), PastBand dims
+// the fill beyond the band's top.
 const BlueZone = styled.div`
   position: absolute;
   inset: 0 auto 0 ${at(BLUE_ZONE[0])};
@@ -480,9 +478,21 @@ const Forward = styled.div`
   background-color: rgba(255, 255, 255, 0.85);
   transform: scaleX(0);
   transform-origin: left;
+`
+
+// Over Forward from the blue zone's top to the end; shown with the wide-turn
+// cue. Dimming, not a colour: amber already means reverse and FA off.
+const PastBand = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: ${at(BLUE_ZONE[1])};
+  right: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: none;
 
   [data-wide-turn] > & {
-    background-color: ${WIDE_TURN};
+    display: block;
   }
 `
 

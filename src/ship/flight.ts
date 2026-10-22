@@ -330,6 +330,8 @@ function rotate(
     -axis(input.roll) * ROLL_RATE * factor
   )
   bodyAxes(state.orientation)
+  // Level is unscaled: it is a recovery assist, and should right the ship as
+  // quickly at the cap as at rest.
   if (input.level) demand.z = levelRollRate()
 
   const w = state.angularVelocity

@@ -371,6 +371,17 @@ describe('level', () => {
     expect(noseOf(state).angleTo(nose)).toBeLessThan(1e-6)
   })
 
+  test('at full throttle it rolls exactly as at rest: no wide-turn penalty', () => {
+    const atRest = fly(rolledShip(), 0.5, input({ level: true }), env([]))
+    // Up to the cap first (no bodies: V_NORMAL), so the speed fraction is ~1.
+    const fast = fly(rolledShip(), 10, input({ throttle: 1 }), env([]))
+    expect(fast.velocity.length() / V_NORMAL).toBeGreaterThan(0.999)
+    fly(fast, 0.5, input({ level: true, throttle: 1 }), env([]))
+    expect(levelError(fast)).toBeCloseTo(levelError(atRest), 9)
+    fly(fast, 3.5, input({ level: true, throttle: 1 }), env([]))
+    expect(levelError(fast)).toBeLessThan(0.01)
+  })
+
   test('is a no-op with the nose on the pole', () => {
     const state = shipAt(new THREE.Vector3(), new THREE.Vector3(0, 1, 0))
     fly(state, 1, input({ level: true }), env([]))
