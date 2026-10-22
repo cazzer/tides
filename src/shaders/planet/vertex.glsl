@@ -4,6 +4,7 @@ varying vec2 vUv;
 varying vec3 vNormalLocal;
 varying vec3 vNormalView;
 varying vec3 vViewPosition;
+varying float vRadiusView;
 
 void main() {
   vUv = uv;
@@ -11,5 +12,7 @@ void main() {
   vNormalView = normalize(normalMatrix * normal);
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   vViewPosition = -mvPosition.xyz;
+  // The sphere is centred on the origin, so its radius is |position|.
+  vRadiusView = length((modelViewMatrix * vec4(position, 0.0)).xyz);
   gl_Position = projectionMatrix * mvPosition;
 }
