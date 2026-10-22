@@ -11,9 +11,12 @@ import * as THREE from 'three'
 export interface ShipTelemetry {
   /** |velocity|, scene units per second. */
   speed: number
-  /** The speed limit this frame (cruise + target ETA cap), scene units/s. */
+  /**
+   * The cruise speed limit this frame, scene units/s. A locked target further
+   * limits only the speed toward it (see approachCap in flight.ts).
+   */
   speedCap: number
-  /** The throttle setpoint the step used. */
+  /** The throttle the step used: the input clamped to −0.25..1. */
   throttle: number
   flightAssist: boolean
   /** World-frame velocity, scene units per second. */
@@ -29,7 +32,11 @@ export interface ShipTelemetry {
    * closing.
    */
   target: { key: string; surfaceDistance: number; etaSeconds: number } | null
-  /** True when this step pushed the ship out of a body. */
+  /**
+   * True when this step hit a body: pushed out of it while moving inward
+   * faster than COLLISION_SPEED. Resting on or pressing into a surface is not
+   * a hit.
+   */
   colliding: boolean
 }
 
@@ -48,14 +55,15 @@ export function createShipTelemetry(): ShipTelemetry {
 
 export const shipTelemetry: ShipTelemetry = createShipTelemetry()
 
-/** Zero the singleton in place, keeping its velocity vector's identity. */
+/** Zero the singleton in place, keeping its velocity and nearest objects. */
 export function resetShipTelemetry(): void {
   shipTelemetry.speed = 0
   shipTelemetry.speedCap = 0
   shipTelemetry.throttle = 0
   shipTelemetry.flightAssist = true
   shipTelemetry.velocity.set(0, 0, 0)
-  shipTelemetry.nearest = { key: null, surfaceDistance: Infinity }
+  shipTelemetry.nearest.key = null
+  shipTelemetry.nearest.surfaceDistance = Infinity
   shipTelemetry.target = null
   shipTelemetry.colliding = false
 }

@@ -8,10 +8,9 @@ import {
   K_CRUISE,
   MAX_DT,
   PITCH_RATE,
-  ROLL_RATE,
   V_NORMAL,
   VELOCITY_TAU,
-  YAW_RATE,
+  approachCap,
   createShipState,
   nearestBody,
   speedCap,
@@ -107,13 +106,13 @@ describe('speedCap', () => {
   const at = (gap: number) => new THREE.Vector3(body.radius + gap, 0, 0)
 
   test('is V_NORMAL close to a surface', () => {
-    expect(speedCap(at(0.06), [body], null)).toBe(V_NORMAL)
-    expect(speedCap(at(V_NORMAL / K_CRUISE), [body], null)).toBeCloseTo(V_NORMAL, 12)
+    expect(speedCap(at(0.06), [body])).toBe(V_NORMAL)
+    expect(speedCap(at(V_NORMAL / K_CRUISE), [body])).toBeCloseTo(V_NORMAL, 12)
   })
 
   test('grows with distance to the nearest surface', () => {
     const gaps = [1, 2, 5, 10, 50, 300, 2000]
-    const caps = gaps.map((g) => speedCap(at(g), [body], null))
+    const caps = gaps.map((g) => speedCap(at(g), [body]))
     for (let i = 1; i < caps.length; i++) expect(caps[i]).toBeGreaterThan(caps[i - 1])
     expect(caps[caps.length - 1]).toBeCloseTo(K_CRUISE * 2000, 9)
   })
@@ -122,21 +121,21 @@ describe('speedCap', () => {
     const near: Body = { key: 'near', position: new THREE.Vector3(10, 0, 0), radius: 1 }
     const p = new THREE.Vector3(14, 0, 0)
     expect(nearestBody(p, [body, near])?.body.key).toBe('near')
-    expect(speedCap(p, [body, near], null)).toBeCloseTo(K_CRUISE * 3, 12)
+    expect(speedCap(p, [body, near])).toBeCloseTo(K_CRUISE * 3, 12)
   })
 
   test('is V_NORMAL with no bodies', () => {
     expect(nearestBody(new THREE.Vector3(), [])).toBeNull()
-    expect(speedCap(new THREE.Vector3(1e6, 0, 0), [], null)).toBe(V_NORMAL)
+    expect(speedCap(new THREE.Vector3(1e6, 0, 0), [])).toBe(V_NORMAL)
   })
 
-  test('a target caps speed at its surface distance over ETA_SECONDS', () => {
-    const far: Body = { key: 'far', position: new THREE.Vector3(1000, 0, 0), radius: 5 }
-    const p = new THREE.Vector3(800, 0, 0)
-    expect(speedCap(p, [body, far], 'far')).toBeCloseTo(195 / ETA_SECONDS, 12)
-    expect(speedCap(p, [body, far], null)).toBeCloseTo(K_CRUISE * 195, 12)
-    // An unknown key is no target.
-    expect(speedCap(p, [body, far], 'pluto')).toBeCloseTo(K_CRUISE * 195, 12)
+})
+
+describe('approachCap', () => {
+  test('is surface distance over ETA_SECONDS, floored at V_NORMAL', () => {
+    expect(approachCap(195)).toBeCloseTo(195 / ETA_SECONDS, 12)
+    expect(approachCap(0.01)).toBe(V_NORMAL)
+    expect(approachCap(-1)).toBe(V_NORMAL)
   })
 })
 
@@ -193,6 +192,22 @@ describe('Flight Assist on', () => {
     expect(state.angularVelocity.length()).toBeLessThan(1e-4)
   })
 
+  test('strafe and reverse: +X moves right, +Y moves up, negative throttle backs up', () => {
+    // Default orientation: nose −Z, right +X, up +Y.
+    const right = fly(createShipState(), 3, input({ strafeX: 1 }), env([]))
+    expect(right.velocity.x).toBeGreaterThan(0)
+    expect(right.position.x).toBeGreaterThan(0)
+    expect(Math.abs(right.velocity.y) + Math.abs(right.velocity.z)).toBeLessThan(1e-12)
+
+    const raised = fly(createShipState(), 3, input({ strafeY: 1 }), env([]))
+    expect(raised.velocity.y).toBeGreaterThan(0)
+    expect(raised.position.y).toBeGreaterThan(0)
+
+    const reversing = fly(createShipState(), 10, input({ throttle: -0.25 }), env([]))
+    expect(reversing.velocity.z).toBeCloseTo(0.25 * V_NORMAL, 4)
+    expect(reversing.position.z).toBeGreaterThan(0)
+  })
+
   test('stick signs: pitch up, yaw right, roll right', () => {
     const pitched = fly(createShipState(), 0.5, input({ pitch: 1 }), env([]))
     expect(noseOf(pitched).y).toBeGreaterThan(0.1)
@@ -232,11 +247,6 @@ describe('Flight Assist off', () => {
 })
 
 describe('turn rates', () => {
-  test('pitch and roll max rates exceed yaw', () => {
-    expect(PITCH_RATE).toBeGreaterThan(YAW_RATE)
-    expect(ROLL_RATE).toBeGreaterThan(YAW_RATE)
-  })
-
   test('full stick turns further in pitch and roll than in yaw', () => {
     const turned = (stick: Partial<ShipInput>) => {
       const state = fly(createShipState(), 1, input({ ...stick, throttle: 0.6 }), env([]))
@@ -282,22 +292,54 @@ describe('level', () => {
   })
 })
 
+function closingSpeed(state: ShipState, body: Body): number {
+  return state.velocity.dot(body.position.clone().sub(state.position).normalize())
+}
+
 describe('target approach', () => {
-  test('never exceeds surfaceDistance / ETA and arrives without passing inside', () => {
+  test('speed toward the target never exceeds max(V_NORMAL, gap / ETA) and it lands without passing inside', () => {
     const start = EARTH.position.clone().add(new THREE.Vector3(-40, 0, 0))
     const state = shipAt(start, EARTH.position)
     const telemetry = createShipTelemetry()
     const shell = EARTH.radius * COLLISION_MARGIN
     let previous = Infinity
-    for (let i = 0; i < 90 * 60; i++) {
+    let hits = 0
+    for (let i = 0; i < 60 * 60; i++) {
       stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, 'earth'), telemetry)
       const gap = telemetry.target!.surfaceDistance
-      expect(telemetry.speed).toBeLessThanOrEqual(gap / ETA_SECONDS + 1e-12)
+      expect(closingSpeed(state, EARTH)).toBeLessThanOrEqual(
+        Math.max(V_NORMAL, gap / ETA_SECONDS) + 1e-12
+      )
       expect(gap).toBeLessThanOrEqual(previous + 1e-12)
       expect(state.position.distanceTo(EARTH.position)).toBeGreaterThanOrEqual(shell - 1e-9)
+      if (telemetry.colliding) hits++
       previous = gap
     }
-    expect(telemetry.target!.surfaceDistance).toBeCloseTo(shell - EARTH.radius, 3)
+    expect(telemetry.target!.surfaceDistance).toBeCloseTo(shell - EARTH.radius, 9)
+    // Touchdown counts once; pressing into the surface afterwards does not.
+    expect(hits).toBe(1)
+  })
+
+  test.each([EARTH, MOON])('leaving a locked $key is as fast as leaving it untargeted', (body) => {
+    // From rest on the collision shell, nose straight up (away from the
+    // body), to a 15-unit gap.
+    const departure = (targetKey: string | null) => {
+      const start = body.position.clone().add(new THREE.Vector3(0, body.radius * COLLISION_MARGIN, 0))
+      const state = shipAt(start, start.clone().add(Y))
+      let t = 0
+      while (state.position.distanceTo(body.position) - body.radius < 15 && t < 120) {
+        stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, targetKey))
+        t += FRAME
+      }
+      return t
+    }
+    const untargeted = departure(null)
+    const targeted = departure(body.key)
+    console.log(
+      `Leave ${body.key} to a 15-unit gap: ${targeted.toFixed(2)} s targeted, ${untargeted.toFixed(2)} s untargeted`
+    )
+    expect(untargeted).toBeLessThan(15)
+    expect(targeted).toBeCloseTo(untargeted, 6)
   })
 
   test('reports a ~7 s ETA while at the target cap', () => {
@@ -380,6 +422,28 @@ describe('collision', () => {
     expect(state.velocity.dot(normal)).toBeGreaterThanOrEqual(-1e-12)
     expect(state.velocity.length()).toBeGreaterThan(0)
   })
+
+  test.each([FRAME, MAX_DT])('resting on or thrusting into a surface is not a hit (dt %s)', (dt) => {
+    // Nose straight at Earth's centre, so thrust is purely into the surface.
+    const start = EARTH.position.clone().add(new THREE.Vector3(0, 0, EARTH.radius * COLLISION_MARGIN))
+    for (const throttle of [0, 1]) {
+      const state = shipAt(start, EARTH.position)
+      const telemetry = createShipTelemetry()
+      for (let i = 0; i < 300; i++) {
+        stepShip(state, input({ throttle }), dt, env([EARTH]), telemetry)
+        expect(telemetry.colliding).toBe(false)
+      }
+      expect(state.position.distanceTo(start)).toBeLessThan(1e-9)
+    }
+    for (const throttle of [0, 1]) {
+      const state = shipAt(start, EARTH.position)
+      const telemetry = createShipTelemetry()
+      for (let i = 0; i < 300; i++) {
+        stepShip(state, input({ throttle, flightAssist: false }), dt, env([EARTH]), telemetry)
+        expect(telemetry.colliding).toBe(false)
+      }
+    }
+  })
 })
 
 describe('dt', () => {
@@ -394,6 +458,14 @@ describe('dt', () => {
 })
 
 describe('telemetry', () => {
+  test('reports the clamped throttle it flew with', () => {
+    const telemetry = createShipTelemetry()
+    stepShip(createShipState(), input({ throttle: -3 }), FRAME, env([]), telemetry)
+    expect(telemetry.throttle).toBe(-0.25)
+    stepShip(createShipState(), input({ throttle: 7 }), FRAME, env([]), telemetry)
+    expect(telemetry.throttle).toBe(1)
+  })
+
   test('reports nearest, target and the input it flew with', () => {
     const state = shipAt(EARTH.position.clone().add(new THREE.Vector3(0, 0, -15)), NEPTUNE.position)
     const telemetry = createShipTelemetry()

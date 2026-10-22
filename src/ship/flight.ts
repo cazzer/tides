@@ -15,9 +15,12 @@
 //     surface). One continuous supercruise regime with no mode switch, and it
 //     is scale-agnostic: skimming the Moon (r = 1) and crossing the 300-unit
 //     gap to Neptune both take a few e-folds of 1/K_CRUISE seconds.
-//   • With a target locked the cap is also surfaceDistance / ETA_SECONDS, so
-//     the closing speed decays exponentially with the gap (time constant
-//     ETA_SECONDS) and the ship can never overshoot.
+//   • With a target locked, the speed *toward* it is also capped at
+//     max(V_NORMAL, surfaceDistance / ETA_SECONDS), so the approach decays
+//     exponentially with the gap (time constant ETA_SECONDS) and can't
+//     overshoot. Only the closing component is limited: leaving or flying
+//     past a locked target is as fast as untargeted, and the V_NORMAL floor
+//     means the last stretch to the surface takes seconds, not forever.
 //   • Flight Assist on: velocity eases toward throttle · v_max along the nose
 //     (plus strafe) and rotation eases toward the stick demand, so letting go
 //     stops the spin. Off: thrust adds to velocity and spin persists; only the
@@ -25,8 +28,9 @@
 //   • Bodies are hard spheres at radius · COLLISION_MARGIN: the ship is pushed
 //     back out along the normal and loses its inward velocity.
 //
-// Vector maths runs on module-level scratch vectors, as elsewhere in the
-// render loop (see ephemeris.ts), so a step allocates no three objects.
+// A step allocates nothing: vector maths runs on module-level scratch vectors
+// and the nearest/target scan writes into a scratch record, as elsewhere in
+// the render loop (see ephemeris.ts).
 
 import * as THREE from 'three'
 import { THROTTLE_MAX, THROTTLE_MIN, type ShipInput } from './ship-input'
@@ -38,7 +42,11 @@ export interface ShipState {
   velocity: THREE.Vector3
   /** Body → world. Nose is local −Z, up local +Y. */
   orientation: THREE.Quaternion
-  /** Body frame, rad/s: x pitch (+ nose up), y yaw (+ nose left), z roll. */
+  /**
+   * Body frame, rad/s, right-handed about the local axes: x pitch (+ nose up),
+   * y yaw (+ nose LEFT), z roll (+ rolls LEFT). Yaw and roll are the opposite
+   * sign to ShipInput, whose +1 means right; rotate() does the flip.
+   */
   angularVelocity: THREE.Vector3
 }
 
@@ -51,7 +59,7 @@ export interface Body {
 
 export interface FlightEnv {
   bodies: readonly Body[]
-  /** Locked target body's key; adds the ETA cap. */
+  /** Locked target body's key; caps the speed toward it (approachCap). */
   targetKey: string | null
 }
 
@@ -84,6 +92,13 @@ export const K_CRUISE = 0.5
 // Target approach time constant, s. Elite's "7 seconds to target" rule: at
 // the cap the HUD ETA stays at 7 s while the gap decays exponentially.
 export const ETA_SECONDS = 7
+
+// Inward speed at the collision shell, units/s, above which a step counts as
+// a hit (telemetry.colliding). Resting on a surface or holding thrust into it
+// gains at most V_NORMAL · (1 − e^(−MAX_DT / VELOCITY_TAU)) ≈ 0.024 a step
+// (FA off: V_NORMAL · MAX_DT / VELOCITY_TAU = 0.025) before being cancelled,
+// so 0.05 never flags those, while arriving at the V_NORMAL floor always does.
+export const COLLISION_SPEED = 0.05
 
 // Flight Assist velocity e-fold, s. Reaching 63% of a new throttle setting
 // takes this long at any scale, because the cap (and so the acceleration)
@@ -138,16 +153,45 @@ export interface NearestBody {
   surfaceDistance: number
 }
 
-function surfaceDistance(position: THREE.Vector3, body: Body): number {
-  return position.distanceTo(body.position) - body.radius
+const { clamp, lerp } = THREE.MathUtils
+
+// One pass over the bodies for both the nearest surface and the target, into
+// a reused record so the per-frame scan allocates nothing.
+interface Proximity {
+  nearest: Body | null
+  nearestGap: number
+  target: Body | null
+  targetGap: number
 }
 
-function findBody(bodies: readonly Body[], key: string | null): Body | null {
-  if (key == null) return null
+const proximity: Proximity = {
+  nearest: null,
+  nearestGap: Infinity,
+  target: null,
+  targetGap: Infinity,
+}
+
+function measure(
+  position: THREE.Vector3,
+  bodies: readonly Body[],
+  targetKey: string | null
+): Proximity {
+  proximity.nearest = null
+  proximity.nearestGap = Infinity
+  proximity.target = null
+  proximity.targetGap = Infinity
   for (const body of bodies) {
-    if (body.key === key) return body
+    const gap = position.distanceTo(body.position) - body.radius
+    if (gap < proximity.nearestGap) {
+      proximity.nearest = body
+      proximity.nearestGap = gap
+    }
+    if (targetKey != null && body.key === targetKey) {
+      proximity.target = body
+      proximity.targetGap = gap
+    }
   }
-  return null
+  return proximity
 }
 
 /** Closest surface to `position`, or null when there are no bodies. */
@@ -155,55 +199,41 @@ export function nearestBody(
   position: THREE.Vector3,
   bodies: readonly Body[]
 ): NearestBody | null {
-  let best: Body | null = null
-  let bestDistance = Infinity
-  for (const body of bodies) {
-    const d = surfaceDistance(position, body)
-    if (d < bestDistance) {
-      best = body
-      bestDistance = d
-    }
-  }
-  return best && { body: best, surfaceDistance: bestDistance }
+  const { nearest, nearestGap } = measure(position, bodies, null)
+  return nearest && { body: nearest, surfaceDistance: nearestGap }
+}
+
+function cruiseCap({ nearest, nearestGap }: Proximity): number {
+  return nearest ? Math.max(V_NORMAL, K_CRUISE * Math.max(0, nearestGap)) : V_NORMAL
 }
 
 /**
- * The speed limit at `position`, scene units/s. With no bodies there is
- * nothing to scale against, so V_NORMAL.
- *
- * `dt` makes the target cap exact for a discrete step: moving at
- * gap / (ETA + dt) for dt leaves speed ≤ newGap / ETA, so the ETA cap holds
- * after the step as well as before it.
+ * The speed limit at `position`, scene units/s: max(V_NORMAL, K_CRUISE ·
+ * nearest surface distance). With no bodies there is nothing to scale
+ * against, so V_NORMAL.
  */
-export function speedCap(
-  position: THREE.Vector3,
-  bodies: readonly Body[],
-  targetKey: string | null,
-  dt = 0
-): number {
-  const nearest = nearestBody(position, bodies)
-  let cap = nearest
-    ? Math.max(V_NORMAL, K_CRUISE * Math.max(0, nearest.surfaceDistance))
-    : V_NORMAL
-  const target = findBody(bodies, targetKey)
-  if (target) {
-    const gap = Math.max(0, surfaceDistance(position, target))
-    cap = Math.min(cap, gap / (ETA_SECONDS + dt))
-  }
-  return cap
+export function speedCap(position: THREE.Vector3, bodies: readonly Body[]): number {
+  return cruiseCap(measure(position, bodies, null))
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t
-}
-
-function clamp(x: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, x))
+/**
+ * The limit on speed toward a locked target `gap` from its surface.
+ *
+ * `dt` makes the cap exact for a discrete step: closing at gap / (ETA + dt)
+ * for dt leaves the closing speed ≤ newGap / ETA, so the ETA rule holds after
+ * the step as well as before it.
+ */
+export function approachCap(gap: number, dt = 0): number {
+  return Math.max(V_NORMAL, Math.max(0, gap) / (ETA_SECONDS + dt))
 }
 
 // Inputs come from pointer maths; NaN would poison the state for good.
 function axis(x: number): number {
   return Number.isFinite(x) ? clamp(x, -1, 1) : 0
+}
+
+function usableThrottle(throttle: number): number {
+  return Number.isFinite(throttle) ? clamp(throttle, THROTTLE_MIN, THROTTLE_MAX) : 0
 }
 
 /**
@@ -224,6 +254,7 @@ const right = new THREE.Vector3()
 const up = new THREE.Vector3()
 const levelUp = new THREE.Vector3()
 const scratch = new THREE.Vector3()
+const toTarget = new THREE.Vector3()
 const demand = new THREE.Vector3()
 const spinAxis = new THREE.Vector3()
 const spin = new THREE.Quaternion()
@@ -235,21 +266,22 @@ function bodyAxes(orientation: THREE.Quaternion): void {
 }
 
 // Roll rate (about body +Z) that turns the ship's up toward ecliptic north
-// projected off the nose. Zero when the nose is within ~0.8° of a pole, where
+// projected off the nose. Zero when the nose is within ~0.6° of a pole, where
 // "up" is undefined.
 function levelRollRate(): number {
-  levelUp.copy(WORLD_UP).addScaledVector(nose, -nose.y)
+  levelUp.copy(WORLD_UP).projectOnPlane(nose)
   if (levelUp.lengthSq() < 1e-4) return 0
   levelUp.normalize()
   // Body +Z in world is −nose; signed angle from up to levelUp about it.
-  const sin = scratch.crossVectors(up, levelUp).dot(nose) * -1
+  const sin = -scratch.crossVectors(up, levelUp).dot(nose)
   const error = Math.atan2(sin, up.dot(levelUp))
   return clamp(error * LEVEL_GAIN, -ROLL_RATE, ROLL_RATE)
 }
 
 function rotate(state: ShipState, input: Readonly<ShipInput>, dt: number): void {
   const factor = turnRateFactor(input.throttle)
-  // Body-frame signs: +X pitches the nose up, +Y yaws it left, +Z rolls left.
+  // Input +1 is nose up / nose right / roll right; in the body frame that is
+  // +X, −Y, −Z (see ShipState.angularVelocity).
   demand.set(
     axis(input.pitch) * PITCH_RATE * factor,
     -axis(input.yaw) * YAW_RATE * factor,
@@ -263,7 +295,9 @@ function rotate(state: ShipState, input: Readonly<ShipInput>, dt: number): void 
   if (input.flightAssist) {
     w.lerp(demand, ease)
   } else {
-    // Full stick reaches the max rate in ROTATION_TAU; nothing damps it.
+    // Full stick reaches the max rate in ROTATION_TAU; nothing damps it. The
+    // clamp is the raw max rate, deliberately not × turnRateFactor: moving
+    // the throttle with FA off must not brake a spin the pilot built up.
     w.x = clamp(w.x + (demand.x * dt) / ROTATION_TAU, -PITCH_RATE, PITCH_RATE)
     w.y = clamp(w.y + (demand.y * dt) / ROTATION_TAU, -YAW_RATE, YAW_RATE)
     // Level is an assist of its own, so it damps roll even with FA off.
@@ -283,16 +317,15 @@ function translate(
   state: ShipState,
   input: Readonly<ShipInput>,
   dt: number,
-  cap: number
+  cap: number,
+  target: Body | null,
+  targetGap: number
 ): void {
   bodyAxes(state.orientation)
-  const throttle = Number.isFinite(input.throttle)
-    ? clamp(input.throttle, THROTTLE_MIN, THROTTLE_MAX)
-    : 0
   // Thrust as a share of the cap, world frame.
   scratch
     .copy(nose)
-    .multiplyScalar(throttle)
+    .multiplyScalar(usableThrottle(input.throttle))
     .addScaledVector(right, STRAFE_SHARE * axis(input.strafeX))
     .addScaledVector(up, STRAFE_SHARE * axis(input.strafeY))
 
@@ -304,11 +337,21 @@ function translate(
     v.addScaledVector(scratch, (cap / VELOCITY_TAU) * dt)
   }
   v.clampLength(0, cap)
+
+  if (!target) return
+  toTarget.subVectors(target.position, state.position)
+  const distance = toTarget.length()
+  if (distance === 0) return
+  toTarget.divideScalar(distance)
+  const closing = v.dot(toTarget)
+  const limit = approachCap(targetGap, dt)
+  if (closing > limit) v.addScaledVector(toTarget, limit - closing)
 }
 
 // Push the ship out of any body it ended inside and drop the velocity
 // component into it, so it slides along the surface. Bodies in the scene
-// never overlap, so one pass leaves the ship outside all of them.
+// never overlap, so one pass leaves the ship outside all of them. Returns
+// whether the step hit something faster than COLLISION_SPEED.
 function collide(state: ShipState, bodies: readonly Body[]): boolean {
   let hit = false
   for (const body of bodies) {
@@ -316,12 +359,12 @@ function collide(state: ShipState, bodies: readonly Body[]): boolean {
     const normal = scratch.subVectors(state.position, body.position)
     const d = normal.length()
     if (d >= shell) continue
-    hit = true
     if (d > 1e-9) normal.divideScalar(d)
     else normal.copy(WORLD_UP)
     state.position.copy(body.position).addScaledVector(normal, shell)
     const inward = state.velocity.dot(normal)
     if (inward < 0) state.velocity.addScaledVector(normal, -inward)
+    if (-inward > COLLISION_SPEED) hit = true
   }
   return hit
 }
@@ -336,35 +379,38 @@ function fillTelemetry(
 ): void {
   out.speed = state.velocity.length()
   out.speedCap = cap
-  out.throttle = input.throttle
+  out.throttle = usableThrottle(input.throttle)
   out.flightAssist = input.flightAssist
   out.velocity.copy(state.velocity)
   out.colliding = colliding
 
-  const nearest = nearestBody(state.position, env.bodies)
-  out.nearest.key = nearest ? nearest.body.key : null
-  out.nearest.surfaceDistance = nearest ? nearest.surfaceDistance : Infinity
+  // End-of-step distances, so the HUD matches where the camera now is.
+  const { nearest, nearestGap, target, targetGap } = measure(
+    state.position,
+    env.bodies,
+    env.targetKey
+  )
+  out.nearest.key = nearest ? nearest.key : null
+  out.nearest.surfaceDistance = nearestGap
 
-  const target = findBody(env.bodies, env.targetKey)
   if (!target) {
     out.target = null
     return
   }
-  const gap = surfaceDistance(state.position, target)
   const closing = state.velocity.dot(
-    scratch.subVectors(target.position, state.position).normalize()
+    toTarget.subVectors(target.position, state.position).normalize()
   )
   if (!out.target) out.target = { key: target.key, surfaceDistance: 0, etaSeconds: 0 }
   out.target.key = target.key
-  out.target.surfaceDistance = gap
-  out.target.etaSeconds = closing > 0 ? Math.max(0, gap) / closing : Infinity
+  out.target.surfaceDistance = targetGap
+  out.target.etaSeconds = closing > 0 ? Math.max(0, targetGap) / closing : Infinity
 }
 
 /**
  * Advance the ship by `dt` seconds (clamped to MAX_DT; non-finite or negative
  * dt is a zero step). Mutates and returns `state`; fills `telemetry` when
- * given. The cap is taken at the start of the step, so a step can never
- * carry the ship further than the cap allows from where it was.
+ * given. Caps are taken at the start of the step, so a step can never carry
+ * the ship further than they allow from where it was.
  */
 export function stepShip(
   state: ShipState,
@@ -374,11 +420,13 @@ export function stepShip(
   telemetry?: ShipTelemetry
 ): ShipState {
   const h = Number.isFinite(dt) ? clamp(dt, 0, MAX_DT) : 0
-  const cap = speedCap(state.position, env.bodies, env.targetKey, h)
+  const here = measure(state.position, env.bodies, env.targetKey)
+  const cap = cruiseCap(here)
+  const { target, targetGap } = here
   let colliding = false
   if (h > 0) {
     rotate(state, input, h)
-    translate(state, input, h, cap)
+    translate(state, input, h, cap, target, targetGap)
     state.position.addScaledVector(state.velocity, h)
     colliding = collide(state, env.bodies)
   }
