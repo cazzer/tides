@@ -29,6 +29,7 @@ import {
   sunVisibility,
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
+  TERRAIN_MAX_GREY_FLAT,
   type Vec3,
 } from './cloud-layer'
 
@@ -97,7 +98,7 @@ describe('cloud tops', () => {
   })
 
   it('keeps the flat shell clear of the highest ground (tides-7oi)', () => {
-    expect(CLOUD_FLAT_ALTITUDE).toBeGreaterThan(TERRAIN_MAX_GREY * TERRAIN_DISPLACEMENT)
+    expect(CLOUD_FLAT_ALTITUDE).toBeGreaterThan(TERRAIN_MAX_GREY_FLAT * TERRAIN_DISPLACEMENT)
     expect(CLOUD_FLAT_ALTITUDE).toBeLessThan(CLOUD_LAYER_TOP)
   })
 

@@ -4,8 +4,10 @@
 // until the ship turns to them.
 import * as THREE from 'three'
 
-/** One piece of first-draw work, done ahead of time. */
-export type Warmup = { texture: THREE.Texture } | { object: THREE.Object3D }
+/** One piece of first-draw work, done ahead of time: a map's upload, or an
+ * object's program, or with `side`, the program its material turns to
+ * later (warmSides). */
+export type Warmup = { texture: THREE.Texture } | { object: THREE.Object3D; side?: THREE.Side }
 
 function materialsOf(object: THREE.Object3D): THREE.Material[] {
   const { material } = object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }
@@ -17,6 +19,16 @@ function texturesOf(material: THREE.Material): THREE.Texture[] {
   return [...Object.values(material), ...Object.values(uniforms).map((u) => u?.value)].filter(
     (value): value is THREE.Texture => (value as THREE.Texture | null)?.isTexture === true
   )
+}
+
+/**
+ * Faces a material turns to on its own at draw time, past the warm-up's
+ * reach, whose programs it warms too: listed by the material as
+ * userData.warmSides (Earth's cloud shell turns to its back faces within
+ * the ship's reach of it: cloudShaders.ts, tides-01v.8.4).
+ */
+function warmSides(material: THREE.Material): THREE.Side[] {
+  return (material.userData.warmSides as THREE.Side[] | undefined) ?? []
 }
 
 /** What has been warmed: textures once, materials at a version. */
@@ -47,6 +59,7 @@ export function coldWork(
   const work: Warmup[] = []
   scene.traverseVisible((object) => {
     let cold = false
+    const sides = new Set<THREE.Side>()
     for (const material of materialsOf(object)) {
       for (const texture of texturesOf(material)) {
         if (texture.version === 0 || texture.isRenderTargetTexture || warmed.textures.has(texture)) continue
@@ -57,8 +70,42 @@ export function coldWork(
       if (warmed.materials.get(key) === material.version) continue
       warmed.materials.set(key, material.version)
       cold = true
+      for (const side of warmSides(material)) sides.add(side)
     }
     if (cold) work.push({ object })
+    for (const side of sides) work.push({ object, side })
   })
   return work
+}
+
+/**
+ * Compiles `object`'s materials turned to `side`, then turns them back.
+ * three keeps a material's programs by key, so the draw that turns it to
+ * `side` later finds that program linked. Compiling makes it the material's
+ * current program, though, and three's draw doesn't check the side again
+ * while the version holds: the version moves on, and `warmed` with it.
+ */
+export function compileSide(
+  renderer: Pick<THREE.WebGLRenderer, 'compile'>,
+  object: THREE.Object3D,
+  side: THREE.Side,
+  camera: THREE.Camera,
+  scene: THREE.Scene,
+  warmed: Warmed,
+  materialKey: (material: THREE.Material) => object
+): void {
+  const materials = materialsOf(object)
+  const sides = materials.map((material) => material.side)
+  for (const material of materials) material.side = side
+  try {
+    renderer.compile(object, camera, scene)
+  } finally {
+    materials.forEach((material, i) => {
+      material.side = sides[i]
+      material.needsUpdate = true
+      if (warmed.materials.has(materialKey(material))) {
+        warmed.materials.set(materialKey(material), material.version)
+      }
+    })
+  }
 }

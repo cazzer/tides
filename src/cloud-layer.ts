@@ -15,8 +15,12 @@ export const EARTH_RADIUS_KM = 6371
 
 /** The ground's displacementScale: scene units at bump-map white. */
 export const TERRAIN_DISPLACEMENT = 0.075
-/** The bump map's brightest grey (Himalaya); bounds the cloud layer. */
-export const TERRAIN_MAX_GREY = 0.81
+/** The brightest grey (Himalaya) of the bump map the relief layer reads,
+ * earth-bump.jpg (4k, high quality); bounds the cloud layer. */
+export const TERRAIN_MAX_GREY = 219 / 255
+/** The same for the flat layer's map, earth-bump-2k.jpg (low quality), whose
+ * smaller size averages the peaks down. */
+export const TERRAIN_MAX_GREY_FLAT = 206 / 255
 /** Kilometres of elevation per unit of bump-map grey (geo-clouds' 1/39 per level). */
 export const TERRAIN_KM_PER_GREY = 255 / 39
 
@@ -34,7 +38,7 @@ export const CLOUD_LAYER_TOP =
 /** The low-quality path's single flat shell: just clear of the highest
  * ground (tides-7oi), at a typical low-cloud top. */
 export const CLOUD_FLAT_ALTITUDE =
-  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
+  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY_FLAT + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
 
 /** Where no satellite measured a top: thicker (brighter) cloud, taller tops. */
 export function defaultTopKm(alpha: number): number {
@@ -95,6 +99,34 @@ export function directionToUv([x, y, z]: Vec3): [number, number] {
  */
 export function distanceToRadius(r0: number, mu: number, r: number): number {
   return -r0 * mu + Math.sqrt(r0 * r0 * (mu * mu - 1) + r * r)
+}
+
+/**
+ * The stretch of a view ray the cloud march covers within the ship camera's
+ * reach of the shell (tides-01v.8.4; cloudShaders.ts' FLIP_SIDED branch), as
+ * distances along the unit `dir` from `eye` (both in the body's frame, about
+ * its centre): from `near`, the near plane's distance along the ray, or from
+ * where the ray comes within `outer` of the centre if that is further, to
+ * where it leaves that sphere or drops below the lowest base anywhere. Null
+ * when no part of the ray past the near plane comes within `outer`.
+ */
+export function marchSpanFromEye(
+  eye: Vec3,
+  dir: Vec3,
+  seaLevel: number,
+  outer: number,
+  near: number
+): { start: number; end: number } | null {
+  const b = eye[0] * dir[0] + eye[1] * dir[1] + eye[2] * dir[2]
+  const eye2 = eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]
+  const discOuter = b * b - (eye2 - outer * outer)
+  if (discOuter <= 0) return null
+  const start = Math.max(-b - Math.sqrt(discOuter), near)
+  let end = -b + Math.sqrt(discOuter)
+  const inner = seaLevel + CLOUD_CLEARANCE
+  const discInner = b * b - (eye2 - inner * inner)
+  if (discInner > 0 && -b - Math.sqrt(discInner) > start) end = -b - Math.sqrt(discInner)
+  return end > start ? { start, end } : null
 }
 
 /**

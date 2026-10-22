@@ -5,6 +5,11 @@
 // The low-quality path (CLOUD_FLAT) skips the march and the terrain: one
 // sample on a flat shell, still shaded by the tops' slopes.
 //
+// Within the ship camera's reach of the shell (tides-01v.8.4: inside it, or
+// near enough that the near plane may clip it), the material draws its back
+// faces instead (three defines FLIP_SIDED) and the march starts at the
+// camera; see the FLIP_SIDED branches.
+//
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
 import {
@@ -26,22 +31,25 @@ import {
   SUNSET_FLOOR,
   TERRAIN_DISPLACEMENT,
   TERRAIN_KM_PER_GREY,
+  TERRAIN_MAX_GREY,
 } from '../cloud-layer'
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { sceneRadius } from '../planets'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
+import { withinShellReach } from './earth-shells'
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 
 const f = (x: number) => x.toFixed(6)
 
-const MARCH_STEP = 0.011
+export const MARCH_STEP = 0.011
 // Steps for the longest path a march can take: a ray grazing the layer's
 // base, from its top in and out again (sea level is Earth's scene radius,
 // as EarthRenderer sets it). Short of that, a grazing ray's samples
 // straddle the tops and the limb stair-steps along them (tides-01v.9).
+// A march from inside the shell covers part of that chord, so it holds there.
 const SEA_LEVEL = sceneRadius(2000 * EARTH_RADIUS_KM)
-const MARCH_STEPS = Math.ceil(
+export const MARCH_STEPS = Math.ceil(
   (2 * Math.sqrt((SEA_LEVEL + CLOUD_LAYER_TOP) ** 2 - (SEA_LEVEL + CLOUD_CLEARANCE) ** 2)) /
     MARCH_STEP
 )
@@ -116,6 +124,13 @@ const VERTEX = /* glsl */ `
 ${ECLIPSE_GLSL.vertexHead}
 varying vec3 vLocal;
 varying vec3 vRayDir;
+#ifdef FLIP_SIDED
+// The camera in the mesh's frame, the fragment's depth in front of it and
+// the near plane's.
+varying vec3 vEye;
+varying float vViewDepth;
+varying float vNear;
+#endif
 
 void main() {
   vLocal = position;
@@ -127,7 +142,21 @@ void main() {
     : world.xyz - cameraPosition;
   vRayDir = transpose(mat3(modelMatrix)) * ray;
   ${ECLIPSE_GLSL.vertexBody}
+  #ifdef FLIP_SIDED
+  // Within reach the camera can sit a hair off the shell, and world
+  // positions, thousands of units out at the flight scale, would bury that
+  // gap in rounding. The view-space position (modelViewMatrix, formed by
+  // three in double) keeps it, so here the ray, the eye and the depth all
+  // come from there. The transpose inverts it as the Earth group is unscaled.
+  vec4 view = modelViewMatrix * vec4(position, 1.0);
+  vRayDir = transpose(mat3(modelViewMatrix)) * view.xyz;
+  vEye = position - vRayDir;
+  vViewDepth = -view.z;
+  vNear = isOrthographic ? 0.0 : projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+  gl_Position = projectionMatrix * view;
+  #else
   gl_Position = projectionMatrix * viewMatrix * world;
+  #endif
 }
 `
 
@@ -140,6 +169,14 @@ uniform float uSunGain;
 uniform float uAmbient;
 varying vec3 vLocal;
 varying vec3 vRayDir;
+#ifdef FLIP_SIDED
+uniform mat4 projectionMatrix;
+varying vec3 vEye;
+varying float vViewDepth;
+varying float vNear;
+// The highest ground the relief layer's bump map holds.
+#define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
+#endif
 
 #define RELIEF 1.2
 #define MAX_SLOPE 0.75
@@ -256,9 +293,92 @@ void main() {
   if (disc <= 0.0) discard;
   float tIn = -b - sqrt(disc);
 
-#ifdef CLOUD_FLAT
+#ifdef FLIP_SIDED
+  // Every ray within reach meets the far side of the shell, so the back
+  // faces alone draw them all, inside the shell or out, and the march
+  // covers the ray from the near plane on. s runs along d from the eye
+  // rather than from vLocal, which lies past the globe.
+  vec3 eye = vEye;
+  float be = dot(eye, d);
+  float discEye = be * be - (dot(eye, eye) - shell * shell);
+  if (discEye <= 0.0) discard;
+  float sIn = -be - sqrt(discEye);
+  float sOut = -be + sqrt(discEye);
+  // View depth scales with distance along the ray.
+  float sNear = vNear * length(vRayDir) / vViewDepth;
+#endif
+
+#if defined(CLOUD_FLAT) && defined(FLIP_SIDED)
+  // The flat shell where the ray enters it, or from inside it, its underside
+  // where the ray leaves (tides-01v.8.5 relights undersides).
+  float sFlat = sIn >= sNear ? sIn : sOut;
+  if (sFlat < sNear) discard;
+  vec3 p = eye + d * sFlat;
+  float terrain = 0.0;
+#elif defined(CLOUD_FLAT)
   vec3 p = vLocal + d * tIn;
   float terrain = 0.0;
+#elif defined(FLIP_SIDED)
+  // March from the near plane (or where the ray comes within reach of the
+  // tallest top this texture can have anywhere, if that is further) to where
+  // it leaves that reach or drops below the lowest base anywhere. Rays that
+  // never come within reach, the sky from inside, end at once. A ray from
+  // inside can cross half the layer, so each step reads its own ground for
+  // the column's base, and its own mip for the footprint there. What lies
+  // past the ground, the depth test hides: gl_FragDepth below. Mirrored by
+  // cloud-layer.ts marchSpanFromEye.
+  float outer = uSeaLevel + min(TERRAIN_TOP + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * uCloudMaxKm,
+    CLOUD_LAYER_TOP);
+  float discOuter = be * be - (dot(eye, eye) - outer * outer);
+  if (discOuter <= 0.0) discard;
+  float sStart = max(-be - sqrt(discOuter), sNear);
+  float sEnd = -be + sqrt(discOuter);
+  float inner = uSeaLevel + CLOUD_CLEARANCE;
+  float discInner = be * be - (dot(eye, eye) - inner * inner);
+  if (discInner > 0.0 && -be - sqrt(discInner) > sStart) sEnd = -be - sqrt(discInner);
+  if (sEnd <= sStart) discard;
+  int steps = int(clamp(ceil((sEnd - sStart) / MARCH_STEP), 3.0, float(MARCH_STEPS)));
+  float ds = (sEnd - sStart) / float(steps);
+  float sPrev = sStart;
+  float gapPrev = 0.0;
+  float sHit = -1.0;
+  for (int i = 0; i <= MARCH_STEPS; i++) {
+    if (i > steps) break;
+    float s = sStart + ds * float(i);
+    vec3 q = eye + d * s;
+    float r = length(q);
+    vec2 uvq = cloudUv(q / r);
+    float lodq = cloudLod(spread * s / max(abs(dot(d, q / r)), 0.05));
+    vec4 colq = cloudColumn(uvq, lodq, cloudTerrain(uvq));
+    float gap = r - uSeaLevel - colq.z;
+    if (gap <= 0.0) {
+      if (i == 0) {
+        // The march starts inside a column. If the camera itself is in it,
+        // it is in a cloud: unshaded until tides-01v.8.6 fogs it, and a
+        // clear column is the view from below the deck (tides-01v.8.5).
+        // Otherwise only the near plane cuts the top, there.
+        vec2 uvEye = cloudUv(normalize(eye));
+        vec4 colEye = cloudColumn(uvEye, 0.0, cloudTerrain(uvEye));
+        if (length(eye) - uSeaLevel <= colEye.z) {
+          if (colEye.x < 0.02) discard;
+          gl_FragColor = vec4(vec3(0.8), colEye.x * uOpacity);
+          gl_FragDepth = 0.0;
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          return;
+        }
+        sHit = s;
+        break;
+      }
+      sHit = mix(sPrev, s, gapPrev / max(gapPrev - gap, 1e-6));
+      break;
+    }
+    sPrev = s;
+    gapPrev = gap;
+  }
+  if (sHit < 0.0) discard;
+  vec3 p = eye + d * sHit;
+  float terrain = cloudTerrain(cloudUv(normalize(p)));
 #else
   // March down to the first cloud top. The ground under the entry stands
   // in for the ground all along the march: it bounds where the march starts
@@ -299,6 +419,13 @@ void main() {
   vec3 p = vLocal + d * tHit;
   terrain = cloudTerrain(cloudUv(normalize(p)));
 #endif
+#ifdef FLIP_SIDED
+  // A pixel's width at the hit, stretched by the slant, as the shell's own
+  // footprint gives it from outside.
+  float eyeDist = length(p - eye);
+  footprint = spread * eyeDist / max(abs(dot(d, normalize(p))), 0.05);
+  lod = cloudLod(footprint);
+#endif
 
   float r = length(p);
   vec3 up = p / r;
@@ -308,9 +435,13 @@ void main() {
   float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
   // A pixel's width where the ray meets the top, stretched by the slant.
   // vRayDir is the eye's offset: the Earth group is unscaled.
+#ifdef FLIP_SIDED
+  float topFootprint = footprint;
+#else
   float topFootprint = isOrthographic
     ? footprint
     : spread * (length(vRayDir) + length(p - vLocal)) / max(abs(dot(d, up)), 0.05);
+#endif
   vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
   float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
   if (alpha < 0.02) discard;
@@ -376,6 +507,16 @@ void main() {
   float slant = 1.0 / max(abs(dot(d, up)), 0.3);
   float opacity = (1.0 - pow(1.0 - min(alpha, 0.995), slant)) * uOpacity;
   gl_FragColor = vec4(radiance, opacity);
+#ifdef FLIP_SIDED
+  #if defined(USE_LOGARITHMIC_DEPTH_BUFFER) || defined(USE_REVERSED_DEPTH_BUFFER)
+  #error "cloud layer: gl_FragDepth assumes the standard depth buffer"
+  #endif
+  // The hit's depth, so the displaced ground hides clouds behind it: the
+  // back face lies past the globe. View depth scales with distance along
+  // the ray.
+  float z = vViewDepth * eyeDist / length(vRayDir);
+  gl_FragDepth = 0.5 + 0.5 * (projectionMatrix[3][2] - projectionMatrix[2][2] * z) / z;
+#endif
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -489,6 +630,20 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     transparent: true,
     depthWrite: false,
   })
+  const shellAltitude = flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP
+  // The back faces within the ship camera's reach of the shell (earth-shells.ts
+  // withinShellReach), the front ones elsewhere. Unlike the atmosphere's
+  // shells, the depth test stays on: the shader writes each hit's depth.
+  // The ship's warm-up compiles that program ahead (ship-warmup.ts).
+  material.userData.warmSides = [THREE.BackSide]
+  material.onBeforeRender = (_renderer, _scene, camera, _geometry, object) => {
+    const reach = withinShellReach(object, camera, uniforms.uSeaLevel.value + shellAltitude)
+    const side = reach ? THREE.BackSide : THREE.FrontSide
+    if (material.side !== side) {
+      material.side = side
+      material.needsUpdate = true
+    }
+  }
   const flag = flat ? '#define CLOUD_FLAT\n' : ''
   const groundPatch: MaterialPatch = {
     onBeforeCompile(shader) {
@@ -510,7 +665,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     material,
     groundPatch,
     uniforms,
-    shellAltitude: flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP,
+    shellAltitude,
     dispose: () => material.dispose(),
   }
 }

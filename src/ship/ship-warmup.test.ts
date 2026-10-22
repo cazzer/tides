@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import * as THREE from 'three'
-import { coldWork, createWarmed } from './ship-warmup'
+import { coldWork, compileSide, createWarmed } from './ship-warmup'
 
 function loaded(): THREE.Texture {
   const texture = new THREE.Texture()
@@ -81,5 +81,26 @@ describe('coldWork', () => {
     expect(coldWork(scene, warmed, () => record)).toEqual([])
     record = {}
     expect(coldWork(scene, warmed, () => record)).toEqual([{ object: mesh }])
+  })
+
+  test('warms the faces a material turns to later, once (tides-01v.8.4)', () => {
+    const material = new THREE.ShaderMaterial()
+    material.userData.warmSides = [THREE.BackSide]
+    const mesh = new THREE.Mesh(undefined, material)
+    const scene = new THREE.Scene().add(mesh)
+    const camera = new THREE.PerspectiveCamera()
+    const warmed = createWarmed()
+
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: mesh }, { object: mesh, side: THREE.BackSide }])
+    const compiledSides: THREE.Side[] = []
+    const renderer = { compile: () => compiledSides.push(material.side) } as unknown as THREE.WebGLRenderer
+    const version = material.version
+    compileSide(renderer, mesh, THREE.BackSide, camera, scene, warmed, byMaterial)
+
+    expect(compiledSides).toEqual([THREE.BackSide])
+    expect(material.side).toBe(THREE.FrontSide)
+    // three must pick the front program again on the next draw.
+    expect(material.version).toBeGreaterThan(version)
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([])
   })
 })
