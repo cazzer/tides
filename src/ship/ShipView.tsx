@@ -5,6 +5,8 @@ import { IconX } from '@tabler/icons-react'
 import { useStore } from '../store'
 import { glassFloatingButton } from '../glass-styles'
 import { ShipController } from './ShipController'
+import { ShipHud } from './ShipHud'
+import { ShipTargeting } from './ShipTargeting'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
 
 // After the exit has rendered, focus the ship button if the three-body view
@@ -82,6 +84,7 @@ export function ShipView({ children }: { children: ReactNode }) {
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust and the
             speed FOV kick (tides-3bl.6). */}
+        <ShipTargeting />
       </View>
       <ExitButton
         ref={exitButton}
@@ -101,6 +104,7 @@ export function ShipView({ children }: { children: ReactNode }) {
           - desktop keyboard + virtual-joystick mouse input (tides-3bl.3)
           - touch steer stick, throttle/roll slider, level button (tides-3bl.4)
           - HUD, target lock and controls modal (tides-3bl.5) */}
+      <ShipHud />
     </div>
   )
 }

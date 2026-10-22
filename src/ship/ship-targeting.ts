@@ -1,0 +1,195 @@
+// Target lock helpers (tides-3bl.5): projecting ship bodies to the screen,
+// picking one under a tap, cycling through them, and placing the marker. The
+// scene has no R3F pointer events in ship mode, so picking is done here
+// against projected discs rather than by raycasting meshes; a small body far
+// off is a few pixels across, and a generous disc is easier to hit.
+
+import * as THREE from 'three'
+import type { Body as FlightBody } from './flight'
+
+export interface ScreenBody {
+  key: string
+  /** CSS px from the view's top-left; meaningless unless inFront. */
+  x: number
+  y: number
+  /** Projected radius, CSS px; Infinity with the camera inside the body. */
+  radiusPx: number
+  /** Camera to centre, scene units. */
+  distance: number
+  inFront: boolean
+  /** Camera-space direction, for an edge arrow: right +x, down +y. */
+  dirX: number
+  dirY: number
+}
+
+export function createScreenBody(): ScreenBody {
+  return {
+    key: '',
+    x: 0,
+    y: 0,
+    radiusPx: 0,
+    distance: 0,
+    inFront: false,
+    dirX: 0,
+    dirY: 0,
+  }
+}
+
+const view = new THREE.Vector3()
+const ndc = new THREE.Vector3()
+const DEG = Math.PI / 180
+
+/**
+ * Project `body` for `camera` onto a `width` × `height` px view, into `out`.
+ * The camera's world matrix and projection must be current.
+ */
+export function projectBody(
+  body: FlightBody,
+  camera: THREE.PerspectiveCamera,
+  width: number,
+  height: number,
+  out: ScreenBody
+): ScreenBody {
+  view.copy(body.position).applyMatrix4(camera.matrixWorldInverse)
+  out.key = body.key
+  out.distance = view.length()
+  out.inFront = view.z < 0
+  out.dirX = view.x
+  out.dirY = -view.y
+  ndc.copy(view).applyMatrix4(camera.projectionMatrix)
+  out.x = ((ndc.x + 1) / 2) * width
+  out.y = ((1 - ndc.y) / 2) * height
+  out.radiusPx =
+    out.distance > body.radius
+      ? ((height / 2) * Math.tan(Math.asin(body.radius / out.distance))) /
+        Math.tan((camera.fov / 2) * DEG)
+      : Infinity
+  return out
+}
+
+/** A tap counts as on a body within this many px of its disc… */
+export const PICK_SLOP = 12
+/** …or of its centre, so a distant dot is still easy to hit. */
+export const PICK_MIN_RADIUS = 24
+
+/**
+ * The body under a tap at (x, y), or null. Hits are within
+ * max(PICK_MIN_RADIUS, radius + PICK_SLOP) of a body's centre; of several,
+ * the one whose disc edge is nearest wins, and among discs the tap is inside,
+ * the nearest to the camera (it is drawn in front).
+ */
+export function pickBody(
+  bodies: readonly ScreenBody[],
+  x: number,
+  y: number
+): string | null {
+  let best: ScreenBody | null = null
+  let bestEdge = Infinity
+  for (const body of bodies) {
+    if (!body.inFront) continue
+    const d = Math.hypot(body.x - x, body.y - y)
+    if (d > Math.max(PICK_MIN_RADIUS, body.radiusPx + PICK_SLOP)) continue
+    const edge = Math.max(0, d - body.radiusPx)
+    if (
+      edge < bestEdge ||
+      (edge === bestEdge && best != null && body.distance < best.distance)
+    ) {
+      best = body
+      bestEdge = edge
+    }
+  }
+  return best?.key ?? null
+}
+
+const forward = new THREE.Vector3()
+const toBody = new THREE.Vector3()
+
+/**
+ * The next target for the T key: bodies ordered by angle off the camera's
+ * nose (the screen centre), and the one after `current` in that order; the
+ * nearest to centre when there is no current target or it is last.
+ */
+export function cycleTarget(
+  bodies: readonly FlightBody[],
+  camera: THREE.Camera,
+  current: string | null
+): string | null {
+  if (bodies.length === 0) return null
+  camera.getWorldDirection(forward)
+  const order = bodies
+    .map((body) => ({
+      key: body.key,
+      angle: forward.angleTo(toBody.subVectors(body.position, camera.position)),
+    }))
+    .sort((a, b) => a.angle - b.angle)
+  const index = order.findIndex((entry) => entry.key === current)
+  return order[(index + 1) % order.length].key
+}
+
+export interface EdgePoint {
+  x: number
+  y: number
+  /** Radians, clockwise from pointing right (CSS rotate). */
+  angle: number
+}
+
+/** A rectangle in view px. */
+export interface Bounds {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+/**
+ * Where an edge arrow for an off-screen target sits: on the edge of `bounds`,
+ * in direction (dirX, dirY) from its centre (screen axes, +y down). Straight
+ * behind (no direction) points down.
+ */
+export function edgePoint(dirX: number, dirY: number, bounds: Bounds): EdgePoint {
+  let dx = dirX
+  let dy = dirY
+  const length = Math.hypot(dx, dy)
+  if (length < 1e-9) {
+    dx = 0
+    dy = 1
+  } else {
+    dx /= length
+    dy /= length
+  }
+  const halfW = Math.max(0, (bounds.right - bounds.left) / 2)
+  const halfH = Math.max(0, (bounds.bottom - bounds.top) / 2)
+  const t = Math.min(
+    Math.abs(dx) > 1e-9 ? halfW / Math.abs(dx) : Infinity,
+    Math.abs(dy) > 1e-9 ? halfH / Math.abs(dy) : Infinity
+  )
+  return {
+    x: bounds.left + halfW + dx * t,
+    y: bounds.top + halfH + dy * t,
+    angle: Math.atan2(dy, dx),
+  }
+}
+
+/**
+ * What the scene side of targeting (ShipTargeting, in the R3F frame loop)
+ * hands the DOM HUD, written every frame: true ranges for the nearest body
+ * and the target, and the km per scene unit for speed (ship-distances.ts).
+ * NaN until measured.
+ */
+export interface ShipNav {
+  nearestKm: number
+  targetKm: number
+  kmPerUnit: number
+}
+
+export const shipNav: ShipNav = { nearestKm: NaN, targetKm: NaN, kmPerUnit: NaN }
+
+/**
+ * The marker element (rendered by the HUD) that ShipTargeting positions each
+ * frame, straight after the camera moves, so it never lags the scene, and the
+ * HUD strip, which an edge arrow keeps below.
+ */
+export const targetMarker: { current: HTMLElement | null; hud: HTMLElement | null } = {
+  current: null,
+  hud: null,
+}
