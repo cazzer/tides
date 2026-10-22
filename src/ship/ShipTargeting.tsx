@@ -108,7 +108,11 @@ export function ShipTargeting() {
     })
 
     const { width, height, hudBottom } = targetMarker
-    if (width === 0 || height === 0) return
+    // Not laid out yet: nothing can be placed, so the brackets stay hidden.
+    if (width === 0 || height === 0) {
+      if (targetMarker.current) targetMarker.current.hidden = true
+      return
+    }
     for (let i = 0; i < bodies.length; i++) {
       projectBody(bodies[i], camera, width, height, screen[i])
     }

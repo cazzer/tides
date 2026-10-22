@@ -24,6 +24,7 @@ import {
   wellFactor,
   type Body,
 } from './flight'
+import { IMPACT_MIN_SPEED } from './impact'
 
 /**
  * [TUNE] Unlocked, a body counts as "ahead" within this angle of the
@@ -55,11 +56,27 @@ export const AHEAD_MIN_SPEED = 0.05 * V_NORMAL
 export const FAST_WINDOW_S = 10
 
 /**
- * Speed over the cap, as a share of it, that reads as overshooting; the
- * state clears at OVER_OFF. "Too fast" predicts reaching OVER_ON.
+ * Speed over the cap, as a share of it, that reads as overshooting: the
+ * share that hits the surface hard (impact.ts IMPACT_MIN_SPEED at the
+ * V_NORMAL floor), so a warning means a crash. Full throttle at Earth or
+ * Venus peaks at ~1.1× the cap and still lands gently; that is not one.
+ * "Too fast" predicts reaching OVER_ON.
  */
-export const OVER_ON = 1.05
-export const OVER_OFF = 1
+export const OVER_ON = IMPACT_MIN_SPEED / V_NORMAL
+/**
+ * Overshooting clears once the speed is back down to about the cap. Just
+ * above 1, not under it: Flight Assist settles at throttle · cap, exactly
+ * the cap at full throttle, so a threshold under 1 would never clear.
+ */
+export const OVER_OFF = 1.02
+/** "Too fast" clears once the predicted peak is this far under OVER_ON. */
+export const FAST_OFF = OVER_ON - 0.1
+
+/**
+ * A safe-arrival throttle this close to full reads as full: the tick at the
+ * end of the bar would only be noise.
+ */
+export const SAFE_SHARE_FULL = 0.95
 
 /**
  * - over: above the cap now, so the well can't stop the ship (overshooting).
@@ -130,10 +147,10 @@ const safeShares = new Map<number, number>()
 
 /**
  * The safe-arrival throttle for a body of wellFactor `factor`: the highest
- * Flight Assist throttle that rides its well down without going over the
- * cap (peakShare ≤ OVER_ON) from its edge. Above it, unlocked, the ship
- * overshoots. ~0.65 at the Moon, ~0.8 at Mars, 1 for Venus, Earth and
- * heavier. The HUD's throttle bar marks it.
+ * Flight Assist throttle that rides its well down without overshooting
+ * (peakShare ≤ OVER_ON) from its edge; 1 from SAFE_SHARE_FULL up. Above it,
+ * unlocked, the ship overshoots. ~0.72 at the Moon, ~0.85 at Mercury, ~0.92
+ * at Mars, 1 for Venus, Earth and heavier. The HUD's throttle bar marks it.
  */
 export function safeShare(factor: number): number {
   const known = safeShares.get(factor)
@@ -150,7 +167,7 @@ export function safeShare(factor: number): number {
       if (over(mid)) hi = mid
       else lo = mid
     }
-    result = lo
+    result = lo >= SAFE_SHARE_FULL ? 1 : lo
   }
   safeShares.set(factor, result)
   return result
@@ -210,7 +227,7 @@ export function approachStatus(a: ApproachInput, previous: ApproachStatus | null
   // at the well's edge if it is still outside.
   const subjectCap = THREE.MathUtils.clamp(a.gap / T, V_NORMAL, V_TOP)
   const peak = peakShare(a.factor, a.gap, a.closing / subjectCap, a.throttle, a.flightAssist)
-  return peak > (previous === 'fast' ? OVER_OFF : OVER_ON) ? 'fast' : 'closing'
+  return peak > (previous === 'fast' ? FAST_OFF : OVER_ON) ? 'fast' : 'closing'
 }
 
 /** What ShipTargeting hands the HUD each frame. */

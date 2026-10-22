@@ -15,6 +15,7 @@ import {
   AHEAD_CONE,
   FAST_WINDOW_S,
   OVER_ON,
+  SAFE_SHARE_FULL,
   approachEta,
   approachStatus,
   approachSubject,
@@ -117,10 +118,12 @@ describe('safeShare', () => {
     const moon = safeShare(wellFactor(BODY_MASS_KG.moon))
     const mars = safeShare(wellFactor(BODY_MASS_KG.mars))
     expect(moon).toBeGreaterThan(0.6)
-    expect(moon).toBeLessThan(0.72)
+    expect(moon).toBeLessThan(0.8)
     expect(mars).toBeGreaterThan(moon)
-    expect(mars).toBeLessThan(0.9)
-    for (const key of ['jupiter', 'saturn', 'sun'] as const) {
+    expect(mars).toBeLessThan(SAFE_SHARE_FULL)
+    // Earth and Venus peak at ~1.1× the cap at full throttle and land
+    // gently: no tick, no warning.
+    for (const key of ['venus', 'earth', 'jupiter', 'saturn', 'sun'] as const) {
       expect(safeShare(wellFactor(BODY_MASS_KG[key]))).toBe(1)
     }
   })
@@ -191,11 +194,13 @@ describe('approachStatus', () => {
   }
 
   test('over the cap is overshooting, with hysteresis, even when locked', () => {
-    expect(approachStatus({ ...base, speed: 21.5 }, null)).toBe('over')
-    expect(approachStatus({ ...base, speed: 21.5, locked: true }, null)).toBe('over')
-    expect(approachStatus({ ...base, speed: 20.5 }, null)).not.toBe('over')
-    expect(approachStatus({ ...base, speed: 20.5 }, 'over')).toBe('over')
-    expect(approachStatus({ ...base, speed: 19.9 }, 'over')).not.toBe('over')
+    expect(approachStatus({ ...base, speed: 31 }, null)).toBe('over')
+    expect(approachStatus({ ...base, speed: 31, locked: true }, null)).toBe('over')
+    // Up to 1.5× the cap still lands gently: not a warning.
+    expect(approachStatus({ ...base, speed: 29 }, null)).not.toBe('over')
+    expect(approachStatus({ ...base, speed: 29 }, 'over')).toBe('over')
+    // Settled back at the cap at full throttle: clears rather than latching.
+    expect(approachStatus({ ...base, speed: 20, throttle: 1 }, 'over')).not.toBe('over')
   })
 
   test('open when not closing; no warning far outside the well', () => {

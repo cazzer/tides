@@ -145,6 +145,18 @@ export function ShipHud() {
     let warningShown: string | null = null
     let impactsSeen = shipImpacts.count
     let flashAt = -Infinity
+    // A live region speaks only when its text changes, so the text is
+    // cleared first and set a frame later: a second "Impact" is spoken too.
+    let announceFrame = 0
+    const announce = (text: string) => {
+      const element = r.announcer
+      if (!element) return
+      cancelAnimationFrame(announceFrame)
+      element.textContent = ''
+      announceFrame = requestAnimationFrame(() => {
+        element.textContent = text
+      })
+    }
 
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick)
@@ -194,7 +206,7 @@ export function ShipHud() {
             duration: IMPACT_FLASH_MS,
             easing: 'ease-out',
           })
-          set(r.announcer, 'Impact')
+          announce('Impact')
         }
       }
 
@@ -216,7 +228,7 @@ export function ShipHud() {
       if (wide !== wideShown) {
         // Nothing to announce on the first pass, as for the target.
         if (wideShown !== undefined) {
-          set(r.announcer, wide ? 'Turn rate reduced at high speed' : 'Full turn rate')
+          announce(wide ? 'Turn rate reduced at high speed' : 'Full turn rate')
         }
         wideShown = wide
         r.bar?.toggleAttribute('data-wide-turn', wide)
@@ -235,7 +247,7 @@ export function ShipHud() {
       if (target !== targetShown) {
         // An announcement on the first pass would only repeat the default.
         if (targetShown !== undefined) {
-          set(r.announcer, target ? `Target locked: ${bodyName(target)}` : 'Target cleared')
+          announce(target ? `Target locked: ${bodyName(target)}` : 'Target cleared')
         }
         targetShown = target
         set(r.markerLabel, target ? bodyName(target) : '')
@@ -266,12 +278,15 @@ export function ShipHud() {
       // Each warning is announced once on the way in.
       const warning = a.key != null ? approachAnnouncement(a.status, a.key) : null
       if (warning !== warningShown) {
-        if (warning) set(r.announcer, warning)
+        if (warning) announce(warning)
         warningShown = warning
       }
     }
     frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frame)
+    return () => {
+      cancelAnimationFrame(frame)
+      cancelAnimationFrame(announceFrame)
+    }
   }, [])
 
   // The marker's frame loop needs the view's size and the strip's bottom

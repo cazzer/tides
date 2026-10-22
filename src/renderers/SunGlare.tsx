@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
+import { useThree } from '@react-three/fiber'
 import {
   GLARE_CORE_MIN_PX,
   GLARE_DEPTH_SHARE,
   GLARE_FADE_PX,
   GLARE_HALO_MAX_PX,
   GLARE_HALO_SCALE,
+  GLARE_MIN_VIEW_PX,
   GLARE_PEAK,
   GLARE_REFERENCE_DISTANCE,
   GLARE_STRENGTH,
@@ -33,9 +35,15 @@ const vertexShader = /* glsl */ `
     vCore = 1.0;
     vHalo = 1.0;
     vAlpha = 0.0;
-    // At or behind the camera plane, or inside the Sun: zero area, outside
-    // the clip volume. Written so NaN collapses too.
-    if (isOrthographic || !(c.z < -1e-6 * d) || !(d > uRadius)) {
+    // At or behind the camera plane, inside the Sun, or no viewport size
+    // yet (px offsets over a 1 px view would span the screen): zero area,
+    // outside the clip volume. Written so NaN collapses too.
+    if (
+      isOrthographic ||
+      !(uViewport.y >= ${glsl(GLARE_MIN_VIEW_PX)}) ||
+      !(c.z < -1e-6 * d) ||
+      !(d > uRadius)
+    ) {
       gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
       return;
     }
@@ -84,6 +92,15 @@ const fragmentShader = /* glsl */ `
 
 const viewport = new THREE.Vector4()
 
+// The View's live viewport, in CSS px, into the material's uniform; module
+// level so the render hook doesn't mutate a memoised value in place.
+function syncViewport(material: THREE.ShaderMaterial, renderer: THREE.WebGLRenderer): void {
+  renderer.getCurrentViewport(viewport)
+  const ratio = renderer.getPixelRatio()
+  const size = material.uniforms.uViewport.value as THREE.Vector2
+  size.set(viewport.z / ratio, viewport.w / ratio)
+}
+
 /**
  * The Sun as a bright point from afar (tides-2hv.12): a pixel-sized quad on
  * its centre that stays visible when the disc is under a pixel, fading out
@@ -91,6 +108,7 @@ const viewport = new THREE.Vector4()
  * origin is the Sun's centre. See glare-geometry.ts.
  */
 export function SunGlare({ radius }: { radius: number }) {
+  const get = useThree((s) => s.get)
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -102,29 +120,24 @@ export function SunGlare({ radius }: { radius: number }) {
         depthTest: true,
         uniforms: {
           uRadius: { value: radius },
-          uViewport: { value: new THREE.Vector2(1, 1) },
+          // The canvas size until the first render reports the View's.
+          uViewport: { value: new THREE.Vector2(get().size.width, get().size.height) },
         },
       }),
-    [radius]
+    [radius, get]
   )
   useEffect(() => () => material.dispose(), [material])
 
-  const mesh = useRef<THREE.Mesh>(null)
-  // At render time, with the viewport the View is drawing into.
-  useEffect(() => {
-    const current = mesh.current
-    if (!current) return
-    current.onBeforeRender = (renderer) => {
-      renderer.getCurrentViewport(viewport)
-      const ratio = renderer.getPixelRatio()
-      const size = material.uniforms.uViewport.value as THREE.Vector2
-      size.set(viewport.z / ratio, viewport.w / ratio)
-    }
-  }, [material])
+  // At render time, with the viewport the View is drawing into. A prop, so
+  // it is in place for the very first frame.
+  const onBeforeRender = useCallback(
+    (renderer: THREE.WebGLRenderer) => syncViewport(material, renderer),
+    [material]
+  )
 
   return (
     <mesh
-      ref={mesh}
+      onBeforeRender={onBeforeRender}
       frustumCulled={false}
       raycast={() => null}
       material={material}

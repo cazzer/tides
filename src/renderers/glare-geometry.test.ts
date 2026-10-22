@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   GLARE_CORE_MIN_PX,
   GLARE_HALO_MAX_PX,
+  GLARE_MIN_VIEW_PX,
   GLARE_PEAK,
   GLARE_STRENGTH,
   glareQuad,
@@ -91,5 +92,12 @@ describe('glareQuad', () => {
     expect(glareQuad([0, 0, 0], R, P00, P11, HEIGHT)).toBeNull()
     expect(glareQuad(sunAt(0, 1000), R, P00, P11, HEIGHT, true)).toBeNull()
     expect(glareQuad([NaN, 0, -1000], R, P00, P11, HEIGHT)).toBeNull()
+  })
+
+  it('collapses before the view has a size, rather than spanning the screen', () => {
+    expect(glareQuad(sunAt(0, 1000), R, P00, P11, 1)).toBeNull()
+    expect(glareQuad(sunAt(0, 1000), R, P00, P11, 0)).toBeNull()
+    expect(glareQuad(sunAt(0, 1000), R, P00, P11, NaN)).toBeNull()
+    expect(glareQuad(sunAt(0, 1000), R, P00, P11, GLARE_MIN_VIEW_PX)).not.toBeNull()
   })
 })

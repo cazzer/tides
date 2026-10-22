@@ -44,6 +44,13 @@ export const GLARE_PEAK = 0.9
  */
 export const GLARE_DEPTH_SHARE = 0.5
 
+/**
+ * Collapsed on a view shorter than this, px: before the View's size is
+ * known the shader would offset px sizes over a 1 px viewport, a quad as
+ * big as the screen.
+ */
+export const GLARE_MIN_VIEW_PX = 1.5
+
 export interface GlareQuad {
   /** The view-space point the quad is centred on. */
   point: [number, number, number]
@@ -62,9 +69,9 @@ export interface GlareQuad {
  * the origin looking down −z), under a projection whose x and y scales are
  * `p00` and `p11` (projectionMatrix elements [0][0] and [1][1]), on a view
  * `heightPx` CSS px tall; or null when the shader collapses it: an
- * orthographic view (the system view has its own Sun), the Sun's centre at
- * or behind the camera plane, the camera inside the Sun, or no strength
- * left because the disc is big.
+ * orthographic view (the system view has its own Sun), no view size yet
+ * (GLARE_MIN_VIEW_PX), the Sun's centre at or behind the camera plane, the
+ * camera inside the Sun, or no strength left because the disc is big.
  */
 export function glareQuad(
   c: Vec3,
@@ -76,7 +83,14 @@ export function glareQuad(
 ): GlareQuad | null {
   const d = Math.hypot(c[0], c[1], c[2])
   // Written so NaN collapses too.
-  if (orthographic || !(c[2] < -1e-6 * d) || !(d > radius)) return null
+  if (
+    orthographic ||
+    !(heightPx >= GLARE_MIN_VIEW_PX) ||
+    !(c[2] < -1e-6 * d) ||
+    !(d > radius)
+  ) {
+    return null
+  }
   const tanAlpha = radius / Math.sqrt(d * d - radius * radius)
   const discPx = tanAlpha * p11 * 0.5 * heightPx
   const alpha =

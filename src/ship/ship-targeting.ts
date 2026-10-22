@@ -7,6 +7,7 @@
 import * as THREE from 'three'
 import type { Body as FlightBody } from './flight'
 import { isMoonKey } from '../moons/moon-keys'
+import { MOONS } from '../moons/moons'
 
 export interface ScreenBody {
   key: string
@@ -73,10 +74,18 @@ export function isMoonBody(key: string): boolean {
   return key === 'moon' || isMoonKey(key)
 }
 
+/** The planet a moon orbits, or null for anything else. */
+export function moonParent(key: string): string | null {
+  if (key === 'moon') return 'earth'
+  return isMoonKey(key) ? MOONS[key].parent : null
+}
+
 /**
- * A moon smaller than this on screen, px radius, can't be picked unless it
- * is already the target: from afar Io sits inside Jupiter's dot, and a tap
- * meant for the planet would lock the moon (tides-2hv.12).
+ * A moon smaller than this on screen, px radius, can't be picked while its
+ * planet is under the tap too, unless it is already the target: from afar
+ * Io sits inside Jupiter's dot, and a tap meant for the planet would lock
+ * the moon (tides-2hv.12). Off on its own, a sub-pixel moon is still fair
+ * game.
  */
 export const PICK_MOON_MIN_PX = 1.5
 
@@ -90,7 +99,8 @@ export const PICK_MIN_RADIUS = 24
  * max(PICK_MIN_RADIUS, radius + PICK_SLOP) of a body's centre; of several,
  * the one whose disc edge is nearest wins, and among discs the tap is inside,
  * the nearest to the camera (it is drawn in front). A moon under
- * PICK_MOON_MIN_PX is skipped unless it is `current`, the target already.
+ * PICK_MOON_MIN_PX is skipped when its planet is also hit, unless it is
+ * `current`, the target already.
  */
 export function pickBody(
   bodies: readonly ScreenBody[],
@@ -98,13 +108,18 @@ export function pickBody(
   y: number,
   current: string | null = null
 ): string | null {
+  const hits = (body: ScreenBody) =>
+    body.inFront &&
+    Math.hypot(body.x - x, body.y - y) <= Math.max(PICK_MIN_RADIUS, body.radiusPx + PICK_SLOP)
   let best: ScreenBody | null = null
   let bestEdge = Infinity
   for (const body of bodies) {
-    if (!body.inFront) continue
-    if (body.key !== current && isMoonBody(body.key) && body.radiusPx < PICK_MOON_MIN_PX) continue
+    if (!hits(body)) continue
+    if (body.key !== current && body.radiusPx < PICK_MOON_MIN_PX) {
+      const parent = moonParent(body.key)
+      if (parent != null && bodies.some((b) => b.key === parent && hits(b))) continue
+    }
     const d = Math.hypot(body.x - x, body.y - y)
-    if (d > Math.max(PICK_MIN_RADIUS, body.radiusPx + PICK_SLOP)) continue
     const edge = Math.max(0, d - body.radiusPx)
     if (
       edge < bestEdge ||
