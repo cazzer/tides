@@ -194,6 +194,40 @@ export function sunlightTint(mu: number, heightKm: number): Vec3 {
   return t.map((c) => c / norm) as Vec3
 }
 
+// Fine detail where the cloud map is magnified (tides-01v.2): octaves of noise
+// from DETAIL_BASE_TEXELS cloud texels down, each halving the last, each
+// faded out as it shrinks toward a few screen pixels so none of it sparkles.
+// From further out than the map's own resolution, no octave survives.
+
+/** The coarsest octave's wavelength, in cloud-map texels. */
+export const DETAIL_BASE_TEXELS = 2
+/** An octave is whole down to 1/start pixels a wave and gone by 1/end. */
+export const DETAIL_FADE_START = 1 / 6
+export const DETAIL_FADE_END = 1 / 3
+/** Octaves for the relief march; the low-quality flat shell takes fewer. */
+export const DETAIL_OCTAVES = 6
+export const DETAIL_OCTAVES_FLAT = 3
+
+/** How much of an octave of `wavelength` shows at a pixel `footprint` wide
+ * (both scene units), 0..1. */
+export function detailOctaveWeight(footprint: number, wavelength: number): number {
+  return 1 - smoothstep(DETAIL_FADE_START, DETAIL_FADE_END, footprint / wavelength)
+}
+
+/** The weight of each octave that shows, coarsest first, for a cloud map of
+ * `texel` scene units seen at `footprint`. */
+export function detailOctaveWeights(footprint: number, texel: number, octaves: number): number[] {
+  const weights: number[] = []
+  let wavelength = DETAIL_BASE_TEXELS * texel
+  for (let k = 0; k < octaves; k++) {
+    const weight = detailOctaveWeight(footprint, wavelength)
+    if (weight <= 0) break
+    weights.push(weight)
+    wavelength /= 2
+  }
+  return weights
+}
+
 /** The static clouds drift east at this many radians per frame. */
 export const STATIC_DRIFT_PER_FRAME = 0.0001
 

@@ -7,6 +7,10 @@ import {
   CLOUD_LAYER_TOP,
   CLOUD_UNITS_PER_KM,
   cloudColumn,
+  DETAIL_OCTAVES,
+  DETAIL_OCTAVES_FLAT,
+  detailOctaveWeight,
+  detailOctaveWeights,
   cloudShape,
   cloudTopKm,
   defaultTopKm,
@@ -225,4 +229,40 @@ describe('sunlight on cloud tops', () => {
 
 it('exaggerates cloud tops less than the terrain', () => {
   expect(CLOUD_UNITS_PER_KM).toBeLessThan(TERRAIN_DISPLACEMENT / 6.5)
+})
+
+describe('cloud detail octaves', () => {
+  // The static map's texel on Earth's 2.95-unit sphere.
+  const texel = (2 * Math.PI * 2.951) / 2048
+
+  it('adds none until the map is magnified past 1.5 px a texel', () => {
+    expect(detailOctaveWeights(texel * 10, texel, DETAIL_OCTAVES)).toEqual([])
+    expect(detailOctaveWeights(texel / 1.5, texel, DETAIL_OCTAVES)).toEqual([])
+    expect(detailOctaveWeights(texel / 2, texel, DETAIL_OCTAVES).length).toBeGreaterThan(0)
+  })
+
+  it('fills down to a few pixels at the ship stop, capped on the flat shell', () => {
+    // The stop on a retina screen: ~53 px a cloud texel (tides-p0p).
+    const footprint = texel / 53
+    const relief = detailOctaveWeights(footprint, texel, DETAIL_OCTAVES)
+    expect(relief).toHaveLength(DETAIL_OCTAVES)
+    expect(relief[0]).toBe(1)
+    expect(detailOctaveWeights(footprint, texel, DETAIL_OCTAVES_FLAT)).toHaveLength(
+      DETAIL_OCTAVES_FLAT
+    )
+  })
+
+  it('never draws a wave under three pixels', () => {
+    for (const pixels of [3, 2, 1, 0.5]) expect(detailOctaveWeight(1, pixels)).toBe(0)
+    expect(detailOctaveWeight(1, 6)).toBe(1)
+  })
+
+  it('fades finer octaves first', () => {
+    for (const footprint of [texel / 4, texel / 20, texel / 100]) {
+      const weights = detailOctaveWeights(footprint, texel, 10)
+      for (let k = 1; k < weights.length; k++) {
+        expect(weights[k]).toBeLessThanOrEqual(weights[k - 1])
+      }
+    }
+  })
 })
