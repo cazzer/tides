@@ -148,19 +148,85 @@ export function useWantsLimbSphere(key: string | null, radius: number, segments:
   return useSyncExternalStore(subscribeLimbBody, () => wantsLimbSphere(key, radius, [width, height]))
 }
 
+// One LIMB_SEGMENTS sphere's topology per ship session (tides-01v.18): every
+// limb sphere shares its index, uvs and normals, which three then uploads
+// once (~5.7 MB), and owns only its positions (~1.6 MB), the unit sphere's,
+// scaled: ~1 ms, where a build of its own takes ~5-13 ms. The positions stay
+// in the body's own units, so no shader, shell radius or raycast changes.
+interface LimbTopology {
+  index: THREE.BufferAttribute
+  normal: THREE.BufferAttribute
+  uv: THREE.BufferAttribute
+  unitPositions: ArrayLike<number>
+}
+let topology: LimbTopology | null = null
+
+function limbTopology(): LimbTopology {
+  if (topology) return topology
+  const unit = new THREE.SphereGeometry(1, ...LIMB_SEGMENTS)
+  topology = {
+    index: unit.index!,
+    normal: unit.getAttribute('normal') as THREE.BufferAttribute,
+    uv: unit.getAttribute('uv') as THREE.BufferAttribute,
+    unitPositions: unit.getAttribute('position').array,
+  }
+  return topology
+}
+
+function attachTopology(sphere: THREE.BufferGeometry): THREE.BufferGeometry {
+  const { index, normal, uv } = limbTopology()
+  sphere.setIndex(index)
+  sphere.setAttribute('normal', normal)
+  sphere.setAttribute('uv', uv)
+  return sphere
+}
+
+function buildLimbSphere(radius: number): THREE.BufferGeometry {
+  const { unitPositions } = limbTopology()
+  const positions = new Float32Array(unitPositions.length)
+  for (let i = 0; i < positions.length; i++) positions[i] = unitPositions[i] * radius
+  const sphere = new THREE.BufferGeometry()
+  sphere.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  return attachTopology(sphere)
+}
+
+// three frees every buffer a geometry holds when it is disposed, shared or
+// not, but only for a geometry it has drawn (WebGLGeometries); a sphere still
+// drawn would then keep pointing at the freed topology. So a sphere leaving
+// while another shown one stays lets go of the topology first, and that one
+// frees it later. With no other shown, the leaving one takes it along: no
+// other has been drawn, and one drawn later uploads it afresh.
+function disposeOwnPositions(sphere: THREE.BufferGeometry) {
+  sphere.setIndex(null)
+  sphere.deleteAttribute('normal')
+  sphere.deleteAttribute('uv')
+  sphere.dispose()
+}
+
 // The limb spheres by radius, kept so that the nearest body flipping between
 // a planet and a close moon swaps a prop instead of rebuilding and uploading
 // ~130k vertices. Meshes retain the ones they show (useLimbSphere), and only
 // unretained ones beyond LIMB_CACHE_SIZE are disposed, oldest first, so a
 // sphere on screen is never disposed. ShipController drops them all on exit.
 const LIMB_CACHE_SIZE = 4
-const limbSpheres = new Map<number, { sphere: THREE.SphereGeometry; users: number }>()
+interface LimbEntry {
+  sphere: THREE.BufferGeometry
+  users: number
+  /** Ever retained, so possibly drawn. */
+  shown: boolean
+}
+const limbSpheres = new Map<number, LimbEntry>()
 
-/** The shared LIMB_SEGMENTS sphere of `radius`, built now if need be. Never dispose it. */
-export function limbSphere(radius: number): THREE.SphereGeometry {
+/**
+ * The shared LIMB_SEGMENTS sphere of `radius`, built now if need be. Never
+ * dispose it, and retain it (retainLimbSphere) while it may be drawn: an
+ * unretained one may be trimmed, which leaves it without its topology.
+ */
+export function limbSphere(radius: number): THREE.BufferGeometry {
   const entry = limbSpheres.get(radius) ?? {
-    sphere: new THREE.SphereGeometry(radius, ...LIMB_SEGMENTS),
+    sphere: buildLimbSphere(radius),
     users: 0,
+    shown: false,
   }
   // Re-inserted, so the map runs from least to most recently used.
   limbSpheres.delete(radius)
@@ -169,7 +235,7 @@ export function limbSphere(radius: number): THREE.SphereGeometry {
 }
 
 /** The limb sphere of `radius` if it is built, else null; builds nothing. */
-export function builtLimbSphere(radius: number): THREE.SphereGeometry | null {
+export function builtLimbSphere(radius: number): THREE.BufferGeometry | null {
   return limbSpheres.get(radius)?.sphere ?? null
 }
 
@@ -254,13 +320,15 @@ export function requestLimbSphere(radius: number): () => void {
 }
 
 /** Marks `sphere` (from limbSphere) as on screen until the returned release. */
-export function retainLimbSphere(radius: number, sphere: THREE.SphereGeometry): () => void {
+export function retainLimbSphere(radius: number, sphere: THREE.BufferGeometry): () => void {
   const found = limbSpheres.get(radius)
-  const retained = found?.sphere === sphere ? found : { sphere, users: 0 }
+  // One already disposed comes back with the topology it let go of.
+  const retained = found?.sphere === sphere ? found : { sphere: attachTopology(sphere), users: 0, shown: false }
   // Re-inserted as most recently used, as limbSphere does.
   limbSpheres.delete(radius)
   limbSpheres.set(radius, retained)
   retained.users++
+  retained.shown = true
   return () => {
     retained.users--
     trimLimbSpheres()
@@ -271,18 +339,25 @@ function trimLimbSpheres() {
   for (const [radius, entry] of limbSpheres) {
     if (limbSpheres.size <= LIMB_CACHE_SIZE) return
     if (entry.users > 0) continue
-    entry.sphere.dispose()
+    const othersShown = [...limbSpheres.values()].some((other) => other !== entry && other.shown)
+    if (othersShown) disposeOwnPositions(entry.sphere)
+    else entry.sphere.dispose()
     limbSpheres.delete(radius)
   }
 }
 
-/** Disposes every limb sphere and drops queued builds, for when ship mode ends. */
+/**
+ * Disposes every limb sphere and their topology, and drops queued builds,
+ * for when ship mode ends. Each takes the topology along, so whichever the
+ * renderer drew frees it.
+ */
 export function disposeLimbSpheres(): void {
   buildHandle?.()
   buildHandle = null
   buildQueue.clear()
   limbSpheres.forEach(({ sphere }) => sphere.dispose())
   limbSpheres.clear()
+  topology = null
 }
 
 /**
@@ -290,7 +365,7 @@ export function disposeLimbSpheres(): void {
  * (requestLimbSphere) and retained while shown; else null, so callers keep
  * their own sphere until it is ready.
  */
-export function useLimbSphere(radius: number, wanted: boolean): THREE.SphereGeometry | null {
+export function useLimbSphere(radius: number, wanted: boolean): THREE.BufferGeometry | null {
   const sphere = useSyncExternalStore(subscribeLimbBody, () => (wanted ? builtLimbSphere(radius) : null))
   useEffect(() => (wanted && !sphere ? requestLimbSphere(radius) : undefined), [radius, sphere, wanted])
   useEffect(() => (sphere ? retainLimbSphere(radius, sphere) : undefined), [radius, sphere])
@@ -305,7 +380,7 @@ export function useBodySphere(
   key: string,
   radius: number,
   [width, height]: SphereSegments
-): THREE.SphereGeometry {
+): THREE.BufferGeometry {
   const base = useMemo(() => new THREE.SphereGeometry(radius, width, height), [radius, width, height])
   useEffect(() => () => base.dispose(), [base])
   return useLimbSphere(radius, useWantsLimbSphere(key, radius, [width, height])) ?? base
