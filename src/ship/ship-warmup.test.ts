@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import * as THREE from 'three'
-import { coldWork } from './ship-warmup'
+import { coldWork, createWarmed } from './ship-warmup'
 
 function loaded(): THREE.Texture {
   const texture = new THREE.Texture()
@@ -20,7 +20,7 @@ describe('coldWork', () => {
     const a = new THREE.Mesh(undefined, basic)
     const b = new THREE.Mesh(undefined, [shader, basic])
     scene.add(a, b)
-    const warmed = new WeakSet<object>()
+    const warmed = createWarmed()
 
     expect(coldWork(scene, warmed, byMaterial)).toEqual([
       { texture: map },
@@ -28,6 +28,27 @@ describe('coldWork', () => {
       { texture: uniformMap },
       { object: b },
     ])
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([])
+  })
+
+  test('lists an object once however many of its materials are cold', () => {
+    const mesh = new THREE.Mesh(undefined, [new THREE.MeshBasicMaterial(), new THREE.MeshBasicMaterial()])
+    const scene = new THREE.Scene().add(mesh)
+
+    expect(coldWork(scene, createWarmed(), byMaterial)).toEqual([{ object: mesh }])
+  })
+
+  test('warms a material again once it changes, as when its map arrives', () => {
+    const material = new THREE.MeshBasicMaterial()
+    const mesh = new THREE.Mesh(undefined, material)
+    const scene = new THREE.Scene().add(mesh)
+    const warmed = createWarmed()
+
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: mesh }])
+    const map = loaded()
+    material.map = map
+    material.needsUpdate = true
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ texture: map }, { object: mesh }])
     expect(coldWork(scene, warmed, byMaterial)).toEqual([])
   })
 
@@ -42,7 +63,7 @@ describe('coldWork', () => {
     const hidden = new THREE.Mesh(undefined, new THREE.MeshBasicMaterial({ map: hiddenMap }))
     hidden.visible = false
     scene.add(shown, hidden)
-    const warmed = new WeakSet<object>()
+    const warmed = createWarmed()
 
     expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: shown }])
     pending.needsUpdate = true
@@ -53,7 +74,7 @@ describe('coldWork', () => {
     const material = new THREE.MeshBasicMaterial()
     const mesh = new THREE.Mesh(undefined, material)
     const scene = new THREE.Scene().add(mesh)
-    const warmed = new WeakSet<object>()
+    const warmed = createWarmed()
     let record = {}
 
     expect(coldWork(scene, warmed, () => record)).toEqual([{ object: mesh }])

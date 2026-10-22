@@ -19,31 +19,46 @@ function texturesOf(material: THREE.Material): THREE.Texture[] {
   )
 }
 
+/** What has been warmed: textures once, materials at a version. */
+export interface Warmed {
+  textures: WeakSet<THREE.Texture>
+  /** Keyed by materialKey (coldWork). */
+  materials: WeakMap<object, number>
+}
+
+export function createWarmed(): Warmed {
+  return { textures: new WeakSet(), materials: new WeakMap() }
+}
+
 /**
  * The work three would do on first drawing `scene`'s visible objects that
  * isn't in `warmed` yet, adding it there: each loaded texture once (render
- * targets' textures are uploaded by drawing to them), and each material once
- * per `materialKey`. The key is three's per-renderer record of the material,
- * which a dispose replaces, since a disposed material drops its programs.
+ * targets' textures are uploaded by drawing to them), and each object whose
+ * material is new or has changed since (a new map, say, can change its
+ * program). Materials are keyed by `materialKey`: three's per-renderer record
+ * of the material, which a dispose replaces, since a disposed material drops
+ * its programs.
  */
 export function coldWork(
   scene: THREE.Object3D,
-  warmed: WeakSet<object>,
+  warmed: Warmed,
   materialKey: (material: THREE.Material) => object
 ): Warmup[] {
   const work: Warmup[] = []
   scene.traverseVisible((object) => {
+    let cold = false
     for (const material of materialsOf(object)) {
       for (const texture of texturesOf(material)) {
-        if (texture.version === 0 || texture.isRenderTargetTexture || warmed.has(texture)) continue
-        warmed.add(texture)
+        if (texture.version === 0 || texture.isRenderTargetTexture || warmed.textures.has(texture)) continue
+        warmed.textures.add(texture)
         work.push({ texture })
       }
       const key = materialKey(material)
-      if (warmed.has(key)) continue
-      warmed.add(key)
-      work.push({ object })
+      if (warmed.materials.get(key) === material.version) continue
+      warmed.materials.set(key, material.version)
+      cold = true
     }
+    if (cold) work.push({ object })
   })
   return work
 }
