@@ -8,6 +8,7 @@ import sunFragment from '../shaders/sun/fragment.frag'
 import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
 import { CubeCamera, meshBounds } from '@react-three/drei'
+import { CORONA_MAX_ANGLE } from './corona-geometry'
 
 // https://www.youtube.com/watch?v=3krH52AhPqk
 // ended at 1:04:24
@@ -52,6 +53,7 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
       uniforms: {
         time: { value: 0 },
         uRadius: { value: diameter },
+        uMaxAngle: { value: CORONA_MAX_ANGLE },
       },
     })
   }, [diameter])
