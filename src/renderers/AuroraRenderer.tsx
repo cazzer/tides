@@ -46,6 +46,8 @@ function ease(delta: number, seconds: number) {
 
 const noRaycast = () => null
 
+const LOW_QUALITY = isLowQuality()
+
 interface AuroraRendererProps {
   /** The Earth sphere's radius in scene units. */
   radius: number
@@ -53,7 +55,7 @@ interface AuroraRendererProps {
 
 export default function AuroraRenderer({ radius }: AuroraRendererProps) {
   const real = useStore((s) => s.weatherSource) === 'real'
-  const low = useMemo(isLowQuality, [])
+  const low = LOW_QUALITY
   const kp = useRef(DEFAULT_KP)
   const tableKp = useRef(Number.NaN)
   /** The nowcast last seen, kept while its weight fades out. */

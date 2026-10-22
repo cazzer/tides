@@ -72,13 +72,16 @@ export function usePlanetTextures(
 // upload (three never flips an ImageBitmap), so the frame a moon's map
 // arrives in only uploads it (tides-2hv.18). Safari before 17 and Firefox
 // before 98 mishandle createImageBitmap's options, so they keep the image
-// path, as three's GLTFLoader does.
-const bitmapLoader = canFlipBitmaps() ? new THREE.ImageBitmapLoader(manager) : null
+// path, as three's GLTFLoader does. The bitmaps stay open: three
+// re-uploads from them after a lost context.
+const bitmapLoader =
+  typeof createImageBitmap !== 'undefined' && canFlipBitmaps(navigator.userAgent)
+    ? new THREE.ImageBitmapLoader(manager)
+    : null
 bitmapLoader?.setOptions({ imageOrientation: 'flipY', premultiplyAlpha: 'none' })
 
-function canFlipBitmaps(): boolean {
-  if (typeof createImageBitmap === 'undefined' || typeof navigator === 'undefined') return false
-  const ua = navigator.userAgent
+/** Whether this browser applies createImageBitmap's flip. */
+export function canFlipBitmaps(ua: string): boolean {
   if (/^((?!chrome|android).)*safari/i.test(ua)) return Number(ua.match(/Version\/(\d+)/)?.[1] ?? 0) >= 17
   const firefox = ua.match(/Firefox\/(\d+)/)
   return !firefox || Number(firefox[1]) >= 98

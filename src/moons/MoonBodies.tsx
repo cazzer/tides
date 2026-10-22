@@ -113,7 +113,8 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // Arrived maps upload one per frame (useFrame below), up front rather than
   // when each moon first comes into view, so maps that arrive or come into
   // view together never stack their uploads into one long frame
-  // (tides-2hv.18).
+  // (tides-2hv.18). Every moon's map is resident once loaded: 154 MB on
+  // desktop, 53 MB at 1k on phones.
   const arrived = useRef<{ material: THREE.ShaderMaterial; map: THREE.Texture }[]>([])
   const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
   useEffect(() => {
