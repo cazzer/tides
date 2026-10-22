@@ -4,8 +4,8 @@ import { useStore } from '../store'
 import { stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
-import { createShipBodies, updateShipBodies } from './ship-bodies'
-import { shipFar, shipNear, spawnPose } from './ship-session'
+import { createShipBodies, EARTH_SHELL_RADII, updateShipBodies } from './ship-bodies'
+import { shellGap, shipFar, shipNear, spawnPose } from './ship-session'
 import { disposeLimbSpheres, setLimbBody } from './limb-detail'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
@@ -21,6 +21,7 @@ const BODY_REFRESH_MS = 250
  */
 export function ShipController() {
   const bodies = useMemo(createShipBodies, [])
+  const earth = useMemo(() => bodies.find((body) => body.key === 'earth'), [bodies])
   const bodiesAt = useRef<number | null>(null)
   const ship = useRef<ShipState | null>(null)
 
@@ -50,7 +51,12 @@ export function ShipController() {
 
     camera.position.copy(state.position)
     camera.quaternion.copy(state.orientation)
-    const near = shipNear(shipTelemetry.nearest.surfaceDistance)
+    // Earth's shells stand off its ground, so the ground's gap alone would let
+    // the near plane cut them on the way down through them.
+    const near = shipNear(
+      shipTelemetry.nearest.surfaceDistance,
+      earth ? shellGap(state.position.distanceTo(earth.position), EARTH_SHELL_RADII) : Infinity
+    )
     // The Sun sits at the origin.
     const far = shipFar(state.position.length())
     if (camera.near !== near || camera.far !== far) {

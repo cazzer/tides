@@ -55,7 +55,11 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
       // A glow, not a surface: writing depth would hide labels behind it.
       depthWrite: false,
       // The Sun's near side hides the quad's middle, so only the limb glows.
+      // Strictly: from the ship's lowest stop the depth step at the Sun (~60
+      // units) dwarfs the quad's 2R push, so both land on one depth value and
+      // a tie must go to the Sun (tides-01v.8.1).
       depthTest: true,
+      depthFunc: THREE.LessDepth,
       uniforms: {
         time: { value: 0 },
         uRadius: { value: diameter },

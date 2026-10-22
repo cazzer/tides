@@ -9,7 +9,7 @@ import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN } from './flight'
-import { CLOUD_LAYER_TOP } from '../cloud-layer'
+import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
 import { shipNear } from './ship-session'
@@ -22,21 +22,29 @@ export const EARTH_RADIUS = sceneRadius(12742000)
 export const MOON_RADIUS = sceneRadius(3474800)
 
 /**
- * The outermost shell Earth draws: the cloud deck (over terrain displaced up
- * to TERRAIN_DISPLACEMENT), the atmosphere's glow and the aurora. Each is a
- * front-faced sphere, so from inside it is culled; inside the displaced
- * ground the whole planet vanishes (tides-3bl.7).
+ * The shells Earth draws over its ground: the cloud deck (over terrain
+ * displaced up to TERRAIN_DISPLACEMENT; the low-quality path's is flat and
+ * lower), the atmosphere's glow and the aurora. The ship camera's near plane
+ * keeps clear of them (ship-session.ts shellGap).
  */
-export const EARTH_SHELL_RADIUS = Math.max(
+export const EARTH_SHELL_RADII: readonly number[] = [
   EARTH_RADIUS + CLOUD_LAYER_TOP,
+  EARTH_RADIUS + CLOUD_FLAT_ALTITUDE,
   EARTH_RADIUS * ATMOSPHERE_OUTER,
-  EARTH_RADIUS * AURORA_SHELL_OUTER
-)
+  EARTH_RADIUS * AURORA_SHELL_OUTER,
+]
+
+/**
+ * The outermost shell Earth draws. Each is a front-faced sphere, so from
+ * inside it is culled; inside the displaced ground the whole planet vanishes
+ * (tides-3bl.7).
+ */
+export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
 
 /**
  * Where the ship stops above Earth: a near plane's depth (shipNear's
- * ceiling) beyond the outermost shell, so no shell is ever clipped by the
- * camera's near plane either. Earth still fills the view from there.
+ * ceiling) beyond the outermost shell. Earth still fills the view from
+ * there.
  */
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 

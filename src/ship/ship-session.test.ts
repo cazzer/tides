@@ -2,7 +2,14 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import type { CameraFocus, Layout, PanelKey } from '../store'
 import { COLLISION_MARGIN } from './flight'
-import { createShipBodies, updateShipBodies } from './ship-bodies'
+import {
+  createShipBodies,
+  EARTH_COLLISION_RADIUS,
+  EARTH_RADIUS,
+  EARTH_SHELL_RADII,
+  updateShipBodies,
+} from './ship-bodies'
+import { FOV_KICK } from './dust'
 import { Body } from 'astronomy-engine'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
 import {
@@ -12,8 +19,10 @@ import {
   narrowHalfFov,
   persistedView,
   SHIP_FAR,
+  SHIP_FOV,
   SHIP_STAR_RADIUS,
   SYSTEM_REACH,
+  shellGap,
   shipFar,
   shipNear,
   SPAWN_EARTH_SHARE,
@@ -223,8 +232,58 @@ describe('ship camera range', () => {
   // far plane barely matters, so far/near only needs a loose bound.
   it('bounds the near plane, keeping far/near within 1e6 in the system', () => {
     expect(shipNear(Infinity)).toBe(0.1)
-    expect(shipNear(-1)).toBe(0.002)
+    expect(shipNear(-1)).toBe(0.001)
     expect(SHIP_FAR / shipNear(Infinity)).toBeLessThanOrEqual(1e6)
+  })
+
+  // How far the near rectangle's corner is from the eye, per unit of near,
+  // at the widest the view gets: the speed kick's FOV on a 21:9 screen.
+  const tanHalf = Math.tan(((SHIP_FOV + FOV_KICK) / 2) * (Math.PI / 180))
+  const CORNER = Math.hypot(1, tanHalf, tanHalf * (21 / 9))
+
+  it("keeps the near rectangle above the ground at Earth's lowest stop", () => {
+    // tides-01v.8 stops the ship this far over the ground drawn under it.
+    for (const clearance of [0.003, 0.004]) {
+      expect(shipNear(clearance)).toBeCloseTo(0.4 * clearance, 12)
+      expect(shipNear(clearance) * CORNER).toBeLessThan(clearance)
+    }
+  })
+
+  it("keeps the near rectangle off Earth's shells on the way down through them", () => {
+    let cut = 0
+    for (let d = EARTH_RADIUS + 0.003; d <= EARTH_COLLISION_RADIUS; d += 1e-4) {
+      // The ground can be anywhere below: sea level is the furthest.
+      const shells = shellGap(d, EARTH_SHELL_RADII)
+      // At a shell the floor wins: a hole a near's width across, crossing it.
+      if (shells < shipNear(-1) * CORNER) continue
+      if (shipNear(d - EARTH_RADIUS, shells) * CORNER >= shells) cut++
+    }
+    expect(cut).toBe(0)
+  })
+
+  it("would cut Earth's atmosphere glow from between its shells going by the ground alone", () => {
+    // Between the atmosphere (1.06 R) and the aurora (1.07 R).
+    const d = EARTH_RADIUS * 1.065
+    const shells = shellGap(d, EARTH_SHELL_RADII)
+    expect(shipNear(d - EARTH_RADIUS)).toBeGreaterThan(shells)
+    expect(shipNear(d - EARTH_RADIUS, shells) * CORNER).toBeLessThan(shells)
+  })
+
+  it('measures the gap to the nearest shell from inside or out', () => {
+    expect(shellGap(1, [2, 4])).toBe(1)
+    expect(shellGap(3.5, [2, 4])).toBe(0.5)
+    expect(shellGap(5, [2, 4])).toBe(1)
+    expect(shellGap(5, [])).toBe(Infinity)
+  })
+
+  // The GPU clips in float32: z_clip = P[10]·z + P[14] against w = −z. Too
+  // small a near rounds the star sphere's z_clip past w and drops it.
+  it('keeps the star sphere inside the far plane in float32 at the lowest near', () => {
+    const camera = new THREE.PerspectiveCamera(SHIP_FOV, 16 / 10, shipNear(-1), SHIP_FAR)
+    const m = new Float32Array(camera.projectionMatrix.elements)
+    const z = Math.fround(-SHIP_STAR_RADIUS)
+    const clipZ = Math.fround(Math.fround(m[10] * z) + m[14])
+    expect(clipZ).toBeLessThan(-z)
   })
 
   // Neptune's furthest from the Sun at the flight scale, 1900–2100.
