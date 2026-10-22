@@ -21,6 +21,7 @@ import ViewMenu from './ViewMenu'
 import CompassButton from './CompassButton'
 import { CloudAttribution } from './CloudAttribution'
 import { PlanetAttribution } from './PlanetAttribution'
+import { GroundAttribution } from './GroundAttribution'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
 import { MAIN_ZOOM, mainViewRange } from './main-view'
 import { ShipView } from './ship/ShipView'
@@ -259,6 +260,7 @@ export default function App() {
         {single && !shipMode && mainPanel === 'top' && <CompassButton />}
         {weatherSource === 'real' && <CloudAttribution />}
         {showPlanets && <PlanetAttribution below={weatherSource === 'real'} />}
+        {shipMode && <GroundAttribution slot={(weatherSource === 'real' ? 1 : 0) + (showPlanets ? 1 : 0)} />}
       </div>
     </div>
   )

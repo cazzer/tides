@@ -6,9 +6,9 @@ import { isLatestStandIn, MODIS_FROM, utcDayKey, type CloudSource, type GibsSour
 import { useStore } from './store'
 import { useRealCloudSnapshot, type GeoTextureInfo } from './renderers/realCloudTextures'
 
-const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
+export const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
 // Wording requested by the GIBS documentation.
-const ACKNOWLEDGEMENT =
+export const GIBS_ACKNOWLEDGEMENT =
   "We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS)."
 
 type StoreState = ReturnType<typeof useStore.getState>
@@ -120,7 +120,7 @@ function CloudSourceText({ source, status, texture }: Described) {
         href={GIBS_URL}
         target="_blank"
         rel="noreferrer"
-        title={ACKNOWLEDGEMENT}
+        title={GIBS_ACKNOWLEDGEMENT}
         aria-describedby={acknowledgementId}
       >
         NASA GIBS/ESDIS
@@ -129,7 +129,7 @@ function CloudSourceText({ source, status, texture }: Described) {
         id={acknowledgementId}
         className="visually-hidden"
       >
-        {ACKNOWLEDGEMENT}
+        {GIBS_ACKNOWLEDGEMENT}
       </span>
       {` · ${what}${latest ? ' (latest)' : ''}`}
     </>

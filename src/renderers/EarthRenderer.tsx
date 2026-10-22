@@ -8,6 +8,7 @@ import { pickBlend } from '../cloud-frames'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer, type CloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
+import { useGibsPatch } from './gibsPatch'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
@@ -47,6 +48,7 @@ export default function EarthRenderer({
   useTexture.preload(textureSet.bump)
 
   const cloudRef = useRef<THREE.Mesh>(null)
+  const groundRef = useRef<THREE.Mesh>(null)
   const drift = useRef(0)
 
   // Load textures using imported paths
@@ -82,6 +84,8 @@ export default function EarthRenderer({
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   const groundSphere = useBodySphere('earth', diameter, [128, 128])
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
+  // Real imagery under the ship (tides-01v.7).
+  const gibsPatch = useGibsPatch(groundRef, diameter)
   const groundPatch = useMemo(
     () =>
       composePatches(
@@ -89,9 +93,10 @@ export default function EarthRenderer({
         clouds.groundPatch,
         nightLightsPatch(clouds.uniforms.uSunDir),
         poleSmoothingPatch(),
-        groundDetailPatch(textureSet.low)
+        groundDetailPatch(textureSet.low),
+        gibsPatch
       ),
-    [eclipseShadow, clouds, textureSet.low]
+    [eclipseShadow, clouds, textureSet.low, gibsPatch]
   )
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
@@ -141,6 +146,7 @@ export default function EarthRenderer({
     <group>
       {/* Land with topology - main Earth surface */}
       <mesh
+        ref={groundRef}
         geometry={groundSphere}
         raycast={meshBounds}
         onBeforeRender={() => {
