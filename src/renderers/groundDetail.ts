@@ -13,9 +13,13 @@
 // octaves it already resolves. Changing groundDetailTexel itself across the
 // ground would warp the noise.
 //
+// The bump map's own relief (tides-01v.13, ./groundRelief.ts) tilts the land's
+// normal first, from the same footprint; the detail's finer tilt adds to it.
+//
 // Spread through composePatches onto the ground's Phong material.
 import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
+import { GROUND_RELIEF_GLSL } from './groundRelief'
 import type { MaterialPatch } from './eclipseShadow'
 
 /** Octaves on the full-quality ground; the low tier takes fewer. At the
@@ -36,9 +40,10 @@ vGroundDetailPos = position;
 
 // normalMatrix is the vertex stage's uniform, shared by the program: it
 // turns the noise's gradient into view space without spending varyings.
-const fragmentHead = (octaves: number) => /* glsl */ `
+const fragmentHead = (octaves: number, relief: boolean) => /* glsl */ `
 varying vec3 vGroundDetailPos;
 uniform mat3 normalMatrix;
+${relief ? `#define GROUND_RELIEF\n${GROUND_RELIEF_GLSL}` : ''}
 
 #define GROUND_DETAIL_OCTAVES ${octaves}
 ${detailTurnsGlsl(octaves)}
@@ -100,6 +105,11 @@ const FRAGMENT_BODY = /* glsl */ `
     : max(length(dFdx(eye)), length(dFdy(eye))) * length(vViewPosition)
       / max(abs(dot(eye, normal)), 0.05);
   float groundLand = 1.0 - specularStrength;
+#ifdef GROUND_RELIEF
+  if (groundLand > 0.0) {
+    normal = normalize(normal - normalMatrix * (groundLand * groundRelief(vMapUv, vGroundDetailPos, groundFootprint)));
+  }
+#endif
   if (groundLand > 0.0
       && groundFootprint < ${f(DETAIL_FADE_END * DETAIL_BASE_TEXELS)} * groundDetailTexel) {
     vec4 detail = groundDetail(vGroundDetailPos, groundFootprint, groundDetailTexel, groundDetailFineTexel, groundDetailFine);
@@ -128,7 +138,8 @@ function inject(source: string, chunk: string, code: string): string {
   return source.replace(include, `${include}\n${code}`)
 }
 
-/** `low`: the low quality tier, which takes fewer octaves. */
+/** `low`: the low quality tier, which takes fewer octaves. The relief
+ * comes with the material's displacement map. */
 export function groundDetailPatch(low: boolean): MaterialPatch {
   const octaves = low ? GROUND_DETAIL_OCTAVES_LOW : GROUND_DETAIL_OCTAVES
   return {
@@ -136,7 +147,7 @@ export function groundDetailPatch(low: boolean): MaterialPatch {
       shader.vertexShader = inject(VERTEX_HEAD + shader.vertexShader, 'begin_vertex', VERTEX_BODY)
       shader.fragmentShader = inject(
         inject(
-          inject(shader.fragmentShader, 'common', fragmentHead(octaves)),
+          inject(shader.fragmentShader, 'common', fragmentHead(octaves, shader.displacementMap)),
           'specularmap_fragment',
           TEXEL_BODY
         ),
