@@ -7,6 +7,7 @@ import { realCloudBlend, realClouds, useRealCloudsActive } from './realCloudText
 import { pickBlend } from '../cloud-frames'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer, type CloudLayer } from './cloudShaders'
+import { groundDetailPatch } from './groundDetail'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
@@ -83,9 +84,10 @@ export default function EarthRenderer({
         eclipseShadow.material,
         clouds.groundPatch,
         nightLightsPatch(clouds.uniforms.uSunDir),
-        poleSmoothingPatch()
+        poleSmoothingPatch(),
+        groundDetailPatch(textureSet.low)
       ),
-    [eclipseShadow, clouds]
+    [eclipseShadow, clouds, textureSet.low]
   )
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
