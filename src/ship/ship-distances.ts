@@ -1,24 +1,29 @@
 // True distances for the ship HUD (tides-3bl.5).
 //
-// The scene is not to scale, and not by one factor: planets sit at
-// sceneDistance(r) (power law inside 1.7 AU, log beyond), the Moon orbits at
-// 10 units per 384 400 km (~44× the heliocentric scale at 1 AU), and every
-// radius is on a log scale. So the ship has no exact true position. The HUD
-// builds one, and reads every range off it, so the ranges never contradict
-// each other (no "1 AU from Earth and 1 km from the Moon"):
+// The scene is not to scale, and not by one factor: the Sun, Earth and
+// planets sit at their true positions × FLIGHT_UNITS_PER_AU (flight-scale.ts,
+// ~150 000 km a unit), but the Moon orbits at 10 units per 384 400 km (38 440
+// km a unit) and every radius is on a log scale. So the ship has no
+// exact true position. The HUD builds one, and reads every range off it, so
+// the ranges never contradict each other (no "1 AU from Earth and 1 km from
+// the Moon"):
 //
 //   1. Each body R anchors a guess: R's true position (astronomy-engine,
 //      heliocentric, km) plus the ship's scene direction from R, at R's true
 //      radius plus the ship's gap to R's shell × kmPerUnit(R).
 //   2. kmPerUnit(R) is the true surface gap over the scene shell gap between R
 //      and its neighbours, weighted to the nearest (1 / gap⁴, log space): the
-//      km a scene unit stands for around R. Earth and the Moon use their own
-//      pair only, since the Moon orbits on its own scale.
+//      km a scene unit stands for around R. Near Earth (MOON_SYSTEM_*), Earth
+//      and the Moon use their own pair only, since the Moon orbits on its own
+//      scale; leaving, they hand over to their planetary neighbours' scale,
+//      or Earth's range would under-read by the ratio of the two (~2.5×)
+//      all the way out.
 //   3. The guesses blend with weights 1 / (ship's gap to R)⁴, so the anchor is
 //      whichever body the ship is near, handing over smoothly in between.
-//      Near Earth (MOON_SYSTEM_*), Earth and the Moon outweigh a planet that
-//      happens to be as near in the scene: Venus near inferior conjunction
-//      otherwise put the spawn millions of km out with the Moon beside it.
+//      Near Earth, Earth and the Moon outweigh a planet that happens to be
+//      as near in the scene. (Venus can't be, at the flight scale: it never
+//      comes within ~260 units. The boost dates from the compressed scale,
+//      where it passed ~14 units from Earth, and costs nothing to keep.)
 //   4. range(B) = |true B − true ship| − B's true radius.
 //
 // Gaps are to the collision shell, the closest the ship can get, and the
@@ -26,11 +31,13 @@
 // and at Earth facing the Moon it is the true surface-to-surface distance
 // (the astronomy-engine centre distance less both radii).
 //
-// The catch: radii are drawn far larger than true and directions between
-// bodies are not true (only distances from the Sun are remapped), so away
-// from the line between two bodies the position is the scene's geometry at
-// the local true scale. Speed uses the same blended scale (km per scene unit
-// where the ship is), so it is the rate the ranges change at.
+// The catch: radii are drawn far larger than true and the Moon's offset is
+// not to scale, so near them the position is the scene's geometry at the
+// local true scale. In deep space the pair scales all converge on
+// KM_PER_AU / FLIGHT_UNITS_PER_AU, so the position is true there. (They are
+// left to converge, not pinned to it: moon systems need their own local
+// scales, as Earth's does.) Speed uses the same blended scale (km per scene
+// unit where the ship is), so it is the rate the ranges change at.
 
 import {
   Body,
@@ -54,14 +61,14 @@ const WEIGHT_POWER = 4
 const MIN_GAP = 1e-3
 
 // Within MOON_SYSTEM_INNER of Earth's centre, Earth and the Moon weigh
-// MOON_SYSTEM_BOOST times as much as anchors; past MOON_SYSTEM_OUTER, the
-// same as any body; between, a smooth blend. The Moon orbits ~10 units out;
-// the spawn is ~12 out on a wide screen and ~28 on a portrait phone (Earth
-// framed across the short side). The boost has to be large because another
-// body's guess is tens of millions of km off (its scale is the planets'):
-// 1e4 is a gap 10× smaller, so with Venus as near as Earth at the spawn the
-// position moves ~2% instead of ~50% (a boost of 100). Venus (which can pass
-// ~14 units from Earth) still takes over within a unit or so of its surface.
+// MOON_SYSTEM_BOOST times as much as anchors and read on their own pair's
+// scale; past MOON_SYSTEM_OUTER, the same as any body, on the planets' scale;
+// between, a smooth blend. The Moon orbits ~10 units out; the spawn is ~12
+// out on a wide screen and ~28 on a portrait phone (Earth framed across the
+// short side). The boost has to be large because another body's guess is
+// tens of millions of km off (its scale is the planets'): 1e4 is a gap 10×
+// smaller, so with a planet as near as Earth the position moves ~2% instead
+// of ~50% (a boost of 100).
 const MOON_SYSTEM_INNER = 30
 const MOON_SYSTEM_OUTER = 60
 const MOON_SYSTEM_BOOST = 1e4
@@ -157,6 +164,25 @@ function pairLogScale(
   return Math.log(Math.max(1, surfaceKm) / pairGap(bodies[a], bodies[b]))
 }
 
+// ln(km per scene unit) around r: its pair scales with every other body bar
+// `skip`, weighted to the nearest.
+function neighbourLogScale(
+  r: number,
+  skip: number,
+  bodies: readonly FlightBody[],
+  truth: TrueBodies
+): number {
+  let weightSum = 0
+  let logSum = 0
+  for (let b = 0; b < bodies.length; b++) {
+    if (b === r || b === skip) continue
+    const w = weight(pairGap(bodies[r], bodies[b]))
+    weightSum += w
+    logSum += w * pairLogScale(r, b, bodies, truth)
+  }
+  return weightSum > 0 ? logSum / weightSum : 0
+}
+
 /**
  * Fill `out` with the ship's true position, its range to every body, the
  * nearest by range and the local km per scene unit (see the header), for a
@@ -180,30 +206,30 @@ export function measureRanges(
   const moon = bodies.findIndex((body) => body.key === 'moon')
   const moonSystem = earth >= 0 && moon >= 0
   const moonSystemLog = moonSystem ? pairLogScale(earth, moon, bodies, truth) : 0
-  const moonSystemBoost = moonSystem
-    ? MOON_SYSTEM_BOOST **
-      (1 -
-        THREE.MathUtils.smoothstep(
-          position.distanceTo(bodies[earth].position),
-          MOON_SYSTEM_INNER,
-          MOON_SYSTEM_OUTER
-        ))
+  // 0 in the Earth–Moon system, 1 once clear of it.
+  const departure = moonSystem
+    ? THREE.MathUtils.smoothstep(
+        position.distanceTo(bodies[earth].position),
+        MOON_SYSTEM_INNER,
+        MOON_SYSTEM_OUTER
+      )
     : 1
+  const moonSystemBoost = moonSystem ? MOON_SYSTEM_BOOST ** (1 - departure) : 1
 
   for (let r = 0; r < n; r++) {
     if (moonSystem && (r === earth || r === moon)) {
-      logScales[r] = moonSystemLog
+      // Each against its other neighbours: the pair scale is the Moon's own.
+      logScales[r] =
+        departure > 0
+          ? THREE.MathUtils.lerp(
+              moonSystemLog,
+              neighbourLogScale(r, r === earth ? moon : earth, bodies, truth),
+              departure
+            )
+          : moonSystemLog
       continue
     }
-    let weightSum = 0
-    let logSum = 0
-    for (let b = 0; b < n; b++) {
-      if (b === r) continue
-      const w = weight(pairGap(bodies[r], bodies[b]))
-      weightSum += w
-      logSum += w * pairLogScale(r, b, bodies, truth)
-    }
-    logScales[r] = weightSum > 0 ? logSum / weightSum : 0
+    logScales[r] = neighbourLogScale(r, -1, bodies, truth)
   }
 
   out.position.set(0, 0, 0)

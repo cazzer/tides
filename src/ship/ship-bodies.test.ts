@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { EARTH_ORBIT_RADIUS } from '../ephemeris'
-import { PLANET_KEYS, PLANETS, planetPosition, sceneRadius } from '../planets'
+import { Body, HelioVector } from 'astronomy-engine'
+import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
+import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
 import { CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import { COLLISION_MARGIN, collisionRadius } from './flight'
@@ -39,10 +40,11 @@ describe('ship bodies', () => {
     for (const key of PLANET_KEYS) expect(b[key].radius).toBe(PLANETS[key].radius)
   })
 
-  it('keeps the Sun at the origin and Earth on its orbit', () => {
+  it('keeps the Sun at the origin and Earth at its true distance at the flight scale', () => {
     const b = byKey()
     expect(b.sun.position.length()).toBe(0)
-    expect(b.earth.position.length()).toBeCloseTo(EARTH_ORBIT_RADIUS, 6)
+    const au = HelioVector(Body.Earth, new Date(T)).Length()
+    expect(b.earth.position.length() / (FLIGHT_UNITS_PER_AU * au)).toBeCloseTo(1, 9)
   })
 
   it('puts the Moon about 10 units from Earth', () => {
@@ -53,10 +55,10 @@ describe('ship bodies', () => {
     }
   })
 
-  it('places each planet where planetPosition does', () => {
+  it('places each planet where flightPlanetPosition does', () => {
     const b = byKey()
     for (const key of PLANET_KEYS) {
-      const [x, y, z] = planetPosition(PLANETS[key].body)(T)
+      const [x, y, z] = flightPlanetPosition(PLANETS[key].body)(T)
       expect(b[key].position.x).toBeCloseTo(x, 9)
       expect(b[key].position.y).toBeCloseTo(y, 9)
       expect(b[key].position.z).toBeCloseTo(z, 9)

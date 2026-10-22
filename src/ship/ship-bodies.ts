@@ -1,10 +1,12 @@
 // The spheres ship mode flies among, built from the ephemeris rather than the
 // scene's mesh refs: those only register in the interactive main view and go
-// stale when it unmounts, and ship mode replaces that view.
+// stale when it unmounts, and ship mode replaces that view. Positions are at
+// the flight scale (flight-scale.ts), as ship mode draws them.
 
 import * as THREE from 'three'
-import { earthPosition, moonPosition, type Vec3 } from '../ephemeris'
-import { PLANET_KEYS, PLANETS, planetPosition, sceneRadius } from '../planets'
+import type { Vec3 } from '../ephemeris'
+import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
+import { positionsFor } from '../flight-scale'
 import { CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
@@ -42,6 +44,7 @@ export interface ShipBody extends FlightBody {
 
 /** Sun, Earth, Moon and the seven planets, positions unset until updated. */
 export function createShipBodies(): ShipBody[] {
+  const { positionAt } = positionsFor('flight')
   return [
     { key: 'sun', position: new THREE.Vector3(), radius: SUN_RADIUS, positionAt: null },
     {
@@ -49,14 +52,14 @@ export function createShipBodies(): ShipBody[] {
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
       collisionRadius: EARTH_COLLISION_RADIUS,
-      positionAt: earthPosition,
+      positionAt: positionAt.earth,
     },
-    { key: 'moon', position: new THREE.Vector3(), radius: MOON_RADIUS, positionAt: moonPosition },
+    { key: 'moon', position: new THREE.Vector3(), radius: MOON_RADIUS, positionAt: positionAt.moon },
     ...PLANET_KEYS.map((key) => ({
       key,
       position: new THREE.Vector3(),
       radius: PLANETS[key].radius,
-      positionAt: planetPosition(PLANETS[key].body),
+      positionAt: positionAt[key],
     })),
   ]
 }

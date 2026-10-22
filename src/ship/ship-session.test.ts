@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import type { CameraFocus, Layout, PanelKey } from '../store'
 import { COLLISION_MARGIN } from './flight'
 import { createShipBodies, updateShipBodies } from './ship-bodies'
+import { Body } from 'astronomy-engine'
+import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
 import {
   enterShipPatch,
   exitShipPatch,
@@ -11,6 +13,7 @@ import {
   persistedView,
   SHIP_FAR,
   SHIP_STAR_RADIUS,
+  SYSTEM_REACH,
   shipFar,
   shipNear,
   SPAWN_EARTH_SHARE,
@@ -213,20 +216,39 @@ describe('ship camera range', () => {
     }
   })
 
-  it('bounds the near plane, keeping far/near within 8e4 in the system', () => {
+  // Depth error is ~z² / (near · 2²⁴): the near plane sets precision and the
+  // far plane barely matters, so far/near only needs a loose bound.
+  it('bounds the near plane, keeping far/near within 1e6 in the system', () => {
     expect(shipNear(Infinity)).toBe(0.1)
     expect(shipNear(-1)).toBe(0.002)
-    expect(SHIP_FAR / shipNear(Infinity)).toBeLessThanOrEqual(8e4)
+    expect(SHIP_FAR / shipNear(Infinity)).toBeLessThanOrEqual(1e6)
   })
 
-  it('draws the star sphere inside the far plane', () => {
+  // Neptune's furthest from the Sun at the flight scale, 1900–2100.
+  const neptuneMax = (() => {
+    const at = flightPlanetPosition(Body.Neptune)
+    let max = 0
+    for (let t = Date.UTC(1900, 0, 1); t < Date.UTC(2100, 0, 1); t += 30 * 86_400_000) {
+      max = Math.max(max, Math.hypot(...at(t)))
+    }
+    return max
+  })()
+
+  it('reaches past every body from the Sun', () => {
+    expect(neptuneMax / FLIGHT_UNITS_PER_AU).toBeGreaterThan(30.2)
+    expect(SYSTEM_REACH).toBeGreaterThan(neptuneMax)
+  })
+
+  it('draws the star sphere behind Neptune from anywhere in the system, inside the far plane', () => {
+    // A ship SYSTEM_REACH from the Sun on the far side from Neptune.
+    expect(SHIP_STAR_RADIUS).toBeGreaterThan(SYSTEM_REACH + neptuneMax)
     expect(SHIP_STAR_RADIUS).toBeLessThan(SHIP_FAR)
   })
 
   it('moves the far plane out with the ship past the system', () => {
     expect(shipFar(0)).toBe(SHIP_FAR)
-    expect(shipFar(3000)).toBe(SHIP_FAR)
-    // Neptune orbits ~325 from the Sun, so it stays inside from anywhere.
-    for (const d of [5000, 1e5, 1e7]) expect(shipFar(d)).toBeGreaterThan(d + 325)
+    expect(shipFar(SYSTEM_REACH)).toBe(SHIP_FAR)
+    // Neptune stays inside from anywhere.
+    for (const d of [SHIP_FAR, 1e6, 1e8]) expect(shipFar(d)).toBeGreaterThan(d + neptuneMax)
   })
 })

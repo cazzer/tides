@@ -1,18 +1,19 @@
 // Planet orbit lines in the main view (tides-kzj.2.5), drawn beside Earth's
-// month ring while the planets are on.
+// month ring while the planets are on, and in ship mode at the flight scale
+// with Earth's own orbit in place of the ring (tides-2hv.6).
 import * as THREE from 'three'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { Body, PlanetOrbitalPeriod } from 'astronomy-engine'
 import {
   PLANETS,
   PLANET_KEYS,
   PLANET_ORBIT_SEGMENTS,
   orbitPathIsStale,
-  planetOrbitPath,
-  type PlanetKey,
 } from './planets'
 import { useStore } from './store'
 import type { DistanceScale } from './distance-scale'
+import { positionsFor } from './flight-scale'
 
 // Earth's orbit ring style (orbit-label.tsx).
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -26,22 +27,50 @@ function simTime(): number {
   return useStore.getState().timestamp ?? Date.now()
 }
 
-export const PlanetOrbits: FC<{
-  /** Not read until tides-2hv.6 adds the 'flight' orbit paths. */
-  distanceScale: DistanceScale
-}> = () => (
+export const PlanetOrbits: FC<{ distanceScale: DistanceScale }> = ({
+  distanceScale,
+}) => (
   <>
     {PLANET_KEYS.map((key) => (
-      <PlanetOrbit
+      <BodyOrbit
         key={key}
-        planetKey={key}
+        body={PLANETS[key].body}
+        period={PLANETS[key].period}
+        distanceScale={distanceScale}
       />
     ))}
   </>
 )
 
-function PlanetOrbit({ planetKey }: { planetKey: PlanetKey }) {
-  const { body, period } = PLANETS[planetKey]
+/** Sidereal year, days. */
+const EARTH_PERIOD = PlanetOrbitalPeriod(Body.Earth)
+
+/**
+ * Earth's true orbit, for ship mode: there Earth sits at its heliocentric
+ * position (flight-scale.ts), which strays off the system view's circular
+ * month ring by up to e·r (~17 units at 1000 per AU).
+ */
+export const EarthOrbit: FC<{ distanceScale: DistanceScale }> = ({
+  distanceScale,
+}) => (
+  <BodyOrbit
+    body={Body.Earth}
+    period={EARTH_PERIOD}
+    distanceScale={distanceScale}
+  />
+)
+
+function BodyOrbit({
+  body,
+  period,
+  distanceScale,
+}: {
+  body: Body
+  /** Sidereal period, days: how often the loop is redrawn. */
+  period: number
+  distanceScale: DistanceScale
+}) {
+  const { orbitPath } = positionsFor(distanceScale)
   const [firstT] = useState(simTime)
   const pathT = useRef(firstT)
 
@@ -50,12 +79,12 @@ function PlanetOrbit({ planetKey }: { planetKey: PlanetKey }) {
     g.setAttribute(
       'position',
       new THREE.BufferAttribute(
-        planetOrbitPath(body, firstT, PLANET_ORBIT_SEGMENTS),
+        orbitPath(body, firstT, PLANET_ORBIT_SEGMENTS),
         3
       )
     )
     return g
-  }, [body, firstT])
+  }, [body, firstT, orbitPath])
 
   useEffect(() => () => geometry.dispose(), [geometry])
 
@@ -66,7 +95,7 @@ function PlanetOrbit({ planetKey }: { planetKey: PlanetKey }) {
     if (!orbitPathIsStale(pathT.current, t, period)) return
     pathT.current = t
     const position = geometry.getAttribute('position') as THREE.BufferAttribute
-    planetOrbitPath(
+    orbitPath(
       body,
       t,
       PLANET_ORBIT_SEGMENTS,

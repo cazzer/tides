@@ -18,10 +18,11 @@ import { OrbitLabel } from './orbit-label'
 import { LunarRing } from './LunarRing'
 import { ZodiacRing } from './ZodiacRing'
 import { PlanetBodies } from './PlanetBodies'
-import { PlanetOrbits } from './planet-orbits'
+import { EarthOrbit, PlanetOrbits } from './planet-orbits'
 import { MoonBodies } from './moons/MoonBodies'
 import { SystemAids } from './system-aids/SystemAids'
 import type { DistanceScale } from './distance-scale'
+import { positionsFor } from './flight-scale'
 import { RoundSkyDiscs } from './RoundSkyDiscs'
 import { SkyLookControls } from './SkyLookControls'
 import { sceneRadius } from './planets'
@@ -39,10 +40,8 @@ import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
 import {
   EARTH_ORBIT_RADIUS,
-  earthPosition,
   earthSpin,
   earthTilt,
-  moonPosition,
   moonOrientation,
   sunOrientation,
 } from './ephemeris'
@@ -90,6 +89,7 @@ export default function SolarSystem({
   const showLunar = useStore((s) => s.showLunar)
   const showZodiac = useStore((s) => s.showZodiac)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
+  const positions = positionsFor(distanceScale)
 
   // From the surface, the Sun and Moon move to their true directions on a sky
   // around the observer (see sky.ts).
@@ -104,8 +104,8 @@ export default function SolarSystem({
     () =>
       earthCamera
         ? skyPositionAt(Body.Moon, MOON_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
-        : moonPosition,
-    [earthCamera, lat, lon]
+        : positions.positionAt.moon,
+    [earthCamera, lat, lon, positions]
   )
 
   // Only the main panel's CameraProvider (the one with OrbitControls) uses these.
@@ -149,7 +149,7 @@ export default function SolarSystem({
         focusKey="earth"
         storeLabel="earth"
         diameter={EARTH_DIAMETER}
-        positionAt={earthPosition}
+        positionAt={positions.positionAt.earth}
         spinAt={earthSpin}
         tiltAt={earthTilt}
         interactive={interactive}
@@ -164,14 +164,20 @@ export default function SolarSystem({
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
       </OrbitingBody>
-      {showOrbitLabels && (
+      {/* The month ring is a circle at the system Earth's radius; in flight
+          Earth follows its true, slightly eccentric orbit, drawn as such. */}
+      {showOrbitLabels && distanceScale === 'system' && (
         <OrbitLabel
           radius={EARTH_ORBIT_RADIUS}
           calendar={calendar}
         />
       )}
-      {showOrbitLabels && showLunar && <LunarRing />}
-      {showOrbitLabels && showZodiac && <ZodiacRing />}
+      {showOrbitLabels && distanceScale === 'flight' && (
+        <EarthOrbit distanceScale={distanceScale} />
+      )}
+      {/* Calendar rings round the Sun at system radii, so system view only. */}
+      {showOrbitLabels && distanceScale === 'system' && showLunar && <LunarRing />}
+      {showOrbitLabels && distanceScale === 'system' && showZodiac && <ZodiacRing />}
       <OrbitingBody
         ref={moon}
         focusKey="moon"

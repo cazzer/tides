@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { Body, GeoMoon, HelioVector, KM_PER_AU } from 'astronomy-engine'
 import { collisionRadius } from './flight'
+import { FLIGHT_KM_PER_UNIT } from '../flight-scale'
 import { createShipBodies, updateShipBodies, type ShipBody } from './ship-bodies'
 import { spawnPose } from './ship-session'
 import {
@@ -73,8 +74,8 @@ describe('trueBodies', () => {
       if (body.key === 'sun' || body.key === 'moon') continue
       const scene = body.position.clone().normalize()
       const real = truth.positions[i].clone().normalize()
-      // Earth's scene orbit is a circle at the Sun's apparent longitude.
-      expect(scene.angleTo(real)).toBeLessThan(0.01)
+      // Flight positions are true directions (Earth included).
+      expect(scene.angleTo(real)).toBeLessThan(1e-9)
     }
   })
 })
@@ -199,7 +200,7 @@ describe('measureRanges', () => {
     expect(ranges.km[neptune.index] / KM_PER_AU).toBeGreaterThan(1)
   })
 
-  it('gives a local scale near Earth set by the Earth–Moon gap, and a far larger one at Neptune', () => {
+  it('gives a local scale near Earth set by the Earth–Moon gap, and the flight scale at Neptune', () => {
     const { bodies, truth, ranges } = setup(DATES[0])
     const earth = find(bodies, 'earth').body
     const moon = find(bodies, 'moon').body
@@ -211,7 +212,30 @@ describe('measureRanges', () => {
     expect(nearEarth).toBeGreaterThan(40_000)
     expect(nearEarth).toBeLessThan(120_000)
     measureRanges(shellToward(neptune, sun, 0.5), bodies, truth, ranges)
-    expect(ranges.kmPerUnit).toBeGreaterThan(100 * nearEarth)
+    // Deep space: every pair scale converges on KM_PER_AU / FLIGHT_UNITS_PER_AU.
+    expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.01)
+  })
+
+  it.each(DATES)('reads the departure from Earth on the planetary scale (%i)', (t) => {
+    const { bodies, truth, ranges } = setup(t)
+    const earth = find(bodies, 'earth')
+    const sun = find(bodies, 'sun').body
+    // Straight out from the Sun, away from Venus and Mercury.
+    const outward = earth.body.position.clone().sub(sun.position).normalize()
+    const at = (d: number) => earth.body.position.clone().addScaledVector(outward, d)
+
+    measureRanges(at(100), bodies, truth, ranges)
+    expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.05)
+    const gap = 100 - shellOf(earth.body)
+    expect(Math.abs(ranges.km[earth.index] / (gap * FLIGHT_KM_PER_UNIT) - 1)).toBeLessThan(0.05)
+
+    // And the hand-over from the Earth–Moon scale never runs the range backwards.
+    let last = 0
+    for (let d = 20; d <= 80; d += 0.25) {
+      measureRanges(at(d), bodies, truth, ranges)
+      expect(ranges.km[earth.index]).toBeGreaterThan(last)
+      last = ranges.km[earth.index]
+    }
   })
 })
 
