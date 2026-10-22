@@ -1,6 +1,8 @@
 // Planet orbit lines in the main view (tides-kzj.2.5), drawn beside Earth's
 // month ring while the planets are on, and in ship mode at the flight scale
-// with Earth's own orbit in place of the ring (tides-2hv.6).
+// with Earth's own orbit in place of the ring (tides-2hv.6). Both follow the
+// orbits aid (systemAids.orbits, tides-2hv.9), as the moons' lines do; the
+// system view's month ring is the calendar, so it stays.
 import * as THREE from 'three'
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { useFrame } from '@react-three/fiber'
@@ -29,18 +31,22 @@ function simTime(): number {
 
 export const PlanetOrbits: FC<{ distanceScale: DistanceScale }> = ({
   distanceScale,
-}) => (
-  <>
-    {PLANET_KEYS.map((key) => (
-      <BodyOrbit
-        key={key}
-        orbitKey={key}
-        period={PLANETS[key].period}
-        distanceScale={distanceScale}
-      />
-    ))}
-  </>
-)
+}) => {
+  const orbits = useStore((s) => s.systemAids.orbits)
+  if (!orbits) return null
+  return (
+    <>
+      {PLANET_KEYS.map((key) => (
+        <BodyOrbit
+          key={key}
+          orbitKey={key}
+          period={PLANETS[key].period}
+          distanceScale={distanceScale}
+        />
+      ))}
+    </>
+  )
+}
 
 /** Sidereal year, days. */
 const EARTH_PERIOD = PlanetOrbitalPeriod(Body.Earth)
@@ -52,13 +58,17 @@ const EARTH_PERIOD = PlanetOrbitalPeriod(Body.Earth)
  */
 export const EarthOrbit: FC<{ distanceScale: DistanceScale }> = ({
   distanceScale,
-}) => (
-  <BodyOrbit
-    orbitKey="earth"
-    period={EARTH_PERIOD}
-    distanceScale={distanceScale}
-  />
-)
+}) => {
+  const orbits = useStore((s) => s.systemAids.orbits)
+  if (!orbits) return null
+  return (
+    <BodyOrbit
+      orbitKey="earth"
+      period={EARTH_PERIOD}
+      distanceScale={distanceScale}
+    />
+  )
+}
 
 function BodyOrbit({
   orbitKey,
