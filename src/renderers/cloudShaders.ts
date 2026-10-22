@@ -13,6 +13,11 @@ import {
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_UNITS_PER_KM,
+  DETAIL_BASE_TEXELS,
+  DETAIL_FADE_END,
+  DETAIL_FADE_START,
+  DETAIL_OCTAVES,
+  DETAIL_OCTAVES_FLAT,
   EARTH_RADIUS_KM,
   MAX_CLOUD_TOP_KM,
   MIN_MEASURED_TOP_KM,
@@ -27,6 +32,20 @@ import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseS
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 
 const f = (x: number) => x.toFixed(6)
+
+// Turns each detail octave off the last one's lattice: powers of one
+// orthonormal turn, as GLSL mat3s. Precomputed, since chaining the product in
+// the shader's loop costs more than the noise itself on the flat path.
+const DETAIL_TURN = new THREE.Matrix3().fromArray([0, 0.8, 0.6, -0.8, 0.36, -0.48, -0.6, -0.48, 0.64])
+const detailTurns = (octaves: number) => {
+  const turn = new THREE.Matrix3()
+  const turns: string[] = []
+  for (let k = 0; k < octaves; k++) {
+    turns.push(`mat3(${turn.elements.map(f).join(', ')})`)
+    turn.premultiply(DETAIL_TURN)
+  }
+  return `const mat3 DETAIL_TURNS[${octaves}] = mat3[](${turns.join(',\n  ')});`
+}
 
 
 // Height field shared by the cloud shell and the ground's shadow.
@@ -169,9 +188,105 @@ float cloudSunUp(float mu, float km) {
   return smoothstep(-0.01, 0.01, mu + cloudDipSin(km - ${f(SUNBEAM_FLOOR_KM)}));
 }
 
+// Fine detail where the map is magnified (detailOctaveWeights()): value-noise
+// fBm in object space, so it has no dateline seam and no polar pinch, in the
+// clouds' own frame, so it drifts with the static clouds and stays on the
+// ground under real ones. It erodes the edges and roughens the tops.
+#ifdef CLOUD_FLAT
+#define DETAIL_OCTAVES ${DETAIL_OCTAVES_FLAT}
+${detailTurns(DETAIL_OCTAVES_FLAT)}
+#else
+#define DETAIL_OCTAVES ${DETAIL_OCTAVES}
+${detailTurns(DETAIL_OCTAVES)}
+#endif
+#define DETAIL_EDGE 0.8
+// Tilt of the tops per unit of noise slope, over the coarsest wavelength;
+// each finer octave tilts them DETAIL_ROUGH as much as the last, and the
+// whole is capped, so the texture's own slopes still read through.
+#define DETAIL_RELIEF 0.35
+#define DETAIL_ROUGH 0.6
+#define DETAIL_MAX_SLOPE 0.35
+
+// A lattice corner's value, 0..1, from its axes' hashes xored together.
+float cloudCorner(uint h) {
+  h ^= h >> 16u;
+  h *= 0x7feb352du;
+  h ^= h >> 15u;
+  h *= 0x846ca68bu;
+  h ^= h >> 16u;
+  return float(h) * (1.0 / 4294967295.0);
+}
+
+// Value noise, 0..1, and its gradient (Quilez's analytic derivatives; checked
+// by hand, not by a test: re-check the k terms after any edit).
+vec4 cloudNoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = p - i;
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  vec3 du = 6.0 * f * (1.0 - f);
+  // Each axis hashed once for both its lattice lines, shared by the corners.
+  const uvec3 SPREAD = uvec3(0x8da6b343u, 0xd8163841u, 0xcb1ab31fu);
+  uvec3 lo = uvec3(ivec3(i)) * SPREAD;
+  uvec3 hi = lo + SPREAD;
+  float a = cloudCorner(lo.x ^ lo.y ^ lo.z);
+  float b = cloudCorner(hi.x ^ lo.y ^ lo.z);
+  float e = cloudCorner(lo.x ^ hi.y ^ lo.z);
+  float g = cloudCorner(hi.x ^ hi.y ^ lo.z);
+  float h = cloudCorner(lo.x ^ lo.y ^ hi.z);
+  float k = cloudCorner(hi.x ^ lo.y ^ hi.z);
+  float m = cloudCorner(lo.x ^ hi.y ^ hi.z);
+  float n = cloudCorner(hi.x ^ hi.y ^ hi.z);
+  float k1 = b - a;
+  float k2 = e - a;
+  float k3 = h - a;
+  float k4 = a - b - e + g;
+  float k5 = a - e - h + m;
+  float k6 = a - b - h + k;
+  float k7 = -a + b + e - g + h - k - m + n;
+  return vec4(
+    a + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x
+      + k7 * u.x * u.y * u.z,
+    du * vec3(
+      k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z,
+      k2 + k4 * u.x + k5 * u.z + k7 * u.x * u.z,
+      k3 + k5 * u.y + k6 * u.x + k7 * u.x * u.y));
+}
+
+// fBm at p (scene units, the clouds' frame) seen at footprint: x in about
+// -1..1, yzw its gradient per scene unit. Octaves stop where they would
+// shrink under a few pixels.
+vec4 cloudDetail(vec3 p, float footprint, float texel) {
+  float wavelength = ${f(DETAIL_BASE_TEXELS)} * texel;
+  float amp = 0.5;
+  float rough = 0.5;
+  vec4 sum = vec4(0.0);
+  for (int k = 0; k < DETAIL_OCTAVES; k++) {
+    float weight = 1.0 - smoothstep(${f(DETAIL_FADE_START)}, ${f(DETAIL_FADE_END)}, footprint / wavelength);
+    if (weight <= 0.0) break;
+    vec4 o = cloudNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 17.31);
+    // o.yzw * turn: the gradient turned back (the transpose).
+    sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
+    wavelength *= 0.5;
+    amp *= 0.5;
+    rough *= 0.5 * DETAIL_ROUGH;
+  }
+  return sum;
+}
+
+// Into and out of the clouds' frame: turned about the pole by the drift, so
+// cloudUv() of the result is the texture coordinate the cloud was painted at.
+vec3 cloudFrame(vec3 v, float turns) {
+  float c = cos(2.0 * CLOUD_PI * turns);
+  float s = sin(2.0 * CLOUD_PI * turns);
+  return vec3(v.x * c - v.z * s, v.y, v.z * c + v.x * s);
+}
+
 void main() {
   vec3 d = normalize(vRayDir);
+  // Derivatives before any discard: after one they are undefined.
   float footprint = max(length(dFdx(vLocal)), length(dFdy(vLocal)));
+  // The ray's spread, a pixel's angle; unlike vLocal's, smooth across facets.
+  float spread = max(length(dFdx(d)), length(dFdy(d)));
   float lod = cloudLod(footprint);
 
 #ifdef CLOUD_FLAT
@@ -233,11 +348,18 @@ void main() {
   vec3 up = p / r;
   vec2 uv = cloudUv(up);
   vec4 col = cloudColumn(uv, lod, terrain);
-  float alpha = col.x;
+  if (col.x < 0.02) discard;
+  float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
+  // A pixel's width where the ray meets the top, stretched by the slant.
+  // vRayDir is the eye's offset: the Earth group is unscaled.
+  float topFootprint = isOrthographic
+    ? footprint
+    : spread * (length(vRayDir) + length(p - vLocal)) / max(abs(dot(d, up)), 0.05);
+  vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
+  float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
   if (alpha < 0.02) discard;
 
   // The tops' slope, by forward differences a pixel or so apart.
-  float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
   float h = max(footprint, 3.0 * texel);
   vec3 east = normalize(vec3(up.z, 0.0, -up.x) + vec3(1e-5, 0.0, 0.0));
   vec3 north = cross(up, east);
@@ -249,6 +371,10 @@ void main() {
   float topE = cloudColumn(uv + vec2(h / (2.0 * CLOUD_PI * r * cosLat), 0.0), lodN, terrain).z;
   float topN = cloudColumn(uv + vec2(0.0, h / (CLOUD_PI * r)), lodN, terrain).z;
   vec2 slope = RELIEF * vec2(topE - topC, topN - topC) / h;
+  // The detail's own slope, along the top.
+  vec3 grain = cloudFrame(detail.yzw, -uCloudShift) * DETAIL_RELIEF * ${f(DETAIL_BASE_TEXELS)} * texel;
+  vec2 grainSlope = vec2(dot(grain, east), dot(grain, north));
+  slope += grainSlope * min(1.0, DETAIL_MAX_SLOPE / max(length(grainSlope), 1e-6));
   slope *= min(1.0, MAX_SLOPE / max(length(slope), 1e-6));
   vec3 n = normalize(up - slope.x * east - slope.y * north);
 
