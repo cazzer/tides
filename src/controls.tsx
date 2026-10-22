@@ -14,9 +14,11 @@ import {
 } from '@tabler/icons-react'
 import {
   PLANET_FOCUS_KEYS,
+  SYSTEM_AID_KEYS,
   useStore,
   type CameraFocus,
   type Layout,
+  type SystemAidKey,
   type WeatherSource,
 } from './store'
 import { truncateLatLon } from './utils'
@@ -154,6 +156,15 @@ const PLANETS_OPTIONS: { value: 'off' | 'on'; label: string }[] = [
   { value: 'on', label: 'Show' },
 ]
 
+const SYSTEM_AID_LABELS: Record<SystemAidKey, string> = {
+  orbits: 'Orbits',
+  grid: 'Grid',
+  labels: 'Labels',
+  belts: 'Belts',
+  scale: 'Scale',
+  trails: 'Trails',
+}
+
 const CONSTELLATIONS_OPTIONS: { value: 'off' | 'lines' | 'art'; label: string }[] = [
   { value: 'off', label: 'Hide' },
   { value: 'lines', label: 'Lines' },
@@ -181,6 +192,9 @@ function SettingsDialog({
   const setLayout = useStore((s) => s.setLayout)
   const showPlanets = useStore((s) => s.showPlanets)
   const setShowPlanets = useStore((s) => s.setShowPlanets)
+  const guidesHintId = useId()
+  const systemAids = useStore((s) => s.systemAids)
+  const setSystemAid = useStore((s) => s.setSystemAid)
   const constellationsHintId = useId()
   const showConstellations = useStore((s) => s.showConstellations)
   const setShowConstellations = useStore((s) => s.setShowConstellations)
@@ -260,6 +274,28 @@ function SettingsDialog({
             onChange={(value) => setShowPlanets(value === 'on')}
           />
         </SettingGroup>
+        {/* The aids only draw beside the planets, so they go with them. */}
+        {showPlanets && (
+          <SettingGroup aria-describedby={guidesHintId}>
+            <SettingLegend>Guides</SettingLegend>
+            <ToggleChips>
+              {SYSTEM_AID_KEYS.map((key) => (
+                <Segment key={key}>
+                  <input
+                    type="checkbox"
+                    name={`aid-${key}`}
+                    checked={systemAids[key]}
+                    onChange={(e) => setSystemAid(key, e.target.checked)}
+                  />
+                  <span>{SYSTEM_AID_LABELS[key]}</span>
+                </Segment>
+              ))}
+            </ToggleChips>
+            <SettingHint id={guidesHintId}>
+              Aids in the Three Body System view.
+            </SettingHint>
+          </SettingGroup>
+        )}
         <SettingGroup aria-describedby={constellationsHintId}>
           <SettingLegend>Constellations</SettingLegend>
           <SegmentedControl
@@ -790,6 +826,13 @@ const Segments = styled.div`
   background-color: black;
   border: 1px gray solid;
   border-radius: 8px;
+`
+
+// On/off chips in the segmented control's frame, three to a row; each chip is
+// a Segment holding a checkbox, so checked reads as a selected segment.
+const ToggleChips = styled(Segments)`
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
 `
 
 const Segment = styled.label`

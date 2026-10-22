@@ -7,7 +7,12 @@ import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
 import { ToneMappingMode, BlendFunction } from 'postprocessing'
 
 import SolarSystem from './solar-system'
-import { parseFocus, useStore, type PanelKey } from './store'
+import {
+  parseFocus,
+  serializeSystemAids,
+  useStore,
+  type PanelKey,
+} from './store'
 import Controls from './controls'
 import { PIN_LAYER } from './LocationPin'
 import LoadingOverlay from './LoadingOverlay'
@@ -21,6 +26,8 @@ import { MAIN_ZOOM, mainViewRange } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
+import { ScaleReadout } from './system-aids/ScaleReadout'
+import type { DistanceScale } from './distance-scale'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -48,6 +55,7 @@ export default function App() {
   const showConstellationArt = useStore((s) => s.showConstellationArt)
   const showLunar = useStore((s) => s.showLunar)
   const showZodiac = useStore((s) => s.showZodiac)
+  const systemAids = useStore((s) => s.systemAids)
   const shipMode = useStore((s) => s.shipMode)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
@@ -102,6 +110,12 @@ export default function App() {
     } else {
       params.delete('zodiac')
     }
+    const aids = serializeSystemAids(systemAids)
+    if (aids != null) {
+      params.set('aids', aids)
+    } else {
+      params.delete('aids')
+    }
     if (location) {
       params.set('lat', String(location.lat))
       params.set('lon', String(location.lon))
@@ -116,7 +130,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, shipMode])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, systemAids, shipMode])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {
@@ -169,6 +183,8 @@ export default function App() {
               showOrbitLabels
               calendar={false}
               starRadius={SHIP_STAR_RADIUS}
+              distanceScale="flight"
+              ship
               onReady={handleSceneReady}
             />
           </ShipView>
@@ -178,7 +194,12 @@ export default function App() {
             ref={solarSystemView}
             {...panelProps('main')}
             overlay={
-              panelProps('main').gridArea === 'main' ? <ShipButton /> : undefined
+              panelProps('main').gridArea === 'main' ? (
+                <>
+                  {showPlanets && systemAids.scale && <ScaleReadout />}
+                  <ShipButton />
+                </>
+              ) : undefined
             }
           >
             <MainCamera />
@@ -246,6 +267,8 @@ function Scene({
   earthCamera = false,
   moonCamera = false,
   interactive = false,
+  distanceScale = 'system',
+  ship = false,
   onReady,
   ...props
 }: {
@@ -253,6 +276,8 @@ function Scene({
   earthCamera?: boolean
   moonCamera?: boolean
   interactive?: boolean
+  distanceScale?: DistanceScale
+  ship?: boolean
   onReady?: () => void
   [key: string]: any
 }) {
@@ -272,6 +297,8 @@ function Scene({
             earthCamera={earthCamera}
             moonCamera={moonCamera}
             interactive={interactive}
+            distanceScale={distanceScale}
+            ship={ship}
             {...props}
           />
           {onReady ? <SceneReadySignal onReady={onReady} /> : null}

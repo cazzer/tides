@@ -1,7 +1,7 @@
 // Planet orbit lines in the main view (tides-kzj.2.5), drawn beside Earth's
 // month ring while the planets are on.
 import * as THREE from 'three'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { useFrame } from '@react-three/fiber'
 import {
   PLANETS,
@@ -12,6 +12,7 @@ import {
   type PlanetKey,
 } from './planets'
 import { useStore } from './store'
+import type { DistanceScale } from './distance-scale'
 
 // Earth's orbit ring style (orbit-label.tsx).
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -25,18 +26,19 @@ function simTime(): number {
   return useStore.getState().timestamp ?? Date.now()
 }
 
-export function PlanetOrbits() {
-  return (
-    <>
-      {PLANET_KEYS.map((key) => (
-        <PlanetOrbit
-          key={key}
-          planetKey={key}
-        />
-      ))}
-    </>
-  )
-}
+export const PlanetOrbits: FC<{
+  /** Not read until tides-2hv.6 adds the 'flight' orbit paths. */
+  distanceScale: DistanceScale
+}> = () => (
+  <>
+    {PLANET_KEYS.map((key) => (
+      <PlanetOrbit
+        key={key}
+        planetKey={key}
+      />
+    ))}
+  </>
+)
 
 function PlanetOrbit({ planetKey }: { planetKey: PlanetKey }) {
   const { body, period } = PLANETS[planetKey]

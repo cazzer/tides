@@ -19,6 +19,9 @@ import { LunarRing } from './LunarRing'
 import { ZodiacRing } from './ZodiacRing'
 import { PlanetBodies } from './PlanetBodies'
 import { PlanetOrbits } from './planet-orbits'
+import { MoonBodies } from './moons/MoonBodies'
+import { SystemAids } from './system-aids/SystemAids'
+import type { DistanceScale } from './distance-scale'
 import { RoundSkyDiscs } from './RoundSkyDiscs'
 import { SkyLookControls } from './SkyLookControls'
 import { sceneRadius } from './planets'
@@ -55,6 +58,8 @@ export default function SolarSystem({
   showOrbitLabels,
   calendar = true,
   starRadius,
+  distanceScale = 'system',
+  ship = false,
 }: {
   earthCamera?: boolean
   moonCamera?: boolean
@@ -64,6 +69,10 @@ export default function SolarSystem({
   calendar?: boolean
   /** Overrides the starfield's radius (ship mode's camera roams the system). */
   starRadius?: number
+  /** The planets' spacing: ship mode flies at 'flight' (tides-2hv.6). */
+  distanceScale?: DistanceScale
+  /** In ship mode, for the parts that look different there. */
+  ship?: boolean
 }) {
   const earthTexture = getEarthTexture()
   const moonTexture = getMoonTexture()
@@ -178,12 +187,30 @@ export default function SolarSystem({
       </OrbitingBody>
       {/* Orbital views only; their textures must not suspend the scene. */}
       {showPlanets && !earthCamera && !moonCamera && (
-        <Suspense fallback={null}>
-          <PlanetBodies interactive={interactive} />
-        </Suspense>
+        <>
+          <Suspense fallback={null}>
+            <PlanetBodies
+              interactive={interactive}
+              distanceScale={distanceScale}
+            />
+          </Suspense>
+          {/* Siblings, so one loading never hides the other. */}
+          <Suspense fallback={null}>
+            <MoonBodies
+              interactive={interactive}
+              distanceScale={distanceScale}
+            />
+          </Suspense>
+          <Suspense fallback={null}>
+            <SystemAids
+              distanceScale={distanceScale}
+              ship={ship}
+            />
+          </Suspense>
+        </>
       )}
       {showPlanets && showOrbitLabels && !earthCamera && !moonCamera && (
-        <PlanetOrbits />
+        <PlanetOrbits distanceScale={distanceScale} />
       )}
     </CameraProvider>
   )
