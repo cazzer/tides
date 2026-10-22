@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
-import { shipInput } from './ship-input'
+import { shipInput, throttlePercent } from './ship-input'
 import {
   bindSteer,
   bindThrottle,
@@ -11,7 +11,6 @@ import {
 } from './touch-controls'
 import {
   BLUE_BAND,
-  MAX_STICK_DT,
   REVERSE_DETENT_MS,
   STICK_RADIUS_PX,
   throttleToTrack,
@@ -54,12 +53,6 @@ export function TouchShipControls() {
 
 const preventDefault = (event: Event) => event.preventDefault()
 
-// "62%" ahead, "R 15%" in reverse.
-function throttleLabel(throttle: number): string {
-  const value = Math.round(throttle * 100)
-  return value < 0 ? `R ${-value}%` : `${value}%`
-}
-
 function Controls() {
   const root = useRef<HTMLDivElement>(null)
   const steerZone = useRef<HTMLDivElement>(null)
@@ -67,6 +60,7 @@ function Controls() {
   const stickBase = useRef<HTMLDivElement>(null)
   const stickKnob = useRef<HTMLDivElement>(null)
   const throttleCluster = useRef<HTMLDivElement>(null)
+  const throttleBase = useRef<HTMLDivElement>(null)
   const throttleKnob = useRef<HTMLDivElement>(null)
   const label = useRef<HTMLSpanElement>(null)
   const thumb = useRef<HTMLDivElement>(null)
@@ -77,6 +71,7 @@ function Controls() {
     const base = stickBase.current!
     const knob = stickKnob.current!
     const cluster = throttleCluster.current!
+    const throttleBaseEl = throttleBase.current!
     const throttleKnobEl = throttleKnob.current!
     const labelEl = label.current!
     const thumbEl = thumb.current!
@@ -130,7 +125,21 @@ function Controls() {
     }
 
     const steer = bindSteer(steerEl, shipInput, { onStick, spawnBounds })
-    const throttle = bindThrottle(throttleZone.current!, shipInput, { onStick: onThrottleStick })
+    // A tap to zero flashes the readout, so the cut reads at a glance.
+    let flashTimer: ReturnType<typeof setTimeout> | undefined
+    const onTap = () => {
+      cluster.dataset.flash = ''
+      clearTimeout(flashTimer)
+      flashTimer = setTimeout(() => delete cluster.dataset.flash, FLASH_MS)
+    }
+    const throttle = bindThrottle(throttleZone.current!, shipInput, {
+      base: () => {
+        const r = throttleBaseEl.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      },
+      onStick: onThrottleStick,
+      onTap,
+    })
     const bindings = [steer, throttle]
     const releaseAll = () => bindings.forEach((binding) => binding.release())
     const stopInterruptions = releaseOnInterruption(
@@ -151,12 +160,12 @@ function Controls() {
     let frame = requestAnimationFrame(function draw(now) {
       const dt = last == null ? 0 : (now - last) / 1000
       last = now
-      throttle.step(Math.min(dt, MAX_STICK_DT))
+      throttle.step(dt)
       steer.reassert()
       const value = shipInput.throttle
       if (value !== shown.throttle) {
         thumbEl.style.bottom = `${throttleToTrack(value) * 100}%`
-        labelEl.textContent = throttleLabel(value)
+        labelEl.textContent = throttlePercent(value)
         if (value < 0) cluster.dataset.reverse = ''
         else delete cluster.dataset.reverse
       }
@@ -174,6 +183,7 @@ function Controls() {
 
     return () => {
       cancelAnimationFrame(frame)
+      clearTimeout(flashTimer)
       for (const type of blocked) overlay.removeEventListener(type, preventDefault)
       unblockPinch()
       stopInterruptions()
@@ -212,7 +222,7 @@ function Controls() {
             <DwellFill ref={dwell} />
           </Thumb>
         </Track>
-        <ThrottleBase>
+        <ThrottleBase ref={throttleBase}>
           <ThrottleKnob ref={throttleKnob} />
         </ThrottleBase>
       </ThrottleCluster>
@@ -228,6 +238,18 @@ const KNOB_SIZE = 52
 const SPAWN_MARGIN = 8
 // Both sticks rest this far in from their side of the screen, to their centres.
 const STICK_INSET = 88
+// Each control's zone, as a share of the overlay's width.
+const ZONE_SHARE = 40
+// How long the readout lights up after a tap zeroes the throttle, in ms.
+const FLASH_MS = 160
+
+// A stick's resting centre in from `side`'s edge: STICK_INSET, pulled in on a
+// narrow phone (320 px) so the base never pokes out of its zone, and never
+// past the screen edge.
+const restInset = (side: 'left' | 'right') => `max(
+  calc(var(--dock-inset-${side}) + ${STICK_RADIUS_PX}px),
+  min(calc(var(--dock-inset-${side}) + ${STICK_INSET}px), calc(${ZONE_SHARE}% - ${STICK_RADIUS_PX}px))
+)`
 
 // Covers the view without taking any presses itself; only the zones do.
 // Custom properties stay scoped here.
@@ -270,7 +292,7 @@ const Overlay = styled.div`
 const Zone = styled.div`
   position: absolute;
   bottom: 0;
-  width: 40%;
+  width: ${ZONE_SHARE}%;
   height: min(65%, calc(100% - var(--ship-top-reserve)));
   pointer-events: auto;
   touch-action: none;
@@ -292,7 +314,7 @@ const ThrottleZone = styled(Zone)`
 // held (left/top set inline).
 const StickBase = styled.div`
   position: absolute;
-  left: calc(var(--dock-inset-left) + ${STICK_INSET}px);
+  left: ${restInset('left')};
   bottom: calc(var(--stick-bottom) + var(--stick-h) / 2);
   width: ${STICK_RADIUS_PX * 2}px;
   height: ${STICK_RADIUS_PX * 2}px;
@@ -326,11 +348,11 @@ const StickKnob = styled.div`
 `
 
 // The readout stacked on the throttle stick, mirroring the steer stick's
-// resting ghost: the base's centre is STICK_INSET in from the right, at the
+// resting ghost: the base's centre is restInset in from the right, at the
 // same height. Nothing here takes presses; ThrottleZone does.
 const ThrottleCluster = styled.div`
   position: absolute;
-  right: calc(var(--dock-inset-right) + ${STICK_INSET}px);
+  right: ${restInset('right')};
   bottom: calc(var(--stick-bottom) + var(--stick-h) / 2 - ${STICK_RADIUS_PX}px);
   display: flex;
   flex-direction: column;
@@ -348,9 +370,19 @@ const ThrottleLabel = styled.span`
   letter-spacing: 0.04em;
   text-align: center;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  transition:
+    color 400ms ease,
+    text-shadow 400ms ease;
 
   [data-reverse] > & {
     color: ${AMBER};
+  }
+
+  /* A colour flash, not motion, so it stays under reduced motion. */
+  [data-flash] > & {
+    color: #fff;
+    text-shadow: 0 0 10px ${BLUE};
+    transition: none;
   }
 `
 
@@ -363,6 +395,12 @@ const Track = styled.div`
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.07);
+  transition: box-shadow 400ms ease;
+
+  [data-flash] > & {
+    box-shadow: 0 0 10px ${BLUE};
+    transition: none;
+  }
 `
 
 const Reverse = styled.div`
@@ -437,7 +475,8 @@ const DwellFill = styled.div`
   }
 `
 
-// A ghost like the steer stick's at rest, firmer while held.
+// A ghost like the steer stick's at rest, firmer while held, and lit in the
+// dwell fill's colour while a pull waits at the zero detent.
 const ThrottleBase = styled.div`
   position: relative;
   width: ${STICK_RADIUS_PX * 2}px;
@@ -452,6 +491,16 @@ const ThrottleBase = styled.div`
   [data-active] > & {
     opacity: 1;
     transition: none;
+  }
+
+  [data-dwell] > & {
+    border-color: ${BLUE};
+    box-shadow: 0 0 12px rgba(76, 159, 254, 0.45);
+  }
+
+  [data-dwell='reverse'] > & {
+    border-color: ${AMBER};
+    box-shadow: 0 0 12px rgba(255, 166, 48, 0.45);
   }
 `
 

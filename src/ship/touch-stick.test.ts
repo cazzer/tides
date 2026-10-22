@@ -17,6 +17,7 @@ import {
   ROLL_RANGE_PX,
   STICK_RADIUS_PX,
   TAP_MAX_MS,
+  TAP_REACH_PX,
   THROTTLE_STICK_RATE,
   freshDetent,
   isTap,
@@ -27,6 +28,7 @@ import {
   stickKnob,
   throttleDeflection,
   throttleToTrack,
+  withinTapReach,
   type ThrottleDetent,
 } from './touch-stick'
 
@@ -167,10 +169,11 @@ describe('stepThrottleStick', () => {
     const landed = stepThrottleStick(0.01, -1, 1 / 60, freshDetent())
     expect(landed.throttle).toBe(0)
     expect(landed.detent).toEqual({ arrivedFrom: 1, dwellMs: 0 })
-    // 17 frames: 283 ms, one frame short of the detent.
-    const waited = hold(landed, -1, 17 / 60)
+    // One 60 fps frame short of the detent.
+    const frames = (REVERSE_DETENT_MS / 1000) * 60 - 1
+    const waited = hold(landed, -1, frames / 60)
     expect(waited.throttle).toBe(0)
-    expect(waited.detent.dwellMs).toBeCloseTo(17000 / 60, 6)
+    expect(waited.detent.dwellMs).toBeCloseTo((frames * 1000) / 60, 6)
   })
 
   it('carries on into reverse after a pull held REVERSE_DETENT_MS at 0', () => {
@@ -202,7 +205,8 @@ describe('stepThrottleStick', () => {
     expect(landed.throttle).toBe(0)
     expect(landed.detent).toEqual({ arrivedFrom: -1, dwellMs: 0 })
     expect(hold(landed, 1, 0.2).throttle).toBe(0)
-    expect(hold(hold(landed, 1, 0.3), 1, 0.1).throttle).toBeGreaterThan(0)
+    const opened = hold(landed, 1, REVERSE_DETENT_MS / 1000)
+    expect(hold(opened, 1, 0.1).throttle).toBeGreaterThan(0)
   })
 
   it('goes straight into reverse on a fresh press at 0', () => {
@@ -211,8 +215,8 @@ describe('stepThrottleStick', () => {
   })
 
   it('never reverses by accident: a full pull from full ahead held until just short of the detent', () => {
-    // 1.2 s to come down from 1 to 0, then 0.28 s held on the detent.
-    const swept = hold(free(THROTTLE_MAX), -1, 1.2 + 0.28)
+    // 1.2 s to come down from 1 to 0, then held on the detent until just short of it.
+    const swept = hold(free(THROTTLE_MAX), -1, 1.2 + (REVERSE_DETENT_MS - 20) / 1000)
     expect(swept.throttle).toBe(0)
     // A gentle pull below DETENT_PULL never gets through, however long.
     expect(hold(free(0.5), -0.4, 5).throttle).toBe(0)
@@ -225,6 +229,18 @@ describe('isTap', () => {
     expect(isTap(AXIS_LOCK_PX - 1, TAP_MAX_MS - 1)).toBe(true)
     expect(isTap(AXIS_LOCK_PX, 10)).toBe(false)
     expect(isTap(0, TAP_MAX_MS)).toBe(false)
+  })
+})
+
+describe('withinTapReach', () => {
+  it('takes taps on and just around the drawn stick only', () => {
+    const base = { x: 300, y: 600 }
+    expect(TAP_REACH_PX).toBe(1.25 * STICK_RADIUS_PX)
+    expect(withinTapReach(base, base)).toBe(true)
+    expect(withinTapReach({ x: 300, y: 600 - TAP_REACH_PX }, base)).toBe(true)
+    expect(withinTapReach({ x: 300 + TAP_REACH_PX + 1, y: 600 }, base)).toBe(false)
+    // The zone's far corner.
+    expect(withinTapReach({ x: 378, y: 804 }, base)).toBe(false)
   })
 })
 

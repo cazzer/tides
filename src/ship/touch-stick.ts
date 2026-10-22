@@ -33,10 +33,10 @@ export const THROTTLE_CURVE = 1
 /**
  * [TUNE] How long a pull must keep pushing on through zero, in ms, before it
  * passes into reverse (or from reverse into forward) without a fresh press.
- * Long enough that "pull to stop" doesn't overshoot, short enough that a
- * deliberate pull isn't left waiting.
+ * Well past a reaction time, so a thumb pulling to stop lets go before it
+ * overshoots; short enough that a deliberate pull isn't left waiting long.
  */
-export const REVERSE_DETENT_MS = 300
+export const REVERSE_DETENT_MS = 700
 /**
  * [TUNE] Deflection a pull must hold at zero for its time to count towards
  * REVERSE_DETENT_MS. A thumb drifting back towards centre resets the wait.
@@ -44,9 +44,15 @@ export const REVERSE_DETENT_MS = 300
 export const DETENT_PULL = 0.5
 /** [TUNE] A press shorter than this, in ms, that never travels AXIS_LOCK_PX is a tap. */
 export const TAP_MAX_MS = 250
+/**
+ * [TUNE] How far from the drawn stick's centre, in CSS px, a press may land
+ * and still tap the throttle to 0. The zone around it is wider, for drags; a
+ * stray brush out there mustn't cut the throttle.
+ */
+export const TAP_REACH_PX = 1.25 * STICK_RADIUS_PX
 /** Longer frames (a stall, an app switch) don't ramp the throttle in one go. */
 export const MAX_STICK_DT = 0.1
-/** Float slack on the detent timer, so 18 frames of 1/60 s count as 300 ms. */
+/** Float slack on the detent timer, so 42 frames of 1/60 s count as 700 ms. */
 const DWELL_EPSILON_MS = 1e-6
 
 export interface Point {
@@ -155,6 +161,11 @@ export function stepThrottleStick(
 /** Whether a press was a tap: brief, and never far enough to lock an axis. */
 export function isTap(maxTravelPx: number, durationMs: number): boolean {
   return maxTravelPx < AXIS_LOCK_PX && durationMs < TAP_MAX_MS
+}
+
+/** Whether a press at `point` landed on the drawn stick, close enough to tap it. */
+export function withinTapReach(point: Point, base: Point): boolean {
+  return Math.hypot(point.x - base.x, point.y - base.y) <= TAP_REACH_PX
 }
 
 /** Travel on the throttle stick before it decides which axes the drag drives. */

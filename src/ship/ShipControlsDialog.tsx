@@ -61,7 +61,7 @@ const TOUCH_ROWS: readonly [ReactNode, string][] = [
   ['Left stick', 'Steer: push up to pitch the nose up, sideways to turn'],
   [
     'Right stick',
-    'Push up or down to change the throttle; it holds when you let go. It stops at zero: pull again, or keep pulling, to reverse. Tap to stop. Left or right to roll',
+    'Push up or down to change the throttle; it holds when you let go. It stops at zero: keep pulling, or let go and pull again, to reverse. Tap the stick to cut the throttle. Left or right to roll',
   ],
   [
     'Flight assist (top bar)',

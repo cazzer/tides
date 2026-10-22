@@ -30,6 +30,12 @@ export interface ShipInput {
 export const THROTTLE_MIN = -0.25
 export const THROTTLE_MAX = 1
 
+/** A throttle setting as the HUD and the touch readout show it: "62%", "−15%". */
+export function throttlePercent(throttle: number): string {
+  const value = Math.round(throttle * 100)
+  return value < 0 ? `−${-value}%` : `${value}%`
+}
+
 export const shipInput: ShipInput = {
   throttle: 0,
   strafeX: 0,

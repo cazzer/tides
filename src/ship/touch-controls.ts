@@ -16,6 +16,7 @@ import {
   stickDemand,
   stickKnob,
   throttleDeflection,
+  withinTapReach,
   type PadAxes,
   type Point,
   type ThrottleDetent,
@@ -189,21 +190,31 @@ export interface ThrottleBinding extends Binding {
   detentState(): ThrottleDetent
 }
 
+export interface ThrottleOptions {
+  /** Read at each press: the drawn stick's centre, in client px. */
+  base: () => Point
+  onStick?: StickListener
+  /** Called when a tap has just zeroed the throttle. */
+  onTap?: () => void
+}
+
 /**
  * The spring-return throttle stick (tides-2hv.3): pushing up raises the
  * throttle and pulling down lowers it, at a rate proportional to the push,
  * and it holds where it's left when the knob springs back. Zero is a detent
  * (stepThrottleStick). Sideways rolls, springing back to 0. Once the drag
  * has travelled a little it locks to the axis it mostly moves along
- * (padAxes); a tap that never gets that far zeroes the throttle.
+ * (padAxes). A tap on the drawn stick (withinTapReach) that never gets that
+ * far zeroes the throttle; elsewhere in the zone, presses only drag.
  */
 export function bindThrottle(
   element: ControlElement,
   input: ShipInput,
-  { onStick = () => {} }: { onStick?: StickListener } = {}
+  { base, onStick = () => {}, onTap = () => {} }: ThrottleOptions
 ): ThrottleBinding {
   let origin: Point = { x: 0, y: 0 }
   let downAt = 0
+  let tappable = false
   let maxTravel = 0
   let axes: PadAxes | null = null
   let deflection: number | null = null
@@ -214,6 +225,7 @@ export function bindThrottle(
       down(event) {
         origin = { x: event.clientX, y: event.clientY }
         downAt = event.timeStamp
+        tappable = withinTapReach(origin, base())
         maxTravel = 0
         axes = null
         deflection = 0
@@ -240,8 +252,9 @@ export function bindThrottle(
         detent = freshDetent()
         input.roll = 0
         onStick(null)
-        if (reason === 'up' && event && isTap(maxTravel, event.timeStamp - downAt)) {
+        if (tappable && reason === 'up' && event && isTap(maxTravel, event.timeStamp - downAt)) {
           input.throttle = 0
+          onTap()
         }
       },
     },
@@ -263,9 +276,11 @@ type EventSource = Pick<Window, 'addEventListener' | 'removeEventListener'>
 
 /**
  * Lets go of every control when the page loses focus or is hidden (an app
- * switch mid-drag delivers no pointerup), or when the view resizes or the
- * phone turns (the controls move out from under the thumbs), so no
- * input sticks. `orientation` is screen.orientation where the browser has it.
+ * switch mid-drag delivers no pointerup), or when the view changes width or
+ * the phone turns (the controls move out from under the thumbs), so no
+ * input sticks. A height-only resize is Safari's toolbars sliding in or out
+ * mid-flight, which leaves the controls where they were, so it's let be.
+ * `orientation` is screen.orientation where the browser has it.
  */
 export function releaseOnInterruption(
   {
@@ -273,7 +288,7 @@ export function releaseOnInterruption(
     doc,
     orientation,
   }: {
-    win: EventSource
+    win: EventSource & Pick<Window, 'innerWidth'>
     doc: EventSource & Pick<Document, 'visibilityState'>
     orientation?: EventSource | null
   },
@@ -282,13 +297,19 @@ export function releaseOnInterruption(
   const onVisibility = () => {
     if (doc.visibilityState === 'hidden') release()
   }
+  let width = win.innerWidth
+  const onResize = () => {
+    if (win.innerWidth === width) return
+    width = win.innerWidth
+    release()
+  }
   win.addEventListener('blur', release)
-  win.addEventListener('resize', release)
+  win.addEventListener('resize', onResize)
   doc.addEventListener('visibilitychange', onVisibility)
   orientation?.addEventListener('change', release)
   return () => {
     win.removeEventListener('blur', release)
-    win.removeEventListener('resize', release)
+    win.removeEventListener('resize', onResize)
     doc.removeEventListener('visibilitychange', onVisibility)
     orientation?.removeEventListener('change', release)
   }

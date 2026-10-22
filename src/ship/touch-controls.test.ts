@@ -12,6 +12,7 @@ import {
   REVERSE_DETENT_MS,
   STICK_RADIUS_PX,
   TAP_MAX_MS,
+  TAP_REACH_PX,
   THROTTLE_STICK_RATE,
 } from './touch-stick'
 
@@ -55,6 +56,8 @@ function run(binding: ThrottleBinding, seconds: number) {
 }
 
 const FRAME_STEP = THROTTLE_STICK_RATE / 60
+// The drawn throttle stick's centre; the tests press on it unless they say.
+const BASE = { x: 300, y: 500 }
 
 describe('touch ship controls (tides-3bl.4)', () => {
   beforeEach(() => resetShipInput())
@@ -118,7 +121,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
     const steer = control()
     const pad = control()
     bindSteer(steer.element, shipInput)
-    const throttle = bindThrottle(pad.element, shipInput)
+    const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
 
     steer.fire('pointerdown', 100, 500, { id: 7 })
     pad.fire('pointerdown', 300, 500, { id: 9 })
@@ -158,7 +161,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
     const steer = control()
     const pad = control()
     bindSteer(steer.element, shipInput)
-    bindThrottle(pad.element, shipInput)
+    bindThrottle(pad.element, shipInput, { base: () => BASE })
     expect(steer.fire('pointerdown', 100, 500, { pointerType: 'mouse' })).toEqual({
       stopped: false,
       prevented: false,
@@ -177,7 +180,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
       const steer = control()
       const pad = control()
       bindSteer(steer.element, shipInput)
-      const throttle = bindThrottle(pad.element, shipInput)
+      const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
       shipInput.throttle = 0.5
       steer.fire('pointerdown', 100, 500, { id: 1 })
       steer.fire('pointermove', 100, 500 + STICK_RADIUS_PX, { id: 1 })
@@ -203,7 +206,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
   describe('throttle stick (tides-2hv.3)', () => {
     it('moves the throttle at a rate set by the push and holds it after release', () => {
       const pad = control()
-      const throttle = bindThrottle(pad.element, shipInput)
+      const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
       shipInput.throttle = 0.5
       pad.fire('pointerdown', 300, 500, { t: 0 })
       pad.fire('pointermove', 300, 500 - STICK_RADIUS_PX, { t: 20 })
@@ -217,7 +220,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
 
     it('stops at 0 coming down; a fresh pull goes on into reverse', () => {
       const pad = control()
-      const throttle = bindThrottle(pad.element, shipInput)
+      const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
       shipInput.throttle = 0.05
       pad.fire('pointerdown', 300, 500, { t: 0 })
       pad.fire('pointermove', 300, 500 + STICK_RADIUS_PX, { t: 20 })
@@ -236,7 +239,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
 
     it('goes on into reverse after a pull held at 0 for REVERSE_DETENT_MS', () => {
       const pad = control()
-      const throttle = bindThrottle(pad.element, shipInput)
+      const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
       shipInput.throttle = 0.01
       pad.fire('pointerdown', 300, 500, { t: 0 })
       pad.fire('pointermove', 300, 500 + STICK_RADIUS_PX, { t: 20 })
@@ -249,7 +252,11 @@ describe('touch ship controls (tides-3bl.4)', () => {
 
     it('zeroes the throttle on a tap', () => {
       const pad = control()
-      const throttle = bindThrottle(pad.element, shipInput)
+      let taps = 0
+      const throttle = bindThrottle(pad.element, shipInput, {
+        base: () => BASE,
+        onTap: () => taps++,
+      })
       shipInput.throttle = 0.7
       pad.fire('pointerdown', 300, 500, { t: 1000 })
       pad.fire('pointermove', 305, 497, { t: 1050 })
@@ -262,11 +269,42 @@ describe('touch ship controls (tides-3bl.4)', () => {
       pad.fire('pointerdown', 300, 500, { t: 2000 })
       pad.fire('pointerup', 300, 500, { t: 2010 })
       expect(shipInput.throttle).toBe(0)
+      expect(taps).toBe(2)
+    })
+
+    it('takes taps only on the drawn stick: a brush in the far corner of the zone does nothing', () => {
+      const pad = control()
+      let taps = 0
+      bindThrottle(pad.element, shipInput, { base: () => BASE, onTap: () => taps++ })
+      shipInput.throttle = 0.6
+      // The review's case: an 80 ms touch in the zone's bottom-right corner.
+      pad.fire('pointerdown', 378, 804, { t: 0 })
+      pad.fire('pointerup', 378, 804, { t: 80 })
+      expect(shipInput.throttle).toBe(0.6)
+      // Just outside the reach, still nothing; just inside, a tap.
+      pad.fire('pointerdown', BASE.x + TAP_REACH_PX + 1, BASE.y, { t: 1000 })
+      pad.fire('pointerup', BASE.x + TAP_REACH_PX + 1, BASE.y, { t: 1050 })
+      expect(shipInput.throttle).toBe(0.6)
+      expect(taps).toBe(0)
+      pad.fire('pointerdown', BASE.x, BASE.y + TAP_REACH_PX - 1, { t: 2000 })
+      pad.fire('pointerup', BASE.x, BASE.y + TAP_REACH_PX - 1, { t: 2050 })
+      expect(shipInput.throttle).toBe(0)
+      expect(taps).toBe(1)
+    })
+
+    it('still drags from anywhere in the zone', () => {
+      const pad = control()
+      const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
+      shipInput.throttle = 0.2
+      pad.fire('pointerdown', 378, 804, { t: 0 })
+      pad.fire('pointermove', 378, 804 - STICK_RADIUS_PX, { t: 20 })
+      run(throttle, 0.3)
+      expect(shipInput.throttle).toBeCloseTo(0.2 + THROTTLE_STICK_RATE * 0.3, 9)
     })
 
     it('does not count a slow press or one that travelled as a tap', () => {
       const pad = control()
-      bindThrottle(pad.element, shipInput)
+      bindThrottle(pad.element, shipInput, { base: () => BASE })
       shipInput.throttle = 0.7
       pad.fire('pointerdown', 300, 500, { t: 0 })
       pad.fire('pointerup', 300, 500, { t: TAP_MAX_MS })
@@ -283,7 +321,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
     it('springs the knob back on release', () => {
       const pad = control()
       const sticks: unknown[] = []
-      bindThrottle(pad.element, shipInput, { onStick: (s) => sticks.push(s) })
+      bindThrottle(pad.element, shipInput, { base: () => BASE, onStick: (s) => sticks.push(s) })
       pad.fire('pointerdown', 300, 500)
       pad.fire('pointermove', 302, 500 - 3 * STICK_RADIUS_PX)
       // Locked to the throttle: the knob runs straight up, held to the rim.
@@ -299,7 +337,7 @@ describe('touch ship controls (tides-3bl.4)', () => {
   describe('axis lock on the throttle stick', () => {
     const drag = (dx: number, dy: number) => {
       const pad = control()
-      const throttle = bindThrottle(pad.element, shipInput)
+      const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
       shipInput.throttle = 0.5
       pad.fire('pointerdown', 300, 500)
       pad.fire('pointermove', 300 + dx, 500 + dy)
@@ -350,15 +388,16 @@ describe('touch ship controls (tides-3bl.4)', () => {
     const steer = control()
     const pad = control()
     const steerBinding = bindSteer(steer.element, shipInput)
-    const throttle = bindThrottle(pad.element, shipInput)
+    const throttle = bindThrottle(pad.element, shipInput, { base: () => BASE })
     const bindings = [steerBinding, throttle]
     const win = control()
     const doc = control()
     const orientation = control()
     const docElement = Object.assign(doc.element, { visibilityState: 'visible' })
+    const winElement = Object.assign(win.element, { innerWidth: 390 })
     const stop = releaseOnInterruption(
       {
-        win: win.element as unknown as Window,
+        win: winElement as unknown as Window,
         doc: docElement as unknown as Document,
         orientation: orientation.element,
       },
@@ -402,6 +441,10 @@ describe('touch ship controls (tides-3bl.4)', () => {
     released()
 
     press()
+    // Height only: Safari's toolbars sliding in or out. The thumbs keep hold.
+    win.fire('resize')
+    expect(shipInput).toMatchObject({ yaw: 1, roll: -1 })
+    winElement.innerWidth = 844
     win.fire('resize')
     released()
 
@@ -420,12 +463,16 @@ describe('touch ship controls (tides-3bl.4)', () => {
 
   it('works without screen.orientation', () => {
     const win = control()
+    const winElement = Object.assign(win.element, { innerWidth: 390 })
     const doc = Object.assign(control().element, { visibilityState: 'visible' })
     let released = 0
     const stop = releaseOnInterruption(
-      { win: win.element as unknown as Window, doc: doc as unknown as Document, orientation: null },
+      { win: winElement as unknown as Window, doc: doc as unknown as Document, orientation: null },
       () => released++
     )
+    win.fire('resize')
+    expect(released).toBe(0)
+    winElement.innerWidth = 844
     win.fire('resize')
     expect(released).toBe(1)
     stop()
