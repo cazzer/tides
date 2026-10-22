@@ -15,8 +15,12 @@ export const EARTH_RADIUS_KM = 6371
 
 /** The ground's displacementScale: scene units at bump-map white. */
 export const TERRAIN_DISPLACEMENT = 0.075
-/** The bump map's brightest grey (Himalaya); bounds the cloud layer. */
-export const TERRAIN_MAX_GREY = 0.81
+/** The brightest grey (Himalaya) of the bump map the relief layer reads,
+ * earth-bump.jpg (4k, high quality); bounds the cloud layer. */
+export const TERRAIN_MAX_GREY = 219 / 255
+/** The same for the flat layer's map, earth-bump-2k.jpg (low quality), whose
+ * smaller size averages the peaks down. */
+export const TERRAIN_MAX_GREY_FLAT = 206 / 255
 /** Kilometres of elevation per unit of bump-map grey (geo-clouds' 1/39 per level). */
 export const TERRAIN_KM_PER_GREY = 255 / 39
 
@@ -34,7 +38,7 @@ export const CLOUD_LAYER_TOP =
 /** The low-quality path's single flat shell: just clear of the highest
  * ground (tides-7oi), at a typical low-cloud top. */
 export const CLOUD_FLAT_ALTITUDE =
-  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
+  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY_FLAT + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
 
 /** Where no satellite measured a top: thicker (brighter) cloud, taller tops. */
 export function defaultTopKm(alpha: number): number {
