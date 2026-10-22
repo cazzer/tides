@@ -4,6 +4,7 @@
 import * as THREE from 'three'
 import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
+import type { PlanetDetail } from '../planetMaterials'
 import marsTexture from '../../assets/mars-2k.jpg'
 
 const MARS = PLANETS.mars
@@ -12,6 +13,10 @@ const MARS = PLANETS.mars
 // mapping's curve far enough to soften toward butterscotch, the map's own
 // red-orange balance; at 1 or below they sink into a dark brick red.
 const MARS_ALBEDO = 1.3
+
+// Below the map's resolution at a close pass: ridged rock, softer than
+// Mercury's under the dust.
+const DETAIL: PlanetDetail = { style: 'rock', strength: 0.25, bump: 0.08 }
 
 // A thin dusty haze, in Mars radii: subtler than the Earth's (lower gain,
 // thinner shell). Linear RGB: dusty pink in full sun; toward the terminator
@@ -29,6 +34,7 @@ export function Mars() {
         planet={MARS}
         texture={marsTexture}
         albedo={MARS_ALBEDO}
+        detail={DETAIL}
       />
       <PlanetAtmosphere
         planet={MARS}

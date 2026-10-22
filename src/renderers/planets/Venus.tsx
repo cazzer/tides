@@ -4,6 +4,7 @@
 import * as THREE from 'three'
 import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
+import type { PlanetDetail } from '../planetMaterials'
 import venusTexture from '../../assets/venus-2k.jpg'
 
 const VENUS = PLANETS.venus
@@ -12,6 +13,9 @@ const VENUS = PLANETS.venus
 // the deck's haze darkens it gently toward the limb (Minnaert k > 1).
 const VENUS_ALBEDO = 1
 const VENUS_LIMB_DARKENING = 1.2
+// Below the map's resolution at a close pass: faint streaks along the
+// cloud deck's flow.
+const DETAIL: PlanetDetail = { style: 'streaks', strength: 0.1 }
 
 // A thin haze above the cloud tops, in Venus radii, exaggerated as the
 // Earth's is to read at this scale. Linear RGB: pale yellow in full sun,
@@ -30,6 +34,7 @@ export function Venus() {
         texture={venusTexture}
         albedo={VENUS_ALBEDO}
         limbDarkening={VENUS_LIMB_DARKENING}
+        detail={DETAIL}
       />
       <PlanetAtmosphere
         planet={VENUS}

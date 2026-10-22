@@ -5,6 +5,7 @@
 import * as THREE from 'three'
 import { MAX_RING_BANDS, sunDirectionInFrame } from './planetFrame'
 import { AMBIENT_COLOR, AMBIENT_INTENSITY, SUNLIGHT_INTENSITY } from '../lighting'
+import { isLowQuality } from '../quality'
 import planetVertex from '../shaders/planet/vertex.glsl'
 import planetFragment from '../shaders/planet/fragment.frag'
 
@@ -42,6 +43,33 @@ export function bandUniforms(): BandUniforms {
 }
 
 /**
+ * Procedural detail finer than a globe's map (tides-01v.3), faded in as the
+ * map is magnified: flowing bands for the gas giants, ridged rock, or Venus's
+ * cloud-deck streaks. `strength` scales the albedo contrast; `bump` (rock)
+ * tilts the lit normal by the detail's relief.
+ */
+export interface PlanetDetail {
+  style: 'bands' | 'rock' | 'streaks'
+  strength: number
+  bump?: number
+}
+
+// fragment.frag's DETAIL_* values; 0 is no detail.
+const DETAIL_STYLES = { bands: 1, rock: 2, streaks: 3 } as const
+
+/** Noise octaves in the detail: fewer on the low quality tier. */
+const DETAIL_OCTAVES = 5
+const LOW_QUALITY_DETAIL_OCTAVES = 2
+
+/** Sets a globe material's detail; uniforms only, so no recompile. */
+export function setPlanetDetail(material: THREE.ShaderMaterial, detail?: PlanetDetail) {
+  const u = material.uniforms
+  u.uDetailStyle.value = detail ? DETAIL_STYLES[detail.style] : 0
+  u.uDetailStrength.value = detail?.strength ?? 0
+  u.uDetailBump.value = detail?.bump ?? 0
+}
+
+/**
  * The globes' material: Sun-lit diffuse (Minnaert, uMinnaert 1 is Lambert)
  * with the scene's ambient fill, lit from `sunDir` (sunDirection). Untextured
  * and unshadowed, it is a plain uColor; every such globe (the planets' and
@@ -53,9 +81,20 @@ export function planetSurfaceMaterial(
     map = null,
     ringMap = null,
     shadowed = false,
-  }: { map?: THREE.Texture | null; ringMap?: THREE.Texture | null; shadowed?: boolean } = {}
+    lowQuality = isLowQuality(),
+  }: {
+    map?: THREE.Texture | null
+    ringMap?: THREE.Texture | null
+    shadowed?: boolean
+    lowQuality?: boolean
+  } = {}
 ): THREE.ShaderMaterial {
-  const defines: Record<string, unknown> = {}
+  // Set even untextured, so a moon whose map arrives later (MoonBodies)
+  // and the planets still share one program per variant. The tier is the
+  // page's (quality.ts) unless a test picks one.
+  const defines: Record<string, unknown> = {
+    PLANET_DETAIL_OCTAVES: lowQuality ? LOW_QUALITY_DETAIL_OCTAVES : DETAIL_OCTAVES,
+  }
   if (map) defines.USE_PLANET_MAP = ''
   if (shadowed) {
     defines.USE_RING_SHADOW = ''
@@ -78,6 +117,9 @@ export function planetSurfaceMaterial(
       uRingInner: { value: 0 },
       uRingOuter: { value: 0 },
       uRingOpacity: { value: 1 },
+      uDetailStyle: { value: 0 },
+      uDetailStrength: { value: 0 },
+      uDetailBump: { value: 0 },
       ...bandUniforms(),
     },
   })

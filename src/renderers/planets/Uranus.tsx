@@ -11,6 +11,7 @@ import {
   PlanetSurface,
   type RingProfile,
 } from '../PlanetRenderer'
+import type { PlanetDetail } from '../planetMaterials'
 import uranusTexture from '../../assets/uranus-2k.jpg'
 
 const URANUS = PLANETS.uranus
@@ -36,6 +37,9 @@ const RINGS: RingProfile = {
 
 const RING_COLOR = '#5a5a5a'
 
+// Below the map's resolution at a close pass: the barest banding.
+const DETAIL: PlanetDetail = { style: 'bands', strength: 0.08 }
+
 // The texture is already near white; at full albedo the tone mapping bleaches
 // its cyan, so it is dimmed a little. The rings' shadow only reaches the
 // globe near the terminator, as faint arcs.
@@ -49,6 +53,7 @@ export function Uranus() {
         albedo={0.8}
         limbDarkening={1.1}
         ringShadow={RINGS}
+        detail={DETAIL}
       />
       <PlanetAtmosphere
         planet={URANUS}

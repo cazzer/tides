@@ -18,7 +18,12 @@ import type { DistanceScale } from '../distance-scale'
 import { positionsFor } from '../flight-scale'
 import { useCamera } from '../camera'
 import { useStore } from '../store'
-import { planetSurfaceMaterial, sunDirection } from '../renderers/planetMaterials'
+import {
+  planetSurfaceMaterial,
+  setPlanetDetail,
+  sunDirection,
+  type PlanetDetail,
+} from '../renderers/planetMaterials'
 import { loadColorTexture } from '../renderers/planetTextures'
 import { PLANETS } from '../planets'
 import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
@@ -40,6 +45,9 @@ export interface MoonBodiesProps {
 // The ship's nearest moon gets the finer limb sphere (limb-detail.ts).
 const SPHERE = new THREE.SphereGeometry(1, 64, 32)
 
+// Ridged rock below the maps' resolution, as on Mercury and Mars, for a
+// close pass. Not on Titan, whose map is its haze.
+const MOON_DETAIL: PlanetDetail = { style: 'rock', strength: 0.25, bump: 0.08 }
 const URLS = MOON_KEYS.map((key) => moonTextureUrl(key, isLowQuality()))
 
 // The maps by url, kept for the app's life as useLoader keeps the planets',
@@ -100,6 +108,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         const sun = sunDirection()
         const material = planetSurfaceMaterial(sun.uniform, { map: loadedMaps.get(URLS[i]) ?? null })
         material.uniforms.uColor.value.set(MOONS[key].color)
+        if (key !== 'titan') setPlanetDetail(material, MOON_DETAIL)
         // The camera frames a focused moon by `radius`; moonRaycast reads
         // the rest.
         const userData: MoonPickData & { focus: string } = {
