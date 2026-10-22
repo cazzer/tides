@@ -1,19 +1,25 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type * as THREE from 'three'
+import * as THREE from 'three'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER } from '../renderers/earth-shells'
-import { collisionRadius } from './flight'
+import { collisionRadius, type Body } from './flight'
 import { createShipBodies, EARTH_COLLISION_RADIUS, EARTH_RADIUS } from './ship-bodies'
+import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
 import { SHIP_FOV } from './ship-session'
 import {
+  LIMB_FACET_PX,
   LIMB_SEGMENTS,
+  builtLimbSphere,
+  clearLimbView,
   limbFacetPx,
   limbBody,
   disposeLimbSpheres,
   limbSphere,
+  requestLimbSphere,
   retainLimbSphere,
-  setLimbBody,
   subscribeLimbBody,
+  updateLimbView,
+  wantsLimbSphere,
 } from './limb-detail'
 
 // The bead's yardstick: a retina laptop, 1600 px tall.
@@ -60,21 +66,79 @@ describe('LIMB_SEGMENTS', () => {
   })
 })
 
-describe('the limb body', () => {
-  afterEach(() => setLimbBody(null))
+const body = (key: string, x = 0, radius = 1): Body => ({ key, position: new THREE.Vector3(x, 0, 0), radius })
+const eyeAt = (x: number) => new THREE.Vector3(x, 0, 0)
+const view = (key: string, bodies: Body[], x: number) => updateLimbView(key, bodies, eyeAt(x), SCREEN_PX, SHIP_FOV)
 
-  it('tells its listeners only when it changes', () => {
+describe('the limb view', () => {
+  afterEach(() => clearLimbView())
+
+  it('tells its listeners only when the gap moves past the hysteresis', () => {
     let calls = 0
     const unsubscribe = subscribeLimbBody(() => calls++)
-    setLimbBody('mars')
-    setLimbBody('mars')
+    const mars = [body('mars')]
+    view('mars', mars, 1.5)
+    view('mars', mars, 1.51)
     expect(limbBody()).toBe('mars')
     expect(calls).toBe(1)
-    setLimbBody(null)
+    view('mars', mars, 1.6)
     expect(calls).toBe(2)
+    clearLimbView()
+    clearLimbView()
+    expect(limbBody()).toBe(null)
+    expect(calls).toBe(3)
     unsubscribe()
-    setLimbBody('venus')
-    expect(calls).toBe(2)
+    view('mars', mars, 1.5)
+    expect(calls).toBe(3)
+  })
+
+  it('holds the limb body until another is clearly nearer', () => {
+    const pair = [body('planet'), body('moon', 10)]
+    view('planet', pair, 4.9)
+    // Just past the midpoint: the moon is nearest, by 2.5%.
+    view('moon', pair, 5.05)
+    expect(limbBody()).toBe('planet')
+    view('moon', pair, 5.3)
+    expect(limbBody()).toBe('moon')
+  })
+
+  it('clears with no nearest body', () => {
+    view('mars', [body('mars')], 2)
+    updateLimbView(null, [body('mars')], eyeAt(2), SCREEN_PX, SHIP_FOV)
+    expect(limbBody()).toBe(null)
+  })
+})
+
+describe('wantsLimbSphere', () => {
+  afterEach(() => clearLimbView())
+  const base = [128, 128] as const
+
+  it('wants the limb sphere only once the base facets pass LIMB_FACET_PX', () => {
+    const earth = [body('earth')]
+    for (const x of [1.02, 1.2, 1.4, 1.5, 2, 4]) {
+      view('earth', earth, x)
+      expect(wantsLimbSphere('earth', 1, base), String(x)).toBe(
+        limbFacetPx(base, x, SCREEN_PX, SHIP_FOV) > LIMB_FACET_PX
+      )
+    }
+    view('earth', earth, 1.02)
+    expect(wantsLimbSphere('earth', 1, base)).toBe(true)
+    view('earth', earth, 4)
+    expect(wantsLimbSphere('earth', 1, base)).toBe(false)
+  })
+
+  it('wants nothing for other bodies, or for a shell seen from inside', () => {
+    view('venus', [body('venus')], 1.02)
+    expect(wantsLimbSphere('mars', 1, base)).toBe(false)
+    expect(wantsLimbSphere('venus', 1.05, [96, 48])).toBe(false)
+    expect(wantsLimbSphere('venus', 1, base)).toBe(true)
+  })
+
+  it('leaves the Sun its own sphere mid-cruise', () => {
+    const bodies = createShipBodies()
+    const sun = bodies.find((b) => b.key === 'sun')!
+    updateLimbView('sun', bodies, eyeAt(0.5 * FLIGHT_UNITS_PER_AU), SCREEN_PX, SHIP_FOV)
+    expect(wantsLimbSphere('sun', sun.radius, base)).toBe(false)
   })
 })
 
@@ -114,6 +178,50 @@ describe('the limb spheres', () => {
     retainLimbSphere(14, limbSphere(14))()
     expect(eleven.disposed).toBe(true)
     expect(ten.disposed).toBe(false)
+  })
+
+  const nextTask = () => new Promise((resolve) => setTimeout(resolve, 5))
+
+  it('builds requested spheres later, off the frame, and says when', async () => {
+    let calls = 0
+    const unsubscribe = subscribeLimbBody(() => calls++)
+    requestLimbSphere(20)
+    requestLimbSphere(20)
+    expect(builtLimbSphere(20)).toBe(null)
+    await nextTask()
+    const sphere = builtLimbSphere(20)
+    expect(sphere?.parameters).toMatchObject({ radius: 20, widthSegments: 512, heightSegments: 256 })
+    expect(calls).toBe(1)
+    requestLimbSphere(20)
+    await nextTask()
+    expect(builtLimbSphere(20)).toBe(sphere)
+    expect(calls).toBe(1)
+    unsubscribe()
+  })
+
+  it('drops a queued build once nothing wants it', async () => {
+    const first = requestLimbSphere(22)
+    const second = requestLimbSphere(22)
+    first()
+    first()
+    await nextTask()
+    const sphere = builtLimbSphere(22)
+    expect(sphere).not.toBe(null)
+    let calls = 0
+    const unsubscribe = subscribeLimbBody(() => calls++)
+    requestLimbSphere(23)()
+    second()
+    await nextTask()
+    expect(builtLimbSphere(23)).toBe(null)
+    expect(calls).toBe(0)
+    unsubscribe()
+  })
+
+  it('drops queued builds when ship mode ends', async () => {
+    requestLimbSphere(21)
+    disposeLimbSpheres()
+    await nextTask()
+    expect(builtLimbSphere(21)).toBe(null)
   })
 
   it('all go when ship mode ends', () => {

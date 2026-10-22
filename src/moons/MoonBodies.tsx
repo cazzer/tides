@@ -30,7 +30,7 @@ import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonR
 import { moonTextureUrl } from './moon-textures'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
-import { useLimbBodyAmong, useLimbSphere } from '../ship/limb-detail'
+import { useLimbBodyAmong, useLimbSphere, useWantsLimbSphere, type SphereSegments } from '../ship/limb-detail'
 
 export interface MoonBodiesProps {
   /** Which planet positions the moons follow. */
@@ -43,7 +43,8 @@ export interface MoonBodiesProps {
 // few pixels across until the camera frames it, but ship mode flies up to
 // them, where a coarser one shows its facets. Shared for the app's life.
 // The ship's nearest moon gets the finer limb sphere (limb-detail.ts).
-const SPHERE = new THREE.SphereGeometry(1, 64, 32)
+const SPHERE_SEGMENTS: SphereSegments = [64, 32]
+const SPHERE = new THREE.SphereGeometry(1, ...SPHERE_SEGMENTS)
 
 // Ridged rock below the maps' resolution, as on Mercury and Mars, for a
 // close pass. Not on Titan, whose map is its haze.
@@ -100,7 +101,8 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   const { handleFocus } = useCamera() as { handleFocus: ((event: ThreeEvent<PointerEvent>) => void) | null }
   const setPlanet = useStore((s) => s.setPlanet)
   const limbMoon = useLimbBodyAmong(isMoonKey)
-  const limbSphere = useLimbSphere(1, limbMoon != null)
+  const wantsLimb = useWantsLimbSphere(limbMoon, limbMoon ? moonRadius(limbMoon) : 1, SPHERE_SEGMENTS)
+  const limbSphere = useLimbSphere(1, wantsLimb)
   const refs = useMemo(() => MOON_KEYS.map(() => createRef<THREE.Mesh>()), [])
   const looks = useMemo(
     () =>

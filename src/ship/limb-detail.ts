@@ -3,10 +3,12 @@
 // the ship's collision stop the limb is only ~0.2 R away, and a 128-segment
 // sphere's facets show as ~3 px notches on a 1600 px tall screen (a 64×32
 // moon's as ~16 px). Only the nearest body is ever that close, so only it
-// trades up to LIMB_SEGMENTS; every other body keeps its own, cheaper sphere.
+// trades up to LIMB_SEGMENTS, and only once its own sphere's facets would
+// show (tides-01v.11); every other body keeps its own, cheaper sphere.
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
+import type { Body } from './flight'
 
 /** Width and height segments of a SphereGeometry. */
 export type SphereSegments = readonly [width: number, height: number]
@@ -40,22 +42,80 @@ export function limbFacetPx(
   return angle * pxPerRadian
 }
 
-// The ship's nearest body, set by ShipController while ship mode runs and
-// null otherwise. Ship mode and the main view never mount together, so
-// outside ship mode no body changes.
-let nearest: string | null = null
-const listeners = new Set<() => void>()
+/**
+ * A body's sphere trades up to LIMB_SEGMENTS once its own segments' facets
+ * would stand this far off the limb (limbFacetPx, at the screen's centre).
+ * Further out the base sphere's facets are subpixel and the fine one is waste:
+ * the Sun mid-cruise, or a planet a few radii off.
+ */
+export const LIMB_FACET_PX = 0.5
 
-/** ShipController's per-frame report; listeners hear only real changes. */
-export function setLimbBody(key: string | null): void {
-  if (key === nearest) return
-  nearest = key
-  listeners.forEach((listener) => listener())
+// The view only moves on once the gap to the limb body's surface has grown
+// or shrunk by this factor, and a newly nearest body only takes over once it
+// is this much closer than the held one: hysteresis, so a ship hovering at a
+// facet threshold, or at the midpoint between a planet and its moon, doesn't
+// flip spheres every frame. It also keeps the store from changing per frame.
+const LIMB_HYSTERESIS = 1.05
+
+interface LimbView {
+  key: string
+  /** From the eye to the body's centre. */
+  distance: number
+  /** The body's drawn radius, for the gap the hysteresis measures. */
+  radius: number
+  screenPx: number
+  fovDeg: number
 }
 
-/** The nearest body's key in ship mode, else null. */
+// The ship's limb body, set by ShipController while ship mode runs and null
+// otherwise. Ship mode and the main view never mount together, so outside
+// ship mode no body changes.
+let view: LimbView | null = null
+const listeners = new Set<() => void>()
+const notify = () => listeners.forEach((listener) => listener())
+
+const gapRatio = (a: number, b: number) => Math.max(a, 1e-12) / Math.max(b, 1e-12)
+
+/**
+ * ShipController's per-frame report: the nearest body (`nearestKey`, from
+ * telemetry) seen from `eye` over `screenPx` device rows with a `fovDeg`
+ * vertical FOV. Listeners hear only changes past LIMB_HYSTERESIS.
+ */
+export function updateLimbView(
+  nearestKey: string | null,
+  bodies: readonly Body[],
+  eye: THREE.Vector3,
+  screenPx: number,
+  fovDeg: number
+): void {
+  let body = nearestKey == null ? undefined : bodies.find((b) => b.key === nearestKey)
+  if (!body) return clearLimbView()
+  const held = view && view.key !== body.key ? bodies.find((b) => b.key === view?.key) : undefined
+  const gap = (b: Body) => b.position.distanceTo(eye) - b.radius
+  if (held && gapRatio(gap(held), gap(body)) < LIMB_HYSTERESIS) body = held
+  const distance = body.position.distanceTo(eye)
+  if (
+    view &&
+    view.key === body.key &&
+    view.screenPx === screenPx &&
+    view.fovDeg === fovDeg &&
+    Math.abs(Math.log(gapRatio(distance - body.radius, view.distance - view.radius))) < Math.log(LIMB_HYSTERESIS)
+  )
+    return
+  view = { key: body.key, distance, radius: body.radius, screenPx, fovDeg }
+  notify()
+}
+
+/** Ends the limb view, for when ship mode ends. */
+export function clearLimbView(): void {
+  if (view == null) return
+  view = null
+  notify()
+}
+
+/** The limb body's key in ship mode, else null. */
 export function limbBody(): string | null {
-  return nearest
+  return view?.key ?? null
 }
 
 export function subscribeLimbBody(listener: () => void): () => void {
@@ -64,13 +124,28 @@ export function subscribeLimbBody(listener: () => void): () => void {
 }
 
 /** limbBody() when `among` accepts it, else null; re-renders when that changes. */
-export function useLimbBodyAmong(among: (key: string) => boolean): string | null {
-  return useSyncExternalStore(subscribeLimbBody, () => (nearest != null && among(nearest) ? nearest : null))
+export function useLimbBodyAmong<K extends string>(among: (key: string) => key is K): K | null {
+  return useSyncExternalStore(subscribeLimbBody, () => {
+    const key = limbBody()
+    return key != null && among(key) ? key : null
+  })
 }
 
-/** True while `key` is the ship's nearest body; re-renders only when that flips. */
-export function useIsLimbBody(key: string): boolean {
-  return useSyncExternalStore(subscribeLimbBody, () => nearest === key)
+/**
+ * Whether body `key`'s sphere of `radius` and `segments` wants the limb
+ * sphere: `key` is the limb body, the eye is outside the sphere (a shell seen
+ * from inside, like a planet's haze from the collision stop, has no limb),
+ * and its facets would pass LIMB_FACET_PX.
+ */
+export function wantsLimbSphere(key: string | null, radius: number, segments: SphereSegments): boolean {
+  if (view == null || key !== view.key || view.distance <= radius) return false
+  return limbFacetPx(segments, view.distance / radius, view.screenPx, view.fovDeg) > LIMB_FACET_PX
+}
+
+/** wantsLimbSphere, re-rendering only when it flips. */
+export function useWantsLimbSphere(key: string | null, radius: number, segments: SphereSegments): boolean {
+  const [width, height] = segments
+  return useSyncExternalStore(subscribeLimbBody, () => wantsLimbSphere(key, radius, [width, height]))
 }
 
 // The limb spheres by radius, kept so that the nearest body flipping between
@@ -81,7 +156,7 @@ export function useIsLimbBody(key: string): boolean {
 const LIMB_CACHE_SIZE = 4
 const limbSpheres = new Map<number, { sphere: THREE.SphereGeometry; users: number }>()
 
-/** The shared LIMB_SEGMENTS sphere of `radius`, built on first use. Never dispose it. */
+/** The shared LIMB_SEGMENTS sphere of `radius`, built now if need be. Never dispose it. */
 export function limbSphere(radius: number): THREE.SphereGeometry {
   const entry = limbSpheres.get(radius) ?? {
     sphere: new THREE.SphereGeometry(radius, ...LIMB_SEGMENTS),
@@ -93,14 +168,98 @@ export function limbSphere(radius: number): THREE.SphereGeometry {
   return entry.sphere
 }
 
+/** The limb sphere of `radius` if it is built, else null; builds nothing. */
+export function builtLimbSphere(radius: number): THREE.SphereGeometry | null {
+  return limbSpheres.get(radius)?.sphere ?? null
+}
+
+// Building a limb sphere takes ~5-15 ms plus the garbage it leaves, and the
+// ~7 MB upload follows on its first draw: together too long for one frame
+// that also draws (Earth's three shells cost ~30-60 ms in one frame).
+// Requests build one sphere per idle callback with room for it, off the frame
+// and at most one per frame, and tell the store's listeners when each is
+// ready, so each upload lands in a frame of its own. A build doesn't split,
+// so a short idle period waits for a longer one; the timeout keeps a busy
+// page (or a 120 Hz one, whose idle periods are all short) from starving it.
+const BUILD_BUDGET_MS = 8
+const BUILD_TIMEOUT_MS = 500
+// Radii to build, with how many hooks still want each.
+const buildQueue = new Map<number, number>()
+let buildHandle: (() => void) | null = null
+
+function whenIdle(callback: () => void): () => void {
+  if (typeof requestIdleCallback === 'function') {
+    let handle = 0
+    const wait = () => {
+      handle = requestIdleCallback(
+        (deadline) => (deadline.didTimeout || deadline.timeRemaining() >= BUILD_BUDGET_MS ? callback() : wait()),
+        { timeout: BUILD_TIMEOUT_MS }
+      )
+    }
+    wait()
+    return () => cancelIdleCallback(handle)
+  }
+  const handle = setTimeout(callback, 0)
+  return () => clearTimeout(handle)
+}
+
+function afterNextFrame(callback: () => void): () => void {
+  if (typeof requestAnimationFrame === 'function') {
+    const handle = requestAnimationFrame(callback)
+    return () => cancelAnimationFrame(handle)
+  }
+  const handle = setTimeout(callback, 0)
+  return () => clearTimeout(handle)
+}
+
+function scheduleBuild() {
+  if (buildHandle || buildQueue.size === 0) return
+  buildHandle = whenIdle(() => {
+    const [radius] = buildQueue.keys()
+    if (radius === undefined) {
+      buildHandle = null
+      return
+    }
+    buildQueue.delete(radius)
+    // Trimmed only on release: the new sphere is unretained until its
+    // hook re-renders and retains it.
+    if (!limbSpheres.has(radius)) {
+      limbSphere(radius)
+      notify()
+    }
+    buildHandle = afterNextFrame(() => {
+      buildHandle = null
+      scheduleBuild()
+    })
+  })
+}
+
+/**
+ * Builds the limb sphere of `radius` in an idle callback, unless built. The
+ * returned cancel drops the request, and the build too once no request
+ * wants it, so a quick flyby doesn't leave builds nobody shows.
+ */
+export function requestLimbSphere(radius: number): () => void {
+  if (limbSpheres.has(radius)) return () => {}
+  buildQueue.set(radius, (buildQueue.get(radius) ?? 0) + 1)
+  scheduleBuild()
+  let cancelled = false
+  return () => {
+    const count = buildQueue.get(radius)
+    if (cancelled || count == null) return
+    cancelled = true
+    if (count > 1) buildQueue.set(radius, count - 1)
+    else buildQueue.delete(radius)
+  }
+}
+
 /** Marks `sphere` (from limbSphere) as on screen until the returned release. */
 export function retainLimbSphere(radius: number, sphere: THREE.SphereGeometry): () => void {
-  let entry = limbSpheres.get(radius)
-  if (entry?.sphere !== sphere) {
-    entry = { sphere, users: 0 }
-    limbSpheres.set(radius, entry)
-  }
-  const retained = entry
+  const found = limbSpheres.get(radius)
+  const retained = found?.sphere === sphere ? found : { sphere, users: 0 }
+  // Re-inserted as most recently used, as limbSphere does.
+  limbSpheres.delete(radius)
+  limbSpheres.set(radius, retained)
   retained.users++
   return () => {
     retained.users--
@@ -117,22 +276,30 @@ function trimLimbSpheres() {
   }
 }
 
-/** Disposes every limb sphere, for when ship mode ends. */
+/** Disposes every limb sphere and drops queued builds, for when ship mode ends. */
 export function disposeLimbSpheres(): void {
+  buildHandle?.()
+  buildHandle = null
+  buildQueue.clear()
   limbSpheres.forEach(({ sphere }) => sphere.dispose())
   limbSpheres.clear()
 }
 
-/** The limb sphere of `radius` while `active`, retained while shown; else null. */
-export function useLimbSphere(radius: number, active: boolean): THREE.SphereGeometry | null {
-  const sphere = useMemo(() => (active ? limbSphere(radius) : null), [active, radius])
+/**
+ * The limb sphere of `radius` while `wanted`, once built off the frame
+ * (requestLimbSphere) and retained while shown; else null, so callers keep
+ * their own sphere until it is ready.
+ */
+export function useLimbSphere(radius: number, wanted: boolean): THREE.SphereGeometry | null {
+  const sphere = useSyncExternalStore(subscribeLimbBody, () => (wanted ? builtLimbSphere(radius) : null))
+  useEffect(() => (wanted && !sphere ? requestLimbSphere(radius) : undefined), [radius, sphere, wanted])
   useEffect(() => (sphere ? retainLimbSphere(radius, sphere) : undefined), [radius, sphere])
   return sphere
 }
 
 /**
  * Body `key`'s sphere of `radius`: its own `base` segments, or the shared
- * limb sphere while the ship is nearest it.
+ * limb sphere while it wants one (wantsLimbSphere) and that is built.
  */
 export function useBodySphere(
   key: string,
@@ -141,5 +308,5 @@ export function useBodySphere(
 ): THREE.SphereGeometry {
   const base = useMemo(() => new THREE.SphereGeometry(radius, width, height), [radius, width, height])
   useEffect(() => () => base.dispose(), [base])
-  return useLimbSphere(radius, useIsLimbBody(key)) ?? base
+  return useLimbSphere(radius, useWantsLimbSphere(key, radius, [width, height])) ?? base
 }
