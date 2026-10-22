@@ -6,6 +6,7 @@ import { useStore } from '../store'
 import { glassFloatingButton } from '../glass-styles'
 import { ShipController } from './ShipController'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
+import { TouchShipControls } from './TouchShipControls'
 
 // After the exit has rendered, focus the ship button if the three-body view
 // came back with one (it carries data-ship-button); otherwise focus falls to
@@ -101,6 +102,7 @@ export function ShipView({ children }: { children: ReactNode }) {
           - desktop keyboard + virtual-joystick mouse input (tides-3bl.3)
           - touch steer stick, throttle/roll slider, level button (tides-3bl.4)
           - HUD, target lock and controls modal (tides-3bl.5) */}
+      <TouchShipControls />
     </div>
   )
 }
