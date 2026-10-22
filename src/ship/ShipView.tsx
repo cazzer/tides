@@ -5,6 +5,8 @@ import { IconX } from '@tabler/icons-react'
 import { useStore } from '../store'
 import { glassFloatingButton } from '../glass-styles'
 import { ShipController } from './ShipController'
+import { SpaceDust } from './SpaceDust'
+import { SpeedFov } from './useSpeedFov'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
 
 // After the exit has rendered, focus the ship button if the three-body view
@@ -82,6 +84,8 @@ export function ShipView({ children }: { children: ReactNode }) {
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust and the
             speed FOV kick (tides-3bl.6). */}
+        <SpaceDust />
+        <SpeedFov />
       </View>
       <ExitButton
         ref={exitButton}
