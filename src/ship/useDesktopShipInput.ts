@@ -1,22 +1,22 @@
 import { useEffect, type RefObject } from 'react'
 import { shipInput, type ShipInput } from './ship-input'
 import {
+  createShipKeys,
   releaseShipKeys,
   shipKeyDown,
   shipKeyUp,
   stepThrottle,
-  type HeldKeys,
 } from './desktop-keys'
-import { joystickDemand } from './mouse-joystick'
+import { mouseSteer, type JoystickMode } from './mouse-joystick'
 
 /** What the binding draws the mouse joystick on (see MouseJoystickWidget). */
 export interface JoystickDisplay {
   setVisible(visible: boolean): void
   /**
    * The cursor offset clamped to the saturation circle as a share of its
-   * radius (x right, y down); active is false while it isn't steering.
+   * radius (x right, y down), and what the joystick is doing.
    */
-  draw(x: number, y: number, active: boolean): void
+  draw(x: number, y: number, mode: JoystickMode): void
 }
 
 /**
@@ -48,16 +48,26 @@ export function bindDesktopShipInput(
   display: JoystickDisplay,
   input: ShipInput = shipInput
 ): () => void {
-  const held: HeldKeys = new Set()
+  const keys = createShipKeys()
   let frame: number | null = null
   let lastFrameAt: number | null = null
+  let armed = false
 
-  const throttleHeld = () => held.has('throttleUp') || held.has('throttleDown')
+  // The view only moves when it resizes (or the window does).
+  let rect: DOMRect | null = null
+  const viewRect = () => (rect ??= area.getBoundingClientRect())
+  const forgetRect = () => {
+    rect = null
+  }
+  const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(forgetRect) : null
+  resizeObserver?.observe(area)
+
+  const throttleHeld = () => keys.held.has('throttleUp') || keys.held.has('throttleDown')
 
   const tick = (now: number) => {
     const dt = lastFrameAt == null ? 0 : (now - lastFrameAt) / 1000
     lastFrameAt = now
-    stepThrottle(held, input, Math.min(dt, MAX_THROTTLE_DT))
+    stepThrottle(keys, input, Math.min(dt, MAX_THROTTLE_DT))
     frame = throttleHeld() ? requestAnimationFrame(tick) : null
   }
   const startThrottleLoop = () => {
@@ -70,65 +80,78 @@ export function bindDesktopShipInput(
     frame = null
   }
 
-  const stopSteering = () => {
+  /** Zero the turn demand; the cursor must come back to the centre to steer again. */
+  const disarm = () => {
+    armed = false
     input.pitch = 0
     input.yaw = 0
-    display.draw(0, 0, false)
+    display.draw(0, 0, 'unarmed')
   }
 
   const releaseAll = () => {
-    releaseShipKeys(held, input)
+    releaseShipKeys(keys, input)
     stopThrottleLoop()
-    stopSteering()
+    disarm()
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented) return
     if (closest(event.target, EDITABLE_SELECTOR) || dialogOpen()) return
-    if (!shipKeyDown(held, event, input)) return
+    if (!shipKeyDown(keys, event, input)) return
     event.preventDefault()
     startThrottleLoop()
   }
 
   const onKeyUp = (event: KeyboardEvent) => {
-    if (!shipKeyUp(held, event, input)) return
-    event.preventDefault()
+    if (shipKeyUp(keys, event, input)) event.preventDefault()
     if (!throttleHeld()) stopThrottleLoop()
+  }
+
+  const insideView = (x: number, y: number) => {
+    const r = viewRect()
+    return x >= r.left && x < r.right && y >= r.top && y < r.bottom
   }
 
   const onPointerMove = (event: PointerEvent) => {
     if (event.pointerType !== 'mouse') return
     display.setVisible(true)
-    const rect = area.getBoundingClientRect()
-    const inside =
-      event.clientX >= rect.left &&
-      event.clientX < rect.right &&
-      event.clientY >= rect.top &&
-      event.clientY < rect.bottom
-    if (!inside) return stopSteering()
-    const demand = joystickDemand(
-      event.clientX - (rect.left + rect.width / 2),
-      event.clientY - (rect.top + rect.height / 2),
-      Math.min(rect.width, rect.height)
+    if (!insideView(event.clientX, event.clientY)) return disarm()
+    const r = viewRect()
+    const steer = mouseSteer(
+      armed,
+      event.clientX - (r.left + r.width / 2),
+      event.clientY - (r.top + r.height / 2),
+      Math.min(r.width, r.height),
+      { overUi: closest(event.target, SHIP_UI_SELECTOR), dialogOpen: dialogOpen() }
     )
-    // Over a control the widget keeps tracking but the ship holds its heading.
-    const steering = !closest(event.target, SHIP_UI_SELECTOR) && !dialogOpen()
-    input.pitch = steering ? demand.pitch : 0
-    input.yaw = steering ? demand.yaw : 0
-    display.draw(demand.x, demand.y, steering && (demand.pitch !== 0 || demand.yaw !== 0))
+    armed = steer.armed
+    input.pitch = steer.pitch
+    input.yaw = steer.yaw
+    display.draw(steer.x, steer.y, steer.mode)
   }
 
   // relatedTarget null: the cursor left the window.
   const onPointerOut = (event: PointerEvent) => {
-    if (event.pointerType === 'mouse' && event.relatedTarget == null) stopSteering()
+    if (event.pointerType === 'mouse' && event.relatedTarget == null) disarm()
   }
 
   // Capture phase, ahead of the touch controls' own handlers: a touch takes
   // over steering, so the mouse lets go before the stick writes.
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === 'mouse') return
-    stopSteering()
+    disarm()
     display.setVisible(false)
+  }
+
+  // A context menu would swallow the keyups of keys held while it's open.
+  const onContextMenu = (event: MouseEvent) => {
+    if (insideView(event.clientX, event.clientY)) event.preventDefault()
+  }
+
+  // A dialog opening or closing (dialogs fire neither event through bubbling,
+  // hence capture) interrupts steering even if the mouse hasn't moved.
+  const onDialogToggle = (event: Event) => {
+    if ((event.target as Element | null)?.tagName === 'DIALOG') disarm()
   }
 
   const onVisibilityChange = () => {
@@ -138,14 +161,18 @@ export function bindDesktopShipInput(
   display.setVisible(
     typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches
   )
-  display.draw(0, 0, false)
+  display.draw(0, 0, 'unarmed')
 
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('pointermove', onPointerMove, { passive: true })
   window.addEventListener('pointerout', onPointerOut, { passive: true })
   window.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
+  window.addEventListener('contextmenu', onContextMenu)
+  window.addEventListener('resize', forgetRect)
   window.addEventListener('blur', releaseAll)
+  document.addEventListener('toggle', onDialogToggle, { capture: true })
+  document.addEventListener('close', onDialogToggle, { capture: true })
   document.addEventListener('visibilitychange', onVisibilityChange)
 
   return () => {
@@ -154,8 +181,13 @@ export function bindDesktopShipInput(
     window.removeEventListener('pointermove', onPointerMove)
     window.removeEventListener('pointerout', onPointerOut)
     window.removeEventListener('pointerdown', onPointerDown, { capture: true })
+    window.removeEventListener('contextmenu', onContextMenu)
+    window.removeEventListener('resize', forgetRect)
     window.removeEventListener('blur', releaseAll)
+    document.removeEventListener('toggle', onDialogToggle, { capture: true })
+    document.removeEventListener('close', onDialogToggle, { capture: true })
     document.removeEventListener('visibilitychange', onVisibilityChange)
+    resizeObserver?.disconnect()
     releaseAll()
   }
 }

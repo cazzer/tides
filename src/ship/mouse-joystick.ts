@@ -5,9 +5,9 @@
 /** Radius of the still zone round the centre, as a share of the view's short side. */
 export const JOYSTICK_DEAD_ZONE = 0.04
 /** Offset that gives full turn rate, as a share of the view's short side. */
-export const JOYSTICK_SATURATION = 0.35
+export const JOYSTICK_SATURATION = 0.3
 /** Response curve: >1 gives fine control near the centre. */
-export const JOYSTICK_EXPONENT = 1.5
+export const JOYSTICK_EXPONENT = 1.25
 
 export interface JoystickDemand {
   /** −1..1; +1 is nose up (cursor above centre). */
@@ -45,4 +45,49 @@ export function joystickDemand(dx: number, dy: number, shortSide: number): Joyst
   const magnitude = ((reach - deadZone) / (saturation - deadZone)) ** JOYSTICK_EXPONENT
   // || 0 turns −0 into 0 along the axes.
   return { pitch: -uy * magnitude || 0, yaw: ux * magnitude || 0, x, y }
+}
+
+/**
+ * - unarmed: the cursor hasn't been back to the centre since steering was
+ *   last interrupted, so it doesn't steer.
+ * - holding: armed, but in the dead zone or over a control.
+ * - steering: armed and turning the ship.
+ */
+export type JoystickMode = 'unarmed' | 'holding' | 'steering'
+
+export interface MouseSteer extends JoystickDemand {
+  armed: boolean
+  mode: JoystickMode
+}
+
+export interface SteerContext {
+  /** The cursor is over a button or other control. */
+  overUi: boolean
+  /** A modal dialog is open. */
+  dialogOpen: boolean
+}
+
+/**
+ * One mouse sample through the arming gate. Wherever the cursor happens to
+ * be when steering starts (on the ship button at entry, on a modal's close
+ * button) must not slam the ship into a full turn, so the joystick only
+ * steers once the cursor has passed through the dead zone. An open dialog
+ * disarms it; the caller disarms it too when the cursor leaves the window or
+ * the window loses focus.
+ */
+export function mouseSteer(
+  armed: boolean,
+  dx: number,
+  dy: number,
+  shortSide: number,
+  { overUi, dialogOpen }: SteerContext
+): MouseSteer {
+  const demand = joystickDemand(dx, dy, shortSide)
+  const inDeadZone = Math.hypot(dx, dy) <= JOYSTICK_DEAD_ZONE * shortSide
+  const nowArmed = !dialogOpen && (armed || inDeadZone)
+  if (!nowArmed) return { ...demand, pitch: 0, yaw: 0, armed: false, mode: 'unarmed' }
+  if (overUi || (demand.pitch === 0 && demand.yaw === 0)) {
+    return { ...demand, pitch: 0, yaw: 0, armed: true, mode: 'holding' }
+  }
+  return { ...demand, armed: true, mode: 'steering' }
 }

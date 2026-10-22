@@ -4,6 +4,7 @@ import {
   JOYSTICK_EXPONENT,
   JOYSTICK_SATURATION,
   joystickDemand,
+  mouseSteer,
 } from './mouse-joystick'
 
 const SHORT = 1000
@@ -80,5 +81,41 @@ describe('mouse virtual joystick (tides-3bl.3)', () => {
   it('returns zero for degenerate input', () => {
     expect(joystickDemand(10, 10, 0)).toEqual({ pitch: 0, yaw: 0, x: 0, y: 0 })
     expect(joystickDemand(NaN, 0, SHORT)).toEqual({ pitch: 0, yaw: 0, x: 0, y: 0 })
+  })
+})
+
+describe('mouse joystick arming (tides-3bl.3)', () => {
+  const free = { overUi: false, dialogOpen: false }
+
+  it('does not steer from wherever the cursor starts', () => {
+    const s = mouseSteer(false, sat, sat, SHORT, free)
+    expect(s).toMatchObject({ pitch: 0, yaw: 0, armed: false, mode: 'unarmed' })
+    // The widget still shows where the cursor is.
+    expect(Math.hypot(s.x, s.y)).toBeCloseTo(1, 12)
+  })
+
+  it('arms once the cursor passes through the dead zone, then steers', () => {
+    const centre = mouseSteer(false, dead / 2, 0, SHORT, free)
+    expect(centre).toMatchObject({ armed: true, mode: 'holding', pitch: 0, yaw: 0 })
+    const out = mouseSteer(centre.armed, sat, 0, SHORT, free)
+    expect(out.mode).toBe('steering')
+    expect(out.armed).toBe(true)
+    expect(out.yaw).toBeCloseTo(1, 12)
+  })
+
+  it('holds over a control without disarming', () => {
+    const s = mouseSteer(true, sat, 0, SHORT, { overUi: true, dialogOpen: false })
+    expect(s).toMatchObject({ pitch: 0, yaw: 0, armed: true, mode: 'holding' })
+    expect(s.x).toBeCloseTo(1, 12)
+    expect(mouseSteer(s.armed, sat, 0, SHORT, free).mode).toBe('steering')
+  })
+
+  it('disarms while a dialog is open, even at the centre', () => {
+    const open = { overUi: false, dialogOpen: true }
+    expect(mouseSteer(true, sat, 0, SHORT, open)).toMatchObject({ yaw: 0, armed: false, mode: 'unarmed' })
+    expect(mouseSteer(false, 0, 0, SHORT, open)).toMatchObject({ armed: false, mode: 'unarmed' })
+    // Closed again: back through the centre before it steers.
+    expect(mouseSteer(false, sat, 0, SHORT, free).mode).toBe('unarmed')
+    expect(mouseSteer(false, 0, 0, SHORT, free).armed).toBe(true)
   })
 })

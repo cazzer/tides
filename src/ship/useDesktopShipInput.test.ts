@@ -61,10 +61,10 @@ function setup({ fine = true, dialog = false } = {}) {
     level: false,
     flightAssist: true,
   }
-  const drawn = { visible: false, x: 0, y: 0, active: false }
+  const drawn = { visible: false, x: 0, y: 0, mode: '' }
   const display: JoystickDisplay = {
     setVisible: (visible) => (drawn.visible = visible),
-    draw: (x, y, active) => Object.assign(drawn, { x, y, active }),
+    draw: (x, y, mode) => Object.assign(drawn, { x, y, mode }),
   }
   // A 1000×800 view at the window's origin: centre (500, 400), short side 800.
   const area = {
@@ -75,6 +75,7 @@ function setup({ fine = true, dialog = false } = {}) {
   const key = (type: 'keydown' | 'keyup', code: string, extra: object = {}) => {
     const event = {
       code,
+      key: code.replace(/^Key/, '').toLowerCase(),
       repeat: false,
       metaKey: false,
       ctrlKey: false,
@@ -90,7 +91,10 @@ function setup({ fine = true, dialog = false } = {}) {
   const move = (x: number, y: number, extra: object = {}) =>
     win.fire('pointermove', { pointerType: 'mouse', clientX: x, clientY: y, target: element('canvas'), ...extra })
 
-  return { win, doc, input, drawn, cleanup, key, move, runFrame, frames }
+  // Bring the cursor to the centre so the joystick arms.
+  const arm = () => move(500, 400)
+
+  return { win, doc, input, drawn, cleanup, key, move, arm, runFrame, frames }
 }
 
 describe('desktop ship input binding (tides-3bl.3)', () => {
@@ -132,31 +136,37 @@ describe('desktop ship input binding (tides-3bl.3)', () => {
     expect(input.throttle).toBeCloseTo(THROTTLE_RATE * 0.1, 9)
   })
 
-  it('steers with the mouse offset from the view centre', () => {
+  it('steers with the mouse offset from the view centre once armed', () => {
     const { move, input, drawn } = setup()
+    move(900, 400)
+    expect(input.yaw).toBe(0)
+    expect(drawn).toMatchObject({ visible: true, mode: 'unarmed' })
     move(500, 400)
     expect(input.pitch).toBe(0)
     expect(input.yaw).toBe(0)
+    expect(drawn.mode).toBe('holding')
     move(500 + 800 * JOYSTICK_SATURATION, 400)
     expect(input.yaw).toBeCloseTo(1, 9)
-    expect(drawn).toMatchObject({ visible: true, active: true })
+    expect(drawn).toMatchObject({ visible: true, mode: 'steering' })
     expect(drawn.x).toBeCloseTo(1, 9)
-    move(500, 100)
+    move(500, 400 - 800 * JOYSTICK_SATURATION)
     expect(input.pitch).toBeCloseTo(1, 9)
   })
 
   it('holds steady over controls but keeps the widget tracking', () => {
-    const { move, input, drawn } = setup()
+    const { move, arm, input, drawn } = setup()
+    arm()
     move(900, 100)
     expect(input.yaw).toBeGreaterThan(0)
     move(900, 100, { target: element('button') })
     expect(input).toMatchObject({ pitch: 0, yaw: 0 })
-    expect(drawn.active).toBe(false)
+    expect(drawn.mode).toBe('holding')
     expect(drawn.x).toBeGreaterThan(0)
   })
 
   it('ignores touch and pen moves and lets a touch take over', () => {
-    const { move, win, input, drawn } = setup()
+    const { move, arm, win, input, drawn } = setup()
+    arm()
     move(900, 400)
     move(100, 400, { pointerType: 'touch' })
     expect(input.yaw).toBeGreaterThan(0)
@@ -173,20 +183,73 @@ describe('desktop ship input binding (tides-3bl.3)', () => {
     expect(drawn.visible).toBe(true)
   })
 
-  it('stops turning when the cursor leaves the window or the view', () => {
-    const { move, win, input } = setup()
+  it('stops and disarms when the cursor leaves the window or the view', () => {
+    const { move, arm, win, input, drawn } = setup()
+    arm()
     move(900, 400)
     win.fire('pointerout', { pointerType: 'mouse', relatedTarget: element('canvas') })
     expect(input.yaw).toBeGreaterThan(0)
     win.fire('pointerout', { pointerType: 'mouse', relatedTarget: null })
     expect(input.yaw).toBe(0)
     move(900, 400)
+    expect(input.yaw).toBe(0)
+    expect(drawn.mode).toBe('unarmed')
+    arm()
+    move(900, 400)
+    expect(input.yaw).toBeGreaterThan(0)
     move(1200, 400)
+    expect(input.yaw).toBe(0)
+    move(900, 400)
     expect(input.yaw).toBe(0)
   })
 
+  it('disarms while a dialog is open and when one opens or closes', () => {
+    const { move, arm, doc, input } = setup()
+    arm()
+    move(900, 400)
+    expect(input.yaw).toBeGreaterThan(0)
+    doc.fire('toggle', { target: { tagName: 'DIALOG' } })
+    expect(input.yaw).toBe(0)
+    move(900, 400)
+    expect(input.yaw).toBe(0)
+    arm()
+    move(900, 400)
+    doc.fire('close', { target: { tagName: 'DIALOG' } })
+    expect(input.yaw).toBe(0)
+    arm()
+    move(900, 400)
+    doc.fire('toggle', { target: { tagName: 'DETAILS' } })
+    expect(input.yaw).toBeGreaterThan(0)
+
+    const open = setup({ dialog: true })
+    open.arm()
+    open.move(900, 400)
+    expect(open.input.yaw).toBe(0)
+    expect(open.drawn.mode).toBe('unarmed')
+  })
+
+  it('lets go of held keys when Cmd is released', () => {
+    const { key, input } = setup()
+    key('keydown', 'KeyD')
+    key('keydown', 'KeyQ')
+    const meta = key('keyup', 'MetaLeft', { key: 'Meta' })
+    expect(meta.preventDefault).not.toHaveBeenCalled()
+    expect(input).toMatchObject({ strafeX: 0, roll: 0 })
+  })
+
+  it('suppresses the context menu over the view only', () => {
+    const { win } = setup()
+    const inside = { clientX: 500, clientY: 400, preventDefault: vi.fn() }
+    win.fire('contextmenu', inside)
+    expect(inside.preventDefault).toHaveBeenCalled()
+    const outside = { clientX: 1100, clientY: 400, preventDefault: vi.fn() }
+    win.fire('contextmenu', outside)
+    expect(outside.preventDefault).not.toHaveBeenCalled()
+  })
+
   it('lets go of everything on blur and when the tab hides', () => {
-    const { move, key, win, doc, input, frames } = setup()
+    const { move, arm, key, win, doc, input, frames } = setup()
+    arm()
     move(900, 100)
     key('keydown', 'KeyW')
     key('keydown', 'KeyQ')
@@ -202,7 +265,8 @@ describe('desktop ship input binding (tides-3bl.3)', () => {
   })
 
   it('removes its listeners and resets what it set on cleanup', () => {
-    const { move, key, win, doc, input, cleanup, frames } = setup()
+    const { move, arm, key, win, doc, input, cleanup, frames } = setup()
+    arm()
     move(900, 100)
     key('keydown', 'KeyS')
     key('keydown', 'KeyE')
