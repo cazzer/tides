@@ -55,6 +55,39 @@ export function planetsNear(zoom: number, eyeDistance: number): number {
   return Math.min(0, eyeDistance - planetsDrawDepth(zoom))
 }
 
+/** A body's centre depth in front of the eye and how far it reaches from it. */
+export interface BodyDepth {
+  depth: number
+  reach: number
+}
+
+/**
+ * Moves `near` forward past every body it would cut, so each is drawn whole
+ * or not at all (tides-o63): as planetsNear sweeps back through the system
+ * with the zoom, a body it passed through showed sliced open. Bodies reaching
+ * past `limit` (the target's depth) are left alone, so the focused body is
+ * never the one hidden.
+ */
+export function clearNear(
+  near: number,
+  bodies: readonly BodyDepth[],
+  limit: number
+): number {
+  // Each move lands on a far side, so no body can stop the plane twice.
+  for (let moved = true; moved; ) {
+    moved = false
+    for (const { depth, reach } of bodies) {
+      const back = depth - reach
+      const front = depth + reach
+      if (back < near && near < front && front <= limit) {
+        near = front
+        moved = true
+      }
+    }
+  }
+  return near
+}
+
 /**
  * The store ref the camera follows for `focus` ('location' is placed
  * separately). A planet or moon that hasn't registered yet falls back to the Sun.

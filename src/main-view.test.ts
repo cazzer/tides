@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { OrthographicCamera } from 'three'
 import {
   MAIN_ZOOM,
+  clearNear,
   focusedRef,
   mainViewRange,
   planetFramingZoom,
@@ -87,6 +88,45 @@ describe('planetsNear', () => {
     expect(-R * cos45).toBeLessThan(near)
     expect(R * cos45).toBeGreaterThan(2000 / 2 / minZoom)
     expect(far).toBeGreaterThanOrEqual(R)
+  })
+})
+
+describe('clearNear', () => {
+  const EYE = 80
+  const cuts = (near: number, { depth, reach }: { depth: number; reach: number }) =>
+    depth - reach < near && near < depth + reach
+
+  it('leaves a near plane that cuts nothing where it is', () => {
+    const bodies = [{ depth: -40, reach: 3 }, { depth: 20, reach: 6 }]
+    expect(clearNear(-10, bodies, EYE)).toBe(-10)
+    expect(clearNear(0, [], EYE)).toBe(0)
+  })
+
+  it('never slices a body as the view zooms out (tides-o63)', () => {
+    // Focused on Venus, Oct 2026: Jupiter 84.5 units behind the eye was cut
+    // open from zoom ~2.25 to ~2.16 as planetsNear swept through it.
+    const jupiter = { depth: -84.46, reach: PLANETS.jupiter.radius }
+    expect(cuts(planetsNear(2.2, EYE), jupiter)).toBe(true)
+    for (let zoom = 40; zoom >= 1; zoom -= 0.005) {
+      const near = clearNear(planetsNear(zoom, EYE), [jupiter], EYE)
+      expect(cuts(near, jupiter), `zoom ${zoom}`).toBe(false)
+    }
+  })
+
+  it('hides a body it would cut by stepping to its far side', () => {
+    expect(clearNear(-85, [{ depth: -84, reach: 6 }], EYE)).toBe(-78)
+  })
+
+  it('steps through bodies that overlap in depth', () => {
+    const bodies = [{ depth: -70, reach: 5 }, { depth: -78, reach: 6 }]
+    const near = clearNear(-80, bodies, EYE)
+    expect(near).toBe(-65)
+    for (const body of bodies) expect(cuts(near, body)).toBe(false)
+  })
+
+  it('never hides a body reaching the target', () => {
+    // A Sun-sized body centred on the target, with the plane inside it.
+    expect(clearNear(75, [{ depth: EYE, reach: 10 }], EYE)).toBe(75)
   })
 })
 
