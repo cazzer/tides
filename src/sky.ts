@@ -143,8 +143,8 @@ const basis = new THREE.Matrix4()
 // with the horizon: +Y is the zenith and −Z faces surfaceView(lat).azimuth,
 // so the ground it carries stays put while the view turns. `camera`, its
 // child, turns to `look` (by default surfaceView(lat)): heading about the
-// zenith, then pitch about its own right axis, never roll, so the horizon
-// stays level on screen.
+// zenith, then pitch about its own right axis, and roll only in compass mode,
+// so the horizon otherwise stays level on screen.
 export function placeSurfaceCamera(
   observer: THREE.Object3D,
   camera: THREE.Object3D,
@@ -178,7 +178,7 @@ export function placeSurfaceCamera(
   observer.quaternion.setFromRotationMatrix(basis)
 
   camera.position.set(0, 0, 0)
-  camera.rotation.set(look.altitude * DEG, a - look.azimuth * DEG, 0, 'YXZ')
+  camera.rotation.set(look.altitude * DEG, a - look.azimuth * DEG, (look.roll ?? 0) * DEG, 'YXZ')
 }
 
 const eye = new THREE.Vector3()

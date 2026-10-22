@@ -145,6 +145,24 @@ describe('dragging View from Earth (tides-2dp)', () => {
     expect(look()).toBeNull()
   })
 
+  it('leaves compass mode on a drag or a double tap, not a tap (tides-d5j)', () => {
+    const { fire } = panel()
+    useStore.setState({ compass: true, skyLook: { azimuth: 10, altitude: 70, roll: 30 } })
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    expect(useStore.getState().compass).toBe(true)
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    expect(useStore.getState().compass).toBe(false)
+
+    useStore.setState({ compass: true })
+    fire('pointerdown', 100, 100, { after: 1000 })
+    fire('pointermove', 100, 100 + DRAG_THRESHOLD + 1)
+    expect(useStore.getState().compass).toBe(false)
+    // The drag levels the view.
+    expect(look()!.roll).toBeUndefined()
+  })
+
   it('lands a reset cut short, and gives the element back', () => {
     const { fire, reset, cleanup, element, listeners } = panel()
     expect(element.style.touchAction).toBe('none')

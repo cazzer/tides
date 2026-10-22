@@ -171,6 +171,9 @@ export const useStore = create<{
   /** View from Earth's vertical field of view (degrees) while zoomed in;
    * null at the default SURFACE_FOV. Not in the URL, like skyLook. */
   skyFov: number | null
+  /** Compass mode (tides-d5j): skyLook follows the phone's orientation.
+   * Not in the URL; a look-around drag or double tap turns it off. */
+  compass: boolean
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
@@ -209,6 +212,7 @@ export const useStore = create<{
   location: getInitialLocation(),
   skyLook: null,
   skyFov: null,
+  compass: false,
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),

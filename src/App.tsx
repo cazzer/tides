@@ -13,6 +13,7 @@ import { PIN_LAYER } from './LocationPin'
 import LoadingOverlay from './LoadingOverlay'
 import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
+import CompassButton from './CompassButton'
 import { CloudAttribution } from './CloudAttribution'
 import { PlanetAttribution } from './PlanetAttribution'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
@@ -204,6 +205,7 @@ export default function App() {
             onChange={setMainPanel}
           />
         )}
+        {single && mainPanel === 'top' && <CompassButton />}
         {weatherSource === 'real' && <CloudAttribution />}
         {showPlanets && <PlanetAttribution below={weatherSource === 'real'} />}
       </div>

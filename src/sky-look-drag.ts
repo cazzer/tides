@@ -86,6 +86,7 @@ export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) 
     press.y = event.clientY
     useStore.setState({
       skyLook: dragLook(currentLook(), dx, dy, element.clientHeight, currentFov()),
+      compass: false,
     })
   }
 
@@ -105,8 +106,10 @@ export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) 
       time - lastTap.time < DOUBLE_TAP_MS &&
       Math.hypot(x - lastTap.x, y - lastTap.y) < DOUBLE_TAP_DISTANCE
     lastTap = double ? null : { time, x, y }
+    if (!double) return
+    useStore.setState({ compass: false })
     const { skyLook, skyFov } = useStore.getState()
-    if (double && (skyLook || skyFov)) {
+    if (skyLook || skyFov) {
       reset.current = { from: currentLook(), fromFov: currentFov(), start: performance.now() }
     }
   }

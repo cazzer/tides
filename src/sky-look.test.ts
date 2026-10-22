@@ -103,6 +103,19 @@ describe('looking around View from Earth (tides-2dp)', () => {
     }
   })
 
+  it('rolls about the line of sight for compass mode (tides-d5j)', () => {
+    for (const { lat, lon } of sites) {
+      const { zenith } = horizonFrame(lat, lon)
+      const level = lookingCamera(lat, lon, { azimuth: 70, altitude: 0 })
+      const rolled = lookingCamera(lat, lon, { azimuth: 70, altitude: 0, roll: 30 })
+      const forward = (c: THREE.Camera) => c.getWorldDirection(new THREE.Vector3())
+      expect(forward(rolled).angleTo(forward(level))).toBeLessThan(1e-9)
+      // Anticlockwise on screen: the right-hand side of the view rises.
+      const right = new THREE.Vector3(1, 0, 0).transformDirection(rolled.matrixWorld)
+      expect(right.dot(zenith)).toBeCloseTo(Math.sin(30 * DEG), 9)
+    }
+  })
+
   it('defaults to today’s view, facing the equator', () => {
     for (const { lat, lon } of sites) {
       const byDefault = lookingCamera(lat, lon)
@@ -172,5 +185,13 @@ describe('looking around View from Earth (tides-2dp)', () => {
     const middle = easeLook(from, to, 0.5)
     expect(angleBetween(middle.azimuth, 0)).toBeLessThan(1e-9)
     expect(middle.altitude).toBeCloseTo(59, 9)
+  })
+
+  it('levels a compass roll on the way (tides-d5j)', () => {
+    const from: SkyLook = { azimuth: 0, altitude: 30, roll: 40 }
+    const to: SkyLook = { azimuth: 0, altitude: 30 }
+    expect(easeLook(from, to, 0).roll).toBeCloseTo(40, 9)
+    expect(easeLook(from, to, 0.5).roll).toBeCloseTo(20, 9)
+    expect(easeLook(from, to, 1).roll ?? 0).toBeCloseTo(0, 9)
   })
 })

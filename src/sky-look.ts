@@ -9,6 +9,9 @@ const DEG = Math.PI / 180
 export interface SkyLook {
   azimuth: number
   altitude: number
+  /** Turn about the line of sight, as the phone is turned in compass mode
+   * (tides-d5j); dragging levels it. */
+  roll?: number
 }
 
 // A little below the horizon, so the hills stay in reach, up to the zenith.
@@ -59,12 +62,14 @@ export function dragLook(
   })
 }
 
-// Smoothstep from `from` to `to` at progress t (0..1), turning the short way.
+// Smoothstep from `from` to `to` at progress t (0..1), turning the short way
+// and levelling any roll on the way.
 export function easeLook(from: SkyLook, to: SkyLook, t: number): SkyLook {
   const k = THREE.MathUtils.smoothstep(t, 0, 1)
   const turn = THREE.MathUtils.euclideanModulo(to.azimuth - from.azimuth + 180, 360) - 180
-  return clampLook({
+  const look = clampLook({
     azimuth: from.azimuth + turn * k,
     altitude: from.altitude + (to.altitude - from.altitude) * k,
   })
+  return from.roll ? { ...look, roll: from.roll * (1 - k) } : look
 }
