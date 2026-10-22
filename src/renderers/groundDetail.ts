@@ -16,6 +16,14 @@
 // The bump map's own relief (tides-01v.13, ./groundRelief.ts) tilts the land's
 // normal first, from the same footprint; the detail's finer tilt adds to it.
 //
+// Skylight on the tilted ground (tides-01v.19): the Sun is the ground's only
+// direct light, so under a low Sun every slope facing away went black.
+// GROUND_SKY_FILL of the flat ground's sunlight comes instead from the sky
+// dome, weighted by how much of the sky a slope sees; it fades with the Sun
+// to nothing at the terminator. Where the normal isn't tilted (the sea, the
+// system view) the two parts sum to the old sunlight, and the night side
+// gains nothing.
+//
 // Spread through composePatches onto the ground's Phong material.
 import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
@@ -58,6 +66,8 @@ ${DETAIL_NOISE_GLSL}
 #define GROUND_DETAIL_RELIEF_ICE 0.08
 #define GROUND_DETAIL_ROUGH 0.7
 #define GROUND_DETAIL_MAX_SLOPE 0.5
+// The share of the Sun's light on flat ground that comes from the sky.
+#define GROUND_SKY_FILL 0.2
 
 // fBm at p (scene units, the Earth's frame) seen at footprint over a map of
 // texel, a fraction fine of it also covered by a source of fineTexel: x in
@@ -95,6 +105,7 @@ float groundDetailFine = 0.0;
 // emissive map and the lights.
 const FRAGMENT_BODY = /* glsl */ `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP)
+vec3 groundUp = normal;
 {
   // A pixel's width on the ground, stretched by the slant: from the view
   // ray's spread, which unlike the position's is smooth across facets (the
@@ -130,6 +141,21 @@ const FRAGMENT_BODY = /* glsl */ `
 #endif
 `
 
+// After the lights, before the cloud shadow and the eclipse (patches earlier
+// in the chain, whose code lands after this) dim the sunlight, skylight and
+// all.
+const LIGHT_BODY = /* glsl */ `
+#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
+{
+  float groundSunUp = saturate(dot(groundUp, directionalLights[0].direction));
+  float groundSkyView = 0.5 + 0.5 * dot(normal, groundUp);
+  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse
+    + GROUND_SKY_FILL * groundSunUp * groundSkyView * directionalLights[0].color
+      * BRDF_Lambert(material.diffuseColor);
+}
+#endif
+`
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
@@ -147,12 +173,16 @@ export function groundDetailPatch(low: boolean): MaterialPatch {
       shader.vertexShader = inject(VERTEX_HEAD + shader.vertexShader, 'begin_vertex', VERTEX_BODY)
       shader.fragmentShader = inject(
         inject(
-          inject(shader.fragmentShader, 'common', fragmentHead(octaves, shader.displacementMap)),
-          'specularmap_fragment',
-          TEXEL_BODY
+          inject(
+            inject(shader.fragmentShader, 'common', fragmentHead(octaves, shader.displacementMap)),
+            'specularmap_fragment',
+            TEXEL_BODY
+          ),
+          'normal_fragment_maps',
+          FRAGMENT_BODY
         ),
-        'normal_fragment_maps',
-        FRAGMENT_BODY
+        'lights_fragment_end',
+        LIGHT_BODY
       )
     },
     customProgramCacheKey: () => `ground-detail-${octaves}`,

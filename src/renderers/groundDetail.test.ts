@@ -43,6 +43,16 @@ describe('ground detail patch', () => {
     expect(at('float groundDetailTexel =')).toBeLessThan(detail)
     // The noise is defined once across the composed chain.
     expect(frag.split('vec4 detailNoise(vec3 p)')).toHaveLength(2)
+    // The skylight's up is the normal before any tilt; it is lit with the
+    // sunlight, which the cloud shadow and eclipse then dim.
+    const sky = at('reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL)')
+    expect(at('vec3 groundUp = normal;')).toBeLessThan(at('groundLand > 0.0'))
+    expect(at('#include <lights_fragment_end>')).toBeLessThan(sky)
+    expect(sky).toBeLessThan(at('reflectedLight.directDiffuse *= cloudLit;'))
+    expect(sky).toBeLessThan(at('reflectedLight.directDiffuse *= vec3(eclipse.x) + glow;'))
+    // Wherever the skylight compiles, groundUp is declared.
+    expect(frag).toContain('#if defined(USE_MAP) && defined(USE_SPECULARMAP)\nvec3 groundUp = normal;')
+    expect(frag).toContain('#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0\n{\n  float groundSunUp')
     clouds.dispose()
   })
 
