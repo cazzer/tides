@@ -23,12 +23,13 @@ import { ovationFeed } from './ovationFeed'
 import { AURORA_GAIN } from '../lighting'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
+import { AURORA_SHELL_OUTER } from './earth-shells'
 
 // Shell heights as fractions of the Earth's radius. Real aurora spans ~100 to
 // ~300+ km (1.6-5%); the base sits just above the cloud layer (1.02) and the
 // displaced terrain, which this scene exaggerates.
 const SHELL_INNER = 1.024
-const SHELL_OUTER = 1.07
+const SHELL_OUTER = AURORA_SHELL_OUTER
 // Down to 18° latitude: rays grazing the shell enter it up to ~17° from where
 // they meet a storm-time oval (≥ ~38° geographic).
 const CAP_THETA = (72 * Math.PI) / 180

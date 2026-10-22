@@ -42,7 +42,7 @@ import {
 import * as THREE from 'three'
 import { eclipticToScene } from '../ephemeris'
 import { PLANETS } from '../planets'
-import { COLLISION_MARGIN, type Body as FlightBody } from './flight'
+import { collisionRadius, type Body as FlightBody } from './flight'
 
 /** Speed of light, km/s. */
 export const C_KM_PER_S = 299_792.458
@@ -112,13 +112,8 @@ export function trueBodies(keys: readonly string[], t: number): TrueBodies {
   }
 }
 
-/** The closest the ship gets to `body`'s centre, scene units. */
-function shell(body: FlightBody): number {
-  return body.radius * COLLISION_MARGIN
-}
-
 function pairGap(a: FlightBody, b: FlightBody): number {
-  return Math.max(MIN_GAP, a.position.distanceTo(b.position) - shell(a) - shell(b))
+  return Math.max(MIN_GAP, a.position.distanceTo(b.position) - collisionRadius(a) - collisionRadius(b))
 }
 
 function weight(gap: number): number {
@@ -178,7 +173,7 @@ export function measureRanges(
   gaps.length = n
   logScales.length = n
   for (let i = 0; i < n; i++) {
-    gaps[i] = Math.max(0, position.distanceTo(bodies[i].position) - shell(bodies[i]))
+    gaps[i] = Math.max(0, position.distanceTo(bodies[i].position) - collisionRadius(bodies[i]))
   }
 
   const earth = bodies.findIndex((body) => body.key === 'earth')

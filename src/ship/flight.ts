@@ -54,7 +54,19 @@ export interface ShipState {
 export interface Body {
   key: string
   position: THREE.Vector3
+  /** The drawn sphere's radius; speed caps and telemetry measure from it. */
   radius: number
+  /**
+   * The hard sphere the ship stays outside, when the body draws shells above
+   * its sphere (Earth's terrain, clouds and atmosphere; tides-3bl.7). Without
+   * one, radius × COLLISION_MARGIN. See collisionRadius.
+   */
+  collisionRadius?: number
+}
+
+/** The closest the ship gets to `body`'s centre, scene units. */
+export function collisionRadius(body: Body): number {
+  return body.collisionRadius ?? body.radius * COLLISION_MARGIN
 }
 
 export interface FlightEnv {
@@ -69,9 +81,10 @@ export interface FlightEnv {
 // can cover at most 5% of the gap to the nearest surface, so it cannot tunnel.
 export const MAX_DT = 0.1
 
-// Hard-sphere radius as a multiple of the body radius. The 2% keeps the
-// camera's near plane off the surface mesh (Earth's cloud/atmosphere shells
-// sit within ~1.5% of its radius).
+// Hard-sphere radius as a multiple of the body radius, for a body without its
+// own collisionRadius. The 2% keeps the camera's near plane off the surface
+// mesh. Earth's displaced terrain and shells reach further and set their own
+// (ship-bodies.ts EARTH_COLLISION_RADIUS).
 export const COLLISION_MARGIN = 1.02
 
 // Speed floor, scene units/s. The cap falls to this within
@@ -355,7 +368,7 @@ function translate(
 function collide(state: ShipState, bodies: readonly Body[]): boolean {
   let hit = false
   for (const body of bodies) {
-    const shell = body.radius * COLLISION_MARGIN
+    const shell = collisionRadius(body)
     const normal = scratch.subVectors(state.position, body.position)
     const d = normal.length()
     if (d >= shell) continue

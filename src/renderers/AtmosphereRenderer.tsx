@@ -7,11 +7,12 @@ import { useStore } from '../store'
 import { sunDirectionLocal } from '../aurora'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
+import { ATMOSPHERE_OUTER } from './earth-shells'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
 // thins out with an (exaggerated, for visibility) ~60 km scale height.
 const SURFACE = 1.012
-const OUTER = 1.06
+const OUTER = ATMOSPHERE_OUTER
 const SCALE_HEIGHT = 0.0095
 // Linear RGB: blue overhead, reddening toward the terminator.
 const SKY = new THREE.Vector3(0.3, 0.55, 1.0)

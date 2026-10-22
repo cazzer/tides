@@ -11,6 +11,7 @@ import {
   V_NORMAL,
   VELOCITY_TAU,
   approachCap,
+  collisionRadius,
   createShipState,
   nearestBody,
   speedCap,
@@ -404,6 +405,27 @@ describe('collision', () => {
           expect(state.position.toArray().every(Number.isFinite)).toBe(true)
         }
       }
+    }
+  })
+
+  test('defaults the hard sphere to radius × COLLISION_MARGIN', () => {
+    expect(collisionRadius(MOON)).toBe(MOON.radius * COLLISION_MARGIN)
+    expect(collisionRadius({ ...MOON, collisionRadius: 1.5 })).toBe(1.5)
+  })
+
+  test("stops at a body's own collisionRadius, flying straight in at full throttle", () => {
+    const shelled: Body = { ...EARTH, collisionRadius: EARTH.radius * 1.2 }
+    const start = shelled.position.clone().add(new THREE.Vector3(0, 0, 30))
+    for (const targetKey of [null, 'earth']) {
+      const state = shipAt(start, shelled.position)
+      const telemetry = createShipTelemetry()
+      for (let i = 0; i < 60 * 60; i++) {
+        stepShip(state, input({ throttle: 1 }), FRAME, env([shelled], targetKey), telemetry)
+        expect(state.position.distanceTo(shelled.position)).toBeGreaterThanOrEqual(
+          shelled.collisionRadius! * (1 - 1e-12)
+        )
+      }
+      expect(state.position.distanceTo(shelled.position)).toBeCloseTo(shelled.collisionRadius!, 9)
     }
   })
 

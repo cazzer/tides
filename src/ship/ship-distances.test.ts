@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { Body, GeoMoon, HelioVector, KM_PER_AU } from 'astronomy-engine'
-import { COLLISION_MARGIN } from './flight'
+import { collisionRadius } from './flight'
 import { createShipBodies, updateShipBodies, type ShipBody } from './ship-bodies'
 import { spawnPose } from './ship-session'
 import {
@@ -39,7 +39,7 @@ function find(bodies: readonly ShipBody[], key: string) {
   return { index, body: bodies[index] }
 }
 
-const shellOf = (body: ShipBody) => body.radius * COLLISION_MARGIN
+const shellOf = collisionRadius
 
 // On `from`'s collision shell (plus `extra`), on the line toward `to`.
 function shellToward(from: ShipBody, to: ShipBody, extra = 0): THREE.Vector3 {
