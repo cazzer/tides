@@ -1,8 +1,6 @@
 uniform float time;
 varying vec2 vPlane;
 varying float vOuter;
-// Fades the perspective corona out near the camera plane (vertex.glsl).
-varying float vFade;
 
 #include ../aurora/noise3.glsl
 
@@ -23,7 +21,7 @@ void main() {
   // ...into a faint, wide haze that carries the streamers.
   float haze = 0.08 * exp(-x / 0.5) * (1.0 + 0.5 * s * smoothstep(1.0, 1.3, r));
   float fade = 1.0 - smoothstep(1.0 + 0.4 * (vOuter - 1.0), vOuter, r);
-  float I = (inner + haze) * fade * vFade;
+  float I = (inner + haze) * fade;
 
   vec3 col = mix(vec3(1.0, 0.3, 0.05), vec3(1.0, 0.62, 0.35), smoothstep(1.0, 1.6, r));
   gl_FragColor = vec4(col * I, 1.0);

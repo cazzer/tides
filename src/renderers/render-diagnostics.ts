@@ -20,13 +20,18 @@ function pathOf(object: THREE.Object3D): string {
 const pending: THREE.Object3D[] = []
 
 /**
- * The first non-finite (NaN or ±Infinity) camera position or orientation, or
- * object position in `scene`, described for a log; null when all are finite.
+ * The camera's position or orientation if either is non-finite (NaN or
+ * ±Infinity), described for a log; null when both are finite.
  */
-export function findNonFinite(scene: THREE.Object3D, camera: THREE.Camera): string | null {
+export function nonFiniteCamera(camera: THREE.Camera): string | null {
   const q = camera.quaternion
   if (!finite3(camera.position)) return `camera position ${camera.position.toArray()}`
   if (!(finite3(q) && Number.isFinite(q.w))) return `camera quaternion ${q.toArray()}`
+  return null
+}
+
+/** The first object in `scene` with a non-finite position, described for a log. */
+export function nonFiniteObject(scene: THREE.Object3D): string | null {
   pending.length = 0
   pending.push(scene)
   while (pending.length) {
@@ -41,11 +46,13 @@ export function findNonFinite(scene: THREE.Object3D, camera: THREE.Camera): stri
 }
 
 /**
- * Dev builds: once per frame per scene, check what each gl.render call is
- * about to draw for non-finite positions, and console.error the first
+ * Dev builds: before each gl.render call, check its camera, and once per
+ * frame its scene, for non-finite positions, and console.error the first
  * offender (with a stack), once. Every View panel and the Sun's CubeCamera
  * render through the one renderer, so this sees the ship camera and the
- * bodies wherever they are drawn. `frame` reads the current frame number.
+ * bodies wherever they are drawn. The camera is checked on every call: the
+ * CubeCamera draws the ship's scene first each frame, so a per-frame check
+ * would only ever see its cameras. `frame` reads the current frame number.
  * Returns the uninstaller.
  */
 export function watchForNonFinite(gl: THREE.WebGLRenderer, frame: () => number): () => void {
@@ -53,9 +60,12 @@ export function watchForNonFinite(gl: THREE.WebGLRenderer, frame: () => number):
   const checkedAt = new WeakMap<THREE.Object3D, number>()
   let reported = false
   gl.render = function (scene, camera) {
-    if (!reported && checkedAt.get(scene) !== frame()) {
-      checkedAt.set(scene, frame())
-      const offender = findNonFinite(scene, camera)
+    if (!reported) {
+      let offender = nonFiniteCamera(camera)
+      if (!offender && checkedAt.get(scene) !== frame()) {
+        checkedAt.set(scene, frame())
+        offender = nonFiniteObject(scene)
+      }
       if (offender) {
         reported = true
         const message = `[render] non-finite ${offender}`

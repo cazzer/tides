@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
-  CORONA_FADE_START,
   CORONA_MAX_ANGLE,
   CORONA_OUTER_PERSPECTIVE as OUTER,
   perspectiveCoronaQuad,
@@ -68,8 +67,6 @@ describe('perspectiveCoronaQuad', () => {
         expect(Math.abs(x)).toBeLessThanOrEqual(OUTER * Math.tan(CORONA_MAX_ANGLE))
         expect(Math.abs(y)).toBeLessThanOrEqual(OUTER * Math.tan(CORONA_MAX_ANGLE))
       }
-      expect(quad.fade).toBeGreaterThan(0)
-      expect(quad.fade).toBeLessThanOrEqual(1)
     })
 
     it('draws no glow at the centre of view', () => {
@@ -79,7 +76,7 @@ describe('perspectiveCoronaQuad', () => {
   })
 
   it('collapses the corona from 89.5° out, where the old quad turned inside out', () => {
-    expect(perspectiveCoronaQuad(sunAt(60, 50), R)?.fade).toBe(1)
+    expect(perspectiveCoronaQuad(sunAt(60, 50), R)).not.toBeNull()
     for (const deg of [89.5, 89.9, 90, 90.5, 179]) {
       expect(perspectiveCoronaQuad(sunAt(deg, 50), R)).toBeNull()
     }
@@ -90,21 +87,40 @@ describe('perspectiveCoronaQuad', () => {
     expect(Math.abs(old.limb) / (50 * Math.cos(89.9 * DEG))).toBeGreaterThan(1e2)
   })
 
-  it('collapses a Sun at or behind the camera plane, and one around the camera', () => {
+  it('collapses a Sun at or behind the camera plane, or centred on the camera', () => {
     expect(perspectiveCoronaQuad([0, 0, 50], R)).toBeNull()
     expect(perspectiveCoronaQuad([50, 0, 0], R)).toBeNull()
     expect(perspectiveCoronaQuad([0, 0, 0], R)).toBeNull()
-    expect(perspectiveCoronaQuad([1, 2, -3], R)).toBeNull()
   })
 
-  it('fades out between CORONA_FADE_START and CORONA_MAX_ANGLE of the far limb', () => {
-    // A distant Sun, so beta is negligible and theta is the far limb.
-    const at = (theta: number) => perspectiveCoronaQuad(sunAt(theta / DEG, 1e6), R)
-    expect(at(CORONA_FADE_START - 0.01)?.fade).toBe(1)
-    const mid = at(0.5 * (CORONA_FADE_START + CORONA_MAX_ANGLE))?.fade
-    expect(mid).toBeGreaterThan(0.4)
-    expect(mid).toBeLessThan(0.6)
-    expect(at(CORONA_MAX_ANGLE + 0.001)).toBeNull()
+  it('shrinks to nothing as the near limb comes up to CORONA_MAX_ANGLE', () => {
+    // A distant Sun, so beta is negligible and theta is the near limb.
+    const limbAt = (theta: number) => {
+      const c = sunAt(theta / DEG, 1e6)
+      const quad = perspectiveCoronaQuad(c, R)
+      return quad && quad.limb / -c[2]
+    }
+    expect(limbAt(CORONA_MAX_ANGLE - 0.1)).toBeGreaterThan(0)
+    expect(limbAt(CORONA_MAX_ANGLE - 1e-4)).toBeLessThan(1e-3)
+    expect(limbAt(CORONA_MAX_ANGLE + 1e-4)).toBeNull()
+  })
+
+  // Ship flight approaches bodies closely: the corona must stay wherever the
+  // Sun's near limb is on screen. 50° covers the ship view's corners (60°
+  // vertical fov plus the speed kick, landscape phone).
+  it.each([1.1, 1.2, 1.3, 1.5])('keeps the corona of a Sun %s radii away while its limb is on screen', (k) => {
+    const alpha = Math.asin(1 / k)
+    for (let deg = 0; deg <= 180; deg += 0.1) {
+      const theta = deg * DEG
+      const beta = Math.atan(Math.cos(theta) * Math.tan(alpha))
+      if (Math.abs(theta - beta) > 50 * DEG) continue
+      const c = sunAt(deg, k * R)
+      const quad = perspectiveCoronaQuad(c, R)
+      expect(quad, `${deg}°`).not.toBeNull()
+      expect(quad!.limb).toBeGreaterThan(0)
+      // ...hugging the near limb.
+      expect(rAt(quad!, c, [Math.tan(theta - beta), 0])).toBeCloseTo(1, 6)
+    }
   })
 
   // Every angle 0–180° at distances from just above the surface outward,
@@ -130,7 +146,7 @@ describe('perspectiveCoronaQuad', () => {
     }
   })
 
-  it('hugs the silhouette: the near and far limbs sit at r = 1', () => {
+  it('hugs the silhouette: the near limb, and the far one short of the clamp, sit at r = 1', () => {
     for (const distance of distances) {
       for (let deg = 0; deg <= 80; deg += 5) {
         const c = sunAt(deg, distance)
@@ -140,13 +156,14 @@ describe('perspectiveCoronaQuad', () => {
         const alpha = Math.asin(R / distance)
         const beta = Math.atan(Math.cos(theta) * Math.tan(alpha))
         for (const limb of [theta - beta, theta + beta]) {
+          if (limb >= CORONA_MAX_ANGLE) continue
           expect(rAt(quad, c, [Math.tan(limb), 0])).toBeCloseTo(1, 6)
         }
       }
     }
   })
 
-  it('matches the pre-fix quad, at full brightness, wherever the Sun can be on screen', () => {
+  it('matches the pre-fix quad wherever a distant Sun can be on screen', () => {
     // View from Earth's widest view (90° vertical) on a 2.4:1 panel reaches
     // ~69° in the corners; the ship view's fov is narrower.
     for (const distance of [50, 1e4 * R]) {
@@ -154,7 +171,6 @@ describe('perspectiveCoronaQuad', () => {
         const c = sunAt(deg, distance, 0.3)
         const quad = perspectiveCoronaQuad(c, R)!
         const old = unfixedQuad(c, R)
-        expect(quad.fade).toBe(1)
         expect(quad.limb).toBeCloseTo(old.limb, 9)
         expect(quad.centre[0]).toBeCloseTo(old.centre[0], 9)
         expect(quad.centre[1]).toBeCloseTo(old.centre[1], 9)
@@ -166,10 +182,10 @@ describe('perspectiveCoronaQuad', () => {
 describe('sun-corona vertex.glsl', () => {
   const glsl = readFileSync(new URL('../shaders/sun-corona/vertex.glsl', import.meta.url), 'utf8')
 
-  it('takes its fade and cut-off angles as uniforms from corona-geometry.ts', () => {
-    expect(glsl).toMatch(/uniform float uFadeStart;/)
+  it('takes its cut-off angle as a uniform from corona-geometry.ts', () => {
     expect(glsl).toMatch(/uniform float uMaxAngle;/)
-    expect(glsl).toMatch(/smoothstep\(uFadeStart, uMaxAngle, theta \+ abs\(beta\)\)/)
+    expect(glsl).toContain('if (!(abs(nearAngle) < uMaxAngle))')
+    expect(glsl).toContain('tan(min(theta + beta, uMaxAngle))')
     expect(glsl).toContain('corona-geometry.ts')
   })
 })

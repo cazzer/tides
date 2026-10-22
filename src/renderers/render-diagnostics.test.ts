@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { findNonFinite, logContextLoss, watchForNonFinite } from './render-diagnostics'
+import { logContextLoss, nonFiniteCamera, nonFiniteObject, watchForNonFinite } from './render-diagnostics'
 
 function world() {
   const scene = new THREE.Scene()
@@ -15,31 +15,32 @@ function world() {
 
 afterEach(() => vi.restoreAllMocks())
 
-describe('findNonFinite', () => {
-  it('passes a finite scene', () => {
-    const { scene, camera } = world()
-    expect(findNonFinite(scene, camera)).toBeNull()
-  })
-
-  it('names the camera first', () => {
-    const { scene, mesh, camera } = world()
-    mesh.position.x = NaN
+describe('nonFiniteCamera', () => {
+  it('passes a finite camera and names a bad position or orientation', () => {
+    const { camera } = world()
+    expect(nonFiniteCamera(camera)).toBeNull()
     camera.position.y = Infinity
-    expect(findNonFinite(scene, camera)).toMatch(/^camera position/)
+    expect(nonFiniteCamera(camera)).toMatch(/^camera position/)
     camera.position.y = 0
     camera.quaternion.w = NaN
-    expect(findNonFinite(scene, camera)).toMatch(/^camera quaternion/)
+    expect(nonFiniteCamera(camera)).toMatch(/^camera quaternion/)
+  })
+})
+
+describe('nonFiniteObject', () => {
+  it('passes a finite scene', () => {
+    expect(nonFiniteObject(world().scene)).toBeNull()
   })
 
   it('names a nested offender by its path', () => {
-    const { scene, mesh, camera } = world()
+    const { scene, mesh } = world()
     mesh.position.z = -Infinity
-    expect(findNonFinite(scene, camera)).toBe('Scene > Group sun > Mesh position 0,0,-Infinity')
+    expect(nonFiniteObject(scene)).toBe('Scene > Group sun > Mesh position 0,0,-Infinity')
   })
 })
 
 describe('watchForNonFinite', () => {
-  it('reports the first offender once, checks each scene once a frame, and uninstalls', () => {
+  it('checks each scene once a frame, reports the first offender once, and uninstalls', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const draw = vi.fn()
     const gl = { render: draw } as unknown as THREE.WebGLRenderer
@@ -48,7 +49,7 @@ describe('watchForNonFinite', () => {
     const { scene, sun, camera } = world()
 
     // The Sun's CubeCamera draws the same scene six more times a frame; only
-    // the first draw of each frame is checked.
+    // the first draw of each frame walks the scene.
     gl.render(scene, camera)
     sun.position.y = NaN
     gl.render(scene, camera)
@@ -66,6 +67,20 @@ describe('watchForNonFinite', () => {
 
     uninstall()
     expect(gl.render).toBe(draw)
+  })
+
+  it('checks the camera on every draw, after the scene was walked with another camera', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const gl = { render: vi.fn() } as unknown as THREE.WebGLRenderer
+    watchForNonFinite(gl, () => 0)
+    const { scene, camera } = world()
+    const cubeFace = new THREE.PerspectiveCamera()
+
+    gl.render(scene, cubeFace)
+    camera.quaternion.x = NaN
+    gl.render(scene, camera)
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(error.mock.calls[0][0]).toMatch(/non-finite camera quaternion/)
   })
 })
 
