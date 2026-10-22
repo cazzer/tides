@@ -137,7 +137,7 @@ export function bindDesktopShipInput(
 
   // Capture phase, ahead of the touch controls' own handlers: a touch takes
   // over steering, so the mouse lets go before the stick writes. Only if the
-  // mouse was steering, though: a second thumb (throttle, LEVEL) must not
+  // mouse was steering, though: a second thumb (the throttle stick) must not
   // zero a turn the touch stick is holding (tides-3bl.4).
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === 'mouse') return

@@ -3,7 +3,7 @@ import styled from 'styled-components'
 import { IconChevronRight, IconQuestionMark, IconX } from '@tabler/icons-react'
 import { glassButton, glassFloatingButton, glassPanel, PHONE } from '../glass-styles'
 import { BLUE_ZONE, speedFraction, turnRateMultiplier } from './flight'
-import { shipInput, THROTTLE_MAX, THROTTLE_MIN } from './ship-input'
+import { shipInput, THROTTLE_MAX, THROTTLE_MIN, throttlePercent } from './ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
 import { bodyName, formatDistance, formatEta, formatSpeed } from './ship-distances'
 import { shipNav, targetMarker } from './ship-targeting'
@@ -43,11 +43,6 @@ function rememberControlsSeen(): void {
 const SPAN = THROTTLE_MAX - THROTTLE_MIN
 const ZERO_AT = -THROTTLE_MIN / SPAN
 const at = (throttle: number) => `${((throttle - THROTTLE_MIN) / SPAN) * 100}%`
-
-function percent(throttle: number): string {
-  const value = Math.round(throttle * 100)
-  return value < 0 ? `−${-value}%` : `${value}%`
-}
 
 interface Readouts {
   speed: HTMLElement | null
@@ -126,7 +121,7 @@ export function ShipHud() {
       textAt = now
 
       set(r.speed, formatSpeed(shipTelemetry.speed * shipNav.kmPerUnit))
-      set(r.throttle, percent(throttle))
+      set(r.throttle, throttlePercent(throttle))
       // From speed, as the flight model does: with FA off a ship coasting
       // fast turns wide whatever the throttle says.
       const fraction = speedFraction(shipTelemetry.speed, shipTelemetry.speedCap)

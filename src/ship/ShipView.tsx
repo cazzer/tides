@@ -108,7 +108,7 @@ export function ShipView({ children }: { children: ReactNode }) {
       {/* SHIP OVERLAY MOUNT POINT: DOM overlays over the view go here, after
           the View so they stack above it:
           - desktop keyboard + virtual-joystick mouse input (tides-3bl.3)
-          - touch steer stick, throttle/roll slider, level button (tides-3bl.4)
+          - touch steer stick and throttle/roll stick (tides-3bl.4, tides-2hv.3)
           - HUD, target lock and controls modal (tides-3bl.5) */}
       <DesktopShipControls />
       <TouchShipControls />

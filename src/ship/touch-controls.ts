@@ -8,15 +8,18 @@ import type { ShipInput } from './ship-input'
 import {
   STICK_RADIUS_PX,
   clampStickOrigin,
+  freshDetent,
+  isTap,
   padAxes,
-  rebaseThrottleAnchor,
   rollFromDrag,
+  stepThrottleStick,
   stickDemand,
   stickKnob,
-  throttleFromDrag,
+  throttleDeflection,
+  withinTapReach,
   type PadAxes,
   type Point,
-  type ThrottleAnchor,
+  type ThrottleDetent,
 } from './touch-stick'
 
 export type ControlElement = Pick<
@@ -47,11 +50,19 @@ function capture(element: ControlElement, pointerId: number) {
   }
 }
 
+/**
+ * Why a press ended: 'up' for a finger lifting, 'interrupted' for anything
+ * else (pointercancel, lost capture, blur, hide, resize, a turn of the
+ * phone, dispose), which must never count as a tap.
+ */
+export type ReleaseReason = 'up' | 'interrupted'
+
 interface PressHandlers {
   /** Return false to decline the press. */
   down(event: PointerEvent): boolean | void
   move?(event: PointerEvent): void
-  release(): void
+  /** `event` is the pointer event that ended the press, if one did. */
+  release(reason: ReleaseReason, event?: PointerEvent): void
 }
 
 // One pointer at a time: a second finger on the same control is ignored,
@@ -63,10 +74,10 @@ function bindPress(
 ): Binding {
   let activeId: number | null = null
 
-  const release = () => {
+  const release = (reason: ReleaseReason, event?: PointerEvent) => {
     if (activeId === null) return
     activeId = null
-    handlers.release()
+    handlers.release(reason, event)
   }
   const down = (event: PointerEvent) => {
     // A mouse on a touch-only pad passes through to the scene and the
@@ -88,16 +99,16 @@ function bindPress(
   const up = (event: PointerEvent) => {
     if (event.pointerId !== activeId) return
     event.stopPropagation()
-    release()
+    release(event.type === 'pointerup' ? 'up' : 'interrupted', event)
   }
 
   element.addEventListener('pointerdown', down, { passive: false })
   element.addEventListener('pointermove', move, { passive: false })
   for (const type of RELEASE_EVENTS) element.addEventListener(type, up)
   return {
-    release,
+    release: () => release('interrupted'),
     dispose() {
-      release()
+      release('interrupted')
       element.removeEventListener('pointerdown', down)
       element.removeEventListener('pointermove', move)
       for (const type of RELEASE_EVENTS) element.removeEventListener(type, up)
@@ -168,96 +179,96 @@ export function bindSteer(
   }
 }
 
+export interface ThrottleBinding extends Binding {
+  /**
+   * Moves the throttle by the held stick's deflection over `dt` seconds; a
+   * no-op when let go. Run each frame. Reads shipInput.throttle afresh, so
+   * the keyboard on a hybrid can set it too.
+   */
+  step(dt: number): void
+  /** The held press's zero detent, for the readout; fresh when let go. */
+  detentState(): ThrottleDetent
+}
+
+export interface ThrottleOptions {
+  /** Read at each press: the drawn stick's centre, in client px. */
+  base: () => Point
+  onStick?: StickListener
+  /** Called when a tap has just zeroed the throttle. */
+  onTap?: () => void
+}
+
 /**
- * The throttle/roll pad: vertical drag moves the throttle setpoint, which
- * stays where it's left; horizontal drag rolls and springs back to 0. Once
- * the drag has travelled a little it locks to the axis it mostly moves along
- * (padAxes). `trackPx` is the throttle track's height, read at each press.
+ * The spring-return throttle stick (tides-2hv.3): pushing up raises the
+ * throttle and pulling down lowers it, at a rate proportional to the push,
+ * and it holds where it's left when the knob springs back. Zero is a detent
+ * (stepThrottleStick). Sideways rolls, springing back to 0. Once the drag
+ * has travelled a little it locks to the axis it mostly moves along
+ * (padAxes). A tap on the drawn stick (withinTapReach) that never gets that
+ * far zeroes the throttle; elsewhere in the zone, presses only drag.
  */
 export function bindThrottle(
   element: ControlElement,
   input: ShipInput,
-  trackPx: () => number
-): Binding {
-  let start = { x: 0, y: 0, trackPx: 1 }
-  let anchor: ThrottleAnchor = { setpoint: 0, y: 0 }
+  { base, onStick = () => {}, onTap = () => {} }: ThrottleOptions
+): ThrottleBinding {
+  let origin: Point = { x: 0, y: 0 }
+  let downAt = 0
+  let tappable = false
+  let maxTravel = 0
   let axes: PadAxes | null = null
-  return bindPress(
+  let deflection: number | null = null
+  let detent = freshDetent()
+  const binding = bindPress(
     element,
     {
       down(event) {
-        start = { x: event.clientX, y: event.clientY, trackPx: trackPx() }
-        anchor = { setpoint: input.throttle, y: event.clientY }
+        origin = { x: event.clientX, y: event.clientY }
+        downAt = event.timeStamp
+        tappable = withinTapReach(origin, base())
+        maxTravel = 0
         axes = null
+        deflection = 0
+        detent = freshDetent()
+        onStick({ origin, knob: origin })
       },
       move(event) {
-        axes ??= padAxes(event.clientX - start.x, event.clientY - start.y)
-        if (!axes) return
-        if (axes !== 'roll') {
-          input.throttle = throttleFromDrag(anchor.setpoint, anchor.y, event.clientY, start.trackPx)
-          anchor = rebaseThrottleAnchor(anchor, event.clientY, start.trackPx)
+        const dx = event.clientX - origin.x
+        const dy = event.clientY - origin.y
+        maxTravel = Math.max(maxTravel, Math.hypot(dx, dy))
+        axes ??= padAxes(dx, dy)
+        // Before the lock the knob follows the thumb but nothing moves, so
+        // a tap's wobble leaves the throttle alone.
+        deflection = axes && axes !== 'roll' ? throttleDeflection(dy, STICK_RADIUS_PX) : 0
+        input.roll = axes && axes !== 'throttle' ? rollFromDrag(origin.x, event.clientX) : 0
+        const shown = {
+          x: origin.x + (axes === 'throttle' ? 0 : dx),
+          y: origin.y + (axes === 'roll' ? 0 : dy),
         }
-        if (axes !== 'throttle') input.roll = rollFromDrag(start.x, event.clientX)
+        onStick({ origin, knob: stickKnob(origin, shown, STICK_RADIUS_PX) })
       },
-      release() {
+      release(reason, event) {
+        deflection = null
+        detent = freshDetent()
         input.roll = 0
+        onStick(null)
+        if (tappable && reason === 'up' && event && isTap(maxTravel, event.timeStamp - downAt)) {
+          input.throttle = 0
+          onTap()
+        }
       },
     },
     { touchOnly: true }
   )
-}
-
-const HOLD_KEYS = new Set([' ', 'Enter'])
-
-/** Level while held, from any pointer or Space/Enter on the focused button. */
-export function bindLevel(element: ControlElement, input: ShipInput): Binding {
-  let keyHeld = false
-  const keyDown = (event: KeyboardEvent) => {
-    if (!HOLD_KEYS.has(event.key)) return
-    // Held here, not by the desktop keys bound on window.
-    event.preventDefault()
-    event.stopPropagation()
-    keyHeld = true
-    input.level = true
-  }
-  const releaseKey = () => {
-    if (!keyHeld) return
-    keyHeld = false
-    input.level = false
-  }
-  const keyUp = (event: KeyboardEvent) => {
-    if (!HOLD_KEYS.has(event.key)) return
-    event.stopPropagation()
-    releaseKey()
-  }
-  const pointer = bindPress(
-    element,
-    {
-      down(event) {
-        if (event.pointerType === 'mouse' && event.button !== 0) return false
-        input.level = true
-      },
-      release() {
-        input.level = false
-      },
-    },
-    { touchOnly: false }
-  )
-  element.addEventListener('keydown', keyDown)
-  element.addEventListener('keyup', keyUp)
-  element.addEventListener('blur', releaseKey)
   return {
-    release() {
-      pointer.release()
-      releaseKey()
+    ...binding,
+    step(dt) {
+      if (deflection === null) return
+      const next = stepThrottleStick(input.throttle, deflection, dt, detent)
+      input.throttle = next.throttle
+      detent = next.detent
     },
-    dispose() {
-      pointer.dispose()
-      releaseKey()
-      element.removeEventListener('keydown', keyDown)
-      element.removeEventListener('keyup', keyUp)
-      element.removeEventListener('blur', releaseKey)
-    },
+    detentState: () => detent,
   }
 }
 
@@ -265,9 +276,11 @@ type EventSource = Pick<Window, 'addEventListener' | 'removeEventListener'>
 
 /**
  * Lets go of every control when the page loses focus or is hidden (an app
- * switch mid-drag delivers no pointerup), or when the view resizes or the
- * phone turns (the pads and track move out from under the thumbs), so no
- * input sticks. `orientation` is screen.orientation where the browser has it.
+ * switch mid-drag delivers no pointerup), or when the view changes width or
+ * the phone turns (the controls move out from under the thumbs), so no
+ * input sticks. A height-only resize is Safari's toolbars sliding in or out
+ * mid-flight, which leaves the controls where they were, so it's let be.
+ * `orientation` is screen.orientation where the browser has it.
  */
 export function releaseOnInterruption(
   {
@@ -275,7 +288,7 @@ export function releaseOnInterruption(
     doc,
     orientation,
   }: {
-    win: EventSource
+    win: EventSource & Pick<Window, 'innerWidth'>
     doc: EventSource & Pick<Document, 'visibilityState'>
     orientation?: EventSource | null
   },
@@ -284,13 +297,19 @@ export function releaseOnInterruption(
   const onVisibility = () => {
     if (doc.visibilityState === 'hidden') release()
   }
+  let width = win.innerWidth
+  const onResize = () => {
+    if (win.innerWidth === width) return
+    width = win.innerWidth
+    release()
+  }
   win.addEventListener('blur', release)
-  win.addEventListener('resize', release)
+  win.addEventListener('resize', onResize)
   doc.addEventListener('visibilitychange', onVisibility)
   orientation?.addEventListener('change', release)
   return () => {
     win.removeEventListener('blur', release)
-    win.removeEventListener('resize', release)
+    win.removeEventListener('resize', onResize)
     doc.removeEventListener('visibilitychange', onVisibility)
     orientation?.removeEventListener('change', release)
   }

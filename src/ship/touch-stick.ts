@@ -1,7 +1,9 @@
 // Geometry → ship input for the touch controls (tides-3bl.4): the floating
-// steer stick on the left and the throttle/roll pad on the right. Pure, so
-// the mappings are tested without a DOM; touch-controls.ts feeds it pointers.
+// steer stick on the left and the spring-return throttle stick on the right
+// (tides-2hv.3). Pure, so the mappings are tested without a DOM;
+// touch-controls.ts feeds it pointers and frame times.
 
+import { THROTTLE_RATE } from './desktop-keys'
 import { BLUE_ZONE } from './flight'
 import { THROTTLE_MAX, THROTTLE_MIN } from './ship-input'
 
@@ -11,12 +13,47 @@ export const STICK_RADIUS_PX = 56
 export const DEAD_ZONE = 0.12
 /** >1 softens small deflections for fine aim while keeping full rate at the rim. */
 export const CURVE_EXPONENT = 1.6
-/** Sideways drag on the throttle pad for full roll, in CSS px. */
-export const ROLL_RANGE_PX = 60
-/** Wider than the stick's, as the throttle thumb wobbles sideways while it slides. */
+/** Sideways drag on the throttle stick for full roll: the knob's rim, in CSS px. */
+export const ROLL_RANGE_PX = STICK_RADIUS_PX
+/** Wider than the steer stick's, as a thumb pushing the throttle wobbles sideways. */
 export const ROLL_DEAD_ZONE = 0.15
-/** Dragging the throttle track's full height sweeps this much setpoint. */
+/** The whole throttle range, full reverse to full ahead. */
 const THROTTLE_SPAN = THROTTLE_MAX - THROTTLE_MIN
+
+/**
+ * Throttle change per second at full stick deflection: the same full sweep in
+ * 1.5 s as holding W or S on the desktop.
+ */
+export const THROTTLE_STICK_RATE = THROTTLE_RATE
+/**
+ * [TUNE] Exponent on the throttle stick's deflection. 1 keeps the rate
+ * proportional to how far the thumb pushes; above 1 would favour fine trims.
+ */
+export const THROTTLE_CURVE = 1
+/**
+ * [TUNE] How long a pull must keep pushing on through zero, in ms, before it
+ * passes into reverse (or from reverse into forward) without a fresh press.
+ * Well past a reaction time, so a thumb pulling to stop lets go before it
+ * overshoots; short enough that a deliberate pull isn't left waiting long.
+ */
+export const REVERSE_DETENT_MS = 700
+/**
+ * [TUNE] Deflection a pull must hold at zero for its time to count towards
+ * REVERSE_DETENT_MS. A thumb drifting back towards centre resets the wait.
+ */
+export const DETENT_PULL = 0.5
+/** [TUNE] A press shorter than this, in ms, that never travels AXIS_LOCK_PX is a tap. */
+export const TAP_MAX_MS = 250
+/**
+ * [TUNE] How far from the drawn stick's centre, in CSS px, a press may land
+ * and still tap the throttle to 0. The zone around it is wider, for drags; a
+ * stray brush out there mustn't cut the throttle.
+ */
+export const TAP_REACH_PX = 1.25 * STICK_RADIUS_PX
+/** Longer frames (a stall, an app switch) don't ramp the throttle in one go. */
+export const MAX_STICK_DT = 0.1
+/** Float slack on the detent timer, so 42 frames of 1/60 s count as 700 ms. */
+const DWELL_EPSILON_MS = 1e-6
 
 export interface Point {
   x: number
@@ -66,42 +103,72 @@ export function stickDemand(
 }
 
 /**
- * The throttle setpoint after dragging from `startY` to `y`: relative to where
- * it stood at the press, so touching the pad never makes it jump. Dragging up
- * the full `trackPx` sweeps the whole −0.25..1 range.
+ * The throttle stick's zero detent, carried from frame to frame. `arrivedFrom`
+ * is the side (+1 forward, −1 reverse) the throttle came to 0 from on this
+ * press, and the stick won't carry it on through until a fresh press or a
+ * pull held for REVERSE_DETENT_MS; 0 when the way through is open.
+ * `dwellMs` is how long the pull has been holding at the detent.
  */
-export function throttleFromDrag(
-  startSetpoint: number,
-  startY: number,
-  y: number,
-  trackPx: number
-): number {
-  const next = startSetpoint + ((startY - y) / Math.max(trackPx, 1)) * THROTTLE_SPAN
-  return clamp(next, THROTTLE_MIN, THROTTLE_MAX)
+export interface ThrottleDetent {
+  arrivedFrom: -1 | 0 | 1
+  dwellMs: number
 }
 
-/** Where a throttle drag is measured from: the setpoint and the finger's y then. */
-export interface ThrottleAnchor {
-  setpoint: number
-  y: number
+/** A press's detent: open, so a press starting at 0 goes either way at once. */
+export const freshDetent = (): ThrottleDetent => ({ arrivedFrom: 0, dwellMs: 0 })
+
+/**
+ * Throttle stick deflection −1..1 from the thumb's vertical offset off where
+ * it pressed: up the screen is +, the dead zone holds a resting thumb still.
+ */
+export function throttleDeflection(dy: number, radius: number): number {
+  return shapeAxis(-dy / radius, DEAD_ZONE, THROTTLE_CURVE) + 0
 }
 
 /**
- * The anchor for the next move. Past an end stop it follows the finger, so
- * dragging back moves the throttle at once instead of after dead travel.
+ * One frame of the throttle stick: the throttle moves at a rate proportional
+ * to `deflection` and holds wherever it's left. Coming to 0 from either side
+ * stops there (as desktop-keys' W/S detent does); carrying on through takes a
+ * fresh press (a fresh detent) or a pull of at least DETENT_PULL held for
+ * REVERSE_DETENT_MS.
  */
-export function rebaseThrottleAnchor(
-  anchor: ThrottleAnchor,
-  y: number,
-  trackPx: number
-): ThrottleAnchor {
-  const raw = anchor.setpoint + ((anchor.y - y) / Math.max(trackPx, 1)) * THROTTLE_SPAN
-  if (raw > THROTTLE_MAX) return { setpoint: THROTTLE_MAX, y }
-  if (raw < THROTTLE_MIN) return { setpoint: THROTTLE_MIN, y }
-  return anchor
+export function stepThrottleStick(
+  throttle: number,
+  deflection: number,
+  dt: number,
+  detent: ThrottleDetent
+): { throttle: number; detent: ThrottleDetent } {
+  if (!(dt > 0)) return { throttle, detent }
+  if (deflection === 0) {
+    return { throttle, detent: detent.dwellMs === 0 ? detent : { ...detent, dwellMs: 0 } }
+  }
+  const step = Math.min(dt, MAX_STICK_DT)
+  const direction = Math.sign(deflection)
+  // Held at zero, pushing on away from the side it came from.
+  if (throttle === 0 && detent.arrivedFrom === -direction) {
+    const dwellMs = Math.abs(deflection) >= DETENT_PULL ? detent.dwellMs + step * 1000 : 0
+    if (dwellMs >= REVERSE_DETENT_MS - DWELL_EPSILON_MS) return { throttle: 0, detent: freshDetent() }
+    return { throttle: 0, detent: { arrivedFrom: detent.arrivedFrom, dwellMs } }
+  }
+  const next = clamp(throttle + deflection * THROTTLE_STICK_RATE * step, THROTTLE_MIN, THROTTLE_MAX)
+  // Reaching or crossing zero from either side stops on it.
+  if (throttle !== 0 && Math.sign(next) !== Math.sign(throttle)) {
+    return { throttle: 0, detent: { arrivedFrom: throttle > 0 ? 1 : -1, dwellMs: 0 } }
+  }
+  return { throttle: next, detent: freshDetent() }
 }
 
-/** Travel on the throttle pad before it decides which axes the drag drives. */
+/** Whether a press was a tap: brief, and never far enough to lock an axis. */
+export function isTap(maxTravelPx: number, durationMs: number): boolean {
+  return maxTravelPx < AXIS_LOCK_PX && durationMs < TAP_MAX_MS
+}
+
+/** Whether a press at `point` landed on the drawn stick, close enough to tap it. */
+export function withinTapReach(point: Point, base: Point): boolean {
+  return Math.hypot(point.x - base.x, point.y - base.y) <= TAP_REACH_PX
+}
+
+/** Travel on the throttle stick before it decides which axes the drag drives. */
 export const AXIS_LOCK_PX = 12
 /** How much one axis must dominate the other for the drag to lock to it. */
 export const AXIS_LOCK_RATIO = 1.5
@@ -109,7 +176,7 @@ export const AXIS_LOCK_RATIO = 1.5
 export type PadAxes = 'throttle' | 'roll' | 'both'
 
 /**
- * Which axes a throttle-pad drag drives, from its travel so far: null until
+ * Which axes a throttle-stick drag drives, from its travel so far: null until
  * it has moved AXIS_LOCK_PX, then throttle for a mostly vertical start, roll
  * for a mostly horizontal one, both only for a clearly diagonal one. Keeps a
  * throttle slide from rolling the ship and a roll from creeping the throttle.
@@ -130,17 +197,17 @@ export function clampStickOrigin(point: Point, bounds: { minX: number; maxY: num
   return { x: Math.max(point.x, bounds.minX), y: Math.min(point.y, bounds.maxY) }
 }
 
-/** Roll demand from the throttle pad's sideways drag; right rolls right. */
+/** Roll demand from the throttle stick's sideways drag; right rolls right. */
 export function rollFromDrag(startX: number, x: number): number {
   return shapeAxis((x - startX) / ROLL_RANGE_PX, ROLL_DEAD_ZONE, CURVE_EXPONENT) + 0
 }
 
-/** A throttle setpoint's height up the track, 0 (full reverse) .. 1 (full ahead). */
+/** A throttle setpoint's height up the readout, 0 (full reverse) .. 1 (full ahead). */
 export function throttleToTrack(throttle: number): number {
   return (clamp(throttle, THROTTLE_MIN, THROTTLE_MAX) - THROTTLE_MIN) / THROTTLE_SPAN
 }
 
-/** The best-turn-rate throttle band as heights up the track. */
+/** flight.ts's BLUE_ZONE as heights up the throttle readout. */
 export const BLUE_BAND: readonly [number, number] = [
   throttleToTrack(BLUE_ZONE[0]),
   throttleToTrack(BLUE_ZONE[1]),
