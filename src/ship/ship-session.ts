@@ -96,8 +96,9 @@ export function shipFar(distanceFromSun: number): number {
 // The near plane follows the nearest surface so depth precision is spent where
 // the eye is: at 0.4 of the gap the surface stays well in front of it. The
 // ceiling keeps anything a tenth of a unit off drawn (Saturn's rings reach
-// 2.27 radii out; 3bl.6's dust passes within a unit) and far/near at 4e4 in
-// the system. The hard-sphere margin (flight.ts COLLISION_MARGIN) keeps the
+// 2.27 radii out; 3bl.6's dust passes within a unit). far/near reaches 8e5
+// (SHIP_FAR at the flight scale), which is fine: depth error is ~z² / (near ·
+// 2²⁴), set by the near plane, not the far. The hard-sphere margin (flight.ts COLLISION_MARGIN) keeps the
 // gap ≥ 0.02 even at the Moon, so the floor is rarely reached.
 const NEAR_SHARE = 0.4
 const NEAR_MIN = 0.002
@@ -198,11 +199,14 @@ interface Spawn {
  * the Sun line and SPAWN_ELEVATION above the ecliptic, far enough for Earth
  * to fill SPAWN_EARTH_SHARE of the short side of a screen of `aspect`. No
  * other body (bar the Moon) may be nearer than Earth, so when one crowds
- * that point (Venus near inferior conjunction) it tries the other side of the
+ * that point it tries the other side of the
  * Sun line, climbing higher and pulling in toward Earth, and takes the
  * candidate that stays furthest out, frames the Moon and climbs least. Faces
  * Earth, swung toward the Moon when that brings it into frame, and level.
- * `bodies` must include 'sun' and 'earth', positioned for now.
+ * (At the flight scale no planet comes within ~260 units of Earth, so with
+ * the real ephemeris the first candidate is always clear; the fallback is
+ * for a body placed closer.) `bodies` must include 'sun' and 'earth',
+ * positioned for now.
  */
 export function spawnPose(bodies: readonly FlightBody[], aspect = 16 / 9): ShipState {
   const sun = bodies.find((b) => b.key === 'sun')

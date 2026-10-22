@@ -17,7 +17,7 @@ import {
 } from './ship-distances'
 
 const DATES = [
-  Date.UTC(2026, 9, 22, 12), // Venus near inferior conjunction, crowding the spawn
+  Date.UTC(2026, 9, 22, 12), // Venus near inferior conjunction, ~280 units off
   Date.UTC(2024, 0, 13, 0), // Moon near perigee
   Date.UTC(2031, 6, 4, 6),
 ]
@@ -108,7 +108,7 @@ describe('measureRanges', () => {
   })
 
   it.each([16 / 9, 390 / 844])(
-    'keeps Earth and the Moon on their own scale at the spawn, with Venus near (aspect %f)',
+    'keeps Earth and the Moon on their own scale at the spawn, at Venus inferior conjunction (aspect %f)',
     (aspect) => {
       const t = DATES[0]
       const { bodies, truth, ranges } = setup(t)
@@ -216,6 +216,42 @@ describe('measureRanges', () => {
     expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.01)
   })
 
+  // Even directions over the sphere (golden-angle spiral).
+  const DIRECTIONS = Array.from({ length: 24 }, (_, i) => {
+    const y = 1 - (2 * (i + 0.5)) / 24
+    const r = Math.sqrt(1 - y * y)
+    const a = i * 2.399963
+    return new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r)
+  })
+
+  it.each(DATES)('reads the departure from Earth at the speed the HUD shows (%i)', (t) => {
+    const { bodies, truth, ranges } = setup(t)
+    const earth = find(bodies, 'earth')
+    const moon = find(bodies, 'moon').body
+    const h = 0.05
+    let worst = 0
+    for (const dir of DIRECTIONS) {
+      const at = (d: number) => earth.body.position.clone().addScaledVector(dir, d)
+      // Through the hand-over band (30–60) and past it, clear of the Moon.
+      for (let d = 30; d <= 90; d += 1) {
+        if (at(d).distanceTo(moon.position) < 10) continue
+        measureRanges(at(d + h), bodies, truth, ranges)
+        const ahead = ranges.km[earth.index]
+        measureRanges(at(d - h), bodies, truth, ranges)
+        const behind = ranges.km[earth.index]
+        measureRanges(at(d), bodies, truth, ranges)
+        // Flying straight out at 1 unit/s: dRange/dt over the HUD's km/s.
+        const rate = (ahead - behind) / (2 * h)
+        worst = Math.max(worst, Math.abs(rate / ranges.kmPerUnit - 1))
+      }
+    }
+    // A log-space hand-over ran the range 2–2.5× faster than the speed
+    // here. What is left (≤ ~4.5%, as much at 90 as at 30) is Earth's and
+    // the Moon's anchors trading weight: they point along slightly different
+    // scene directions, the Moon being drawn ~4× further out than true.
+    expect(worst).toBeLessThan(0.05)
+  })
+
   it.each(DATES)('reads the departure from Earth on the planetary scale (%i)', (t) => {
     const { bodies, truth, ranges } = setup(t)
     const earth = find(bodies, 'earth')
@@ -224,18 +260,18 @@ describe('measureRanges', () => {
     const outward = earth.body.position.clone().sub(sun.position).normalize()
     const at = (d: number) => earth.body.position.clone().addScaledVector(outward, d)
 
+    measureRanges(at(90), bodies, truth, ranges)
+    const before = ranges.km[earth.index]
     measureRanges(at(100), bodies, truth, ranges)
     expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.05)
+    expect(
+      Math.abs((ranges.km[earth.index] - before) / (10 * FLIGHT_KM_PER_UNIT) - 1)
+    ).toBeLessThan(0.05)
+    // Short of the planetary scale all the way out by what the Earth–Moon
+    // system's finer scale covered: below gap × b, above gap × the Moon's.
     const gap = 100 - shellOf(earth.body)
-    expect(Math.abs(ranges.km[earth.index] / (gap * FLIGHT_KM_PER_UNIT) - 1)).toBeLessThan(0.05)
-
-    // And the hand-over from the Earth–Moon scale never runs the range backwards.
-    let last = 0
-    for (let d = 20; d <= 80; d += 0.25) {
-      measureRanges(at(d), bodies, truth, ranges)
-      expect(ranges.km[earth.index]).toBeGreaterThan(last)
-      last = ranges.km[earth.index]
-    }
+    expect(ranges.km[earth.index]).toBeLessThan(gap * FLIGHT_KM_PER_UNIT)
+    expect(ranges.km[earth.index]).toBeGreaterThan(0.6 * gap * FLIGHT_KM_PER_UNIT)
   })
 })
 

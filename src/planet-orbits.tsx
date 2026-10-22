@@ -13,7 +13,7 @@ import {
 } from './planets'
 import { useStore } from './store'
 import type { DistanceScale } from './distance-scale'
-import { positionsFor } from './flight-scale'
+import { positionsFor, type OrbitKey } from './flight-scale'
 
 // Earth's orbit ring style (orbit-label.tsx).
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -34,7 +34,7 @@ export const PlanetOrbits: FC<{ distanceScale: DistanceScale }> = ({
     {PLANET_KEYS.map((key) => (
       <BodyOrbit
         key={key}
-        body={PLANETS[key].body}
+        orbitKey={key}
         period={PLANETS[key].period}
         distanceScale={distanceScale}
       />
@@ -54,18 +54,18 @@ export const EarthOrbit: FC<{ distanceScale: DistanceScale }> = ({
   distanceScale,
 }) => (
   <BodyOrbit
-    body={Body.Earth}
+    orbitKey="earth"
     period={EARTH_PERIOD}
     distanceScale={distanceScale}
   />
 )
 
 function BodyOrbit({
-  body,
+  orbitKey,
   period,
   distanceScale,
 }: {
-  body: Body
+  orbitKey: OrbitKey
   /** Sidereal period, days: how often the loop is redrawn. */
   period: number
   distanceScale: DistanceScale
@@ -79,12 +79,12 @@ function BodyOrbit({
     g.setAttribute(
       'position',
       new THREE.BufferAttribute(
-        orbitPath(body, firstT, PLANET_ORBIT_SEGMENTS),
+        orbitPath(orbitKey, firstT, PLANET_ORBIT_SEGMENTS),
         3
       )
     )
     return g
-  }, [body, firstT, orbitPath])
+  }, [orbitKey, firstT, orbitPath])
 
   useEffect(() => () => geometry.dispose(), [geometry])
 
@@ -96,7 +96,7 @@ function BodyOrbit({
     pathT.current = t
     const position = geometry.getAttribute('position') as THREE.BufferAttribute
     orbitPath(
-      body,
+      orbitKey,
       t,
       PLANET_ORBIT_SEGMENTS,
       position.array as Float32Array

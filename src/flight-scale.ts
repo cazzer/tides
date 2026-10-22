@@ -27,6 +27,7 @@ import {
   PLANET_KEYS,
   planetOrbitPath,
   planetPosition,
+  sceneDistance,
   type PlanetKey,
   type SceneDistance,
 } from './planets'
@@ -75,51 +76,84 @@ export function flightOrbitPath(
 }
 
 export type BodyKey = 'sun' | 'earth' | 'moon' | PlanetKey
+/** The bodies with a heliocentric orbit to draw. */
+export type OrbitKey = PlanetKey | 'earth'
 
 export interface ScalePositions {
-  /** Each body's scene position at t, epoch ms, as a fresh array. */
+  /** Scene units from the Sun for a body r AU out (AU rings, scale bars). */
+  distance: SceneDistance
+  /**
+   * Each body's scene position at t, epoch ms. The array is shared: a call at
+   * the same t as the last returns it again without recomputing (a planet's
+   * moons ask for it every frame), so read it, never mutate or keep it.
+   */
   positionAt: Readonly<Record<BodyKey, (t: number) => Vec3>>
   /** One sidereal period of the body's positions centred on t (planetOrbitPath). */
-  orbitPath(body: Body, t: number, segments: number, out?: Float32Array): Float32Array
+  orbitPath(key: OrbitKey, t: number, segments: number, out?: Float32Array): Float32Array
+}
+
+const ORBIT_BODIES: Readonly<Record<OrbitKey, Body>> = {
+  earth: Body.Earth,
+  ...(Object.fromEntries(PLANET_KEYS.map((key) => [key, PLANETS[key].body])) as Record<
+    PlanetKey,
+    Body
+  >),
+}
+
+// Hands back the last result while t is unchanged: the ephemeris costs far
+// more than the comparison, and there is nothing to allocate on a repeat.
+function sameTimeCache(positionAt: (t: number) => Vec3): (t: number) => Vec3 {
+  let lastT = NaN
+  let last: Vec3 = [0, 0, 0]
+  return (t) => {
+    if (t !== lastT) {
+      last = positionAt(t)
+      lastT = t
+    }
+    return last
+  }
 }
 
 // The Sun stays at the origin at every scale: planetFrame and shipFar
 // measure from there.
-const sunPosition = (): Vec3 => [0, 0, 0]
+const ORIGIN: Vec3 = [0, 0, 0]
+const sunPosition = (): Vec3 => ORIGIN
 
-function planetPositions(distance?: SceneDistance) {
-  return Object.fromEntries(
-    PLANET_KEYS.map((key) => [key, planetPosition(PLANETS[key].body, distance)])
+function scalePositions(
+  distance: SceneDistance,
+  earth: (t: number) => Vec3,
+  moon: (t: number) => Vec3
+): ScalePositions {
+  const planets = Object.fromEntries(
+    PLANET_KEYS.map((key) => [
+      key,
+      sameTimeCache(planetPosition(PLANETS[key].body, distance)),
+    ])
   ) as Record<PlanetKey, (t: number) => Vec3>
+  return {
+    distance,
+    positionAt: {
+      sun: sunPosition,
+      earth: sameTimeCache(earth),
+      moon: sameTimeCache(moon),
+      ...planets,
+    },
+    orbitPath: (key, t, segments, out) =>
+      planetOrbitPath(ORBIT_BODIES[key], t, segments, out, distance),
+  }
 }
 
 // Built once, so positionsFor hands out stable identities (safe as hook deps).
-const SYSTEM: ScalePositions = {
-  positionAt: {
-    sun: sunPosition,
-    earth: earthPosition,
-    moon: moonPosition,
-    ...planetPositions(),
-  },
-  orbitPath: (body, t, segments, out) => planetOrbitPath(body, t, segments, out),
-}
-
-const FLIGHT: ScalePositions = {
-  positionAt: {
-    sun: sunPosition,
-    earth: flightEarthPosition,
-    moon: flightMoonPosition,
-    ...planetPositions(flightDistance),
-  },
-  orbitPath: flightOrbitPath,
-}
+const SYSTEM = scalePositions(sceneDistance, earthPosition, moonPosition)
+const FLIGHT = scalePositions(flightDistance, flightEarthPosition, flightMoonPosition)
 
 /**
  * Body positions and orbit paths for a distance scale. 'system' is the
- * compressed system view (byte-for-byte earthPosition, moonPosition and
+ * compressed system view (bit-for-bit earthPosition, moonPosition and
  * planetPosition); 'flight' is the linear ship-mode scale above. Anything
  * placed relative to a body (a planet's moons, aids) should start from
- * positionsFor(scale).positionAt[key], never sceneDistance.
+ * positionsFor(scale).positionAt[key], and anything placed by distance from
+ * the Sun from positionsFor(scale).distance, never sceneDistance.
  */
 export function positionsFor(scale: DistanceScale): ScalePositions {
   return scale === 'flight' ? FLIGHT : SYSTEM

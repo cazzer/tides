@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { Body, HelioVector, KM_PER_AU, PlanetOrbitalPeriod } from 'astronomy-engine'
 import { earthPosition, moonPosition, type Vec3 } from './ephemeris'
-import { PLANETS, PLANET_KEYS, planetOrbitPath, planetPosition } from './planets'
+import {
+  PLANETS,
+  PLANET_KEYS,
+  planetOrbitPath,
+  planetPosition,
+  sceneDistance,
+} from './planets'
 import {
   FLIGHT_KM_PER_UNIT,
   FLIGHT_UNITS_PER_AU,
+  flightDistance,
   flightEarthPosition,
   flightMoonPosition,
   flightOrbitPath,
@@ -67,15 +74,19 @@ describe('system view (golden, recorded before tides-2hv.6)', () => {
     expect(times.map((t) => bits(moonPosition(t)))).toEqual(golden.moon)
   })
 
-  it("is positionsFor('system')", () => {
-    const { positionAt, orbitPath } = positionsFor('system')
-    expect(positionAt.earth).toBe(earthPosition)
-    expect(positionAt.moon).toBe(moonPosition)
+  it("is positionsFor('system'), bit-for-bit", () => {
+    const { positionAt, orbitPath, distance } = positionsFor('system')
+    expect(distance).toBe(sceneDistance)
+    expect(times.map((t) => bits(positionAt.earth(t)))).toEqual(golden.earth)
+    expect(times.map((t) => bits(positionAt.moon(t)))).toEqual(golden.moon)
     expect(positionAt.sun(T)).toEqual([0, 0, 0])
     for (const key of PLANET_KEYS) {
-      expect(bits(positionAt[key](T))).toEqual(bits(planetPosition(PLANETS[key].body)(T)))
+      expect(times.map((t) => bits(positionAt[key](t)))).toEqual(
+        golden.planets[key as keyof typeof golden.planets]
+      )
     }
-    expect(bits(orbitPath(Body.Mars, times[3], 8))).toEqual(golden.marsOrbit)
+    expect(bits(orbitPath('mars', times[3], 8))).toEqual(golden.marsOrbit)
+    expect(bits(orbitPath('neptune', times[1], 8))).toEqual(golden.neptuneOrbit)
   })
 })
 
@@ -165,12 +176,31 @@ describe('flight scale', () => {
     const flight = positionsFor('flight')
     expect(positionsFor('flight')).toBe(flight)
     expect(positionsFor('system')).not.toBe(flight)
-    expect(flight.positionAt.earth).toBe(flightEarthPosition)
-    expect(flight.positionAt.moon).toBe(flightMoonPosition)
+    expect(flight.distance).toBe(flightDistance)
+    expect(flight.distance(30)).toBe(30 * X)
+    expect(flight.positionAt.earth(T)).toEqual(flightEarthPosition(T))
+    expect(flight.positionAt.moon(T)).toEqual(flightMoonPosition(T))
     expect(flight.positionAt.sun(T)).toEqual([0, 0, 0])
     for (const key of PLANET_KEYS) {
       expect(flight.positionAt[key](T)).toEqual(flightPlanetPosition(PLANETS[key].body)(T))
+      expect(flight.orbitPath(key, T, 8)).toEqual(flightOrbitPath(PLANETS[key].body, T, 8))
     }
-    expect(flight.orbitPath(Body.Mars, T, 8)).toEqual(flightOrbitPath(Body.Mars, T, 8))
+    expect(flight.orbitPath('earth', T, 8)).toEqual(flightOrbitPath(Body.Earth, T, 8))
+  })
+
+  it('reuses the last position while t is unchanged', () => {
+    for (const scale of ['system', 'flight'] as const) {
+      const { positionAt } = positionsFor(scale)
+      for (const key of ['earth', 'moon', 'jupiter'] as const) {
+        const first = positionAt[key](T)
+        // Same t: the very same array, no recompute.
+        expect(positionAt[key](T)).toBe(first)
+        // A new t: a new position, and the old t recomputes to equal values.
+        const later = positionAt[key](T + DAY)
+        expect(later).not.toBe(first)
+        expect(later).not.toEqual(first)
+        expect(positionAt[key](T)).toEqual(first)
+      }
+    }
   })
 })

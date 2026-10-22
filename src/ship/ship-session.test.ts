@@ -188,6 +188,9 @@ describe('spawnPose', () => {
     expect(up.y).toBeGreaterThan(0)
   })
 
+  // Holds by distance at the flight scale (Venus stays ≥ ~260 units off);
+  // kept as a guard should the scale shrink. The crowding fallback itself is
+  // exercised by the next test.
   it('keeps Venus further than Earth at its October 2026 inferior conjunction', () => {
     for (const aspect of Object.values(ASPECTS)) {
       const { bodies, earth, ship } = spawnAt(Date.UTC(2026, 9, 24), aspect)

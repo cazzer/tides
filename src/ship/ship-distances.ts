@@ -15,9 +15,13 @@
 //      and its neighbours, weighted to the nearest (1 / gap⁴, log space): the
 //      km a scene unit stands for around R. Near Earth (MOON_SYSTEM_*), Earth
 //      and the Moon use their own pair only, since the Moon orbits on its own
-//      scale; leaving, they hand over to their planetary neighbours' scale,
+//      scale; leaving, they hand over to Earth's planetary neighbours' scale,
 //      or Earth's range would under-read by the ratio of the two (~2.5×)
-//      all the way out.
+//      all the way out. The hand-over is linear in km per unit, k(d), with d
+//      the ship's distance from Earth's centre, and their gap is measured
+//      along it: a·gap + ∫(k − a) dd, so the range grows at k × the radial
+//      speed, the rate the HUD's speed reads (a·gap alone, scaled up as the
+//      ship leaves, would run ~2.5× faster than the speed through the band).
 //   3. The guesses blend with weights 1 / (ship's gap to R)⁴, so the anchor is
 //      whichever body the ship is near, handing over smoothly in between.
 //      Near Earth, Earth and the Moon outweigh a planet that happens to be
@@ -72,6 +76,14 @@ const MIN_GAP = 1e-3
 const MOON_SYSTEM_INNER = 30
 const MOON_SYSTEM_OUTER = 60
 const MOON_SYSTEM_BOOST = 1e4
+const MOON_SYSTEM_BAND = MOON_SYSTEM_OUTER - MOON_SYSTEM_INNER
+
+// ∫ smoothstep(x, INNER, OUTER) dx from INNER to d (0 inside INNER): with
+// u = (x − INNER) / BAND, ∫ (3u² − 2u³) BAND du = BAND (u³ − u⁴/2).
+function departureIntegral(d: number): number {
+  const u = THREE.MathUtils.clamp((d - MOON_SYSTEM_INNER) / MOON_SYSTEM_BAND, 0, 1)
+  return MOON_SYSTEM_BAND * (u ** 3 - u ** 4 / 2) + Math.max(0, d - MOON_SYSTEM_OUTER)
+}
 
 const ASTRO_BODIES: Record<string, Body> = {
   sun: Body.Sun,
@@ -205,31 +217,29 @@ export function measureRanges(
   const earth = bodies.findIndex((body) => body.key === 'earth')
   const moon = bodies.findIndex((body) => body.key === 'moon')
   const moonSystem = earth >= 0 && moon >= 0
-  const moonSystemLog = moonSystem ? pairLogScale(earth, moon, bodies, truth) : 0
+  const fromEarth = moonSystem ? position.distanceTo(bodies[earth].position) : Infinity
   // 0 in the Earth–Moon system, 1 once clear of it.
   const departure = moonSystem
-    ? THREE.MathUtils.smoothstep(
-        position.distanceTo(bodies[earth].position),
-        MOON_SYSTEM_INNER,
-        MOON_SYSTEM_OUTER
-      )
+    ? THREE.MathUtils.smoothstep(fromEarth, MOON_SYSTEM_INNER, MOON_SYSTEM_OUTER)
     : 1
   const moonSystemBoost = moonSystem ? MOON_SYSTEM_BOOST ** (1 - departure) : 1
+  // Earth and the Moon's km per unit: a, their pair's, near Earth; a + (b − a)
+  // · departure leaving, b being Earth's against the planets (the Moon not
+  // counted). Their gaps take the extra (b − a) · ∫departure on top of a · gap
+  // (see the header). Both use Earth's b and d, so they stay a·(scene
+  // separation) apart, the Earth–Moon scale, however far out the ship is.
+  const moonSystemKm = moonSystem ? Math.exp(pairLogScale(earth, moon, bodies, truth)) : 0
+  const departureKm =
+    moonSystem && departure > 0
+      ? Math.exp(neighbourLogScale(earth, moon, bodies, truth)) - moonSystemKm
+      : 0
+  const moonSystemExtraKm = departureKm * departureIntegral(fromEarth)
 
   for (let r = 0; r < n; r++) {
-    if (moonSystem && (r === earth || r === moon)) {
-      // Each against its other neighbours: the pair scale is the Moon's own.
-      logScales[r] =
-        departure > 0
-          ? THREE.MathUtils.lerp(
-              moonSystemLog,
-              neighbourLogScale(r, r === earth ? moon : earth, bodies, truth),
-              departure
-            )
-          : moonSystemLog
-      continue
-    }
-    logScales[r] = neighbourLogScale(r, -1, bodies, truth)
+    logScales[r] =
+      moonSystem && (r === earth || r === moon)
+        ? Math.log(moonSystemKm + departureKm * departure)
+        : neighbourLogScale(r, -1, bodies, truth)
   }
 
   out.position.set(0, 0, 0)
@@ -240,9 +250,11 @@ export function measureRanges(
     if (r === earth || r === moon) w *= moonSystemBoost
     direction.subVectors(position, bodies[r].position)
     if (direction.lengthSq() > 0) direction.normalize()
-    anchor
-      .copy(truth.positions[r])
-      .addScaledVector(direction, truth.radii[r] + gaps[r] * Math.exp(logScales[r]))
+    const gapKm =
+      moonSystem && (r === earth || r === moon)
+        ? gaps[r] * moonSystemKm + moonSystemExtraKm
+        : gaps[r] * Math.exp(logScales[r])
+    anchor.copy(truth.positions[r]).addScaledVector(direction, truth.radii[r] + gapKm)
     out.position.addScaledVector(anchor, w)
     weightSum += w
     logSum += w * logScales[r]
