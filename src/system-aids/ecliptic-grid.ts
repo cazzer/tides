@@ -1,22 +1,32 @@
 // The ecliptic grid's geometry (tides-2hv.9), kept out of EclipticGrid.tsx so
 // it can be tested without a renderer.
 //
-// A polar grid in the ecliptic plane (scene y = 0): dashed rings at round
-// distances from the Sun and spokes every 30° of ecliptic longitude. Polar
-// rather than square because the system view's spacing is compressed
-// radially (sceneDistance): equal squares would claim equal distances that
-// aren't, while a ring is honest at any spacing as long as its label gives
-// its true AU. The rings sit at positionsFor(scale).distance, so they cross
-// the planets' orbits where the planets really are that far out.
+// Dashed rings in the ecliptic plane (scene y = 0) at round distances from
+// the Sun, each labelled with its true AU. Rings rather than a square grid
+// because the system view's spacing is compressed radially (sceneDistance):
+// equal squares would claim equal distances that aren't, while a ring is
+// honest at any spacing as long as its label gives its true AU. The rings sit
+// at positionsFor(scale).distance, so they cross the planets' orbits where the
+// planets really are that far out. No spokes: they carried no information,
+// and the calendar rings already mark the longitudes.
+import { EARTH_ORBIT_RADIUS, type Vec3 } from '../ephemeris'
 import type { SceneDistance } from '../planets'
 
 /** Ring distances from the Sun, AU: Earth, Mars-ish, Jupiter, Saturn, Uranus, Neptune. */
 export const AU_RINGS = [1, 2, 5, 10, 20, 30] as const
 
 /**
- * Points per ring. [TUNE] The 30 AU ring at the flight scale is 30 000 units
- * across; at 720 its chords sag 0.29 units, under a third of Neptune's
- * radius, so even flying along it the ring looks round.
+ * The rings drawn as lines at `distance`'s spacing. The system view's 1 AU
+ * ring would lie exactly on Earth's month ring (orbit-label.tsx, radius
+ * EARTH_ORBIT_RADIUS), so there only its label is kept.
+ */
+export function drawnRings(distance: SceneDistance): readonly number[] {
+  return AU_RINGS.filter((au) => distance(au) !== EARTH_ORBIT_RADIUS)
+}
+
+/**
+ * Points per ring. [TUNE] The 30 AU ring in the system view is ~640 units
+ * across; at 720 its chords sag well under a hundredth of a unit.
  */
 export const RING_SEGMENTS = 720 // [TUNE]
 
@@ -29,20 +39,60 @@ export const RING_SEGMENTS = 720 // [TUNE]
  */
 export const RING_DASHES = 120 // [TUNE]
 
-/** Spokes round the Sun, one per 30° of ecliptic longitude (the signs' edges). */
-export const SPOKES = 12
-
 /**
  * Where on each ring its label sits, as a scene angle φ = atan2(−z, x)
  * (ecliptic longitude φ + 180°). [TUNE] −45° is the near side from the main
- * view's starting eye ([100, 80, 80]), between two spokes, so the labels run
- * down the screen in a column that a phone's portrait frame keeps in view.
+ * view's starting eye ([100, 80, 80]), so the labels run down the screen in
+ * a column that a phone's portrait frame keeps in view.
  */
 export const LABEL_ANGLE = -Math.PI / 4 // [TUNE]
+
+/**
+ * A body closer than this to a label's angle, on that label's ring, moves the
+ * label aside by LABEL_NUDGE. [TUNE] Jupiter's moon system spans ~4° of the
+ * 5 AU ring in the system view.
+ */
+export const LABEL_CLEARANCE = (6 * Math.PI) / 180 // [TUNE]
+export const LABEL_NUDGE = (15 * Math.PI) / 180 // [TUNE]
+// "On that ring": within this share of the ring's radius of it.
+const SAME_RING = 0.25
 
 /** A ring's label: its true distance, whatever the scale draws it at. */
 export function ringLabel(au: number): string {
   return `${au} AU`
+}
+
+function wrapToPi(a: number): number {
+  return a - 2 * Math.PI * Math.round(a / (2 * Math.PI))
+}
+
+/**
+ * Each AU ring's label angle given where the bodies are (scene positions):
+ * LABEL_ANGLE, or LABEL_NUDGE to the side away from a body that sits on it.
+ */
+export function ringLabelAngles(distance: SceneDistance, bodies: readonly Vec3[]): number[] {
+  const radii = AU_RINGS.map(distance)
+  // Each body counts only for its nearest ring: the compressed rings sit
+  // close enough that Jupiter would otherwise also be "on" the 10 AU ring.
+  const nearest = bodies.map(([x, , z]) => {
+    const r = Math.hypot(x, z)
+    let best = 0
+    radii.forEach((ring, i) => {
+      if (Math.abs(r - ring) < Math.abs(r - radii[best])) best = i
+    })
+    return Math.abs(r - radii[best]) <= SAME_RING * radii[best] ? best : -1
+  })
+  return AU_RINGS.map((_, ring) => {
+    for (let b = 0; b < bodies.length; b++) {
+      if (nearest[b] !== ring) continue
+      const [x, , z] = bodies[b]
+      const offset = wrapToPi(Math.atan2(-z, x) - LABEL_ANGLE)
+      if (Math.abs(offset) < LABEL_CLEARANCE) {
+        return LABEL_ANGLE + (offset > 0 ? -LABEL_NUDGE : LABEL_NUDGE)
+      }
+    }
+    return LABEL_ANGLE
+  })
 }
 
 // The scene point r out at scene angle φ (ZodiacRing's ringPoint).
@@ -65,13 +115,13 @@ export interface RingArrays {
   indices: Uint16Array
 }
 
-/** Every AU ring at `distance`'s spacing. */
-export function ringArrays(distance: SceneDistance): RingArrays {
+/** The `rings` (AU) at `distance`'s spacing. */
+export function ringArrays(distance: SceneDistance, rings: readonly number[]): RingArrays {
   const points = RING_SEGMENTS + 1
-  const positions = new Float32Array(AU_RINGS.length * points * 3)
-  const lineDistances = new Float32Array(AU_RINGS.length * points)
-  const indices = new Uint16Array(AU_RINGS.length * RING_SEGMENTS * 2)
-  AU_RINGS.forEach((au, ring) => {
+  const positions = new Float32Array(rings.length * points * 3)
+  const lineDistances = new Float32Array(rings.length * points)
+  const indices = new Uint16Array(rings.length * RING_SEGMENTS * 2)
+  rings.forEach((au, ring) => {
     const r = distance(au)
     const base = ring * points
     for (let k = 0; k < points; k++) {
@@ -87,24 +137,12 @@ export function ringArrays(distance: SceneDistance): RingArrays {
   return { positions, lineDistances, indices }
 }
 
-/**
- * The spokes as segment pairs, from the innermost ring to the outermost:
- * inside 1 AU the system view's calendar rings already mark the longitudes.
- */
-export function spokePositions(distance: SceneDistance): Float32Array {
-  const inner = distance(AU_RINGS[0])
-  const outer = distance(AU_RINGS[AU_RINGS.length - 1])
-  const positions = new Float32Array(SPOKES * 2 * 3)
-  for (let k = 0; k < SPOKES; k++) {
-    const angle = (2 * Math.PI * k) / SPOKES
-    writeRingPoint(positions, k * 6, inner, angle)
-    writeRingPoint(positions, k * 6 + 3, outer, angle)
-  }
-  return positions
-}
-
-/** Where the `au` ring's label is anchored, scene units. */
-export function ringLabelPosition(distance: SceneDistance, au: number): [number, number, number] {
+/** Where the `au` ring's label is anchored at scene angle `angle`, scene units. */
+export function ringLabelPosition(
+  distance: SceneDistance,
+  au: number,
+  angle = LABEL_ANGLE
+): [number, number, number] {
   const r = distance(au)
-  return [r * Math.cos(LABEL_ANGLE), 0, -r * Math.sin(LABEL_ANGLE)]
+  return [r * Math.cos(angle), 0, -r * Math.sin(angle)]
 }

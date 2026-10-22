@@ -1,42 +1,61 @@
 import { describe, expect, it } from 'vitest'
+import { EARTH_ORBIT_RADIUS, type Vec3 } from '../ephemeris'
 import { positionsFor } from '../flight-scale'
 import { sceneDistance } from '../planets'
 import {
   AU_RINGS,
+  LABEL_ANGLE,
+  LABEL_CLEARANCE,
+  LABEL_NUDGE,
   RING_DASHES,
   RING_SEGMENTS,
-  SPOKES,
+  drawnRings,
   ringArrays,
   ringLabel,
+  ringLabelAngles,
   ringLabelPosition,
-  spokePositions,
 } from './ecliptic-grid'
 
 const SCALES = ['system', 'flight'] as const
+
+// The scene point r out at scene angle φ.
+function at(r: number, angle: number): Vec3 {
+  return [r * Math.cos(angle), 0, -r * Math.sin(angle)]
+}
+
+describe('drawnRings', () => {
+  it("leaves the system view's 1 AU ring to Earth's month ring", () => {
+    expect(sceneDistance(1)).toBe(50)
+    expect(positionsFor('system').distance(1)).toBe(EARTH_ORBIT_RADIUS)
+    expect(drawnRings(positionsFor('system').distance)).toEqual([2, 5, 10, 20, 30])
+  })
+
+  it('draws every ring at the flight spacing, which is linear', () => {
+    const { distance } = positionsFor('flight')
+    expect(drawnRings(distance)).toEqual(AU_RINGS)
+    expect(distance(30)).toBe(30 * distance(1))
+  })
+})
 
 describe('ringArrays', () => {
   it("draws each ring at its true AU through the scale's spacing, in the ecliptic", () => {
     for (const scale of SCALES) {
       const { distance } = positionsFor(scale)
-      const { positions } = ringArrays(distance)
-      AU_RINGS.forEach((au, ring) => {
+      const rings = drawnRings(distance)
+      const { positions } = ringArrays(distance, rings)
+      expect(positions.length).toBe(rings.length * (RING_SEGMENTS + 1) * 3)
+      rings.forEach((au, ring) => {
         for (let k = 0; k <= RING_SEGMENTS; k += 37) {
-          const at = (ring * (RING_SEGMENTS + 1) + k) * 3
-          expect(Math.hypot(positions[at], positions[at + 2])).toBeCloseTo(distance(au), 2)
-          expect(positions[at + 1]).toBe(0)
+          const i = (ring * (RING_SEGMENTS + 1) + k) * 3
+          expect(Math.hypot(positions[i], positions[i + 2])).toBeCloseTo(distance(au), 2)
+          expect(positions[i + 1]).toBe(0)
         }
       })
     }
   })
 
-  it('puts the 1 AU ring on Earth\'s system orbit and spaces flight linearly', () => {
-    expect(sceneDistance(1)).toBe(50)
-    expect(positionsFor('system').distance(1)).toBe(50)
-    expect(positionsFor('flight').distance(30)).toBe(30 * positionsFor('flight').distance(1))
-  })
-
   it('closes each ring and counts the same dashes round every ring', () => {
-    const { positions, lineDistances } = ringArrays(sceneDistance)
+    const { positions, lineDistances } = ringArrays(sceneDistance, AU_RINGS)
     const points = RING_SEGMENTS + 1
     AU_RINGS.forEach((_, ring) => {
       const first = ring * points
@@ -49,7 +68,7 @@ describe('ringArrays', () => {
   })
 
   it('joins only neighbouring points of the same ring', () => {
-    const { indices } = ringArrays(sceneDistance)
+    const { indices } = ringArrays(sceneDistance, AU_RINGS)
     const points = RING_SEGMENTS + 1
     expect(indices.length).toBe(AU_RINGS.length * RING_SEGMENTS * 2)
     for (let i = 0; i < indices.length; i += 2) {
@@ -59,39 +78,49 @@ describe('ringArrays', () => {
   })
 })
 
-describe('spokePositions', () => {
-  it('runs every 30° of longitude from the innermost ring to the outermost', () => {
-    for (const scale of SCALES) {
-      const { distance } = positionsFor(scale)
-      const spokes = spokePositions(distance)
-      expect(spokes.length).toBe(SPOKES * 6)
-      for (let k = 0; k < SPOKES; k++) {
-        const [x0, y0, z0, x1, y1, z1] = spokes.subarray(k * 6, k * 6 + 6)
-        expect(Math.hypot(x0, z0)).toBeCloseTo(distance(AU_RINGS[0]), 2)
-        expect(Math.hypot(x1, z1)).toBeCloseTo(distance(AU_RINGS[AU_RINGS.length - 1]), 2)
-        expect(y0).toBe(0)
-        expect(y1).toBe(0)
-        const angle = Math.atan2(-z1, x1)
-        const expected = (2 * Math.PI * k) / SPOKES
-        expect(Math.cos(angle - expected)).toBeCloseTo(1, 6)
-      }
-    }
-  })
-})
-
 describe('ring labels', () => {
   it('state the true AU, not the scene distance', () => {
     expect(AU_RINGS.map(ringLabel)).toEqual(['1 AU', '2 AU', '5 AU', '10 AU', '20 AU', '30 AU'])
   })
 
-  it('sit on their rings', () => {
+  it('sit on their rings, the 1 AU one too', () => {
     for (const scale of SCALES) {
       const { distance } = positionsFor(scale)
       for (const au of AU_RINGS) {
         const [x, y, z] = ringLabelPosition(distance, au)
         expect(Math.hypot(x, z)).toBeCloseTo(distance(au), 6)
+        expect(Math.atan2(-z, x)).toBeCloseTo(LABEL_ANGLE, 6)
         expect(y).toBe(0)
       }
     }
+  })
+})
+
+describe('ringLabelAngles', () => {
+  const d = sceneDistance
+  const jupiterRing = AU_RINGS.indexOf(5)
+
+  it('keeps every label at LABEL_ANGLE when nothing sits on it', () => {
+    expect(ringLabelAngles(d, [])).toEqual(AU_RINGS.map(() => LABEL_ANGLE))
+    // On the label's line but on another ring, or on the ring but well round it.
+    const clear = [at(d(5.2), LABEL_ANGLE + Math.PI / 2), at(d(30), LABEL_ANGLE + 0.5 * LABEL_CLEARANCE)]
+    expect(ringLabelAngles(d, clear)[jupiterRing]).toBe(LABEL_ANGLE)
+  })
+
+  it('moves a label aside, away from a planet on it', () => {
+    const ahead = ringLabelAngles(d, [at(d(5.2), LABEL_ANGLE + 0.5 * LABEL_CLEARANCE)])
+    expect(ahead[jupiterRing]).toBeCloseTo(LABEL_ANGLE - LABEL_NUDGE)
+    const behind = ringLabelAngles(d, [at(d(5.2), LABEL_ANGLE - 0.5 * LABEL_CLEARANCE)])
+    expect(behind[jupiterRing]).toBeCloseTo(LABEL_ANGLE + LABEL_NUDGE)
+    // The other labels stay put.
+    ahead.forEach((angle, i) => {
+      if (i !== jupiterRing) expect(angle).toBe(LABEL_ANGLE)
+    })
+  })
+
+  it('reads angles across the ±π seam', () => {
+    const angle = Math.PI - 0.01
+    const nudged = ringLabelAngles(d, [at(d(5), angle)])
+    expect(nudged).toEqual(AU_RINGS.map(() => LABEL_ANGLE))
   })
 })
