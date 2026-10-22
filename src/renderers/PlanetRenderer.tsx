@@ -27,8 +27,10 @@ import {
   AMBIENT,
   bandUniforms,
   planetSurfaceMaterial,
+  setPlanetDetail,
   sunDirection,
   type BandUniforms,
+  type PlanetDetail,
 } from './planetMaterials'
 import ringVertex from '../shaders/ring/vertex.glsl'
 import ringFragment from '../shaders/ring/fragment.frag'
@@ -96,6 +98,9 @@ export interface PlanetSurfaceProps {
   limbDarkening?: number
   /** Rings that shade the globe; pass the same profile as PlanetRings. */
   ringShadow?: RingProfile
+  /** Detail finer than the texture, for close fly-bys. Keep it stable
+   * (module level): it's an effect dependency. */
+  detail?: PlanetDetail
 }
 
 /** The planet's globe: Sun-lit diffuse with the scene's ambient fill. */
@@ -131,6 +136,7 @@ function SurfaceMesh({
   albedo = 1,
   limbDarkening = 1,
   ringShadow,
+  detail,
   map,
   ringMap,
 }: PlanetSurfaceProps & {
@@ -152,6 +158,7 @@ function SurfaceMesh({
       uAlbedo: albedo,
       uMinnaert: Math.max(limbDarkening, MIN_MINNAERT),
     })
+    setPlanetDetail(material, detail)
     if (ringShadow) {
       setUniforms(u, {
         uRingInner: ringShadow.inner,
@@ -160,7 +167,7 @@ function SurfaceMesh({
       })
       setBands(u, ringShadow)
     }
-  }, [material, planet.color, albedo, limbDarkening, ringShadow])
+  }, [material, planet.color, albedo, limbDarkening, ringShadow, detail])
 
   return (
     <mesh

@@ -20,6 +20,75 @@ uniform vec3 uAmbient;
 uniform float uMinnaert;
 #ifdef USE_PLANET_MAP
 uniform sampler2D uMap;
+
+// Detail finer than the map (tides-01v.3), for close fly-bys: the ship
+// stops at 1.02 R, where a 2k map's texel spans ~200 px. Keyed to the point
+// on the unit sphere, so it has no dateline seam or polar pinch, and faded
+// in by how many pixels a texel covers, so it's absent wherever the map
+// isn't magnified. uDetailStyle picks the look (planetMaterials.ts).
+#include ../aurora/noise3.glsl
+
+#ifndef PLANET_DETAIL_OCTAVES
+#define PLANET_DETAIL_OCTAVES 5
+#endif
+#define DETAIL_BANDS 1
+#define DETAIL_ROCK 2
+#define DETAIL_STREAKS 3
+
+uniform int uDetailStyle;
+uniform float uDetailStrength;
+uniform float uDetailBump;
+
+// fp is n's footprint per pixel and texel the map's, both in radians. d is
+// albedo detail in about [-1, 1], h a matching height (radii) for the bump.
+// Rock's height is ridged (crests where s crosses 0), shifted to about zero
+// mean: fp steps a little at each mesh edge, and so do the octave weights,
+// which on an offset height would outline the triangles in the bump.
+// Each octave fades out before its wavelength shrinks to 2 px, so nothing
+// sparkles, and the sum is normalised by the full amplitudes, so a fading
+// octave lowers the contrast instead of boosting the rest.
+void planetDetail(vec3 n, float fp, float texel, out float d, out float h) {
+  d = 0.0;
+  h = 0.0;
+  // 0 until a texel spans 2 px, 1 from 8 px.
+  float gate = smoothstep(1.0, 3.0, log2(texel / fp));
+  if (gate == 0.0) return;
+
+  bool rock = uDetailStyle == DETAIL_ROCK;
+  bool streaks = uDetailStyle == DETAIL_STREAKS;
+  // Gas giants and Venus: noise squashed along the axis, so near the
+  // equator it stretches along the bands and toward the poles turns
+  // isotropic (it can't pinch), then warped once so the bands flow.
+  float squash = rock ? 1.0 : (streaks ? 6.0 : 3.0);
+  float warp = rock ? 0.0 : (streaks ? 0.3 : 0.8);
+  float gain = streaks ? 0.4 : 0.5;
+
+  float wavelength = 2.0 * texel;
+  vec3 p = vec3(n.x, n.y * squash, n.z) / wavelength;
+  p.y += warp * snoise3(p * 0.35 + 17.0);
+
+  float amp = 1.0;
+  float total = 0.0;
+  for (int i = 0; i < PLANET_DETAIL_OCTAVES; i++) {
+    total += amp;
+    float w = gate * smoothstep(2.0, 4.0, wavelength / fp);
+    if (w > 0.0) {
+      float s = snoise3(p + float(i) * 7.31);
+      d += w * amp * s;
+      // The bump takes its slope from 2×2-pixel differences, constant
+      // across each quad, so it fades out two octaves sooner (16 px) and
+      // its rock crests stay rounded, or a low Sun shows the quads. Height
+      // scales with wavelength: every octave as steep.
+      float wb = gate * smoothstep(8.0, 16.0, wavelength / fp);
+      h += wb * amp * wavelength * (rock ? 0.1 - s * s : s);
+    }
+    amp *= gain;
+    wavelength /= 2.5;
+    p *= 2.5;
+  }
+  d /= total;
+  h /= total;
+}
 #endif
 #ifdef USE_RING_SHADOW
 #include ../ring/profile.glsl
@@ -35,15 +104,38 @@ varying vec3 vNormalView;
 varying vec3 vViewPosition;
 
 void main() {
+  // On a sphere the unit normal is the position in planet radii.
+  vec3 n = normalize(vNormalLocal);
+  // Lit normal: n, or bumped by the detail.
+  vec3 nLit = n;
+
   #ifdef USE_PLANET_MAP
   vec3 albedo = texture2D(uMap, vUv).rgb * uAlbedo;
+  // dFdx(n) before any branch; dFdx(h) below sits only in uniform ones.
+  vec3 dnx = dFdx(n);
+  vec3 dny = dFdy(n);
+  if (uDetailStyle != 0) {
+    float fp = max(length(dnx), length(dny));
+    float texel = 3.141592653589793 / float(textureSize(uMap, 0).y);
+    float d, h;
+    planetDetail(n, fp, texel, d, h);
+    albedo *= max(0.0, 1.0 + uDetailStrength * d);
+    if (uDetailBump > 0.0) {
+      // Screen-space bump from h (Mikkelsen's surface gradient).
+      vec3 r1 = cross(dny, n);
+      vec3 r2 = cross(n, dnx);
+      float det = dot(dnx, r1);
+      vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
+      if (det != 0.0) nLit = normalize(abs(det) * n - uDetailBump * grad);
+    }
+  }
   #else
   vec3 albedo = uColor * uAlbedo;
   #endif
 
-  // On a sphere the unit normal is the position in planet radii.
-  vec3 n = normalize(vNormalLocal);
-  float cosI = max(dot(n, uSunDir), 0.0);
+  // Capped by the sphere's own, or bumps tilted sunward would speckle the
+  // night side; unbumped (nLit = n), the cap never binds.
+  float cosI = min(max(dot(nLit, uSunDir), 0.0), 4.0 * max(dot(n, uSunDir), 0.0));
   vec3 viewDir = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
   // Floored so the cos(e)^(k−1) term stays finite at the limb.
   float cosE = max(dot(normalize(vNormalView), viewDir), 0.05);

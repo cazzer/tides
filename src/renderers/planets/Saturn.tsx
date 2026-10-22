@@ -8,6 +8,7 @@ import {
   PlanetSurface,
   type RingProfile,
 } from '../PlanetRenderer'
+import type { PlanetDetail } from '../planetMaterials'
 import saturnTexture from '../../assets/saturn-2k.jpg'
 import ringTexture from '../../assets/saturn-ring-2k.png'
 
@@ -39,6 +40,10 @@ const RINGS: RingProfile = {
 const RING_ALBEDO = 3
 const RING_UNLIT_FACE = 0.1
 
+// Below the map's resolution at a close pass: banded filaments, fainter
+// than Jupiter's under the haze.
+const DETAIL: PlanetDetail = { style: 'bands', strength: 0.18 }
+
 export function Saturn() {
   return (
     <>
@@ -48,6 +53,7 @@ export function Saturn() {
         texture={saturnTexture}
         limbDarkening={1.1}
         ringShadow={RINGS}
+        detail={DETAIL}
       />
       <PlanetRings
         planet={SATURN}
