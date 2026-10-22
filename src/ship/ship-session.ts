@@ -94,19 +94,48 @@ export function shipFar(distanceFromSun: number): number {
 }
 
 // The near plane follows the nearest surface so depth precision is spent where
-// the eye is: at 0.4 of the gap the surface stays well in front of it. The
-// ceiling keeps anything a tenth of a unit off drawn (Saturn's rings reach
-// 2.27 radii out; 3bl.6's dust passes within a unit). far/near reaches 8e5
-// (SHIP_FAR at the flight scale), which is fine: depth error is ~z² / (near ·
-// 2²⁴), set by the near plane, not the far. The hard-sphere margin (flight.ts COLLISION_MARGIN) keeps the
-// gap ≥ 0.02 even at the Moon, so the floor is rarely reached.
+// the eye is: at 0.4 of the gap the surface stays well in front of it, even at
+// the near rectangle's corners (up to ~2 near from the eye at the speed kick's
+// FOV on a 21:9 screen). The ceiling keeps anything a tenth of a unit off
+// drawn (Saturn's rings reach 2.27 radii out; 3bl.6's dust passes within a
+// unit). far/near reaches 8e7 at the floor, which is fine: depth error is
+// ~z² / (near · 2²⁴), set by the near plane, not the far.
+//
+// The floor sits under 0.4 × Earth's lowest stop, the ground clearance over
+// its terrain (~0.003–0.004, tides-01v.8), so the share still holds there.
+// Measured from that stop (tides-01v.8.1), 0.001 cuts nothing, so neither
+// reversed-Z nor a log depth buffer is needed. The depth steps there (~0.006
+// at the Moon, ~60 at the Sun, ~4000 at Saturn) leave the Moon as drawn at
+// 0.1; the Sun's corona needs its strict depth test (SunRenderer), and
+// Saturn's rings were already unresolved by depth at 0.1 but are a few pixels
+// across from Earth. Just below 0.001 (0.000977), float32 clip maths drops the
+// star sphere at the far plane.
 const NEAR_SHARE = 0.4
-const NEAR_MIN = 0.002
+const NEAR_MIN = 0.001
 const NEAR_MAX = 0.1
 
-/** The ship camera's near plane `surfaceDistance` from the nearest body. */
-export function shipNear(surfaceDistance: number): number {
-  return THREE.MathUtils.clamp(NEAR_SHARE * surfaceDistance, NEAR_MIN, NEAR_MAX)
+/**
+ * The ship camera's near plane `groundDistance` above the nearest body's
+ * ground and `shellDistance` from the nearest shell it draws (shellGap).
+ */
+export function shipNear(groundDistance: number, shellDistance = Infinity): number {
+  return THREE.MathUtils.clamp(
+    NEAR_SHARE * Math.min(groundDistance, shellDistance),
+    NEAR_MIN,
+    NEAR_MAX
+  )
+}
+
+/**
+ * How far a point `distance` from a body's centre is from the nearest of its
+ * shells of `radii`, from inside or out. Below the outermost shell the ship is
+ * nearer a shell than the ground can say, and a near plane set from the
+ * ground alone cuts a hole in it.
+ */
+export function shellGap(distance: number, radii: readonly number[]): number {
+  let gap = Infinity
+  for (const radius of radii) gap = Math.min(gap, Math.abs(distance - radius))
+  return gap
 }
 
 const DEG = Math.PI / 180
