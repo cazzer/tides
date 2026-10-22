@@ -10,6 +10,7 @@ import { SpaceDust } from './SpaceDust'
 import { SpeedFov } from './useSpeedFov'
 import { ShipHud } from './ShipHud'
 import { ShipTargeting } from './ShipTargeting'
+import { ShipWarmup } from './ShipWarmup'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
 import { TouchShipControls } from './TouchShipControls'
 import { releaseFlightTextures } from '../renderers/useFlightTexture'
@@ -95,6 +96,7 @@ export function ShipView({ children }: { children: ReactNode }) {
         <SpaceDust />
         <SpeedFov />
         <ShipTargeting />
+        <ShipWarmup />
       </View>
       <ExitButton
         ref={exitButton}
