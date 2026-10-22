@@ -286,8 +286,35 @@ body {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
-.scale-readout__caption {
+.scale-readout__caption,
+.scale-readout__short {
   color: rgba(255, 255, 255, 0.55);
+}
+
+.scale-readout__short {
+  display: none;
+  font-size: 11px;
+}
+
+/* A short view (a phone held landscape) has no height to stack three lines
+ * over the scene: one line on the ship button's row, to its left, with the
+ * caption cut to where the bar holds and no distance line. */
+@media only screen and (max-height: 500px) {
+  .scale-readout {
+    right: calc(var(--dock-inset-right) + var(--dock-button-size, 40px) + 8px);
+    bottom: var(--dock-clearance);
+    min-height: var(--dock-button-size, 40px);
+    justify-content: center;
+  }
+
+  .scale-readout__caption,
+  .scale-readout__distance {
+    display: none;
+  }
+
+  .scale-readout__short {
+    display: inline;
+  }
 }
 
 .canvas {

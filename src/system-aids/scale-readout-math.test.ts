@@ -11,6 +11,7 @@ import {
   kmPerUnit,
   niceScaleBarKm,
   scaleCaption,
+  scaleCaptionShort,
   scaleReference,
 } from './scale-readout-math'
 
@@ -79,8 +80,9 @@ describe('the readout’s words', () => {
     expect(scaleReference('sun')).toBe('earth')
     expect(scaleReference('clock')).toBe('earth')
     expect(scaleReference('location')).toBe('earth')
-    expect(scaleCaption('jupiter')).toBe("along Jupiter's orbit · not to scale between orbits")
-    expect(scaleCaption('moon')).toBe("along the Moon's orbit · not to scale between orbits")
+    expect(scaleCaption('jupiter')).toBe("at Jupiter's orbit · gaps between orbits are squeezed")
+    expect(scaleCaption('moon')).toBe("at the Moon's orbit · gaps between orbits are squeezed")
+    expect(scaleCaptionShort('titan')).toBe("at Titan's orbit")
   })
 
   it('gives the distance from Earth only for a body other than Earth', () => {

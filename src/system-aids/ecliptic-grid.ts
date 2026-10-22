@@ -146,3 +146,61 @@ export function ringLabelPosition(
   const r = distance(au)
   return [r * Math.cos(angle), 0, -r * Math.sin(angle)]
 }
+
+/**
+ * Where a ring label's text starts from its anchor, in ems: just off the
+ * ring, up and to the right on screen (left- and bottom-anchored there).
+ */
+export const RING_TEXT_OFFSET: readonly [number, number, number] = [0.35, 0.15, 0]
+
+/**
+ * Each AU ring's label anchor, scene units, clear of `bodies` (scene
+ * positions of Earth and the planets, as ringLabelAngles takes them).
+ */
+export function ringLabelPositions(distance: SceneDistance, bodies: readonly Vec3[]): Vec3[] {
+  const angles = ringLabelAngles(distance, bodies)
+  return AU_RINGS.map((au, i) => ringLabelPosition(distance, au, angles[i]))
+}
+
+/**
+ * The AU ring labels as EclipticGrid draws them, which it publishes so body
+ * names (BodyLabels, tides-2hv.10) can keep off them. Per label, in
+ * AU_RINGS order: its anchor (scene xyz) and its text's box in ems from the
+ * anchor along the screen's right and up ([minX, minY, maxX, maxY], troika's
+ * measured block plus RING_TEXT_OFFSET; NaN until laid out). `count` is 0
+ * while the grid isn't mounted; `emPx` is the text's em, CSS px.
+ */
+export interface RingLabelLayout {
+  count: number
+  emPx: number
+  anchors: Float64Array
+  bounds: Float64Array
+}
+
+export const ringLabelLayout: RingLabelLayout = {
+  count: 0,
+  emPx: 0,
+  anchors: new Float64Array(AU_RINGS.length * 3),
+  bounds: new Float64Array(AU_RINGS.length * 4).fill(NaN),
+}
+
+/** Publish the labels' anchors and em size (EclipticGrid, on mount). */
+export function publishRingLabels(anchors: readonly Vec3[], emPx: number): void {
+  anchors.forEach((anchor, i) => ringLabelLayout.anchors.set(anchor, i * 3))
+  ringLabelLayout.emPx = emPx
+  ringLabelLayout.count = anchors.length
+}
+
+/** Publish ring label i's text block, troika's [minX, minY, maxX, maxY] at font size 1. */
+export function publishRingLabelBounds(i: number, block: readonly number[]): void {
+  const [dx, dy] = RING_TEXT_OFFSET
+  ringLabelLayout.bounds.set([block[0] + dx, block[1] + dy, block[2] + dx, block[3] + dy], i * 4)
+}
+
+/**
+ * Nothing published, as when the grid unmounts. The bounds stay: they hang
+ * on the text alone, and troika won't measure it again on a remount.
+ */
+export function clearRingLabels(): void {
+  ringLabelLayout.count = 0
+}

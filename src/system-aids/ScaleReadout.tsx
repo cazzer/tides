@@ -6,13 +6,16 @@
 //
 // Three lines, bottom-right above the ship button:
 //   [bar] 2 AU
-//   along Jupiter's orbit · not to scale between orbits
+//   at Jupiter's orbit · gaps between orbits are squeezed
 //   Jupiter · 5.21 AU from Earth          (with the camera on a body but Earth)
-// What the bar can honestly claim is scale-readout-math.ts.
+// On a short view (a phone held landscape) one line beside the ship button
+// instead, "[bar] 2 AU · at Jupiter's orbit" (index.css). What the bar can
+// honestly claim is scale-readout-math.ts.
 //
 // Like ShipHud, one requestAnimationFrame loop writes to the DOM through
-// refs: the bar every frame, so it tracks a pinch; the text only when it
-// changes, and the true distances (an ephemeris call) a few times a second.
+// refs, and only what changed: the bar's width as the zoom moves, the text
+// when it changes, and the true distances (an ephemeris call) a few times a
+// second.
 import { useEffect, useRef } from 'react'
 import { formatDistance } from '../ship/ship-distances'
 import { useStore } from '../store'
@@ -24,6 +27,7 @@ import {
   kmPerUnit,
   niceScaleBarKm,
   scaleCaption,
+  scaleCaptionShort,
   scaleReference,
 } from './scale-readout-math'
 
@@ -34,6 +38,7 @@ interface Lines {
   root: HTMLDivElement | null
   bar: HTMLSpanElement | null
   length: HTMLSpanElement | null
+  short: HTMLSpanElement | null
   caption: HTMLDivElement | null
   distance: HTMLDivElement | null
 }
@@ -42,8 +47,19 @@ function setText(element: HTMLElement | null, text: string) {
   if (element && element.textContent !== text) element.textContent = text
 }
 
+function setHidden(element: HTMLElement | null, hidden: boolean) {
+  if (element && element.hidden !== hidden) element.hidden = hidden
+}
+
 export function ScaleReadout() {
-  const lines = useRef<Lines>({ root: null, bar: null, length: null, caption: null, distance: null })
+  const lines = useRef<Lines>({
+    root: null,
+    bar: null,
+    length: null,
+    short: null,
+    caption: null,
+    distance: null,
+  })
 
   useEffect(() => {
     let frame = 0
@@ -51,12 +67,13 @@ export function ScaleReadout() {
     let truthFocus: string | null = null
     let unitKm = NaN
     let barKm = NaN
+    let barPx = NaN
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick)
       const l = lines.current
       const upp = scaleProbe.unitsPerPixel
       const { timestamp, cameraFocus } = useStore.getState()
-      if (l.root) l.root.hidden = upp == null || timestamp == null
+      setHidden(l.root, upp == null || timestamp == null)
       if (upp == null || timestamp == null) return
 
       // A new focus can't wait for the next refresh: its bar is another scale.
@@ -66,9 +83,10 @@ export function ScaleReadout() {
         const reference = scaleReference(cameraFocus)
         unitKm = kmPerUnit(reference, timestamp)
         setText(l.caption, scaleCaption(reference))
+        setText(l.short, ` · ${scaleCaptionShort(reference)}`)
         const target = distanceTarget(cameraFocus)
         setText(l.distance, target ? distanceLine(target, distanceFromEarthKm(target, timestamp)) : '')
-        if (l.distance) l.distance.hidden = target == null
+        setHidden(l.distance, target == null)
       }
 
       const kmPerPx = unitKm * upp
@@ -77,7 +95,12 @@ export function ScaleReadout() {
         barKm = km
         setText(l.length, formatDistance(km))
       }
-      if (l.bar) l.bar.style.width = `${km / kmPerPx}px`
+      // Half pixels: finer than that is invisible, and each write restyles.
+      const px = Math.round((2 * km) / kmPerPx) / 2
+      if (px !== barPx && l.bar) {
+        barPx = px
+        l.bar.style.width = `${px}px`
+      }
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
@@ -99,11 +122,19 @@ export function ScaleReadout() {
             lines.current.bar = el
           }}
         />
-        <span
-          ref={(el) => {
-            lines.current.length = el
-          }}
-        />
+        <span>
+          <span
+            ref={(el) => {
+              lines.current.length = el
+            }}
+          />
+          <span
+            className="scale-readout__short"
+            ref={(el) => {
+              lines.current.short = el
+            }}
+          />
+        </span>
       </div>
       <div
         className="scale-readout__caption"

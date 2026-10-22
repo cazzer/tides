@@ -5,6 +5,11 @@ import { MOON_KEYS, moonRadius, moonsOf } from '../moons/moons'
 import type { CameraFocus } from '../store'
 import {
   LABEL_KEYS,
+  createLabelLayout,
+  eclipsed,
+  resolveLabels,
+  type LabelFrame,
+  type LabelLayout,
   boxHitsDisc,
   boxesOverlap,
   bodyReach,
@@ -182,5 +187,176 @@ describe('collisions', () => {
     // Diagonal from the corner (10, 5): 5√2 ≈ 7.07 away.
     expect(boxHitsDisc(0, 0, 10, 5, 15, 10, 7)).toBe(false)
     expect(boxHitsDisc(0, 0, 10, 5, 15, 10, 7.1)).toBe(true)
+  })
+})
+
+describe('resolveLabels', () => {
+  // Names 40 × 12 px; bodies' default side to the right; a big view.
+  function setup(bodies: [x: number, y: number, r: number][]): LabelLayout {
+    const layout = createLabelLayout(bodies.length, 1)
+    bodies.forEach(([x, y, r], i) => {
+      layout.discX[i] = x
+      layout.discY[i] = y
+      layout.discR[i] = r
+      layout.inView[i] = 1
+      layout.wanted[i] = 1
+      layout.halfW[i] = 20
+      layout.halfH[i] = 6
+      layout.dirX[i] = 1
+      layout.dirY[i] = 0
+    })
+    return layout
+  }
+  function frame(layout: LabelLayout, over: Partial<LabelFrame> = {}): LabelFrame {
+    return {
+      focus: -1,
+      obstacleRank: Infinity,
+      left: -1000,
+      right: 1000,
+      bottom: -1000,
+      top: 1000,
+      // Long enough for any fade to finish in one call.
+      delta: 1,
+      gapPx: 6,
+      reach: (i) => layout.discR[i],
+      ...over,
+    }
+  }
+
+  it('keeps the higher-priority name where it is and moves the other', () => {
+    // Name 0 lands at (36, 0); name 1's default, (36, 14), would cover it.
+    const layout = setup([
+      [0, 0, 10],
+      [0, 14, 10],
+    ])
+    resolveLabels(layout, frame(layout))
+    expect(layout.side[0]).toBe(0)
+    expect(layout.boxX[0]).toBe(36)
+    expect(layout.side[1]).not.toBe(0)
+    expect([...layout.shown]).toEqual([1, 1])
+  })
+
+  it('places the focused name first', () => {
+    const layout = setup([
+      [0, 0, 10],
+      [0, 14, 10],
+    ])
+    resolveLabels(layout, frame(layout, { focus: 1 }))
+    expect(layout.side[1]).toBe(0)
+    expect(layout.side[0]).not.toBe(0)
+  })
+
+  it('fades out a name with no side free, but never the focused one', () => {
+    // A view just big enough for the bodies: no name fits anywhere.
+    const layout = setup([
+      [0, 0, 10],
+      [30, 0, 10],
+    ])
+    const tight = { left: -15, right: 45, bottom: -15, top: 15 }
+    resolveLabels(layout, frame(layout, tight))
+    expect([...layout.shown]).toEqual([0, 0])
+    resolveLabels(layout, frame(layout, { ...tight, focus: 1 }))
+    expect([...layout.shown]).toEqual([0, 1])
+  })
+
+  it('eases a name out over LABEL_COLLISION_FADE_S rather than at once', () => {
+    const layout = setup([[0, 0, 10]])
+    layout.shown[0] = 1
+    resolveLabels(layout, frame(layout, { left: -15, right: 15, bottom: -15, top: 15, delta: 0.1 }))
+    expect(layout.shown[0]).toBeCloseTo(0.6, 9)
+  })
+
+  it('lets a shown name graze its neighbour, but a hidden one waits until it is clear', () => {
+    // Name 1 at (29, 15) is 15 px above name 0: inside the 16 px they keep
+    // apart, but within the hysteresis pad.
+    const shown = setup([
+      [0, 0, 10],
+      [0, 15, 3],
+    ])
+    shown.shown[1] = 1
+    resolveLabels(shown, frame(shown))
+    expect(shown.side[1]).toBe(0)
+
+    const hidden = setup([
+      [0, 0, 10],
+      [0, 15, 3],
+    ])
+    resolveLabels(hidden, frame(hidden))
+    expect(hidden.side[1]).not.toBe(0)
+  })
+
+  it('turns a name that would run off the view to a side that fits', () => {
+    // Near the right edge, where "Sun" would read "Su".
+    const layout = setup([[50, 0, 10]])
+    resolveLabels(layout, frame(layout, { right: 70 }))
+    expect(layout.side[0]).not.toBe(0)
+    expect(layout.boxX[0] + layout.halfW[0]).toBeLessThanOrEqual(70)
+    expect(layout.shown[0]).toBe(1)
+  })
+
+  it('keeps off obstacles only the names it does not outrank', () => {
+    const layout = setup([
+      [0, 0, 10],
+      [0, 100, 10],
+    ])
+    layout.obstacleCount = 1
+    layout.obstacleHalfW[0] = 20
+    layout.obstacleHalfH[0] = 6
+    // On name 0's default spot: name 0 (rank 0) outranks it and stays.
+    layout.obstacleX[0] = 36
+    layout.obstacleY[0] = 0
+    resolveLabels(layout, frame(layout, { obstacleRank: 0 }))
+    expect(layout.side[0]).toBe(0)
+    // On name 1's: it moves.
+    layout.obstacleY[0] = 100
+    resolveLabels(layout, frame(layout, { obstacleRank: 0 }))
+    expect(layout.side[1]).not.toBe(0)
+  })
+
+  it('drops the name of a body behind a larger, nearer globe, whatever its priority', () => {
+    const layout = setup([
+      [0, 0, 5],
+      [2, 0, 30],
+    ])
+    layout.nearness[1] = 10
+    expect(eclipsed(layout, 0)).toBe(true)
+    layout.nearness[1] = -10
+    expect(eclipsed(layout, 0)).toBe(false)
+  })
+})
+
+describe('resolveLabels sides', () => {
+  function one(): LabelLayout {
+    const layout = createLabelLayout(1, 0, 1)
+    layout.discR[0] = 10
+    layout.inView[0] = 1
+    layout.wanted[0] = 1
+    layout.halfW[0] = 20
+    layout.halfH[0] = 6
+    layout.dirX[0] = 1
+    return layout
+  }
+  const frame = (layout: LabelLayout): LabelFrame => ({
+    focus: -1,
+    obstacleRank: Infinity,
+    left: -1000,
+    right: 1000,
+    bottom: -1000,
+    top: 1000,
+    delta: 1,
+    gapPx: 6,
+    reach: () => layout.discR[0],
+  })
+
+  it('keeps off a blocker (the clock), and goes back to its own side once that is clear', () => {
+    const layout = one()
+    layout.blockerCount = 1
+    layout.blockerX[0] = 36
+    layout.blockerR[0] = 5
+    resolveLabels(layout, frame(layout))
+    expect(layout.side[0]).not.toBe(0)
+    layout.blockerX[0] = 500
+    resolveLabels(layout, frame(layout))
+    expect(layout.side[0]).toBe(0)
   })
 })

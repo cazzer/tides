@@ -9,7 +9,8 @@
 // (moons.ts' log map; Earth's Moon at 38 440 km a unit). So the bar is
 // honest about where it holds: it measures along one body's orbit, the
 // focused body's (Earth's when the camera is on the Sun, the clock or a
-// location), and says so, "not to scale between orbits".
+// location), and says so: "at Jupiter's orbit · gaps between orbits are
+// squeezed".
 
 import * as THREE from 'three'
 import { KM_PER_AU } from 'astronomy-engine'
@@ -77,9 +78,14 @@ function possessive(key: ScaleReference): string {
   return key === 'moon' ? "the Moon's" : `${bodyName(key)}'s`
 }
 
-/** What the bar measures along, and that it holds only there. */
+/** Where the bar holds, and that it holds only there. */
 export function scaleCaption(key: ScaleReference): string {
-  return `along ${possessive(key)} orbit · not to scale between orbits`
+  return `${scaleCaptionShort(key)} · gaps between orbits are squeezed`
+}
+
+/** scaleCaption's first half, for a short view where the readout is one line. */
+export function scaleCaptionShort(key: ScaleReference): string {
+  return `at ${possessive(key)} orbit`
 }
 
 /** The focused body other than Earth, whose distance from Earth the readout gives; else null. */

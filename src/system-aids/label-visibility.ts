@@ -288,10 +288,12 @@ export function steerClearOfSun(dir: ScreenDirection, awayX: number, awayY: numb
 //
 // Names placed outward from the Sun still meet where bodies line up on
 // screen: Venus' name lands on Earth at inferior conjunction, Iapetus' on
-// Saturn's. BodyLabels walks the names in priority order (the focused body,
-// then LABEL_KEYS' order), and each takes the first side of its body (out,
-// along the orbit either way, in) clear of higher-priority names and bodies
-// and of the AU rings' labels, or fades out where none is.
+// Saturn's. resolveLabels walks the names in priority order (the focused
+// body, then LABEL_KEYS' order), and each takes the first side of its body
+// (out, along the orbit either way, in) that is on screen and clear of the
+// names already placed, of every body's globe, of the clock and of the AU
+// rings' labels, or fades out where none is. The focused body's name shows
+// wherever it lands.
 
 /**
  * Hysteresis on a collision, CSS px: a shown name keeps showing until it
@@ -302,6 +304,9 @@ export const LABEL_COLLISION_PAD_PX = 2
 
 /** The least space between two names, CSS px, before the hysteresis pad. [TUNE] */
 export const LABEL_SPACING_PX = 4
+
+/** The least space between a name and the view's edge, CSS px. [TUNE] */
+export const LABEL_EDGE_PX = 4
 
 /**
  * A body's disc smaller than this, px, doesn't push names aside: a moon's
@@ -340,4 +345,266 @@ export function boxHitsDisc(
   const dx = Math.max(Math.abs(cx - x) - halfWidth, 0)
   const dy = Math.max(Math.abs(cy - y) - halfHeight, 0)
   return dx * dx + dy * dy < radius * radius
+}
+
+/**
+ * Every name's inputs and results for resolveLabels: parallel arrays, one
+ * slot per name in priority order (LABEL_KEYS'), in CSS px along the
+ * camera's right and up axes. Filled in place each frame, so the per-frame
+ * path allocates nothing; `side` and `shown` carry over between frames.
+ */
+export interface LabelLayout {
+  n: number
+  // Inputs, per name.
+  /** The body's globe on screen: centre and radius. */
+  discX: Float64Array
+  discY: Float64Array
+  discR: Float64Array
+  /** Toward the camera, any unit: larger is nearer. */
+  nearness: Float64Array
+  /** 1 between the camera's near and far planes. */
+  inView: Uint8Array
+  /** The opacity the zoom asks for (labelOpacity); under MIN_NAME_OPACITY, no name. */
+  wanted: Float64Array
+  /** The name's half sizes. */
+  halfW: Float64Array
+  halfH: Float64Array
+  /** The default side, a unit vector: away from what the body orbits. */
+  dirX: Float64Array
+  dirY: Float64Array
+  /** 1 for a name turned off headings toward the Sun (steerClearOfSun), with (awayX, awayY) the unit direction from the Sun. */
+  steer: Uint8Array
+  awayX: Float64Array
+  awayY: Float64Array
+  // Fixed boxes (the AU rings' labels) that the names below the frame's
+  // obstacleRank keep off.
+  obstacleCount: number
+  obstacleX: Float64Array
+  obstacleY: Float64Array
+  obstacleHalfW: Float64Array
+  obstacleHalfH: Float64Array
+  // Fixed discs (the clock's text) that every name keeps off.
+  blockerCount: number
+  blockerX: Float64Array
+  blockerY: Float64Array
+  blockerR: Float64Array
+  // Results, per name.
+  /** Which of LABEL_SIDES it is on. */
+  side: Int8Array
+  /** Its direction from the body's centre (unit), and how far its centre is, px. */
+  outX: Float64Array
+  outY: Float64Array
+  distance: Float64Array
+  /** Its box centre. */
+  boxX: Float64Array
+  boxY: Float64Array
+  /** How far it is shown past collisions, 0 to 1, eased; opacity is wanted × shown. */
+  shown: Float64Array
+  /** Scratch: the names placed so far this frame. */
+  kept: Int32Array
+}
+
+export function createLabelLayout(n: number, obstacles: number, blockers = 0): LabelLayout {
+  const f = () => new Float64Array(n)
+  const o = () => new Float64Array(obstacles)
+  const b = () => new Float64Array(blockers)
+  return {
+    n,
+    discX: f(),
+    discY: f(),
+    discR: f(),
+    nearness: f(),
+    inView: new Uint8Array(n),
+    wanted: f(),
+    halfW: f(),
+    halfH: f(),
+    dirX: f(),
+    dirY: f(),
+    steer: new Uint8Array(n),
+    awayX: f(),
+    awayY: f(),
+    obstacleCount: 0,
+    obstacleX: o(),
+    obstacleY: o(),
+    obstacleHalfW: o(),
+    obstacleHalfH: o(),
+    blockerCount: 0,
+    blockerX: b(),
+    blockerY: b(),
+    blockerR: b(),
+    side: new Int8Array(n),
+    outX: f(),
+    outY: f(),
+    distance: f(),
+    boxX: f(),
+    boxY: f(),
+    shown: f(),
+    kept: new Int32Array(n),
+  }
+}
+
+/** One frame's settings for resolveLabels. */
+export interface LabelFrame {
+  /** The focused body's name's index, or -1: placed first, and always shown. */
+  focus: number
+  /** Names past this index (and not focused) keep off the obstacles. */
+  obstacleRank: number
+  /** The view's edges, px, in the layout's axes. */
+  left: number
+  right: number
+  bottom: number
+  top: number
+  /** Seconds since the last frame, for the fades. */
+  delta: number
+  /** Gap between a body's edge and its name, px. */
+  gapPx: number
+  /** How far body i reaches from its centre along (dirX, dirY), px (bodyReach / upp). */
+  reach(i: number, dirX: number, dirY: number): number
+}
+
+/** Below this a name is skipped altogether rather than drawn invisible. */
+export const MIN_NAME_OPACITY = 0.01
+
+// The sides a name tries, in turn, as quarter turns from its default: out
+// from what the body orbits, then either way along the orbit, then inward.
+// [cos, sin] of each turn.
+const LABEL_SIDES: readonly (readonly [number, number])[] = [
+  [1, 0],
+  [0, 1],
+  [0, -1],
+  [-1, 0],
+]
+
+const turned: ScreenDirection = { x: 0, y: 0 }
+
+function rankOf(i: number, focus: number): number {
+  return i === focus ? -1 : i
+}
+
+// Put name i on side `s`.
+function placeOnSide(layout: LabelLayout, frame: LabelFrame, i: number, s: number) {
+  const [c, sn] = LABEL_SIDES[s]
+  turned.x = layout.dirX[i] * c - layout.dirY[i] * sn
+  turned.y = layout.dirX[i] * sn + layout.dirY[i] * c
+  if (layout.steer[i]) steerClearOfSun(turned, layout.awayX[i], layout.awayY[i])
+  const distance = labelDistancePx(
+    turned.x,
+    turned.y,
+    frame.reach(i, turned.x, turned.y),
+    layout.halfW[i],
+    layout.halfH[i],
+    frame.gapPx
+  )
+  layout.outX[i] = turned.x
+  layout.outY[i] = turned.y
+  layout.distance[i] = distance
+  layout.boxX[i] = layout.discX[i] + turned.x * distance
+  layout.boxY[i] = layout.discY[i] + turned.y * distance
+}
+
+/**
+ * Whether body i is out of sight behind a larger, nearer globe (its name
+ * goes with it): depth, not priority, decides.
+ */
+export function eclipsed(layout: LabelLayout, i: number): boolean {
+  const { discX, discY, discR, nearness, inView } = layout
+  for (let j = 0; j < layout.n; j++) {
+    if (
+      j !== i &&
+      inView[j] &&
+      nearness[j] > nearness[i] &&
+      discR[j] > discR[i] &&
+      Math.hypot(discX[i] - discX[j], discY[i] - discY[j]) < discR[j]
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+// Whether name i, where it is now, runs off the view or covers a placed
+// name, an obstacle it doesn't outrank, or any other body's globe, with its
+// box grown by `pad` px.
+function collides(layout: LabelLayout, frame: LabelFrame, i: number, keptCount: number, pad: number): boolean {
+  const { boxX, boxY, halfW, halfH, kept } = layout
+  const w = halfW[i] + pad
+  const h = halfH[i] + pad
+  const x = boxX[i]
+  const y = boxY[i]
+  if (
+    x - w < frame.left + LABEL_EDGE_PX ||
+    x + w > frame.right - LABEL_EDGE_PX ||
+    y - h < frame.bottom + LABEL_EDGE_PX ||
+    y + h > frame.top - LABEL_EDGE_PX
+  ) {
+    return true
+  }
+  // Names keep a space between them, so two never read as one word.
+  const spacedW = w + LABEL_SPACING_PX
+  const spacedH = h + LABEL_SPACING_PX
+  for (let k = 0; k < keptCount; k++) {
+    const j = kept[k]
+    if (boxesOverlap(x, y, spacedW, spacedH, boxX[j], boxY[j], halfW[j], halfH[j])) return true
+  }
+  if (rankOf(i, frame.focus) > frame.obstacleRank) {
+    for (let r = 0; r < layout.obstacleCount; r++) {
+      if (
+        boxesOverlap(x, y, spacedW, spacedH, layout.obstacleX[r], layout.obstacleY[r], layout.obstacleHalfW[r], layout.obstacleHalfH[r])
+      ) {
+        return true
+      }
+    }
+  }
+  for (let b = 0; b < layout.blockerCount; b++) {
+    if (boxHitsDisc(x, y, w, h, layout.blockerX[b], layout.blockerY[b], layout.blockerR[b])) return true
+  }
+  const { discX, discY, discR, inView } = layout
+  for (let j = 0; j < layout.n; j++) {
+    if (j !== i && inView[j] && discR[j] >= MIN_BLOCKING_DISC_PX && boxHitsDisc(x, y, w, h, discX[j], discY[j], discR[j])) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Place every name (see Collisions, above): fills each name's side, box and
+ * direction, and eases `shown` toward 1 where it fits, 0 where it doesn't.
+ * A name keeps last frame's side while that stays clear, so it doesn't hop.
+ */
+export function resolveLabels(layout: LabelLayout, frame: LabelFrame): void {
+  const { n, wanted, shown, side, kept } = layout
+  const step = frame.delta / LABEL_COLLISION_FADE_S
+  let keptCount = 0
+  for (let k = -1; k < n; k++) {
+    const i = k < 0 ? frame.focus : k
+    if (i < 0 || (k >= 0 && i === frame.focus)) continue
+    const focused = i === frame.focus
+    let target = 0
+    if (wanted[i] >= MIN_NAME_OPACITY && (focused || !eclipsed(layout, i))) {
+      // The default side first, so a name goes back to it once it's free;
+      // then the side it is on, so it doesn't hop between the others. It
+      // stays where it is (if shown) until that is overlapped by the pad,
+      // and moves only to a side clear by the pad.
+      const was = side[i]
+      const staying = shown[i] > 0.5
+      let clear = false
+      for (let tried = -2; tried < LABEL_SIDES.length && !clear; tried++) {
+        const s = tried === -2 ? 0 : tried === -1 ? was : tried
+        if ((tried === -1 && was === 0) || (tried >= 0 && (s === 0 || s === was))) continue
+        placeOnSide(layout, frame, i, s)
+        const pad = staying && s === was ? -LABEL_COLLISION_PAD_PX : LABEL_COLLISION_PAD_PX
+        if (!collides(layout, frame, i, keptCount, pad)) {
+          clear = true
+          side[i] = s
+        }
+      }
+      if (!clear) placeOnSide(layout, frame, i, was)
+      if (clear || focused) {
+        target = 1
+        kept[keptCount++] = i
+      }
+    }
+    shown[i] = target > shown[i] ? Math.min(target, shown[i] + step) : Math.max(target, shown[i] - step)
+  }
 }
