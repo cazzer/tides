@@ -44,8 +44,9 @@
 //      neighbour, so Mimas from Saturn would read ~4× long), so the moons
 //      keep the blended range: exact from the parent's surface, 0 on arrival.
 //
-// Gaps are to the collision shell, the closest the ship can get, and the
-// anchor then puts the ship on R's true surface: a range reads 0 on arrival,
+// Gaps are to the collision shell, the closest the ship can get (over Earth,
+// its terrain floor under the ship: flight.ts floorRadius), and the anchor
+// then puts the ship on R's true surface: a range reads 0 on arrival,
 // and at Earth facing the Moon it is the true surface-to-surface distance
 // (the astronomy-engine centre distance less both radii).
 //
@@ -80,7 +81,7 @@ import {
   moonTrueOffsetKm,
   moonsOf,
 } from '../moons/moons'
-import { collisionRadius, type Body as FlightBody } from './flight'
+import { collisionRadius, floorRadius, type Body as FlightBody } from './flight'
 
 /** Speed of light, km/s. */
 export const C_KM_PER_S = 299_792.458
@@ -247,6 +248,16 @@ const anchorGapKm: number[] = []
 const anchor = new THREE.Vector3()
 const direction = new THREE.Vector3()
 
+// From `position` to `body`'s collision shell, at least 0. Only a body with
+// ground needs the direction (its floor under the ship).
+function shellGap(position: THREE.Vector3, body: FlightBody): number {
+  const d = direction.subVectors(position, body.position).length()
+  if (!body.ground) return Math.max(0, d - collisionRadius(body))
+  if (d > 0) direction.divideScalar(d)
+  else direction.set(0, 1, 0)
+  return Math.max(0, d - floorRadius(body, direction))
+}
+
 // ln(km per scene unit) between a and b: true surface gap over scene shell gap.
 function pairLogScale(
   a: number,
@@ -299,7 +310,7 @@ export function measureRanges(
   logScales.length = n
   anchorGapKm.length = n
   for (let i = 0; i < n; i++) {
-    gaps[i] = Math.max(0, position.distanceTo(bodies[i].position) - collisionRadius(bodies[i]))
+    gaps[i] = shellGap(position, bodies[i])
   }
 
   // Which bodies form which moon system, and where the ship is in each.

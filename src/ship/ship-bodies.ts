@@ -4,7 +4,7 @@
 // the flight scale (flight-scale.ts), as ship mode draws them.
 
 import * as THREE from 'three'
-import type { Vec3 } from '../ephemeris'
+import { earthSpin, earthTilt, type Vec3 } from '../ephemeris'
 import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
@@ -13,6 +13,7 @@ import { CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
 import { shipNear } from './ship-session'
+import { earthTerrain, loadEarthTerrain, terrainFloorRadius } from './terrain-floor'
 
 // The scene draws Sun, Earth and Moon with sceneRadius(diameter) as the sphere
 // radius (solar-system.tsx), so these match what is on screen.
@@ -40,6 +41,13 @@ export const EARTH_SHELL_RADIUS = Math.max(
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
 /**
+ * How far above the displaced ground (terrain-floor.ts) the ship stops over
+ * Earth. EARTH_COLLISION_RADIUS still clamps the stop, far above it, until
+ * the ship can fly below the cloud deck (tides-01v.8.7).
+ */
+export const EARTH_GROUND_CLEARANCE = 0.004
+
+/**
  * Masses, kg, for the flight model's gravity wells (flight.ts wellFactor).
  * The other planets' moons (tides-2hv.8) take theirs from moons.ts' MOONS.
  */
@@ -59,6 +67,27 @@ export const BODY_MASS_KG: Readonly<Record<'sun' | 'earth' | 'moon' | PlanetKey,
 export interface ShipBody extends FlightBody {
   /** Null for the Sun, which stays at the origin. */
   positionAt: ((t: number) => Vec3) | null
+  /** Turns a body whose ground is sampled in its own frame (Earth) to `t`. */
+  turnTo?: (t: number) => void
+}
+
+const DEG = Math.PI / 180
+
+// Earth's ground: its terrain floor, read in its own spinning frame. The
+// mesh tilts about X, then spins about the tilted Y (body-transform.ts), so
+// world → local undoes the spin after the tilt.
+function earthGround(): Pick<ShipBody, 'ground' | 'groundClearance' | 'turnTo'> {
+  const toLocal = new THREE.Quaternion()
+  const euler = new THREE.Euler()
+  const local = new THREE.Vector3()
+  return {
+    ground: (direction) =>
+      terrainFloorRadius(earthTerrain(), EARTH_RADIUS, local.copy(direction).applyQuaternion(toLocal)),
+    groundClearance: EARTH_GROUND_CLEARANCE,
+    turnTo: (t) => {
+      toLocal.setFromEuler(euler.set(earthTilt(t) * DEG, earthSpin(t), 0, 'XYZ')).invert()
+    },
+  }
 }
 
 /**
@@ -74,6 +103,7 @@ export const MOON_COLLISION_CLEARANCE = 0.02
  */
 export function createShipBodies(): ShipBody[] {
   const { positionAt } = positionsFor('flight')
+  loadEarthTerrain()
   return [
     {
       key: 'sun',
@@ -87,6 +117,7 @@ export function createShipBodies(): ShipBody[] {
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
       collisionRadius: EARTH_COLLISION_RADIUS,
+      ...earthGround(),
       mass: BODY_MASS_KG.earth,
       positionAt: positionAt.earth,
     },
@@ -118,9 +149,13 @@ export function createShipBodies(): ShipBody[] {
   ]
 }
 
-/** Move `bodies` (from createShipBodies) to where they are at `t`, epoch ms. */
+/**
+ * Move and turn `bodies` (from createShipBodies) to where they are at `t`,
+ * epoch ms.
+ */
 export function updateShipBodies(bodies: readonly ShipBody[], t: number): void {
   for (const body of bodies) {
     if (body.positionAt) body.position.fromArray(body.positionAt(t))
+    body.turnTo?.(t)
   }
 }

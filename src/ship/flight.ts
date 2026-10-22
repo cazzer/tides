@@ -47,7 +47,10 @@
 //     v_max) and ease off above it, to TURN_RATE_MIN_FACTOR at the cap.
 //     Slow is never penalised, so easing off is always the way to turn tight.
 //   • Bodies are hard spheres at radius · COLLISION_MARGIN: the ship is pushed
-//     back out along the normal and loses its inward velocity.
+//     back out along the normal and loses its inward velocity. A body with
+//     ground (Earth's terrain) also keeps the ship groundClearance above
+//     that, direction by direction (floorRadius), and its gaps measure from
+//     the ground under the ship rather than its sphere.
 //
 // A step allocates nothing: vector maths runs on module-level scratch vectors
 // and the nearest/target scan writes into a scratch record, as elsewhere in
@@ -84,15 +87,42 @@ export interface Body {
    */
   collisionRadius?: number
   /**
+   * How far out the drawn ground stands along `direction` (world frame, a
+   * unit vector from the centre), for a body whose surface isn't its sphere:
+   * Earth's displaced terrain (ship-bodies.ts). It must never read below the
+   * ground drawn there, and must leave `direction` as it is. Gaps measure
+   * from it in place of `radius`, and the ship stops groundClearance above
+   * it as well as outside collisionRadius (floorRadius).
+   */
+  ground?: (direction: THREE.Vector3) => number
+  /** How far above `ground` the ship stops; 0 when missing. */
+  groundClearance?: number
+  /**
    * Mass in kg; sets the size of the body's gravity well (wellFactor).
    * Missing, non-positive or non-finite reads as the smallest well.
    */
   mass?: number
 }
 
-/** The closest the ship gets to `body`'s centre, scene units. */
+/**
+ * The closest the ship gets to `body`'s centre in any direction, scene
+ * units: its hard sphere. floorRadius adds the ground under the ship.
+ */
 export function collisionRadius(body: Body): number {
   return body.collisionRadius ?? body.radius * COLLISION_MARGIN
+}
+
+/**
+ * The closest the ship gets to `body`'s centre along `direction` (world
+ * frame, unit): groundClearance above its ground, but never inside
+ * collisionRadius, so a body's hard sphere still clamps the stop.
+ */
+export function floorRadius(body: Body, direction: THREE.Vector3): number {
+  const shell = collisionRadius(body)
+  if (!body.ground) return shell
+  // A NaN floor would put the ship at NaN for good.
+  const floor = body.ground(direction) + (body.groundClearance ?? 0)
+  return Number.isFinite(floor) ? Math.max(shell, floor) : shell
 }
 
 export interface FlightEnv {
@@ -286,6 +316,17 @@ const proximity: Proximity = {
   wellBodyFactor: 1,
 }
 
+const outward = new THREE.Vector3()
+
+// From `position` to `body`'s surface below it; negative inside.
+function surfaceGap(position: THREE.Vector3, body: Body): number {
+  const d = outward.subVectors(position, body.position).length()
+  if (!body.ground) return d - body.radius
+  if (d > 0) outward.divideScalar(d)
+  else outward.copy(WORLD_UP)
+  return d - body.ground(outward)
+}
+
 function measure(
   position: THREE.Vector3,
   bodies: readonly Body[],
@@ -299,7 +340,7 @@ function measure(
   proximity.wellKey = null
   proximity.wellBodyFactor = 1
   for (const body of bodies) {
-    const gap = position.distanceTo(body.position) - body.radius
+    const gap = surfaceGap(position, body)
     // A NaN gap never wins the nearest or well comparisons, so it can't
     // poison the cap.
     if (gap < proximity.nearestGap) {
@@ -530,18 +571,22 @@ function rideWell(
 }
 
 // Push the ship out of any body it ended inside and drop the velocity
-// component into it, so it slides along the surface. Bodies in the scene
-// never overlap, so one pass leaves the ship outside all of them. Returns
-// whether the step hit something faster than COLLISION_SPEED.
+// component into it, so it slides along the surface. The push is radial,
+// also over a ground: climbing rising terrain lifts the ship straight up to
+// the floor, which keeps the tangential speed. Bodies in the scene never
+// overlap, so one pass leaves the ship outside all of them. Returns whether
+// the step hit something faster than COLLISION_SPEED.
 function collide(state: ShipState, bodies: readonly Body[]): boolean {
   let hit = false
   for (const body of bodies) {
-    const shell = collisionRadius(body)
     const normal = scratch.subVectors(state.position, body.position)
     const d = normal.length()
-    if (d >= shell) continue
+    // A sphere needs no direction; a ground is sampled under the ship.
+    if (!body.ground && d >= collisionRadius(body)) continue
     if (d > 1e-9) normal.divideScalar(d)
     else normal.copy(WORLD_UP)
+    const shell = floorRadius(body, normal)
+    if (d >= shell) continue
     state.position.copy(body.position).addScaledVector(normal, shell)
     const inward = state.velocity.dot(normal)
     if (inward < 0) state.velocity.addScaledVector(normal, -inward)
