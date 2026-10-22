@@ -1,21 +1,28 @@
-import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
-import { CLOUD_LAYER_TOP } from '../cloud-layer'
+import { CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { latLonToLocal } from '../aurora'
+import { applyBodyTransform } from '../body-transform'
+import { earthSpin, earthTilt } from '../ephemeris'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
-import { COLLISION_MARGIN, collisionRadius, wellFactor } from './flight'
+import { COLLISION_MARGIN, collisionRadius, floorRadius, wellFactor } from './flight'
 import { MOONS, MOON_KEYS, isMoonKey, moonPosition, moonRadius } from '../moons/moons'
 import {
   BODY_MASS_KG,
   EARTH_COLLISION_RADIUS,
+  EARTH_GROUND_CLEARANCE,
+  EARTH_RADIUS,
   EARTH_SHELL_RADIUS,
   MOON_COLLISION_CLEARANCE,
   createShipBodies,
   updateShipBodies,
 } from './ship-bodies'
 import { shipNear, spawnPose } from './ship-session'
+import { TERRAIN_MAP_SIZE, buildTerrainFloor, setEarthTerrain } from './terrain-floor'
 
 const T = Date.UTC(2026, 9, 22, 12)
 
@@ -157,6 +164,67 @@ describe('ship bodies', () => {
             expect(position.distanceTo(body.position)).toBeGreaterThan(collisionRadius(body))
           }
         }
+      }
+    })
+  })
+
+  describe('terrain floor (tides-01v.8.3)', () => {
+    afterEach(() => setEarthTerrain(null))
+
+    // Earth's mesh transform at `t`: a local direction in world axes.
+    function toWorld(local: THREE.Vector3, t: number): THREE.Vector3 {
+      const frame = new THREE.Object3D()
+      applyBodyTransform(frame, { tiltAt: earthTilt, spinAt: earthSpin }, t)
+      return local.clone().applyQuaternion(frame.quaternion)
+    }
+
+    it("samples the ground in Earth's tilted, spinning frame at the bodies' time", () => {
+      // One white block over Tibet, sea everywhere else.
+      const [width, height] = TERRAIN_MAP_SIZE
+      const pooled = new Uint8Array(width * height)
+      pooled[Math.floor(((90 - 32) / 180) * height) * width + Math.floor(((88 + 180) / 360) * width)] = 255
+      setEarthTerrain(buildTerrainFloor(pooled))
+      const tibet = latLonToLocal(32, 88)
+      const { earth } = byKey()
+      const high = EARTH_RADIUS + TERRAIN_DISPLACEMENT
+      expect(earth.ground!(toWorld(tibet, T))).toBeCloseTo(high, 9)
+      // A quarter day on, Tibet has turned away from that world direction.
+      const later = T + 6 * 3_600_000
+      updateShipBodies([earth], later)
+      expect(earth.ground!(toWorld(tibet, T))).toBeLessThan(EARTH_RADIUS + 0.01)
+      expect(earth.ground!(toWorld(tibet, later))).toBeCloseTo(high, 9)
+      // Mirrored through the equator or the prime meridian: open sea.
+      expect(earth.ground!(toWorld(latLonToLocal(-32, 88), later))).toBeLessThan(EARTH_RADIUS + 0.01)
+      expect(earth.ground!(toWorld(latLonToLocal(32, -88), later))).toBeLessThan(EARTH_RADIUS + 0.01)
+    })
+
+    it('keeps the stop at EARTH_COLLISION_RADIUS everywhere, with the real terrain loaded', () => {
+      setEarthTerrain(
+        buildTerrainFloor(new Uint8Array(readFileSync(new URL('../assets/earth-terrain-max.bin', import.meta.url))))
+      )
+      const { earth } = byKey()
+      const direction = new THREE.Vector3()
+      let highest = 0
+      for (let lat = -89; lat <= 89; lat += 1) {
+        for (let lon = -180; lon < 180; lon += 1) {
+          direction.copy(toWorld(latLonToLocal(lat, lon), T))
+          highest = Math.max(highest, earth.ground!(direction))
+          expect(floorRadius(earth, direction)).toBe(EARTH_COLLISION_RADIUS)
+        }
+      }
+      expect(highest).toBeGreaterThan(EARTH_RADIUS + 0.05)
+      expect(highest + EARTH_GROUND_CLEARANCE).toBeLessThan(EARTH_COLLISION_RADIUS)
+    })
+
+    it('falls back to the highest the ground can reach until the map loads', () => {
+      const { earth } = byKey()
+      expect(earth.ground!(new THREE.Vector3(1, 0, 0))).toBe(EARTH_RADIUS + TERRAIN_DISPLACEMENT)
+      expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
+    })
+
+    it('gives no other body a ground', () => {
+      for (const body of createShipBodies()) {
+        if (body.key !== 'earth') expect(body.ground).toBeUndefined()
       }
     })
   })

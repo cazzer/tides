@@ -19,6 +19,7 @@ import {
   approachCap,
   collisionRadius,
   createShipState,
+  floorRadius,
   nearestBody,
   speedCap,
   speedFraction,
@@ -686,6 +687,89 @@ describe('collision', () => {
         expect(telemetry.colliding).toBe(false)
       }
     }
+  })
+})
+
+describe('ground (tides-01v.8.3)', () => {
+  // A unit rock at the origin whose ground rises `rise` over `width` radians
+  // of longitude east of φ = 0 (a cliff when width is 0).
+  const CLEARANCE = 0.01
+  function rock(rise: number, width: number, collision = 1): Body {
+    return {
+      key: 'rock',
+      position: new THREE.Vector3(),
+      radius: 1,
+      collisionRadius: collision,
+      ground: (direction) => {
+        const phi = Math.atan2(direction.z, direction.x)
+        return 1 + rise * (width > 0 ? THREE.MathUtils.clamp(phi / width, 0, 1) : phi >= 0 ? 1 : 0)
+      },
+      groundClearance: CLEARANCE,
+    }
+  }
+  const along = (phi: number) => new THREE.Vector3(Math.cos(phi), 0, Math.sin(phi))
+  const longitude = (p: THREE.Vector3) => Math.atan2(p.z, p.x)
+
+  test('the stop is groundClearance above the ground, clamped to collisionRadius', () => {
+    const body = rock(0.2, 0.5)
+    expect(floorRadius(body, along(-0.3))).toBeCloseTo(1 + CLEARANCE, 12)
+    expect(floorRadius(body, along(0.25))).toBeCloseTo(1.1 + CLEARANCE, 12)
+    const clamped = rock(0.2, 0.5, 1.5)
+    for (const phi of [-0.3, 0.25, 1]) expect(floorRadius(clamped, along(phi))).toBe(1.5)
+    expect(floorRadius(MOON, along(0))).toBe(collisionRadius(MOON))
+    expect(floorRadius({ ...body, ground: () => NaN }, along(0))).toBe(1)
+  })
+
+  test.each([
+    ['a slope', 0.1, 0.2],
+    ['a cliff', 0.05, 0],
+  ])('slides up %s at the speed floor without entering it', (_, rise, width) => {
+    const body = rock(rise, width)
+    // Pressed 30° into the ground and heading east across the rise.
+    const start = along(-0.1).multiplyScalar(floorRadius(body, along(-0.1)))
+    const tangent = new THREE.Vector3(-Math.sin(0.05), 0, Math.cos(0.05))
+    const nose = tangent.clone().addScaledVector(along(0.05), -Math.tan(Math.PI / 6))
+    const state = shipAt(start, start.clone().add(nose))
+    const telemetry = createShipTelemetry()
+    const direction = new THREE.Vector3()
+    for (let i = 0; i < 40 / MAX_DT; i++) {
+      stepShip(state, input({ throttle: 1 }), MAX_DT, env([body]), telemetry)
+      direction.copy(state.position).normalize()
+      expect(state.position.length()).toBeGreaterThanOrEqual(floorRadius(body, direction) * (1 - 1e-12))
+      expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * V_NORMAL + 1e-9)
+      if (longitude(state.position) > 0.3) break
+    }
+    // Over the top and resting on it, not stuck at the foot.
+    expect(longitude(state.position)).toBeGreaterThan(0.3)
+    expect(state.position.length()).toBeCloseTo(1 + rise + CLEARANCE, 6)
+    expect(telemetry.speedCap).toBe(V_NORMAL)
+  })
+
+  test('diving straight in stops on the floor and flags the hit', () => {
+    const body = rock(0.1, 0.2)
+    const start = along(0.3).multiplyScalar(3)
+    const state = shipAt(start, body.position)
+    const telemetry = createShipTelemetry()
+    let hit = false
+    for (let i = 0; i < 60 * 60; i++) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env([body]), telemetry)
+      expect(state.position.length()).toBeGreaterThanOrEqual((1.1 + CLEARANCE) * (1 - 1e-12))
+      hit ||= telemetry.colliding
+    }
+    expect(state.position.length()).toBeCloseTo(1.1 + CLEARANCE, 9)
+    expect(hit).toBe(true)
+  })
+
+  test('gaps and the speed cap measure from the ground under the ship', () => {
+    const body = rock(0.3, 0.2)
+    const position = along(0.5).multiplyScalar(4)
+    const sphere: Body = { key: 'sphere', position: new THREE.Vector3(), radius: 1.3 }
+    expect(nearestBody(position, [body])!.surfaceDistance).toBeCloseTo(4 - 1.3, 12)
+    expect(speedCap(position, [body])).toBe(speedCap(position, [sphere]))
+    const telemetry = createShipTelemetry()
+    stepShip(shipAt(position, body.position), input(), 0, env([body], 'rock'), telemetry)
+    expect(telemetry.nearest.surfaceDistance).toBeCloseTo(4 - 1.3, 12)
+    expect(telemetry.target!.surfaceDistance).toBeCloseTo(4 - 1.3, 12)
   })
 })
 

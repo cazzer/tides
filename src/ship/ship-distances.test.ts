@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { Body, GeoMoon, HelioVector, KM_PER_AU } from 'astronomy-engine'
-import { collisionRadius } from './flight'
+import { collisionRadius, floorRadius } from './flight'
+import { buildTerrainFloor, setEarthTerrain } from './terrain-floor'
 import { FLIGHT_KM_PER_UNIT } from '../flight-scale'
 import { createShipBodies, updateShipBodies, type ShipBody } from './ship-bodies'
 import { MOONS, isMoonKey, type MoonKey } from '../moons/moons'
@@ -144,6 +146,33 @@ describe('measureRanges', () => {
       measureRanges(shellToward(target.body, from), bodies, truth, ranges)
       expect(ranges.km[target.index]).toBeCloseTo(0, 0)
       expect(ranges.nearest).toBe(target.index)
+    }
+  })
+
+  it("reads 0 on arrival at Earth's floor with the terrain loaded (tides-01v.8.3)", () => {
+    setEarthTerrain(
+      buildTerrainFloor(new Uint8Array(readFileSync(new URL('../assets/earth-terrain-max.bin', import.meta.url))))
+    )
+    try {
+      const { bodies, truth, ranges } = setup(DATES[0])
+      const earth = find(bodies, 'earth')
+      const direction = new THREE.Vector3()
+      for (const [x, y, z] of [
+        [1, 0, 0],
+        [0, 1, 0],
+        [-0.3, 0.2, 0.9],
+        [0.5, -0.7, -0.5],
+      ]) {
+        direction.set(x, y, z).normalize()
+        const position = earth.body.position
+          .clone()
+          .addScaledVector(direction, floorRadius(earth.body, direction))
+        measureRanges(position, bodies, truth, ranges)
+        expect(ranges.km[earth.index]).toBeCloseTo(0, 0)
+        expect(ranges.nearest).toBe(earth.index)
+      }
+    } finally {
+      setEarthTerrain(null)
     }
   })
 
