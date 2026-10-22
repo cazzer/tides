@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_SYSTEM_AIDS,
   FOCUS_VALUES,
   PLANET_FOCUS_KEYS,
+  SYSTEM_AID_KEYS,
   isPlanetFocus,
   parseConstellations,
   parseFocus,
+  parseSystemAids,
+  serializeSystemAids,
   useStore,
+  type SystemAids,
 } from './store'
 import { shipInput } from './ship/ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship/ship-telemetry'
@@ -94,6 +99,79 @@ describe('calendar ring toggles', () => {
     expect(useStore.getState().showZodiac).toBe(true)
     setShowZodiac(false)
     expect(useStore.getState().showZodiac).toBe(false)
+  })
+})
+
+describe('system aids', () => {
+  const allOff = Object.fromEntries(
+    SYSTEM_AID_KEYS.map((key) => [key, false])
+  ) as SystemAids
+
+  it('defaults every aid on except trails', () => {
+    expect(DEFAULT_SYSTEM_AIDS).toEqual({
+      orbits: true,
+      grid: true,
+      labels: true,
+      belts: true,
+      scale: true,
+      trails: false,
+    })
+    expect(useStore.getState().systemAids).toEqual(DEFAULT_SYSTEM_AIDS)
+  })
+
+  it('reads a missing ?aids= as the defaults', () => {
+    expect(parseSystemAids(null)).toEqual(DEFAULT_SYSTEM_AIDS)
+  })
+
+  it('reads the listed aids as on and the rest as off', () => {
+    expect(parseSystemAids('orbits,trails')).toEqual({
+      ...allOff,
+      orbits: true,
+      trails: true,
+    })
+  })
+
+  it('reads an empty ?aids= as all off and ignores unknown names', () => {
+    expect(parseSystemAids('')).toEqual(allOff)
+    expect(parseSystemAids('grid,comets,,')).toEqual({ ...allOff, grid: true })
+  })
+
+  it('writes no param for the defaults', () => {
+    expect(serializeSystemAids(DEFAULT_SYSTEM_AIDS)).toBeNull()
+  })
+
+  it('writes the on aids in a fixed order, and an empty value for none', () => {
+    expect(
+      serializeSystemAids({ ...allOff, trails: true, orbits: true })
+    ).toBe('orbits,trails')
+    expect(serializeSystemAids(allOff)).toBe('')
+  })
+
+  it('round-trips every combination through the URL', () => {
+    for (let mask = 0; mask < 1 << SYSTEM_AID_KEYS.length; mask++) {
+      const aids = Object.fromEntries(
+        SYSTEM_AID_KEYS.map((key, i) => [key, (mask & (1 << i)) !== 0])
+      ) as SystemAids
+      const params = new URLSearchParams()
+      const value = serializeSystemAids(aids)
+      if (value != null) params.set('aids', value)
+      const read = new URLSearchParams(params.toString()).get('aids')
+      expect(parseSystemAids(read)).toEqual(aids)
+    }
+  })
+
+  it('toggles one aid at a time', () => {
+    const { setSystemAid } = useStore.getState()
+    setSystemAid('grid', false)
+    expect(useStore.getState().systemAids).toEqual({
+      ...DEFAULT_SYSTEM_AIDS,
+      grid: false,
+    })
+    setSystemAid('trails', true)
+    expect(useStore.getState().systemAids.trails).toBe(true)
+    setSystemAid('grid', true)
+    setSystemAid('trails', false)
+    expect(useStore.getState().systemAids).toEqual(DEFAULT_SYSTEM_AIDS)
   })
 })
 

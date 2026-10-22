@@ -13,8 +13,15 @@ import {
 } from './planets'
 import { PLANET_RENDERERS } from './renderers/planets'
 import { useStore } from './store'
+import type { DistanceScale } from './distance-scale'
 
-export function PlanetBodies({ interactive }: { interactive: boolean }) {
+export function PlanetBodies({
+  interactive,
+}: {
+  interactive: boolean
+  /** Inert until tides-2hv.6 adds the 'flight' positions. */
+  distanceScale: DistanceScale
+}) {
   return (
     <>
       {PLANET_KEYS.map((key) => (

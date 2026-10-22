@@ -12,6 +12,7 @@ import {
   type PlanetKey,
 } from './planets'
 import { useStore } from './store'
+import type { DistanceScale } from './distance-scale'
 
 // Earth's orbit ring style (orbit-label.tsx).
 const orbitMaterial = new THREE.LineBasicMaterial({
@@ -25,7 +26,11 @@ function simTime(): number {
   return useStore.getState().timestamp ?? Date.now()
 }
 
-export function PlanetOrbits() {
+export function PlanetOrbits(
+  // Inert until tides-2hv.6 adds the 'flight' orbit paths.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _props: { distanceScale: DistanceScale }
+) {
   return (
     <>
       {PLANET_KEYS.map((key) => (

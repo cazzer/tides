@@ -14,9 +14,11 @@ import {
 } from '@tabler/icons-react'
 import {
   PLANET_FOCUS_KEYS,
+  SYSTEM_AID_KEYS,
   useStore,
   type CameraFocus,
   type Layout,
+  type SystemAidKey,
   type WeatherSource,
 } from './store'
 import { truncateLatLon } from './utils'
@@ -154,6 +156,15 @@ const PLANETS_OPTIONS: { value: 'off' | 'on'; label: string }[] = [
   { value: 'on', label: 'Show' },
 ]
 
+const SYSTEM_AID_LABELS: Record<SystemAidKey, string> = {
+  orbits: 'Orbits',
+  grid: 'Grid',
+  labels: 'Labels',
+  belts: 'Belts',
+  scale: 'Scale',
+  trails: 'Trails',
+}
+
 const CONSTELLATIONS_OPTIONS: { value: 'off' | 'lines' | 'art'; label: string }[] = [
   { value: 'off', label: 'Hide' },
   { value: 'lines', label: 'Lines' },
@@ -181,6 +192,9 @@ function SettingsDialog({
   const setLayout = useStore((s) => s.setLayout)
   const showPlanets = useStore((s) => s.showPlanets)
   const setShowPlanets = useStore((s) => s.setShowPlanets)
+  const guidesId = useId()
+  const systemAids = useStore((s) => s.systemAids)
+  const setSystemAid = useStore((s) => s.setSystemAid)
   const constellationsHintId = useId()
   const showConstellations = useStore((s) => s.showConstellations)
   const setShowConstellations = useStore((s) => s.setShowConstellations)
@@ -260,6 +274,34 @@ function SettingsDialog({
             onChange={(value) => setShowPlanets(value === 'on')}
           />
         </SettingGroup>
+        {/* The aids only draw beside the planets, so they go with them. */}
+        {showPlanets && (
+          <SettingGroup aria-describedby={`${guidesId}-hint`}>
+            <SettingLegend>Guides</SettingLegend>
+            {SYSTEM_AID_KEYS.map((key) => (
+              <GuideRow
+                key={key}
+                role="radiogroup"
+                aria-labelledby={`${guidesId}-${key}`}
+              >
+                <GuideLabel id={`${guidesId}-${key}`}>
+                  {SYSTEM_AID_LABELS[key]}
+                </GuideLabel>
+                <GuideSegments>
+                  <SegmentedControl
+                    name={`aid-${key}`}
+                    value={systemAids[key] ? 'on' : 'off'}
+                    options={PLANETS_OPTIONS}
+                    onChange={(value) => setSystemAid(key, value === 'on')}
+                  />
+                </GuideSegments>
+              </GuideRow>
+            ))}
+            <SettingHint id={`${guidesId}-hint`}>
+              Aids in the Three Body System view.
+            </SettingHint>
+          </SettingGroup>
+        )}
         <SettingGroup aria-describedby={constellationsHintId}>
           <SettingLegend>Constellations</SettingLegend>
           <SegmentedControl
@@ -781,6 +823,23 @@ const SettingHint = styled.p`
   a:hover {
     color: #bbb;
   }
+`
+
+// One aid per row: its name, then a compact Hide/Show switch.
+const GuideRow = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+`
+
+const GuideLabel = styled.span`
+  font-size: 14px;
+  color: #aaa;
+`
+
+const GuideSegments = styled.div`
+  flex: 0 0 168px;
 `
 
 const Segments = styled.div`

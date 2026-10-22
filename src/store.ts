@@ -129,6 +129,60 @@ function getInitialShowZodiac(): boolean {
   return new URLSearchParams(window.location.search).get('zodiac') === '1'
 }
 
+/**
+ * Spatial aids in the system view (tides-2hv): orbit lines, the ecliptic grid,
+ * body labels, the belts, the scale readout and motion trails. Each aid's own
+ * bead decides how it looks; this only says whether it is on.
+ */
+export const SYSTEM_AID_KEYS = [
+  'orbits',
+  'grid',
+  'labels',
+  'belts',
+  'scale',
+  'trails',
+] as const
+export type SystemAidKey = (typeof SYSTEM_AID_KEYS)[number]
+export type SystemAids = Record<SystemAidKey, boolean>
+
+// Trails are the only busy aid, so they start off; keeping the others subtle
+// is each aid's job.
+export const DEFAULT_SYSTEM_AIDS: Readonly<SystemAids> = {
+  orbits: true,
+  grid: true,
+  labels: true,
+  belts: true,
+  scale: true,
+  trails: false,
+}
+
+/**
+ * `?aids=` lists the aids that are on, comma-separated (`aids=orbits,grid`);
+ * an empty value turns them all off. No param means the defaults, and unknown
+ * names are ignored.
+ */
+export function parseSystemAids(param: string | null): SystemAids {
+  if (param == null) return { ...DEFAULT_SYSTEM_AIDS }
+  const on = new Set(param.split(','))
+  return Object.fromEntries(
+    SYSTEM_AID_KEYS.map((key) => [key, on.has(key)])
+  ) as SystemAids
+}
+
+/** The `?aids=` value, or null when the aids are the defaults (no param). */
+export function serializeSystemAids(aids: SystemAids): string | null {
+  const isDefault = SYSTEM_AID_KEYS.every(
+    (key) => aids[key] === DEFAULT_SYSTEM_AIDS[key]
+  )
+  if (isDefault) return null
+  return SYSTEM_AID_KEYS.filter((key) => aids[key]).join(',')
+}
+
+function getInitialSystemAids(): SystemAids {
+  if (typeof window === 'undefined') return { ...DEFAULT_SYSTEM_AIDS }
+  return parseSystemAids(new URLSearchParams(window.location.search).get('aids'))
+}
+
 import { truncateLatLon } from './utils'
 
 export type Location = { lat: number; lon: number }
@@ -172,6 +226,8 @@ export const useStore = create<{
   /** Moon-phase and zodiac rings around the month ring (tides-28u). */
   showLunar: boolean
   showZodiac: boolean
+  /** System-view aids; their controls show only while the planets are on. */
+  systemAids: SystemAids
   location: Location | null
   /** Where View from Earth looks; null until dragged, facing the equator.
    * Written per pointer move: read it with getState() inside useFrame. */
@@ -200,6 +256,7 @@ export const useStore = create<{
   setShowConstellationArt: (showConstellationArt: boolean) => void
   setShowLunar: (showLunar: boolean) => void
   setShowZodiac: (showZodiac: boolean) => void
+  setSystemAid: (key: SystemAidKey, on: boolean) => void
   setLocation: (location: Location | null) => void
   jumpDate: Date | null
   jumpDateSetAt: Date | null
@@ -223,6 +280,7 @@ export const useStore = create<{
   showConstellationArt: getInitialShowConstellationArt(),
   showLunar: getInitialShowLunar(),
   showZodiac: getInitialShowZodiac(),
+  systemAids: getInitialSystemAids(),
   location: getInitialLocation(),
   skyLook: null,
   skyFov: null,
@@ -259,6 +317,8 @@ export const useStore = create<{
   setShowConstellationArt: (showConstellationArt: boolean) => set({ showConstellationArt }),
   setShowLunar: (showLunar: boolean) => set({ showLunar }),
   setShowZodiac: (showZodiac: boolean) => set({ showZodiac }),
+  setSystemAid: (key: SystemAidKey, on: boolean) =>
+    set((s) => ({ systemAids: { ...s.systemAids, [key]: on } })),
   setLocation: (location: Location | null) =>
     set((s) => ({
       location,
