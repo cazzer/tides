@@ -11,6 +11,7 @@ import { CubeCamera, meshBounds } from '@react-three/drei'
 import { CORONA_MAX_ANGLE } from './corona-geometry'
 import { SunGlare } from './SunGlare'
 import { useStore } from '../store'
+import { useBodySphere } from '../ship/limb-detail'
 
 // https://www.youtube.com/watch?v=3krH52AhPqk
 // ended at 1:04:24
@@ -24,6 +25,7 @@ interface SunRendererProps {
 export default function SunRenderer({ diameter }: SunRendererProps) {
   // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
   const shipMode = useStore((s) => s.shipMode)
+  const sphere = useBodySphere('sun', diameter, [128, 128])
   const noiseMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       vertexShader: noiseVertex,
@@ -96,9 +98,9 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
           return (
             <mesh
               position={[0, 0, 0]}
+              geometry={sphere}
               raycast={meshBounds}
             >
-              <sphereGeometry args={[diameter, 128, 128]} />
               <primitive
                 object={sunMaterial}
                 attach="material"

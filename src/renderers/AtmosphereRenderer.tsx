@@ -8,6 +8,7 @@ import { sunDirectionLocal } from '../aurora'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 import { ATMOSPHERE_OUTER } from './earth-shells'
+import { useBodySphere } from '../ship/limb-detail'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
 // thins out with an (exaggerated, for visibility) ~60 km scale height.
@@ -43,10 +44,11 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
   )
   // Uniforms are updated through the mesh, not the memoised material.
   const mesh = useRef<THREE.Mesh>(null)
-  const geometry = useMemo(() => new THREE.SphereGeometry(radius * OUTER, 96, 48), [radius])
+  // The glow is faint but not zero at its outer edge, so from the ship's stop
+  // a coarse shell shows as facets there.
+  const geometry = useBodySphere('earth', radius * OUTER, [96, 48])
 
   useEffect(() => () => material.dispose(), [material])
-  useEffect(() => () => geometry.dispose(), [geometry])
 
   useFrame(() => {
     const { timestamp } = useStore.getState()

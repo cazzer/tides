@@ -34,6 +34,7 @@ import ringVertex from '../shaders/ring/vertex.glsl'
 import ringFragment from '../shaders/ring/fragment.frag'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
+import { useBodySphere } from '../ship/limb-detail'
 
 export type { RingBand } from './planetFrame'
 
@@ -144,6 +145,7 @@ function SurfaceMesh({
     [map, ringMap, shadowed, sun.uniform]
   )
   useEffect(() => () => material.dispose(), [material])
+  const geometry = useBodySphere(planet.key, planet.radius, [SPHERE_SEGMENTS, SPHERE_SEGMENTS])
 
   useLayoutEffect(() => {
     const u = material.uniforms
@@ -164,12 +166,11 @@ function SurfaceMesh({
 
   return (
     <mesh
+      geometry={geometry}
       material={material}
       raycast={meshBounds}
       onBeforeRender={sun.onBeforeRender}
-    >
-      <sphereGeometry args={[planet.radius, SPHERE_SEGMENTS, SPHERE_SEGMENTS]} />
-    </mesh>
+    />
   )
 }
 
@@ -220,12 +221,10 @@ export function PlanetAtmosphere({
       }),
     [sun.uniform]
   )
-  const geometry = useMemo(
-    () => new THREE.SphereGeometry(R * outer, 96, 48),
-    [R, outer]
-  )
+  // Faint but not zero at its outer edge, so from close by a coarse shell
+  // shows as facets there.
+  const geometry = useBodySphere(planet.key, R * outer, [96, 48])
   useEffect(() => () => material.dispose(), [material])
-  useEffect(() => () => geometry.dispose(), [geometry])
 
   useLayoutEffect(() => {
     const u = material.uniforms

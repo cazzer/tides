@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { stepShip, type ShipState } from './flight'
@@ -6,6 +6,7 @@ import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
 import { createShipBodies, updateShipBodies } from './ship-bodies'
 import { shipFar, shipNear, spawnPose } from './ship-session'
+import { disposeLimbSpheres, setLimbBody } from './limb-detail'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -23,6 +24,14 @@ export function ShipController() {
   const bodiesAt = useRef<number | null>(null)
   const ship = useRef<ShipState | null>(null)
 
+  useEffect(
+    () => () => {
+      setLimbBody(null)
+      disposeLimbSpheres()
+    },
+    []
+  )
+
   // Priority 0: after SimClock (−1) has set this frame's time, before drei's
   // View renders (≥ 1), so the frame draws where the ship is now.
   useFrame(({ camera, size }, delta) => {
@@ -37,6 +46,7 @@ export function ShipController() {
     ship.current ??= spawnPose(bodies, size.width / size.height)
     const state = ship.current
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
+    setLimbBody(shipTelemetry.nearest.key)
 
     camera.position.copy(state.position)
     camera.quaternion.copy(state.orientation)
