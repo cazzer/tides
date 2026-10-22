@@ -30,6 +30,11 @@ export function SkyLookControls() {
   useFrame(() => {
     const easing = reset.current
     if (!easing) return
+    // Compass mode, turned back on mid-ease, owns the view.
+    if (useStore.getState().compass) {
+      reset.current = null
+      return
+    }
     const t = (performance.now() - easing.start) / RESET_DURATION
     if (t >= 1) {
       reset.current = null

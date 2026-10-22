@@ -7,7 +7,7 @@ const DEG = Math.PI / 180
 // camera points. The maths works in the horizon frame three's cameras use:
 // X east, Y the zenith, −Z north.
 
-/** A deviceorientation reading in degrees, with alpha measured from true north. */
+/** A deviceorientation reading in degrees, with alpha measured from north. */
 export interface DeviceAngles {
   alpha: number
   beta: number
@@ -23,21 +23,70 @@ export interface OrientationReading {
   webkitCompassHeading?: number | null
 }
 
+/** iOS's turn from its own alpha to north, and whether it was learnt in a
+ * pose where the compass heading can be trusted. */
+export interface NorthOffset {
+  degrees: number
+  trusted: boolean
+}
+
 // Time constant of the low-pass, in ms: enough to settle sensor jitter
 // without the view trailing the phone.
 export const SMOOTHING_MS = 80
 
-/** The reading's angles with alpha turned to face north, or null when it has
- * no north to give (no sensor, or an alpha that only counts from where the
- * page started). */
-export function readingAngles(reading: OrientationReading): DeviceAngles | null {
-  const { alpha, beta, gamma, absolute, webkitCompassHeading } = reading
-  if (beta == null || gamma == null) return null
-  // iOS: a clockwise heading, against alpha's anticlockwise turn.
-  if (webkitCompassHeading != null && webkitCompassHeading >= 0) {
-    return { alpha: THREE.MathUtils.euclideanModulo(-webkitCompassHeading, 360), beta, gamma }
+// How far each trusted reading moves iOS's north offset: heavy smoothing, as
+// the offset only drifts slowly.
+const OFFSET_EASING = 0.1
+
+const wrap180 = (degrees: number) => THREE.MathUtils.euclideanModulo(degrees + 180, 360) - 180
+
+// iOS's compass heading follows the top of the phone lying flat and the back
+// of it held upright, so it agrees with alpha's frame only in between, with
+// the phone not leant sideways.
+function headingMatchesAlpha({ beta, gamma }: { beta: number; gamma: number }) {
+  return beta >= 0 && beta <= 75 && Math.abs(gamma) <= 30
+}
+
+/** Updates iOS's north offset from a reading: −heading − alpha, eased in
+ * readings from poses where the two agree. Until one arrives, any reading
+ * stands in, so the view starts near north even when held up to the sky.
+ * Returns `offset` unchanged when the reading has no heading (or an
+ * uncalibrated −1). */
+export function nextNorthOffset(
+  offset: NorthOffset | null,
+  reading: OrientationReading
+): NorthOffset | null {
+  const { alpha, beta, gamma, webkitCompassHeading: heading } = reading
+  if (heading == null || heading < 0 || alpha == null || beta == null || gamma == null) {
+    return offset
   }
-  if (absolute && alpha != null) return { alpha, beta, gamma }
+  const target = THREE.MathUtils.euclideanModulo(-heading - alpha, 360)
+  const trusted = headingMatchesAlpha({ beta, gamma })
+  if (!offset || (trusted && !offset.trusted)) return { degrees: target, trusted }
+  if (!trusted) return offset
+  return {
+    degrees: THREE.MathUtils.euclideanModulo(
+      offset.degrees + wrap180(target - offset.degrees) * OFFSET_EASING,
+      360
+    ),
+    trusted,
+  }
+}
+
+/** The reading's angles with alpha turned to face north, or null when it has
+ * no north to give: no sensor, or an alpha that only counts from where the
+ * page started and no iOS offset (see nextNorthOffset) to correct it. North
+ * here is magnetic north, as both iOS and Chrome report it. */
+export function readingAngles(
+  reading: OrientationReading,
+  northOffset: NorthOffset | null = null
+): DeviceAngles | null {
+  const { alpha, beta, gamma, absolute } = reading
+  if (alpha == null || beta == null || gamma == null) return null
+  if (northOffset) {
+    return { alpha: THREE.MathUtils.euclideanModulo(alpha + northOffset.degrees, 360), beta, gamma }
+  }
+  if (absolute) return { alpha, beta, gamma }
   return null
 }
 

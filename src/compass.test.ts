@@ -4,6 +4,7 @@ import {
   SMOOTHING_MS,
   deviceQuaternion,
   lookFromQuaternion,
+  nextNorthOffset,
   readingAngles,
   smoothOrientation,
   type DeviceAngles,
@@ -133,10 +134,12 @@ describe('compass mode orientation (tides-d5j)', () => {
 })
 
 describe('reading a north from orientation events', () => {
-  it('turns the iOS compass heading into an anticlockwise alpha', () => {
-    expect(
-      readingAngles({ alpha: 12, beta: 90, gamma: 0, absolute: false, webkitCompassHeading: 90 })
-    ).toEqual({ alpha: 270, beta: 90, gamma: 0 })
+  const ios = (alpha: number, beta: number, gamma: number, heading: number | null) => ({
+    alpha,
+    beta,
+    gamma,
+    absolute: false,
+    webkitCompassHeading: heading,
   })
 
   it('takes alpha from an absolute reading', () => {
@@ -147,12 +150,38 @@ describe('reading a north from orientation events', () => {
     })
   })
 
-  it('has no north from a relative alpha, an uncalibrated compass or no sensor', () => {
+  it('has no north from a relative alpha or no sensor', () => {
     expect(readingAngles({ alpha: 40, beta: 10, gamma: 5, absolute: false })).toBeNull()
-    expect(
-      readingAngles({ alpha: 40, beta: 10, gamma: 5, absolute: false, webkitCompassHeading: -1 })
-    ).toBeNull()
     expect(readingAngles({ alpha: null, beta: null, gamma: null, absolute: true })).toBeNull()
+  })
+
+  it('turns iOS’s own alpha to north by the clockwise compass heading', () => {
+    // Upright, facing east (heading 90), where iOS's alpha happens to read 12.
+    const reading = ios(12, 60, 0, 90)
+    const offset = nextNorthOffset(null, reading)
+    expect(offset).toEqual({ degrees: 258, trusted: true })
+    expect(readingAngles(reading, offset)!.alpha).toBeCloseTo(270, 9)
+    // Turning keeps alpha and the heading in step, so the offset holds.
+    expect(readingAngles(ios(42, 60, 0, 60), offset)!.alpha).toBeCloseTo(300, 9)
+  })
+
+  it('learns the offset only where the heading agrees with alpha', () => {
+    // Held up to the sky, the heading may follow the top edge instead.
+    const skyward = nextNorthOffset(null, ios(0, 150, 0, 180))
+    expect(skyward).toEqual({ degrees: 180, trusted: false })
+    // A trusted reading replaces a stand-in outright...
+    const flat = nextNorthOffset(skyward, ios(0, 30, 0, 0))
+    expect(flat).toEqual({ degrees: 0, trusted: true })
+    // ...but an untrusted one doesn't move a trusted offset...
+    expect(nextNorthOffset(flat, ios(0, 150, 0, 180))).toBe(flat)
+    // ...and trusted ones ease it, the short way round north.
+    const eased = nextNorthOffset(flat, ios(0, 30, 0, 20))!
+    expect(eased.degrees).toBeCloseTo(358, 9)
+  })
+
+  it('waits out an uncalibrated iOS compass', () => {
+    expect(nextNorthOffset(null, ios(0, 30, 0, -1))).toBeNull()
+    expect(nextNorthOffset(null, ios(0, 30, 0, null))).toBeNull()
   })
 })
 
