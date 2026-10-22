@@ -634,6 +634,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   // The back faces within the ship camera's reach of the shell (earth-shells.ts
   // withinShellReach), the front ones elsewhere. Unlike the atmosphere's
   // shells, the depth test stays on: the shader writes each hit's depth.
+  // The ship's warm-up compiles that program ahead (ship-warmup.ts).
+  material.userData.warmSides = [THREE.BackSide]
   material.onBeforeRender = (_renderer, _scene, camera, _geometry, object) => {
     const reach = withinShellReach(object, camera, uniforms.uSeaLevel.value + shellAltitude)
     const side = reach ? THREE.BackSide : THREE.FrontSide

@@ -9,7 +9,7 @@ import {
   marchSpanFromEye,
 } from '../cloud-layer'
 import { sceneRadius } from '../planets'
-import { setLimbBody } from '../ship/limb-detail'
+import { clearLimbView, updateLimbView } from '../ship/limb-detail'
 
 function phongShader() {
   return {
@@ -152,7 +152,9 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
         return clouds.material.version
       }
       try {
-        setLimbBody('earth')
+        // Ship mode with Earth nearest.
+        const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
+        updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
         const v0 = versionAt(clouds.shellAltitude - 0.005)
         expect(clouds.material.side).toBe(THREE.BackSide)
         expect(clouds.material.depthTest).toBe(true)
@@ -166,11 +168,11 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
         ortho.updateMatrixWorld()
         render(ortho)
         expect(clouds.material.side).toBe(THREE.FrontSide)
-        setLimbBody(null)
+        clearLimbView()
         versionAt(clouds.shellAltitude - 0.005)
         expect(clouds.material.side).toBe(THREE.FrontSide)
       } finally {
-        setLimbBody(null)
+        clearLimbView()
         clouds.dispose()
       }
     })
