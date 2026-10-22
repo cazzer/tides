@@ -23,8 +23,9 @@ export const BELT_POINT_SIZE = 1.8 // [TUNE]
  */
 export const ASTEROID_OPACITY = 0.5 // [TUNE]
 export const KUIPER_OPACITY = 0.45 // [TUNE]
-// Rocky grey-brown inside, icy blue-grey out past Neptune.
-const ASTEROID_COLOR = new THREE.Color('#b3a48f')
+// Rocky tan inside, warm enough to read apart from the white starfield behind
+// it; icy blue-grey out past Neptune.
+const ASTEROID_COLOR = new THREE.Color('#c9a172')
 const KUIPER_COLOR = new THREE.Color('#9fb3c8')
 
 // beltPosition (belt-particles.ts) in GLSL: keep them in step. The ortho main
@@ -94,6 +95,13 @@ function createBeltMaterial(color: THREE.Color, opacity: number): THREE.ShaderMa
   })
 }
 
+// Generated once and kept: toggling the belts rebuilds only the GL buffers.
+let orbits: { asteroids: BeltOrbits; kuiper: BeltOrbits } | null = null
+function beltOrbits() {
+  orbits ??= { asteroids: asteroidBelt(), kuiper: kuiperBelt() }
+  return orbits
+}
+
 interface Belt {
   geometry: THREE.BufferGeometry
   material: THREE.ShaderMaterial
@@ -119,11 +127,11 @@ function SystemBelts() {
   const belts = useMemo<Belt[]>(
     () => [
       {
-        geometry: createBeltGeometry(asteroidBelt()),
+        geometry: createBeltGeometry(beltOrbits().asteroids),
         material: createBeltMaterial(ASTEROID_COLOR, ASTEROID_OPACITY),
       },
       {
-        geometry: createBeltGeometry(kuiperBelt()),
+        geometry: createBeltGeometry(beltOrbits().kuiper),
         material: createBeltMaterial(KUIPER_COLOR, KUIPER_OPACITY),
       },
     ],

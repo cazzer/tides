@@ -1,170 +1,180 @@
 import { describe, expect, it } from 'vitest'
 import {
-  TRAIL_MAX_DEGREES,
+  COLORS_CHANGED,
+  SEGMENTS_CHANGED,
+  TRAIL_ARC_DEGREES,
   TRAIL_OPACITY,
-  TRAIL_SAMPLES_PER_SECOND,
-  TRAIL_SECONDS,
+  TRAIL_SAMPLES,
   TRAIL_SLOTS,
-  beginTrailFrame,
   createTrailBuffer,
-  fadeTrail,
+  sampleStep,
   trailFade,
-  writeTrailHead,
+  updateTrails,
   type TrailBuffer,
+  type TrailPositionAt,
 } from './trail-buffer'
 
+const DAY = 86_400_000
 const RED = [1, 0, 0] as const
 const BLUE = [0, 0, 1] as const
-const DAY = 86_400_000
+// A fast inner body and a slow outer one, on circles in the XZ plane.
+const PERIODS = [88, 365]
+const RADII = [20, 50]
+const T0 = Date.parse('2026-10-22T12:00:00Z')
 
-function alpha(buffer: TrailBuffer, vertex: number): number {
-  return buffer.colors[vertex * 4 + 3]
+function angle(body: number, t: number): number {
+  return (2 * Math.PI * t) / (PERIODS[body] * DAY)
 }
 
-function vertex(buffer: TrailBuffer, v: number): number[] {
-  return Array.from(buffer.positions.subarray(v * 3, v * 3 + 3))
-}
-
-// Runs `seconds` of 60 fps frames; body b sits at x = b + where(sim).
-function run(
-  buffer: TrailBuffer,
-  {
-    from = 0,
-    seconds,
-    simPerSecond,
-    periodDays = [365, 365],
-    where = (sim: number) => sim / DAY,
-    present = () => true,
-  }: {
-    from?: number
-    seconds: number
-    simPerSecond: number
-    periodDays?: number[]
-    where?: (sim: number) => number
-    present?: (body: number, now: number) => boolean
+// Counts calls, as the ephemeris costs.
+function circles() {
+  const calls = [0, 0]
+  const positionAt: TrailPositionAt = (body, t) => {
+    calls[body]++
+    const a = angle(body, t)
+    return [RADII[body] * Math.cos(a), 0, -RADII[body] * Math.sin(a)]
   }
-): number {
-  const frames = Math.round(seconds * 60)
-  let now = from
-  for (let f = 1; f <= frames; f++) {
-    now = from + f / 60
-    const sim = now * simPerSecond
-    beginTrailFrame(buffer, now, sim)
-    for (let b = 0; b < buffer.bodies; b++) {
-      if (present(b, now)) writeTrailHead(buffer, b, b + where(sim), 0, 0)
-    }
-    fadeTrail(buffer, now, sim, periodDays)
-  }
-  return now
+  return { calls, positionAt }
 }
+
+function trail(t: number) {
+  const { calls, positionAt } = circles()
+  const buffer = createTrailBuffer(PERIODS, [RED, BLUE])
+  updateTrails(buffer, t, positionAt)
+  return { buffer, calls, positionAt }
+}
+
+function endpoint(buffer: TrailBuffer, body: number, i: number, end: 0 | 1): number[] {
+  const o = (body * TRAIL_SAMPLES + i) * 6 + end * 3
+  return Array.from(buffer.segments.subarray(o, o + 3))
+}
+
+function brightness(buffer: TrailBuffer, body: number, i: number, end: 0 | 1): number {
+  const o = (body * TRAIL_SAMPLES + i) * 6 + end * 3
+  return Math.max(...buffer.colors.subarray(o, o + 3))
+}
+
+// Angle of a scene point on the test circles, unwrapped near `near`.
+function angleOf([x, , z]: number[], near: number): number {
+  const a = Math.atan2(-z, x)
+  return a + 2 * Math.PI * Math.round((near - a) / (2 * Math.PI))
+}
+
+describe('sampleStep', () => {
+  it('splits the trail arc of an orbit into TRAIL_SAMPLES steps', () => {
+    expect(sampleStep(360) * TRAIL_SAMPLES).toBeCloseTo(TRAIL_ARC_DEGREES * DAY, 3)
+  })
+})
 
 describe('trailFade', () => {
-  it('is 1 at the planet and 0 at either limit', () => {
-    expect(trailFade(0, 0)).toBe(1)
-    expect(trailFade(TRAIL_SECONDS, 0)).toBe(0)
-    expect(trailFade(0, TRAIL_MAX_DEGREES)).toBe(0)
-    expect(trailFade(TRAIL_SECONDS * 2, 0)).toBe(0)
-  })
-
-  it('fades by whichever limit is nearer', () => {
-    expect(trailFade(TRAIL_SECONDS / 2, TRAIL_MAX_DEGREES / 4)).toBeCloseTo(0.5, 12)
-    expect(trailFade(TRAIL_SECONDS / 4, (TRAIL_MAX_DEGREES * 3) / 4)).toBeCloseTo(0.25, 12)
+  it('is 1 at the planet and 0 from the tail on', () => {
+    expect(trailFade(0)).toBe(1)
+    expect(trailFade(0.25)).toBe(0.75)
+    expect(trailFade(1)).toBe(0)
+    expect(trailFade(2)).toBe(0)
   })
 })
 
 describe('the trail ring buffer', () => {
-  it('has room for a whole trail before it wraps', () => {
-    expect(TRAIL_SLOTS).toBeGreaterThan(TRAIL_SECONDS * TRAIL_SAMPLES_PER_SECOND)
+  it('fills a whole trail of ephemeris samples on the first update', () => {
+    const { buffer, calls } = trail(T0)
+    expect(calls).toEqual([TRAIL_SLOTS, TRAIL_SLOTS])
+    expect(buffer.segments).toHaveLength(2 * TRAIL_SAMPLES * 6)
   })
 
-  it('gives each body its colour and starts empty', () => {
-    const buffer = createTrailBuffer([RED, BLUE])
-    expect(buffer.positions).toHaveLength(2 * TRAIL_SLOTS * 2 * 3)
-    expect(Array.from(buffer.colors.subarray(0, 4))).toEqual([1, 0, 0, 0])
-    const blue = TRAIL_SLOTS * 2
-    expect(Array.from(buffer.colors.subarray(blue * 4, blue * 4 + 4))).toEqual([0, 0, 1, 0])
-    fadeTrail(buffer, 0, 0, [365, 365])
-    expect(buffer.colors.every((c, i) => i % 4 !== 3 || c === 0)).toBe(true)
-  })
-
-  it('joins consecutive samples into one unbroken line', () => {
-    const buffer = createTrailBuffer([RED, BLUE])
-    run(buffer, { seconds: 3, simPerSecond: DAY })
+  it('joins its samples into one unbroken line', () => {
+    const { buffer } = trail(T0)
     for (let b = 0; b < 2; b++) {
-      for (let j = 0; j < TRAIL_SLOTS; j++) {
-        const end = (b * TRAIL_SLOTS + j) * 2 + 1
-        const nextStart = (b * TRAIL_SLOTS + ((j + 1) % TRAIL_SLOTS)) * 2
-        expect(vertex(buffer, end)).toEqual(vertex(buffer, nextStart))
+      for (let i = 0; i + 1 < TRAIL_SAMPLES; i++) {
+        expect(endpoint(buffer, b, i, 1)).toEqual(endpoint(buffer, b, i + 1, 0))
       }
     }
   })
 
-  it('keeps the head on the planet at full opacity and fades toward the tail', () => {
-    const buffer = createTrailBuffer([RED, BLUE])
-    const now = run(buffer, { seconds: 3, simPerSecond: DAY })
-    const head = buffer.head
-    // The head is the end of the segment before it, at the latest position.
-    const into = (TRAIL_SLOTS + ((head - 1 + TRAIL_SLOTS) % TRAIL_SLOTS)) * 2 + 1
-    expect(vertex(buffer, into)[0]).toBeCloseTo(1 + now, 3)
-    expect(alpha(buffer, into)).toBeCloseTo(TRAIL_OPACITY, 6)
-    // Walking back from the head, each sample is fainter than the last.
+  it('runs TRAIL_ARC_DEGREES back along the orbit from the body', () => {
+    const { buffer } = trail(T0)
+    for (let b = 0; b < 2; b++) {
+      const now = angle(b, T0)
+      const head = angleOf(endpoint(buffer, b, 0, 0), now)
+      const tail = angleOf(endpoint(buffer, b, TRAIL_SAMPLES - 1, 1), now)
+      const step = (TRAIL_ARC_DEGREES / TRAIL_SAMPLES) * (Math.PI / 180)
+      // Behind the body (it moves to larger angles) by under one step...
+      expect(now - head).toBeGreaterThanOrEqual(0)
+      expect(now - head).toBeLessThan(step + 1e-9)
+      // ...and the tail one trail arc further back.
+      expect(((head - tail) * 180) / Math.PI).toBeCloseTo(TRAIL_ARC_DEGREES, 4)
+    }
+  })
+
+  it('is brightest at the body and fades to nothing at the tail', () => {
+    const { buffer } = trail(T0)
+    expect(brightness(buffer, 0, 0, 0)).toBeGreaterThan(TRAIL_OPACITY * 0.98)
+    expect(brightness(buffer, 0, 0, 0)).toBeLessThanOrEqual(TRAIL_OPACITY)
+    expect(brightness(buffer, 1, TRAIL_SAMPLES - 1, 1)).toBe(0)
     let previous = Infinity
-    for (let k = 1; k < TRAIL_SLOTS; k++) {
-      const slot = (head - k + TRAIL_SLOTS) % TRAIL_SLOTS
-      const start = (TRAIL_SLOTS + slot) * 2
-      const a = alpha(buffer, start)
-      expect(a).toBeLessThanOrEqual(previous)
-      previous = a
-      if (k === TRAIL_SLOTS - 1) expect(a).toBe(0)
+    for (let i = 0; i < TRAIL_SAMPLES; i++) {
+      const b = brightness(buffer, 1, i, 0)
+      expect(b).toBeLessThan(previous)
+      expect(brightness(buffer, 1, i, 1)).toBeLessThan(b)
+      previous = b
     }
+    // In the body's own colour.
+    const o = (1 * TRAIL_SAMPLES) * 6
+    expect(buffer.colors[o]).toBe(0)
+    expect(buffer.colors[o + 2]).toBeGreaterThan(0)
   })
 
-  it('never draws the segment that closes the ring', () => {
-    const buffer = createTrailBuffer([RED])
-    for (let s = 1; s <= 8; s++) {
-      run(buffer, { from: (s - 1) * 0.37, seconds: 0.37, simPerSecond: DAY })
-      const v = buffer.head * 2
-      expect(alpha(buffer, v)).toBe(0)
-      expect(alpha(buffer, v + 1)).toBe(0)
-    }
+  it('stays put and lit while the clock is paused', () => {
+    const { buffer, calls, positionAt } = trail(T0)
+    const segments = buffer.segments.slice()
+    const colors = buffer.colors.slice()
+    expect(updateTrails(buffer, T0, positionAt)).toBe(0)
+    expect(calls).toEqual([TRAIL_SLOTS, TRAIL_SLOTS])
+    expect(buffer.segments).toEqual(segments)
+    expect(buffer.colors).toEqual(colors)
+    expect(brightness(buffer, 0, 0, 0)).toBeGreaterThan(0)
   })
 
-  it('spans TRAIL_SECONDS of wall time at most', () => {
-    const buffer = createTrailBuffer([RED])
-    const now = run(buffer, { seconds: 5, simPerSecond: DAY })
-    for (let slot = 0; slot < TRAIL_SLOTS; slot++) {
-      if (now - buffer.wallAt[slot] >= TRAIL_SECONDS) {
-        expect(alpha(buffer, slot * 2)).toBe(0)
+  it('only refades within a step, and samples once per step crossed', () => {
+    const { buffer, calls, positionAt } = trail(T0)
+    const step = buffer.step[1]
+    const k = Math.floor(T0 / step)
+    const inStep = (k + 0.5) * step === T0 ? (k + 0.25) * step : (k + 0.5) * step
+    // Within the same step for the slow body (the fast one may cross).
+    calls.fill(0)
+    updateTrails(buffer, inStep, positionAt)
+    expect(calls[1]).toBe(0)
+    calls.fill(0)
+    expect(updateTrails(buffer, (k + 1) * step, positionAt)).toBe(SEGMENTS_CHANGED | COLORS_CHANGED)
+    expect(calls[1]).toBe(1)
+  })
+
+  it('matches a fresh trail after running forward, backward or jumping', () => {
+    const { buffer, calls, positionAt } = trail(T0)
+    const check = (t: number) => {
+      const fresh = trail(t).buffer
+      for (let v = 0; v < buffer.segments.length; v++) {
+        expect(buffer.segments[v]).toBeCloseTo(fresh.segments[v], 3)
+      }
+      for (let v = 0; v < buffer.colors.length; v++) {
+        expect(buffer.colors[v]).toBeCloseTo(fresh.colors[v], 6)
       }
     }
-    // ...and, with the clock paused, fades away to the planet.
-    run(buffer, { from: now, seconds: TRAIL_SECONDS + 0.1, simPerSecond: 0, where: () => 5 })
-    const lit = Array.from({ length: TRAIL_SLOTS }, (_, s) => buffer.positions[s * 6])
-      .filter((_, s) => alpha(buffer, s * 2) > 0)
-    expect(new Set(lit.map((x) => x.toFixed(6)))).toEqual(new Set([(5).toFixed(6)]))
-  })
-
-  it('caps the arc on a fast planet', () => {
-    // Mercury at a month a second sweeps ~120° a second.
-    const buffer = createTrailBuffer([RED])
-    const now = run(buffer, { seconds: 3, simPerSecond: 30 * DAY, periodDays: [88] })
-    const sim = now * 30 * DAY
-    for (let slot = 0; slot < TRAIL_SLOTS; slot++) {
-      const arc = ((sim - buffer.simAt[slot]) / (88 * DAY)) * 360
-      if (arc >= TRAIL_MAX_DEGREES) expect(alpha(buffer, slot * 2)).toBe(0)
-    }
-    const visible = Array.from({ length: TRAIL_SLOTS }, (_, s) => alpha(buffer, s * 2) > 0)
-    expect(visible.filter(Boolean).length).toBeLessThan(TRAIL_SECONDS * TRAIL_SAMPLES_PER_SECOND / 4)
-  })
-
-  it('draws nothing from before a planet first appears', () => {
-    const buffer = createTrailBuffer([RED, BLUE])
-    // Blue registers a second in; its unwritten slots sit at the origin.
-    run(buffer, { seconds: 1.5, simPerSecond: DAY, present: (b, now) => b === 0 || now > 1 })
-    for (let slot = 0; slot < TRAIL_SLOTS; slot++) {
-      const start = (TRAIL_SLOTS + slot) * 2
-      if (buffer.wallAt[slot] <= 1) expect(alpha(buffer, start)).toBe(0)
-    }
-    expect(alpha(buffer, (TRAIL_SLOTS + ((buffer.head - 1 + TRAIL_SLOTS) % TRAIL_SLOTS)) * 2 + 1)).toBeGreaterThan(0)
+    // Forward a day a frame, as at 1 day/s.
+    let t = T0
+    for (let f = 0; f < 120; f++) updateTrails(buffer, (t += DAY / 60), positionAt)
+    check(t)
+    // Back a little, as a scrub does: only the new tail is sampled.
+    calls.fill(0)
+    t -= 3 * buffer.step[1]
+    updateTrails(buffer, t, positionAt)
+    expect(calls[1]).toBeLessThanOrEqual(4)
+    check(t)
+    // A jump of years refills, with no chord across the gap.
+    calls.fill(0)
+    t += 5 * 365 * DAY
+    updateTrails(buffer, t, positionAt)
+    expect(calls).toEqual([TRAIL_SLOTS, TRAIL_SLOTS])
+    check(t)
   })
 })
