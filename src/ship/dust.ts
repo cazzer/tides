@@ -18,7 +18,7 @@
 // skimming speed and streaks in cruise, capped at a share of the box and
 // dimmed as they lengthen so cruise never whites out.
 
-import { V_NORMAL } from './flight'
+import { V_NORMAL, V_TOP } from './flight'
 import { SHIP_FOV } from './ship-session'
 
 /** Speed ratio between adjacent dust layers. */
@@ -49,12 +49,12 @@ export const EDGE_FADE: readonly [number, number] = [0.7, 1]
  */
 export const STOPPED_OPACITY = 0.22
 /**
- * How much the dust dims by high cruise, and the layer levels it dims over
- * (~4 to ~130 units/s). The heading stays dark: motes there come head-on and
- * barely streak.
+ * How much the dust dims by high cruise, and the speed depths it dims over
+ * (speedDepth: ~4.4 units/s to V_TOP). [TUNE] The heading stays dark: motes
+ * there come head-on and barely streak.
  */
 export const CRUISE_DIM = 0.65
-export const CRUISE_DIM_LEVELS: readonly [number, number] = [2, 4.5]
+export const CRUISE_DIM_DEPTH: readonly [number, number] = [0.45, 1]
 /** Dust opacity under prefers-reduced-motion, as a share of normal. */
 export const REDUCED_MOTION_OPACITY = 0.5
 /** A streak's brightness never falls below this share of a dot's. */
@@ -63,11 +63,12 @@ export const STREAK_ENERGY_FLOOR = 0.45
 /** Extra vertical FOV at the cruise cap, degrees. */
 export const FOV_KICK = 10
 /**
- * Dust levels over which the kick comes in (~1 to ~16 units/s). The cap
- * scales with distance, so full throttle past the Moon is still a crawl and
- * gets no kick; it is for real speed.
+ * Speed depths over which the kick comes in (speedDepth: ~2.4 to ~79
+ * units/s). [TUNE] The cap scales with distance, so full throttle past the
+ * Moon is still a crawl and gets no kick, nor does an Earth → Moon cruise
+ * (~2.7 units/s); it is for interplanetary speed.
  */
-export const FOV_KICK_LEVELS: readonly [number, number] = [1, 3]
+export const FOV_KICK_DEPTH: readonly [number, number] = [0.35, 0.9]
 /** Time constant of the FOV's ease toward its speed target, seconds. */
 export const FOV_TAU = 0.5
 
@@ -111,6 +112,17 @@ export function wrapCoord(seed: number, halfSize: number, offset: number): numbe
 export function dustLevel(speed: number): number {
   if (!(speed > V_NORMAL)) return 0
   return Math.log(speed / V_NORMAL) / Math.log(DUST_SPEED_BASE)
+}
+
+/**
+ * Where `speed` sits between V_NORMAL (0) and V_TOP (1), on a log scale as
+ * flight.ts velocityTau reads the cap: each doubling weighs the same, so the
+ * cues spread evenly over the whole range the flight model flies
+ * (tides-2hv.12). Clamped; overspeed past V_TOP reads as 1.
+ */
+export function speedDepth(speed: number): number {
+  if (!(speed > V_NORMAL)) return 0
+  return clamp01(Math.log(speed / V_NORMAL) / Math.log(V_TOP / V_NORMAL))
 }
 
 export function layerHalfSize(layer: number): number {
@@ -173,9 +185,10 @@ export function streakEnergy(lengthPx: number, radiusPx: number): number {
 }
 
 /** The whole field's opacity: dimmer at rest and in high cruise. */
-export function motionOpacity(speed: number, level: number): number {
+export function motionOpacity(speed: number): number {
   const moving = STOPPED_OPACITY + (1 - STOPPED_OPACITY) * smoothstep(0, V_NORMAL, speed)
-  const cruise = 1 - CRUISE_DIM * smoothstep(CRUISE_DIM_LEVELS[0], CRUISE_DIM_LEVELS[1], level)
+  const cruise =
+    1 - CRUISE_DIM * smoothstep(CRUISE_DIM_DEPTH[0], CRUISE_DIM_DEPTH[1], speedDepth(speed))
   return moving * cruise
 }
 
@@ -191,12 +204,14 @@ export function speedFraction(speed: number, speedCap: number): number {
 
 /**
  * How much of the FOV kick `speed` earns, 0..1: its share of the cruise cap,
- * weighted by how fast it is in absolute terms (FOV_KICK_LEVELS).
+ * weighted by how fast it is in absolute terms (FOV_KICK_DEPTH). Overspeed
+ * earns no more than the cap: widening the view while a planet looms in
+ * would only make the overshoot harder to read.
  */
 export function fovKickShare(speed: number, speedCap: number): number {
   return (
     speedFraction(speed, speedCap) *
-    smoothstep(FOV_KICK_LEVELS[0], FOV_KICK_LEVELS[1], dustLevel(speed))
+    smoothstep(FOV_KICK_DEPTH[0], FOV_KICK_DEPTH[1], speedDepth(speed))
   )
 }
 

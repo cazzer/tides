@@ -9,6 +9,8 @@ import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
 import { CubeCamera, meshBounds } from '@react-three/drei'
 import { CORONA_MAX_ANGLE } from './corona-geometry'
+import { SunGlare } from './SunGlare'
+import { useStore } from '../store'
 
 // https://www.youtube.com/watch?v=3krH52AhPqk
 // ended at 1:04:24
@@ -20,6 +22,8 @@ interface SunRendererProps {
 }
 
 export default function SunRenderer({ diameter }: SunRendererProps) {
+  // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
+  const shipMode = useStore((s) => s.shipMode)
   const noiseMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       vertexShader: noiseVertex,
@@ -115,6 +119,9 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
           attach="material"
         />
       </mesh>
+      {/* Far glare: keeps the Sun a bright point when its disc is sub-pixel
+          at flight-scale ranges (tides-2hv.12); separate from the corona. */}
+      {shipMode && <SunGlare radius={diameter} />}
       {/* Noise sphere - only visible to CubeCamera */}
       <mesh
         position={[0, 0, 0]}

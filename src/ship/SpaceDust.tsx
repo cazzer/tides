@@ -210,7 +210,7 @@ export function SpaceDust() {
         const { layer, weight } = slotLayer(level, slot)
         const half = layerHalfSize(layer)
         const reduced = prefersReducedMotion() ? REDUCED_MOTION_OPACITY : 1
-        const opacity = weight * motionOpacity(speed, level) * DUST_OPACITY * reduced
+        const opacity = weight * motionOpacity(speed) * DUST_OPACITY * reduced
         uniforms.uOpacity.value = opacity
         if (opacity <= 0) return
         // The View's live viewport, in CSS pixels, so resizes and rotation

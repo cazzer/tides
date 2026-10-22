@@ -4,11 +4,20 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useStore } from '../store'
 import { createShipBodies, updateShipBodies } from './ship-bodies'
 import { createShipRanges, measureRanges, trueBodies, type TrueBodies } from './ship-distances'
-import { getShipTarget, setShipTarget } from './ship-telemetry'
+import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
+import { resetShipApproach, updateApproach } from './approach'
+import {
+  applyMarker,
+  bodyMarkers,
+  createMarkerPlacement,
+  isMarked,
+  placeMarker,
+} from './body-markers'
 import {
   createScreenBody,
   cycleTarget,
   edgePoint,
+  isMoonBody,
   pickBody,
   projectBody,
   shipNav,
@@ -28,6 +37,8 @@ const MARKER_MIN_PX = 28
 // An edge arrow sits this far inside the view.
 const EDGE_INSET_PX = 28
 
+const HIDDEN = createMarkerPlacement()
+
 const INTERACTIVE = 'button, a, input, select, textarea, [role="button"], [role="slider"], dialog'
 
 /**
@@ -37,7 +48,10 @@ const INTERACTIVE = 'button, a, input, select, textarea, [role="button"], [role=
  * - picks a target on a tap or click on the scene (by projected disc, the
  *   scene having no pointer events) and cycles targets on T;
  * - positions the HUD's marker on the target (or an edge arrow off screen);
- * - measures true ranges for the HUD into shipNav.
+ * - measures true ranges for the HUD into shipNav;
+ * - places the minimum-size body markers (body-markers.ts);
+ * - works out the approach subject and its state for the HUD's approach
+ *   indicator (approach.ts, shipApproach).
  */
 export function ShipTargeting() {
   const camera = useThree((s) => s.camera)
@@ -47,6 +61,7 @@ export function ShipTargeting() {
   const bodies = useMemo(() => createShipBodies(), [])
   const screen = useMemo(() => bodies.map(() => createScreenBody()), [bodies])
   const ranges = useMemo(() => createShipRanges(bodies.length), [bodies])
+  const placement = useMemo(() => createMarkerPlacement(), [])
   const bodiesAt = useRef<number | null>(null)
   const truth = useRef<TrueBodies | null>(null)
   const truthAt = useRef<number | null>(null)
@@ -80,14 +95,42 @@ export function ShipTargeting() {
     shipNav.targetKm = targetIndex >= 0 ? ranges.km[targetIndex] : NaN
     shipNav.kmPerUnit = ranges.kmPerUnit
 
+    updateApproach({
+      bodies,
+      position: camera.position,
+      velocity: shipTelemetry.velocity,
+      speed: shipTelemetry.speed,
+      cap: shipTelemetry.speedCap,
+      throttle: shipTelemetry.throttle,
+      flightAssist: shipTelemetry.flightAssist,
+      targetKey: target,
+      km: ranges.km,
+    })
+
+    const { width, height, hudBottom } = targetMarker
+    if (width === 0 || height === 0) return
+    for (let i = 0; i < bodies.length; i++) {
+      projectBody(bodies[i], camera, width, height, screen[i])
+    }
+    // The moon dot follows whichever moon is targeted; no target, no dot.
+    let moonPlaced = false
+    for (let i = 0; i < bodies.length; i++) {
+      const key = bodies[i].key
+      const element = isMoonBody(key) ? bodyMarkers.moon : bodyMarkers.planets.get(key)
+      if (!element) continue
+      if (!isMarked(key, target)) continue
+      applyMarker(element, placeMarker(screen[i], screen, width, height, placement))
+      if (isMoonBody(key)) moonPlaced = true
+    }
+    if (!moonPlaced && bodyMarkers.moon) applyMarker(bodyMarkers.moon, HIDDEN)
+
     const marker = targetMarker.current
     if (!marker) return
-    const { width, height, hudBottom } = targetMarker
-    if (targetIndex < 0 || width === 0 || height === 0) {
+    if (targetIndex < 0) {
       marker.hidden = true
       return
     }
-    const s = projectBody(bodies[targetIndex], camera, width, height, screen[targetIndex])
+    const s = screen[targetIndex]
     marker.hidden = false
     const onScreen =
       s.inFront && s.x >= 0 && s.x <= width && s.y >= 0 && s.y <= height
@@ -131,7 +174,12 @@ export function ShipTargeting() {
       presses.set(event.pointerId, {
         x: event.clientX,
         y: event.clientY,
-        key: pickBody(screen, event.clientX - rect.left, event.clientY - rect.top),
+        key: pickBody(
+          screen,
+          event.clientX - rect.left,
+          event.clientY - rect.top,
+          getShipTarget()
+        ),
       })
     }
     const onUp = (event: PointerEvent) => {
@@ -171,8 +219,14 @@ export function ShipTargeting() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [camera, bodies])
 
-  // A target doesn't outlive the ship session.
-  useEffect(() => () => setShipTarget(null), [])
+  // A target (or an approach) doesn't outlive the ship session.
+  useEffect(
+    () => () => {
+      setShipTarget(null)
+      resetShipApproach()
+    },
+    []
+  )
 
   return null
 }

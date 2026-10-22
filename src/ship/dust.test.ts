@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest'
-import { V_NORMAL } from './flight'
+import { OVERSPEED_MAX, V_NORMAL, V_TOP } from './flight'
 import { SHIP_FOV } from './ship-session'
 import {
   DUST_HALF_SIZE,
   DUST_SIZE_BASE,
   DUST_SPEED_BASE,
-  FOV_KICK_LEVELS,
+  CRUISE_DIM,
+  CRUISE_DIM_DEPTH,
+  FOV_KICK_DEPTH,
   EDGE_FADE,
   FOV_KICK,
   MAX_STREAK_SHARE,
@@ -20,6 +22,7 @@ import {
   motionOpacity,
   positiveMod,
   slotLayer,
+  speedDepth,
   speedFov,
   speedFraction,
   streakEnergy,
@@ -190,10 +193,33 @@ describe('fades', () => {
   })
 
   test('field is dimmer at rest, full when moving, dimmed in high cruise', () => {
-    expect(motionOpacity(0, 0)).toBeCloseTo(STOPPED_OPACITY)
-    expect(motionOpacity(V_NORMAL, 0)).toBeCloseTo(1)
-    expect(motionOpacity(500, dustLevel(500))).toBeLessThan(1)
-    expect(motionOpacity(500, dustLevel(500))).toBeGreaterThan(0.25)
+    expect(motionOpacity(0)).toBeCloseTo(STOPPED_OPACITY)
+    expect(motionOpacity(V_NORMAL)).toBeCloseTo(1)
+    // Earth → Moon cruise is undimmed; the dimming spans the rest up to V_TOP.
+    expect(motionOpacity(2.7)).toBeCloseTo(1)
+    expect(motionOpacity(20)).toBeLessThan(1)
+    expect(motionOpacity(20)).toBeGreaterThan(motionOpacity(80))
+    expect(motionOpacity(V_TOP)).toBeCloseTo(1 - CRUISE_DIM)
+    expect(motionOpacity(OVERSPEED_MAX * V_TOP)).toBeCloseTo(1 - CRUISE_DIM)
+  })
+})
+
+describe('speed depth', () => {
+  test('runs 0 at V_NORMAL to 1 at V_TOP on a log scale, clamped', () => {
+    expect(speedDepth(0)).toBe(0)
+    expect(speedDepth(NaN)).toBe(0)
+    expect(speedDepth(V_NORMAL)).toBe(0)
+    expect(speedDepth(V_TOP)).toBeCloseTo(1)
+    expect(speedDepth(3 * V_TOP)).toBe(1)
+    expect(speedDepth(Math.sqrt(V_NORMAL * V_TOP))).toBeCloseTo(0.5)
+  })
+
+  test('the cue ranges sit inside V_NORMAL..V_TOP', () => {
+    for (const [a, b] of [CRUISE_DIM_DEPTH, FOV_KICK_DEPTH]) {
+      expect(a).toBeGreaterThan(0)
+      expect(b).toBeLessThanOrEqual(1)
+      expect(a).toBeLessThan(b)
+    }
   })
 })
 
@@ -208,13 +234,25 @@ describe('speed FOV', () => {
     // Full throttle crawling past the Moon: at the cap, but slow.
     expect(fovKickShare(V_NORMAL, V_NORMAL)).toBe(0)
     expect(fovKickShare(0.8, 0.8)).toBe(0)
-    // Cruise at the cap.
-    expect(fovKickShare(50, 50)).toBe(1)
+    // Earth → Moon cruise, at its cap: barely any.
+    expect(fovKickShare(2.7, 2.7)).toBeLessThan(0.01)
+    // Interplanetary cruise at the cap: all of it.
+    expect(fovKickShare(V_TOP, V_TOP)).toBe(1)
+    expect(fovKickShare(100, 100)).toBe(1)
     // Fast but well under the cap.
-    expect(fovKickShare(25, 50)).toBeCloseTo(0.5)
-    const top = V_NORMAL * DUST_SPEED_BASE ** FOV_KICK_LEVELS[1]
+    expect(fovKickShare(V_TOP / 2, V_TOP)).toBeCloseTo(0.5)
+    const top = V_NORMAL * (V_TOP / V_NORMAL) ** FOV_KICK_DEPTH[1]
     expect(fovKickShare(top / 2, top)).toBeGreaterThan(0)
     expect(fovKickShare(top / 2, top)).toBeLessThan(0.5)
+  })
+
+  test('overspeed earns no more kick than the cap', () => {
+    for (const cap of [V_NORMAL, 5, V_TOP]) {
+      expect(fovKickShare(OVERSPEED_MAX * cap, cap)).toBeLessThanOrEqual(1)
+      expect(fovKickShare(OVERSPEED_MAX * cap, cap)).toBeLessThanOrEqual(
+        fovKickShare(OVERSPEED_MAX * cap, OVERSPEED_MAX * cap)
+      )
+    }
   })
 
   test('no kick under prefers-reduced-motion', () => {
