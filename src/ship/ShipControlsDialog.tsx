@@ -60,10 +60,9 @@ const KEYBOARD_ROWS: readonly [ReactNode, string][] = [
 const TOUCH_ROWS: readonly [ReactNode, string][] = [
   ['Left stick', 'Steer: push up to pitch the nose up, sideways to turn'],
   [
-    'Right pad',
-    'Drag up or down to set the throttle (it holds; a short drag locks to one direction). Left or right to roll (springs back)',
+    'Right stick',
+    'Push up or down to change the throttle; it holds when you let go. It stops at zero: pull again, or keep pulling, to reverse. Tap to stop. Left or right to roll',
   ],
-  ['Level', 'Hold to turn upright'],
   [
     'Flight assist (top bar)',
     'Tap to switch: on, the ship slows and straightens itself; off, it drifts',
