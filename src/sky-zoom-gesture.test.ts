@@ -77,6 +77,20 @@ describe('pinch to zoom View from Earth (tides-2j7)', () => {
     expect(state().skyFov).toBe(SKY_FOV_MIN)
   })
 
+  it('in compass mode zooms about the centre and stays in compass mode (tides-d5j)', () => {
+    const { touch } = panel()
+    const compassLook = { azimuth: 10, altitude: 30, roll: 12 }
+    useStore.setState({ compass: true, skyLook: compassLook })
+    touch('pointerdown', 1, 150, 300)
+    touch('pointerdown', 2, 250, 300)
+    touch('pointermove', 1, 120, 260)
+    touch('pointermove', 2, 320, 260)
+    expect(tanHalf(state().skyFov!)).toBeCloseTo(tanHalf(SURFACE_FOV) / 2, 9)
+    expect(state().skyLook).toBe(compassLook)
+    expect(state().compass).toBe(true)
+    useStore.setState({ compass: false })
+  })
+
   it('ignores one finger and the mouse', () => {
     const { touch, fire } = panel()
     touch('pointerdown', 1, 150, 300)

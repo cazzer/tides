@@ -163,6 +163,19 @@ describe('dragging View from Earth (tides-2dp)', () => {
     expect(look()!.roll).toBeUndefined()
   })
 
+  it('stays in compass mode through a pinch (tides-d5j)', () => {
+    const { fire } = panel()
+    useStore.setState({ compass: true })
+    fire('pointerdown', 100, 100, { id: 1 })
+    fire('pointerdown', 200, 100, { id: 2 })
+    fire('pointermove', 60, 100, { id: 1 })
+    fire('pointermove', 260, 100, { id: 2 })
+    fire('pointerup', 60, 100, { id: 1 })
+    fire('pointerup', 260, 100, { id: 2 })
+    expect(useStore.getState().compass).toBe(true)
+    useStore.setState({ compass: false })
+  })
+
   it('lands a reset cut short, and gives the element back', () => {
     const { fire, reset, cleanup, element, listeners } = panel()
     expect(element.style.touchAction).toBe('none')

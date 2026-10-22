@@ -26,6 +26,12 @@ export interface Glide {
 // Close enough to the wheel's target to stop easing, in degrees.
 const GLIDE_DONE = 0.01
 
+// In compass mode the phone owns where the view looks, so a zoom only
+// narrows it, about the centre, and leaves compass mode on (tides-d5j).
+function zoomTo(skyFov: number, skyLook: SkyLook) {
+  useStore.setState(useStore.getState().compass ? { skyFov } : { skyFov, skyLook })
+}
+
 // Safari's trackpad pinch: no ctrl+wheel, just a scale since gesturestart.
 interface GestureEvent extends UIEvent {
   scale: number
@@ -113,7 +119,7 @@ export function zoomOnPinch(
     const { point, height, distance } = span(pinch.ids)
     const skyFov = pinchFov(pinch.fov, pinch.distance, distance)
     const skyLook = lookKeeping(pinch.anchor, point, skyFov, height, currentLook())
-    useStore.setState({ skyFov, skyLook })
+    zoomTo(skyFov, skyLook)
     // Held at a limit, start afresh from here, so pinching back responds at once.
     if (skyFov === SKY_FOV_MIN || skyFov === SKY_FOV_MAX) {
       pinch.fov = skyFov
@@ -164,10 +170,7 @@ export function zoomOnPinch(
     if (!gesture || touches.size > 0) return
     const { fov, anchor, point, height } = gesture
     const skyFov = pinchFov(fov, 1, (event as GestureEvent).scale)
-    useStore.setState({
-      skyFov,
-      skyLook: lookKeeping(anchor, point, skyFov, height, currentLook()),
-    })
+    zoomTo(skyFov, lookKeeping(anchor, point, skyFov, height, currentLook()))
   }
 
   const gestureEnd = (event: Event) => {
@@ -207,10 +210,7 @@ export function stepGlide(glide: RefObject<Glide | null>, reset: RefObject<Reset
     skyFov = target.fov
     glide.current = null
   }
-  useStore.setState({
-    skyFov,
-    skyLook: lookKeeping(target.anchor, target.point, skyFov, target.height, currentLook()),
-  })
+  zoomTo(skyFov, lookKeeping(target.anchor, target.point, skyFov, target.height, currentLook()))
 }
 
 // Pinch and wheel zoom on View from Earth's panel element (see zoomOnPinch),
