@@ -50,6 +50,9 @@ describe('ground detail patch', () => {
     expect(at('#include <lights_fragment_end>')).toBeLessThan(sky)
     expect(sky).toBeLessThan(at('reflectedLight.directDiffuse *= cloudLit;'))
     expect(sky).toBeLessThan(at('reflectedLight.directDiffuse *= vec3(eclipse.x) + glow;'))
+    // Wherever the skylight compiles, groundUp is declared.
+    expect(frag).toContain('#if defined(USE_MAP) && defined(USE_SPECULARMAP)\nvec3 groundUp = normal;')
+    expect(frag).toContain('#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0\n{\n  float groundSunUp')
     clouds.dispose()
   })
 

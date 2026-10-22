@@ -18,11 +18,11 @@
 //
 // Skylight on the tilted ground (tides-01v.19): the Sun is the ground's only
 // direct light, so under a low Sun every slope facing away went black.
-// GROUND_SKY_FILL of the Sun's light on the ground comes instead from the sky
-// dome: the flat ground's share, sinking with the Sun to nothing at the
-// terminator, onto the part of the sky a slope sees. Where the normal isn't
-// tilted (the sea, the system view) the two parts sum to the old sunlight
-// exactly, and the night side gains nothing.
+// GROUND_SKY_FILL of the flat ground's sunlight comes instead from the sky
+// dome, weighted by how much of the sky a slope sees; it fades with the Sun
+// to nothing at the terminator. Where the normal isn't tilted (the sea, the
+// system view) the two parts sum to the old sunlight, and the night side
+// gains nothing.
 //
 // Spread through composePatches onto the ground's Phong material.
 import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
