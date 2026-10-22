@@ -151,10 +151,85 @@ describe('the limb spheres', () => {
     return state
   }
 
+  // As a SphereGeometry of its own would be, up to float rounding.
+  const expectLimbSphere = (sphere: THREE.BufferGeometry | null, radius: number) => {
+    const own = new THREE.SphereGeometry(radius, ...LIMB_SEGMENTS)
+    for (const name of ['position', 'normal', 'uv']) {
+      const [ours, theirs] = [sphere!.getAttribute(name).array, own.getAttribute(name).array]
+      expect(ours.length, name).toBe(theirs.length)
+      const worst = Array.from(ours).reduce((max, v, i) => Math.max(max, Math.abs(v - theirs[i])), 0)
+      expect(worst, name).toBeLessThan(1e-6 * radius)
+    }
+    expect(Array.from(sphere!.index!.array)).toEqual(Array.from(own.index!.array))
+  }
+
   it('builds one LIMB_SEGMENTS sphere per radius and reuses it', () => {
     const sphere = limbSphere(10)
     expect(limbSphere(10)).toBe(sphere)
-    expect(sphere.parameters).toMatchObject({ radius: 10, widthSegments: 512, heightSegments: 256 })
+    expectLimbSphere(sphere, 10)
+  })
+
+  it('shares one topology between radii, each owning only its positions', () => {
+    const [a, b] = [limbSphere(10), limbSphere(1)]
+    expectLimbSphere(b, 1)
+    expect(b.index).toBe(a.index)
+    expect(b.getAttribute('normal')).toBe(a.getAttribute('normal'))
+    expect(b.getAttribute('uv')).toBe(a.getAttribute('uv'))
+    expect(b.getAttribute('position')).not.toBe(a.getAttribute('position'))
+  })
+
+  // What three frees when a geometry is disposed (WebGLGeometries).
+  const freed = new Set<THREE.BufferAttribute | THREE.InterleavedBufferAttribute>()
+  const freesOnDispose = (sphere: THREE.BufferGeometry) =>
+    sphere.addEventListener('dispose', () => {
+      if (sphere.index) freed.add(sphere.index)
+      Object.values(sphere.attributes).forEach((attribute) => freed.add(attribute))
+    })
+
+  it('frees the shared topology with a trimmed sphere when no other was shown', () => {
+    freed.clear()
+    const drawn = limbSphere(1)
+    const release = retainLimbSphere(1, drawn)
+    freesOnDispose(drawn)
+    const shared = [drawn.index!, drawn.getAttribute('normal'), drawn.getAttribute('uv')]
+    const unshown = [2, 3, 4, 5].map((r) => limbSphere(r))
+    release()
+    // Over the cache: the drawn one goes first, taking the topology the
+    // never-drawn others couldn't free; they'd upload it afresh.
+    expect(builtLimbSphere(1)).toBe(null)
+    shared.forEach((attribute) => expect(freed.has(attribute)).toBe(true))
+    expect(unshown[0].index).toBe(shared[0])
+  })
+
+  it('frees the shared topology only once no shown sphere needs it', () => {
+    freed.clear()
+    const kept = limbSphere(1)
+    const release = retainLimbSphere(1, kept)
+    const shared = [kept.index!, kept.getAttribute('normal'), kept.getAttribute('uv')]
+    const trimmed = [2, 3, 4, 5, 6].map((r) => limbSphere(r))
+    trimmed.forEach(freesOnDispose)
+    retainLimbSphere(7, limbSphere(7))()
+    // The trimmed three freed their positions alone; the rest still draw.
+    expect(freed.size).toBe(3)
+    trimmed.slice(0, 3).forEach((sphere) => expect(freed.has(sphere.getAttribute('position'))).toBe(true))
+    shared.forEach((attribute) => expect(freed.has(attribute)).toBe(false))
+    expect(kept.index).toBe(shared[0])
+    release()
+    freesOnDispose(kept)
+    disposeLimbSpheres()
+    shared.forEach((attribute) => expect(freed.has(attribute)).toBe(true))
+    expect(limbSphere(1).index).not.toBe(shared[0])
+  })
+
+  it('gives a disposed sphere its topology back if it is shown again', () => {
+    const sphere = limbSphere(2)
+    ;[3, 4, 5, 6].forEach((r) => limbSphere(r))
+    retainLimbSphere(7, limbSphere(7))()
+    expect(sphere.index).toBe(null)
+    const release = retainLimbSphere(2, sphere)
+    expect(sphere.index).toBe(limbSphere(7).index)
+    expect(sphere.getAttribute('normal')).toBe(limbSphere(7).getAttribute('normal'))
+    release()
   })
 
   it('never disposes a sphere on screen, however many are cached', () => {
@@ -190,7 +265,7 @@ describe('the limb spheres', () => {
     expect(builtLimbSphere(20)).toBe(null)
     await nextTask()
     const sphere = builtLimbSphere(20)
-    expect(sphere?.parameters).toMatchObject({ radius: 20, widthSegments: 512, heightSegments: 256 })
+    expectLimbSphere(sphere, 20)
     expect(calls).toBe(1)
     requestLimbSphere(20)
     await nextTask()
