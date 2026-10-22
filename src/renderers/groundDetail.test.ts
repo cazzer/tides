@@ -54,8 +54,10 @@ describe('ground detail patch', () => {
     const frag = displaced.fragmentShader
     const relief = frag.indexOf('groundRelief(vMapUv, vGroundDetailPos, groundFootprint)')
     expect(frag).toContain('#define GROUND_RELIEF\n')
+    expect(frag.indexOf('#include <normal_fragment_maps>')).toBeLessThan(relief)
     expect(frag.indexOf('float groundFootprint =')).toBeLessThan(relief)
     expect(relief).toBeLessThan(frag.indexOf('vec4 detail = groundDetail('))
+    expect(flat.fragmentShader).not.toContain('#define GROUND_RELIEF')
     expect(flat.fragmentShader).not.toContain('uniform sampler2D displacementMap;')
   })
 

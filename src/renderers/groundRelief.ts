@@ -28,7 +28,8 @@ export const RELIEF_MAX_SLOPE = 1
 const f = (x: number) => x.toFixed(6)
 
 // three declares the displacement map for the vertex stage only; the
-// fragment's declaration shares its uniform.
+// fragment's declaration shares its uniform. It is read at the day map's uv:
+// both maps cover the sphere untransformed.
 export const GROUND_RELIEF_GLSL = /* glsl */ `
 uniform sampler2D displacementMap;
 uniform float displacementScale;
@@ -44,10 +45,13 @@ vec3 groundRelief(vec2 uv, vec3 p, float footprint) {
     * (1.0 - smoothstep(${f(POLE_SMOOTH_FROM)}, ${f(POLE_SMOOTH_TO)}, abs(lat)));
   if (fade <= 0.0) return vec3(0.0);
   float run = max(footprint, texel);
+  // Texels shrink east-west toward the poles: the east taps span more of
+  // them, so read a coarser mip.
+  float c = max(cos(radians(lat)), 0.05);
   float lod = log2(run / texel);
-  vec2 d = vec2(run / (texel * width * max(cos(radians(lat)), 0.05)), 2.0 * run / (texel * width));
-  float east = textureLod(displacementMap, vec2(fract(uv.x + d.x), uv.y), lod).r
-    - textureLod(displacementMap, vec2(fract(uv.x - d.x), uv.y), lod).r;
+  vec2 d = vec2(run / (texel * width * c), 2.0 * run / (texel * width));
+  float east = textureLod(displacementMap, vec2(fract(uv.x + d.x), uv.y), lod - log2(c)).r
+    - textureLod(displacementMap, vec2(fract(uv.x - d.x), uv.y), lod - log2(c)).r;
   float north = textureLod(displacementMap, vec2(uv.x, min(uv.y + d.y, 1.0)), lod).r
     - textureLod(displacementMap, vec2(uv.x, max(uv.y - d.y, 0.0)), lod).r;
   vec3 n = normalize(p);
