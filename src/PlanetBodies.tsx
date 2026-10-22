@@ -15,24 +15,24 @@ import {
   PLANETS,
   PLANET_KEYS,
   bodyOrientation,
-  planetPosition,
   type PlanetKey,
 } from './planets'
 import { PLANET_RENDERERS } from './renderers/planets'
 import { useStore } from './store'
 import type { DistanceScale } from './distance-scale'
+import { positionsFor } from './flight-scale'
 
 export const PlanetBodies: FC<{
   interactive: boolean
-  /** Not read until tides-2hv.6 adds the 'flight' positions. */
   distanceScale: DistanceScale
-}> = ({ interactive }) => (
+}> = ({ interactive, distanceScale }) => (
   <>
     {PLANET_KEYS.map((key) => (
       <PlanetBody
         key={key}
         planetKey={key}
         interactive={interactive}
+        distanceScale={distanceScale}
       />
     ))}
   </>
@@ -41,14 +41,16 @@ export const PlanetBodies: FC<{
 function PlanetBody({
   planetKey,
   interactive,
+  distanceScale,
 }: {
   planetKey: PlanetKey
   interactive: boolean
+  distanceScale: DistanceScale
 }) {
   const { body, radius } = PLANETS[planetKey]
   const Renderer = PLANET_RENDERERS[planetKey]
   const ref = useRef<THREE.Mesh>(null)
-  const positionAt = useMemo(() => planetPosition(body), [body])
+  const positionAt = positionsFor(distanceScale).positionAt[planetKey]
   const orientationAt = useMemo(() => bodyOrientation(body), [body])
   const setPlanet = useStore((s) => s.setPlanet)
 

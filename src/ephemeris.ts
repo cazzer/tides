@@ -52,17 +52,25 @@ export function earthSpin(t: number): number {
   return SiderealTime(new Date(t)) * 15 * DEG + Math.PI
 }
 
-export function moonPosition(t: number): Vec3 {
+// The Moon from Earth's centre in scene axes, at MOON_UNITS_PER_KM (~10
+// units) whatever spacing Earth itself is placed at (flight-scale.ts).
+export function moonOffset(t: number): Vec3 {
   const { lat, lon, dist } = EclipticGeoMoon(new Date(t))
   const phi = (lon + 180) * DEG
   const beta = lat * DEG
   const r = dist * KM_PER_AU * MOON_UNITS_PER_KM
-  const [x, y, z] = earthPosition(t)
   return [
-    x + r * Math.cos(beta) * Math.cos(phi),
-    y + r * Math.sin(beta),
-    z - r * Math.cos(beta) * Math.sin(phi),
+    r * Math.cos(beta) * Math.cos(phi),
+    r * Math.sin(beta),
+    -r * Math.cos(beta) * Math.sin(phi),
   ]
+}
+
+// z + (−v) rounds exactly as z − v, so this is bit-for-bit the old sum.
+export function moonPosition(t: number): Vec3 {
+  const [x, y, z] = earthPosition(t)
+  const [dx, dy, dz] = moonOffset(t)
+  return [x + dx, y + dy, z + dz]
 }
 
 // Ecliptic of date (x toward λ = 0°, z north) to scene axes (φ = λ + 180°,

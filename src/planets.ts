@@ -45,6 +45,9 @@ const R0 = 1.7
 const F_R0 = EARTH_ORBIT_RADIUS * R0 ** INNER_POWER
 const K = 0.9
 
+/** Scene units from the Sun for a body `rAu` AU out. */
+export type SceneDistance = (rAu: number) => number
+
 export function sceneDistance(rAu: number): number {
   if (rAu <= R0) {
     return EARTH_ORBIT_RADIUS * rAu ** INNER_POWER
@@ -120,13 +123,15 @@ export const PLANETS: Readonly<Record<PlanetKey, Planet>> = {
 export const PLANET_KEYS = Object.keys(PLANETS) as readonly PlanetKey[]
 
 // Heliocentric EQJ (AU) → ecliptic of date → scene, with the length remapped
-// by sceneDistance. Writes into `out`.
+// by `distance` (sceneDistance in the system view, flight-scale.ts's linear
+// scale in ship mode). Writes into `out`.
 function heliocentricScene(
   body: Body,
   date: Date,
   rot: RotationMatrix,
   out: Float32Array | Vec3,
-  offset: number
+  offset: number,
+  distance: SceneDistance
 ): void {
   const { x, y, z } = HelioVector(body, date)
   const r = rot.rot
@@ -134,18 +139,21 @@ function heliocentricScene(
   const ey = r[0][1] * x + r[1][1] * y + r[2][1] * z
   const ez = r[0][2] * x + r[1][2] * y + r[2][2] * z
   const rAu = Math.hypot(ex, ey, ez)
-  const s = sceneDistance(rAu) / rAu
+  const s = distance(rAu) / rAu
   // eclipticToScene: (x, y, z) → (−x, z, y)
   out[offset] = -ex * s
   out[offset + 1] = ez * s
   out[offset + 2] = ey * s
 }
 
-export function planetPosition(body: Body): (t: number) => Vec3 {
+export function planetPosition(
+  body: Body,
+  distance: SceneDistance = sceneDistance
+): (t: number) => Vec3 {
   return (t) => {
     const date = new Date(t)
     const out: Vec3 = [0, 0, 0]
-    heliocentricScene(body, date, Rotation_EQJ_ECT(date), out, 0)
+    heliocentricScene(body, date, Rotation_EQJ_ECT(date), out, 0, distance)
     return out
   }
 }
@@ -158,14 +166,15 @@ export function planetOrbitPath(
   body: Body,
   t: number,
   segments: number,
-  out?: Float32Array
+  out?: Float32Array,
+  distance: SceneDistance = sceneDistance
 ): Float32Array {
   const period = PlanetOrbitalPeriod(body) * MS_PER_DAY
   const rot = Rotation_EQJ_ECT(new Date(t))
   const points = out ?? new Float32Array(segments * 3)
   for (let i = 0; i < segments; i++) {
     const ti = t + (i / segments - 0.5) * period
-    heliocentricScene(body, new Date(ti), rot, points, i * 3)
+    heliocentricScene(body, new Date(ti), rot, points, i * 3, distance)
   }
   return points
 }

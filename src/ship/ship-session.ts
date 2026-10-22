@@ -4,6 +4,7 @@
 import * as THREE from 'three'
 import type { CameraFocus, Layout, PanelKey } from '../store'
 import { createShipState, type Body as FlightBody, type ShipState } from './flight'
+import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
 
 /** The view state ship mode overrides or hides, put back on exit. */
 export interface ShipSaved {
@@ -65,15 +66,22 @@ export function persistedView(s: ShipSessionState): ShipSaved {
 /** Ship camera's vertical field of view, degrees. */
 export const SHIP_FOV = 60
 /**
- * Ship camera's far plane within the system. Neptune orbits ~320 units out, so
- * two bodies are at most ~650 apart; the margin is for the star sphere, which
- * is centred on the camera and must sit inside.
+ * Past every body from the Sun: Neptune's aphelion is 30.33 AU (flight-scale
+ * positions, ship-session.test.ts), so 32 AU leaves a margin.
  */
-export const SHIP_FAR = 4000
-/** The starfield's radius in ship mode (as the main view with planets on). */
-export const SHIP_STAR_RADIUS = 1500
-// Past every body from the Sun (Neptune orbits ~325 out), with room to spare.
-const SYSTEM_REACH = 700
+export const SYSTEM_REACH = 32 * FLIGHT_UNITS_PER_AU
+/**
+ * The starfield's radius in ship mode. The sphere is centred on the camera,
+ * so with the ship anywhere within SYSTEM_REACH of the Sun every body is at
+ * most 2·SYSTEM_REACH away and the stars stay behind it.
+ */
+export const SHIP_STAR_RADIUS = 2 * SYSTEM_REACH
+/**
+ * Ship camera's far plane within the system, with room for the star sphere,
+ * which must sit inside it. Depth precision is set by the near plane (error
+ * ~z² / (near · 2²⁴)), so a far this deep costs next to nothing.
+ */
+export const SHIP_FAR = 1.25 * SHIP_STAR_RADIUS
 
 /**
  * The far plane `distanceFromSun` out. Cruise has no range limit, so beyond
@@ -88,8 +96,9 @@ export function shipFar(distanceFromSun: number): number {
 // The near plane follows the nearest surface so depth precision is spent where
 // the eye is: at 0.4 of the gap the surface stays well in front of it. The
 // ceiling keeps anything a tenth of a unit off drawn (Saturn's rings reach
-// 2.27 radii out; 3bl.6's dust passes within a unit) and far/near at 4e4 in
-// the system. The hard-sphere margin (flight.ts COLLISION_MARGIN) keeps the
+// 2.27 radii out; 3bl.6's dust passes within a unit). far/near reaches 8e5
+// (SHIP_FAR at the flight scale), which is fine: depth error is ~z² / (near ·
+// 2²⁴), set by the near plane, not the far. The hard-sphere margin (flight.ts COLLISION_MARGIN) keeps the
 // gap ≥ 0.02 even at the Moon, so the floor is rarely reached.
 const NEAR_SHARE = 0.4
 const NEAR_MIN = 0.002
@@ -190,11 +199,14 @@ interface Spawn {
  * the Sun line and SPAWN_ELEVATION above the ecliptic, far enough for Earth
  * to fill SPAWN_EARTH_SHARE of the short side of a screen of `aspect`. No
  * other body (bar the Moon) may be nearer than Earth, so when one crowds
- * that point (Venus near inferior conjunction) it tries the other side of the
+ * that point it tries the other side of the
  * Sun line, climbing higher and pulling in toward Earth, and takes the
  * candidate that stays furthest out, frames the Moon and climbs least. Faces
  * Earth, swung toward the Moon when that brings it into frame, and level.
- * `bodies` must include 'sun' and 'earth', positioned for now.
+ * (At the flight scale no planet comes within ~260 units of Earth, so with
+ * the real ephemeris the first candidate is always clear; the fallback is
+ * for a body placed closer.) `bodies` must include 'sun' and 'earth',
+ * positioned for now.
  */
 export function spawnPose(bodies: readonly FlightBody[], aspect = 16 / 9): ShipState {
   const sun = bodies.find((b) => b.key === 'sun')
