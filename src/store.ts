@@ -168,6 +168,9 @@ export const useStore = create<{
   /** Where View from Earth looks; null until dragged, facing the equator.
    * Written per pointer move: read it with getState() inside useFrame. */
   skyLook: SkyLook | null
+  /** View from Earth's vertical field of view (degrees) while zoomed in;
+   * null at the default SURFACE_FOV. Not in the URL, like skyLook. */
+  skyFov: number | null
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
@@ -205,6 +208,7 @@ export const useStore = create<{
   showZodiac: getInitialShowZodiac(),
   location: getInitialLocation(),
   skyLook: null,
+  skyFov: null,
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   setTimeScale: (timeScale: number) => set({ timeScale }),

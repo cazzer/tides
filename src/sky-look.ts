@@ -42,9 +42,16 @@ const GRAB_TURN_LIMIT = 60
 // where a pixel spans 2 tan(fov/2) / height radians. Turning the heading
 // moves the centre of view only cos(altitude) as far, so sideways drags turn
 // faster as the view looks up; toward the zenith, where no turn could keep up,
-// that stops at GRAB_TURN_LIMIT rather than spinning the sky.
-export function dragLook(look: SkyLook, dx: number, dy: number, height: number): SkyLook {
-  const perPixel = (2 * Math.tan((SURFACE_FOV / 2) * DEG)) / height / DEG
+// that stops at GRAB_TURN_LIMIT rather than spinning the sky. `fov` is the
+// view's current vertical field of view, narrower when zoomed in.
+export function dragLook(
+  look: SkyLook,
+  dx: number,
+  dy: number,
+  height: number,
+  fov = SURFACE_FOV
+): SkyLook {
+  const perPixel = (2 * Math.tan((fov / 2) * DEG)) / height / DEG
   const tilt = Math.min(Math.abs(look.altitude), GRAB_TURN_LIMIT) * DEG
   return clampLook({
     azimuth: look.azimuth - (dx * perPixel) / Math.cos(tilt),

@@ -130,6 +130,12 @@ export default forwardRef<THREE.Mesh, OrbitingBodyProps>(function OrbitingBody(
     // calculate surface camera position (use location from store if set)
     if (surfaceCameraContainerRef.current && surfaceCameraRef.current) {
       const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
+      // Pinch zoom (tides-2j7) narrows the view.
+      const fov = useStore.getState().skyFov ?? SURFACE_FOV
+      if (surfaceCameraRef.current.fov !== fov) {
+        surfaceCameraRef.current.fov = fov
+        surfaceCameraRef.current.updateProjectionMatrix()
+      }
       placeSurfaceCamera(
         surfaceCameraContainerRef.current,
         surfaceCameraRef.current,

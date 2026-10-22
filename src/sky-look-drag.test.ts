@@ -44,7 +44,9 @@ function panel() {
 const look = () => useStore.getState().skyLook
 
 describe('dragging View from Earth (tides-2dp)', () => {
-  beforeEach(() => useStore.setState({ skyLook: null, location: { lat: 51.5, lon: 0 } }))
+  beforeEach(() =>
+    useStore.setState({ skyLook: null, skyFov: null, location: { lat: 51.5, lon: 0 } })
+  )
 
   it('keeps short presses as taps and drags past the threshold', () => {
     const { fire, captured } = panel()
@@ -82,14 +84,51 @@ describe('dragging View from Earth (tides-2dp)', () => {
     expect(reset.current?.from).toEqual({ azimuth: 10, altitude: 70 })
   })
 
-  it('follows one pointer only', () => {
-    const { fire } = panel()
+  it('leaves a two-finger pinch alone: no drag, no tap (tides-2j7)', () => {
+    const { fire, reset } = panel()
+    useStore.setState({ skyLook: { azimuth: 10, altitude: 70 } })
     fire('pointerdown', 100, 100, { id: 1 })
     fire('pointerdown', 300, 100, { id: 2 })
     fire('pointermove', 400, 400, { id: 2 })
-    expect(look()).toBeNull()
     fire('pointermove', 100, 300, { id: 1 })
-    expect(look()).not.toBeNull()
+    expect(look()).toEqual({ azimuth: 10, altitude: 70 })
+    fire('pointerup', 100, 300, { id: 1 })
+    fire('pointerup', 400, 400, { id: 2 })
+    // Two quick pinches are not a double tap.
+    fire('pointerdown', 100, 100, { id: 3, after: 50 })
+    fire('pointerdown', 300, 100, { id: 4 })
+    fire('pointerup', 100, 100, { id: 3 })
+    fire('pointerup', 300, 100, { id: 4 })
+    expect(reset.current).toBeNull()
+
+    // Once both are up, one finger drags again.
+    fire('pointerdown', 100, 100, { id: 5, after: 1000 })
+    fire('pointermove', 100, 300, { id: 5 })
+    expect(look()!.altitude).toBeGreaterThan(70)
+  })
+
+  it('drags slower when zoomed in, keeping the sky under the finger', () => {
+    const { fire } = panel()
+    fire('pointerdown', 100, 100)
+    fire('pointermove', 100, 300)
+    const wide = look()!.altitude - surfaceView(51.5).altitude
+    useStore.setState({ skyLook: null, skyFov: 30 })
+    fire('pointerup', 100, 300)
+    fire('pointerdown', 100, 100, { after: 1000 })
+    fire('pointermove', 100, 300)
+    const narrow = look()!.altitude - surfaceView(51.5).altitude
+    expect(narrow / wide).toBeCloseTo(Math.tan(15 * (Math.PI / 180)), 6)
+  })
+
+  it('resets the zoom on a double tap, even facing the default way', () => {
+    const { fire, reset } = panel()
+    useStore.setState({ skyFov: 30 })
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    expect(reset.current?.fromFov).toBe(30)
+    expect(reset.current?.from).toEqual(surfaceView(51.5))
   })
 
   it('drops a press whose release was lost', () => {

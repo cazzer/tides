@@ -1,6 +1,6 @@
 import type { RefObject } from 'react'
 import { useStore } from './store'
-import { DEFAULT_SURFACE_LOCATION, surfaceView } from './sky'
+import { DEFAULT_SURFACE_LOCATION, SURFACE_FOV, surfaceView } from './sky'
 import {
   DOUBLE_TAP_DISTANCE,
   DOUBLE_TAP_MS,
@@ -9,9 +9,11 @@ import {
   type SkyLook,
 } from './sky-look'
 
-// A reset easing back to the default view (SkyLookControls runs it).
+// A reset easing back to the default view and field of view (SkyLookControls
+// runs it).
 export interface Reset {
   from: SkyLook
+  fromFov: number
   start: number
 }
 
@@ -22,6 +24,10 @@ export function defaultLook() {
 
 export function currentLook() {
   return useStore.getState().skyLook ?? defaultLook()
+}
+
+export function currentFov() {
+  return useStore.getState().skyFov ?? SURFACE_FOV
 }
 
 type LookTarget = Pick<
@@ -35,15 +41,24 @@ type LookTarget = Pick<
 // useThree in place. Returns the cleanup.
 export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) {
   let press: { id: number; x: number; y: number; dragging: boolean } | null = null
+  const pointers = new Set<number>()
   let lastTap: { time: number; x: number; y: number } | null = null
   const { touchAction, cursor } = element.style
   element.style.touchAction = 'none'
   element.style.cursor = 'grab'
 
-  // A second finger leaves the first in charge; the same pointer pressing
-  // again means its release was lost.
+  // A second finger makes a pinch (sky-zoom-gesture), so the press is
+  // neither a drag nor a tap any more; the same pointer pressing again means
+  // its release was lost. A primary press starts afresh.
   const down = (event: PointerEvent) => {
-    if (press && press.id !== event.pointerId) return
+    if (event.isPrimary) pointers.clear()
+    pointers.add(event.pointerId)
+    if (pointers.size > 1) {
+      press = null
+      lastTap = null
+      element.style.cursor = 'grab'
+      return
+    }
     if (event.pointerType === 'mouse' && event.button !== 0) return
     reset.current = null
     press = { id: event.pointerId, x: event.clientX, y: event.clientY, dragging: false }
@@ -69,10 +84,13 @@ export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) 
     // (the zenith) turns the view straight away.
     press.x = event.clientX
     press.y = event.clientY
-    useStore.setState({ skyLook: dragLook(currentLook(), dx, dy, element.clientHeight) })
+    useStore.setState({
+      skyLook: dragLook(currentLook(), dx, dy, element.clientHeight, currentFov()),
+    })
   }
 
   const up = (event: PointerEvent) => {
+    pointers.delete(event.pointerId)
     if (!press || event.pointerId !== press.id) return
     const { dragging, x, y } = press
     press = null
@@ -87,8 +105,9 @@ export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) 
       time - lastTap.time < DOUBLE_TAP_MS &&
       Math.hypot(x - lastTap.x, y - lastTap.y) < DOUBLE_TAP_DISTANCE
     lastTap = double ? null : { time, x, y }
-    if (double && useStore.getState().skyLook) {
-      reset.current = { from: currentLook(), start: performance.now() }
+    const { skyLook, skyFov } = useStore.getState()
+    if (double && (skyLook || skyFov)) {
+      reset.current = { from: currentLook(), fromFov: currentFov(), start: performance.now() }
     }
   }
 
@@ -108,7 +127,7 @@ export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) 
     // A reset cut short (the panel unmounting mid-ease) still lands.
     if (reset.current) {
       reset.current = null
-      useStore.setState({ skyLook: null })
+      useStore.setState({ skyLook: null, skyFov: null })
     }
   }
 }
