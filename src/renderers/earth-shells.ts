@@ -8,8 +8,33 @@ import { limbBody } from '../ship/limb-detail'
 /** The atmosphere's limb-glow shell (AtmosphereRenderer). */
 export const ATMOSPHERE_OUTER = 1.06
 
+/** The atmosphere's haze (shaders/atmosphere/haze.glsl): its base, at the
+ * cloud deck, its (exaggerated, ~60 km) scale height, its gain, and its
+ * colours (linear RGB), blue overhead, reddening toward the terminator. */
+export const ATMOSPHERE_SURFACE = 1.012
+export const ATMOSPHERE_SCALE_HEIGHT = 0.0095
+export const ATMOSPHERE_GAIN = 1.2
+export const ATMOSPHERE_SKY: readonly [number, number, number] = [0.3, 0.55, 1.0]
+export const ATMOSPHERE_DUSK: readonly [number, number, number] = [1.0, 0.45, 0.2]
+
 /** The aurora's shell (AuroraRenderer). */
+export const AURORA_SHELL_INNER = 1.024
 export const AURORA_SHELL_OUTER = 1.07
+
+/** Draw order of the additive shells, after the clouds'. */
+export const ATMOSPHERE_RENDER_ORDER = 1
+export const AURORA_RENDER_ORDER = 2
+
+/**
+ * The cloud shell's draw order within the ship camera's reach
+ * (tides-01v.8.6): after the haze, which it lays over itself where in front
+ * (cloudShaders.ts), so that the fog inside a cloud covers the rest; and
+ * from under the aurora's shell, where the aurora lies past nearly every
+ * cloud (only tall cloud over high ground reaches above its base), after
+ * the aurora too.
+ */
+export const CLOUD_REACH_RENDER_ORDER = 1.5
+export const CLOUD_UNDER_AURORA_RENDER_ORDER = 3
 
 const eye = new THREE.Vector3()
 

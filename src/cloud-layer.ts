@@ -98,6 +98,41 @@ export function cloudPathClear(alpha: number, thickness: number, path: number): 
   return (1 - Math.min(alpha, 0.995)) ** (path / Math.max(thickness, 1e-4))
 }
 
+/** The path over which fog in opaque cloud stops its opacity's share of
+ * the light, whatever the column's height: under a march step, as real
+ * cloud is far denser inside than its opacity from above suggests. */
+export const FOG_PATH = 0.004
+
+/** How far into its column (as a share of its thickness) fog thickens from
+ * nothing at the top and base: a soft edge, and with reduced motion, a
+ * softer one, so flying in fades rather than flashes (tides-01v.8.6). */
+export const FOG_SOFT = 0.15
+export const FOG_SOFT_REDUCED = 0.5
+
+/**
+ * Fog's extinction (per scene unit) at `altitude` in a column, for an eye
+ * inside a cloud (tides-01v.8.6): the column's optical depth over
+ * FOG_PATH, and as patchy as the cloud is thin (times its opacity), so
+ * dense cloud whites out and thin cloud only veils. It thins to nothing at
+ * the column's top and base over `soft` of its thickness. None outside it,
+ * or where it is a gap.
+ */
+export function fogExtinction(
+  alpha: number,
+  base: number,
+  top: number,
+  altitude: number,
+  soft: number
+): number {
+  const inside = Math.min(altitude - base, top - altitude)
+  if (alpha < CLOUD_MIN_ALPHA || inside <= 0) return 0
+  const thickness = top - base
+  return (
+    ((alpha * -Math.log(1 - Math.min(alpha, 0.995))) / FOG_PATH) *
+    smoothstep(0, soft * thickness, inside)
+  )
+}
+
 /** One step of the cloud march: its altitude, and its column's base, top
  * and opacity there. */
 export interface MarchSample {

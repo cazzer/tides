@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer, MARCH_STEP, MARCH_STEPS } from './cloudShaders'
@@ -8,11 +8,22 @@ import {
   CLOUD_MIN_ALPHA,
   cloudPathClear,
   columnDepth,
+  FOG_SOFT,
+  FOG_SOFT_REDUCED,
+  fogExtinction,
   marchCrossing,
   marchSpanFromEye,
 } from '../cloud-layer'
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
+import { prefersReducedMotion } from '../ship/reduced-motion'
+import {
+  AURORA_SHELL_INNER,
+  CLOUD_REACH_RENDER_ORDER,
+  CLOUD_UNDER_AURORA_RENDER_ORDER,
+} from './earth-shells'
+
+vi.mock('../ship/reduced-motion', () => ({ prefersReducedMotion: vi.fn(() => false) }))
 
 function phongShader() {
   return {
@@ -161,15 +172,7 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
       clouds.uniforms.uSeaLevel.value = sea
       const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
       const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
-      const render = (cam: THREE.Camera) =>
-        clouds.material.onBeforeRender(
-          {} as THREE.WebGLRenderer,
-          new THREE.Scene(),
-          cam,
-          mesh.geometry,
-          mesh,
-          null
-        )
+      const render = (cam: THREE.Camera) => clouds.faceCamera(mesh, cam)
       const versionAt = (altitude: number) => {
         camera.position.set(0, sea + altitude, 0)
         camera.updateMatrixWorld()
@@ -282,7 +285,19 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
       // and the shared code reads.
       const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
       const src = preprocess(clouds.material.fragmentShader, new Set(variant))
-      const names = ['colIn', 'side', 'sideClear', 'depthHit', 'fromAbove', 'depth', 'eye', 'shell']
+      const names = [
+        'colIn',
+        'side',
+        'sideClear',
+        'depthHit',
+        'fromAbove',
+        'depth',
+        'eye',
+        'shell',
+        'fogged',
+        'fogClear',
+        'fogLight',
+      ]
       for (const name of names) {
         if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
           expect(src).toMatch(new RegExp(`(float|vec3|vec4|bool) ${name}\\b`))
@@ -291,4 +306,108 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
       clouds.dispose()
     })
   }
+})
+
+describe('fog inside a cloud (tides-01v.8.6)', () => {
+  const sea = sceneRadius(12742000)
+  // A column based at 0.006 and topped at 0.03.
+  const fog = (alpha: number, altitude: number, soft = FOG_SOFT) =>
+    fogExtinction(alpha, 0.006, 0.03, altitude, soft)
+  const clear = (sigma: number, path: number) => Math.exp(-sigma * path)
+
+  it('whites out in dense cloud and only veils in thin', () => {
+    // Level through the middle of the column, a few march steps.
+    expect(clear(fog(0.85, 0.018), 2 * MARCH_STEP)).toBeLessThan(0.01)
+    expect(clear(fog(0.1, 0.018), 2 * MARCH_STEP)).toBeGreaterThan(0.5)
+    expect(fog(0.3, 0.018)).toBeGreaterThan(fog(0.1, 0.018))
+    expect(fog(0.85, 0.018)).toBeGreaterThan(fog(0.3, 0.018))
+  })
+
+  it('is clear outside a cloud and in a gap', () => {
+    expect(fog(0.9, 0.005)).toBe(0)
+    expect(fog(0.9, 0.031)).toBe(0)
+    expect(fog(CLOUD_MIN_ALPHA / 2, 0.018)).toBe(0)
+  })
+
+  it('thickens from nothing at the top and base, more softly with reduced motion', () => {
+    expect(fog(0.8, 0.03)).toBe(0)
+    expect(fog(0.8, 0.006)).toBe(0)
+    const deep = fog(0.8, 0.018)
+    const nearTop = 0.03 - 0.5 * FOG_SOFT * 0.024
+    expect(fog(0.8, nearTop)).toBeGreaterThan(0)
+    expect(fog(0.8, nearTop)).toBeLessThan(deep)
+    expect(fog(0.8, nearTop, FOG_SOFT_REDUCED)).toBeLessThan(fog(0.8, nearTop))
+    expect(fog(0.8, 0.018, FOG_SOFT_REDUCED)).toBe(deep)
+  })
+
+  for (const flat of [false, true]) {
+    it(`fogs from inside a cloud only from within reach (${flat ? 'flat' : 'relief'})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      const variant = flat ? ['CLOUD_FLAT'] : []
+      const outside = preprocess(clouds.material.fragmentShader, new Set(variant))
+      const inside = preprocess(clouds.material.fragmentShader, new Set([...variant, 'FLIP_SIDED']))
+      for (const name of ['cloudFogDensity', 'cloudHazeFront', 'fogged']) {
+        expect(outside).not.toContain(name)
+      }
+      expect(inside).toContain('cloudHazeFront(eye, d, eyeDist, shell)')
+      // The atmosphere's own haze, shared with its shader.
+      expect(inside).toContain('float columnAhead(')
+      // Only the relief march has columns to stand in.
+      expect(inside.includes('cloudFogEdge(colq, alt)')).toBe(!flat)
+      // A camera in a cloud no longer sees a flat card.
+      expect(inside).not.toContain('vec3(0.8)')
+      // Both programs premultiply, as the material blends.
+      expect(clouds.material.premultipliedAlpha).toBe(true)
+      expect(outside).toContain('gl_FragColor.rgb *= gl_FragColor.a')
+      expect(inside).toContain('gl_FragColor.rgb * gl_FragColor.a')
+      clouds.dispose()
+    })
+
+    it(`draws after the haze within reach, and under the aurora after it (${flat ? 'flat' : 'relief'})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      clouds.uniforms.uSeaLevel.value = sea
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+      const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
+      const orderAt = (altitude: number) => {
+        camera.position.set(0, sea + altitude, 0)
+        camera.updateMatrixWorld()
+        clouds.faceCamera(mesh, camera)
+        return mesh.renderOrder
+      }
+      try {
+        const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
+        updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+        const auroraBase = sea * (AURORA_SHELL_INNER - 1)
+        expect(orderAt(clouds.shellAltitude + 0.1)).toBe(0)
+        const top = clouds.shellAltitude - 0.001
+        expect(orderAt(top)).toBe(
+          top < auroraBase ? CLOUD_UNDER_AURORA_RENDER_ORDER : CLOUD_REACH_RENDER_ORDER
+        )
+        expect(orderAt(0.02)).toBe(CLOUD_UNDER_AURORA_RENDER_ORDER)
+        expect(CLOUD_REACH_RENDER_ORDER).toBeGreaterThan(1)
+        expect(CLOUD_REACH_RENDER_ORDER).toBeLessThan(2)
+        clearLimbView()
+        expect(orderAt(0.02)).toBe(0)
+      } finally {
+        clearLimbView()
+        clouds.dispose()
+      }
+    })
+  }
+
+  it('softens the fog with reduced motion', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+    const render = () => clouds.faceCamera(mesh, new THREE.PerspectiveCamera())
+    try {
+      render()
+      expect(clouds.material.uniforms.uFogSoft.value).toBe(FOG_SOFT)
+      vi.mocked(prefersReducedMotion).mockReturnValue(true)
+      render()
+      expect(clouds.material.uniforms.uFogSoft.value).toBe(FOG_SOFT_REDUCED)
+    } finally {
+      vi.mocked(prefersReducedMotion).mockReturnValue(false)
+      clouds.dispose()
+    }
+  })
 })

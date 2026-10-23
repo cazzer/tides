@@ -33,7 +33,7 @@ function glsl(x: number): string {
 }
 
 // Draw after the planets' translucent shells (clouds, atmosphere, aurora use
-// renderOrder 1–2), so those don't blend over motes in front of a planet.
+// renderOrder 0–3), so those don't blend over motes in front of a planet.
 const DUST_RENDER_ORDER = 10
 
 const viewport = new THREE.Vector4()
