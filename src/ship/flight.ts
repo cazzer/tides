@@ -221,7 +221,9 @@ export const OVERSPEED_MAX = 3
 // step (FA off: V_NORMAL · MAX_DT / VELOCITY_TAU_WELL = 0.0125) before being
 // cancelled, so 0.05 never flags those, while arriving at the V_NORMAL floor
 // always does. Arriving at a lower floor (Earth's ground, at most
-// OVERSPEED_MAX × 0.02) never does: touching down there is landing.
+// OVERSPEED_MAX × 0.02) rarely does and is never an impact (impact.ts):
+// touching down there is landing, and the approach panel doesn't warn of it
+// either (approach.ts canCrash, tides-01v.8.17).
 export const COLLISION_SPEED = 0.05
 
 // Rotation e-fold, s: how quickly turn rates follow the stick with FA on (and
@@ -626,7 +628,7 @@ function fillTelemetry(
   out: ShipTelemetry,
   state: ShipState,
   input: Readonly<ShipInput>,
-  { nearest, nearestGap, target, targetGap, wellKey, wellBodyFactor }: Proximity,
+  { nearest, nearestGap, target, targetGap, wellKey, wellBodyFactor, wellFloor }: Proximity,
   cap: number,
   colliding: boolean
 ): void {
@@ -641,6 +643,7 @@ function fillTelemetry(
   out.nearest.surfaceDistance = nearestGap
   out.well.key = wellKey
   out.well.factor = wellBodyFactor
+  out.well.floor = wellFloor
 
   if (!target) {
     out.target = null

@@ -101,6 +101,7 @@ export function ShipTargeting() {
       velocity: shipTelemetry.velocity,
       speed: shipTelemetry.speed,
       cap: shipTelemetry.speedCap,
+      capFloor: shipTelemetry.well.floor,
       throttle: shipTelemetry.throttle,
       flightAssist: shipTelemetry.flightAssist,
       targetKey: target,
