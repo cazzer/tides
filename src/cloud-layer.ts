@@ -24,8 +24,13 @@ export const TERRAIN_MAX_GREY_FLAT = 206 / 255
 /** Kilometres of elevation per unit of bump-map grey (geo-clouds' 1/39 per level). */
 export const TERRAIN_KM_PER_GREY = 255 / 39
 
-/** Gap between the (smoothed) ground and a cloud's base. */
-export const CLOUD_CLEARANCE = 0.006
+/**
+ * Gap between the (smoothed) ground and a cloud's base: three times the
+ * ship's EARTH_GROUND_CLEARANCE, so its floor (the ground's highest nearby
+ * plus that) stays under the base over most lowland (tides-42p; at 0.006 it
+ * did over almost none).
+ */
+export const CLOUD_CLEARANCE = 0.012
 /** Cloud-top exaggeration: about 9x the true scale (terrain is about 25x). */
 export const CLOUD_UNITS_PER_KM = 0.004
 /** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */

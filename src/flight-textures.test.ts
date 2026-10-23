@@ -14,7 +14,7 @@ import {
 
 describe('flightTextureUrl', () => {
   it('picks 8k where there is one and the cap allows it', () => {
-    for (const key of ['mars', 'mercury', 'earth-clouds'] as const) {
+    for (const key of ['mars', 'mercury'] as const) {
       expect(flightTextureUrl(key, 8192)).toMatch(new RegExp(`${key}-8k`))
       expect(flightTextureUrl(key, 4096)).toMatch(new RegExp(`${key}-4k`))
     }
@@ -100,9 +100,8 @@ describe('createFlightTextureCache', () => {
 
 // What the asset script must produce: Basis ETC1S (BasisLZ) or UASTC
 // (Zstandard) with a full mip chain, tagged sRGB, the colour space
-// KTX2Loader then gives the texture; the cloud map, data, tagged linear.
+// KTX2Loader then gives the texture. Earth's clouds have none (tides-42p).
 describe('flight assets', () => {
-  const LINEAR = 1
   const SRGB = 2
   const BASIS_LZ = 1
   const ZSTD = 2
@@ -110,7 +109,6 @@ describe('flight assets', () => {
     ['mars', 8192, BASIS_LZ, SRGB], ['mars', 4096, BASIS_LZ, SRGB],
     ['mercury', 8192, BASIS_LZ, SRGB], ['mercury', 4096, BASIS_LZ, SRGB],
     ['jupiter', 4096, ZSTD, SRGB], ['saturn', 4096, ZSTD, SRGB], ['venus', 4096, ZSTD, SRGB],
-    ['earth-clouds', 8192, BASIS_LZ, LINEAR], ['earth-clouds', 4096, BASIS_LZ, LINEAR],
   ] as const
 
   it.each(files)('%s at %i', (key, width, scheme, transfer) => {

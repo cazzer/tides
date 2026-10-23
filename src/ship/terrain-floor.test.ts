@@ -11,6 +11,7 @@ import {
   TERRAIN_MAP_SIZE,
   buildTerrainFloor,
   terrainFloorGrey,
+  terrainFloorGreyAround,
   terrainFloorRadius,
 } from './terrain-floor'
 
@@ -174,6 +175,62 @@ describe('terrain floor (tides-01v.8.3)', () => {
       }
     }
   }, 60_000)
+
+  // The same build over the limb sphere's own cells (tides-42p), for while it
+  // is the ground drawn: it need only cover that mesh.
+  const limbFloor = buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS)
+  const limbMeshes = meshes.filter(({ segments }) => segments === LIMB_SEGMENTS)
+
+  it.each(Object.keys(REGIONS) as (keyof typeof REGIONS)[])(
+    'over its own cells, never reads below the limb sphere over the %s, nor above the coarse floor',
+    (region) => {
+      for (const local of sweep(region, 3000)) {
+        const radius = terrainFloorRadius(limbFloor, EARTH_RADIUS, local)
+        for (const { source, mesh } of limbMeshes) {
+          expect(radius, `${local.toArray()} from ${source}`).toBeGreaterThanOrEqual(meshRadius(mesh, LIMB_SEGMENTS, local))
+        }
+        expect(radius).toBeLessThanOrEqual(terrainFloorRadius(floor, EARTH_RADIUS, local) + 1e-12)
+      }
+    },
+    60_000
+  )
+
+  it('over its own cells, never reads below the limb sphere anywhere, the poles and date line too', () => {
+    const rand = random(42)
+    const directions = [
+      ...Array.from({ length: 6000 }, () => latLonToLocal((Math.asin(2 * rand() - 1) * 180) / Math.PI, 360 * rand() - 180)),
+      ...Array.from({ length: 1000 }, () => latLonToLocal(80 + 10 * rand(), 360 * rand() - 180)),
+      ...Array.from({ length: 1000 }, () => latLonToLocal(-90 + 10 * rand(), 360 * rand() - 180)),
+      ...Array.from({ length: 1000 }, () => latLonToLocal(160 * rand() - 80, 178 + 4 * rand())),
+    ]
+    for (const local of directions) {
+      const radius = terrainFloorRadius(limbFloor, EARTH_RADIUS, local)
+      for (const { mesh } of limbMeshes) expect(radius).toBeGreaterThanOrEqual(meshRadius(mesh, LIMB_SEGMENTS, local))
+    }
+  }, 60_000)
+
+  it("takes the floor's highest within an angle of a direction, poles and date line included", () => {
+    const rand = random(7)
+    const angle = 0.004 / EARTH_RADIUS
+    const side = new THREE.Vector3()
+    const at = new THREE.Vector3()
+    const directions = [
+      ...sweep('Himalaya', 400),
+      ...sweep('Andes', 400),
+      ...Array.from({ length: 200 }, () => latLonToLocal(-89.9 + 179.8 * rand(), 179 + 2 * rand())),
+      latLonToLocal(89.95, 10),
+      latLonToLocal(-89.95, -120),
+    ]
+    for (const local of directions) {
+      const around = terrainFloorGreyAround(limbFloor, local, angle)
+      expect(around).toBeGreaterThanOrEqual(terrainFloorGrey(limbFloor, local))
+      for (let k = 0; k < 48; k++) {
+        side.randomDirection().cross(local).normalize()
+        at.copy(local).applyAxisAngle(side, angle * Math.sqrt(rand()))
+        expect(around, `${local.toArray()}`).toBeGreaterThanOrEqual(terrainFloorGrey(limbFloor, at) - 1e-6)
+      }
+    }
+  })
 
   it('stays close over the ocean and under the highest peak plus the margin', () => {
     // A level of JPEG noise on top of the margin.

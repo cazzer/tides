@@ -80,15 +80,16 @@ export const MARCH_MAP_WIDTH = 2048
 // (tides-01v.8.19): under the clearance, so cloud over level ground keeps
 // all of its opacity.
 export const GROUND_FADE = 0.005
-// Steps for the longest path a march can take: a ray grazing the layer's
-// base, from its top in and out again (sea level is Earth's scene radius,
-// as EarthRenderer sets it). Short of that, a grazing ray's samples
-// straddle the tops and the limb stair-steps along them (tides-01v.9).
-// A march from inside the shell covers part of that chord, so it holds there.
+// Steps for the longest path a march can take: a ray from the layer's top
+// grazing the sea, under every base, and out again (sea level is Earth's
+// scene radius, as EarthRenderer sets it); one from outside stops at the
+// base, inside that. Short of that, a grazing ray's samples straddle the
+// tops and the limb stair-steps along them (tides-01v.9). Since the base
+// rose to CLOUD_CLEARANCE 0.012 (tides-42p), the sea-grazing chord is 4%
+// longer than the base-grazing one the count was first taken over.
 const SEA_LEVEL = sceneRadius(2000 * EARTH_RADIUS_KM)
 export const MARCH_STEPS = Math.ceil(
-  (2 * Math.sqrt((SEA_LEVEL + CLOUD_LAYER_TOP) ** 2 - (SEA_LEVEL + CLOUD_CLEARANCE) ** 2)) /
-    MARCH_STEP
+  (2 * Math.sqrt((SEA_LEVEL + CLOUD_LAYER_TOP) ** 2 - SEA_LEVEL ** 2)) / MARCH_STEP
 )
 
 // Height field shared by the cloud shell and the ground's shadow.

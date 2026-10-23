@@ -10,11 +10,18 @@ import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN } from './flight'
-import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
+import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
-import { shipNear } from './ship-session'
-import { earthTerrain, loadEarthTerrain, terrainFloorRadius } from './terrain-floor'
+import { SHIP_FOV, shipNear } from './ship-session'
+import {
+  earthLimbTerrain,
+  earthTerrain,
+  loadEarthTerrain,
+  terrainFloorGreyAround,
+  terrainFloorRadius,
+} from './terrain-floor'
+import { limbSphereInUse } from './limb-detail'
 
 // The scene draws Sun, Earth and Moon with sceneRadius(diameter) as the sphere
 // radius (solar-system.tsx), so these match what is on screen.
@@ -60,6 +67,16 @@ export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 export const EARTH_GROUND_CLEARANCE = 0.004
 
 /**
+ * How far the near plane's corners reach from the eye at Earth's stop, on
+ * screens up to 32:9 at SHIP_FOV (the FOV kick is nil that low): the limb
+ * sphere's floor holds the ship clear of the ground that far around it
+ * (terrainFloorGreyAround), not only straight down (tides-42p).
+ */
+export const EARTH_FLOOR_REACH =
+  shipNear(EARTH_GROUND_CLEARANCE) *
+  Math.sqrt(1 + Math.tan(THREE.MathUtils.degToRad(SHIP_FOV / 2)) ** 2 * (1 + (32 / 9) ** 2))
+
+/**
  * The slowest the speed cap falls to near Earth's ground on the high tier
  * (flight.ts speedFloor), units/s: the cloud deck's few hundredths of a unit
  * take a second or two to cross, where V_NORMAL went through a column a
@@ -97,7 +114,11 @@ const DEG = Math.PI / 180
 // mesh tilts about X, then spins about the tilted Y (body-transform.ts), so
 // world → local undoes the spin after the tilt. On the high tier the ship
 // stops on it: the hard sphere drops to the bare sphere's clearance, which
-// the floor never reads below. On the low tier the shells' stop stays.
+// the floor never reads below. On the low tier the shells' stop stays. While
+// EarthRenderer's ground holds the limb sphere (its radius is EARTH_RADIUS),
+// the floor is that sphere's own, low enough to fly under the cloud base over
+// most lowland (tides-42p); the ground swaps back only far out, where the
+// floor is far below the ship.
 function earthStop(
   tier: QualityTier
 ): Pick<ShipBody, 'collisionRadius' | 'ground' | 'groundClearance' | 'minSpeed' | 'turnTo'> {
@@ -107,8 +128,13 @@ function earthStop(
   const low = tier === 'low'
   return {
     collisionRadius: low ? EARTH_COLLISION_RADIUS : EARTH_RADIUS + EARTH_GROUND_CLEARANCE,
-    ground: (direction) =>
-      terrainFloorRadius(earthTerrain(), EARTH_RADIUS, local.copy(direction).applyQuaternion(toLocal)),
+    ground: (direction) => {
+      local.copy(direction).applyQuaternion(toLocal)
+      const fine = limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null
+      if (!fine) return terrainFloorRadius(earthTerrain(), EARTH_RADIUS, local)
+      const grey = terrainFloorGreyAround(fine, local, EARTH_FLOOR_REACH / EARTH_RADIUS)
+      return EARTH_RADIUS + (TERRAIN_DISPLACEMENT * grey) / 255
+    },
     groundClearance: EARTH_GROUND_CLEARANCE,
     minSpeed: low ? undefined : EARTH_GROUND_SPEED,
     turnTo: (t) => {

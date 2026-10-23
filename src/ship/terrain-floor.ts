@@ -27,12 +27,15 @@
 //      the axis a ray meets every fan's apex at once.
 //
 // The limb mesh (LIMB_SEGMENTS, 512 × 256) nests inside FLOOR_CELLS' cells,
-// so one floor covers both. TERRAIN_GREY_MARGIN absorbs JPEG decoders
-// disagreeing by a level or two.
+// so one floor covers both. While the limb sphere is the one drawn, the same
+// build over its own cells (earthLimbTerrain) covers it alone, much nearer
+// the ground: the coarse floor stands above the cloud base over nearly all
+// land (tides-42p). TERRAIN_GREY_MARGIN absorbs JPEG decoders disagreeing by
+// a level or two.
 
 import * as THREE from 'three'
 import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
-import type { SphereSegments } from './limb-detail'
+import { LIMB_SEGMENTS, type SphereSegments } from './limb-detail'
 import terrainUrl from '../assets/earth-terrain-max.bin?url'
 
 /** earth-terrain-max.bin's size: blocks across (longitude) and down. */
@@ -144,8 +147,57 @@ export function terrainFloorRadius(
   return radius + (TERRAIN_DISPLACEMENT * grey) / 255
 }
 
-// Earth's floor, once loaded. Shared by every set of ship bodies.
+const AROUND = 8
+/** Grey levels terrainFloorGreyAround adds for its octagon's sides. */
+const AROUND_SLACK = 0.5
+const _t1 = new THREE.Vector3()
+const _t2 = new THREE.Vector3()
+const _at = new THREE.Vector3()
+
+/**
+ * terrainFloorGrey's highest within `angle` radians of `local`, for a floor
+ * the ship must clear across its near plane, not only under it (tides-42p):
+ * a fine floor's slopes come within a near plane's reach. Between cell
+ * centres the floor is bilinear, a saddle with no peak inside a cell, so over
+ * the disc it peaks on the rim or at a centre within it: this takes the
+ * corners of an octagon around the rim and any centre inside, plus
+ * AROUND_SLACK for the bilinear's bow along a side (a cell is ~10 reaches
+ * across, so it bows by hundredths of a level).
+ */
+export function terrainFloorGreyAround(floor: TerrainFloor, local: THREE.Vector3, angle: number): number {
+  const { width, height, grey } = floor
+  let top = terrainFloorGrey(floor, local)
+  const rim = angle / Math.cos(Math.PI / AROUND)
+  _t1.set(0, 1, 0)
+  if (Math.abs(local.y) > 0.9) _t1.set(1, 0, 0)
+  _t1.cross(local).normalize()
+  _t2.copy(local).cross(_t1)
+  const c = Math.cos(rim)
+  const s = Math.sin(rim)
+  for (let k = 0; k < AROUND; k++) {
+    const phi = (2 * Math.PI * k) / AROUND
+    _at.copy(local).multiplyScalar(c).addScaledVector(_t1, s * Math.cos(phi)).addScaledVector(_t2, s * Math.sin(phi))
+    top = Math.max(top, terrainFloorGrey(floor, _at))
+  }
+  // The cell centres around `local` (terrainFloorGrey's grid), if inside.
+  const u = Math.atan2(local.z, -local.x) / (2 * Math.PI)
+  const x0 = Math.floor((u - Math.floor(u)) * width - 0.5)
+  const y0 = Math.floor((0.5 - Math.asin(THREE.MathUtils.clamp(local.y, -1, 1)) / Math.PI) * height - 0.5)
+  for (let j = y0; j <= y0 + 1; j++) {
+    if (j < 0 || j >= height) continue
+    const lat = Math.PI / 2 - ((j + 0.5) / height) * Math.PI
+    for (let i = x0; i <= x0 + 1; i++) {
+      const lon = ((i + 0.5) / width) * 2 * Math.PI
+      _at.set(-Math.cos(lon) * Math.cos(lat), Math.sin(lat), Math.sin(lon) * Math.cos(lat))
+      if (_at.dot(local) >= c) top = Math.max(top, grey[j * width + ((i + width) % width)])
+    }
+  }
+  return top + AROUND_SLACK
+}
+
+// Earth's floors, once loaded. Shared by every set of ship bodies.
 let earthFloor: TerrainFloor | null = null
+let earthLimbFloor: TerrainFloor | null = null
 let loading = false
 
 /** Earth's terrain floor, or null until loadEarthTerrain has finished. */
@@ -153,9 +205,20 @@ export function earthTerrain(): TerrainFloor | null {
   return earthFloor
 }
 
-/** Replace Earth's floor (null drops back to the fallback); for tests. */
-export function setEarthTerrain(floor: TerrainFloor | null): void {
+/**
+ * Earth's floor over the limb sphere alone (tides-42p): the same build with
+ * LIMB_SEGMENTS' cells, so a peak holds the floor up over ~2° rather than
+ * the 128 × 128 sphere's ~8°. Under it the drawn ground must be the limb
+ * sphere; null until loaded, or when set without one.
+ */
+export function earthLimbTerrain(): TerrainFloor | null {
+  return earthLimbFloor
+}
+
+/** Replace Earth's floors (null drops back to the fallback); for tests. */
+export function setEarthTerrain(floor: TerrainFloor | null, limbFloor: TerrainFloor | null = null): void {
   earthFloor = floor
+  earthLimbFloor = limbFloor
 }
 
 /**
@@ -172,7 +235,9 @@ export function loadEarthTerrain(): void {
       return response.arrayBuffer()
     })
     .then((buffer) => {
-      earthFloor = buildTerrainFloor(new Uint8Array(buffer))
+      const pooled = new Uint8Array(buffer)
+      earthFloor = buildTerrainFloor(pooled)
+      earthLimbFloor = buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS)
     })
     .catch((error: unknown) => {
       loading = false
