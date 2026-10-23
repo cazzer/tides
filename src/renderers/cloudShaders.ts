@@ -17,8 +17,10 @@
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
 import {
+  type EyeSample,
   airMass,
   ceilingReach,
+  cloudFrame,
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
@@ -30,9 +32,11 @@ import {
   DETAIL_OCTAVES,
   DETAIL_OCTAVES_FLAT,
   EARTH_RADIUS_KM,
+  eyePastOffsets,
+  FOG_EASE_SAMPLES,
+  FOG_EASE_SECONDS,
   FOG_PATH,
   FOG_SOFT,
-  FOG_SOFT_REDUCED,
   MAX_CLOUD_TOP_KM,
   MIN_MEASURED_TOP_KM,
   SUNBEAM_FLOOR_KM,
@@ -152,6 +156,49 @@ float cloudLod(float footprint) {
 }
 `
 
+// With reduced motion (FOG_EASE), fog thickens over the eye's first
+// FOG_EASE_SECONDS in a cloud (tides-01v.8.15) from the cloud as its side
+// looked from just outside, so that flying in neither flashes white nor
+// shows what lies past the wall. uFogPast holds where the eye was, among
+// the clouds (which drift), at FOG_EASE_SAMPLES times over those seconds
+// back, less where it is now; the vertex stage reads how long the march's
+// start has been in a cloud from it, the same at every vertex.
+const FOG_EASE_GLSL = /* glsl */ `
+#define FOG_EASE_SAMPLES ${FOG_EASE_SAMPLES}
+uniform vec3 uFogPast[FOG_EASE_SAMPLES];
+varying float vFogEase;
+
+// How far inside a cloud q is, in its column's thickness, and over showing:
+// at most 0 outside it. Read at the mip the march reads near the eye
+// (cloudMarchLod() for a step across).
+float cloudFogInside(vec3 q) {
+  float r = length(q);
+  vec2 uv = cloudUv(q / r);
+  float lod = max(0.0, log2(float(textureSize(uCloudMap, 0).x) / ${f(MARCH_MAP_WIDTH)}));
+  vec4 col = cloudColumn(uv, lod, cloudTerrain(uv));
+  float alt = r - uSeaLevel;
+  return min(min(alt - col.y, col.z - alt) / max(col.z - col.y, 1e-6), col.x - ${f(CLOUD_MIN_ALPHA)});
+}
+
+// How far the fog of a march from q has eased in (fogEaseShare()): the
+// share of FOG_EASE_SECONDS since q, moved as the eye has, was last out of
+// the cloud, smoothed. A still eye's, all of it; one moving outside a
+// cloud, none, for the cloud the near plane is about to enter.
+float cloudFogEase(vec3 q) {
+  if (dot(uFogPast[FOG_EASE_SAMPLES - 1], uFogPast[FOG_EASE_SAMPLES - 1]) < 1e-12) return 1.0;
+  float prev = cloudFogInside(q);
+  if (prev <= 0.0) return 0.0;
+  for (int k = 0; k < FOG_EASE_SAMPLES; k++) {
+    float inside = cloudFogInside(q + uFogPast[k]);
+    if (inside <= 0.0) {
+      return smoothstep(0.0, 1.0, (float(k) + prev / (prev - inside)) / float(FOG_EASE_SAMPLES));
+    }
+    prev = inside;
+  }
+  return 1.0;
+}
+`
+
 const VERTEX = /* glsl */ `
 #include <common>
 ${ECLIPSE_GLSL.vertexHead}
@@ -164,6 +211,10 @@ varying vec3 vEye;
 varying float vViewDepth;
 varying float vNear;
 varying vec3 vEclipseEye;
+#ifdef FOG_EASE
+${FIELD}
+${FOG_EASE_GLSL}
+#endif
 #endif
 
 void main() {
@@ -188,6 +239,11 @@ void main() {
   vEclipseEye = eclipsePoint(vEye);
   vViewDepth = -view.z;
   vNear = isOrthographic ? 0.0 : projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+  #ifdef FOG_EASE
+  // At the near plane's centre, where the march starts: the same at every
+  // vertex.
+  vFogEase = cloudFogEase(vEye + transpose(mat3(modelViewMatrix)) * vec3(0.0, 0.0, -vNear));
+  #endif
   gl_Position = projectionMatrix * view;
   #else
   gl_Position = projectionMatrix * viewMatrix * world;
@@ -210,6 +266,11 @@ varying vec3 vEye;
 varying float vViewDepth;
 varying float vNear;
 varying vec3 vEclipseEye;
+// The hit's own point for the eclipse: the vertex's lies past the globe.
+uniform mat4 modelMatrix;
+uniform vec2 uEclipseBody;
+${ECLIPSE_GLSL.point}
+#define CLOUD_ECLIPSE_HIT eclipsePoint(p)
 // The highest ground the relief layer's bump map holds.
 #define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
 // How far past a flank its cloud is read, and how many steps past a side.
@@ -222,7 +283,7 @@ varying vec3 vEclipseEye;
 // The mip whose tops stand for those around the camera: about 8 texels.
 #define NEAR_TOPS_LOD 3.0
 
-uniform float uFogSoft;
+#define FOG_SOFT ${f(FOG_SOFT)}
 // Where the fog lets so little through that what lies past it can't show.
 #define FOG_OPAQUE 0.004
 // The fog's own steps per march step, over the column and altitude
@@ -235,6 +296,11 @@ uniform float uFogSoft;
 #define CLOUD_VEIL { if (sVeil < 0.0) { sVeil = sHit; colVeil = colIn; upVeil = upThrough; } veilClear *= sideClear; side = false; sHit = -1.0; }
 // A ray that meets no cloud past its fog draws the fog alone.
 #define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), 0.0, vec3(0.0), 0.0); return; } discard; }
+#ifdef FOG_EASE
+// With reduced motion, how far the fog has eased in (FOG_EASE_GLSL): the
+// same at every vertex, so the same here but for rounding.
+varying float vFogEase;
+#endif
 
 // The cloud ceiling (../cloud-layer.ts cloudCeiling()): its texels' greys,
 // rows north first, and how far along a ray above it stays within its arc
@@ -253,7 +319,7 @@ float cloudCeilingRadius(vec3 q) {
     + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * uCloudMaxKm;
 }
 
-// The ground mesh's altitude under up (unit): within reach, the limb
+// The ground mesh's altitude at uv (cloudUv()): within reach, the limb
 // sphere's (LIMB_SEGMENTS), its vertices raised by the bump map as three's
 // displacement reads it (the base level, at the vertex), and flat between
 // them over each of a quad's two triangles. The columns stand on the ground
@@ -263,8 +329,7 @@ float cloudCeilingRadius(vec3 q) {
 float cloudGroundAt(vec2 vertex) {
   return textureLod(uTerrainMap, vec2(vertex.x, GROUND_SEGMENTS.y - vertex.y) / GROUND_SEGMENTS, 0.0).r;
 }
-float cloudGround(vec3 up) {
-  vec2 uv = cloudUv(up);
+float cloudGround(vec2 uv) {
   // Vertex columns east from the dateline, rows south from the pole; each
   // quad split from its north-west corner to its south-east.
   vec2 cell = vec2(uv.x, 1.0 - uv.y) * GROUND_SEGMENTS;
@@ -329,6 +394,7 @@ void cloudOut(vec4 color, float z, vec3 haze, float share) {
 #else
 #define CLOUD_MISS discard
 #define CLOUD_VEILED false
+#define CLOUD_ECLIPSE_HIT vEclipsePoint
 #endif
 
 #define RELIEF 1.2
@@ -496,8 +562,19 @@ float cloudFogDensity(vec4 col) {
 }
 float cloudFogEdge(vec4 col, float alt) {
   float inside = min(alt - col.y, col.z - alt);
-  return inside <= 0.0 ? 0.0 : smoothstep(0.0, uFogSoft * (col.z - col.y), inside);
+  return inside <= 0.0 ? 0.0 : smoothstep(0.0, FOG_SOFT * (col.z - col.y), inside);
 }
+#ifdef FOG_EASE
+// cloudPathClear()'s extinction: a side's, which the fog eases from.
+float cloudSideDensity(vec4 col) {
+  return col.x < CLOUD_MIN_ALPHA ? 0.0 : -log(1.0 - min(col.x, 0.995)) / max(col.z - col.y, 1e-4);
+}
+// The fog's extinction sigma (density times edge, cloudFogEdge()), eased
+// by ease from the side's density, which is all or none.
+float cloudFogEased(float sigma, float side, float edge, float ease) {
+  return ease < 1.0 ? mix(edge > 0.0 ? side : 0.0, sigma, ease) : sigma;
+}
+#endif
 #endif
 
 void main() {
@@ -552,10 +629,14 @@ void main() {
   // Whether the camera is above the tops around it.
   bool fromAbove = false;
   // Whether the march started in a cloud, and that cloud's fog: how much
-  // light gets through it, and how much it sends back (tides-01v.8.6).
+  // light gets through it, and how much it sends back (tides-01v.8.6); and
+  // with reduced motion, how far it has eased in.
   bool fogged = false;
   float fogClear = 1.0;
   vec3 fogLight = vec3(0.0);
+#ifdef FOG_EASE
+  float fogEase = 1.0;
+#endif
 #endif
 
 #if defined(CLOUD_FLAT) && defined(FLIP_SIDED)
@@ -654,8 +735,12 @@ void main() {
   // on, grazing rays would find sides along every far edge, a step apart.
   // Mirrored by cloud-layer.ts marchCrossing. A march that starts in a cloud
   // crosses its fog first (fogExtinction()), to where it leaves that cloud,
-  // and from there on as from anywhere else; past the fog, it ends at the
-  // ground, which no longer hides what lies beyond (gl_FragDepth below).
+  // and from there on as from anywhere else. Past the fog's start, whose
+  // depth the depth test then sees (gl_FragDepth below), nothing hides what
+  // lies beyond the ground, so the march ends where it goes under the
+  // ground mesh itself (cloudGround()), within the step: into a ridge, not
+  // only the ground the columns stand on (tides-01v.8.13). The mesh's
+  // vertices lie a few steps apart.
   float sPrev = sStart;
   float altPrev = 0.0;
   float gapPrev = 0.0;
@@ -672,6 +757,11 @@ void main() {
   vec4 colFog = vec4(0.0);
   vec4 colPrev = vec4(0.0);
   float densityPrev = 0.0;
+  // Past the fog's start, how far above the ground mesh the last step was.
+  float groundPrev = 0.0;
+#ifdef FOG_EASE
+  float sidePrev = 0.0;
+#endif
   vec2 fogShade = vec2(0.0);
   for (int i = iFirst; i <= MARCH_STEPS; i++) {
     if (i > iLast) break;
@@ -695,25 +785,40 @@ void main() {
     float gap = alt - colq.z;
     float under = colq.y - alt;
     bool inCloud = gap <= 0.0 && under <= 0.0 && colq.x >= CLOUD_MIN_ALPHA;
-    if (fogged && alt < colq.y - CLOUD_CLEARANCE) break;
+    // How much of this step lies above the ground mesh, past a fog's start,
+    // as the ray and the ground change linearly over it: past that the
+    // march ends, with what the step met short of it.
+    float clip = 1.0;
+    if (fogged) {
+      float aboveGround = alt - cloudGround(uvq);
+      // From under the mesh (its faces cull from inside), once out of it.
+      if (aboveGround < 0.0 && groundPrev > 0.0) clip = groundPrev / (groundPrev - aboveGround);
+      groundPrev = aboveGround;
+    }
     if (side) {
       // A column's alpha is its opacity top to bottom; a side is as opaque
       // as the cloud the ray goes on through, a few steps at most, to where
       // it leaves the column or the cloud thins out of showing.
       float through = min(min(cloudSpan(gapPrev, gap).y, cloudSpan(underPrev, under).y),
         cloudSpan(CLOUD_MIN_ALPHA - alphaPrev, CLOUD_MIN_ALPHA - colq.x).y);
-      sideClear *= cloudPathClear(colq.x, colq.z - colq.y, stepLen * max(through, 0.0));
-      if (sideClear < 0.02) break;
+      sideClear *= cloudPathClear(colq.x, colq.z - colq.y, stepLen * max(min(through, clip), 0.0));
+      if (clip < 1.0 || sideClear < 0.02) break;
       if (!inCloud) CLOUD_VEIL
       else if (i >= iSide + SIDE_STEPS) {
         float rest = mu > 0.0 ? -gap / mu : mu < 0.0 ? under / mu : SIDE_REST;
         sideClear *= cloudPathClear(colq.x, colq.z - colq.y, min(rest, SIDE_REST));
         if (rest >= SIDE_REST || sideClear < 0.02) break;
         CLOUD_VEIL
-        // On from where it leaves the column, out of the cloud.
+        // On from where it leaves the column, out of the cloud, unless the
+        // ground rises across the way first.
         sSkip = s + rest;
         s = sSkip;
         alt += mu * rest;
+        if (fogged) {
+          float aboveGround = alt - cloudGround(cloudUv(normalize(eye + d * s)));
+          if (aboveGround < 0.0 && groundPrev > 0.0) break;
+          groundPrev = aboveGround;
+        }
         gap = mu > 0.0 ? 1e-6 : alt - colq.z;
         under = mu < 0.0 ? 1e-6 : colq.y - alt;
       }
@@ -730,6 +835,12 @@ void main() {
         colFog = colq;
         densityPrev = cloudFogDensity(colq);
         sigmaPrev = densityPrev * cloudFogEdge(colq, alt);
+#ifdef FOG_EASE
+        fogEase = vFogEase > 0.9999 ? 1.0 : vFogEase;
+        sidePrev = cloudSideDensity(colq);
+        sigmaPrev = cloudFogEased(sigmaPrev, sidePrev, cloudFogEdge(colq, alt), fogEase);
+#endif
+        groundPrev = alt - cloudGround(uvq);
         fogClear = exp(-sigmaPrev * (s - max(sOuter, 0.0)));
         fogShade = (1.0 - fogClear)
           * vec2(clamp(-gap / max(colq.z - colq.y, 1e-6), 0.0, 1.0), colq.x);
@@ -738,18 +849,27 @@ void main() {
       if (fogging) {
         // The fog over this step, by the trapezoid rule on its own steps.
         float density = cloudFogDensity(colq);
+#ifdef FOG_EASE
+        float sideDensity = fogEase < 1.0 ? cloudSideDensity(colq) : 0.0;
+#endif
         for (int k = 1; k <= FOG_SUBSTEPS; k++) {
-          float w = float(k) / float(FOG_SUBSTEPS);
+          float w = clip * float(k) / float(FOG_SUBSTEPS);
           vec4 colk = mix(colPrev, colq, w);
           float altk = mix(altPrev, alt, w);
           float sigma = mix(densityPrev, density, w) * cloudFogEdge(colk, altk);
-          float clear = exp(-0.5 * (sigmaPrev + sigma) * stepLen / float(FOG_SUBSTEPS));
+#ifdef FOG_EASE
+          sigma = cloudFogEased(sigma, mix(sidePrev, sideDensity, w), cloudFogEdge(colk, altk), fogEase);
+#endif
+          float clear = exp(-0.5 * (sigmaPrev + sigma) * clip * stepLen / float(FOG_SUBSTEPS));
           fogShade += fogClear * (1.0 - clear)
             * vec2(clamp((colk.z - altk) / max(colk.z - colk.y, 1e-6), 0.0, 1.0), colk.x);
           fogClear *= clear;
           sigmaPrev = sigma;
         }
         densityPrev = density;
+#ifdef FOG_EASE
+        sidePrev = sideDensity;
+#endif
         if (fogClear < FOG_OPAQUE) break;
         fogging = inCloud;
       }
@@ -759,7 +879,7 @@ void main() {
         ? vec2(0.0, 1.0)
         : cloudSpan(CLOUD_MIN_ALPHA - alphaPrev, CLOUD_MIN_ALPHA - colq.x);
       float from = max(max(underTop.x, overBase.x), shows.x);
-      float until = min(min(underTop.y, overBase.y), shows.y);
+      float until = min(min(min(underTop.y, overBase.y), shows.y), clip);
       // From outside the cloud at the last step.
       if (from > 0.0 && from <= until) {
         sHit = sPrev + stepLen * from;
@@ -785,6 +905,7 @@ void main() {
         }
       }
     }
+    if (clip < 1.0) break;
     sPrev = s;
     colPrev = colq;
     altPrev = alt;
@@ -954,7 +1075,7 @@ void main() {
     occ = max(occ, cloudShade(cq.x) * smoothstep(0.0, SHADOW_SOFT, cq.z - aq));
   }
 
-  vec3 radiance = cloudRadiance(up, n, d, alpha, depth, cloudKm(col.z, col.y), occ, vEclipsePoint);
+  vec3 radiance = cloudRadiance(up, n, d, alpha, depth, cloudKm(col.z, col.y), occ, CLOUD_ECLIPSE_HIT);
 
   // Seen edge-on, a cloud is a longer path.
   float slant = 1.0 / max(abs(dot(d, up)), 0.3);
@@ -965,7 +1086,7 @@ void main() {
   float opacity = (1.0 - pow(1.0 - min(alpha, 0.995), slant)) * uOpacity;
 #ifdef FLIP_SIDED
   // Thinning into the ground, and seen through the veils in front of it.
-  opacity *= smoothstep(0.0, GROUND_FADE, r - uSeaLevel - cloudGround(up));
+  opacity *= smoothstep(0.0, GROUND_FADE, r - uSeaLevel - cloudGround(uv));
   opacity = 1.0 - (1.0 - (1.0 - veilClear) * uOpacity) * (1.0 - opacity);
   #if defined(USE_LOGARITHMIC_DEPTH_BUFFER) || defined(USE_REVERSED_DEPTH_BUFFER)
   #error "cloud layer: gl_FragDepth assumes the standard depth buffer"
@@ -1120,7 +1241,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uOpacity: { value: 0.92 },
       uSunGain: { value: (SUNLIGHT_INTENSITY / Math.PI) * CLOUD_EXPOSURE },
       uAmbient: { value: CLOUD_AMBIENT },
-      uFogSoft: { value: FOG_SOFT },
+      uFogPast: { value: Array.from({ length: FOG_EASE_SAMPLES }, () => new THREE.Vector3()) },
       uCloudCeiling: { value: ceilingTexture() },
     },
     defines,
@@ -1132,6 +1253,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     // cloud (cloudHazeFront) isn't clipped before the blend.
     premultipliedAlpha: true,
   })
+  // The eye's recent path, while the fog eases in (FOG_EASE_SECONDS).
+  const track: EyeSample[] = []
   const shellAltitude = flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP
   // The back faces within the ship camera's reach of the shell (earth-shells.ts
   // withinShellReach), the front ones elsewhere. Unlike the atmosphere's
@@ -1152,14 +1275,36 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       material.side = side
       material.needsUpdate = true
     }
-    const underAurora =
-      mesh.worldToLocal(camera.getWorldPosition(eye)).length() < seaLevel * AURORA_SHELL_INNER
+    mesh.worldToLocal(camera.getWorldPosition(eye))
+    const underAurora = eye.length() < seaLevel * AURORA_SHELL_INNER
     mesh.renderOrder = !reach
       ? 0
       : underAurora
         ? CLOUD_UNDER_AURORA_RENDER_ORDER
         : CLOUD_REACH_RENDER_ORDER
-    material.uniforms.uFogSoft.value = prefersReducedMotion() ? FOG_SOFT_REDUCED : FOG_SOFT
+    // The ease is its own program, so that without it the march pays nothing.
+    const ease = !flat && prefersReducedMotion()
+    if (('FOG_EASE' in material.defines) !== ease) {
+      if (ease) material.defines.FOG_EASE = ''
+      else delete material.defines.FOG_EASE
+      material.needsUpdate = true
+    }
+    // The eye's path among the clouds: in their frame, as they drift.
+    if (ease && reach) {
+      const t = performance.now() / 1000
+      const shift = uniforms.uCloudShift.value
+      const p = cloudFrame([eye.x, eye.y, eye.z], shift)
+      // Afresh after a break longer than the ease (other cameras render
+      // between, so leaving reach shows only as a gap).
+      if (track.length > 0 && track[track.length - 1].t < t - FOG_EASE_SECONDS) track.length = 0
+      while (track.length > 1 && track[1].t < t - FOG_EASE_SECONDS) track.shift()
+      const newest = track[track.length - 1]
+      if (newest && newest.t >= t) newest.p = p
+      else track.push({ t, p })
+      eyePastOffsets(track, FOG_EASE_SECONDS, FOG_EASE_SAMPLES).forEach((offset, k) =>
+        material.uniforms.uFogPast.value[k].fromArray(cloudFrame(offset, -shift))
+      )
+    }
     // The ceiling, once the ship is near Earth, ahead of the march from
     // inside (in a browser: elsewhere there is no asset server).
     if (!flat && !ceilingLoad && limbBody() === 'earth' && typeof window !== 'undefined') {

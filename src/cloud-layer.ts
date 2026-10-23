@@ -104,10 +104,20 @@ export function cloudPathClear(alpha: number, thickness: number, path: number): 
 export const FOG_PATH = 0.004
 
 /** How far into its column (as a share of its thickness) fog thickens from
- * nothing at the top and base: a soft edge, and with reduced motion, a
- * softer one, so flying in fades rather than flashes (tides-01v.8.6). */
+ * nothing at the top and base: a soft edge (tides-01v.8.6). */
 export const FOG_SOFT = 0.15
-export const FOG_SOFT_REDUCED = 0.5
+
+/**
+ * With reduced motion, the seconds over which fog thickens after the eye
+ * enters a cloud (tides-01v.8.15), from the cloud as its side looked from
+ * just outside (cloudPathClear()) to the fog's own (fogExtinction()); and
+ * how many points back along the eye's path over that time the shader
+ * reads to tell how long it has been in. So flying in fades in time, never
+ * flashing, at any speed, and never shows what lay past the wall; a still
+ * eye's fog is the same either way.
+ */
+export const FOG_EASE_SECONDS = 0.8
+export const FOG_EASE_SAMPLES = 6
 
 /**
  * Fog's extinction (per scene unit) at `altitude` in a column, for an eye
@@ -117,20 +127,82 @@ export const FOG_SOFT_REDUCED = 0.5
  * the column's top and base over `soft` of its thickness. None outside it,
  * or where it is a gap.
  */
-export function fogExtinction(
-  alpha: number,
-  base: number,
-  top: number,
-  altitude: number,
-  soft: number
-): number {
+export function fogExtinction(alpha: number, base: number, top: number, altitude: number): number {
   const inside = Math.min(altitude - base, top - altitude)
   if (alpha < CLOUD_MIN_ALPHA || inside <= 0) return 0
   const thickness = top - base
   return (
     ((alpha * -Math.log(1 - Math.min(alpha, 0.995))) / FOG_PATH) *
-    smoothstep(0, soft * thickness, inside)
+    smoothstep(0, FOG_SOFT * thickness, inside)
   )
+}
+
+/**
+ * The fog's extinction as it eases in (ease 0 to 1, FOG_EASE_SECONDS): from
+ * cloudPathClear()'s, the side's, to fogExtinction().
+ */
+export function easedFogExtinction(
+  alpha: number,
+  base: number,
+  top: number,
+  altitude: number,
+  ease: number
+): number {
+  const fog = fogExtinction(alpha, base, top, altitude)
+  const inside = Math.min(altitude - base, top - altitude)
+  if (ease >= 1 || alpha < CLOUD_MIN_ALPHA || inside <= 0) return fog
+  const side = -Math.log(1 - Math.min(alpha, 0.995)) / Math.max(top - base, 1e-4)
+  return side + (fog - side) * ease
+}
+
+/**
+ * How far fog has eased in (0 to 1, smoothed) for a march whose start is
+ * `insideNow` inside its cloud (in column thicknesses, at most 0 outside),
+ * and was `insidePast` inside where the eye was at evenly spaced times over
+ * FOG_EASE_SECONDS back (newest first): the share of that time since it
+ * was last out, read between the samples. Mirrored by cloudShaders.ts
+ * cloudFogEase().
+ */
+export function fogEaseShare(insideNow: number, insidePast: readonly number[]): number {
+  if (insideNow <= 0) return 0
+  let prev = insideNow
+  for (let k = 0; k < insidePast.length; k++) {
+    const inside = insidePast[k]
+    if (inside <= 0) return smoothstep(0, 1, (k + prev / (prev - inside)) / insidePast.length)
+    prev = inside
+  }
+  return 1
+}
+
+/** A point on the eye's path: seconds, and where. */
+export interface EyeSample {
+  t: number
+  p: Vec3
+}
+
+/**
+ * Where the eye was at `count` times over the last `seconds`, (k + 1) /
+ * count of them back, less where it is now (the newest of `track`, oldest
+ * first, which holds at least one sample), read between its samples;
+ * before the oldest, there.
+ */
+export function eyePastOffsets(
+  track: readonly EyeSample[],
+  seconds: number,
+  count: number
+): Vec3[] {
+  const now = track[track.length - 1]
+  const offsets: Vec3[] = []
+  let i = track.length - 1
+  for (let k = 0; k < count; k++) {
+    const t = now.t - ((k + 1) / count) * seconds
+    while (i > 0 && track[i].t > t) i--
+    const a = track[i]
+    const b = track[Math.min(i + 1, track.length - 1)]
+    const w = b.t > a.t ? Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t))) : 0
+    offsets.push([0, 1, 2].map((j) => a.p[j] + (b.p[j] - a.p[j]) * w - now.p[j]) as Vec3)
+  }
+  return offsets
 }
 
 /** One step of the cloud march: its altitude, and its column's base, top
