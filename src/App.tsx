@@ -211,12 +211,7 @@ export default function App() {
               showOrbitLabels
               onReady={readyHandler('main')}
             />
-            <OrbitControls
-              maxDistance={80}
-              minDistance={5}
-              minZoom={mainViewRange(showPlanets).minZoom}
-              makeDefault
-            />
+            <MainControls />
           </Panel>
         )}
         {!shipMode && showPanel('top') && (
@@ -370,6 +365,20 @@ function MainCamera() {
       position={[100, 80, 80]}
       zoom={MAIN_ZOOM}
       near={0}
+    />
+  )
+}
+
+// Inside the main view, so its zoom floor fits that view's size.
+function MainControls() {
+  const showPlanets = useStore((s) => s.showPlanets)
+  const size = useThree((s) => s.size)
+  return (
+    <OrbitControls
+      maxDistance={80}
+      minDistance={5}
+      minZoom={mainViewRange(showPlanets, size).minZoom}
+      makeDefault
     />
   )
 }

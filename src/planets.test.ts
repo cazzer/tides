@@ -107,9 +107,16 @@ describe('planet bands', () => {
     expect(band.mars.min).toBeGreaterThan(EARTH_ORBIT_RADIUS + MOON_ENVELOPE)
   })
 
-  test('Neptune’s aphelion surface is within 350', () => {
-    expect(band.neptune.max).toBeLessThanOrEqual(350)
-    expect(band.neptune.max).toBeGreaterThanOrEqual(300)
+  test('Neptune’s aphelion surface is 440–470 out', () => {
+    expect(band.neptune.max).toBeLessThanOrEqual(470)
+    expect(band.neptune.max).toBeGreaterThanOrEqual(440)
+  })
+
+  test('leaves 30+ units between the giant planets (tides-rg9)', () => {
+    const giants = bands.slice(PLANET_KEYS.indexOf('jupiter'))
+    for (let i = 1; i < giants.length; i++) {
+      expect(giants[i].min - giants[i - 1].max, giants[i].key).toBeGreaterThan(30)
+    }
   })
 })
 

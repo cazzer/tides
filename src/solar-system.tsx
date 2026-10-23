@@ -13,7 +13,7 @@ import ConstellationArt from './renderers/ConstellationArt'
 import SceneLights from './renderers/SceneLights'
 import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
-import { mainViewRange } from './main-view'
+import { PLANETS_STAR_RADIUS } from './main-view'
 import { OrbitLabel } from './orbit-label'
 import { LunarRing } from './LunarRing'
 import { ZodiacRing } from './ZodiacRing'
@@ -124,7 +124,7 @@ export default function SolarSystem({
       {/* Only the main view widens for the planets. */}
       <Starfield
         fromSurface={earthCamera}
-        radius={starRadius ?? mainViewRange(interactive && showPlanets).starRadius}
+        radius={starRadius ?? (interactive && showPlanets ? PLANETS_STAR_RADIUS : undefined)}
         depth={interactive}
       />
       {earthCamera && showConstellations && showConstellationArt && <ConstellationArt />}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PLANETS, sceneRadius } from '../planets'
-import { MAIN_ZOOM, PLANETS_MIN_ZOOM, planetFramingZoom } from '../main-view'
+import { MAIN_ZOOM, PLANETS_MIN_ZOOM, mainViewRange, planetFramingZoom } from '../main-view'
 import { MOON_KEYS, moonRadius, moonsOf } from '../moons/moons'
 import type { CameraFocus } from '../store'
 import {
@@ -33,6 +33,18 @@ describe('labelOpacity', () => {
     for (const key of ['sun', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'] as const) {
       expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.9)
     }
+  })
+
+  it('names the giants at a phone’s lower zoom floor, where Mars gives way', () => {
+    // Earth and Mars orbit ~11 px apart there, too close for two names.
+    const upp = at(mainViewRange(true, { width: 390, height: 844 }).minZoom)
+    for (const key of ['sun', 'earth', 'jupiter', 'saturn'] as const) {
+      expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.9)
+    }
+    for (const key of ['uranus', 'neptune'] as const) {
+      expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.4)
+    }
+    expect(labelOpacity('mars', upp, 'clock')).toBe(0)
   })
 
   it('fades Mercury and Venus in as the inner system opens up', () => {

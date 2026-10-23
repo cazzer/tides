@@ -1,7 +1,7 @@
 // Where ship mode puts the Sun, Earth and planets (tides-2hv.6).
 //
 // The system view squeezes the planets in with sceneDistance (planets.ts):
-// Neptune ~320 units out with Earth at 50, which is too tight to fly between.
+// Neptune ~450 units out with Earth at 50, which is too tight to fly between.
 // Flight spaces them at one linear scale instead, FLIGHT_UNITS_PER_AU, and
 // takes Earth's true heliocentric position too, so the Sun, Earth and every
 // planet are reality × FLIGHT_UNITS_PER_AU / KM_PER_AU: distances between

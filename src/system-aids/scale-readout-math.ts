@@ -5,7 +5,7 @@
 // only distances are squeezed (planets.ts' sceneDistance, f(r)), so along a
 // planet's orbit, around the Sun, a unit is r / f(r) of true distance, but
 // across orbits, out from the Sun, it is 1 / f′(r): at Jupiter the two
-// differ by ~2.2×, at Neptune by ~4×. The moons have scales of their own
+// differ by ~1.8×, at Neptune by ~3.6×. The moons have scales of their own
 // (moons.ts' log map; Earth's Moon at 38 440 km a unit). So the bar is
 // honest about where it holds: it measures along one body's orbit, the
 // focused body's (Earth's when the camera is on the Sun, the clock or a

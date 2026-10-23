@@ -25,7 +25,7 @@ export function drawnRings(distance: SceneDistance): readonly number[] {
 }
 
 /**
- * Points per ring. [TUNE] The 30 AU ring in the system view is ~640 units
+ * Points per ring. [TUNE] The 30 AU ring in the system view is ~900 units
  * across; at 720 its chords sag well under a hundredth of a unit.
  */
 export const RING_SEGMENTS = 720 // [TUNE]
@@ -49,7 +49,7 @@ export const LABEL_ANGLE = -Math.PI / 4 // [TUNE]
 
 /**
  * A body closer than this to a label's angle, on that label's ring, moves the
- * label aside by LABEL_NUDGE. [TUNE] Jupiter's moon system spans ~4° of the
+ * label aside by LABEL_NUDGE. [TUNE] Jupiter's moon system spans ~3° of the
  * 5 AU ring in the system view.
  */
 export const LABEL_CLEARANCE = (6 * Math.PI) / 180 // [TUNE]
