@@ -24,7 +24,6 @@ import {
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
   CLOUD_UNITS_PER_KM,
-  cloudCeiling,
   DETAIL_BASE_TEXELS,
   DETAIL_FADE_END,
   DETAIL_FADE_START,
@@ -63,7 +62,7 @@ import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './p
 import { limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
-import terrainMaxUrl from '../assets/earth-terrain-max.bin?url'
+import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 
 const f = (x: number) => x.toFixed(6)
@@ -956,7 +955,8 @@ export interface CloudLayer {
 
 const eye = new THREE.Vector3()
 
-// The cloud ceiling's texture (cloudCeiling()); until it has loaded, a
+// The cloud ceiling's texture (cloudCeiling(), built by
+// scripts/build-cloud-ceiling.mjs); until it has loaded, a
 // single texel of white, under which the march skips nothing.
 function ceilingTexture(
   grey: Uint8Array<ArrayBuffer> = new Uint8Array([255]),
@@ -968,14 +968,14 @@ function ceilingTexture(
 }
 
 async function fetchCeiling(): Promise<THREE.DataTexture> {
-  const response = await fetch(terrainMaxUrl)
+  const response = await fetch(ceilingUrl)
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
-  const pooled = new Uint8Array(await response.arrayBuffer())
+  const grey = new Uint8Array(await response.arrayBuffer())
   const [width, height] = TERRAIN_MAP_SIZE
-  if (pooled.length !== width * height) {
-    throw new Error(`terrain map is ${pooled.length} bytes, not ${width}×${height}`)
+  if (grey.length !== width * height) {
+    throw new Error(`cloud ceiling is ${grey.length} bytes, not ${width}×${height}`)
   }
-  return ceilingTexture(cloudCeiling(pooled, width, height), TERRAIN_MAP_SIZE)
+  return ceilingTexture(grey, TERRAIN_MAP_SIZE)
 }
 
 export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLayer {

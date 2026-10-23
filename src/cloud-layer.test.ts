@@ -352,6 +352,15 @@ describe('cloud ceiling', () => {
     expect(at(28, 87)).toBeGreaterThanOrEqual(Math.round(TERRAIN_MAX_GREY * 255))
   })
 
+  it('ships as built (scripts/build-cloud-ceiling.mjs)', () => {
+    const shipped = new Uint8Array(
+      readFileSync(new URL('./assets/earth-cloud-ceiling.bin', import.meta.url))
+    )
+    expect(shipped.length).toBe(W * H)
+    // The first texel that differs, if any.
+    expect(shipped.findIndex((grey, k) => grey !== ceiling[k])).toBe(-1)
+  })
+
   it('reaches no further along a path above the sea than its arc', () => {
     const sea = 2.95
     const reach = ceilingReach(sea)

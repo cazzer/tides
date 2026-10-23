@@ -1,0 +1,3 @@
+# Data assets (src/assets/*.bin); some hold no zero byte, which git would
+# otherwise take for text.
+*.bin binary
