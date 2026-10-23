@@ -215,37 +215,49 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
 
   it('meets a top from above only where the cloud there shows', () => {
     const top = marchCrossing(at(0.024, 0.022, solid), at(0.02, 0.022, solid))
-    expect(top).toEqual({ at: expect.closeTo(0.5, 9), side: false, depth: 0 })
+    expect(top).toEqual({ at: expect.closeTo(0.5, 9), until: 1, side: false, depth: 0 })
     expect(marchCrossing(at(0.009, 0.0075, clear), at(0.0055 + 0.0015, 0.0075, clear))).toBeNull()
     expect(marchCrossing(at(0.026, 0.022, solid), at(0.024, 0.022, solid))).toBeNull()
   })
 
   it('meets tops as from outside from above the deck', () => {
     const faint = marchCrossing(at(0.009, 0.0075, clear), at(0.007, 0.0075, clear), true)
-    expect(faint).toEqual({ at: expect.closeTo(0.75, 9), side: false, depth: 0 })
+    expect(faint).toEqual({ at: expect.closeTo(0.75, 9), until: 1, side: false, depth: 0 })
   })
 
-  it('meets a base from below where the cloud shows, and passes up through a gap', () => {
+  it('goes up through a base where the cloud shows, as through a side, and up through a gap', () => {
     const below = at(0.003, 0.03, solid)
     expect(marchCrossing(below, at(0.007, 0.03, solid))).toEqual({
       at: expect.closeTo(0.75, 9),
-      side: false,
-      depth: 1,
+      until: 1,
+      side: true,
+      depth: null,
     })
     expect(marchCrossing({ ...below, alpha: clear }, at(0.007, 0.0075, clear))).toBeNull()
-    // A thin column crossed whole in one step still counts.
-    expect(marchCrossing(below, at(0.014, 0.01, solid))!.at).toBeCloseTo(0.003 / 0.011, 9)
+    // A thin column crossed whole in one step still counts, as far as its top.
+    const thin = marchCrossing(below, at(0.014, 0.01, solid))!
+    expect(thin.at).toBeCloseTo(0.003 / 0.011, 9)
+    expect(thin.until).toBeCloseTo(0.027 / 0.031, 9)
     expect(marchCrossing(below, at(0.005, 0.03, solid))).toBeNull()
   })
 
   it('meets a side from a gap within the deck', () => {
     const gap = at(0.007, 0.0075, 0)
     const hit = marchCrossing(gap, at(0.007, 0.03, 0.2))!
-    expect(hit).toEqual({ at: expect.closeTo(CLOUD_MIN_ALPHA / 0.2, 9), side: true, depth: null })
+    expect(hit).toEqual({ at: expect.closeTo(CLOUD_MIN_ALPHA / 0.2, 9), until: 1, side: true, depth: null })
     expect(marchCrossing(gap, at(0.007, 0.0075, clear))).toBeNull()
-    // Within a cloud already, or leaving the deck, nothing new.
+    // Within a cloud already, or leaving the deck before the cloud shows,
+    // nothing new.
     expect(marchCrossing({ ...gap, top: 0.03, alpha: solid }, at(0.007, 0.03, solid))).toBeNull()
-    expect(marchCrossing(gap, at(0.009, 0.0075, solid))).toBeNull()
+    expect(marchCrossing(gap, at(0.009, 0.0075, 0.05))).toBeNull()
+  })
+
+  it('meets cloud the ray clips between two steps', () => {
+    // Out of the deck by the next step, but in the cloud a while before.
+    const hit = marchCrossing(at(0.007, 0.0075, 0), at(0.009, 0.0075, solid))!
+    expect(hit.at).toBeCloseTo(CLOUD_MIN_ALPHA / solid, 9)
+    expect(hit.until).toBeCloseTo(0.25, 9)
+    expect(hit.side).toBe(true)
   })
 
   it('takes a wall met from a gap above its faint top for a side', () => {
@@ -262,7 +274,7 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
     // Half way the cloud is still under CLOUD_MIN_ALPHA; past that, solid.
     const hit = marchCrossing(at(0.0085, 0.0075, 0), at(0.0065, 0.0075, 0.03))!
     const t = (CLOUD_MIN_ALPHA - 0.015) / (0.03 - 0.015)
-    expect(hit).toEqual({ at: expect.closeTo(0.5 + 0.5 * t, 9), side: true, depth: null })
+    expect(hit).toEqual({ at: expect.closeTo(0.5 + 0.5 * t, 9), until: 1, side: true, depth: null })
   })
 
   it('shades by how far down its column a hit lies', () => {

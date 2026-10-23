@@ -14,6 +14,10 @@
 #   map, so Mercury (grey, saturation 0.007) is encoded from greyscale.
 # - Jupiter, Saturn, Venus: UASTC with RDO (~4 MB at 4k). ETC1S left visible
 #   hue patches in their smooth bands.
+# - Earth's static clouds (tides-01v.12): ETC1S from greyscale, ~6 MB at 8k
+#   (UASTC was 8 MB at 4k). The map is data, the cloud shader's opacity, so
+#   it is tagged linear, and toned to match earth-clouds.jpg, the 2k map it
+#   replaces up close (fit by least squares on the 8k map cut to 2k).
 # -y_flip: three never flips compressed textures on upload.
 #
 # Needs ImageMagick and basisu (brew install imagemagick basis_universal).
@@ -33,17 +37,18 @@ done
 ETC1S=(-etc1s -q 255)
 UASTC=(-uastc -uastc_level 2 -uastc_rdo_l 3)
 
-# key | source | sizes | codec | extra magick options
+# key | source | sizes | codec | transfer | extra magick options
 BODIES=(
-  "mars|8k_mars.jpg|8k 4k|etc1s|"
-  "mercury|8k_mercury.jpg|8k 4k|etc1s|-colorspace gray"
-  "jupiter|8k_jupiter.jpg|4k|uastc|"
-  "saturn|8k_saturn.jpg|4k|uastc|"
-  "venus|4k_venus_atmosphere.jpg|4k|uastc|"
+  "mars|8k_mars.jpg|8k 4k|etc1s|srgb|"
+  "mercury|8k_mercury.jpg|8k 4k|etc1s|srgb|-colorspace gray"
+  "jupiter|8k_jupiter.jpg|4k|uastc|srgb|"
+  "saturn|8k_saturn.jpg|4k|uastc|srgb|"
+  "venus|4k_venus_atmosphere.jpg|4k|uastc|srgb|"
+  "earth-clouds|8k_earth_clouds.jpg|8k 4k|etc1s|linear|-function Polynomial 1.031,0.0117"
 )
 
 for row in "${BODIES[@]}"; do
-  IFS='|' read -r key source sizes codec extra <<<"$row"
+  IFS='|' read -r key source sizes codec transfer extra <<<"$row"
   src="$DL/$source"
   if [[ ! -s "$src" ]]; then
     echo "Downloading $source"
@@ -61,7 +66,7 @@ for row in "${BODIES[@]}"; do
     png="$DL/$key-$size.png"
     # shellcheck disable=SC2086 # $extra is a list of magick options
     magick "$src" -resize "${width}x$(( width / 2 ))!" $extra -colorspace sRGB -type TrueColor "$png"
-    basisu "${options[@]}" -mipmap -y_flip -srgb "$png" -output_file "$OUT/$key-$size.ktx2" >/dev/null
+    basisu "${options[@]}" -mipmap -y_flip "-$transfer" "$png" -output_file "$OUT/$key-$size.ktx2" >/dev/null
     echo "$OUT/$key-$size.ktx2 $(wc -c <"$OUT/$key-$size.ktx2" | tr -d ' ') bytes"
   done
 done

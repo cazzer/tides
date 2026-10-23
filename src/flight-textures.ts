@@ -1,11 +1,13 @@
 // The flight-only high-res maps (tides-01v.6): KTX2 (Basis ETC1S and UASTC)
 // builds of the planets' maps, made by scripts/build-flight-textures.sh and
 // fetched only in ship mode as the ship nears each body. Until one arrives,
-// and wherever it can't load, the planet keeps its 2k map. Earth's clouds
-// stay 2k: the cloud march, tuned to that map, terraces sharper ones.
+// and wherever it can't load, the planet keeps its 2k map. Earth's static
+// clouds have one too (tides-01v.12), read by the cloud march no sharper than
+// the 2k map it was tuned to (cloudShaders.ts cloudMarchLod()); real weather
+// keeps its own frames.
 import type * as THREE from 'three'
 
-export const FLIGHT_TEXTURE_KEYS = ['mars', 'mercury', 'jupiter', 'saturn', 'venus'] as const
+export const FLIGHT_TEXTURE_KEYS = ['mars', 'mercury', 'jupiter', 'saturn', 'venus', 'earth-clouds'] as const
 export type FlightTextureKey = (typeof FLIGHT_TEXTURE_KEYS)[number]
 
 const URLS = import.meta.glob<string>('./assets/flight/*.ktx2', {
