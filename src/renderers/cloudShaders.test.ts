@@ -8,8 +8,12 @@ import {
   CLOUD_MIN_ALPHA,
   cloudPathClear,
   columnDepth,
+  easedFogExtinction,
+  eyePastOffsets,
+  FOG_EASE_SAMPLES,
+  FOG_EASE_SECONDS,
   FOG_SOFT,
-  FOG_SOFT_REDUCED,
+  fogEaseShare,
   fogExtinction,
   marchCrossing,
   marchSpanFromEye,
@@ -159,11 +163,15 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
       const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
       const defines = new Set(flat ? ['CLOUD_FLAT'] : [])
       const { vertexShader, fragmentShader } = clouds.material
-      for (const name of ['gl_FragDepth', 'vEye', 'sNear']) {
+      for (const name of ['gl_FragDepth', 'vEye', 'sNear', 'eclipsePoint(p)']) {
         expect(preprocess(fragmentShader, defines)).not.toContain(name)
         expect(preprocess(fragmentShader, new Set([...defines, 'FLIP_SIDED']))).toContain(name)
       }
       expect(preprocess(vertexShader, defines)).toContain('projectionMatrix * viewMatrix * world')
+      // Reduced motion's fog ease leaves it as it was too.
+      for (const source of [vertexShader, fragmentShader]) {
+        expect(preprocess(source, new Set([...defines, 'FOG_EASE']))).toBe(preprocess(source, defines))
+      }
       clouds.dispose()
     })
 
@@ -291,7 +299,13 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
     expect(cloudPathClear(0, 0.01, 1)).toBe(1)
   })
 
-  for (const variant of [[], ['CLOUD_FLAT'], ['FLIP_SIDED'], ['CLOUD_FLAT', 'FLIP_SIDED']]) {
+  for (const variant of [
+    [],
+    ['CLOUD_FLAT'],
+    ['FLIP_SIDED'],
+    ['CLOUD_FLAT', 'FLIP_SIDED'],
+    ['FLIP_SIDED', 'FOG_EASE'],
+  ]) {
     it(`declares what the program reads (${variant.join('+') || 'relief'})`, () => {
       // Without a WebGL context, a guard against names one branch defines
       // and the shared code reads.
@@ -309,6 +323,9 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
         'fogged',
         'fogClear',
         'fogLight',
+        'fogEase',
+        'sidePrev',
+        'sideDensity',
       ]
       for (const name of names) {
         if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
@@ -323,8 +340,7 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
 describe('fog inside a cloud (tides-01v.8.6)', () => {
   const sea = sceneRadius(12742000)
   // A column based at 0.006 and topped at 0.03.
-  const fog = (alpha: number, altitude: number, soft = FOG_SOFT) =>
-    fogExtinction(alpha, 0.006, 0.03, altitude, soft)
+  const fog = (alpha: number, altitude: number) => fogExtinction(alpha, 0.006, 0.03, altitude)
   const clear = (sigma: number, path: number) => Math.exp(-sigma * path)
 
   it('whites out in dense cloud and only veils in thin', () => {
@@ -341,15 +357,58 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
     expect(fog(CLOUD_MIN_ALPHA / 2, 0.018)).toBe(0)
   })
 
-  it('thickens from nothing at the top and base, more softly with reduced motion', () => {
+  it('thickens from nothing at the top and base', () => {
     expect(fog(0.8, 0.03)).toBe(0)
     expect(fog(0.8, 0.006)).toBe(0)
     const deep = fog(0.8, 0.018)
     const nearTop = 0.03 - 0.5 * FOG_SOFT * 0.024
     expect(fog(0.8, nearTop)).toBeGreaterThan(0)
     expect(fog(0.8, nearTop)).toBeLessThan(deep)
-    expect(fog(0.8, nearTop, FOG_SOFT_REDUCED)).toBeLessThan(fog(0.8, nearTop))
-    expect(fog(0.8, 0.018, FOG_SOFT_REDUCED)).toBe(deep)
+  })
+
+  it('eases in from the side as seen from outside (tides-01v.8.15)', () => {
+    // Eased out, the fog over a path is the side's over it.
+    for (const alpha of [0.1, 0.4, 0.85]) {
+      const sigma = easedFogExtinction(alpha, 0.006, 0.03, 0.018, 0)
+      expect(Math.exp(-sigma * 0.01)).toBeCloseTo(cloudPathClear(alpha, 0.024, 0.01), 9)
+    }
+    // Eased in, the fog's own; between, between; outside a cloud, none.
+    expect(easedFogExtinction(0.8, 0.006, 0.03, 0.018, 1)).toBe(fog(0.8, 0.018))
+    const side = easedFogExtinction(0.8, 0.006, 0.03, 0.018, 0)
+    const half = easedFogExtinction(0.8, 0.006, 0.03, 0.018, 0.5)
+    expect(half).toBeCloseTo((side + fog(0.8, 0.018)) / 2, 9)
+    expect(easedFogExtinction(0.8, 0.006, 0.03, 0.031, 0)).toBe(0)
+    expect(easedFogExtinction(CLOUD_MIN_ALPHA / 2, 0.006, 0.03, 0.018, 0)).toBe(0)
+  })
+
+  it('times the ease from when the march\'s start was last out of the cloud', () => {
+    // In for the whole window, or never out: all of it; out now: none.
+    expect(fogEaseShare(0.5, [0.5, 0.4, 0.3, 0.2])).toBe(1)
+    expect(fogEaseShare(0, [0.5, 0.5])).toBe(0)
+    // Out between the second and third samples back, halfway: 1.5 of 4.
+    const share = fogEaseShare(0.5, [0.4, 0.2, -0.2, -0.4])
+    const t = 2.5 / 4
+    expect(share).toBeCloseTo(t * t * (3 - 2 * t), 9)
+    // Later out, more eased in.
+    expect(fogEaseShare(0.5, [-0.5, -0.5])).toBeLessThan(share)
+  })
+
+  it('reads where the eye was over the ease, between its samples', () => {
+    const track = [
+      { t: 0, p: [0, 0, 0] as [number, number, number] },
+      { t: 0.5, p: [1, 0, 0] as [number, number, number] },
+      { t: 1, p: [2, 0, 0] as [number, number, number] },
+    ]
+    const offsets = eyePastOffsets(track, 0.5, 2)
+    expect(offsets[0][0]).toBeCloseTo(-0.5, 9)
+    expect(offsets[1][0]).toBeCloseTo(-1, 9)
+    // Before the oldest sample, there; a still eye, nowhere.
+    expect(eyePastOffsets(track, 4, 2)[1][0]).toBeCloseTo(-2, 9)
+    expect(eyePastOffsets(track.slice(2), 1, 3)).toEqual([
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ])
   })
 
   for (const flat of [false, true]) {
@@ -407,19 +466,61 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
     })
   }
 
-  it('softens the fog with reduced motion', () => {
+  it('eases the fog in with reduced motion, from where the eye has been', () => {
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    clouds.uniforms.uSeaLevel.value = sea
     const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
-    const render = () => clouds.faceCamera(mesh, new THREE.PerspectiveCamera())
+    const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
+    const now = vi.spyOn(performance, 'now')
+    const renderAt = (ms: number, x: number) => {
+      now.mockReturnValue(ms)
+      camera.position.set(x, sea + 0.02, 0)
+      camera.updateMatrixWorld()
+      clouds.faceCamera(mesh, camera)
+    }
     try {
-      render()
-      expect(clouds.material.uniforms.uFogSoft.value).toBe(FOG_SOFT)
+      const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      renderAt(0, 0)
+      expect(clouds.material.defines).not.toHaveProperty('FOG_EASE')
       vi.mocked(prefersReducedMotion).mockReturnValue(true)
-      render()
-      expect(clouds.material.uniforms.uFogSoft.value).toBe(FOG_SOFT_REDUCED)
+      const version = clouds.material.version
+      // Flying along x at 0.01 a second, another camera, far off, rendering
+      // between.
+      const far = new THREE.PerspectiveCamera()
+      far.position.set(0, sea * 10, 0)
+      far.updateMatrixWorld()
+      for (let ms = 0; ms <= 2000; ms += 100) {
+        renderAt(ms, ms / 1e5)
+        clouds.faceCamera(mesh, far)
+      }
+      expect(clouds.material.defines).toHaveProperty('FOG_EASE')
+      expect(clouds.material.version).toBeGreaterThan(version)
+      const past = clouds.material.uniforms.uFogPast.value as THREE.Vector3[]
+      expect(past).toHaveLength(FOG_EASE_SAMPLES)
+      past.forEach((offset, k) => {
+        const back = ((k + 1) / FOG_EASE_SAMPLES) * FOG_EASE_SECONDS * 0.01
+        expect(offset.x).toBeCloseTo(-back, 6)
+      })
+      vi.mocked(prefersReducedMotion).mockReturnValue(false)
+      renderAt(2100, 0.021)
+      expect(clouds.material.defines).not.toHaveProperty('FOG_EASE')
     } finally {
       vi.mocked(prefersReducedMotion).mockReturnValue(false)
+      now.mockRestore()
+      clearLimbView()
       clouds.dispose()
     }
+  })
+
+  it('ends the march past its fog at the ground mesh, under a ridge too (tides-01v.8.13)', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+    // Where the ray goes under the mesh within a step, the step is cut there:
+    // its fog and what it meets short of the ground count, nothing past.
+    expect(inside).toContain('float aboveGround = alt - cloudGround(uvq);')
+    expect(inside).toContain('clip * stepLen')
+    expect(inside).toContain('if (clip < 1.0) break;')
+    clouds.dispose()
   })
 })

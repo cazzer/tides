@@ -24,17 +24,19 @@ const UMBRA_GLOW: Record<ShadedBody, [number, number, number]> = {
 
 // Mirrors surfacePoint(): a direction in the body's frame, read as a
 // geodetic latitude on the ellipsoid, turned into the scene's axes (km).
-const VERTEX_HEAD = /* glsl */ `
-uniform vec2 uEclipseBody;
-varying vec3 vEclipsePoint;
-
-vec3 eclipsePoint(vec3 local) {
+const POINT = /* glsl */ `vec3 eclipsePoint(vec3 local) {
   vec3 eclipseLocal = normalize(local);
   float eclipseN = uEclipseBody.x / sqrt(1.0 - uEclipseBody.y * eclipseLocal.y * eclipseLocal.y);
   vec3 eclipseP = eclipseN * vec3(eclipseLocal.x, eclipseLocal.y * (1.0 - uEclipseBody.y), eclipseLocal.z);
   return mat3(modelMatrix) * eclipseP / length(modelMatrix[0].xyz);
 }
 `
+
+const VERTEX_HEAD = /* glsl */ `
+uniform vec2 uEclipseBody;
+varying vec3 vEclipsePoint;
+
+${POINT}`
 
 // The vertex's own point.
 const VERTEX_BODY = /* glsl */ `
@@ -97,8 +99,11 @@ function inject(source: string, chunk: string, code: string): string {
 
 /** The patch's GLSL, for shaders written whole (the cloud layer): declare
  * the heads, run vertexBody after `position` is known, and call
- * eclipseSunlight(vEclipsePoint) when uEclipseActive > 0.5. */
+ * eclipseSunlight(vEclipsePoint) when uEclipseActive > 0.5. point is
+ * eclipsePoint() alone, for a fragment shader that finds its own point; it
+ * reads uEclipseBody and modelMatrix, which that shader declares. */
 export const ECLIPSE_GLSL = {
+  point: POINT,
   vertexHead: VERTEX_HEAD,
   vertexBody: VERTEX_BODY,
   fragmentHead: FRAGMENT_HEAD,
