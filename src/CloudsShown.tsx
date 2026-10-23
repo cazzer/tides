@@ -1,15 +1,8 @@
-import { useId } from 'react'
 import type * as THREE from 'three'
 import { shownFrame, type CloudStatus } from './cloud-frames'
-import { OPEN_METEO_SITE } from './forecast-clouds'
 import { isLatestStandIn, MODIS_FROM, utcDayKey, type CloudSource, type GibsSource } from './real-clouds'
 import { useStore } from './store'
 import { useRealCloudSnapshot, type GeoTextureInfo } from './renderers/realCloudTextures'
-
-export const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
-// Wording requested by the GIBS documentation.
-export const GIBS_ACKNOWLEDGEMENT =
-  "We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS)."
 
 type StoreState = ReturnType<typeof useStore.getState>
 const simTime = (s: StoreState) => (s.timestamp == null ? null : (s.jumpDate?.getTime() ?? s.timestamp))
@@ -20,10 +13,11 @@ interface Described {
   texture: THREE.Texture | null
 }
 
-/** Where the clouds on screen in Real weather come from: the loaded frame
- * nearer the sim time of the two being blended (tides-kzj.4.4), or, before
- * any has loaded, the one being fetched. Mount only in Real mode. */
-export function CloudAttribution() {
+/** Which clouds Real weather shows, as a credits line in settings
+ * (tides-1qv): the loaded frame nearer the sim time of the two being blended
+ * (tides-kzj.4.4), or, before any has loaded, the one being fetched. Mount
+ * only in Real mode. */
+export function CloudsShown() {
   const { frames, source, status, texture } = useRealCloudSnapshot()
   // A key, so the per-frame timestamp only re-renders when the frame changes.
   const shownKey = useStore((s) => {
@@ -32,17 +26,12 @@ export function CloudAttribution() {
   })
   const shown = frames.find((f) => f.key === shownKey) ?? null
   const described: Described | null = shown ?? (source && { source, status, texture })
-  // Credited whenever forecast data is on screen, not only as the nearer
-  // frame, unless a frame only holds the latest observation for want of it.
-  const forecast = frames.some(
-    (f) => f.source.kind === 'forecast' && f.status === 'ready' && !f.texture?.userData.held
-  )
   // Only while nothing loaded is on screen: frames turning over during fast
   // playback aren't worth a flicker.
   const loading = !shown && (frames.length === 0 || frames.some((f) => f.status === 'loading'))
   return (
-    <p className="cloud-attribution">
-      Clouds:{' '}
+    <li>
+      Clouds on screen:{' '}
       {described && (
         <CloudSourceText
           source={described.source}
@@ -51,19 +40,7 @@ export function CloudAttribution() {
         />
       )}
       {loading && (described ? ' · loading…' : 'loading…')}
-      {forecast && (
-        <>
-          {' · '}
-          <a
-            href={OPEN_METEO_SITE}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Weather data by Open-Meteo.com
-          </a>
-        </>
-      )}
-    </p>
+    </li>
   )
 }
 
@@ -73,7 +50,6 @@ const instrument = (source: GibsSource) => source.layer.split('_')[0]
 const slotLabel = (time: string) => `${time.slice(0, 10)} ${time.slice(11, 16)} UTC`
 
 function CloudSourceText({ source, status, texture }: Described) {
-  const acknowledgementId = useId()
   // A boolean, so the per-frame timestamp only re-renders when it flips.
   const latest = useStore((s) => {
     const sim = simTime(s)
@@ -114,24 +90,5 @@ function CloudSourceText({ source, status, texture }: Described) {
         : source.kind === 'geo'
           ? slotLabel(source.time)
           : `${instrument(daily)} ${daily.date}`
-  return (
-    <>
-      <a
-        href={GIBS_URL}
-        target="_blank"
-        rel="noreferrer"
-        title={GIBS_ACKNOWLEDGEMENT}
-        aria-describedby={acknowledgementId}
-      >
-        NASA GIBS/ESDIS
-      </a>
-      <span
-        id={acknowledgementId}
-        className="visually-hidden"
-      >
-        {GIBS_ACKNOWLEDGEMENT}
-      </span>
-      {` · ${what}${latest ? ' (latest)' : ''}`}
-    </>
-  )
+  return <>{`NASA GIBS/ESDIS · ${what}${latest ? ' (latest)' : ''}`}</>
 }

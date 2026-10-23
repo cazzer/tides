@@ -1,5 +1,5 @@
 // Jupiter (tides-kzj.2.10). Texture: Solar System Scope, CC BY 4.0
-// (credited by PlanetAttribution),
+// (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_jupiter.jpg
 // (flight tier: 8k_jupiter.jpg, scripts/build-flight-textures.sh)
 import { PLANETS } from '../../planets'

@@ -27,6 +27,8 @@ import DateTimePicker from './DateTimePicker'
 import { glassButton, glassPanel, PHONE } from './glass-styles'
 import DockToggle from './DockToggle'
 import { opensDownOnPhone, phoneDock, useDockDisclosure } from './dock-disclosure'
+import { Credits } from './Credits'
+import { CloudsShown } from './CloudsShown'
 
 const FOCUS_OPTIONS: {
   value: CameraFocus
@@ -172,9 +174,6 @@ const CONSTELLATIONS_OPTIONS: { value: 'off' | 'lines' | 'art'; label: string }[
   { value: 'art', label: 'Lines + art' },
 ]
 
-const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/skycultures/modern'
-const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
-
 /** A native modal dialog: showModal() supplies the focus trap, Esc, and focus return. */
 function SettingsDialog({
   open,
@@ -310,23 +309,6 @@ function SettingsDialog({
           />
           <SettingHint id={constellationsHintId}>
             Lines for the major constellations in the View from Earth panel.
-            Art by Johan Meuris for{' '}
-            <a
-              href={STELLARIUM_URL}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Stellarium
-            </a>{' '}
-            (
-            <a
-              href={FREE_ART_LICENSE_URL}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Free Art License
-            </a>
-            ).
           </SettingHint>
         </SettingGroup>
         <SettingGroup>
@@ -346,6 +328,12 @@ function SettingsDialog({
             options={PLANETS_OPTIONS}
             onChange={(value) => setShowZodiac(value === 'on')}
           />
+        </SettingGroup>
+        {/* Not a form control, so a section with a heading in the legend's look. */}
+        <SettingGroup as="section">
+          <SectionHeading>Credits</SectionHeading>
+          {/* Only while open: the live line re-renders as the frames turn over. */}
+          <Credits>{open && weatherSource === 'real' && <CloudsShown />}</Credits>
         </SettingGroup>
       </DialogBody>
     </Dialog>
@@ -809,18 +797,16 @@ const SettingLegend = styled.legend`
   color: #888;
 `
 
+// The legend's look; the section's gap spaces it.
+const SectionHeading = styled(SettingLegend).attrs({ as: 'h3' })`
+  margin: 0;
+  font-weight: normal;
+`
+
 const SettingHint = styled.p`
   margin: 0;
   font-size: 12px;
   color: #888;
-
-  a {
-    color: inherit;
-  }
-
-  a:hover {
-    color: #bbb;
-  }
 `
 
 const Segments = styled.div`

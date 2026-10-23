@@ -1,5 +1,5 @@
-// Mars's surface map: Solar System Scope, CC BY 4.0 (credited by
-// PlanetAttribution), from
+// Mars's surface map: Solar System Scope, CC BY 4.0 (credited in
+// Credits.tsx), from
 // https://www.solarsystemscope.com/textures/download/2k_mars.jpg
 // (flight tier: 8k_mars.jpg, scripts/build-flight-textures.sh)
 import * as THREE from 'three'

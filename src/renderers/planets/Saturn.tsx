@@ -1,5 +1,5 @@
 // Saturn (tides-kzj.2.11). Textures: Solar System Scope, CC BY 4.0
-// (credited by PlanetAttribution),
+// (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_saturn.jpg and
 // https://www.solarsystemscope.com/textures/download/2k_saturn_ring_alpha.png
 // (flight tier: 8k_saturn.jpg, scripts/build-flight-textures.sh)
