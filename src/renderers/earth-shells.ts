@@ -1,7 +1,8 @@
 // The outer edges of Earth's drawn shells, as fractions of its radius: shared
-// by their renderers and by ship mode, whose collision sphere must stay
-// outside them (tides-3bl.7). In ship mode both are drawn from inside too
-// (pickShellFaces).
+// by their renderers and by ship mode, whose near plane keeps clear of them
+// and whose low-tier stop stays outside them (tides-3bl.7). In ship mode both
+// are drawn from inside too (pickShellFaces), and on the high tier the ship
+// flies down through them to the terrain floor (tides-01v.8.7).
 import * as THREE from 'three'
 import { limbBody } from '../ship/limb-detail'
 

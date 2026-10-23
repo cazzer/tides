@@ -5,6 +5,7 @@
 
 import * as THREE from 'three'
 import { earthSpin, earthTilt, type Vec3 } from '../ephemeris'
+import { qualityTier, type QualityTier } from '../quality'
 import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
@@ -42,18 +43,29 @@ export const EARTH_SHELL_RADII: readonly number[] = [
 export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
 
 /**
- * Where the ship stops above Earth: a near plane's depth (shipNear's
- * ceiling) beyond the outermost shell. Earth still fills the view from
- * there.
+ * Where the ship stops above Earth on the low quality tier: a near plane's
+ * depth (shipNear's ceiling) beyond the outermost shell. That tier draws a
+ * flat cloud sheet with no columns or in-cloud fog, so it stays above the
+ * deck (tides-01v.8.14). Earth still fills the view from there.
  */
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
 /**
  * How far above the displaced ground (terrain-floor.ts) the ship stops over
- * Earth. EARTH_COLLISION_RADIUS still clamps the stop, far above it, until
- * the ship can fly below the cloud deck (tides-01v.8.7).
+ * Earth on the high tier (tides-01v.8.7): under the cloud base
+ * (CLOUD_CLEARANCE), so the ship flies below the deck. At 0.4 of it the
+ * near plane stays over shipNear's 0.001 floor, and its corners stay off the
+ * ground on steep slopes up to 32:9 screens at SHIP_FOV (ship-bodies.test).
  */
 export const EARTH_GROUND_CLEARANCE = 0.004
+
+/**
+ * The slowest the speed cap falls to near Earth's ground on the high tier
+ * (flight.ts speedFloor), units/s: the cloud deck's few hundredths of a unit
+ * take a second or two to cross, where V_NORMAL went through a column a
+ * frame. [TUNE]
+ */
+export const EARTH_GROUND_SPEED = 0.02
 
 /**
  * Masses, kg, for the flight model's gravity wells (flight.ts wellFactor).
@@ -83,15 +95,22 @@ const DEG = Math.PI / 180
 
 // Earth's ground: its terrain floor, read in its own spinning frame. The
 // mesh tilts about X, then spins about the tilted Y (body-transform.ts), so
-// world → local undoes the spin after the tilt.
-function earthGround(): Pick<ShipBody, 'ground' | 'groundClearance' | 'turnTo'> {
+// world → local undoes the spin after the tilt. On the high tier the ship
+// stops on it: the hard sphere drops to the bare sphere's clearance, which
+// the floor never reads below. On the low tier the shells' stop stays.
+function earthStop(
+  tier: QualityTier
+): Pick<ShipBody, 'collisionRadius' | 'ground' | 'groundClearance' | 'minSpeed' | 'turnTo'> {
   const toLocal = new THREE.Quaternion()
   const euler = new THREE.Euler()
   const local = new THREE.Vector3()
+  const low = tier === 'low'
   return {
+    collisionRadius: low ? EARTH_COLLISION_RADIUS : EARTH_RADIUS + EARTH_GROUND_CLEARANCE,
     ground: (direction) =>
       terrainFloorRadius(earthTerrain(), EARTH_RADIUS, local.copy(direction).applyQuaternion(toLocal)),
     groundClearance: EARTH_GROUND_CLEARANCE,
+    minSpeed: low ? undefined : EARTH_GROUND_SPEED,
     turnTo: (t) => {
       toLocal.setFromEuler(euler.set(earthTilt(t) * DEG, earthSpin(t), 0, 'XYZ')).invert()
     },
@@ -107,9 +126,9 @@ export const MOON_COLLISION_CLEARANCE = 0.02
 
 /**
  * Sun, Earth, Moon, the seven planets and their major moons, positions unset
- * until updated.
+ * until updated. `tier` sets Earth's stop (earthStop).
  */
-export function createShipBodies(): ShipBody[] {
+export function createShipBodies(tier: QualityTier = qualityTier()): ShipBody[] {
   const { positionAt } = positionsFor('flight')
   loadEarthTerrain()
   return [
@@ -124,8 +143,7 @@ export function createShipBodies(): ShipBody[] {
       key: 'earth',
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
-      collisionRadius: EARTH_COLLISION_RADIUS,
-      ...earthGround(),
+      ...earthStop(tier),
       mass: BODY_MASS_KG.earth,
       positionAt: positionAt.earth,
     },

@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER } from '../renderers/earth-shells'
 import { collisionRadius, type Body } from './flight'
-import { createShipBodies, EARTH_COLLISION_RADIUS, EARTH_RADIUS } from './ship-bodies'
+import { createShipBodies, EARTH_COLLISION_RADIUS, EARTH_GROUND_CLEARANCE, EARTH_RADIUS } from './ship-bodies'
 import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
 import { SHIP_FOV } from './ship-session'
 import {
@@ -50,9 +50,18 @@ describe('limbFacetPx', () => {
 
 describe('LIMB_SEGMENTS', () => {
   it('keeps every body’s limb under 1 px at its collision stop, even in a corner', () => {
-    for (const body of createShipBodies()) {
+    for (const body of createShipBodies('low')) {
       expect(cornerPx(collisionRadius(body) / body.radius), body.key).toBeLessThan(1)
     }
+  })
+
+  it('keeps Earth’s sea horizon about 1 px at the screen’s centre from the high-tier floor', () => {
+    // The ship flies down to EARTH_GROUND_CLEARANCE over the sea
+    // (tides-01v.8.7): ~1 px by the estimate at the centre and up to ~3 px
+    // in a corner, though headless shots at the floor show no kinks
+    // (tides-01v.8.16).
+    const floor = (EARTH_RADIUS + EARTH_GROUND_CLEARANCE) / EARTH_RADIUS
+    expect(limbFacetPx(LIMB_SEGMENTS, floor, SCREEN_PX, SHIP_FOV)).toBeLessThan(1)
   })
 
   it('keeps Earth’s outer shells under 1 px too, each in its own radii', () => {
