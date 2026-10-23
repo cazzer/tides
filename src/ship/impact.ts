@@ -14,7 +14,10 @@ export const shipImpacts = { count: 0 }
  * [TUNE] A hit counts as an impact only when the ship was going faster than
  * this, units/s, the frame before. A locked approach touches down at the
  * V_NORMAL floor, which telemetry.colliding also flags (flight.ts
- * COLLISION_SPEED); that is a landing, not a crash.
+ * COLLISION_SPEED); that is a landing, not a crash. Earth's ground on the
+ * high tier is never one: its speed floor holds a dive at or under OVERSPEED_MAX ×
+ * EARTH_GROUND_SPEED, well under this, so the ship stops there rather than
+ * hitting it (tides-01v.8.17; approach.ts canCrash mutes its warnings).
  */
 export const IMPACT_MIN_SPEED = 1.5 * V_NORMAL
 

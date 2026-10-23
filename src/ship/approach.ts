@@ -17,6 +17,7 @@
 import * as THREE from 'three'
 import {
   K_WELL,
+  OVERSPEED_MAX,
   V_NORMAL,
   V_TOP,
   WELL_BRAKE,
@@ -61,7 +62,9 @@ export const FAST_WINDOW_S = 10
  * share that hits the surface hard (impact.ts IMPACT_MIN_SPEED at the
  * V_NORMAL floor), so a warning means a crash. Full throttle at Earth or
  * Venus peaks at ~1.1× the cap and still lands gently; that is not one.
- * "Too fast" predicts reaching OVER_ON.
+ * "Too fast" predicts reaching OVER_ON. Neither warns where the floor is too
+ * low for any arrival to be a crash (canCrash: Earth's ground on the high
+ * tier, tides-01v.8.17).
  */
 export const OVER_ON = IMPACT_MIN_SPEED / V_NORMAL
 /**
@@ -72,6 +75,19 @@ export const OVER_ON = IMPACT_MIN_SPEED / V_NORMAL
 export const OVER_OFF = 1.02
 /** "Too fast" clears once the predicted peak is this far under OVER_ON. */
 export const FAST_OFF = OVER_ON - 0.1
+
+/**
+ * Whether arriving at a body with speed floor `speedFloor` (flight.ts
+ * speedFloor) can be a crash. The ship never carries more than
+ * OVERSPEED_MAX × the cap, which falls to the floor at the surface, so with
+ * a floor under IMPACT_MIN_SPEED / OVERSPEED_MAX (0.125; Earth's ground on
+ * the high tier is 0.02) even an unlocked full-throttle dive with Flight
+ * Assist off touches down softly: stopping at the ground, not hitting it
+ * (tides-01v.8.17). There, over and fast would warn about nothing.
+ */
+export function canCrash(speedFloor: number): boolean {
+  return OVERSPEED_MAX * speedFloor > IMPACT_MIN_SPEED
+}
 
 /**
  * A safe-arrival throttle this close to full reads as full: the tick at the
@@ -155,10 +171,12 @@ const safeShares = new Map<number, Map<number, number>>()
  * floor `speedFloor`: the highest Flight Assist throttle that rides its well
  * down without overshooting (peakShare ≤ OVER_ON) from its edge; 1 from
  * SAFE_SHARE_FULL up. Above it, unlocked, the ship overshoots. ~0.72 at the
- * Moon, ~0.85 at Mercury, ~0.92 at Mars, 1 for Venus, Earth and heavier.
- * The HUD's throttle bar marks it.
+ * Moon, ~0.85 at Mercury, ~0.92 at Mars, 1 for Venus, Earth and heavier,
+ * and 1 where no arrival can crash (canCrash). The HUD's throttle bar
+ * marks it.
  */
 export function safeShare(factor: number, speedFloor = V_NORMAL): number {
+  if (!canCrash(speedFloor)) return 1
   let byFloor = safeShares.get(factor)
   if (!byFloor) safeShares.set(factor, (byFloor = new Map()))
   const known = byFloor.get(speedFloor)
@@ -223,6 +241,11 @@ export interface ApproachInput {
   /** The subject's wellFactor and speed floor (flight.ts speedFloor). */
   factor: number
   speedFloor?: number
+  /**
+   * The speed floor of the body whose well sets `cap` (telemetry.well),
+   * which need not be the subject: whether over the cap can end in a crash.
+   */
+  capFloor?: number
   locked: boolean
   throttle: number
   flightAssist: boolean
@@ -230,19 +253,26 @@ export interface ApproachInput {
 
 /**
  * The subject's approach state, in priority order (see ApproachStatus).
- * `previous` gives over and fast their hysteresis.
+ * `previous` gives over and fast their hysteresis. Never over where the
+ * well setting the cap can't be hit hard, nor fast where the subject can't
+ * (canCrash): over measures against that well's cap, fast against the
+ * subject's. Skimming Earth's ground after a dive with Flight Assist off,
+ * still over its cap, is not overshooting whatever lies ahead.
  */
 export function approachStatus(a: ApproachInput, previous: ApproachStatus | null): ApproachStatus {
+  const floor = a.speedFloor ?? V_NORMAL
   const ratio = a.speed / Math.max(a.cap, 1e-9)
-  if (ratio > (previous === 'over' ? OVER_OFF : OVER_ON)) return 'over'
+  if (canCrash(a.capFloor ?? V_NORMAL) && ratio > (previous === 'over' ? OVER_OFF : OVER_ON)) {
+    return 'over'
+  }
   if (a.locked) return 'locked'
   if (!(a.closing > 0)) return 'open'
+  if (!canCrash(floor)) return 'closing'
   const T = wellTimeOf(a.factor)
   const edge = V_TOP * T
   if ((a.gap - edge) / a.closing > FAST_WINDOW_S) return 'closing'
   // As a share of the subject's own cap where the ship is; the run starts
   // at the well's edge if it is still outside.
-  const floor = a.speedFloor ?? V_NORMAL
   const subjectCap = THREE.MathUtils.clamp(a.gap / T, floor, V_TOP)
   const peak = peakShare(a.factor, a.gap, a.closing / subjectCap, a.throttle, a.flightAssist, floor)
   return peak > (previous === 'fast' ? FAST_OFF : OVER_ON) ? 'fast' : 'closing'
@@ -339,6 +369,8 @@ export interface ApproachFrame {
   velocity: THREE.Vector3
   speed: number
   cap: number
+  /** The speed floor of the well setting `cap` (telemetry.well.floor). */
+  capFloor: number
   throttle: number
   flightAssist: boolean
   targetKey: string | null
@@ -382,6 +414,7 @@ export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApp
       gap,
       factor,
       speedFloor: floor,
+      capFloor: frame.capFloor,
       locked,
       throttle: frame.throttle,
       flightAssist: frame.flightAssist,

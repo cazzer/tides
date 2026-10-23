@@ -898,9 +898,10 @@ describe('telemetry', () => {
     expect(telemetry.nearest.key).toBe('moon')
     expect(telemetry.well.key).toBe('sun')
     expect(telemetry.well.factor).toBe(wellFactor(BODY_MASS_KG.sun))
+    expect(telemetry.well.floor).toBe(V_NORMAL)
 
     stepShip(state, input(), FRAME, env([]), telemetry)
-    expect(telemetry.well).toEqual({ key: null, factor: 1 })
+    expect(telemetry.well).toEqual({ key: null, factor: 1, floor: V_NORMAL })
   })
 
   test('reports the clamped throttle it flew with', () => {

@@ -5,7 +5,13 @@ import { Body, GeoMoon, HelioVector, KM_PER_AU } from 'astronomy-engine'
 import { collisionRadius, floorRadius } from './flight'
 import { buildTerrainFloor, setEarthTerrain } from './terrain-floor'
 import { FLIGHT_KM_PER_UNIT } from '../flight-scale'
-import { createShipBodies, updateShipBodies, type ShipBody } from './ship-bodies'
+import {
+  EARTH_GROUND_SPEED,
+  EARTH_RADIUS,
+  createShipBodies,
+  updateShipBodies,
+  type ShipBody,
+} from './ship-bodies'
 import { MOONS, isMoonKey, type MoonKey } from '../moons/moons'
 import { spawnPose } from './ship-session'
 import {
@@ -174,6 +180,144 @@ describe('measureRanges', () => {
     } finally {
       setEarthTerrain(null)
     }
+  })
+
+  describe("near Earth's ground (tides-01v.8.18)", () => {
+    // The scale Earth's ground is drawn at: true radius over scene radius.
+    const DRAWN_KM_PER_UNIT = EARTH_RADIUS_KM / EARTH_RADIUS
+    // Straight up from the floor, well away from the Moon.
+    function climbs(bodies: readonly ShipBody[]) {
+      const earth = find(bodies, 'earth').body
+      const toMoon = find(bodies, 'moon').body.position.clone().sub(earth.position).normalize()
+      return [
+        [1, 0, 0],
+        [0, 1, 0],
+        [-0.3, 0.2, 0.9],
+        [0.5, -0.7, -0.5],
+      ]
+        .map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize())
+        .filter((dir) => dir.dot(toMoon) < 0.5)
+        .map((dir) => {
+          const floor = floorRadius(earth, dir)
+          return (h: number) => earth.position.clone().addScaledVector(dir, floor + h)
+        })
+    }
+
+    it.each(DATES)("reads the ground speed at the drawn ground's scale on the floor (%i)", (t) => {
+      const { bodies, truth, ranges } = setup(t)
+      const earth = find(bodies, 'earth').index
+      expect(bodies[earth].ground).toBeDefined()
+      for (const at of climbs(bodies)) {
+        measureRanges(at(0), bodies, truth, ranges)
+        expect(ranges.km[earth]).toBeCloseTo(0, 0)
+        // Within 2× of the ground speed at the drawn scale (the bead's bar);
+        // in fact within a few %.
+        const kmPerS = EARTH_GROUND_SPEED * ranges.kmPerUnit
+        expect(kmPerS / (EARTH_GROUND_SPEED * DRAWN_KM_PER_UNIT)).toBeGreaterThan(0.5)
+        expect(kmPerS / (EARTH_GROUND_SPEED * DRAWN_KM_PER_UNIT)).toBeLessThan(2)
+        expect(Math.abs(ranges.kmPerUnit / DRAWN_KM_PER_UNIT - 1)).toBeLessThan(0.05)
+      }
+    })
+
+    it.each(DATES)('hands the range and speed over to the Earth–Moon scale with no jump (%i)', (t) => {
+      const { bodies, truth, ranges } = setup(t)
+      const earth = find(bodies, 'earth').index
+      const h = 0.002
+      for (const at of climbs(bodies)) {
+        let previousKm = -Infinity
+        for (let d = h; d <= 3; d += d < 0.5 ? 0.01 : 0.1) {
+          measureRanges(at(d + h), bodies, truth, ranges)
+          const ahead = ranges.km[earth]
+          const scaleAhead = ranges.kmPerUnit
+          measureRanges(at(d - h), bodies, truth, ranges)
+          const behind = ranges.km[earth]
+          const scaleBehind = ranges.kmPerUnit
+          measureRanges(at(d), bodies, truth, ranges)
+          // Climbing at 1 unit/s: the range grows at the speed the HUD shows.
+          const rate = (ahead - behind) / (2 * h)
+          expect(Math.abs(rate / ranges.kmPerUnit - 1)).toBeLessThan(0.05)
+          expect(ranges.km[earth]).toBeGreaterThan(previousKm)
+          // The scale moves smoothly, if steeply through the band (~28× in
+          // 0.13 units): no step across a few thousandths of a unit.
+          expect(Math.abs(Math.log(scaleAhead / scaleBehind))).toBeLessThan(0.5)
+          previousKm = ranges.km[earth]
+        }
+        // Clear of the ground band the scale is the Earth–Moon pair's again.
+        measureRanges(at(0.5), bodies, truth, ranges)
+        expect(ranges.kmPerUnit).toBeGreaterThan(20 * DRAWN_KM_PER_UNIT)
+      }
+    })
+
+    it.each(DATES)('reads Earth as it did without ground from 4 units up (%i)', (t) => {
+      const { bodies, truth, ranges } = setup(t)
+      const earth = find(bodies, 'earth')
+      // The same Earth with no ground: its gaps measure from the hard
+      // sphere, so the same gap is that far closer in.
+      const bare = bodies.map((b) => (b.key === 'earth' ? { ...b, ground: undefined } : b))
+      const bareRanges = createShipRanges(bodies.length)
+      const toMoon = find(bodies, 'moon').body.position.clone().sub(earth.body.position).normalize()
+      for (const dir of [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0)]) {
+        if (dir.dot(toMoon) > 0.5) dir.negate()
+        // Short of the moon system's hand-over (30 units from the centre),
+        // which reads the ship's distance from it, not its gap.
+        for (const gap of [4, 6, 15, 25]) {
+          measureRanges(
+            earth.body.position.clone().addScaledVector(dir, floorRadius(earth.body, dir) + gap),
+            bodies,
+            truth,
+            ranges
+          )
+          measureRanges(
+            earth.body.position.clone().addScaledVector(dir, collisionRadius(earth.body) + gap),
+            bare,
+            truth,
+            bareRanges
+          )
+          expect(ranges.km[earth.index] / bareRanges.km[earth.index]).toBeCloseTo(1, 9)
+          expect(Math.abs(ranges.kmPerUnit / bareRanges.kmPerUnit - 1)).toBeLessThan(0.01)
+        }
+      }
+    })
+
+    it.each(DATES)('reads Earth from the Moon as it did without ground (%i)', (t) => {
+      const { bodies, truth, ranges } = setup(t)
+      const earth = find(bodies, 'earth')
+      const moon = find(bodies, 'moon').body
+      const bare = bodies.map((b) => (b.key === 'earth' ? { ...b, ground: undefined } : b))
+      const bareRanges = createShipRanges(bodies.length)
+      const at = shellToward(moon, earth.body)
+      measureRanges(at, bodies, truth, ranges)
+      // Without terrain the floor stands the same height everywhere, so the
+      // bare Earth's gap is that much larger from the same point: read it
+      // from that much further in, at the same gap.
+      const offset = floorRadius(earth.body, new THREE.Vector3(1, 0, 0)) - collisionRadius(earth.body)
+      const toEarth = earth.body.position.clone().sub(at).normalize()
+      measureRanges(at.clone().addScaledVector(toEarth, offset), bare, truth, bareRanges)
+      expect(ranges.km[earth.index] / bareRanges.km[earth.index]).toBeCloseTo(1, 9)
+    })
+
+    it.each(DATES)('changes nothing on the low tier, which stops above the shells (%i)', (t) => {
+      const bodies = createShipBodies('low')
+      updateShipBodies(bodies, t)
+      const truth = trueBodies(
+        bodies.map((b) => b.key),
+        t
+      )
+      const earth = find(bodies, 'earth')
+      expect(earth.body.ground).toBeDefined()
+      const bare = bodies.map((b) => (b.key === 'earth' ? { ...b, ground: undefined } : b))
+      const ranges = createShipRanges(bodies.length)
+      const bareRanges = createShipRanges(bodies.length)
+      const dir = new THREE.Vector3(0, 1, 0)
+      for (const gap of [0, 0.05, 0.2, 1]) {
+        const at = earth.body.position.clone().addScaledVector(dir, collisionRadius(earth.body) + gap)
+        measureRanges(at, bodies, truth, ranges)
+        measureRanges(at, bare, truth, bareRanges)
+        expect(ranges.kmPerUnit / bareRanges.kmPerUnit).toBeCloseTo(1, 9)
+        expect(ranges.km[earth.index]).toBeCloseTo(bareRanges.km[earth.index], 3)
+      }
+      expect(ranges.kmPerUnit).toBeGreaterThan(20 * DRAWN_KM_PER_UNIT)
+    })
   })
 
   it('falls steadily toward the Moon, with no jump where the nearest body changes', () => {

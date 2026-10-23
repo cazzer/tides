@@ -7,6 +7,7 @@
 // it, the controller passes it to stepShip as targetKey.
 
 import * as THREE from 'three'
+import { V_NORMAL } from './flight'
 
 export interface ShipTelemetry {
   /** |velocity|, scene units per second. */
@@ -31,9 +32,10 @@ export interface ShipTelemetry {
    * The body whose gravity well sets speedCap (smallest gap / wellFactor in
    * flight.ts), which a heavy body far off can be rather than the nearest:
    * crawling past the Sun, it is the Sun. key is null only with no bodies;
-   * factor is that body's wellFactor (1 then).
+   * factor is that body's wellFactor (1 then) and floor its speedFloor
+   * (V_NORMAL then).
    */
-  well: { key: string | null; factor: number }
+  well: { key: string | null; factor: number; floor: number }
   /**
    * The locked target, or null without one (or when its key matches no body).
    * etaSeconds is surface distance over closing speed; Infinity when not
@@ -56,7 +58,7 @@ export function createShipTelemetry(): ShipTelemetry {
     flightAssist: true,
     velocity: new THREE.Vector3(),
     nearest: { key: null, surfaceDistance: Infinity },
-    well: { key: null, factor: 1 },
+    well: { key: null, factor: 1, floor: V_NORMAL },
     target: null,
     colliding: false,
   }
@@ -75,6 +77,7 @@ export function resetShipTelemetry(): void {
   shipTelemetry.nearest.surfaceDistance = Infinity
   shipTelemetry.well.key = null
   shipTelemetry.well.factor = 1
+  shipTelemetry.well.floor = V_NORMAL
   shipTelemetry.target = null
   shipTelemetry.colliding = false
 }

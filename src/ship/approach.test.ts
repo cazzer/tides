@@ -2,7 +2,9 @@ import * as THREE from 'three'
 import { describe, expect, test } from 'vitest'
 import {
   K_WELL,
+  V_NORMAL,
   V_TOP,
+  collisionRadius,
   createShipState,
   stepShip,
   wellFactor,
@@ -11,12 +13,14 @@ import {
 import { BODY_MASS_KG, EARTH_GROUND_SPEED } from './ship-bodies'
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry } from './ship-telemetry'
+import { isImpact } from './impact'
 import {
   AHEAD_CONE,
   FAST_WINDOW_S,
   OVER_ON,
   SAFE_SHARE_FULL,
   approachEta,
+  canCrash,
   approachStatus,
   approachSubject,
   resetShipApproach,
@@ -94,6 +98,7 @@ function approach(
       velocity: state.velocity,
       speed: telemetry.speed,
       cap: telemetry.speedCap,
+      capFloor: telemetry.well.floor,
       throttle: telemetry.throttle,
       flightAssist,
       targetKey,
@@ -165,6 +170,93 @@ describe("Earth's ground speed (tides-01v.8.7)", () => {
     const position = new THREE.Vector3(1.05, 0, 0)
     expect(approachSubject([earth], position, new THREE.Vector3(-closing, 0, 0), null, null)).toBe(0)
     expect(approachSubject([{ ...earth, minSpeed: undefined }], position, new THREE.Vector3(-closing, 0, 0), null, null)).toBe(-1)
+  })
+})
+
+describe("touching Earth's ground (tides-01v.8.17)", () => {
+  test('its floor is too low for an arrival to crash; the V_NORMAL floor is not', () => {
+    expect(canCrash(EARTH_GROUND_SPEED)).toBe(false)
+    expect(canCrash(V_NORMAL)).toBe(true)
+  })
+
+  test.each([
+    [false, 1],
+    [false, 0],
+    [true, 1],
+  ] as const)(
+    'an unlocked dive to the floor (Flight Assist %s, throttle %s) lands without an impact or a warning',
+    (flightAssist, throttle) => {
+      const earth: Body = { ...body('earth'), minSpeed: EARTH_GROUND_SPEED }
+      const T = wellFactor(earth.mass) / K_WELL
+      const state = createShipState()
+      state.position.set(0, 0, earth.radius + V_TOP * T * 1.2)
+      state.velocity.set(0, 0, -V_TOP)
+      const telemetry = createShipTelemetry()
+      const bodies = [earth]
+      const pilot = input({ throttle, flightAssist })
+      const km = [NaN]
+      resetShipApproach()
+      const statuses = new Set<ApproachStatus>()
+      let peak = 0
+      let wasColliding = false
+      let impacts = 0
+      let landed = false
+      for (let t = 0; t < 300 && !landed; t += FRAME) {
+        const speedBefore = telemetry.speed
+        stepShip(state, pilot, FRAME, { bodies, targetKey: null }, telemetry)
+        if (isImpact(telemetry.colliding, wasColliding, speedBefore)) impacts++
+        wasColliding = telemetry.colliding
+        peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
+        updateApproach({
+          bodies,
+          position: state.position,
+          velocity: state.velocity,
+          speed: telemetry.speed,
+          cap: telemetry.speedCap,
+          capFloor: telemetry.well.floor,
+          throttle: telemetry.throttle,
+          flightAssist,
+          targetKey: null,
+          km,
+        })
+        statuses.add(shipApproach.status)
+        landed = state.position.length() - collisionRadius(earth) < 1e-6
+      }
+      expect(landed).toBe(true)
+      expect(impacts).toBe(0)
+      expect(statuses.has('over')).toBe(false)
+      expect(statuses.has('fast')).toBe(false)
+      expect(statuses.has('closing')).toBe(true)
+      // The run does go over the cap: what used to read as overshooting.
+      if (!flightAssist) expect(peak).toBeGreaterThan(OVER_ON)
+    }
+  )
+})
+
+describe("over Earth's ground, over its cap (tides-01v.8.17)", () => {
+  // Levelled off after a Flight Assist off dive: 2.5× Earth's ground cap,
+  // with something else (the Sun, a locked Moon) as the subject.
+  const skim: ApproachInput = {
+    speed: 2.5 * EARTH_GROUND_SPEED,
+    cap: EARTH_GROUND_SPEED,
+    capFloor: EARTH_GROUND_SPEED,
+    closing: 0.01,
+    gap: 1000,
+    factor: 1,
+    locked: false,
+    throttle: 1,
+    flightAssist: false,
+  }
+
+  test('is not overshooting the subject when the well setting the cap is soft ground', () => {
+    expect(approachStatus(skim, null)).toBe('closing')
+    expect(approachStatus({ ...skim, locked: true }, null)).toBe('locked')
+  })
+
+  test('is overshooting when that well can be hit hard, whatever the subject', () => {
+    const hard = { ...skim, speed: 2.5 * V_NORMAL, cap: V_NORMAL, capFloor: V_NORMAL }
+    expect(approachStatus(hard, null)).toBe('over')
+    expect(approachStatus({ ...hard, speedFloor: EARTH_GROUND_SPEED }, null)).toBe('over')
   })
 })
 

@@ -61,6 +61,23 @@
 // the log map's chords don't scale linearly; they still read 0 on arrival.
 // The moon systems also nudge ranges outside them: Mars's moons' anchors
 // shift Earth's and Mars's ranges by 1–11% for a ship 200–400 units out.
+//
+// Near a body the ship flies down to its ground (Earth's terrain on the high
+// tier, where its speed floor is under V_NORMAL: flight.ts speedFloor), its
+// own anchor reads on the drawn ground's scale instead (tides-01v.8.18): the body's
+// true radius over its scene radius, ~2 160 km a unit for Earth, against
+// the Earth–Moon pair's ~38 000–62 000. Skimming the floor at Earth's 0.02
+// units/s ground speed then reads ~43 km/s, where the pair scale read
+// 550–1 300 km/s across ground the ship crosses in seconds. The anchor's km
+// per unit hands over from the ground's to its usual scale between the
+// cloud tops and twice their height (GROUND_BAND), and its gap is the
+// integral of that, as for the moon systems, so the range still grows at
+// the speed's rate and reads 0 on the floor. That leaves the anchor's gap
+// short of the usual scale's by the band's depth at the difference (~12 000
+// km at Earth), which it pays back over GROUND_PAYBACK, the speed reading up
+// to ~6–8% over the pair scale through it, so from there out (the Moon
+// included) every range and speed is as it was. On the low tier the ship
+// stops above the shells, nowhere near the ground, and nothing changes.
 
 import {
   Body,
@@ -81,7 +98,14 @@ import {
   moonTrueOffsetKm,
   moonsOf,
 } from '../moons/moons'
-import { collisionRadius, floorRadius, type Body as FlightBody } from './flight'
+import { CLOUD_LAYER_TOP } from '../cloud-layer'
+import {
+  V_NORMAL,
+  collisionRadius,
+  floorRadius,
+  speedFloor,
+  type Body as FlightBody,
+} from './flight'
 
 /** Speed of light, km/s. */
 export const C_KM_PER_S = 299_792.458
@@ -115,11 +139,26 @@ const MOON_SYSTEM_BOOST = 1e4
 // planets' scale. [TUNE]
 const RANGE_HAND_OVER = 10
 
-interface MoonSystem {
-  parent: string
+interface Band {
   inner: number
   outer: number
 }
+
+interface MoonSystem extends Band {
+  parent: string
+}
+
+// A body with ground reads on its drawn ground's scale up to `inner` above
+// its floor, its usual one from `outer`, smoothly between. [TUNE]
+const GROUND_BAND: Band = { inner: CLOUD_LAYER_TOP, outer: 2 * CLOUD_LAYER_TOP }
+// ∫ (1 − smoothstep) over GROUND_BAND from the floor up: the scene units
+// whose km the ground scale leaves out of the gap.
+const GROUND_BAND_DEPTH = (GROUND_BAND.inner + GROUND_BAND.outer) / 2
+// Where the gap makes those km back: from the band's top out to a gap of 4,
+// short of the Moon (Earth's gap from its shell is 5.3–6 units), so Earth's
+// range read there is as before. Wide, so the speed reads little over the
+// usual scale while it does. [TUNE]
+const GROUND_PAYBACK: Band = { inner: GROUND_BAND.outer, outer: 4 }
 
 const MOON_SYSTEMS: readonly MoonSystem[] = [
   { parent: 'earth', inner: MOON_SYSTEM_INNER, outer: 2 * MOON_SYSTEM_INNER },
@@ -140,10 +179,17 @@ const SYSTEM_OF_KEY = new Map<string, number>([
 
 // ∫ smoothstep(x, inner, outer) dx from inner to d (0 inside inner): with
 // u = (x − inner) / band, ∫ (3u² − 2u³) band du = band (u³ − u⁴/2).
-function departureIntegral(d: number, { inner, outer }: MoonSystem): number {
+function bandIntegral(d: number, { inner, outer }: Band): number {
   const band = outer - inner
   const u = THREE.MathUtils.clamp((d - inner) / band, 0, 1)
   return band * (u ** 3 - u ** 4 / 2) + Math.max(0, d - outer)
+}
+
+// d/dx smoothstep(x, inner, outer) at d: 6u(1 − u) / band.
+function bandSlope(d: number, { inner, outer }: Band): number {
+  const band = outer - inner
+  const u = THREE.MathUtils.clamp((d - inner) / band, 0, 1)
+  return (6 * u * (1 - u)) / band
 }
 
 // The planets and Earth's Moon; a major moon is its parent plus
@@ -233,7 +279,7 @@ const systemOf: number[] = []
 // Per system: the parent's body index (-1 when it or all its moons are
 // missing from the bodies), the ship's departure (0 inside, 1 clear), its
 // members' weight boost, the parent's km per unit against the planets, and
-// ∫departure (departureIntegral).
+// ∫departure (bandIntegral).
 const systemParent: number[] = []
 const systemDeparture: number[] = []
 const systemBoost: number[] = []
@@ -334,7 +380,7 @@ export function measureRanges(
     // The parent against the planets (its moons not counted): what its
     // members' km per unit hands over to on the way out.
     systemKm[s] = departure > 0 ? Math.exp(neighbourLogScale(parent, bodies, truth, -1, s)) : 0
-    systemIntegral[s] = departureIntegral(fromParent, system)
+    systemIntegral[s] = bandIntegral(fromParent, system)
     systemHandOver[s] = THREE.MathUtils.smoothstep(
       fromParent,
       system.outer,
@@ -350,24 +396,42 @@ export function measureRanges(
   // the extra (b − a) · ∫departure on top of a · gap (see the header). All of
   // a system's members use the parent's b and d, so Earth and the Moon (one
   // pair, one a) stay a·(scene separation) apart, the Earth–Moon scale,
-  // however far out the ship is.
+  // however far out the ship is. Over a body with ground the scale near it
+  // is the ground's, g, handing over to a through GROUND_BAND the same way:
+  // (g − a) · (1 − smoothstep) on the scale, its integral on the gap; then
+  // the gap pays back (a − g) · GROUND_BAND_DEPTH through GROUND_PAYBACK,
+  // and the scale takes its slope.
   out.position.set(0, 0, 0)
   let weightSum = 0
   let logSum = 0
   for (let r = 0; r < n; r++) {
     const s = systemOf[r]
     let w = weight(gaps[r])
-    let gapKm: number
+    let a: number
+    let leavingKm = 0
+    let leavingGapKm = 0
     if (s >= 0) {
-      const a = Math.exp(neighbourLogScale(r, bodies, truth, s))
+      a = Math.exp(neighbourLogScale(r, bodies, truth, s))
       const departureKm = systemDeparture[s] > 0 ? systemKm[s] - a : 0
-      logScales[r] = Math.log(a + departureKm * systemDeparture[s])
-      gapKm = gaps[r] * a + departureKm * systemIntegral[s]
+      leavingKm = departureKm * systemDeparture[s]
+      leavingGapKm = departureKm * systemIntegral[s]
       w *= systemBoost[s]
     } else {
-      logScales[r] = neighbourLogScale(r, bodies, truth)
-      gapKm = gaps[r] * Math.exp(logScales[r])
+      a = Math.exp(neighbourLogScale(r, bodies, truth))
     }
+    const grounded = bodies[r].ground && speedFloor(bodies[r]) < V_NORMAL
+    const groundKm = grounded ? truth.radii[r] / bodies[r].radius - a : 0
+    const grounding = 1 - THREE.MathUtils.smoothstep(gaps[r], GROUND_BAND.inner, GROUND_BAND.outer)
+    const paybackKm = -groundKm * GROUND_BAND_DEPTH
+    logScales[r] = Math.log(
+      a + groundKm * grounding + paybackKm * bandSlope(gaps[r], GROUND_PAYBACK) + leavingKm
+    )
+    const gapKm =
+      gaps[r] * a +
+      groundKm * (gaps[r] - bandIntegral(gaps[r], GROUND_BAND)) +
+      paybackKm *
+        THREE.MathUtils.smoothstep(gaps[r], GROUND_PAYBACK.inner, GROUND_PAYBACK.outer) +
+      leavingGapKm
     direction.subVectors(position, bodies[r].position)
     if (direction.lengthSq() > 0) direction.normalize()
     anchorGapKm[r] = gapKm
