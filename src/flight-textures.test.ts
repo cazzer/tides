@@ -14,7 +14,7 @@ import {
 
 describe('flightTextureUrl', () => {
   it('picks 8k where there is one and the cap allows it', () => {
-    for (const key of ['mars', 'mercury'] as const) {
+    for (const key of ['mars', 'mercury', 'earth-clouds'] as const) {
       expect(flightTextureUrl(key, 8192)).toMatch(new RegExp(`${key}-8k`))
       expect(flightTextureUrl(key, 4096)).toMatch(new RegExp(`${key}-4k`))
     }
@@ -100,24 +100,27 @@ describe('createFlightTextureCache', () => {
 
 // What the asset script must produce: Basis ETC1S (BasisLZ) or UASTC
 // (Zstandard) with a full mip chain, tagged sRGB, the colour space
-// KTX2Loader then gives the texture.
+// KTX2Loader then gives the texture; the cloud map, data, tagged linear.
 describe('flight assets', () => {
+  const LINEAR = 1
   const SRGB = 2
   const BASIS_LZ = 1
   const ZSTD = 2
   const files = [
-    ['mars', 8192, BASIS_LZ], ['mars', 4096, BASIS_LZ], ['mercury', 8192, BASIS_LZ], ['mercury', 4096, BASIS_LZ],
-    ['jupiter', 4096, ZSTD], ['saturn', 4096, ZSTD], ['venus', 4096, ZSTD],
+    ['mars', 8192, BASIS_LZ, SRGB], ['mars', 4096, BASIS_LZ, SRGB],
+    ['mercury', 8192, BASIS_LZ, SRGB], ['mercury', 4096, BASIS_LZ, SRGB],
+    ['jupiter', 4096, ZSTD, SRGB], ['saturn', 4096, ZSTD, SRGB], ['venus', 4096, ZSTD, SRGB],
+    ['earth-clouds', 8192, BASIS_LZ, LINEAR], ['earth-clouds', 4096, BASIS_LZ, LINEAR],
   ] as const
 
-  it.each(files)('%s at %i', (key, width, scheme) => {
+  it.each(files)('%s at %i', (key, width, scheme, transfer) => {
     const file = resolve(__dirname, `assets/flight/${key}-${width / 1024}k.ktx2`)
     const container = read(new Uint8Array(readFileSync(file)))
     expect(container.vkFormat).toBe(0)
     expect(container.supercompressionScheme).toBe(scheme)
     expect([container.pixelWidth, container.pixelHeight]).toEqual([width, width / 2])
     expect(container.levelCount).toBe(Math.log2(width) + 1)
-    expect(container.dataFormatDescriptor[0].transferFunction).toBe(SRGB)
+    expect(container.dataFormatDescriptor[0].transferFunction).toBe(transfer)
   })
 
   it('has a file for every map and no others', () => {

@@ -20,6 +20,7 @@ import {
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
+import { useFlightTexture } from './useFlightTexture'
 
 // Import assets directly
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
@@ -106,9 +107,13 @@ export default function EarthRenderer({
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
   }, [groundPatch])
-  // The static clouds, and with Real weather until the frame loop has a blend
-  // to show, so the first frame isn't missing its map.
-  if (!real || !clouds.uniforms.uCloudMap.value) setCloudMap(clouds, cloudsTexture, false)
+  // The static clouds, sharper in flight near Earth (tides-01v.12), and with
+  // Real weather until the frame loop has a blend to show, so the first
+  // frame isn't missing its map.
+  const flightClouds = useFlightTexture('earth-clouds', groundRef, diameter)
+  if (!real || !clouds.uniforms.uCloudMap.value) {
+    setCloudMap(clouds, (!real && flightClouds) || cloudsTexture, false)
+  }
   clouds.uniforms.uTerrainMap.value = bumpTexture
   clouds.uniforms.uSeaLevel.value = diameter
 

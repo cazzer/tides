@@ -142,55 +142,55 @@ export interface MarchSample {
   alpha: number
 }
 
-/** A crossing the march meets: how far from one step to the next (0..1),
- * whether it is a side, and a top's or base's depth down its column. */
+/** A crossing the march meets: how far from one step to the next (0..1)
+ * the ray goes into the cloud and how far it is still in it, whether it
+ * goes on through it as through a side, and a top's depth down its column. */
 export interface MarchHit {
   at: number
+  until: number
   side: boolean
   depth: number | null
 }
 
+/** The stretch (from, until) of a step over which a quantity changing
+ * linearly from f0 to f1 is at most 0; from > until where it is nowhere. */
+function spanAtMost0(f0: number, f1: number): [number, number] {
+  if (f0 <= 0 && f1 <= 0) return [0, 1]
+  if (f0 > 0 && f1 > 0) return [1, 0]
+  const w = f0 / (f0 - f1)
+  return f0 > 0 ? [w, 1] : [0, w]
+}
+
 /**
  * Whether the march from inside the shell (cloudShaders.ts' FLIP_SIDED
- * branch) meets cloud between two steps: down through a top or up through
- * a base where the cloud is at least CLOUD_MIN_ALPHA, or into a side, where
- * the ray was already between the base and top of the column it steps
- * into (from a gap in the deck, or past a faint column's top or base).
- * Null where the ray carries on. `fromAbove`, for a camera above the tops
- * around it (the shader reads them from a coarse mip): as from outside, a
- * top is met however faint, and nothing is a side.
+ * branch) meets cloud between two steps (tides-01v.8.12): with the ray's
+ * altitude and the column taken to change linearly over the step, where the
+ * ray first is under the top, over the base and where the cloud shows
+ * (at least CLOUD_MIN_ALPHA), having been outside it at the last step. Down
+ * through a top, a top (unless the column's top rose past the ray's height
+ * between the steps); otherwise, up through a base or into cloud coming up
+ * to showing beside it, the ray goes on through it as through a side. Null
+ * where the ray carries on. `fromAbove`, for a camera above the tops around
+ * it (the shader reads them from a coarse mip): as from outside, a top is
+ * met however faint, and is never a side.
  */
 export function marchCrossing(
   prev: MarchSample,
   next: MarchSample,
   fromAbove = false
 ): MarchHit | null {
-  const gap = (m: MarchSample) => m.alt - m.top
-  const under = (m: MarchSample) => m.base - m.alt
-  let from = 0
-  let alphaFrom = prev.alpha
-  // Into the column through its top or base, or past it: a step can cross a
-  // thin column whole.
-  const w =
-    gap(prev) > 0 && gap(next) <= 0
-      ? gap(prev) / Math.max(gap(prev) - gap(next), 1e-6)
-      : under(prev) > 0 && under(next) <= 0
-        ? under(prev) / Math.max(under(prev) - under(next), 1e-6)
-        : null
-  if (w != null) {
-    from = w
-    alphaFrom = prev.alpha + (next.alpha - prev.alpha) * w
-    if (alphaFrom >= CLOUD_MIN_ALPHA || (fromAbove && gap(prev) > 0)) {
-      const side = !fromAbove && prev.alt <= next.top && prev.alt >= next.base
-      return { at: w, side, depth: side ? null : gap(prev) > 0 ? 0 : 1 }
-    }
-  }
-  const inColumn = gap(next) <= 0 && under(next) <= 0
-  if (inColumn && alphaFrom < CLOUD_MIN_ALPHA && next.alpha >= CLOUD_MIN_ALPHA) {
-    const t = (CLOUD_MIN_ALPHA - alphaFrom) / Math.max(next.alpha - alphaFrom, 1e-6)
-    return { at: from + (1 - from) * t, side: true, depth: null }
-  }
-  return null
+  const underTop = spanAtMost0(prev.alt - prev.top, next.alt - next.top)
+  const overBase = spanAtMost0(prev.base - prev.alt, next.base - next.alt)
+  const shows: [number, number] =
+    fromAbove && prev.alt > prev.top
+      ? [0, 1]
+      : spanAtMost0(CLOUD_MIN_ALPHA - prev.alpha, CLOUD_MIN_ALPHA - next.alpha)
+  const at = Math.max(underTop[0], overBase[0], shows[0])
+  const until = Math.min(underTop[1], overBase[1], shows[1])
+  if (at <= 0 || at > until) return null
+  const side =
+    at !== underTop[0] || (!fromAbove && prev.alt <= next.top && prev.alt >= next.base)
+  return { at, until, side, depth: side ? null : 0 }
 }
 
 export type Vec3 = [number, number, number]
