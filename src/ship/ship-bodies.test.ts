@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
-import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, cloudColumn } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
@@ -39,7 +39,9 @@ import {
   TERRAIN_MAP_SIZE,
   buildTerrainFloor,
   setEarthTerrain,
+  terrainFloorGrey,
 } from './terrain-floor'
+import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from './limb-detail'
 
 const T = Date.UTC(2026, 9, 22, 12)
 
@@ -261,15 +263,109 @@ describe('ship bodies', () => {
       expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(0.05)
     })
 
-    it("keeps the near plane's corners off the ground at the high-tier stop, on steep slopes and 32:9 screens", () => {
+    // Where a ray from Earth's centre along `local` meets the limb sphere's
+    // displaced triangles, with each vertex at the highest grey it can read:
+    // its bilinear bump sample at u = i / 512, v = j / 256 only reaches the
+    // pooled blocks either side of that line, plus the decoder margin.
+    // THREE.SphereGeometry's quad (i, j) is the faces (a, b, d) and (b, c, d)
+    // over a = (i, j), b = (i, j + 1), c = (i + 1, j + 1), d = (i + 1, j).
+    function limbMeshTop(pooled: Uint8Array, local: THREE.Vector3): number {
+      const [width, height] = LIMB_SEGMENTS
+      const vertex = (i: number, j: number) => {
+        let grey = 0
+        for (const y of [j - 1, j]) {
+          if (y < 0 || y >= height) continue
+          for (const x of [i - 1, i]) grey = Math.max(grey, pooled[y * width + ((x + width) % width)])
+        }
+        const r = EARTH_RADIUS + (TERRAIN_DISPLACEMENT * Math.min(255, grey + TERRAIN_GREY_MARGIN)) / 255
+        const phi = (i / width) * 2 * Math.PI
+        const theta = (j / height) * Math.PI
+        return new THREE.Vector3(-Math.cos(phi) * Math.sin(theta), Math.cos(theta), Math.sin(phi) * Math.sin(theta)).multiplyScalar(r)
+      }
+      const u = Math.atan2(local.z, -local.x) / (2 * Math.PI)
+      const i = Math.floor((u - Math.floor(u)) * width)
+      const j = Math.min(height - 1, Math.floor((0.5 - Math.asin(local.y) / Math.PI) * height))
+      const ray = new THREE.Ray(new THREE.Vector3(), local.clone().normalize())
+      const hit = new THREE.Vector3()
+      let top = 0
+      // The quads either side too, for rays a rounding away from an edge.
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          const qj = j + dj
+          if (qj < 0 || qj >= height) continue
+          const qi = i + di
+          const [a, b, c, d] = [vertex(qi, qj), vertex(qi, qj + 1), vertex(qi + 1, qj + 1), vertex(qi + 1, qj)]
+          for (const [p, q, s] of [[a, b, d], [b, c, d]]) {
+            if (ray.intersectTriangle(p, q, s, false, hit)) top = Math.max(top, hit.length())
+          }
+        }
+      }
+      return top
+    }
+
+    // The ship's stop under the cloud base, over land: the bump map's grey
+    // there read from the pooled map at the cloud march's 256-wide mip (a
+    // 2 × 2 mean of the pooled maxima, which only raises the base it gives).
+    function underBaseShare(earth: ReturnType<typeof byKey>[string], pooled: Uint8Array) {
+      const [width, height] = TERRAIN_MAP_SIZE
+      let land = 0
+      let under = 0
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const grey = (pooled[y * width + x] + pooled[y * width + x + 1] + pooled[(y + 1) * width + x] + pooled[(y + 1) * width + x + 1]) / 4
+          if (grey <= 8) continue
+          const lat = 90 - ((y + 1) / height) * 180
+          const lon = ((x + 1) / width) * 360 - 180
+          const weight = Math.cos(THREE.MathUtils.degToRad(lat))
+          const stop = floorRadius(earth, toWorld(latLonToLocal(lat, lon), T)) - EARTH_RADIUS
+          land += weight
+          if (stop < cloudColumn(1, 1.5, grey / 255).base) under += weight
+        }
+      }
+      return under / land
+    }
+
+    it("stops on the limb sphere's own floor while Earth's ground holds it, under the cloud base over most land (tides-42p)", () => {
+      const pooled = pooledTerrain()
+      const coarse = buildTerrainFloor(pooled)
+      const fine = buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS)
+      setEarthTerrain(coarse, fine)
+      const { earth } = byKey()
+      // On the 128 × 128 sphere's floor a peak holds the stop up for ~8°.
+      expect(underBaseShare(earth, pooled)).toBeLessThan(0.5)
+      onTestFinished(disposeLimbSpheres)
+      const release = retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS))
+      expect(underBaseShare(earth, pooled)).toBeGreaterThan(0.75)
+      release()
+      expect(underBaseShare(earth, pooled)).toBeLessThan(0.5)
+      // The fine floor is the coarse one's own build over finer cells: never
+      // above it, so the swap only ever lets the ship lower.
+      for (let lat = -89; lat <= 89; lat += 1) {
+        for (let lon = -180; lon < 180; lon += 1) {
+          const local = latLonToLocal(lat, lon)
+          expect(terrainFloorGrey(fine, local)).toBeLessThanOrEqual(terrainFloorGrey(coarse, local) + 1e-9)
+        }
+      }
+    })
+
+    it.each([
+      ['128 × 128 sphere', false],
+      ['limb sphere (tides-42p)', true],
+    ])("keeps the near plane's corners off the ground at the high-tier stop over the %s, on steep slopes and 32:9 screens", (_, limb) => {
       // The ground mesh can stand no higher than the pooled block it reads
       // and its neighbours (terrain-floor.ts), plus the decoder margin. From
       // the stop, every point of that within the near rectangle's reach must
       // be further than the reach, at SHIP_FOV: the FOV kick is nil this low.
       const pooled = pooledTerrain()
-      setEarthTerrain(buildTerrainFloor(pooled))
+      setEarthTerrain(buildTerrainFloor(pooled), buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS))
+      const release = limb ? retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS)) : () => {}
+      onTestFinished(() => {
+        release()
+        disposeLimbSpheres()
+      })
       const [width, height] = TERRAIN_MAP_SIZE
       const meshTop = (local: THREE.Vector3) => {
+        if (limb) return limbMeshTop(pooled, local)
         const u = Math.atan2(local.z, -local.x) / (2 * Math.PI)
         const x = Math.floor((u - Math.floor(u)) * width)
         const y = Math.min(height - 1, Math.floor((0.5 - Math.asin(local.y) / Math.PI) * height))

@@ -239,6 +239,15 @@ export function builtLimbSphere(radius: number): THREE.BufferGeometry | null {
   return limbSpheres.get(radius)?.sphere ?? null
 }
 
+/**
+ * Whether a mesh holds the limb sphere of `radius` (retainLimbSphere): from
+ * the commit after it first shows until the one after it goes, so a frame
+ * either side may draw the mesh's own sphere instead.
+ */
+export function limbSphereInUse(radius: number): boolean {
+  return (limbSpheres.get(radius)?.users ?? 0) > 0
+}
+
 // Building a limb sphere takes ~5-15 ms plus the garbage it leaves, and the
 // ~7 MB upload follows on its first draw: together too long for one frame
 // that also draws (Earth's three shells cost ~30-60 ms in one frame).
