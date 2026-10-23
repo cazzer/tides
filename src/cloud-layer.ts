@@ -304,6 +304,9 @@ function wrappedWindowMax(row: Uint8Array, half: number, into: Uint8Array): void
  * texels hold the max of; its taps reach 1½ of them from the point. Texels
  * within the arc are found centre to centre, with each one's reach from its
  * centre to its corners added.
+ *
+ * Not called at runtime: scripts/build-cloud-ceiling.mjs ships its output
+ * as earth-cloud-ceiling.bin, and a test checks the two agree.
  */
 export function cloudCeiling(
   pooled: Uint8Array,

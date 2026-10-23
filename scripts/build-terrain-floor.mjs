@@ -7,7 +7,8 @@
 // and low texture sets), and the 4k one keeps peaks the 2k one averages
 // away, so each block takes the max over both.
 //
-// Requires ImageMagick (magick) to decode the JPEGs.
+// Requires ImageMagick (magick) to decode the JPEGs. Then rebuild the cloud
+// ceiling from it: scripts/build-cloud-ceiling.mjs.
 // usage: node scripts/build-terrain-floor.mjs
 
 import { execFileSync } from "node:child_process";
