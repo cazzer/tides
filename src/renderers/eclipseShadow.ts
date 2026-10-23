@@ -22,20 +22,23 @@ const UMBRA_GLOW: Record<ShadedBody, [number, number, number]> = {
   moon: LUNAR_ECLIPSE_GLOW,
 }
 
+// Mirrors surfacePoint(): a direction in the body's frame, read as a
+// geodetic latitude on the ellipsoid, turned into the scene's axes (km).
 const VERTEX_HEAD = /* glsl */ `
 uniform vec2 uEclipseBody;
 varying vec3 vEclipsePoint;
-`
 
-// Mirrors surfacePoint(): the texel's direction in the body's frame, read as
-// a geodetic latitude on the ellipsoid, turned into the scene's axes (km).
-const VERTEX_BODY = /* glsl */ `
-{
-  vec3 eclipseLocal = normalize(position);
+vec3 eclipsePoint(vec3 local) {
+  vec3 eclipseLocal = normalize(local);
   float eclipseN = uEclipseBody.x / sqrt(1.0 - uEclipseBody.y * eclipseLocal.y * eclipseLocal.y);
   vec3 eclipseP = eclipseN * vec3(eclipseLocal.x, eclipseLocal.y * (1.0 - uEclipseBody.y), eclipseLocal.z);
-  vEclipsePoint = mat3(modelMatrix) * eclipseP / length(modelMatrix[0].xyz);
+  return mat3(modelMatrix) * eclipseP / length(modelMatrix[0].xyz);
 }
+`
+
+// The vertex's own point.
+const VERTEX_BODY = /* glsl */ `
+vEclipsePoint = eclipsePoint(position);
 `
 
 // Mirrors coveredFraction() and sunVisibleFraction().

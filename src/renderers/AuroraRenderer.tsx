@@ -24,12 +24,18 @@ import { AURORA_GAIN } from '../lighting'
 import { isLowQuality } from '../quality'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
-import { AURORA_SHELL_OUTER, pickShellFaces, withinShellReach } from './earth-shells'
+import {
+  AURORA_RENDER_ORDER,
+  AURORA_SHELL_INNER,
+  AURORA_SHELL_OUTER,
+  pickShellFaces,
+  withinShellReach,
+} from './earth-shells'
 
 // Shell heights as fractions of the Earth's radius. Real aurora spans ~100 to
 // ~300+ km (1.6-5%); the base sits just above the cloud layer (1.02) and the
 // displaced terrain, which this scene exaggerates.
-const SHELL_INNER = 1.024
+const SHELL_INNER = AURORA_SHELL_INNER
 const SHELL_OUTER = AURORA_SHELL_OUTER
 // Down to 18° latitude: rays grazing the shell enter it up to ~17° from where
 // they meet a storm-time oval (≥ ~38° geographic).
@@ -199,14 +205,14 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         ref={mesh}
         geometry={north}
         material={material}
-        renderOrder={2}
+        renderOrder={AURORA_RENDER_ORDER}
         raycast={noRaycast}
         onBeforeRender={pickFaces}
       />
       <mesh
         geometry={south}
         material={material}
-        renderOrder={2}
+        renderOrder={AURORA_RENDER_ORDER}
         raycast={noRaycast}
         onBeforeRender={pickFaces}
       />
@@ -215,7 +221,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         geometry={band}
         material={material}
         visible={false}
-        renderOrder={2}
+        renderOrder={AURORA_RENDER_ORDER}
         raycast={noRaycast}
         onBeforeRender={pickFaces}
       />

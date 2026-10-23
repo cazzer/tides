@@ -1,6 +1,6 @@
 import { useLoader, useFrame, useThree } from '@react-three/fiber'
 import { meshBounds, useTexture } from '@react-three/drei'
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import { realCloudBlend, realClouds, useRealCloudsActive } from './realCloudTextures'
@@ -81,6 +81,8 @@ export default function EarthRenderer({
     [eclipseShadow, textureSet.low]
   )
   useEffect(() => () => clouds.dispose(), [clouds])
+  const scene = useThree((s) => s.scene)
+  useEffect(() => cloudsFaceEachCamera(scene, clouds, cloudRef), [scene, clouds])
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   const groundSphere = useBodySphere('earth', diameter, [128, 128])
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
@@ -199,6 +201,25 @@ export default function EarthRenderer({
       </mesh> */}
     </group>
   )
+}
+
+// The cloud shell picks its faces and draw order for each camera before
+// three sorts the scene (CloudLayer.faceCamera). Outside the component: the
+// react-hooks lint rejects mutating the scene from useThree in place.
+// Returns the cleanup.
+function cloudsFaceEachCamera(
+  scene: THREE.Scene,
+  clouds: CloudLayer,
+  cloudRef: RefObject<THREE.Mesh | null>
+) {
+  const previous = scene.onBeforeRender
+  scene.onBeforeRender = function (renderer, renderScene, camera, target) {
+    previous.call(this, renderer, renderScene, camera, target)
+    if (cloudRef.current) clouds.faceCamera(cloudRef.current, camera)
+  }
+  return () => {
+    scene.onBeforeRender = previous
+  }
 }
 
 /** Only geostationary imagery carries cloud-top heights (R) and their

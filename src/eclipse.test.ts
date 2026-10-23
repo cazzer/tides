@@ -229,7 +229,7 @@ describe('shader patch', () => {
       shader as THREE.WebGLProgramParametersWithUniforms,
       {} as THREE.WebGLRenderer
     )
-    expect(shader.vertexShader).toMatch(/#include <begin_vertex>\s+\{\s+vec3 eclipseLocal/)
+    expect(shader.vertexShader).toMatch(/#include <begin_vertex>\s+vEclipsePoint = eclipsePoint\(position\);/)
     expect(shader.fragmentShader).toMatch(
       /#include <lights_fragment_end>\s+if \(uEclipseActive/
     )
