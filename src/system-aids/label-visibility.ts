@@ -2,7 +2,8 @@
 // BodyLabels runs these every frame, so they are pure and allocation-free.
 //
 // The metric is scene units per CSS pixel (upp), the ortho main view's
-// "camera distance": 1 zoomed all the way out, 0.1 at the default zoom, and
+// "camera distance": 1 zoomed all the way out on a desktop (~2.7 on a
+// 390 px phone, whose zoom floor is lower), 0.1 at the default zoom, and
 // ~0.2 with Jupiter or Saturn framed. A label shows when, at the current upp:
 //
 //   - its orbit is clear of its neighbours' (labelClearance) by enough

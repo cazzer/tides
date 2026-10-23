@@ -11,19 +11,20 @@
 //
 // The inner power law keeps Mercury's perihelion surface 12.2 units from the
 // Sun's centre (clear of its radius-10 surface) and keeps Venus and Mars off
-// the Moon's orbit around the Earth (50 ± 11.6 incl. the Moon's radius). The
-// log tail is C0-continuous at R0 = f⁻¹(89.6) but not C1: matching the slope
-// needs K = 1.1, which puts Neptune's aphelion surface at ~379. K = 0.9 puts
-// it at 327, mid-way in the 300–350 target, and leaves 20+ unit gaps
-// between the outer planets.
+// the Moon's orbit around the Earth (50 ± 11.6 incl. the Moon's radius), so
+// the inner planets have no room to spread. The log tail is C0-continuous at
+// R0 = f⁻¹(89.6) but not C1: matching the slope needs K = 1.1. K = 1.4 is
+// steeper than that, which spreads the giants (tides-rg9): 34–50 unit gaps
+// between them where K = 0.9 left 17–24, with Neptune's aphelion surface at
+// 456 and the Kuiper belt's outer edge (50 AU) at 514.
 //
 // Bands [f(q) − R, f(Q) + R] in scene units, with q/Q sampled over 1900–2100
 // and R the ring outer radius for Saturn and Uranus:
 //
-//   Mercury  12.2 –  23.1     Jupiter  169.3 – 190.3
-//   Venus    31.9 –  38.2     Saturn   210.0 – 247.4
-//   Mars     69.3 –  89.7     Uranus   271.2 – 298.9
-//                             Neptune  315.7 – 327.1
+//   Mercury  12.2 –  23.1     Jupiter  217.1 – 242.5
+//   Venus    31.9 –  38.2     Saturn   284.7 – 327.1
+//   Mars     69.3 –  89.7     Uranus   377.6 – 409.6
+//                             Neptune  444.1 – 456.2
 //
 // (Earth 50, Moon envelope 38.4 – 61.6.) planets.test.ts asserts all of this.
 
@@ -43,7 +44,7 @@ const MS_PER_DAY = 86_400_000
 const INNER_POWER = 1.1
 const R0 = 1.7
 const F_R0 = EARTH_ORBIT_RADIUS * R0 ** INNER_POWER
-const K = 0.9
+const K = 1.4
 
 /** Scene units from the Sun for a body `rAu` AU out. */
 export type SceneDistance = (rAu: number) => number

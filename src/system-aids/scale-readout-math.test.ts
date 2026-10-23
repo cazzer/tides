@@ -42,7 +42,7 @@ describe('kmPerUnit', () => {
     }
     const r = 5.2
     const radial = (KM_PER_AU * 0.01) / (sceneDistance(r + 0.005) - sceneDistance(r - 0.005))
-    expect(radial / along).toBeGreaterThan(2)
+    expect(radial / along).toBeGreaterThan(1.5)
   })
 })
 

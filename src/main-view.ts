@@ -16,32 +16,57 @@ export function planetFramingZoom(radius: number, earthRadius: number): number {
   )
 }
 
-/** Zooming out no further than this keeps the starfield's edge off screen. */
+/**
+ * The lowest zoom floor a large view gets, and where planetsDrawDepth stops
+ * reaching deeper: a smaller view's floor goes lower (mainViewRange).
+ */
 export const PLANETS_MIN_ZOOM = 1
 
 /**
- * Main view zoom floor and starfield size. With planets on, the stars sit
- * beyond every body planetsNear lets through (see main-view.test.ts). Off,
- * these are the values the view always had (minZoom is OrbitControls'
- * default, and an undefined starRadius keeps Starfield's).
+ * How far from the target the zoom floor frames, scene units: Neptune's
+ * aphelion surface (456, planets.ts) seen from Earth (50 from the Sun, the
+ * default target) on the far side, with room for its label.
  */
-export function mainViewRange(showPlanets: boolean): {
-  minZoom: number
-  starRadius: number | undefined
-} {
-  return showPlanets
-    ? { minZoom: PLANETS_MIN_ZOOM, starRadius: 1500 }
-    : { minZoom: 0, starRadius: undefined }
+export const SYSTEM_FIT_RADIUS = 530
+
+/** The starfield's radius in the main view with planets on. */
+export const PLANETS_STAR_RADIUS = 1800
+
+/** The main view's size in CSS pixels (its camera's frustum at zoom 1). */
+export interface ViewSize {
+  width: number
+  height: number
 }
 
 /**
- * How far in front of the target the main view draws at `zoom`: 800 units
- * once zoomed out to the whole system (bodies sit within ~360 of the Sun, so
- * two are at most ~720 apart), shrinking with the square of the zoom so that
- * from zoom ~3.2 in, i.e. at every planet's framing, it is inside the eye.
+ * Main view zoom floor and starfield size. With planets on, the floor frames
+ * the whole system across the view's shorter side, however the view is
+ * turned, but never zooms out past PLANETS_MIN_ZOOM: a phone gets a lower
+ * floor than a desktop. The stars sit beyond every body planetsNear lets
+ * through (see main-view.test.ts). Off, these are the values the view always
+ * had (minZoom is OrbitControls' default, and an undefined starRadius keeps
+ * Starfield's).
+ */
+export function mainViewRange(
+  showPlanets: boolean,
+  view: ViewSize
+): {
+  minZoom: number
+  starRadius: number | undefined
+} {
+  if (!showPlanets) return { minZoom: 0, starRadius: undefined }
+  const fit = Math.min(view.width, view.height) / (2 * SYSTEM_FIT_RADIUS)
+  return { minZoom: Math.min(PLANETS_MIN_ZOOM, fit), starRadius: PLANETS_STAR_RADIUS }
+}
+
+/**
+ * How far in front of the target the main view draws at `zoom`: 1000 units
+ * once zoomed out to the whole system (bodies sit within ~470 of the Sun, so
+ * two are at most ~940 apart), shrinking with the square of the zoom so that
+ * from zoom ~3.5 in, i.e. at every planet's framing, it is inside the eye.
  */
 export function planetsDrawDepth(zoom: number): number {
-  return 800 / Math.max(zoom, PLANETS_MIN_ZOOM) ** 2
+  return 1000 / Math.max(zoom, PLANETS_MIN_ZOOM) ** 2
 }
 
 /**

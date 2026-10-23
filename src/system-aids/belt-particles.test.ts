@@ -19,8 +19,8 @@ import {
 
 // Band edges from planets.ts' header (scene units, incl. ring extents).
 const MARS_MAX = 89.7
-const JUPITER_MIN = 169.3
-const NEPTUNE_MAX = 327.1
+const JUPITER_MIN = 217.1
+const NEPTUNE_MAX = 456.2
 // OrbitControls' maxDistance: the eye sits this far behind the target.
 const EYE = 80
 
@@ -164,7 +164,7 @@ describe('the Kuiper belt in the main view', () => {
   })
 
   it('stays inside the starfield, even its nearest depth shell', () => {
-    const starRadius = mainViewRange(true).starRadius!
+    const starRadius = mainViewRange(true, { width: 390, height: 844 }).starRadius!
     expect(EYE + NEPTUNE_MAX + kuiperMax).toBeLessThan(starRadius * SHELL_NEAR_RADIUS)
     expect(EYE + NEPTUNE_MAX + kuiperMax).toBeLessThan(starRadius * Math.SQRT1_2)
   })

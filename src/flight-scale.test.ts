@@ -53,6 +53,8 @@ function helioAu(body: Body, t: number): Vec3 {
 describe('system view (golden, recorded before tides-2hv.6)', () => {
   // flight-scale.golden.json was written from main at ad6cfd0, before
   // heliocentricScene took a distance function or moonPosition was split.
+  // tides-rg9 re-recorded Jupiter to Neptune for its wider log tail (the
+  // same directions, only the radii moved); the rest is still ad6cfd0's.
   const { times } = golden
 
   it('places every planet bit-for-bit as before', () => {
