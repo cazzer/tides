@@ -82,6 +82,82 @@ export function cloudColumn(
   return { base, top: base + CLOUD_UNITS_PER_KM * topKm * cloudShape(alpha) }
 }
 
+/** The faintest cloud drawn: a column under it is a gap in the deck. */
+export const CLOUD_MIN_ALPHA = 0.02
+
+/** How far down its column a point at `altitude` lies: 0 at the top, 1 at
+ * the base. Undersides and the lower sides of gaps shade darker by it
+ * (tides-01v.8.5). */
+export function columnDepth(altitude: number, base: number, top: number): number {
+  return Math.min(1, Math.max(0, (top - altitude) / Math.max(top - base, 1e-6)))
+}
+
+/** How much light crosses `path` scene units of a column of opacity `alpha`
+ * (top to bottom) and `thickness`: the cloud past a side, seen across. */
+export function cloudPathClear(alpha: number, thickness: number, path: number): number {
+  return (1 - Math.min(alpha, 0.995)) ** (path / Math.max(thickness, 1e-4))
+}
+
+/** One step of the cloud march: its altitude, and its column's base, top
+ * and opacity there. */
+export interface MarchSample {
+  alt: number
+  base: number
+  top: number
+  alpha: number
+}
+
+/** A crossing the march meets: how far from one step to the next (0..1),
+ * whether it is a side, and a top's or base's depth down its column. */
+export interface MarchHit {
+  at: number
+  side: boolean
+  depth: number | null
+}
+
+/**
+ * Whether the march from inside the shell (cloudShaders.ts' FLIP_SIDED
+ * branch) meets cloud between two steps: down through a top or up through
+ * a base where the cloud is at least CLOUD_MIN_ALPHA, or into a side, where
+ * the ray was already between the base and top of the column it steps
+ * into (from a gap in the deck, or past a faint column's top or base).
+ * Null where the ray carries on. `fromAbove`, for a camera above the tops
+ * around it (the shader reads them from a coarse mip): as from outside, a
+ * top is met however faint, and nothing is a side.
+ */
+export function marchCrossing(
+  prev: MarchSample,
+  next: MarchSample,
+  fromAbove = false
+): MarchHit | null {
+  const gap = (m: MarchSample) => m.alt - m.top
+  const under = (m: MarchSample) => m.base - m.alt
+  let from = 0
+  let alphaFrom = prev.alpha
+  // Into the column through its top or base, or past it: a step can cross a
+  // thin column whole.
+  const w =
+    gap(prev) > 0 && gap(next) <= 0
+      ? gap(prev) / Math.max(gap(prev) - gap(next), 1e-6)
+      : under(prev) > 0 && under(next) <= 0
+        ? under(prev) / Math.max(under(prev) - under(next), 1e-6)
+        : null
+  if (w != null) {
+    from = w
+    alphaFrom = prev.alpha + (next.alpha - prev.alpha) * w
+    if (alphaFrom >= CLOUD_MIN_ALPHA || (fromAbove && gap(prev) > 0)) {
+      const side = !fromAbove && prev.alt <= next.top && prev.alt >= next.base
+      return { at: w, side, depth: side ? null : gap(prev) > 0 ? 0 : 1 }
+    }
+  }
+  const inColumn = gap(next) <= 0 && under(next) <= 0
+  if (inColumn && alphaFrom < CLOUD_MIN_ALPHA && next.alpha >= CLOUD_MIN_ALPHA) {
+    const t = (CLOUD_MIN_ALPHA - alphaFrom) / Math.max(next.alpha - alphaFrom, 1e-6)
+    return { at: from + (1 - from) * t, side: true, depth: null }
+  }
+  return null
+}
+
 export type Vec3 = [number, number, number]
 
 /**
@@ -107,8 +183,10 @@ export function distanceToRadius(r0: number, mu: number, r: number): number {
  * distances along the unit `dir` from `eye` (both in the body's frame, about
  * its centre): from `near`, the near plane's distance along the ray, or from
  * where the ray comes within `outer` of the centre if that is further, to
- * where it leaves that sphere or drops below the lowest base anywhere. Null
- * when no part of the ray past the near plane comes within `outer`.
+ * where it leaves that sphere or, if it goes on to meet the sea, drops below
+ * the lowest base anywhere, or from below that, meets the sea (one that skims
+ * over the sea comes back up under the deck). Null when no part of the ray
+ * past the near plane comes within `outer`.
  */
 export function marchSpanFromEye(
   eye: Vec3,
@@ -125,7 +203,13 @@ export function marchSpanFromEye(
   let end = -b + Math.sqrt(discOuter)
   const inner = seaLevel + CLOUD_CLEARANCE
   const discInner = b * b - (eye2 - inner * inner)
-  if (discInner > 0 && -b - Math.sqrt(discInner) > start) end = -b - Math.sqrt(discInner)
+  const discSea = b * b - (eye2 - seaLevel * seaLevel)
+  const toSea = -b - Math.sqrt(Math.max(discSea, 0))
+  if (discSea > 0 && toSea > 0) {
+    // From below every base, the sea itself.
+    const toInner = -b - Math.sqrt(discInner)
+    end = toInner > start ? toInner : toSea
+  }
   return end > start ? { start, end } : null
 }
 

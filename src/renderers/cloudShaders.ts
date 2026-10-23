@@ -8,7 +8,9 @@
 // Within the ship camera's reach of the shell (tides-01v.8.4: inside it, or
 // near enough that the near plane may clip it), the material draws its back
 // faces instead (three defines FLIP_SIDED) and the march starts at the
-// camera; see the FLIP_SIDED branches.
+// camera; see the FLIP_SIDED branches. From below the tops (tides-01v.8.5)
+// that march also meets the clouds' bases and the sides of their gaps, which
+// are shaded darker as the light reaching them has come through the cloud.
 //
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
@@ -17,6 +19,7 @@ import {
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
+  CLOUD_MIN_ALPHA,
   CLOUD_UNITS_PER_KM,
   DETAIL_BASE_TEXELS,
   DETAIL_FADE_END,
@@ -176,6 +179,16 @@ varying float vViewDepth;
 varying float vNear;
 // The highest ground the relief layer's bump map holds.
 #define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
+// How far past a flank its cloud is read, and how many steps past a side.
+#define WALL_DEPTH ${f(MARCH_STEP / 2)}
+#define SIDE_STEPS 6
+// The mip whose tops stand for those around the camera: about 8 texels.
+#define NEAR_TOPS_LOD 3.0
+
+// cloudPathClear()
+float cloudPathClear(float alpha, float thickness, float path) {
+  return pow(1.0 - min(alpha, 0.995), path / max(thickness, 1e-4));
+}
 #endif
 
 #define RELIEF 1.2
@@ -196,6 +209,9 @@ varying float vNear;
 #define SHADOW_DARK 0.5
 #define SKY 0.22
 #define FORWARD 0.6
+#define CLOUD_MIN_ALPHA ${f(CLOUD_MIN_ALPHA)}
+// How much of its light the underside of the thickest cloud loses.
+#define UNDERSIDE_DARK 0.65
 
 // sunbeamAirMass() and sunlightTint()
 vec3 cloudSunTint(float mu, float km) {
@@ -306,11 +322,20 @@ void main() {
   float sOut = -be + sqrt(discEye);
   // View depth scales with distance along the ray.
   float sNear = vNear * length(vRayDir) / vViewDepth;
+  // The column the march stepped into at its hit, whether that was a side,
+  // how much light gets through the cloud behind it, and how far down its
+  // column the hit lies where the crossing tells (below; else -1).
+  vec4 colIn = vec4(0.0);
+  bool side = false;
+  float sideClear = 1.0;
+  float depthHit = -1.0;
+  // Whether the camera is above the tops around it.
+  bool fromAbove = false;
 #endif
 
 #if defined(CLOUD_FLAT) && defined(FLIP_SIDED)
   // The flat shell where the ray enters it, or from inside it, its underside
-  // where the ray leaves (tides-01v.8.5 relights undersides).
+  // where the ray leaves.
   float sFlat = sIn >= sNear ? sIn : sOut;
   if (sFlat < sNear) discard;
   vec3 p = eye + d * sFlat;
@@ -321,8 +346,9 @@ void main() {
 #elif defined(FLIP_SIDED)
   // March from the near plane (or where the ray comes within reach of the
   // tallest top this texture can have anywhere, if that is further) to where
-  // it leaves that reach or drops below the lowest base anywhere. Rays that
-  // never come within reach, the sky from inside, end at once. A ray from
+  // it leaves that reach, or drops below the lowest base anywhere on its way
+  // to the sea: a ray that skims over the sea comes back up under the deck.
+  // Rays that never come within reach, the sky from inside, end at once. A ray from
   // inside can cross half the layer, so each step reads its own ground for
   // the column's base, and its own mip for the footprint there. What lies
   // past the ground, the depth test hides: gl_FragDepth below. Mirrored by
@@ -335,32 +361,68 @@ void main() {
   float sEnd = -be + sqrt(discOuter);
   float inner = uSeaLevel + CLOUD_CLEARANCE;
   float discInner = be * be - (dot(eye, eye) - inner * inner);
-  if (discInner > 0.0 && -be - sqrt(discInner) > sStart) sEnd = -be - sqrt(discInner);
+  float discSea = be * be - (dot(eye, eye) - uSeaLevel * uSeaLevel);
+  float sSea = -be - sqrt(max(discSea, 0.0));
+  if (discSea > 0.0 && sSea > 0.0) {
+    // From below every base, the sea itself.
+    sEnd = -be - sqrt(discInner) > sStart ? -be - sqrt(discInner) : sSea;
+  }
   if (sEnd <= sStart) discard;
+  // Past MARCH_STEPS * MARCH_STEP only for rays skimming the sea from the
+  // shell's top, by under 2%.
   int steps = int(clamp(ceil((sEnd - sStart) / MARCH_STEP), 3.0, float(MARCH_STEPS)));
   float ds = (sEnd - sStart) / float(steps);
+  // A column holds cloud from its base to its top, where it is at least
+  // CLOUD_MIN_ALPHA: the march meets it down through a top, up through a
+  // base, or into a side, where the ray was already between the base and
+  // the top of the column it steps into. Through a faint column's top or
+  // base it carries on. From above the tops around the camera, as from
+  // outside, a top is met however faint (the shading drops it): carried on,
+  // grazing rays would find sides along every far edge, a step apart.
+  // Mirrored by
+  // cloud-layer.ts marchCrossing.
   float sPrev = sStart;
+  float altPrev = 0.0;
   float gapPrev = 0.0;
+  float underPrev = 0.0;
+  float alphaPrev = 0.0;
   float sHit = -1.0;
+  int iSide = 0;
   for (int i = 0; i <= MARCH_STEPS; i++) {
     if (i > steps) break;
     float s = sStart + ds * float(i);
     vec3 q = eye + d * s;
     float r = length(q);
     vec2 uvq = cloudUv(q / r);
-    float lodq = cloudLod(spread * s / max(abs(dot(d, q / r)), 0.05));
+    // A pixel's width on the map: stretched by the slant toward a top or a
+    // base, but across a side, what a step within the deck's height meets.
+    bool inDeck = !fromAbove && i > 0 && underPrev <= 0.0
+      && -underPrev < CLOUD_UNITS_PER_KM * uCloudMaxKm;
+    float lodq = cloudLod(spread * s / (inDeck ? 1.0 : max(abs(dot(d, q / r)), 0.05)));
     vec4 colq = cloudColumn(uvq, lodq, cloudTerrain(uvq));
-    float gap = r - uSeaLevel - colq.z;
-    if (gap <= 0.0) {
-      if (i == 0) {
-        // The march starts inside a column. If the camera itself is in it,
-        // it is in a cloud: unshaded until tides-01v.8.6 fogs it, and a
-        // clear column is the view from below the deck (tides-01v.8.5).
-        // Otherwise only the near plane cuts the top, there.
-        vec2 uvEye = cloudUv(normalize(eye));
-        vec4 colEye = cloudColumn(uvEye, 0.0, cloudTerrain(uvEye));
-        if (length(eye) - uSeaLevel <= colEye.z) {
-          if (colEye.x < 0.02) discard;
+    // Above the top, and below the base.
+    float alt = r - uSeaLevel;
+    float gap = alt - colq.z;
+    float under = colq.y - alt;
+    if (side) {
+      // A column's alpha is its opacity top to bottom; a side is as opaque
+      // as the cloud the ray goes on through, a few steps at most.
+      if (gap > 0.0 || under > 0.0) break;
+      sideClear *= cloudPathClear(colq.x, colq.z - colq.y, ds);
+      if (sideClear < 0.02 || i >= iSide + SIDE_STEPS) break;
+      continue;
+    }
+    if (i == 0) {
+      vec2 uvEye = cloudUv(normalize(eye));
+      float terrainEye = cloudTerrain(uvEye);
+      float altEye = length(eye) - uSeaLevel;
+      fromAbove = altEye > cloudColumn(uvEye, NEAR_TOPS_LOD, terrainEye).z;
+      if (gap <= 0.0 && under <= 0.0 && colq.x >= CLOUD_MIN_ALPHA) {
+        // The march starts in a cloud. If the camera itself is in it, it is
+        // unshaded until tides-01v.8.6 fogs it; otherwise only the near
+        // plane cuts the cloud, there.
+        vec4 colEye = cloudColumn(uvEye, 0.0, terrainEye);
+        if (altEye <= colEye.z && altEye >= colEye.y && colEye.x >= CLOUD_MIN_ALPHA) {
           gl_FragColor = vec4(vec3(0.8), colEye.x * uOpacity);
           gl_FragDepth = 0.0;
           #include <tonemapping_fragment>
@@ -370,11 +432,48 @@ void main() {
         sHit = s;
         break;
       }
-      sHit = mix(sPrev, s, gapPrev / max(gapPrev - gap, 1e-6));
-      break;
+    } else {
+      float sFrom = sPrev;
+      float alphaFrom = alphaPrev;
+      if ((gapPrev > 0.0 && gap <= 0.0) || (underPrev > 0.0 && under <= 0.0)) {
+        // Secant refinement between the last step outside the column and
+        // this one in it (or past it: a step can cross a thin column whole).
+        float w = gapPrev > 0.0
+          ? gapPrev / max(gapPrev - gap, 1e-6)
+          : underPrev / max(underPrev - under, 1e-6);
+        sFrom = mix(sPrev, s, w);
+        alphaFrom = mix(alphaPrev, colq.x, w);
+        if (alphaFrom >= CLOUD_MIN_ALPHA || (fromAbove && gapPrev > 0.0)) {
+          sHit = sFrom;
+          colIn = colq;
+          // Beside the column, its top (or base) having passed the ray's
+          // height between the steps: a side.
+          side = !fromAbove && altPrev <= colq.z && altPrev >= colq.y;
+          if (!side) {
+            depthHit = gapPrev > 0.0 ? 0.0 : 1.0;
+            break;
+          }
+          iSide = i;
+          sideClear = cloudPathClear(colq.x, colq.z - colq.y, s - sHit);
+          continue;
+        }
+      }
+      if (gap <= 0.0 && under <= 0.0
+          && alphaFrom < CLOUD_MIN_ALPHA && colq.x >= CLOUD_MIN_ALPHA) {
+        // From a gap in the deck, or a faint column's top or base, into a
+        // side.
+        sHit = mix(sFrom, s, (CLOUD_MIN_ALPHA - alphaFrom) / max(colq.x - alphaFrom, 1e-6));
+        colIn = colq;
+        side = true;
+        iSide = i;
+        sideClear = cloudPathClear(colq.x, colq.z - colq.y, s - sHit);
+      }
     }
     sPrev = s;
+    altPrev = alt;
     gapPrev = gap;
+    underPrev = under;
+    alphaPrev = colq.x;
   }
   if (sHit < 0.0) discard;
   vec3 p = eye + d * sHit;
@@ -420,10 +519,10 @@ void main() {
   terrain = cloudTerrain(cloudUv(normalize(p)));
 #endif
 #ifdef FLIP_SIDED
-  // A pixel's width at the hit, stretched by the slant, as the shell's own
-  // footprint gives it from outside.
+  // A pixel's width at the hit, stretched by the slant (but for a side), as
+  // the shell's own footprint gives it from outside.
   float eyeDist = length(p - eye);
-  footprint = spread * eyeDist / max(abs(dot(d, normalize(p))), 0.05);
+  footprint = spread * eyeDist / (side ? 1.0 : max(abs(dot(d, normalize(p))), 0.05));
   lod = cloudLod(footprint);
 #endif
 
@@ -431,7 +530,22 @@ void main() {
   vec3 up = p / r;
   vec2 uv = cloudUv(up);
   vec4 col = cloudColumn(uv, lod, terrain);
-  if (col.x < 0.02) discard;
+#ifdef FLIP_SIDED
+  // A side, or a flank where the secant fell short of the column over the
+  // clear ground before it, is the face of the column a little way in (or
+  // failing that the step's, which varies by step): the hit's own column is
+  // clear or thinning, its top below the hit. A side's opacity is the
+  // cloud's behind it (the march's); a flank's depth down its column is
+  // then found below.
+  if (side || (!fromAbove && colIn.x >= CLOUD_MIN_ALPHA && col.x < CLOUD_MIN_ALPHA)) {
+    vec2 uvIn = cloudUv(normalize(p + d * WALL_DEPTH));
+    vec4 colWall = cloudColumn(uvIn, lod, cloudTerrain(uvIn));
+    if (colWall.x < CLOUD_MIN_ALPHA) colWall = colIn;
+    col = vec4(side ? max(1.0 - sideClear, CLOUD_MIN_ALPHA) : colWall.x, colWall.yzw);
+    depthHit = -1.0;
+  }
+#endif
+  if (col.x < CLOUD_MIN_ALPHA) discard;
   float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
   // A pixel's width where the ray meets the top, stretched by the slant.
   // vRayDir is the eye's offset: the Earth group is unscaled.
@@ -444,7 +558,19 @@ void main() {
 #endif
   vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
   float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
-  if (alpha < 0.02) discard;
+  if (alpha < CLOUD_MIN_ALPHA) discard;
+  // How far down its column the hit lies (columnDepth()): 0 on a top, 1 on
+  // a base seen from below, between on a side; the flat shell is all top or
+  // all base, and from outside only tops show.
+#if defined(CLOUD_FLAT) && defined(FLIP_SIDED)
+  float depth = length(eye) < shell ? 1.0 : 0.0;
+#elif defined(FLIP_SIDED)
+  float depth = depthHit >= 0.0
+    ? depthHit
+    : clamp((col.z - (r - uSeaLevel)) / max(col.z - col.y, 1e-6), 0.0, 1.0);
+#else
+  float depth = 0.0;
+#endif
 
   // The tops' slope, by forward differences a pixel or so apart.
   float h = max(footprint, 3.0 * texel);
@@ -493,6 +619,10 @@ void main() {
   // its light.
   float wrap = WRAP * smoothstep(-0.02, 0.2, mu);
   float diffuse = clamp((dot(n, s) + wrap) / (1.0 + wrap), 0.0, 1.0);
+  // Down a column the light has come through the cloud above: the column's
+  // share of the Sun rather than its tops' slopes', and as much less of it
+  // as the cloud stops.
+  diffuse = mix(diffuse, clamp((mu + wrap) / (1.0 + wrap), 0.0, 1.0), depth);
   // Thick cloud turned from the Sun reads grey.
   float albedo = 1.0 - 0.3 * smoothstep(0.5, 1.0, alpha) * (1.0 - diffuse);
   vec3 sky = vec3(0.55, 0.68, 0.9) * SKY * smoothstep(-0.1, 0.35, mu);
@@ -500,11 +630,16 @@ void main() {
   float cosT = dot(d, s);
   float hg = 0.25 * (1.0 - 0.36) / pow(1.36 - 1.2 * cosT, 1.5);
   float edge = 4.0 * alpha * (1.0 - alpha);
-  vec3 radiance = albedo * (uSunGain * (tint * light * diffuse + sky) + uAmbient)
-    + uSunGain * FORWARD * tint * light * hg * edge;
+  vec3 radiance = (albedo * (uSunGain * (tint * light * diffuse + sky) + uAmbient)
+    + uSunGain * FORWARD * tint * light * hg * edge)
+    * (1.0 - UNDERSIDE_DARK * depth * cloudShade(alpha));
 
   // Seen edge-on, a cloud is a longer path.
   float slant = 1.0 / max(abs(dot(d, up)), 0.3);
+#ifdef FLIP_SIDED
+  // A side's opacity already holds its path.
+  if (side) slant = 1.0;
+#endif
   float opacity = (1.0 - pow(1.0 - min(alpha, 0.995), slant)) * uOpacity;
   gl_FragColor = vec4(radiance, opacity);
 #ifdef FLIP_SIDED
