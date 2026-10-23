@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
   airMass,
+  CEILING_ARC_DEG,
+  CEILING_GREY_MARGIN,
+  ceilingReach,
+  cloudCeiling,
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
@@ -30,6 +35,7 @@ import {
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
   TERRAIN_MAX_GREY_FLAT,
+  TERRAIN_READ_TEXELS,
   type Vec3,
 } from './cloud-layer'
 
@@ -38,6 +44,10 @@ const DEG = Math.PI / 180
 function unit(v: Vec3): Vec3 {
   const l = Math.hypot(...v)
   return [v[0] / l, v[1] / l, v[2] / l]
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -272,6 +282,92 @@ describe('cloud detail octaves', () => {
         // And back.
         cloudFrame(cloudFrame(unit, turns), -turns).forEach((c, i) => expect(c).toBeCloseTo(unit[i], 9))
       }
+    }
+  })
+})
+
+describe('cloud ceiling', () => {
+  // earth-terrain-max.bin (ship/terrain-floor.ts TERRAIN_MAP_SIZE).
+  const W = 512
+  const H = 256
+  const pooled = new Uint8Array(
+    readFileSync(new URL('./assets/earth-terrain-max.bin', import.meta.url))
+  )
+  const ceiling = cloudCeiling(pooled, W, H)
+  const atUv = (grid: Uint8Array, w: number, h: number, [u, v]: [number, number]) =>
+    grid[Math.min(h - 1, Math.floor((1 - v) * h)) * w + Math.min(w - 1, Math.floor(u * w))]
+  // The march's ground read at uv (cloudShaders.ts cloudTerrain()), at its
+  // worst: bilinear on the TERRAIN_READ_TEXELS-wide mip, each of whose
+  // texels is at most the max of the pooled texels it covers.
+  const k = W / TERRAIN_READ_TEXELS
+  const mipTexel = (i: number, j: number) => {
+    let max = 0
+    for (let y = j * k; y < (j + 1) * k; y++) {
+      for (let x = i * k; x < (i + 1) * k; x++) max = Math.max(max, pooled[y * W + x])
+    }
+    return max
+  }
+  const groundRead = ([u, v]: [number, number]) => {
+    const w = TERRAIN_READ_TEXELS
+    const h = w / 2
+    const x = u * w - 0.5
+    const y = Math.min(Math.max((1 - v) * h - 0.5, 0), h - 1)
+    const i0 = Math.floor(x)
+    const j0 = Math.floor(y)
+    let max = 0
+    for (const i of [i0, i0 + 1]) {
+      for (const j of [j0, Math.min(j0 + 1, h - 1)]) max = Math.max(max, mipTexel((i + w) % w, j))
+    }
+    return max
+  }
+  // A seeded generator, so a failure repeats.
+  let seed = 1
+  const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646
+  const randomUnit = (): Vec3 => {
+    const z = 2 * random() - 1
+    const a = 2 * Math.PI * random()
+    const r = Math.sqrt(1 - z * z)
+    return [r * Math.cos(a), z, r * Math.sin(a)]
+  }
+
+  it('stands over the ground the march reads anywhere within its arc', () => {
+    for (let n = 0; n < 20000; n++) {
+      // Every tenth near a pole, where the texels crowd.
+      const p = n % 10 ? randomUnit() : unit([random() - 0.5, n % 20 ? 20 : -20, random() - 0.5])
+      // A point up to the arc away, in a random direction.
+      const t = unit(cross(p, randomUnit()))
+      const a = random() * CEILING_ARC_DEG * DEG
+      const x: Vec3 = [0, 1, 2].map((c) => p[c] * Math.cos(a) + t[c] * Math.sin(a)) as Vec3
+      expect(atUv(ceiling, W, H, directionToUv(p))).toBeGreaterThanOrEqual(
+        groundRead(directionToUv(x)) + CEILING_GREY_MARGIN
+      )
+    }
+  })
+
+  it('lies low over open ocean and over the highest ground at the top', () => {
+    const at = (latDeg: number, lonDeg: number) =>
+      atUv(ceiling, W, H, [(lonDeg + 180) / 360, 0.5 + latDeg / 180])
+    expect(at(0, -150)).toBeLessThanOrEqual(CEILING_GREY_MARGIN + 4)
+    expect(at(-45, -120)).toBeLessThanOrEqual(CEILING_GREY_MARGIN + 4)
+    expect(at(28, 87)).toBeGreaterThanOrEqual(Math.round(TERRAIN_MAX_GREY * 255))
+  })
+
+  it('reaches no further along a path above the sea than its arc', () => {
+    const sea = 2.95
+    const reach = ceilingReach(sea)
+    for (let n = 0; n < 2000; n++) {
+      const q = randomUnit().map((c) => c * sea * (1 + 0.1 * random())) as Vec3
+      const d = randomUnit()
+      const s = reach * random()
+      const e: Vec3 = [q[0] + d[0] * s, q[1] + d[1] * s, q[2] + d[2] * s]
+      // Only paths that stay above the sea (the march's skips do).
+      const b = -(q[0] * d[0] + q[1] * d[1] + q[2] * d[2])
+      const nearest = b > 0 && b < s ? q.map((c, i) => c + d[i] * b) : null
+      if (Math.hypot(...e) < sea || (nearest && Math.hypot(...nearest) < sea)) continue
+      const angle = Math.acos(
+        Math.min(1, (q[0] * e[0] + q[1] * e[1] + q[2] * e[2]) / Math.hypot(...q) / Math.hypot(...e))
+      )
+      expect(angle).toBeLessThanOrEqual(CEILING_ARC_DEG * DEG + 1e-12)
     }
   })
 })
