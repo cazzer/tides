@@ -18,11 +18,13 @@
 import * as THREE from 'three'
 import {
   airMass,
+  ceilingReach,
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
   CLOUD_UNITS_PER_KM,
+  cloudCeiling,
   DETAIL_BASE_TEXELS,
   DETAIL_FADE_END,
   DETAIL_FADE_START,
@@ -40,6 +42,7 @@ import {
   TERRAIN_DISPLACEMENT,
   TERRAIN_KM_PER_GREY,
   TERRAIN_MAX_GREY,
+  TERRAIN_READ_TEXELS,
 } from '../cloud-layer'
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { sceneRadius } from '../planets'
@@ -57,7 +60,10 @@ import {
   withinShellReach,
 } from './earth-shells'
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
+import { limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
+import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
+import terrainMaxUrl from '../assets/earth-terrain-max.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 
 const f = (x: number) => x.toFixed(6)
@@ -105,7 +111,7 @@ float cloudTerrain(vec2 uv) {
 #ifdef CLOUD_FLAT
   return 0.0;
 #else
-  float lod = max(0.0, log2(float(textureSize(uTerrainMap, 0).x) / 256.0));
+  float lod = max(0.0, log2(float(textureSize(uTerrainMap, 0).x) / ${f(TERRAIN_READ_TEXELS)}));
   return textureLod(uTerrainMap, vec2(fract(uv.x), clamp(uv.y, 0.0, 1.0)), lod).r
     * TERRAIN_DISPLACEMENT;
 #endif
@@ -214,6 +220,23 @@ uniform float uFogSoft;
 #define FOG_SUBSTEPS 8
 // A ray that meets no cloud past its fog draws the fog alone.
 #define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), 0.0, vec3(0.0), 0.0); return; } discard; }
+
+// The cloud ceiling (../cloud-layer.ts cloudCeiling()): its texels' greys,
+// rows north first, and how far along a ray above it stays within its arc
+// of where it was read, from anywhere above the sea.
+uniform sampler2D uCloudCeiling;
+#define CEILING_REACH (uSeaLevel * ${f(ceilingReach(1))})
+// Reads of it at each end of the march, before the march's own steps.
+#define CEILING_READS 6
+
+// The radius below which cloud can stand within the ceiling's arc of q.
+float cloudCeilingRadius(vec3 q) {
+  vec2 uv = cloudUv(normalize(q));
+  ivec2 size = textureSize(uCloudCeiling, 0);
+  ivec2 cell = clamp(ivec2(vec2(uv.x, 1.0 - uv.y) * vec2(size)), ivec2(0), size - 1);
+  return uSeaLevel + texelFetch(uCloudCeiling, cell, 0).r * TERRAIN_DISPLACEMENT
+    + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * uCloudMaxKm;
+}
 
 // cloudPathClear()
 float cloudPathClear(float alpha, float thickness, float path) {
@@ -503,6 +526,44 @@ void main() {
   // shell's top, by under 2%.
   int steps = int(clamp(ceil((sEnd - sStart) / MARCH_STEP), 3.0, float(MARCH_STEPS)));
   float ds = (sEnd - sStart) / float(steps);
+  // The march's steps at either end that lie above the ceiling would all
+  // find clear air, so it leaves them out (tides-01v.8.10): from each end
+  // the ray is read against the ceiling, then moved on to where it comes
+  // under it, or by the ceiling's reach. The steps between are the same
+  // steps, so they meet the same cloud.
+  float sFirst = sStart;
+  for (int k = 0; k < CEILING_READS; k++) {
+    vec3 q = eye + d * sFirst;
+    float ceiling = cloudCeilingRadius(q);
+    if (length(q) <= ceiling) break;
+    // Heading in, it goes under where it meets the sphere: taken no further
+    // back than here, so a point judged above it by a rounding stops here.
+    float discCeiling = be * be - (dot(eye, eye) - ceiling * ceiling);
+    float sUnder = max(-be - sqrt(max(discCeiling, 0.0)), sFirst);
+    if (discCeiling > 0.0 && sFirst < -be && sUnder - sFirst <= CEILING_REACH) {
+      sFirst = sUnder;
+      break;
+    }
+    sFirst += CEILING_REACH;
+    if (sFirst >= sEnd) break;
+  }
+  float sLast = sEnd;
+  for (int k = 0; k < CEILING_READS; k++) {
+    if (sLast <= sFirst) break;
+    vec3 q = eye + d * sLast;
+    float ceiling = cloudCeilingRadius(q);
+    if (length(q) <= ceiling) break;
+    float discCeiling = be * be - (dot(eye, eye) - ceiling * ceiling);
+    float sUnder = min(-be + sqrt(max(discCeiling, 0.0)), sLast);
+    if (discCeiling > 0.0 && sLast > -be && sLast - sUnder <= CEILING_REACH) {
+      sLast = sUnder;
+      break;
+    }
+    sLast -= CEILING_REACH;
+  }
+  // A step clear of each, for the first to stand above the cloud.
+  int iFirst = max(int(floor((sFirst - sStart) / ds)) - 1, 0);
+  int iLast = min(int(ceil((sLast - sStart) / ds)) + 1, steps);
   // A column holds cloud from its base to its top, where it is at least
   // CLOUD_MIN_ALPHA: the march meets it down through a top, up through a
   // base, or into a side, where the ray was already between the base and
@@ -531,15 +592,15 @@ void main() {
   vec4 colPrev = vec4(0.0);
   float densityPrev = 0.0;
   vec2 fogShade = vec2(0.0);
-  for (int i = 0; i <= MARCH_STEPS; i++) {
-    if (i > steps) break;
+  for (int i = iFirst; i <= MARCH_STEPS; i++) {
+    if (i > iLast) break;
     float s = sStart + ds * float(i);
     vec3 q = eye + d * s;
     float r = length(q);
     vec2 uvq = cloudUv(q / r);
     // A pixel's width on the map: stretched by the slant toward a top or a
     // base, but across a side, what a step within the deck's height meets.
-    bool inDeck = !fromAbove && i > 0 && underPrev <= 0.0
+    bool inDeck = !fromAbove && i > iFirst && underPrev <= 0.0
       && -underPrev < CLOUD_UNITS_PER_KM * uCloudMaxKm;
     float lodq = cloudLod(spread * s / (inDeck ? 1.0 : max(abs(dot(d, q / r)), 0.05)));
     vec4 colq = cloudColumn(uvq, lodq, cloudTerrain(uvq));
@@ -557,7 +618,7 @@ void main() {
       if (sideClear < 0.02 || i >= iSide + SIDE_STEPS) break;
       continue;
     }
-    if (i == 0) {
+    if (i == iFirst) {
       vec2 uvEye = cloudUv(normalize(eye));
       float terrainEye = cloudTerrain(uvEye);
       float altEye = length(eye) - uSeaLevel;
@@ -895,6 +956,28 @@ export interface CloudLayer {
 
 const eye = new THREE.Vector3()
 
+// The cloud ceiling's texture (cloudCeiling()); until it has loaded, a
+// single texel of white, under which the march skips nothing.
+function ceilingTexture(
+  grey: Uint8Array<ArrayBuffer> = new Uint8Array([255]),
+  [width, height]: readonly [number, number] = [1, 1]
+): THREE.DataTexture {
+  const texture = new THREE.DataTexture(grey, width, height, THREE.RedFormat)
+  texture.needsUpdate = true
+  return texture
+}
+
+async function fetchCeiling(): Promise<THREE.DataTexture> {
+  const response = await fetch(terrainMaxUrl)
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+  const pooled = new Uint8Array(await response.arrayBuffer())
+  const [width, height] = TERRAIN_MAP_SIZE
+  if (pooled.length !== width * height) {
+    throw new Error(`terrain map is ${pooled.length} bytes, not ${width}×${height}`)
+  }
+  return ceilingTexture(cloudCeiling(pooled, width, height), TERRAIN_MAP_SIZE)
+}
+
 export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLayer {
   const uniforms: CloudLayer['uniforms'] = {
     uCloudMap: { value: null },
@@ -914,6 +997,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uSunGain: { value: (SUNLIGHT_INTENSITY / Math.PI) * CLOUD_EXPOSURE },
       uAmbient: { value: CLOUD_AMBIENT },
       uFogSoft: { value: FOG_SOFT },
+      uCloudCeiling: { value: ceilingTexture() },
     },
     defines,
     vertexShader: VERTEX,
@@ -935,6 +1019,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   // faces and the order turn together, before the sort, so that no frame
   // draws one program at the other's place.
   material.userData.warmSides = [THREE.BackSide]
+  let ceilingLoad: Promise<void> | null = null
   const faceCamera = (mesh: THREE.Object3D, camera: THREE.Camera) => {
     const seaLevel = uniforms.uSeaLevel.value
     const reach = withinShellReach(mesh, camera, seaLevel + shellAltitude)
@@ -951,6 +1036,18 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         ? CLOUD_UNDER_AURORA_RENDER_ORDER
         : CLOUD_REACH_RENDER_ORDER
     material.uniforms.uFogSoft.value = prefersReducedMotion() ? FOG_SOFT_REDUCED : FOG_SOFT
+    // The ceiling, once the ship is near Earth, ahead of the march from
+    // inside (in a browser: elsewhere there is no asset server).
+    if (!flat && !ceilingLoad && limbBody() === 'earth' && typeof window !== 'undefined') {
+      ceilingLoad = fetchCeiling()
+        .then((texture) => {
+          material.uniforms.uCloudCeiling.value.dispose()
+          material.uniforms.uCloudCeiling.value = texture
+        })
+        .catch((error: unknown) => {
+          console.warn('Cloud ceiling failed to load; the march skips nothing.', error)
+        })
+    }
   }
   const flag = flat ? '#define CLOUD_FLAT\n' : ''
   const groundPatch: MaterialPatch = {
@@ -975,6 +1072,9 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uniforms,
     shellAltitude,
     faceCamera,
-    dispose: () => material.dispose(),
+    dispose: () => {
+      material.uniforms.uCloudCeiling.value.dispose()
+      material.dispose()
+    },
   }
 }

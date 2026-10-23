@@ -248,6 +248,114 @@ export function marchSpanFromEye(
   return end > start ? { start, end } : null
 }
 
+/** How far around a point (degrees of arc) its cloud ceiling holds. */
+export const CEILING_ARC_DEG = 2
+/** Texels across the bump map's mip the cloud march reads its ground from
+ * (cloudShaders.ts cloudTerrain()). */
+export const TERRAIN_READ_TEXELS = 256
+/** Grey levels added to the ceiling, for decoders that round differently
+ * (as ship/terrain-floor.ts TERRAIN_GREY_MARGIN). */
+export const CEILING_GREY_MARGIN = 4
+
+/**
+ * How far a straight path can run from a point and stay within the
+ * ceiling's arc of it, where it never comes nearer the centre than
+ * `seaLevel`: the chord of the arc at that radius.
+ */
+export function ceilingReach(seaLevel: number, arcDeg = CEILING_ARC_DEG): number {
+  return 2 * seaLevel * Math.sin((arcDeg * Math.PI) / 360)
+}
+
+/**
+ * The highest of each element of a row that wraps around and the `half`
+ * either side of it, into `into`: van Herk's running maxima over blocks of
+ * the window's width, forward and back, so the cost doesn't grow with it.
+ */
+function wrappedWindowMax(row: Uint8Array, half: number, into: Uint8Array): void {
+  const n = row.length
+  const size = 2 * half + 1
+  if (size >= n) {
+    into.fill(row.reduce((a, b) => Math.max(a, b), 0))
+    return
+  }
+  // The row from half before its start to half past its end.
+  const length = n + 2 * half
+  const at = (k: number) => row[(k - half + n) % n]
+  const ahead = new Uint8Array(length)
+  const behind = new Uint8Array(length)
+  for (let k = 0; k < length; k++) ahead[k] = k % size ? Math.max(ahead[k - 1], at(k)) : at(k)
+  for (let k = length - 1; k >= 0; k--) {
+    behind[k] = (k + 1) % size && k + 1 < length ? Math.max(behind[k + 1], at(k)) : at(k)
+  }
+  for (let i = 0; i < n; i++) into[i] = Math.max(behind[i], ahead[i + size - 1])
+}
+
+/**
+ * The cloud ceiling (tides-01v.8.10), from the bump maps max-pooled to
+ * `width` × `height` (earth-terrain-max.bin, rows north first, columns from
+ * −180° east): for each of its texels, a grey that no ground the cloud
+ * march reads within `arcDeg` of any point in it rises above, so no cloud
+ * top there stands above that grey's ground plus the clearance and the
+ * tallest top. The march from inside the shell (cloudShaders.ts) skips
+ * what lies above it.
+ *
+ * The march reads the ground bilinearly from the bump map's
+ * TERRAIN_READ_TEXELS-wide mip, whose texels average the ones the pooled
+ * texels hold the max of; its taps reach 1½ of them from the point. Texels
+ * within the arc are found centre to centre, with each one's reach from its
+ * centre to its corners added.
+ */
+export function cloudCeiling(
+  pooled: Uint8Array,
+  width: number,
+  height: number,
+  arcDeg = CEILING_ARC_DEG
+): Uint8Array<ArrayBuffer> {
+  const row = (grid: Uint8Array, j: number) => grid.subarray(j * width, (j + 1) * width)
+  // The highest ground a read from each texel can see.
+  const read = Math.ceil((1.5 * width) / TERRAIN_READ_TEXELS)
+  const rows = new Uint8Array(width * height)
+  for (let j = 0; j < height; j++) wrappedWindowMax(row(pooled, j), read, row(rows, j))
+  const seen = new Uint8Array(width * height)
+  for (let j = 0; j < height; j++) {
+    for (let i = 0; i < width; i++) {
+      let max = 0
+      for (let dj = Math.max(0, j - read); dj <= Math.min(height - 1, j + read); dj++) {
+        max = Math.max(max, rows[dj * width + i])
+      }
+      seen[j * width + i] = max
+    }
+  }
+  // Then the highest within the arc.
+  const dLon = (2 * Math.PI) / width
+  const dLat = Math.PI / height
+  const lat = (j: number) => Math.PI / 2 - (j + 0.5) * dLat
+  const arc = (lat0: number, lat1: number, lon: number) =>
+    Math.acos(
+      Math.min(1, Math.sin(lat0) * Math.sin(lat1) + Math.cos(lat0) * Math.cos(lat1) * Math.cos(lon))
+    )
+  const corner = Array.from({ length: height }, (_, j) =>
+    Math.max(arc(lat(j), lat(j) + dLat / 2, dLon / 2), arc(lat(j), lat(j) - dLat / 2, dLon / 2))
+  )
+  const out = new Uint8Array(width * height)
+  const within = new Uint8Array(width)
+  for (let j = 0; j < height; j++) {
+    const into = row(out, j)
+    for (let j2 = 0; j2 < height; j2++) {
+      const reach = (arcDeg * Math.PI) / 180 + corner[j] + corner[j2]
+      if (Math.abs(lat(j) - lat(j2)) > reach) continue
+      // The longitudes within reach, the same for every texel of the row.
+      const c = Math.cos(lat(j)) * Math.cos(lat(j2))
+      const cosLon = c > 1e-9 ? (Math.cos(reach) - Math.sin(lat(j)) * Math.sin(lat(j2))) / c : -1
+      const span = cosLon <= -1 ? width : Math.ceil(Math.acos(Math.min(1, cosLon)) / dLon)
+      wrappedWindowMax(row(seen, j2), span, within)
+      for (let i = 0; i < width; i++) into[i] = Math.max(into[i], within[i])
+    }
+  }
+  for (let k = 0; k < out.length; k++) out[k] = Math.min(255, out[k] + CEILING_GREY_MARGIN)
+  return out
+}
+
 /**
  * Where a sunbeam to the ground point (unit direction `ground`, at radius r0)
  * crosses the altitude `altitude` above radius `seaLevel`: the cloud that
