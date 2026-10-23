@@ -1,5 +1,5 @@
 // Venus's cloud tops (its surface never shows through them): Solar System
-// Scope, CC BY 4.0 (credited by PlanetAttribution), from
+// Scope, CC BY 4.0 (credited in Credits.tsx), from
 // https://www.solarsystemscope.com/textures/download/2k_venus_atmosphere.jpg
 // (flight tier: 4k_venus_atmosphere.jpg, scripts/build-flight-textures.sh)
 import * as THREE from 'three'

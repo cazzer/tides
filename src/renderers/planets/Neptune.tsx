@@ -1,7 +1,7 @@
 // Neptune: deep blue with the texture's banding and Voyager's Great Dark
 // Spot, under a faint blue limb.
 //
-// Texture: Solar System Scope, CC BY 4.0 (credited by PlanetAttribution),
+// Texture: Solar System Scope, CC BY 4.0 (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_neptune.jpg
 import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'

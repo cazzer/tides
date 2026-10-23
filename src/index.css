@@ -234,8 +234,8 @@ body {
 
 /* The system view's scale bar and distance readout (src/system-aids/
  * ScaleReadout.tsx), stacked above the ship button in the bottom-right
- * corner: the view menu opens upward in the bottom-left and the attribution
- * pills hold the top-right. It names, never takes taps. */
+ * corner: the view menu opens upward in the bottom-left. It names, never
+ * takes taps. */
 .scale-readout {
   position: absolute;
   right: var(--dock-inset-right);
@@ -396,38 +396,6 @@ body {
   }
 }
 
-/* Top-right of the viewports: panel labels, the view menu and the control dock
- * sit at the bottom, and no layout puts anything else up there. */
-.cloud-attribution {
-  position: absolute;
-  top: calc(6px + env(safe-area-inset-top));
-  right: var(--dock-inset-right);
-  max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
-  margin: 0;
-  font-size: 10px;
-  color: #666;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 10px;
-  padding: 2px 8px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.cloud-attribution a {
-  color: inherit;
-  pointer-events: auto;
-}
-
-.cloud-attribution a:hover {
-  color: #333;
-}
-
-.cloud-attribution a:focus-visible {
-  outline: 2px solid #4c9ffe;
-  outline-offset: 2px;
-}
-
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -440,53 +408,3 @@ body {
   border: 0;
 }
 
-/* Same pill as the cloud credit, same corner; stacks under it when both show. */
-.planet-attribution {
-  position: absolute;
-  top: calc(6px + env(safe-area-inset-top));
-  right: var(--dock-inset-right);
-  max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
-  margin: 0;
-  font-size: 10px;
-  color: #666;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 10px;
-  padding: 2px 8px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.planet-attribution.below {
-  top: calc(30px + env(safe-area-inset-top));
-}
-
-/* The GIBS ground credit in flight (tides-01v.7), under whichever show. */
-.ground-attribution {
-  top: calc(6px + var(--attribution-slot, 0) * 24px + env(safe-area-inset-top));
-}
-
-/* Clear the folded dock's button in the top-left. */
-@media only screen and (max-width: 600px) {
-  .cloud-attribution,
-  .planet-attribution {
-    max-width: calc(
-      100% - var(--dock-inset-left) - var(--dock-height) - 8px -
-        var(--dock-inset-right)
-    );
-  }
-}
-
-.planet-attribution a {
-  color: inherit;
-  pointer-events: auto;
-}
-
-.planet-attribution a:hover {
-  color: #333;
-}
-
-.planet-attribution a:focus-visible {
-  outline: 2px solid #4c9ffe;
-  outline-offset: 2px;
-}

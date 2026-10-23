@@ -2,7 +2,7 @@
 # Builds the flight-only high-res planet maps in src/assets/flight
 # (tides-01v.6): mipmapped KTX2, fetched lazily in ship mode.
 #
-# Sources: Solar System Scope, CC BY 4.0 (credited by PlanetAttribution), the
+# Sources: Solar System Scope, CC BY 4.0 (credited in Credits.tsx), the
 # same maps the 2k JPEGs were cut from. Mars and Mercury ship 8k (desktop)
 # and 4k (phones and tablets). Their "8k" Jupiter and Saturn are 4096 × 2048
 # and Venus's cloud deck tops out at 4k, so those ship one 4k file. Uranus and

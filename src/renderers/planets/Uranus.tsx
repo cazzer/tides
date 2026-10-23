@@ -2,7 +2,7 @@
 // and its thin dark rings. Lying on its side (axis ~97.8°) comes from
 // bodyOrientation, not from anything here.
 //
-// Texture: Solar System Scope, CC BY 4.0 (credited by PlanetAttribution),
+// Texture: Solar System Scope, CC BY 4.0 (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_uranus.jpg
 import { PLANETS } from '../../planets'
 import {

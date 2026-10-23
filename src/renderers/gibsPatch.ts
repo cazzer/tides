@@ -25,7 +25,7 @@
 // scripts/fit-gibs-warp.mjs), zero wherever the two agree to two texels or
 // the shores don't all confirm the shift.
 import { useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo, useSyncExternalStore, type RefObject } from 'react'
+import { useEffect, useMemo, type RefObject } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import { flightTextureCap } from '../quality'
@@ -77,24 +77,6 @@ const store = createGibsTileStore(async (url) => {
 /** Network requests for GIBS ground tiles this page has made. */
 export function gibsTileRequests(): number {
   return store.requests
-}
-
-// Whether any patch imagery is on screen, for its credit.
-let shown = false
-const listeners = new Set<() => void>()
-function setShown(value: boolean) {
-  if (value === shown) return
-  shown = value
-  listeners.forEach((listener) => listener())
-}
-export function useGibsPatchShown(): boolean {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    () => shown
-  )
 }
 
 const f = (x: number) => x.toFixed(6)
@@ -379,7 +361,6 @@ export function createGibsPatch(side: number): GibsPatch {
     inFlight = 0
     uniforms.uGibsPatch.value = null
     uniforms.uGibsActive.value = 0
-    setShown(false)
   }
 
   function load(index: number, tile: GibsPatchTile, now: number) {
@@ -490,10 +471,8 @@ export function createGibsPatch(side: number): GibsPatch {
       }
     }
 
-    let shownAny = false
     slots.forEach((slot, i) => {
       if (slot.state !== 'shown') return
-      shownAny = true
       const fade = Math.round(255 * Math.min(1, (now - slot.since) / FADE_IN_MS))
       if (maskData[i] !== fade) {
         maskData[i] = fade
@@ -501,7 +480,6 @@ export function createGibsPatch(side: number): GibsPatch {
       }
     })
     if (maskChanged) mask.needsUpdate = true
-    setShown(shownAny)
   }
 
   return {

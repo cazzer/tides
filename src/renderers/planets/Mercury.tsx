@@ -1,5 +1,5 @@
-// Mercury's surface map: Solar System Scope, CC BY 4.0 (credited by
-// PlanetAttribution), from
+// Mercury's surface map: Solar System Scope, CC BY 4.0 (credited in
+// Credits.tsx), from
 // https://www.solarsystemscope.com/textures/download/2k_mercury.jpg
 // (flight tier: 8k_mercury.jpg, scripts/build-flight-textures.sh)
 import { PLANETS } from '../../planets'
