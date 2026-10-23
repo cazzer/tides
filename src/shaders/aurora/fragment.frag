@@ -78,7 +78,11 @@ float arcProfile(float x, float width, float blur) {
 
 void main() {
   vec3 ro = vRayOrigin;
+  #ifdef DOUBLE_SIDED
+  vec3 rd = normalize(vRayDir);
+  #else
   vec3 rd = normalize(vPos - vRayOrigin);
+  #endif
   #ifdef DOUBLE_SIDED
   // A pixel's angular size, taken before any discard so its quad is whole.
   float pixelAngle = length(fwidth(rd));

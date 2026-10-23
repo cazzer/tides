@@ -5,8 +5,10 @@
 // the true sphere, so a front facet is never nearer than the sphere's entry:
 // testing the entry against the near plane leaves no gap and no overlap.
 // Pairs with shell/vertex.glsl; only double-sided materials compile it.
-// Include it after the shell's vPos and vRayOrigin varyings.
+// It declares the DOUBLE_SIDED varyings itself; callers take the ray's
+// direction from vRayDir there (tides-01v.8.11).
 #ifdef DOUBLE_SIDED
+varying vec3 vRayDir;
 varying float vViewDepth;
 varying float vNear;
 
@@ -18,6 +20,6 @@ bool shellBackFace(vec3 ro, vec3 rd, float outer) {
   if (h <= 0.0) return false;
   float entry = -b - sqrt(h);
   // Depth scales with distance along the ray.
-  return entry * vViewDepth / length(vPos - ro) < vNear;
+  return entry * vViewDepth / length(vRayDir) < vNear;
 }
 #endif
