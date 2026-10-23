@@ -4,8 +4,11 @@ import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer, MARCH_STEP, MARCH_STEPS } from './cloudShaders'
 import {
   CLOUD_CLEARANCE,
-  CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
+  CLOUD_MIN_ALPHA,
+  cloudPathClear,
+  columnDepth,
+  marchCrossing,
   marchSpanFromEye,
 } from '../cloud-layer'
 import { sceneRadius } from '../planets'
@@ -97,12 +100,34 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
     expect(marchSpanFromEye([0, sea + 0.3, 0], [0, 1, 0], sea, outer, near)).toBeNull()
   })
 
+  it('carries a ray that skims over the sea on, up under the deck', () => {
+    const eye: [number, number, number] = [0, sea + 0.004, 0]
+    // Level: below the lowest base, then up under the bases beyond.
+    const level = marchSpanFromEye(eye, [1, 0, 0], sea, outer, 0.001)!
+    expect(level.end).toBeCloseTo(Math.sqrt(outer ** 2 - (sea + 0.004) ** 2), 9)
+    // Down toward the sea: nothing past the lowest base (or from below it,
+    // the sea) but the ground.
+    const a = (-30 * Math.PI) / 180
+    const dir: [number, number, number] = [Math.cos(a), Math.sin(a), 0]
+    // Where a ray from (0, r, 0) along dir meets the sphere of radius to.
+    const meets = (r: number, to: number) => {
+      const b = r * dir[1]
+      return -b - Math.sqrt(b * b - (r * r - to * to))
+    }
+    expect(marchSpanFromEye(eye, dir, sea, outer, 0.001)!.end).toBeCloseTo(meets(sea + 0.004, sea), 9)
+    const high = marchSpanFromEye([0, sea + 0.05, 0], dir, sea, outer, 0.001)!
+    expect(high.end).toBeCloseTo(meets(sea + 0.05, sea + CLOUD_CLEARANCE), 9)
+    // Up from below the deck: the sea behind the eye ends nothing.
+    const up = marchSpanFromEye(eye, [Math.cos(a), -Math.sin(a), 0], sea, outer, 0.001)!
+    const b = (sea + 0.004) * -Math.sin(a)
+    expect(up.end).toBeCloseTo(-b + Math.sqrt(b * b - ((sea + 0.004) ** 2 - outer ** 2)), 9)
+  })
+
   it('keeps every march from inside within the step budget', () => {
-    // Eyes above the low deck; from below it (tides-01v.8.5) a ray can pass
-    // through the globe, which the shader's step clamp and the depth test
-    // cover.
+    // From the deck's bottom to above the shell. Rays that skim over the sea
+    // from the shell's top stretch the clamped steps, by under 2%.
     let longest = 0
-    for (let alt = CLOUD_FLAT_ALTITUDE; alt <= CLOUD_LAYER_TOP + 0.01; alt += 0.005) {
+    for (let alt = 0.001; alt <= CLOUD_LAYER_TOP + 0.01; alt += 0.005) {
       for (let deg = -90; deg <= 90; deg += 0.5) {
         const a = (deg * Math.PI) / 180
         const span = marchSpanFromEye(
@@ -115,7 +140,7 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
         if (span) longest = Math.max(longest, span.end - span.start)
       }
     }
-    expect(longest / MARCH_STEP).toBeLessThanOrEqual(MARCH_STEPS)
+    expect(longest / MARCH_STEPS).toBeLessThanOrEqual(MARCH_STEP * 1.02)
   })
 
   for (const flat of [false, true]) {
@@ -175,6 +200,95 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
         clearLimbView()
         clouds.dispose()
       }
+    })
+  }
+})
+
+describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => {
+  const solid = 0.6
+  const clear = 0.005
+  // A column based at 0.006, its top at `top`, and a step at `alt` over it.
+  const at = (alt: number, top: number, alpha: number) => ({ alt, base: 0.006, top, alpha })
+
+  it('meets a top from above only where the cloud there shows', () => {
+    const top = marchCrossing(at(0.024, 0.022, solid), at(0.02, 0.022, solid))
+    expect(top).toEqual({ at: expect.closeTo(0.5, 9), side: false, depth: 0 })
+    expect(marchCrossing(at(0.009, 0.0075, clear), at(0.0055 + 0.0015, 0.0075, clear))).toBeNull()
+    expect(marchCrossing(at(0.026, 0.022, solid), at(0.024, 0.022, solid))).toBeNull()
+  })
+
+  it('meets tops as from outside from above the deck', () => {
+    const faint = marchCrossing(at(0.009, 0.0075, clear), at(0.007, 0.0075, clear), true)
+    expect(faint).toEqual({ at: expect.closeTo(0.75, 9), side: false, depth: 0 })
+  })
+
+  it('meets a base from below where the cloud shows, and passes up through a gap', () => {
+    const below = at(0.003, 0.03, solid)
+    expect(marchCrossing(below, at(0.007, 0.03, solid))).toEqual({
+      at: expect.closeTo(0.75, 9),
+      side: false,
+      depth: 1,
+    })
+    expect(marchCrossing({ ...below, alpha: clear }, at(0.007, 0.0075, clear))).toBeNull()
+    // A thin column crossed whole in one step still counts.
+    expect(marchCrossing(below, at(0.014, 0.01, solid))!.at).toBeCloseTo(0.003 / 0.011, 9)
+    expect(marchCrossing(below, at(0.005, 0.03, solid))).toBeNull()
+  })
+
+  it('meets a side from a gap within the deck', () => {
+    const gap = at(0.007, 0.0075, 0)
+    const hit = marchCrossing(gap, at(0.007, 0.03, 0.2))!
+    expect(hit).toEqual({ at: expect.closeTo(CLOUD_MIN_ALPHA / 0.2, 9), side: true, depth: null })
+    expect(marchCrossing(gap, at(0.007, 0.0075, clear))).toBeNull()
+    // Within a cloud already, or leaving the deck, nothing new.
+    expect(marchCrossing({ ...gap, top: 0.03, alpha: solid }, at(0.007, 0.03, solid))).toBeNull()
+    expect(marchCrossing(gap, at(0.009, 0.0075, solid))).toBeNull()
+  })
+
+  it('takes a wall met from a gap above its faint top for a side', () => {
+    // Mid-gap, over the faint top, stepping into a tall column beside it:
+    // its top passed the ray's height, not the ray its top.
+    const hit = marchCrossing(at(0.012, 0.0075, clear), at(0.012, 0.0216, solid))!
+    expect(hit.side).toBe(true)
+    expect(hit.depth).toBeNull()
+    // From above the deck the same crossing is a top, as from outside.
+    expect(marchCrossing(at(0.012, 0.0075, clear), at(0.012, 0.0216, solid), true)!.side).toBe(false)
+  })
+
+  it('meets a side past a faint top in the same step', () => {
+    // Half way the cloud is still under CLOUD_MIN_ALPHA; past that, solid.
+    const hit = marchCrossing(at(0.0085, 0.0075, 0), at(0.0065, 0.0075, 0.03))!
+    const t = (CLOUD_MIN_ALPHA - 0.015) / (0.03 - 0.015)
+    expect(hit).toEqual({ at: expect.closeTo(0.5 + 0.5 * t, 9), side: true, depth: null })
+  })
+
+  it('shades by how far down its column a hit lies', () => {
+    expect(columnDepth(0.03, 0.01, 0.03)).toBe(0)
+    expect(columnDepth(0.01, 0.01, 0.03)).toBe(1)
+    expect(columnDepth(0.02, 0.01, 0.03)).toBeCloseTo(0.5, 9)
+    expect(columnDepth(0.005, 0.01, 0.03)).toBe(1)
+  })
+
+  it('makes a side as opaque as the cloud seen across', () => {
+    // Across its own thickness, a column's own opacity; further, more.
+    expect(1 - cloudPathClear(0.4, 0.01, 0.01)).toBeCloseTo(0.4, 9)
+    expect(1 - cloudPathClear(0.1, 0.002, 0.011)).toBeGreaterThan(0.4)
+    expect(cloudPathClear(0, 0.01, 1)).toBe(1)
+  })
+
+  for (const variant of [[], ['CLOUD_FLAT'], ['FLIP_SIDED'], ['CLOUD_FLAT', 'FLIP_SIDED']]) {
+    it(`declares what the program reads (${variant.join('+') || 'relief'})`, () => {
+      // Without a WebGL context, a guard against names one branch defines
+      // and the shared code reads.
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const src = preprocess(clouds.material.fragmentShader, new Set(variant))
+      const names = ['colIn', 'side', 'sideClear', 'depthHit', 'fromAbove', 'depth', 'eye', 'shell']
+      for (const name of names) {
+        if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
+          expect(src).toMatch(new RegExp(`(float|vec3|vec4|bool) ${name}\\b`))
+        }
+      }
+      clouds.dispose()
     })
   }
 })
