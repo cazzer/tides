@@ -16,6 +16,8 @@ uniform vec3 uSun;
 uniform float uGain;
 uniform vec3 uSky;
 uniform vec3 uDusk;
+// Read only from inside (columnAheadOverSea()), so only the Earth's sets it.
+uniform float uSeaLevel;
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
@@ -44,7 +46,7 @@ void main() {
   bool back = shellBackFace(ro, rd, uOuter);
   if (gl_FrontFacing == back) discard;
   if (back) {
-    column = columnAhead(ro, rd, grazing, at);
+    column = columnAheadOverSea(ro, rd, grazing, at);
   } else
   #endif
   if (hs > 0.0) {

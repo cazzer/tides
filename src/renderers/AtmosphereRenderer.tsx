@@ -40,6 +40,7 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
           uSurface: { value: 0 },
           uOuter: { value: 0 },
           uScaleHeight: { value: 0 },
+          uSeaLevel: { value: 0 },
           uSun: { value: new THREE.Vector3(1, 0, 0) },
           uGain: { value: ATMOSPHERE_GAIN },
           uSky: { value: SKY },
@@ -70,6 +71,7 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
     u.uSurface.value = radius * SURFACE
     u.uOuter.value = radius * OUTER
     u.uScaleHeight.value = radius * SCALE_HEIGHT
+    u.uSeaLevel.value = radius
     sunDirectionLocal(timestamp, u.uSun.value)
   })
 
