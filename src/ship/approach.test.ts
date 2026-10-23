@@ -8,7 +8,7 @@ import {
   wellFactor,
   type Body,
 } from './flight'
-import { BODY_MASS_KG } from './ship-bodies'
+import { BODY_MASS_KG, EARTH_GROUND_SPEED } from './ship-bodies'
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry } from './ship-telemetry'
 import {
@@ -142,6 +142,30 @@ describe('safeShare', () => {
       if (share + 0.04 <= 1) expect(peak(share + 0.04)).toBeGreaterThan(OVER_ON)
     }
   )
+})
+
+describe("Earth's ground speed (tides-01v.8.7)", () => {
+  test('full throttle still rides Earth down to its lower floor without an overshoot warning', () => {
+    expect(safeShare(wellFactor(BODY_MASS_KG.earth), EARTH_GROUND_SPEED)).toBe(1)
+  })
+
+  test('the ETA runs on past V_NORMAL to the lower floor, crossing it at share · floor', () => {
+    const wellTime = wellFactor(BODY_MASS_KG.earth) / K_WELL
+    const floorGap = EARTH_GROUND_SPEED * wellTime
+    expect(approachEta(floorGap, 1, wellTime, 1, EARTH_GROUND_SPEED)).toBeCloseTo(floorGap / EARTH_GROUND_SPEED, 9)
+    expect(approachEta(floorGap, 1, wellTime, 1)).toBeLessThan(approachEta(floorGap, 1, wellTime, 1, EARTH_GROUND_SPEED))
+  })
+
+  test('keeps the ETA and the subject at part throttle near the ground', () => {
+    const wellTime = wellFactor(BODY_MASS_KG.earth) / K_WELL
+    // 0.3 throttle at the ground speed: under the V_NORMAL-scaled threshold.
+    const closing = 0.3 * EARTH_GROUND_SPEED
+    expect(approachEta(0.05, closing, wellTime, 0.3, EARTH_GROUND_SPEED)).toBeCloseTo(0.05 / closing, 9)
+    const earth: Body = { key: 'earth', position: new THREE.Vector3(), radius: 1, minSpeed: EARTH_GROUND_SPEED }
+    const position = new THREE.Vector3(1.05, 0, 0)
+    expect(approachSubject([earth], position, new THREE.Vector3(-closing, 0, 0), null, null)).toBe(0)
+    expect(approachSubject([{ ...earth, minSpeed: undefined }], position, new THREE.Vector3(-closing, 0, 0), null, null)).toBe(-1)
+  })
 })
 
 describe('approachEta', () => {

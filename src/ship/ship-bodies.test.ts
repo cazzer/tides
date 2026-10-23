@@ -4,30 +4,47 @@ import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
-import { CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
-import { COLLISION_MARGIN, collisionRadius, floorRadius, wellFactor } from './flight'
+import {
+  COLLISION_MARGIN,
+  OVERSPEED_MAX,
+  V_NORMAL,
+  collisionRadius,
+  floorRadius,
+  speedCap,
+  speedFloor,
+  wellFactor,
+} from './flight'
+import { fovKickShare } from './dust'
+import type { QualityTier } from '../quality'
 import { MOONS, MOON_KEYS, isMoonKey, moonPosition, moonRadius } from '../moons/moons'
 import {
   BODY_MASS_KG,
   EARTH_COLLISION_RADIUS,
   EARTH_GROUND_CLEARANCE,
+  EARTH_GROUND_SPEED,
   EARTH_RADIUS,
   EARTH_SHELL_RADIUS,
   MOON_COLLISION_CLEARANCE,
   createShipBodies,
   updateShipBodies,
 } from './ship-bodies'
-import { shipNear, spawnPose } from './ship-session'
-import { TERRAIN_MAP_SIZE, buildTerrainFloor, setEarthTerrain } from './terrain-floor'
+import { SHIP_FOV, shipNear, spawnPose } from './ship-session'
+import {
+  TERRAIN_GREY_MARGIN,
+  TERRAIN_MAP_SIZE,
+  buildTerrainFloor,
+  setEarthTerrain,
+} from './terrain-floor'
 
 const T = Date.UTC(2026, 9, 22, 12)
 
-function byKey(t = T) {
-  const bodies = createShipBodies()
+function byKey(t = T, tier: QualityTier = 'high') {
+  const bodies = createShipBodies(tier)
   updateShipBodies(bodies, t)
   return Object.fromEntries(bodies.map((b) => [b.key, b]))
 }
@@ -119,8 +136,9 @@ describe('ship bodies', () => {
   })
 
   describe('collision radius (tides-3bl.7)', () => {
-    it("keeps the ship outside every shell Earth draws, and a near plane's depth beyond", () => {
-      const { earth } = byKey()
+    it("keeps the ship outside every shell Earth draws, and a near plane's depth beyond, on the low tier", () => {
+      const { earth } = byKey(T, 'low')
+      expect(earth.minSpeed).toBeUndefined()
       expect(collisionRadius(earth)).toBe(EARTH_COLLISION_RADIUS)
       for (const shell of [
         earth.radius + CLOUD_LAYER_TOP,
@@ -135,6 +153,17 @@ describe('ship bodies', () => {
       expect(EARTH_COLLISION_RADIUS - shipNear(gap)).toBeGreaterThanOrEqual(EARTH_SHELL_RADIUS)
       // Close enough that Earth still fills the view: ~1.1 radii.
       expect(EARTH_COLLISION_RADIUS / earth.radius).toBeLessThan(1.15)
+    })
+
+    it('drops the hard sphere to the bare ground on the high tier (tides-01v.8.7)', () => {
+      const { earth } = byKey()
+      expect(collisionRadius(earth)).toBe(EARTH_RADIUS + EARTH_GROUND_CLEARANCE)
+      expect(speedFloor(earth)).toBe(EARTH_GROUND_SPEED)
+      // Under the cloud base, and far enough up that 0.4 of it stays over
+      // shipNear's floor.
+      expect(EARTH_GROUND_CLEARANCE).toBeLessThan(CLOUD_CLEARANCE)
+      expect(EARTH_GROUND_CLEARANCE).toBeGreaterThanOrEqual(0.0025)
+      expect(shipNear(EARTH_GROUND_CLEARANCE)).toBeCloseTo(0.4 * EARTH_GROUND_CLEARANCE, 12)
     })
 
     it('leaves the Moon and planets (no displaced or shelled surfaces) on the default margin', () => {
@@ -198,11 +227,12 @@ describe('ship bodies', () => {
       expect(earth.ground!(toWorld(latLonToLocal(32, -88), later))).toBeLessThan(EARTH_RADIUS + 0.01)
     })
 
-    it('keeps the stop at EARTH_COLLISION_RADIUS everywhere, with the real terrain loaded', () => {
-      setEarthTerrain(
-        buildTerrainFloor(new Uint8Array(readFileSync(new URL('../assets/earth-terrain-max.bin', import.meta.url))))
-      )
-      const { earth } = byKey()
+    const pooledTerrain = () =>
+      new Uint8Array(readFileSync(new URL('../assets/earth-terrain-max.bin', import.meta.url)))
+
+    it('keeps the low-tier stop at EARTH_COLLISION_RADIUS everywhere, with the real terrain loaded', () => {
+      setEarthTerrain(buildTerrainFloor(pooledTerrain()))
+      const { earth } = byKey(T, 'low')
       const direction = new THREE.Vector3()
       let highest = 0
       for (let lat = -89; lat <= 89; lat += 1) {
@@ -216,10 +246,87 @@ describe('ship bodies', () => {
       expect(highest + EARTH_GROUND_CLEARANCE).toBeLessThan(EARTH_COLLISION_RADIUS)
     })
 
+    it('stops the high tier groundClearance above the real terrain, from the sea to the Himalaya', () => {
+      setEarthTerrain(buildTerrainFloor(pooledTerrain()))
+      const { earth } = byKey()
+      const ground = (lat: number, lon: number) => earth.ground!(toWorld(latLonToLocal(lat, lon), T))
+      for (let lat = -89; lat <= 89; lat += 1) {
+        for (let lon = -180; lon < 180; lon += 1) {
+          const direction = toWorld(latLonToLocal(lat, lon), T)
+          expect(floorRadius(earth, direction)).toBeCloseTo(earth.ground!(direction) + EARTH_GROUND_CLEARANCE, 12)
+        }
+      }
+      // Mid-Pacific near sea level; Everest near the top of the displacement.
+      expect(ground(0, -150) - EARTH_RADIUS).toBeLessThan(0.01)
+      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(0.05)
+    })
+
+    it("keeps the near plane's corners off the ground at the high-tier stop, on steep slopes and 32:9 screens", () => {
+      // The ground mesh can stand no higher than the pooled block it reads
+      // and its neighbours (terrain-floor.ts), plus the decoder margin. From
+      // the stop, every point of that within the near rectangle's reach must
+      // be further than the reach, at SHIP_FOV: the FOV kick is nil this low.
+      const pooled = pooledTerrain()
+      setEarthTerrain(buildTerrainFloor(pooled))
+      const [width, height] = TERRAIN_MAP_SIZE
+      const meshTop = (local: THREE.Vector3) => {
+        const u = Math.atan2(local.z, -local.x) / (2 * Math.PI)
+        const x = Math.floor((u - Math.floor(u)) * width)
+        const y = Math.min(height - 1, Math.floor((0.5 - Math.asin(local.y) / Math.PI) * height))
+        let grey = 0
+        for (let dy = -1; dy <= 1; dy++) {
+          if (y + dy < 0 || y + dy >= height) continue
+          for (let dx = -1; dx <= 1; dx++) grey = Math.max(grey, pooled[(y + dy) * width + ((x + dx + width) % width)])
+        }
+        return EARTH_RADIUS + (TERRAIN_DISPLACEMENT * Math.min(255, grey + TERRAIN_GREY_MARGIN)) / 255
+      }
+      const { earth } = byKey()
+      const tan = Math.tan(THREE.MathUtils.degToRad(SHIP_FOV / 2))
+      const reach = shipNear(EARTH_GROUND_CLEARANCE) * Math.sqrt(1 + tan * tan * (1 + (32 / 9) ** 2))
+      const local = new THREE.Vector3()
+      const side = new THREE.Vector3()
+      const point = new THREE.Vector3()
+      let closest = Infinity
+      for (let lat = -88; lat <= 88; lat += 0.5) {
+        for (let lon = -180; lon < 180; lon += 0.5) {
+          const up = latLonToLocal(lat, lon)
+          const eye = up.clone().multiplyScalar(floorRadius(earth, toWorld(up, T)))
+          for (let k = 0; k < 8; k++) {
+            side.set(Math.cos(k), 0, Math.sin(k)).cross(up).normalize()
+            for (const s of [0, 0.001, 0.002, 0.003, 0.004]) {
+              local.copy(up).applyAxisAngle(side, s / EARTH_RADIUS)
+              closest = Math.min(closest, point.copy(local).multiplyScalar(meshTop(local)).distanceTo(eye))
+            }
+          }
+        }
+      }
+      expect(closest).toBeGreaterThan(reach)
+    })
+
+    it('flies the floor slowly: the cap falls to EARTH_GROUND_SPEED near the ground, with no FOV kick', () => {
+      const { earth } = byKey()
+      const up = new THREE.Vector3(0, 1, 0)
+      const at = (gap: number) =>
+        earth.position.clone().addScaledVector(up, earth.ground!(up) + gap)
+      const bodies = [earth]
+      expect(speedCap(at(EARTH_GROUND_CLEARANCE), bodies)).toBe(EARTH_GROUND_SPEED)
+      // Down the well past V_NORMAL, as it would be with the low tier's floor.
+      expect(speedCap(at(0.5), bodies)).toBeLessThan(V_NORMAL)
+      expect(speedCap(at(0.5), bodies)).toBeGreaterThan(EARTH_GROUND_SPEED)
+      expect(speedCap(at(2), bodies)).toBeGreaterThan(V_NORMAL)
+      expect(speedCap(at(0.5), [byKey(T, 'low').earth])).toBe(V_NORMAL)
+      for (const speed of [EARTH_GROUND_SPEED, OVERSPEED_MAX * EARTH_GROUND_SPEED]) {
+        expect(fovKickShare(speed, EARTH_GROUND_SPEED)).toBe(0)
+      }
+    })
+
     it('falls back to the highest the ground can reach until the map loads', () => {
       const { earth } = byKey()
       expect(earth.ground!(new THREE.Vector3(1, 0, 0))).toBe(EARTH_RADIUS + TERRAIN_DISPLACEMENT)
-      expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
+      expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(
+        EARTH_RADIUS + TERRAIN_DISPLACEMENT + EARTH_GROUND_CLEARANCE
+      )
+      expect(floorRadius(byKey(T, 'low').earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
     })
 
     it('gives no other body a ground', () => {

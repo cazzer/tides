@@ -11,14 +11,17 @@
 //
 // Feel target: Elite Dangerous.
 //
-//   • Speed cap v_max = clamp(K_WELL · d_eff, V_NORMAL, V_TOP), Elite's
+//   • Speed cap v_max = clamp(K_WELL · d_eff, floor, V_TOP), Elite's
 //     supercruise governed by gravity wells (tides-2hv.7). d_eff is the
 //     smallest gap to a surface divided by that body's wellFactor, which
 //     grows slowly with mass, so the Sun and Jupiter slow the ship from
 //     further out than Mercury does. Inside a well the gap e-folds every
 //     wellTime = wellFactor / K_WELL seconds at the cap; in open space the
 //     cap tops out at V_TOP, which is what makes Neptune minutes away rather
-//     than seconds. One continuous regime, no mode switch.
+//     than seconds. One continuous regime, no mode switch. The floor is
+//     V_NORMAL, or the minSpeed of the body setting d_eff (speedFloor): a
+//     body the ship can fly down to its ground (Earth) keeps its well
+//     slowing the ship below V_NORMAL all the way down.
 //   • With Flight Assist on the velocity "rides" the cap: after each step it
 //     is scaled by how much the cap changed over it, so speed / cap tracks
 //     the throttle in steady flight however fast the cap is moving (turning
@@ -34,7 +37,7 @@
 //     approachCap: the gap over the target's wellTime, which is the cap
 //     itself when the target sets d_eff. A locked approach therefore never
 //     overshoots. Only the closing component is limited: leaving or flying
-//     past a locked target is as fast as untargeted, and the V_NORMAL floor
+//     past a locked target is as fast as untargeted, and the speed floor
 //     means the last stretch to the surface takes seconds, not forever.
 //   • Flight Assist on: velocity eases toward throttle · v_max along the nose
 //     (plus strafe) and rotation eases toward the stick demand, so letting go
@@ -98,10 +101,26 @@ export interface Body {
   /** How far above `ground` the ship stops; 0 when missing. */
   groundClearance?: number
   /**
+   * The speed floor while this body sets d_eff, in place of V_NORMAL: the
+   * cap follows the well below V_NORMAL down to this. For a body whose
+   * stop is low enough that V_NORMAL would cross what is drawn there in a
+   * frame or two (Earth's cloud deck over its ground). See speedFloor.
+   */
+  minSpeed?: number
+  /**
    * Mass in kg; sets the size of the body's gravity well (wellFactor).
    * Missing, non-positive or non-finite reads as the smallest well.
    */
   mass?: number
+}
+
+/**
+ * The cap's floor while `body` sets d_eff: its minSpeed, or V_NORMAL when
+ * that is missing, not positive or above V_NORMAL.
+ */
+export function speedFloor(body: Body): number {
+  const { minSpeed } = body
+  return minSpeed !== undefined && minSpeed > 0 && minSpeed < V_NORMAL ? minSpeed : V_NORMAL
 }
 
 /**
@@ -135,8 +154,8 @@ export interface FlightEnv {
 // this long: the world just runs slow for that frame instead of the ship
 // covering seconds of flight in one jump. A step moves at most OVERSPEED_MAX ·
 // K_WELL · MAX_DT = 0.15 of the mass-weighted gap (wellFactor ≥ 1, so at most
-// 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor, so it
-// cannot tunnel.
+// 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor (0.006
+// at Earth's ground speed), so it cannot tunnel.
 export const MAX_DT = 0.1
 
 // Hard-sphere radius as a multiple of the body radius, for a body without its
@@ -147,8 +166,9 @@ export const COLLISION_MARGIN = 1.02
 
 // Speed floor, scene units/s. The cap falls to this within V_NORMAL ·
 // wellFactor / K_WELL (0.5 units of the Moon, ~5 of the Sun), i.e. this is
-// the speed for skimming. Crossing the Moon (diameter 2) takes ~8 s, Earth
-// (5.9) ~24 s: slow enough to read the surface, fast enough not to feel stuck.
+// the speed for skimming, except near a body with its own minSpeed (Earth's
+// ground, ship-bodies.ts). Crossing the Moon (diameter 2) takes ~8 s: slow
+// enough to read the surface, fast enough not to feel stuck.
 export const V_NORMAL = 0.25
 
 // Cap per unit of mass-weighted surface distance, 1/s. [TUNE] Sets how long a
@@ -200,7 +220,8 @@ export const OVERSPEED_MAX = 3
 // gains at most V_NORMAL · (1 − e^(−MAX_DT / VELOCITY_TAU_WELL)) ≈ 0.012 a
 // step (FA off: V_NORMAL · MAX_DT / VELOCITY_TAU_WELL = 0.0125) before being
 // cancelled, so 0.05 never flags those, while arriving at the V_NORMAL floor
-// always does.
+// always does. Arriving at a lower floor (Earth's ground, at most
+// OVERSPEED_MAX × 0.02) never does: touching down there is landing.
 export const COLLISION_SPEED = 0.05
 
 // Rotation e-fold, s: how quickly turn rates follow the stick with FA on (and
@@ -301,9 +322,10 @@ interface Proximity {
   targetGap: number
   /** min over bodies of max(0, gap) / wellFactor; Infinity with no bodies. */
   wellDistance: number
-  /** The body that sets wellDistance (d_eff), and its wellFactor. */
+  /** The body that sets wellDistance (d_eff), its wellFactor and speedFloor. */
   wellKey: string | null
   wellBodyFactor: number
+  wellFloor: number
 }
 
 const proximity: Proximity = {
@@ -314,6 +336,7 @@ const proximity: Proximity = {
   wellDistance: Infinity,
   wellKey: null,
   wellBodyFactor: 1,
+  wellFloor: V_NORMAL,
 }
 
 const outward = new THREE.Vector3()
@@ -339,6 +362,7 @@ function measure(
   proximity.wellDistance = Infinity
   proximity.wellKey = null
   proximity.wellBodyFactor = 1
+  proximity.wellFloor = V_NORMAL
   for (const body of bodies) {
     const gap = surfaceGap(position, body)
     // A NaN gap never wins the nearest or well comparisons, so it can't
@@ -353,6 +377,7 @@ function measure(
       proximity.wellDistance = well
       proximity.wellKey = body.key
       proximity.wellBodyFactor = factor
+      proximity.wellFloor = speedFloor(body)
     }
     if (targetKey != null && body.key === targetKey) {
       proximity.target = body
@@ -372,16 +397,17 @@ export function nearestBody(
 }
 
 // wellDistance is Infinity with no bodies (or none with a usable gap).
-function wellCap({ wellDistance }: Proximity): number {
+function wellCap({ wellDistance, wellFloor }: Proximity): number {
   return Number.isFinite(wellDistance)
-    ? clamp(K_WELL * wellDistance, V_NORMAL, V_TOP)
+    ? clamp(K_WELL * wellDistance, wellFloor, V_TOP)
     : V_NORMAL
 }
 
 /**
  * The speed limit at `position`, scene units/s: clamp(K_WELL · d_eff,
- * V_NORMAL, V_TOP), with d_eff the smallest gap / wellFactor over `bodies`.
- * With no bodies there is nothing to scale against, so V_NORMAL.
+ * floor, V_TOP), with d_eff the smallest gap / wellFactor over `bodies` and
+ * floor the speedFloor of the body that sets it. With no bodies there is
+ * nothing to scale against, so V_NORMAL.
  */
 export function speedCap(position: THREE.Vector3, bodies: readonly Body[]): number {
   return wellCap(measure(position, bodies, null))
@@ -389,16 +415,17 @@ export function speedCap(position: THREE.Vector3, bodies: readonly Body[]): numb
 
 /**
  * The limit on speed toward a locked target `gap` from its surface, whose
- * gap should e-fold every `eta` seconds (its wellTime): max(V_NORMAL,
- * gap / eta). When the target sets d_eff this is the cap itself, so it only
- * binds on speed carried in above the cap: a locked approach can't overshoot.
+ * gap should e-fold every `eta` seconds (its wellTime): max(floor, gap / eta),
+ * with `floor` its speedFloor. When the target sets d_eff this is the cap
+ * itself, so it only binds on speed carried in above the cap: a locked
+ * approach can't overshoot.
  *
  * `dt` makes the cap exact for a discrete step: closing at gap / (eta + dt)
  * for dt leaves the closing speed ≤ newGap / eta, so the rule holds after
  * the step as well as before it.
  */
-export function approachCap(gap: number, eta: number, dt = 0): number {
-  return Math.max(V_NORMAL, Math.max(0, gap) / (eta + dt))
+export function approachCap(gap: number, eta: number, dt = 0, floor = V_NORMAL): number {
+  return Math.max(floor, Math.max(0, gap) / (eta + dt))
 }
 
 // Inputs come from pointer maths; NaN would poison the state for good.
@@ -541,7 +568,7 @@ function translate(
   if (distance === 0) return
   toTarget.divideScalar(distance)
   const closing = v.dot(toTarget)
-  const limit = approachCap(targetGap, wellTime(target), dt)
+  const limit = approachCap(targetGap, wellTime(target), dt, speedFloor(target))
   if (closing > limit) v.addScaledVector(toTarget, limit - closing)
 }
 

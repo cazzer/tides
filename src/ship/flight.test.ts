@@ -22,6 +22,7 @@ import {
   floorRadius,
   nearestBody,
   speedCap,
+  speedFloor,
   speedFraction,
   stepShip,
   turnRateMultiplier,
@@ -32,7 +33,17 @@ import {
   type FlightEnv,
   type ShipState,
 } from './flight'
-import { BODY_MASS_KG, createShipBodies, updateShipBodies } from './ship-bodies'
+import {
+  BODY_MASS_KG,
+  EARTH_COLLISION_RADIUS,
+  EARTH_GROUND_CLEARANCE,
+  EARTH_GROUND_SPEED,
+  EARTH_RADIUS,
+  createShipBodies,
+  updateShipBodies,
+} from './ship-bodies'
+import type { QualityTier } from '../quality'
+import { CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY } from '../cloud-layer'
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 
@@ -88,8 +99,8 @@ function env(bodies: readonly Body[], targetKey: string | null = null): FlightEn
 const TRIP_DATE = '2026-10-22T12:00:00Z'
 
 /** Ship mode's real bodies (masses, flight scale), frozen at `date`. */
-function flightBodies(date = TRIP_DATE): Body[] {
-  const bodies = createShipBodies()
+function flightBodies(date = TRIP_DATE, tier: QualityTier = 'high'): Body[] {
+  const bodies = createShipBodies(tier)
   updateShipBodies(bodies, Date.parse(date))
   return bodies
 }
@@ -218,6 +229,7 @@ describe('approachCap', () => {
     expect(approachCap(195, 7, 1)).toBeCloseTo(195 / 8, 12)
     expect(approachCap(0.01, 2)).toBe(V_NORMAL)
     expect(approachCap(-1, 2)).toBe(V_NORMAL)
+    expect(approachCap(0.01, 2, 0, 0.02)).toBe(0.02)
   })
 
   test("equals the cap when the target sets the well, at its wellTime", () => {
@@ -770,6 +782,91 @@ describe('ground (tides-01v.8.3)', () => {
     stepShip(shipAt(position, body.position), input(), 0, env([body], 'rock'), telemetry)
     expect(telemetry.nearest.surfaceDistance).toBeCloseTo(4 - 1.3, 12)
     expect(telemetry.target!.surfaceDistance).toBeCloseTo(4 - 1.3, 12)
+  })
+})
+
+describe("Earth's floor (tides-01v.8.7)", () => {
+  test('speedFloor is minSpeed when it is a usable speed under V_NORMAL, else V_NORMAL', () => {
+    expect(speedFloor(MOON)).toBe(V_NORMAL)
+    expect(speedFloor({ ...MOON, minSpeed: 0.02 })).toBe(0.02)
+    for (const minSpeed of [0, -1, NaN, 2 * V_NORMAL]) expect(speedFloor({ ...MOON, minSpeed })).toBe(V_NORMAL)
+  })
+
+  // Straight down at Earth from `gap` over its ground, unlocked, until it
+  // rests on the floor; then straight back up for `climb` seconds.
+  function dive(tier: QualityTier, throttle: number, gap = 3, climb = 0) {
+    const bodies = flightBodies(TRIP_DATE, tier)
+    const earth = bodies.find((b) => b.key === 'earth')!
+    const up = new THREE.Vector3(0.3, 1, -0.2).normalize()
+    const start = earth.position.clone().addScaledVector(up, earth.ground!(up) + gap)
+    const state = shipAt(start, earth.position)
+    const telemetry = createShipTelemetry()
+    let seconds = 0
+    let peakShare = 0
+    let peakSpeed = 0
+    let lowest = Infinity
+    const direction = new THREE.Vector3()
+    for (; seconds < 120; seconds += FRAME) {
+      stepShip(state, input({ throttle }), FRAME, env(bodies), telemetry)
+      const d = direction.subVectors(state.position, earth.position).length()
+      direction.divideScalar(d)
+      lowest = Math.min(lowest, d - floorRadius(earth, direction))
+      peakShare = Math.max(peakShare, telemetry.speed / telemetry.speedCap)
+      peakSpeed = Math.max(peakSpeed, telemetry.speed)
+      if (telemetry.speed < 1e-3 && d - floorRadius(earth, direction) < 1e-9) break
+    }
+    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, cap: telemetry.speedCap }
+    state.orientation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI))
+    fly(state, climb, input({ throttle }), env(bodies))
+    const height = state.position.distanceTo(earth.position) - earth.ground!(direction.subVectors(state.position, earth.position).normalize())
+    return { landed, peakShare, peakSpeed, lowest, height }
+  }
+
+  test.each([1, 0.3])('a dive at throttle %s from orbit comes to rest on the floor, never under it', (throttle) => {
+    const { landed, peakShare, lowest } = dive('high', throttle)
+    expect(lowest).toBeGreaterThanOrEqual(-1e-9)
+    expect(landed.gap).toBeCloseTo(EARTH_GROUND_CLEARANCE, 6)
+    expect(landed.cap).toBe(EARTH_GROUND_SPEED)
+    // Rides the well down without the approach warning's overshoot.
+    expect(peakShare).toBeLessThan(1.5)
+    expect(landed.seconds).toBeLessThan(60)
+  })
+
+  // The deck's tallest tops over the ground under them.
+  const DECK = CLOUD_LAYER_TOP - TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY
+
+  test('crosses the cloud deck in seconds, not frames', () => {
+    const { landed } = dive('high', 1, DECK)
+    expect(landed.seconds).toBeGreaterThan(2)
+    expect(landed.seconds).toBeLessThan(6)
+  })
+
+  test('climbs back out of the deck at full throttle within seconds', () => {
+    // Over the deck's tallest tops in 8 s, the low tier's stop in 15.
+    expect(dive('high', 1, DECK, 8).height).toBeGreaterThan(DECK)
+    expect(dive('high', 1, DECK, 15).height).toBeGreaterThan(EARTH_COLLISION_RADIUS - EARTH_RADIUS)
+  })
+
+  test.each([true, false])('a locked dive at Earth never goes over the cap (FA %s)', (flightAssist) => {
+    const bodies = flightBodies()
+    const earth = bodies.find((b) => b.key === 'earth')!
+    const state = shipAt(earth.position.clone().add(new THREE.Vector3(0, 0, 6)), earth.position)
+    const telemetry = createShipTelemetry()
+    let peak = 0
+    for (let i = 0; i < 60 * 60; i++) {
+      stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env(bodies, 'earth'), telemetry)
+      peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
+    }
+    expect(telemetry.nearest.surfaceDistance).toBeCloseTo(EARTH_GROUND_CLEARANCE, 6)
+    expect(peak).toBeLessThanOrEqual(1 + 1e-6)
+  })
+
+  test('the low tier still stops at EARTH_COLLISION_RADIUS', () => {
+    const bodies = flightBodies(TRIP_DATE, 'low')
+    const earth = bodies.find((b) => b.key === 'earth')!
+    const state = shipAt(earth.position.clone().add(new THREE.Vector3(0, 0, 4)), earth.position)
+    fly(state, 30, input({ throttle: 1 }), env(bodies))
+    expect(state.position.distanceTo(earth.position)).toBeCloseTo(EARTH_COLLISION_RADIUS, 9)
   })
 })
 
