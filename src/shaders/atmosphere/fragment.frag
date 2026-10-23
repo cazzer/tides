@@ -68,7 +68,11 @@ float columnAhead(vec3 ro, vec3 rd, float grazing, out vec3 at) {
 
 void main() {
   vec3 ro = vRayOrigin;
+  #ifdef DOUBLE_SIDED
+  vec3 rd = normalize(vRayDir);
+  #else
   vec3 rd = normalize(vPos - vRayOrigin);
+  #endif
   float H = uScaleHeight;
 
   float b = dot(ro, rd);
