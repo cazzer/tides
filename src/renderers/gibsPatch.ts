@@ -17,6 +17,13 @@
 // shows a seam, and the patch fades out by itself wherever the day map
 // already resolves the ground. Night lights, the specular mask and the
 // clouds are untouched.
+//
+// The day map is also warped against Blue Marble, by up to a few of its
+// texels (most around the Great Lakes), which no recolour can fix: its
+// blurred coasts would sit beside the patch's sharp ones. So the patch is
+// read through an offset field fitted offline (tides-01v.20;
+// scripts/fit-gibs-warp.mjs), zero wherever the two agree to two texels or
+// the shores don't all confirm the shift.
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useSyncExternalStore, type RefObject } from 'react'
 import * as THREE from 'three'
@@ -41,6 +48,7 @@ import {
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 import type { MaterialPatch } from './eclipseShadow'
 import colourLutUrl from '../assets/gibs-colour-lut.bin?url&inline'
+import warpUrl from '../assets/gibs-warp.bin?url&inline'
 
 /** Fetches in flight at once, and tiles uploaded a frame (each regenerates
  * the texture's mips, and a 512 px upload is ~1 MB). */
@@ -108,6 +116,28 @@ function colourLut(): THREE.Data3DTexture {
   return lut
 }
 
+/** The offset field: WARP_COLS x WARP_ROWS RG8 texels from the north,
+ * each 128 plus WARP_UNITS a day-map texel (1/WARP_TEXELS of the
+ * circumference, so twice that of the map's v), x east and y south, of
+ * where Blue Marble shows what the day map shows at the texel's centre. */
+const WARP_COLS = 180
+const WARP_ROWS = 90
+const WARP_UNITS = 16
+const WARP_TEXELS = 10800
+
+function warpField(): THREE.DataTexture {
+  const rg = Uint8Array.from(atob(warpUrl.slice(warpUrl.indexOf(',') + 1)), (c) => c.charCodeAt(0))
+  if (rg.length !== WARP_COLS * WARP_ROWS * 2) {
+    throw new Error(`GIBS warp field: ${rg.length} bytes, expected ${WARP_COLS * WARP_ROWS * 2}`)
+  }
+  const field = new THREE.DataTexture(rg, WARP_COLS, WARP_ROWS, THREE.RGFormat, THREE.UnsignedByteType)
+  field.magFilter = field.minFilter = THREE.LinearFilter
+  field.wrapS = THREE.RepeatWrapping
+  field.unpackAlignment = 1
+  field.needsUpdate = true
+  return field
+}
+
 // Draws a tile, recoloured, into the slot the target's viewport frames. Both
 // ends hold sRGB: the tile is read raw and the target encodes on write.
 const RECOLOUR_VERTEX = /* glsl */ `
@@ -170,6 +200,7 @@ function createRecolour(): Recolour {
 const fragmentHead = (side: number) => /* glsl */ `
 uniform sampler2D uGibsPatch;
 uniform sampler2D uGibsMask;
+uniform sampler2D uGibsWarp;
 // The patch's north-west tile: column, row.
 uniform vec2 uGibsOrigin;
 uniform float uGibsActive;
@@ -187,10 +218,14 @@ const ALBEDO_BODY = /* glsl */ `
 float gibsCover = 0.0;
 #if defined(USE_MAP) && defined(USE_SPECULARMAP)
 if (uGibsActive > 0.5) {
-  // Tiles from the patch's north-west corner; derivatives before branching.
+  // Tiles from the patch's north-west corner, moved to where Blue Marble
+  // shows this ground (wrapped after, so the west edge stays put);
+  // derivatives before branching.
+  vec2 gibsWarp = (texture(uGibsWarp, vec2(vMapUv.x, 1.0 - vMapUv.y)).rg * 255.0 - 128.0)
+    / vec2(${f(WARP_UNITS * WARP_TEXELS)}, ${f((WARP_UNITS * WARP_TEXELS) / 2)});
   vec2 gibsAt = vec2(
-    fract(vMapUv.x - uGibsOrigin.x / ${f(GIBS_COLS)}) * ${f(GIBS_COLS)},
-    (1.0 - vMapUv.y) * ${f(GIBS_ROWS)} - uGibsOrigin.y);
+    fract(vMapUv.x + gibsWarp.x - uGibsOrigin.x / ${f(GIBS_COLS)}) * ${f(GIBS_COLS)},
+    (1.0 - vMapUv.y + gibsWarp.y) * ${f(GIBS_ROWS)} - uGibsOrigin.y);
   vec2 gibsDx = dFdx(gibsAt);
   vec2 gibsDy = dFdy(gibsAt);
   gibsDx.x -= ${f(GIBS_COLS)} * floor(gibsDx.x / ${f(GIBS_COLS)} + 0.5);
@@ -287,9 +322,11 @@ export function createGibsPatch(side: number): GibsPatch {
   mask.magFilter = mask.minFilter = THREE.NearestFilter
   mask.unpackAlignment = 1
   mask.needsUpdate = true
+  const warp = warpField()
   const uniforms = {
     uGibsPatch: { value: null as THREE.Texture | null },
     uGibsMask: { value: mask },
+    uGibsWarp: { value: warp },
     uGibsOrigin: { value: new THREE.Vector2() },
     uGibsActive: { value: 0 },
   }
@@ -484,8 +521,9 @@ export function createGibsPatch(side: number): GibsPatch {
       release()
       recolour?.dispose()
       recolour = null
-      // three uploads it again if the patch is used after.
+      // three uploads them again if the patch is used after.
       mask.dispose()
+      warp.dispose()
     },
   }
 }

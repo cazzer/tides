@@ -48,9 +48,49 @@ describe('GIBS patch on the ground', () => {
     expect(blend).toBeLessThan(at('#include <specularmap_fragment>'))
     const gibsCode = frag.slice(frag.indexOf('float gibsCover'), at('#include <color_fragment>'))
     expect(gibsCode).not.toMatch(/totalEmissiveRadiance|specularStrength|vCloud/)
-    expect(Object.keys(shader.uniforms)).toEqual(expect.arrayContaining(['uGibsPatch', 'uGibsMask', 'uGibsOrigin', 'uGibsActive']))
+    expect(Object.keys(shader.uniforms)).toEqual(
+      expect.arrayContaining(['uGibsPatch', 'uGibsMask', 'uGibsWarp', 'uGibsOrigin', 'uGibsActive'])
+    )
+    // The patch's tile coordinates are moved by the warp before anything
+    // (its derivatives, edge and mask) reads them.
+    expect(frag.indexOf('texture(uGibsWarp')).toBeLessThan(frag.indexOf('vec2 gibsDx = dFdx(gibsAt);'))
+    // Read where the day map is (rows from the north, like gibsAt.y), in
+    // sixteenths of a 10800x5400 day map's texel, x wrapped with the patch.
+    expect(frag).toContain('texture(uGibsWarp, vec2(vMapUv.x, 1.0 - vMapUv.y)).rg * 255.0 - 128.0)')
+    expect(frag).toContain('/ vec2(172800.000000, 86400.000000);')
+    expect(frag).toContain('fract(vMapUv.x + gibsWarp.x - uGibsOrigin.x')
+    expect(frag).toContain('(1.0 - vMapUv.y + gibsWarp.y) * 80.000000')
     expect(patch.customProgramCacheKey()).toContain('gibs-patch-8')
     clouds.dispose()
+    gibs.release()
+  })
+
+  it('moves the patch onto the day map around the Great Lakes and nowhere the two agree', () => {
+    const gibs = createGibsPatch(4)
+    const shader = phongShader()
+    gibs.material.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+    const warp = shader.uniforms.uGibsWarp.value as THREE.DataTexture
+    const { data, width, height } = warp.image as { data: Uint8Array; width: number; height: number }
+    expect([width, height, warp.format, warp.wrapS]).toEqual([180, 90, THREE.RGFormat, THREE.RepeatWrapping])
+    // Day-map texels (east, south) at the node nearest a place.
+    const at = (lat: number, lon: number) => {
+      const k = Math.floor((90 - lat) / 2) * width + Math.floor((lon + 180) / 2)
+      return [(data[2 * k] - 128) / 16, (data[2 * k + 1] - 128) / 16]
+    }
+    // The day map shows Lake Michigan ~3 texels south-east of Blue Marble.
+    for (const v of at(44, -87)) {
+      expect(v).toBeGreaterThan(-4)
+      expect(v).toBeLessThan(-2)
+    }
+    for (const [lat, lon] of [
+      [27, -81], // Florida
+      [21, -89], // Yucatan
+      [36, -6], // Gibraltar
+      [27, -97], // Texas, whose lagoons the day map draws wide
+      [-34, 151], // Sydney
+    ]) {
+      expect(at(lat, lon)).toEqual([0, 0])
+    }
     gibs.release()
   })
 
