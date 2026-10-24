@@ -17,6 +17,8 @@ import {
   fogExtinction,
   marchCrossing,
   marchSpanFromEye,
+  marchSteps,
+  type Vec3,
 } from '../cloud-layer'
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
@@ -107,11 +109,14 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
     const near = 0.002
     const inside = marchSpanFromEye([0, sea + 0.11, 0], [1, 0, 0], sea, outer, near)!
     expect(inside.start).toBe(near)
+    // Its steps count from the eye (tides-16z).
+    expect(inside.origin).toBe(0)
     expect(inside.end).toBeCloseTo(Math.sqrt(outer ** 2 - (sea + 0.11) ** 2), 9)
     const down = marchSpanFromEye([0, sea + 0.11, 0], [0, -1, 0], sea, outer, near)!
     expect(down.end).toBeCloseTo(0.11 - CLOUD_CLEARANCE, 9)
     const outside = marchSpanFromEye([0, sea + 0.3, 0], [0, -1, 0], sea, outer, near)!
     expect(outside.start).toBeCloseTo(0.3 - CLOUD_LAYER_TOP, 9)
+    expect(outside.origin).toBe(outside.start)
     expect(marchSpanFromEye([0, sea + 0.3, 0], [0, 1, 0], sea, outer, near)).toBeNull()
   })
 
@@ -140,22 +145,30 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
 
   it('keeps every march from inside within the step budget', () => {
     // From the deck's bottom to above the shell. Rays that skim over the sea
-    // from the shell's top stretch the clamped steps, by under 2%.
+    // from the shell's top stretch the clamped steps, by under 2%. The steps
+    // count from the eye, whatever the near plane (tides-16z).
     let longest = 0
+    let most = 0
     for (let alt = 0.001; alt <= CLOUD_LAYER_TOP + 0.01; alt += 0.005) {
       for (let deg = -90; deg <= 90; deg += 0.5) {
         const a = (deg * Math.PI) / 180
-        const span = marchSpanFromEye(
-          [0, sea + alt, 0],
-          [Math.cos(a), Math.sin(a), 0],
-          sea,
-          outer,
-          0.001
-        )
-        if (span) longest = Math.max(longest, span.end - span.start)
+        for (const near of [0.001, 0.012, 0.1]) {
+          const span = marchSpanFromEye(
+            [0, sea + alt, 0],
+            [Math.cos(a), Math.sin(a), 0],
+            sea,
+            outer,
+            near
+          )
+          if (!span) continue
+          longest = Math.max(longest, span.end - span.origin)
+          most = Math.max(most, marchSteps(span, MARCH_STEP, MARCH_STEPS).length)
+        }
       }
     }
     expect(longest / MARCH_STEPS).toBeLessThanOrEqual(MARCH_STEP * 1.02)
+    // The start and MARCH_STEPS steps on: the shader's loop.
+    expect(most).toBeLessThanOrEqual(MARCH_STEPS + 1)
   })
 
   for (const flat of [false, true]) {
@@ -521,6 +534,70 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
     expect(inside).toContain('float aboveGround = alt - cloudGround(uvq);')
     expect(inside).toContain('clip * stepLen')
     expect(inside).toContain('if (clip < 1.0) break;')
+    clouds.dispose()
+  })
+})
+
+describe('cloud march holding still as the camera moves (tides-16z)', () => {
+  const sea = sceneRadius(12742000)
+  const outer = sea + CLOUD_LAYER_TOP
+  const eye: Vec3 = [0, sea + 0.05, 0]
+  const along = (deg: number): Vec3 => {
+    const a = (deg * Math.PI) / 180
+    return [Math.cos(a), Math.sin(a), 0]
+  }
+
+  it('anchors the steps to the eye, so turning leaves them', () => {
+    // The ship's camera turns about the eye: a ray on the view axis, turned
+    // 45° off it, meets the near plane further on, near / cos 45°.
+    const near = 0.012
+    for (const deg of [-60, -30, -10, 0, 10, 30]) {
+      const onAxis = marchSteps(marchSpanFromEye(eye, along(deg), sea, outer, near)!, MARCH_STEP, MARCH_STEPS)
+      const offAxis = marchSteps(
+        marchSpanFromEye(eye, along(deg), sea, outer, near / Math.SQRT1_2)!,
+        MARCH_STEP,
+        MARCH_STEPS
+      )
+      // Past the later start's first step, every step is where it was.
+      const ds = onAxis[2] - onAxis[1]
+      const past = offAxis[0] + ds
+      const shared = onAxis.filter((s) => s > past)
+      expect(shared.length).toBeGreaterThan(1)
+      expect(offAxis.filter((s) => s > past)).toHaveLength(shared.length)
+      for (const s of shared) {
+        expect(Math.min(...offAxis.map((o) => Math.abs(o - s)))).toBeLessThan(1e-9)
+      }
+    }
+  })
+
+  it('keeps the same step phase from ray to ray inside the shell (tides-01v.8.12)', () => {
+    // Steps MARCH_STEP from the eye on every ray long enough for them: but
+    // for the start and the end, on the same spheres about the eye.
+    let checked = 0
+    for (let deg = -60; deg <= 60; deg += 0.25) {
+      const span = marchSpanFromEye(eye, along(deg), sea, outer, 0.004)!
+      const steps = marchSteps(span, MARCH_STEP, MARCH_STEPS)
+      if (Math.abs(steps[2] - steps[1] - MARCH_STEP) > 1e-12) continue
+      for (const s of steps.slice(1, -1)) {
+        expect(Math.abs(s / MARCH_STEP - Math.round(s / MARCH_STEP))).toBeLessThan(1e-9)
+      }
+      checked++
+    }
+    expect(checked).toBeGreaterThan(300)
+  })
+
+  it('reads the ray spread off the image plane, and the deck without a toggle', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+    const outside = preprocess(clouds.material.fragmentShader, new Set())
+    expect(inside).toContain('vec3 plane = vRayDir / vViewDepth;')
+    expect(inside).toContain('length(dFdx(plane))')
+    expect(inside).not.toContain('length(dFdx(d))')
+    expect(inside).not.toContain('inDeck')
+    expect(inside).toContain('cloudMarchColumn(uvq, r, mu, cloudTerrain(uvq), s, ds, spread, fromAbove)')
+    // The march from outside is as it was.
+    expect(outside).toContain('float spread = max(length(dFdx(d)), length(dFdy(d)));')
+    expect(outside).not.toContain('cloudMarchColumn(')
     clouds.dispose()
   })
 })
