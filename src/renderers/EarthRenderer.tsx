@@ -8,6 +8,7 @@ import { pickBlend } from '../cloud-frames'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer, type CloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
+import { groundShadowPatch } from './groundShadow'
 import { useGibsPatch } from './gibsPatch'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
@@ -21,6 +22,7 @@ import {
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
 import { EarthDemLoader } from './earthDemTexture'
+import { earthHorizon } from './earthHorizonTexture'
 
 // Import assets directly
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
@@ -31,6 +33,7 @@ import earthNightTextureHigh from '../assets/earth-night.jpg'
 import earthNightTextureLow from '../assets/earth-night-2k.jpg'
 import earthDemHigh from '../assets/earth-dem-4k.bin?url'
 import earthDemLow from '../assets/earth-dem-2k.bin?url'
+import earthHorizonUrl from '../assets/earth-horizon-1k.bin?url'
 
 interface EarthRendererProps {
   diameter: number
@@ -97,6 +100,7 @@ export default function EarthRenderer({
         nightLightsPatch(clouds.uniforms.uSunDir),
         poleSmoothingPatch(),
         groundDetailPatch(textureSet.low),
+        groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
         gibsPatch
       ),
     [eclipseShadow, clouds, textureSet.low, gibsPatch]
