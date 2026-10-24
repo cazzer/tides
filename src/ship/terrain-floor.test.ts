@@ -5,37 +5,43 @@ import { latLonToLocal } from '../aurora'
 import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { LIMB_SEGMENTS, type SphereSegments } from './limb-detail'
 import { EARTH_RADIUS } from './ship-bodies'
+import { decodeEarthDem, demLevel, toHalfBits } from '../earth-dem'
 import {
   FLOOR_CELLS,
+  TERRAIN_FALLBACK_GREY,
   TERRAIN_GREY_MARGIN,
   TERRAIN_MAP_SIZE,
   buildTerrainFloor,
+  demGrey,
   terrainFloorGrey,
   terrainFloorGreyAround,
   terrainFloorRadius,
 } from './terrain-floor'
 
-const pooled = new Uint8Array(readFileSync(new URL('../assets/earth-terrain-max.bin', import.meta.url)))
+const shipped = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
+const [demMax, dem4k, dem2k] = await Promise.all(['earth-dem-max.bin', 'earth-dem-4k.bin', 'earth-dem-2k.bin'].map(shipped))
+const pooled = demGrey(demMax)
 const floor = buildTerrainFloor(pooled)
 const [POOLED_W, POOLED_H] = TERRAIN_MAP_SIZE
 
-// The bump maps the ground can load (EarthRenderer: 4k high, 2k low), as
-// their worst case: every texel as high as its block in the pooled map,
-// which by construction it is at or below. Displacing by these bounds the
-// real mesh from above.
-const SOURCES: SphereSegments[] = [
-  [4096, 2048],
-  [2048, 1024],
-]
+// The elevation maps the ground can load (EarthRenderer: 4k high, 2k low),
+// in grey levels as the GPU holds them: half floats (earthDemTexture.ts).
+interface Source {
+  width: number
+  height: number
+  grey: Float32Array
+}
+const SOURCES: Source[] = [dem4k, dem2k].map((dem) => {
+  const { width, height, data } = demLevel(dem)
+  return { width, height, grey: Float32Array.from(data, (h) => THREE.DataUtils.fromHalfFloat(toHalfBits(h)) * 255) }
+})
 
-// texture2D on a ClampToEdge, flipY'd map: the vertex shader's bilinear read.
-function sourceGrey([width, height]: SphereSegments, u: number, v: number): number {
-  const bx = width / POOLED_W
-  const by = height / POOLED_H
+// texture2D on a ClampToEdge map, north at v = 1: the vertex shader's bilinear read.
+function sourceGrey({ width, height, grey }: Source, u: number, v: number): number {
   const texel = (i: number, j: number) => {
     const x = THREE.MathUtils.clamp(i, 0, width - 1)
     const y = THREE.MathUtils.clamp(j, 0, height - 1)
-    return pooled[Math.floor(y / by) * POOLED_W + Math.floor(x / bx)]
+    return grey[y * width + x]
   }
   const x = u * width - 0.5
   const y = (1 - v) * height - 0.5
@@ -52,7 +58,7 @@ function sourceGrey([width, height]: SphereSegments, u: number, v: number): numb
 // The ground mesh's vertices, displaced along their normals as the Phong
 // material's displacementMap does. SphereGeometry lays them out row by row,
 // widthSegments + 1 to a row, north first.
-function displacedMesh(segments: SphereSegments, source: SphereSegments): Float64Array {
+function displacedMesh(segments: SphereSegments, source: Source): Float64Array {
   const sphere = new THREE.SphereGeometry(EARTH_RADIUS, ...segments)
   const position = sphere.getAttribute('position')
   const uv = sphere.getAttribute('uv')
@@ -115,8 +121,9 @@ function random(seed: number): () => number {
 const REGIONS = {
   Himalaya: { lat: [26, 38], lon: [72, 98] },
   Andes: { lat: [-34, -8], lon: [-78, -62] },
-  // Clear of every island's cell and its neighbours.
-  'open Pacific': { lat: [-45, -30], lon: [-130, -100] },
+  // Clear of every island's cell and its neighbours (Easter Island's, at
+  // 27°S, reaches the floor to 30.2°S).
+  'open Pacific': { lat: [-45, -31], lon: [-130, -100] },
 } as const
 
 function sweep(region: keyof typeof REGIONS, count: number): THREE.Vector3[] {
@@ -187,7 +194,7 @@ describe('terrain floor (tides-01v.8.3)', () => {
       for (const local of sweep(region, 3000)) {
         const radius = terrainFloorRadius(limbFloor, EARTH_RADIUS, local)
         for (const { source, mesh } of limbMeshes) {
-          expect(radius, `${local.toArray()} from ${source}`).toBeGreaterThanOrEqual(meshRadius(mesh, LIMB_SEGMENTS, local))
+          expect(radius, `${local.toArray()} from ${source.width}`).toBeGreaterThanOrEqual(meshRadius(mesh, LIMB_SEGMENTS, local))
         }
         expect(radius).toBeLessThanOrEqual(terrainFloorRadius(floor, EARTH_RADIUS, local) + 1e-12)
       }
@@ -233,8 +240,7 @@ describe('terrain floor (tides-01v.8.3)', () => {
   })
 
   it('stays close over the ocean and under the highest peak plus the margin', () => {
-    // A level of JPEG noise on top of the margin.
-    const margin = (TERRAIN_DISPLACEMENT * (TERRAIN_GREY_MARGIN + 1)) / 255
+    const margin = (TERRAIN_DISPLACEMENT * TERRAIN_GREY_MARGIN) / 255
     for (const local of sweep('open Pacific', 500)) {
       expect(terrainFloorRadius(floor, EARTH_RADIUS, local)).toBeLessThanOrEqual(EARTH_RADIUS + margin + 1e-12)
     }
@@ -275,10 +281,10 @@ describe('terrain floor (tides-01v.8.3)', () => {
     }
   })
 
-  it('falls back to the highest the ground can reach before the map loads', () => {
-    expect(terrainFloorRadius(null, EARTH_RADIUS, latLonToLocal(0, -150))).toBe(
-      EARTH_RADIUS + TERRAIN_DISPLACEMENT
-    )
+  it('falls back over the highest ground there is before the map loads', () => {
+    const fallback = terrainFloorRadius(null, EARTH_RADIUS, latLonToLocal(0, -150))
+    expect(fallback).toBe(EARTH_RADIUS + (TERRAIN_DISPLACEMENT * TERRAIN_FALLBACK_GREY) / 255)
+    expect(fallback).toBeGreaterThan(EARTH_RADIUS + (TERRAIN_DISPLACEMENT * floor.grey.reduce((a, b) => Math.max(a, b), 0)) / 255)
   })
 
   it('rejects a map that does not tile the cells', () => {

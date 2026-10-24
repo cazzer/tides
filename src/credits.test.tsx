@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import { Credits, GIBS_ACKNOWLEDGEMENT } from './Credits'
+import { COPERNICUS_DEM_NOTICE, Credits, GIBS_ACKNOWLEDGEMENT } from './Credits'
 import { OPEN_METEO_SITE } from './forecast-clouds'
 
 // The credits the views used to draw over the scene, now in settings (tides-1qv).
@@ -24,6 +24,12 @@ describe('Credits', () => {
         'https://artlibre.org/licence/lal/en/',
       ])
     )
+  })
+
+  test("credits Mapterhorn's terrain with the Copernicus notice and its per-source attribution", () => {
+    expect(hrefs).toEqual(expect.arrayContaining(['https://mapterhorn.com/', 'https://mapterhorn.com/attribution/']))
+    expect(html).toContain('Copernicus GLO-30')
+    expect(html).toContain(COPERNICUS_DEM_NOTICE)
   })
 
   test('opens every link in a new tab without an opener', () => {

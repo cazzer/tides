@@ -8,7 +8,7 @@
 // CEILING_GREY_MARGIN already added. Built here rather than in the browser,
 // where it held the main thread ~14 ms as the ship neared Earth.
 //
-// Run scripts/build-terrain-floor.mjs first when the bump maps change.
+// Run scripts/build-earth-dem.mjs first when the elevation map changes.
 // usage: node scripts/build-cloud-ceiling.mjs
 
 import fs from "node:fs";
