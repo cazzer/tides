@@ -270,6 +270,54 @@ export function marchCrossing(
   return { at, until, side, depth: side ? null : 0 }
 }
 
+/**
+ * Where within a step the march from inside meets cloud, pinned to the
+ * field (tides-16z; cloudShaders.ts cloudRefine()). marchCrossing() found it
+ * `at` of the way from `prev` (out of the cloud) to `next`, the field taken
+ * linear over the step, which lands wherever the steps fall. Between the
+ * step's start and the first place known to be in cloud (`next`, or failing
+ * that the crossing itself, read with `sampleAt`, of a share of the step),
+ * each of `iterations` reads halves the stretch the ray goes in over, and
+ * the crossing is solved linearly on the last: within 2^-iterations of a
+ * step of where the field goes in. Where neither is in cloud, the ray
+ * clipped cloud thinner than a step: `at` as it was. As a share of the step.
+ */
+export function refineMarchCrossing(
+  prev: MarchSample,
+  next: MarchSample,
+  at: number,
+  sampleAt: (w: number) => MarchSample,
+  iterations: number,
+  fromAbove = false
+): number {
+  // From above the tops, met from over a top: however faint.
+  const faint = fromAbove && prev.alt > prev.top
+  const inside = (q: MarchSample) =>
+    q.alt <= q.top && q.alt >= q.base && (faint || q.alpha >= CLOUD_MIN_ALPHA)
+  let lo = 0
+  let hi = 1
+  let a = prev
+  let b = next
+  if (!inside(b)) {
+    hi = at
+    b = sampleAt(at)
+    if (!inside(b)) return at
+  }
+  for (let k = 0; k < iterations; k++) {
+    const mid = (lo + hi) / 2
+    const m = sampleAt(mid)
+    if (inside(m)) {
+      hi = mid
+      b = m
+    } else {
+      lo = mid
+      a = m
+    }
+  }
+  const hit = marchCrossing(a, b, fromAbove)
+  return hit ? lo + (hi - lo) * hit.at : (lo + hi) / 2
+}
+
 export type Vec3 = [number, number, number]
 
 /**
@@ -297,8 +345,10 @@ export function distanceToRadius(r0: number, mu: number, r: number): number {
  * where the ray comes within `outer` of the centre if that is further, to
  * where it leaves that sphere or, if it goes on to meet the sea, drops below
  * the lowest base anywhere, or from below that, meets the sea (one that skims
- * over the sea comes back up under the deck). Null when no part of the ray
- * past the near plane comes within `outer`.
+ * over the sea comes back up under the deck). `origin`, where its steps
+ * count from (marchSteps()): the eye, or from outside `outer`, where the ray
+ * comes within it. Null when no part of the ray past the near plane comes
+ * within `outer`.
  */
 export function marchSpanFromEye(
   eye: Vec3,
@@ -306,12 +356,14 @@ export function marchSpanFromEye(
   seaLevel: number,
   outer: number,
   near: number
-): { start: number; end: number } | null {
+): MarchSpan | null {
   const b = eye[0] * dir[0] + eye[1] * dir[1] + eye[2] * dir[2]
   const eye2 = eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]
   const discOuter = b * b - (eye2 - outer * outer)
   if (discOuter <= 0) return null
-  const start = Math.max(-b - Math.sqrt(discOuter), near)
+  const toOuter = -b - Math.sqrt(discOuter)
+  const origin = Math.max(toOuter, 0)
+  const start = Math.max(toOuter, near)
   let end = -b + Math.sqrt(discOuter)
   const inner = seaLevel + CLOUD_CLEARANCE
   const discInner = b * b - (eye2 - inner * inner)
@@ -322,7 +374,33 @@ export function marchSpanFromEye(
     const toInner = -b - Math.sqrt(discInner)
     end = toInner > start ? toInner : toSea
   }
-  return end > start ? { start, end } : null
+  return end > start ? { origin, start, end } : null
+}
+
+/** The stretch of a view ray the march from inside covers
+ * (marchSpanFromEye()), and where its steps count from. */
+export interface MarchSpan {
+  origin: number
+  start: number
+  end: number
+}
+
+/**
+ * Where along the ray the march from inside reads (cloudShaders.ts'
+ * FLIP_SIDED branch, without the steps the cloud ceiling lets it leave out):
+ * its start, then steps of `step` counted from the span's origin, the last
+ * cut short at its end (tides-16z). At least three steps over the span from
+ * the origin, and no more than `maxSteps`. Counted from the eye, not the
+ * near plane, a ray's steps hold still as the camera turns about it.
+ */
+export function marchSteps({ origin, start, end }: MarchSpan, step: number, maxSteps: number): number[] {
+  const span = end - origin
+  const ds = Math.max(Math.min(step, span / 3), span / maxSteps)
+  const grid = origin + ds * Math.floor((start - origin) / ds)
+  const steps = Math.min(Math.max(Math.ceil((end - grid) / ds - 1e-3), 1), maxSteps)
+  const at = [start]
+  for (let i = 1; i <= steps; i++) at.push(Math.min(grid + ds * i, end))
+  return at
 }
 
 /** How far around a point (degrees of arc) its cloud ceiling holds. */
