@@ -337,6 +337,14 @@ export function distanceToRadius(r0: number, mu: number, r: number): number {
   return -r0 * mu + Math.sqrt(r0 * r0 * (mu * mu - 1) + r * r)
 }
 
+/** The stretch of a view ray the march from inside covers
+ * (marchSpanFromEye()), and where its steps count from. */
+export interface MarchSpan {
+  origin: number
+  start: number
+  end: number
+}
+
 /**
  * The stretch of a view ray the cloud march covers within the ship camera's
  * reach of the shell (tides-01v.8.4; cloudShaders.ts' FLIP_SIDED branch), as
@@ -375,14 +383,6 @@ export function marchSpanFromEye(
     end = toInner > start ? toInner : toSea
   }
   return end > start ? { origin, start, end } : null
-}
-
-/** The stretch of a view ray the march from inside covers
- * (marchSpanFromEye()), and where its steps count from. */
-export interface MarchSpan {
-  origin: number
-  start: number
-  end: number
 }
 
 /**

@@ -669,11 +669,21 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
         crossing(sampleAt, ((p + 0.5) / 16) * MARCH_STEP, iterations)
       )
     )
-  // The worst error (in steps) where the field goes in once in the step.
-  const worst = (found: (Crossing | null)[]) =>
-    Math.max(...found.map((c) => (c?.truth != null ? Math.abs(c.hit - c.truth) : 0))) /
-    MARCH_STEP
-  const once = (found: (Crossing | null)[]) => found.filter((c) => c?.truth != null).length
+  // The errors (in steps) where the field goes in once in the step, sorted:
+  // the worst, and the 95th percentile.
+  const errors = (found: (Crossing | null)[]) =>
+    found
+      .filter((c) => c?.truth != null)
+      .map((c) => Math.abs(c!.hit - c!.truth!) / MARCH_STEP)
+      .sort((a, b) => a - b)
+  const worst = (found: (Crossing | null)[]) => Math.max(...errors(found))
+  const p95 = (found: (Crossing | null)[]) => {
+    const e = errors(found)
+    return e[Math.floor(0.95 * (e.length - 1))]
+  }
+  const once = (found: (Crossing | null)[]) => errors(found).length
+  // Each read halves where the crossing can lie.
+  const BOUND = 2 ** -MARCH_REFINE + 1e-9
 
   it('refines the crossing within its step, so tops hold still as the steps slide', () => {
     // Tops 0.018..0.03 a texel apart, under rays descending 5..20° from
@@ -693,9 +703,11 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     }
     const refined = crossings(cases, MARCH_REFINE)
     expect(once(refined)).toBeGreaterThan(300)
-    // Within a sixteenth of a step of the field, wherever the steps fall;
-    // the step's own crossing, some way off.
-    expect(worst(refined)).toBeLessThanOrEqual(1 / 16 + 1e-9)
+    // Within 2^-MARCH_REFINE of a step of the field, wherever the steps
+    // fall, and mostly much closer, the field solved linearly on the last
+    // half; the step's own crossing, some way off.
+    expect(worst(refined)).toBeLessThanOrEqual(BOUND)
+    expect(p95(refined)).toBeLessThan(0.01)
     expect(worst(crossings(cases, 0))).toBeGreaterThan(0.2)
   })
 
@@ -709,8 +721,55 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     }
     const refined = crossings(cases, MARCH_REFINE)
     expect(once(refined)).toBeGreaterThan(100)
-    expect(worst(refined)).toBeLessThanOrEqual(1 / 16 + 1e-9)
+    expect(worst(refined)).toBeLessThanOrEqual(BOUND)
+    expect(p95(refined)).toBeLessThan(0.01)
     expect(worst(crossings(cases, 0))).toBeGreaterThan(0.2)
+  })
+
+  it('refines a faint top met from above the tops at its height', () => {
+    // From above the tops around the camera, a top is met however faint
+    // (marchCrossing()): the reads must take it in cloud too, or the hit
+    // would stay where the step found it.
+    const tops = field((k) => 0.018 + 0.012 * hash(k))
+    const a = (12 * Math.PI) / 180
+    const sampleAt = (s: number) => ({
+      alt: 0.034 - s * Math.sin(a),
+      base: 0.006,
+      top: tops(0.11 + s * Math.cos(a)),
+      alpha: CLOUD_MIN_ALPHA / 2,
+    })
+    const gap = (s: number) => sampleAt(s).alt - sampleAt(s).top
+    let moved = 0
+    for (let p = 0; p < 16; p++) {
+      let sPrev = ((p + 0.5) / 16) * MARCH_STEP
+      for (let s = sPrev + MARCH_STEP; ; sPrev = s, s += MARCH_STEP) {
+        const prev = sampleAt(sPrev)
+        const next = sampleAt(s)
+        const found = marchCrossing(prev, next, true)
+        if (!found) continue
+        const share = (w: number) => sampleAt(sPrev + w * MARCH_STEP)
+        const w = refineMarchCrossing(prev, next, found.at, share, MARCH_REFINE, true)
+        // Where the ray first comes down to the tops in the step.
+        let lo = 0
+        let hi = 1
+        for (let k = 1; k <= 1000; k++) {
+          if (gap(sPrev + (k / 1000) * MARCH_STEP) <= 0) {
+            ;[lo, hi] = [(k - 1) / 1000, k / 1000]
+            break
+          }
+        }
+        for (let k = 0; k < 40; k++) {
+          const mid = (lo + hi) / 2
+          if (gap(sPrev + mid * MARCH_STEP) <= 0) hi = mid
+          else lo = mid
+        }
+        expect(Math.abs(w - hi)).toBeLessThanOrEqual(BOUND)
+        if (Math.abs(found.at - hi) > BOUND) moved++
+        break
+      }
+    }
+    // Where the step's own crossing was off, the reads moved it.
+    expect(moved).toBeGreaterThan(0)
   })
 
   it('leaves a crossing the field holds nowhere as the step found it', () => {
@@ -738,7 +797,9 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     expect(inside).not.toContain('length(dFdx(d))')
     expect(inside).not.toContain('inDeck')
     expect(inside).toContain(`#define MARCH_REFINE ${MARCH_REFINE}`)
-    expect(inside).toContain('cloudRefine(eye, d, sPrev, s,')
+    // Once, for the hit, after the march.
+    expect(inside.match(/cloudRefine\(eye, d,/g)).toHaveLength(1)
+    expect(inside).toContain('if (sHit >= 0.0) sHit = min(cloudRefine(eye, d, hitStep.x, hitStep.y,')
     // The march from outside is as it was.
     expect(outside).toContain('float spread = max(length(dFdx(d)), length(dFdy(d)));')
     expect(outside).not.toContain('cloudRefine(')
