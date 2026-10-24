@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
-import { createCloudLayer, MARCH_REFINE, MARCH_STEP, MARCH_STEPS } from './cloudShaders'
+import { createCloudLayer, MARCH_STEP, MARCH_STEPS } from './cloudShaders'
 import {
   CLOUD_CLEARANCE,
   CLOUD_LAYER_TOP,
@@ -16,10 +16,8 @@ import {
   fogEaseShare,
   fogExtinction,
   marchCrossing,
-  type MarchSample,
   marchSpanFromEye,
   marchSteps,
-  refineMarchCrossing,
   type Vec3,
 } from '../cloud-layer'
 import { sceneRadius } from '../planets'
@@ -588,206 +586,6 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     expect(checked).toBeGreaterThan(300)
   })
 
-  // A field of tops (or opacities) with a knot every 0.0072 (about a texel
-  // of the real-weather map, 2560 wide), linear between, along a ray. Flat
-  // ground: over a step the Earth's curve is nothing to the field's.
-  const TEXEL = 0.0072
-  const hash = (k: number) => {
-    const x = Math.sin(k * 12.9898 + 4.1414) * 43758.5453
-    return x - Math.floor(x)
-  }
-  const field = (knot: (k: number) => number) => (x: number) => {
-    const k = Math.floor(x / TEXEL)
-    const t = x / TEXEL - k
-    return knot(k) + (knot(k + 1) - knot(k)) * t
-  }
-
-  const inCloud = (q: MarchSample) =>
-    q.alt <= q.top && q.alt >= q.base && q.alpha >= CLOUD_MIN_ALPHA
-
-  // The march's first crossing over steps of MARCH_STEP from phase: as the
-  // step found it, refined `iterations` times, and where the field itself
-  // goes in, where it does so once in the step (to a thousandth of a step,
-  // then bisected); and whether neither the step's end nor its crossing is
-  // in cloud: a clip thinner than the step.
-  interface Crossing {
-    hit: number
-    coarse: number
-    truth: number | null
-    thinClip: boolean
-  }
-  function crossing(
-    sampleAt: (s: number) => MarchSample,
-    phase: number,
-    iterations: number
-  ): Crossing | null {
-    let sPrev = phase
-    let prev = sampleAt(sPrev)
-    for (let i = 1; i < 400; i++) {
-      const s = phase + i * MARCH_STEP
-      const next = sampleAt(s)
-      const found = marchCrossing(prev, next)
-      if (found) {
-        const from = sPrev
-        const share = (w: number) => sampleAt(from + w * MARCH_STEP)
-        const w = refineMarchCrossing(prev, next, found.at, share, iterations)
-        const goesIn: number[] = []
-        let was = inCloud(prev)
-        for (let k = 1; k <= 1000; k++) {
-          const now = inCloud(share(k / 1000))
-          if (now !== was) goesIn.push(k)
-          was = now
-        }
-        let truth: number | null = null
-        if (goesIn.length === 1) {
-          let lo = (goesIn[0] - 1) / 1000
-          let hi = goesIn[0] / 1000
-          for (let k = 0; k < 40; k++) {
-            const mid = (lo + hi) / 2
-            if (inCloud(share(mid))) hi = mid
-            else lo = mid
-          }
-          truth = sPrev + hi * MARCH_STEP
-        }
-        return {
-          hit: sPrev + w * MARCH_STEP,
-          coarse: sPrev + found.at * MARCH_STEP,
-          truth,
-          thinClip: !inCloud(next) && !inCloud(share(found.at)),
-        }
-      }
-      sPrev = s
-      prev = next
-    }
-    return null
-  }
-
-  // Every case's crossing at 16 phases of the steps.
-  const crossings = (cases: ((s: number) => MarchSample)[], iterations: number) =>
-    cases.flatMap((sampleAt) =>
-      Array.from({ length: 16 }, (_, p) =>
-        crossing(sampleAt, ((p + 0.5) / 16) * MARCH_STEP, iterations)
-      )
-    )
-  // The errors (in steps) where the field goes in once in the step, sorted:
-  // the worst, and the 95th percentile.
-  const errors = (found: (Crossing | null)[]) =>
-    found
-      .filter((c) => c?.truth != null)
-      .map((c) => Math.abs(c!.hit - c!.truth!) / MARCH_STEP)
-      .sort((a, b) => a - b)
-  const worst = (found: (Crossing | null)[]) => Math.max(...errors(found))
-  const p95 = (found: (Crossing | null)[]) => {
-    const e = errors(found)
-    return e[Math.floor(0.95 * (e.length - 1))]
-  }
-  const once = (found: (Crossing | null)[]) => errors(found).length
-  // Each read halves where the crossing can lie.
-  const BOUND = 2 ** -MARCH_REFINE + 1e-9
-
-  it('refines the crossing within its step, so tops hold still as the steps slide', () => {
-    // Tops 0.018..0.03 a texel apart, under rays descending 5..20° from
-    // above them all, over stretches of the field further and further on.
-    const tops = field((k) => 0.018 + 0.012 * hash(k))
-    const cases: ((s: number) => MarchSample)[] = []
-    for (const deg of [5, 8, 12, 16, 20]) {
-      for (const x0 of [0, 0.05, 0.11, 0.23, 0.37]) {
-        const a = (deg * Math.PI) / 180
-        cases.push((s) => ({
-          alt: 0.034 - s * Math.sin(a),
-          base: 0.006,
-          top: tops(x0 + s * Math.cos(a)),
-          alpha: 0.6,
-        }))
-      }
-    }
-    const refined = crossings(cases, MARCH_REFINE)
-    expect(once(refined)).toBeGreaterThan(300)
-    // Within 2^-MARCH_REFINE of a step of the field, wherever the steps
-    // fall, and mostly much closer, the field solved linearly on the last
-    // half; the step's own crossing, some way off.
-    expect(worst(refined)).toBeLessThanOrEqual(BOUND)
-    expect(p95(refined)).toBeLessThan(0.01)
-    expect(worst(crossings(cases, 0))).toBeGreaterThan(0.2)
-  })
-
-  it('refines a side met where the cloud comes up to showing', () => {
-    // Level through the deck, into cloud thickening unevenly, texel by
-    // texel, from clear.
-    const cases: ((s: number) => MarchSample)[] = []
-    for (const seed of [0, 1, 2, 3, 4, 5, 6, 7]) {
-      const alpha = field((k) => (k < 3 ? 0 : Math.min(0.6, (k - 3) * 0.08 * hash(k + 31 * seed))))
-      cases.push((s) => ({ alt: 0.015, base: 0.006, top: 0.03, alpha: alpha(s) }))
-    }
-    const refined = crossings(cases, MARCH_REFINE)
-    expect(once(refined)).toBeGreaterThan(100)
-    expect(worst(refined)).toBeLessThanOrEqual(BOUND)
-    expect(p95(refined)).toBeLessThan(0.01)
-    expect(worst(crossings(cases, 0))).toBeGreaterThan(0.2)
-  })
-
-  it('refines a faint top met from above the tops at its height', () => {
-    // From above the tops around the camera, a top is met however faint
-    // (marchCrossing()): the reads must take it in cloud too, or the hit
-    // would stay where the step found it.
-    const tops = field((k) => 0.018 + 0.012 * hash(k))
-    const a = (12 * Math.PI) / 180
-    const sampleAt = (s: number) => ({
-      alt: 0.034 - s * Math.sin(a),
-      base: 0.006,
-      top: tops(0.11 + s * Math.cos(a)),
-      alpha: CLOUD_MIN_ALPHA / 2,
-    })
-    const gap = (s: number) => sampleAt(s).alt - sampleAt(s).top
-    let moved = 0
-    for (let p = 0; p < 16; p++) {
-      let sPrev = ((p + 0.5) / 16) * MARCH_STEP
-      for (let s = sPrev + MARCH_STEP; ; sPrev = s, s += MARCH_STEP) {
-        const prev = sampleAt(sPrev)
-        const next = sampleAt(s)
-        const found = marchCrossing(prev, next, true)
-        if (!found) continue
-        const share = (w: number) => sampleAt(sPrev + w * MARCH_STEP)
-        const w = refineMarchCrossing(prev, next, found.at, share, MARCH_REFINE, true)
-        // Where the ray first comes down to the tops in the step.
-        let lo = 0
-        let hi = 1
-        for (let k = 1; k <= 1000; k++) {
-          if (gap(sPrev + (k / 1000) * MARCH_STEP) <= 0) {
-            ;[lo, hi] = [(k - 1) / 1000, k / 1000]
-            break
-          }
-        }
-        for (let k = 0; k < 40; k++) {
-          const mid = (lo + hi) / 2
-          if (gap(sPrev + mid * MARCH_STEP) <= 0) hi = mid
-          else lo = mid
-        }
-        expect(Math.abs(w - hi)).toBeLessThanOrEqual(BOUND)
-        if (Math.abs(found.at - hi) > BOUND) moved++
-        break
-      }
-    }
-    // Where the step's own crossing was off, the reads moved it.
-    expect(moved).toBeGreaterThan(0)
-  })
-
-  it('leaves a crossing the field holds nowhere as the step found it', () => {
-    // Down through flat tops just where the cloud clears: the step, taking
-    // both linear, finds a sliver of cloud the field barely has, or hasn't.
-    const alpha = field((k) => (k <= 7 ? 0.6 : 0))
-    const a = (10 * Math.PI) / 180
-    const cases = [0, 0.0004, 0.0008, 0.0012].map((x0) => (s: number) => ({
-      alt: 0.03 - s * Math.sin(a),
-      base: 0.006,
-      top: 0.02,
-      alpha: alpha(x0 + s * Math.cos(a)),
-    }))
-    const clips = crossings(cases, MARCH_REFINE).filter((c) => c?.thinClip)
-    expect(clips.length).toBeGreaterThan(0)
-    for (const c of clips) expect(c!.hit).toBe(c!.coarse)
-  })
-
   it('reads the ray spread off the image plane, and the deck without a toggle', () => {
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
     const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
@@ -796,13 +594,10 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     expect(inside).toContain('length(dFdx(plane))')
     expect(inside).not.toContain('length(dFdx(d))')
     expect(inside).not.toContain('inDeck')
-    expect(inside).toContain(`#define MARCH_REFINE ${MARCH_REFINE}`)
-    // Once, for the hit, after the march.
-    expect(inside.match(/cloudRefine\(eye, d,/g)).toHaveLength(1)
-    expect(inside).toContain('if (sHit >= 0.0) sHit = min(cloudRefine(eye, d, hitStep.x, hitStep.y,')
+    expect(inside).toContain('cloudMarchColumn(uvq, r, mu, cloudTerrain(uvq), s, ds, spread, fromAbove)')
     // The march from outside is as it was.
     expect(outside).toContain('float spread = max(length(dFdx(d)), length(dFdy(d)));')
-    expect(outside).not.toContain('cloudRefine(')
+    expect(outside).not.toContain('cloudMarchColumn(')
     clouds.dispose()
   })
 })

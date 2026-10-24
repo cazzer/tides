@@ -270,54 +270,6 @@ export function marchCrossing(
   return { at, until, side, depth: side ? null : 0 }
 }
 
-/**
- * Where within a step the march from inside meets cloud, pinned to the
- * field (tides-16z; cloudShaders.ts cloudRefine()). marchCrossing() found it
- * `at` of the way from `prev` (out of the cloud) to `next`, the field taken
- * linear over the step, which lands wherever the steps fall. Between the
- * step's start and the first place known to be in cloud (`next`, or failing
- * that the crossing itself, read with `sampleAt`, of a share of the step),
- * each of `iterations` reads halves the stretch the ray goes in over, and
- * the crossing is solved linearly on the last: within 2^-iterations of a
- * step of where the field goes in. Where neither is in cloud, the ray
- * clipped cloud thinner than a step: `at` as it was. As a share of the step.
- */
-export function refineMarchCrossing(
-  prev: MarchSample,
-  next: MarchSample,
-  at: number,
-  sampleAt: (w: number) => MarchSample,
-  iterations: number,
-  fromAbove = false
-): number {
-  // From above the tops, met from over a top: however faint.
-  const faint = fromAbove && prev.alt > prev.top
-  const inside = (q: MarchSample) =>
-    q.alt <= q.top && q.alt >= q.base && (faint || q.alpha >= CLOUD_MIN_ALPHA)
-  let lo = 0
-  let hi = 1
-  let a = prev
-  let b = next
-  if (!inside(b)) {
-    hi = at
-    b = sampleAt(at)
-    if (!inside(b)) return at
-  }
-  for (let k = 0; k < iterations; k++) {
-    const mid = (lo + hi) / 2
-    const m = sampleAt(mid)
-    if (inside(m)) {
-      hi = mid
-      b = m
-    } else {
-      lo = mid
-      a = m
-    }
-  }
-  const hit = marchCrossing(a, b, fromAbove)
-  return hit ? lo + (hi - lo) * hit.at : (lo + hi) / 2
-}
-
 export type Vec3 = [number, number, number]
 
 /**
