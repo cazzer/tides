@@ -8,6 +8,7 @@ import { pickBlend } from '../cloud-frames'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer, type CloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
+import { createGroundHaze } from './groundHaze'
 import { useGibsPatch } from './gibsPatch'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
@@ -88,6 +89,11 @@ export default function EarthRenderer({
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibsPatch = useGibsPatch(groundRef, diameter)
+  // Aerial perspective from inside the atmosphere (tides-zmw.5).
+  const groundHaze = useMemo(
+    () => createGroundHaze(clouds.uniforms.uSunDir, diameter),
+    [clouds, diameter]
+  )
   const groundPatch = useMemo(
     () =>
       composePatches(
@@ -96,9 +102,10 @@ export default function EarthRenderer({
         nightLightsPatch(clouds.uniforms.uSunDir),
         poleSmoothingPatch(),
         groundDetailPatch(textureSet.low),
-        gibsPatch
+        gibsPatch,
+        groundHaze.patch
       ),
-    [eclipseShadow, clouds, textureSet.low, gibsPatch]
+    [eclipseShadow, clouds, textureSet.low, gibsPatch, groundHaze]
   )
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
@@ -151,7 +158,8 @@ export default function EarthRenderer({
         ref={groundRef}
         geometry={groundSphere}
         raycast={meshBounds}
-        onBeforeRender={() => {
+        onBeforeRender={(_renderer, _scene, camera) => {
+          groundHaze.update(groundRef.current!, camera)
           // The Sun in the Earth's frame, from this frame's final transform
           // (the ground renders before the transparent clouds). The Sun is
           // the scene's origin, as for the directional light (sunlight.ts).

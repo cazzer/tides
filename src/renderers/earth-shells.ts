@@ -68,6 +68,14 @@ export function withinShellReach(
 }
 
 /**
+ * True when the ship's camera (shipNearEarth) is inside the shell of radius
+ * `outer` round `shell`'s origin: where the shell shows its back faces alone.
+ */
+export function insideShell(shell: THREE.Object3D, camera: THREE.Camera, outer: number): boolean {
+  return shipNearEarth(camera) && shell.worldToLocal(camera.getWorldPosition(eye)).length() < outer
+}
+
+/**
  * A shell mesh's onBeforeRender (tides-01v.8.2): which faces to draw for
  * this camera. Out of the shell's reach (withinShellReach), the front faces
  * alone, as ever. Within it, both, and the shader (shaders/shell/face.glsl,
@@ -75,19 +83,23 @@ export function withinShellReach(
  * the shell or where the near plane clips the front. Those back faces lie
  * beyond the globe, so there the depth test is off and the shaders stop
  * each ray at the ground themselves. three keeps both programs, so crossing
- * the reach compiles only once.
+ * the reach compiles only once. `stopAtGround` (the atmosphere's, tides-
+ * zmw.5): from inside, the depth test stays on, so the back faces stop at
+ * the ground, which draws its own share of the haze (groundHaze.ts).
  */
 export function pickShellFaces(
   mesh: THREE.Object3D,
   material: THREE.Material,
-  camera: THREE.Camera
+  camera: THREE.Camera,
+  stopAtGround = false
 ): void {
   const shader = material as THREE.ShaderMaterial
-  const reach = withinShellReach(mesh, camera, shader.uniforms.uOuter.value)
+  const outer = shader.uniforms.uOuter.value
+  const reach = withinShellReach(mesh, camera, outer)
   const side = reach ? THREE.DoubleSide : THREE.FrontSide
   if (shader.side !== side) {
     shader.side = side
     shader.needsUpdate = true
   }
-  shader.depthTest = !reach
+  shader.depthTest = !reach || (stopAtGround && insideShell(mesh, camera, outer))
 }
