@@ -91,8 +91,8 @@ export default function EarthRenderer({
   const gibsPatch = useGibsPatch(groundRef, diameter)
   // Aerial perspective from inside the atmosphere (tides-zmw.5).
   const groundHaze = useMemo(
-    () => createGroundHaze(clouds.uniforms.uSunDir, diameter),
-    [clouds, diameter]
+    () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
+    [clouds, diameter, textureSet.low]
   )
   const groundPatch = useMemo(
     () =>

@@ -15,8 +15,10 @@ import {
   ATMOSPHERE_SCALE_HEIGHT,
   ATMOSPHERE_SKY,
   ATMOSPHERE_SURFACE,
+  groundHazeTop,
   pickShellFaces,
 } from './earth-shells'
+import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
@@ -50,8 +52,9 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         // Double-sided in ship mode (pickShellFaces), where the shader keeps
-        // one face per ray; from inside it stops at the ground, which lays
-        // its own share of the haze over itself (groundHaze.ts).
+        // one face per ray; under the cloud shell's top it stops at the
+        // ground, which lays its own share of the haze over itself
+        // (groundHaze.ts).
         forceSinglePass: true,
       }),
     []
@@ -84,7 +87,7 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
       renderOrder={ATMOSPHERE_RENDER_ORDER}
       raycast={noRaycast}
       onBeforeRender={(_renderer, _scene, camera, _geometry, shader) =>
-        pickShellFaces(mesh.current!, shader, camera, true)
+        pickShellFaces(mesh.current!, shader, camera, radius + groundHazeTop(isLowQuality()))
       }
     />
   )
