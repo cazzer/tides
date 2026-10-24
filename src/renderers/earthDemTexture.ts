@@ -33,8 +33,12 @@ function heightTexture(levels: DemLevel[]): THREE.DataTexture {
   texture.generateMipmaps = false
   texture.minFilter = THREE.LinearMipmapLinearFilter
   texture.magFilter = THREE.LinearFilter
-  // As the bump image had; the shaders wrap longitude themselves (fract).
-  texture.wrapS = THREE.ClampToEdgeWrapping
+  // Longitude wraps: fract() in the shaders wraps a read's coordinate, not
+  // its bilinear footprint, so a clamped map would read column 0 at u = 0
+  // and column 4095 at u = 1 (hundreds of metres apart in places), cracking
+  // the sphere's seam vertices and stepping the cloud base at 180°. Repeat
+  // blends the two there instead.
+  texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.ClampToEdgeWrapping
   texture.colorSpace = THREE.NoColorSpace
   texture.unpackAlignment = 1
@@ -80,6 +84,10 @@ export class EarthDemLoader extends THREE.Loader<THREE.DataTexture> {
             return flatDemTexture()
           })
           .then(onLoad)
+          .catch((error: unknown) => {
+            onError?.(error)
+            this.manager.itemError(url)
+          })
           .finally(() => this.manager.itemEnd(url))
       },
       onProgress,

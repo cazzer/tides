@@ -36,10 +36,11 @@ const SOURCES: Source[] = [dem4k, dem2k].map((dem) => {
   return { width, height, grey: Float32Array.from(data, (h) => THREE.DataUtils.fromHalfFloat(toHalfBits(h)) * 255) }
 })
 
-// texture2D on a ClampToEdge map, north at v = 1: the vertex shader's bilinear read.
+// texture2D on the map (repeating east-west, clamped north-south; north at
+// v = 1): the vertex shader's bilinear read.
 function sourceGrey({ width, height, grey }: Source, u: number, v: number): number {
   const texel = (i: number, j: number) => {
-    const x = THREE.MathUtils.clamp(i, 0, width - 1)
+    const x = ((i % width) + width) % width
     const y = THREE.MathUtils.clamp(j, 0, height - 1)
     return grey[y * width + x]
   }

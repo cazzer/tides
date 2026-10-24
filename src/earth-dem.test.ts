@@ -90,7 +90,7 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
 
   it('stands the peaks the 8-bit bump map clipped, and the plateaus where they are', () => {
     expect(heightAt(dem4k, 27.988, 86.925)).toBeGreaterThan(0.9) // Everest
-    expect(heightAt(dem4k, 35.881, 76.513)).toBeGreaterThan(0.85) // K2
+    expect(heightAt(dem4k, 35.881, 76.513)).toBeGreaterThan(0.88) // K2, over the old 219/255 clip
     const altiplano = heightAt(dem4k, -17.5, -67.5)
     expect(altiplano).toBeGreaterThan(0.55)
     expect(altiplano).toBeLessThan(0.65)
@@ -154,6 +154,31 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
     expect(texture.generateMipmaps).toBe(false)
     texture.dispose()
   })
+
+  it('reads the same either side of the date line, at every mip', () => {
+    // GL's bilinear read along a row, east-west as the texture wraps.
+    const read = ({ width, data }: DemLevel, row: number, u: number, wrap: (i: number) => number) => {
+      const x = u * width - 0.5
+      const i = Math.floor(x)
+      const f = x - i
+      return data[row * width + wrap(i)] * (1 - f) + data[row * width + wrap(i + 1)] * f
+    }
+    const texture = earthDemTexture(dem2k)
+    expect(texture.wrapS).toBe(THREE.RepeatWrapping)
+    expect(texture.wrapT).toBe(THREE.ClampToEdgeWrapping)
+    texture.dispose()
+    for (const level of boxMips(demLevel(dem2k)).filter(({ width }) => width >= 256)) {
+      const repeat = (i: number) => ((i % level.width) + level.width) % level.width
+      const clamp = (i: number) => Math.min(level.width - 1, Math.max(0, i))
+      let clampedStep = 0
+      for (let row = 0; row < level.height; row++) {
+        expect(read(level, row, 0, repeat)).toBeCloseTo(read(level, row, 1, repeat), 9)
+        clampedStep = Math.max(clampedStep, Math.abs(read(level, row, 0, clamp) - read(level, row, 1, clamp)))
+      }
+      // What clamping would have cracked open (Fiji, Chukotka).
+      if (level.width === 2048) expect(clampedStep * DEM_METRES_PER_UNIT).toBeGreaterThan(100)
+    }
+  })
 })
 
 // The cloud layer's bounds, still 8-bit until tides-zmw.1's second step moves
@@ -165,6 +190,15 @@ describe('the 8-bit cloud bounds over the DEM (tides-zmw.1)', () => {
     for (const mip of marchMips) expect(maxOf(mip.data)).toBeLessThanOrEqual(TERRAIN_MAX_GREY)
     const lowGround = maxOf(dem2k.metres) / DEM_METRES_PER_UNIT
     expect(lowGround * TERRAIN_DISPLACEMENT).toBeLessThan(CLOUD_FLAT_ALTITUDE)
+  })
+
+  it('ships earth-terrain-max.bin as the max map rounded up to grey levels', () => {
+    const terrainMax = new Uint8Array(readFileSync(new URL('./assets/earth-terrain-max.bin', import.meta.url)))
+    expect(terrainMax.length).toBe(demMax.metres.length)
+    const short = demMax.metres.findIndex(
+      (m, k) => terrainMax[k] < Math.min(255, Math.ceil((m / DEM_METRES_PER_UNIT) * 255))
+    )
+    expect(short).toBe(-1)
   })
 
   it("keeps earth-cloud-ceiling.bin over the ground the march reads within its arc", () => {

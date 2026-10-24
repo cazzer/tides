@@ -45,6 +45,10 @@ const TILE = 512;
 const SOURCE = TILES * TILE;
 const TILE_URL = (x, y) => `https://tiles.mapterhorn.com/${ZOOM}/${x}/${y}.webp`;
 const CONCURRENCY = 4;
+// The z4 tiles (x/y) Mapterhorn 404s on, open ocean, as of October 2026.
+const OCEAN_TILES = new Set(
+  "0/0 0/1 0/2 0/11 1/0 1/1 1/2 1/10 1/11 2/0 2/1 2/10 2/11 3/10 3/11 6/5 7/11 8/0 8/11 9/0 9/11 10/0 11/0 12/0 12/10 13/0 13/1 13/10 14/0 14/1 15/0 15/1 15/6".split(" ")
+);
 const WIDTH = 4096;
 const HEIGHT = 2048;
 const MAX_POOL = 8;
@@ -93,7 +97,17 @@ await Promise.all(
   })
 );
 const ocean = [...tiles].filter(([, file]) => !file).map(([key]) => key);
-console.log(`Tiles: ${jobs.length - ocean.length} of ${jobs.length}; open ocean (404): ${ocean.join(" ") || "none"}`);
+console.log(`Tiles: ${jobs.length - ocean.length} of ${jobs.length}; open ocean (404): ${ocean.length}`);
+// A land tile that 404s (an outage, a bad cache) would silently become sea:
+// only these, all open ocean when this map was built, may.
+const unexpected = ocean.filter((key) => !OCEAN_TILES.has(key));
+const nowLand = [...OCEAN_TILES].filter((key) => tiles.get(key));
+if (unexpected.length || nowLand.length) {
+  throw new Error(
+    `z${ZOOM} tiles differ from OCEAN_TILES: 404 but expected land ${unexpected.join(" ") || "none"}; ` +
+      `expected 404 but found ${nowLand.join(" ") || "none"}. Check them, then update OCEAN_TILES.`
+  );
+}
 
 // Which output texel each source pixel's centre falls in.
 const rowOf = new Int32Array(SOURCE);

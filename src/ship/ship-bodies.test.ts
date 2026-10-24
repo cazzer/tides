@@ -317,8 +317,8 @@ describe('ship bodies', () => {
     // 2 × 2 blocks average over 8 levels): the base on the march's ground at
     // the centres of its texels, which are these blocks' corners. (Until
     // tides-zmw.1 this took the 2 × 2 mean of the pooled maxima for that
-    // ground, which overstated the share: 0.80 against 0.55 on the 8-bit
-    // map. The 16-bit map gives 0.55, and the proxy 0.78.)
+    // ground, which overstated the share: 0.75 against 0.52 on the 8-bit
+    // map at e27cb87. The 16-bit map gives 0.55, the proxy 0.78.)
     function underBaseShare(earth: ReturnType<typeof byKey>[string], pooled: Float32Array) {
       const [width, height] = TERRAIN_MAP_SIZE
       let land = 0
@@ -339,19 +339,26 @@ describe('ship bodies', () => {
       return under / land
     }
 
-    it("stops on the limb sphere's own floor while Earth's ground holds it, under the cloud base over most land (tides-42p)", () => {
+    it("stops on the limb sphere's own floor while Earth's ground holds it, under the cloud base over more land (tides-42p; a regression guard: ~55% of land)", () => {
       const pooled = pooledTerrain()
       const coarse = buildTerrainFloor(pooled)
       const fine = buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS)
       setEarthTerrain(coarse, fine)
       const { earth } = byKey()
       // On the 128 × 128 sphere's floor a peak holds the stop up for ~8°.
-      expect(underBaseShare(earth, pooled)).toBeLessThan(0.5)
+      const coarseShare = underBaseShare(earth, pooled)
+      expect(coarseShare).toBeLessThan(0.5)
       onTestFinished(disposeLimbSpheres)
       const release = retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS))
-      expect(underBaseShare(earth, pooled)).toBeGreaterThan(0.5)
+      // The limb floor lets the ship under the base over ~55% of land (the
+      // rest is mountains whose floor stands over their smoothed ground):
+      // well clear of the coarse floor's, and no worse than the 8-bit map's
+      // 0.52 (0.547 when tides-zmw.1 landed).
+      const limbShare = underBaseShare(earth, pooled)
+      expect(limbShare).toBeGreaterThan(coarseShare + 0.2)
+      expect(limbShare).toBeGreaterThan(0.53)
       release()
-      expect(underBaseShare(earth, pooled)).toBeLessThan(0.5)
+      expect(underBaseShare(earth, pooled)).toBe(coarseShare)
       // The fine floor is the coarse one's own build over finer cells: never
       // above it, so the swap only ever lets the ship lower.
       for (let lat = -89; lat <= 89; lat += 1) {
