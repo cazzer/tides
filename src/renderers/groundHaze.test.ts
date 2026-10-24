@@ -51,6 +51,16 @@ describe('ground haze', () => {
     expect(at('#include <opaque_fragment>')).toBeLessThan(at('if (uGroundHaze > 0.0)'))
     expect(shader.vertexShader).toMatch(/#include <project_vertex>\s+vGroundHazeRay =/)
     expect(shader.uniforms.uGroundHazeSun).toBe(clouds.uniforms.uSunDir)
+    // The weights groundHazeWeights() mirrors: a change to one side fails here.
+    for (const line of [
+      'float share = 1.0 - exp(-s / uGroundHazeLength);',
+      'float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, length(eye));',
+      'cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);',
+      'return vec4(hazeGlow(column, grazing, at, uGroundHazeSun), mix(share, 1.0, ease));',
+      'groundHazeLit.rgb = groundHazeLit.rgb * (1.0 - cover) + gl_FragColor.rgb * haze.a;',
+    ]) {
+      expect(frag).toContain(line)
+    }
     clouds.dispose()
   })
 

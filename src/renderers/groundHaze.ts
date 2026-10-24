@@ -51,10 +51,11 @@ export function groundHazeLength(seaLevel: number): number {
 }
 
 /**
- * The shader's weights (groundHaze() below; keep the two in step), for an eye
- * `eye` from the centre, ground `distance` off along a ray whose haze column
- * is `columnShare` of the grazing line's: `cover`, the share of the ground's
- * colour the haze hides, and `haze`, the share of the haze laid over it.
+ * The shader's weights (groundHaze() below; the test pins the two
+ * together), for an eye `eye` from the centre, ground `distance` off along a
+ * ray whose haze column is `columnShare` of the grazing line's: `cover`, the
+ * share of the ground's colour the haze hides, and `haze`, the share of the
+ * haze laid over it.
  */
 export function groundHazeWeights(
   eye: number,
@@ -160,7 +161,9 @@ export interface GroundHaze {
 }
 
 /** `sun`: the Sun's direction in the ground mesh's frame, kept up to date by
- * the caller (the cloud layer's uSunDir). `seaLevel`: the ground's radius.
+ * the caller (the cloud layer's uSunDir, while the atmosphere takes
+ * sunDirectionLocal(timestamp): the pairing the clouds' haze relies on too).
+ * `seaLevel`: the ground's radius.
  * `flat`: the cloud shell is the low tier's (groundHazeTop()). */
 export function createGroundHaze(
   sun: THREE.IUniform<THREE.Vector3>,
