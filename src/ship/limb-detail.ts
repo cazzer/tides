@@ -187,7 +187,13 @@ function buildLimbSphere(radius: number): THREE.BufferGeometry {
   for (let i = 0; i < positions.length; i++) positions[i] = unitPositions[i] * radius
   const sphere = new THREE.BufferGeometry()
   sphere.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  sphere.userData.limbSphere = true
   return attachTopology(sphere)
+}
+
+/** Whether `geometry` is a limb sphere (limbSphere), not a body's own. */
+export function isLimbSphere(geometry: THREE.BufferGeometry): boolean {
+  return geometry.userData.limbSphere === true
 }
 
 // three frees every buffer a geometry holds when it is disposed, shared or

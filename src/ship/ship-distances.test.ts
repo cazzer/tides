@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { Body, GeoMoon, HelioVector, KM_PER_AU } from 'astronomy-engine'
 import { collisionRadius, floorRadius } from './flight'
-import { buildTerrainFloor, demGrey, setEarthTerrain } from './terrain-floor'
+import { EARTH_BASE_SEGMENTS, buildTerrainFloor, meanGrey, setEarthTerrain } from './terrain-floor'
 import { decodeEarthDem } from '../earth-dem'
 import { FLIGHT_KM_PER_UNIT } from '../flight-scale'
 import {
@@ -158,7 +158,10 @@ describe('measureRanges', () => {
 
   it("reads 0 on arrival at Earth's floor with the terrain loaded (tides-01v.8.3)", async () => {
     setEarthTerrain(
-      buildTerrainFloor(demGrey(await decodeEarthDem(readFileSync(new URL('../assets/earth-dem-max.bin', import.meta.url)))))
+      buildTerrainFloor(
+        meanGrey(await decodeEarthDem(readFileSync(new URL('../assets/earth-dem-mean.bin', import.meta.url)))),
+        EARTH_BASE_SEGMENTS
+      )
     )
     try {
       const { bodies, truth, ranges } = setup(DATES[0])

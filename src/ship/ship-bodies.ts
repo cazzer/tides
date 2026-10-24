@@ -68,8 +68,8 @@ export const EARTH_GROUND_CLEARANCE = 0.004
 
 /**
  * How far the near plane's corners reach from the eye at Earth's stop, on
- * screens up to 32:9 at SHIP_FOV (the FOV kick is nil that low): the limb
- * sphere's floor holds the ship clear of the ground that far around it
+ * screens up to 32:9 at SHIP_FOV (the FOV kick is nil that low): the
+ * floor holds the ship clear of the ground that far around it
  * (terrainFloorGreyAround), not only straight down (tides-42p).
  */
 export const EARTH_FLOOR_REACH =
@@ -114,11 +114,11 @@ const DEG = Math.PI / 180
 // mesh tilts about X, then spins about the tilted Y (body-transform.ts), so
 // world → local undoes the spin after the tilt. On the high tier the ship
 // stops on it: the hard sphere drops to the bare sphere's clearance, which
-// the floor never reads below. On the low tier the shells' stop stays. While
-// EarthRenderer's ground holds the limb sphere (its radius is EARTH_RADIUS),
-// the floor is that sphere's own, low enough to fly under the cloud base over
-// most lowland (tides-42p); the ground swaps back only far out, where the
-// floor is far below the ship.
+// the floor never reads below. On the low tier the shells' stop stays. The
+// floor is the sphere EarthRenderer's ground holds: the limb sphere's (its
+// radius is EARTH_RADIUS) while it does (tides-42p), else the 128 × 128
+// one's, each taken over the near plane's reach. The ground swaps only far
+// out, where both are far below the ship.
 function earthStop(
   tier: QualityTier
 ): Pick<ShipBody, 'collisionRadius' | 'ground' | 'groundClearance' | 'minSpeed' | 'turnTo'> {
@@ -130,9 +130,9 @@ function earthStop(
     collisionRadius: low ? EARTH_COLLISION_RADIUS : EARTH_RADIUS + EARTH_GROUND_CLEARANCE,
     ground: (direction) => {
       local.copy(direction).applyQuaternion(toLocal)
-      const fine = limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null
-      if (!fine) return terrainFloorRadius(earthTerrain(), EARTH_RADIUS, local)
-      const grey = terrainFloorGreyAround(fine, local, EARTH_FLOOR_REACH / EARTH_RADIUS)
+      const floor = (limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null) ?? earthTerrain()
+      if (!floor) return terrainFloorRadius(null, EARTH_RADIUS, local)
+      const grey = terrainFloorGreyAround(floor, local, EARTH_FLOOR_REACH / EARTH_RADIUS)
       return EARTH_RADIUS + (TERRAIN_DISPLACEMENT * grey) / 255
     },
     groundClearance: EARTH_GROUND_CLEARANCE,

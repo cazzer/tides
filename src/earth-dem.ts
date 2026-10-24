@@ -163,6 +163,19 @@ export function maxPoolDem({ width, height, metres }: EarthDem, factor: number):
   return { width: w, height: h, metres: out }
 }
 
+/** The mean of each `factor` × `factor` block of a DEM, to the nearest metre. */
+export function meanPoolDem({ width, height, metres }: EarthDem, factor: number): EarthDem {
+  if (width % factor || height % factor) throw new Error(`DEM ${width}×${height} does not pool by ${factor}`)
+  const w = width / factor
+  const h = height / factor
+  const sum = new Float64Array(w * h)
+  for (let y = 0; y < height; y++) {
+    const row = Math.floor(y / factor) * w
+    for (let x = 0; x < width; x++) sum[row + Math.floor(x / factor)] += metres[y * width + x]
+  }
+  return { width: w, height: h, metres: Uint16Array.from(sum, (s) => Math.round(s / (factor * factor))) }
+}
+
 /** The mean of each 2 × 2 block of a DEM, to the nearest metre. */
 export function halveDem({ width, height, metres }: EarthDem): EarthDem {
   const w = width >> 1

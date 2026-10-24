@@ -5,8 +5,10 @@
 // - src/assets/earth-dem-2k.bin: 2048 × 1024, the same on the low tier: the
 //   4k map's 2 × 2 means (its first mip).
 // - src/assets/earth-dem-max.bin: 512 × 256, the 4k map's 8 × 8 maxima, so
-//   at or above every texel of either map: the terrain floor's source
-//   (src/ship/terrain-floor.ts).
+//   at or above every texel of either map: earth-terrain-max.bin's source.
+// - src/assets/earth-dem-mean.bin: 512 × 256, the 4k map's 8 × 8 means: the
+//   level the ground mesh is displaced from (tides-zmw.2), and so the
+//   terrain floor's source (src/ship/terrain-floor.ts).
 // - src/assets/earth-terrain-max.bin: the max map in 8-bit grey levels,
 //   rounded up, for scripts/build-cloud-ceiling.mjs (run it next).
 //
@@ -181,6 +183,7 @@ const outputs = [
   ["earth-dem-4k.bin", full],
   ["earth-dem-2k.bin", dem.halveDem(full)],
   ["earth-dem-max.bin", dem.maxPoolDem(full, MAX_POOL)],
+  ["earth-dem-mean.bin", dem.meanPoolDem(full, MAX_POOL)],
 ];
 for (const [name, map] of outputs) {
   const file = path.join(assets, name);

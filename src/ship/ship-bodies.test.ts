@@ -35,20 +35,23 @@ import {
 } from './ship-bodies'
 import { SHIP_FOV, shipNear, spawnPose } from './ship-session'
 import {
+  EARTH_BASE_SEGMENTS,
   TERRAIN_FALLBACK_GREY,
   TERRAIN_GREY_MARGIN,
   TERRAIN_MAP_SIZE,
   buildTerrainFloor,
   demGrey,
+  meanGrey,
   setEarthTerrain,
   terrainFloorGrey,
+  type TerrainFloor,
 } from './terrain-floor'
 import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from './limb-detail'
 import { TERRAIN_READ_TEXELS } from '../cloud-layer'
 import { boxMips, decodeEarthDem, demLevel } from '../earth-dem'
 
 const shippedDem = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
-const [demMax, dem4k] = await Promise.all(['earth-dem-max.bin', 'earth-dem-4k.bin'].map(shippedDem))
+const [demMax, demMean, dem4k] = await Promise.all(['earth-dem-max.bin', 'earth-dem-mean.bin', 'earth-dem-4k.bin'].map(shippedDem))
 
 const T = Date.UTC(2026, 9, 22, 12)
 
@@ -217,11 +220,12 @@ describe('ship bodies', () => {
     }
 
     it("samples the ground in Earth's tilted, spinning frame at the bodies' time", () => {
-      // One white block over Tibet, sea everywhere else.
+      // A white block over Tibet, sea everywhere else.
       const [width, height] = TERRAIN_MAP_SIZE
-      const pooled = new Uint8Array(width * height)
-      pooled[Math.floor(((90 - 32) / 180) * height) * width + Math.floor(((88 + 180) / 360) * width)] = 255
-      setEarthTerrain(buildTerrainFloor(pooled))
+      const data = new Float32Array(width * height)
+      const [y, x] = [Math.floor(((90 - 32) / 180) * height), Math.floor(((88 + 180) / 360) * width)]
+      for (let dy = -16; dy < 16; dy++) for (let dx = -16; dx < 16; dx++) data[(y + dy) * width + x + dx] = 255
+      setEarthTerrain(buildTerrainFloor({ width, height, data }, EARTH_BASE_SEGMENTS))
       const tibet = latLonToLocal(32, 88)
       const { earth } = byKey()
       const high = EARTH_RADIUS + (TERRAIN_DISPLACEMENT * (255 + TERRAIN_GREY_MARGIN)) / 255
@@ -236,13 +240,16 @@ describe('ship bodies', () => {
       expect(earth.ground!(toWorld(latLonToLocal(32, -88), later))).toBeLessThan(EARTH_RADIUS + 0.01)
     })
 
+    // The max map's land, for underBaseShare; the floors are the mean map's.
     const pooledTerrain = () => demGrey(demMax)
+    const baseFloor = () => buildTerrainFloor(meanGrey(demMean), EARTH_BASE_SEGMENTS)
+    const limbFloor = () => buildTerrainFloor(meanGrey(demMean), LIMB_SEGMENTS)
     // The ground the cloud march stands its columns on (cloudShaders.ts
     // cloudTerrain()): the 4k map's TERRAIN_READ_TEXELS-wide mip.
     const marchGround = boxMips(demLevel(dem4k)).find(({ width }) => width === TERRAIN_READ_TEXELS)!
 
     it('keeps the low-tier stop at EARTH_COLLISION_RADIUS everywhere, with the real terrain loaded', () => {
-      setEarthTerrain(buildTerrainFloor(pooledTerrain()))
+      setEarthTerrain(baseFloor())
       const { earth } = byKey(T, 'low')
       const direction = new THREE.Vector3()
       let highest = 0
@@ -258,7 +265,7 @@ describe('ship bodies', () => {
     })
 
     it('stops the high tier groundClearance above the real terrain, from the sea to the Himalaya', () => {
-      setEarthTerrain(buildTerrainFloor(pooledTerrain()))
+      setEarthTerrain(baseFloor())
       const { earth } = byKey()
       const ground = (lat: number, lon: number) => earth.ground!(toWorld(latLonToLocal(lat, lon), T))
       for (let lat = -89; lat <= 89; lat += 1) {
@@ -267,51 +274,11 @@ describe('ship bodies', () => {
           expect(floorRadius(earth, direction)).toBeCloseTo(earth.ground!(direction) + EARTH_GROUND_CLEARANCE, 12)
         }
       }
-      // Mid-Pacific near sea level; Everest near the top of the displacement.
+      // Mid-Pacific near sea level; Everest's summit, on the 128 × 128
+      // sphere's smoothed triangles, ~3.4 km of its 8.8 (tides-zmw.2).
       expect(ground(0, -150) - EARTH_RADIUS).toBeLessThan(0.01)
-      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(0.05)
+      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(0.035)
     })
-
-    // Where a ray from Earth's centre along `local` meets the limb sphere's
-    // displaced triangles, with each vertex at the highest grey it can read:
-    // its bilinear sample of the elevation map at u = i / 512, v = j / 256
-    // only reaches the pooled blocks either side of that line, plus the
-    // half-float margin.
-    // THREE.SphereGeometry's quad (i, j) is the faces (a, b, d) and (b, c, d)
-    // over a = (i, j), b = (i, j + 1), c = (i + 1, j + 1), d = (i + 1, j).
-    function limbMeshTop(pooled: Float32Array, local: THREE.Vector3): number {
-      const [width, height] = LIMB_SEGMENTS
-      const vertex = (i: number, j: number) => {
-        let grey = 0
-        for (const y of [j - 1, j]) {
-          if (y < 0 || y >= height) continue
-          for (const x of [i - 1, i]) grey = Math.max(grey, pooled[y * width + ((x + width) % width)])
-        }
-        const r = EARTH_RADIUS + (TERRAIN_DISPLACEMENT * (grey + TERRAIN_GREY_MARGIN)) / 255
-        const phi = (i / width) * 2 * Math.PI
-        const theta = (j / height) * Math.PI
-        return new THREE.Vector3(-Math.cos(phi) * Math.sin(theta), Math.cos(theta), Math.sin(phi) * Math.sin(theta)).multiplyScalar(r)
-      }
-      const u = Math.atan2(local.z, -local.x) / (2 * Math.PI)
-      const i = Math.floor((u - Math.floor(u)) * width)
-      const j = Math.min(height - 1, Math.floor((0.5 - Math.asin(local.y) / Math.PI) * height))
-      const ray = new THREE.Ray(new THREE.Vector3(), local.clone().normalize())
-      const hit = new THREE.Vector3()
-      let top = 0
-      // The quads either side too, for rays a rounding away from an edge.
-      for (let dj = -1; dj <= 1; dj++) {
-        for (let di = -1; di <= 1; di++) {
-          const qj = j + dj
-          if (qj < 0 || qj >= height) continue
-          const qi = i + di
-          const [a, b, c, d] = [vertex(qi, qj), vertex(qi, qj + 1), vertex(qi + 1, qj + 1), vertex(qi + 1, qj)]
-          for (const [p, q, s] of [[a, b, d], [b, c, d]]) {
-            if (ray.intersectTriangle(p, q, s, false, hit)) top = Math.max(top, hit.length())
-          }
-        }
-      }
-      return top
-    }
 
     // The ship's stop under the cloud base, over land (where the pooled map's
     // 2 × 2 blocks average over 8 levels): the base on the march's ground at
@@ -339,64 +306,47 @@ describe('ship bodies', () => {
       return under / land
     }
 
+    // The limb floor's share, a regression guard (1.0 at tides-zmw.2).
+    const LIMB_SHARE = 0.995
+
     it("stops on the limb sphere's own floor while Earth's ground holds it, under the cloud base over more land (tides-42p; a regression guard: ~55% of land)", () => {
       const pooled = pooledTerrain()
-      const coarse = buildTerrainFloor(pooled)
-      const fine = buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS)
-      setEarthTerrain(coarse, fine)
+      setEarthTerrain(baseFloor(), limbFloor())
       const { earth } = byKey()
-      // On the 128 × 128 sphere's floor a peak holds the stop up for ~8°.
+      // Both floors model their mesh, displaced from the levels the march's
+      // ground averages (tides-zmw.2), so both stand under the base nearly
+      // everywhere: until then a peak held the 128 × 128 sphere's floor up
+      // over ~8° (under 0.5 of land) and the limb sphere's over ~2° (0.547).
       const coarseShare = underBaseShare(earth, pooled)
-      expect(coarseShare).toBeLessThan(0.5)
+      expect(coarseShare).toBeGreaterThan(0.99)
       onTestFinished(disposeLimbSpheres)
       const release = retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS))
-      // The limb floor lets the ship under the base over ~55% of land (the
-      // rest is mountains whose floor stands over their smoothed ground):
-      // well clear of the coarse floor's, and no worse than the 8-bit map's
-      // 0.52 (0.547 when tides-zmw.1 landed).
+      // The limb floor lets the ship under the base over all of it (0.997 on
+      // the coarse one's).
       const limbShare = underBaseShare(earth, pooled)
-      expect(limbShare).toBeGreaterThan(coarseShare + 0.2)
-      expect(limbShare).toBeGreaterThan(0.53)
+      expect(limbShare).toBeGreaterThanOrEqual(coarseShare)
+      expect(limbShare).toBeGreaterThan(LIMB_SHARE)
       release()
       expect(underBaseShare(earth, pooled)).toBe(coarseShare)
-      // The fine floor is the coarse one's own build over finer cells: never
-      // above it, so the swap only ever lets the ship lower.
-      for (let lat = -89; lat <= 89; lat += 1) {
-        for (let lon = -180; lon < 180; lon += 1) {
-          const local = latLonToLocal(lat, lon)
-          expect(terrainFloorGrey(fine, local)).toBeLessThanOrEqual(terrainFloorGrey(coarse, local) + 1e-9)
-        }
-      }
     })
 
     it.each([
       ['128 × 128 sphere', false],
       ['limb sphere (tides-42p)', true],
     ])("keeps the near plane's corners off the ground at the high-tier stop over the %s, on steep slopes and 32:9 screens", (_, limb) => {
-      // The ground mesh can stand no higher than the pooled block it reads
-      // and its neighbours (terrain-floor.ts), plus the half-float margin. From
-      // the stop, every point of that within the near rectangle's reach must
-      // be further than the reach, at SHIP_FOV: the FOV kick is nil this low.
-      const pooled = pooledTerrain()
-      setEarthTerrain(buildTerrainFloor(pooled), buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS))
+      // The drawn ground stands at or under its sphere's floor
+      // (terrain-floor.test). From the stop, every point of that within the
+      // near rectangle's reach must be further than the reach, at SHIP_FOV:
+      // the FOV kick is nil this low.
+      const floors = { base: baseFloor(), limb: limbFloor() }
+      setEarthTerrain(floors.base, floors.limb)
       const release = limb ? retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS)) : () => {}
       onTestFinished(() => {
         release()
         disposeLimbSpheres()
       })
-      const [width, height] = TERRAIN_MAP_SIZE
-      const meshTop = (local: THREE.Vector3) => {
-        if (limb) return limbMeshTop(pooled, local)
-        const u = Math.atan2(local.z, -local.x) / (2 * Math.PI)
-        const x = Math.floor((u - Math.floor(u)) * width)
-        const y = Math.min(height - 1, Math.floor((0.5 - Math.asin(local.y) / Math.PI) * height))
-        let grey = 0
-        for (let dy = -1; dy <= 1; dy++) {
-          if (y + dy < 0 || y + dy >= height) continue
-          for (let dx = -1; dx <= 1; dx++) grey = Math.max(grey, pooled[(y + dy) * width + ((x + dx + width) % width)])
-        }
-        return EARTH_RADIUS + (TERRAIN_DISPLACEMENT * (grey + TERRAIN_GREY_MARGIN)) / 255
-      }
+      const drawn: TerrainFloor = limb ? floors.limb : floors.base
+      const meshTop = (local: THREE.Vector3) => EARTH_RADIUS + (TERRAIN_DISPLACEMENT * terrainFloorGrey(drawn, local)) / 255
       const { earth } = byKey()
       const tan = Math.tan(THREE.MathUtils.degToRad(SHIP_FOV / 2))
       const reach = shipNear(EARTH_GROUND_CLEARANCE) * Math.sqrt(1 + tan * tan * (1 + (32 / 9) ** 2))
