@@ -49,6 +49,9 @@ import {
 import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from './limb-detail'
 import { TERRAIN_READ_TEXELS } from '../cloud-layer'
 import { boxMips, decodeEarthDem, demLevel } from '../earth-dem'
+import { groundLevels, meshGrid, meshRadius, displace, vertexGrey } from './ground-mesh-model'
+import { RELIEF } from '../relief'
+import { setTerrainEye, terrainBlendTop, terrainDisplacement, terrainScale, terrainScaleUniform } from '../terrain-scale'
 
 const shippedDem = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
 const [demMax, demMean, dem4k] = await Promise.all(['earth-dem-max.bin', 'earth-dem-mean.bin', 'earth-dem-4k.bin'].map(shippedDem))
@@ -413,6 +416,55 @@ describe('ship bodies', () => {
       expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(fallback + EARTH_GROUND_CLEARANCE)
       expect(floorRadius(byKey(T, 'low').earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
     })
+
+    // The eye altitude at which the blend draws `scale` (tides-zmw.9.5).
+    function eyeFor(scale: number): number {
+      let [lo, hi] = [0, terrainBlendTop(RELIEF)]
+      for (let k = 0; k < 200; k++) {
+        const mid = (lo + hi) / 2
+        if (terrainScale(mid, RELIEF, true) < scale) lo = mid
+        else hi = mid
+      }
+      return hi
+    }
+
+    it.each([1, 4, RELIEF])(
+      'follows the live terrain scale at %dx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
+      (scale) => {
+        setEarthTerrain(baseFloor())
+        onTestFinished(() => setTerrainEye(Infinity))
+        const { earth } = byKey()
+        const pooled = pooledTerrain()
+        const fullShare = underBaseShare(earth, pooled)
+        const directions: THREE.Vector3[] = []
+        const locals: THREE.Vector3[] = []
+        for (let lat = -80; lat <= 80; lat += 4) {
+          for (let lon = -180; lon < 180; lon += 4) locals.push(latLonToLocal(lat, lon))
+        }
+        // Everest, K2, the Grand Canyon, the Altiplano.
+        for (const [lat, lon] of [[27.99, 86.93], [35.88, 76.51], [36.1, -112.1], [-16, -68]]) {
+          for (let k = 0; k < 25; k++) locals.push(latLonToLocal(lat + (k % 5) * 0.4 - 0.8, lon + Math.floor(k / 5) * 0.4 - 0.8))
+        }
+        for (const local of locals) directions.push(toWorld(local, T))
+        const full = directions.map((d) => earth.ground!(d))
+
+        setTerrainEye(eyeFor(scale), true)
+        expect(terrainScaleUniform.value).toBeCloseTo(scale, 9)
+        const displacement = terrainDisplacement(terrainScaleUniform.value)
+        const grid = meshGrid(EARTH_BASE_SEGMENTS)
+        const mesh = displace(grid, vertexGrey(groundLevels(dem4k), grid), EARTH_RADIUS, displacement)
+        directions.forEach((direction, k) => {
+          const ground = earth.ground!(direction)
+          expect(ground).toBeGreaterThanOrEqual(meshRadius(mesh, EARTH_BASE_SEGMENTS, locals[k]))
+          expect(ground - EARTH_RADIUS).toBeCloseTo(((full[k] - EARTH_RADIUS) * displacement) / TERRAIN_DISPLACEMENT, 14)
+          expect(floorRadius(earth, direction)).toBeCloseTo(ground + EARTH_GROUND_CLEARANCE, 12)
+        })
+        // A lower ground only lowers the stop, under the base (still on the
+        // full relief's ground until tides-zmw.9.6) over at least as much land.
+        expect(underBaseShare(earth, pooled)).toBeGreaterThanOrEqual(fullShare)
+      },
+      60_000
+    )
 
     it('gives no other body a ground', () => {
       for (const body of createShipBodies()) {

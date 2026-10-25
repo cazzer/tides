@@ -22,6 +22,7 @@ import {
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
+import { applyTerrainScale } from '../terrain-scale'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { EarthDemLoader } from './earthDemTexture'
@@ -180,6 +181,11 @@ export default function EarthRenderer({
         geometry={groundSphere}
         raycast={meshBounds}
         onBeforeRender={(renderer, _scene, camera, geometry) => {
+          // The live terrain scale (tides-zmw.9.5): the page's relief unless
+          // ?blend=1 eases it with the ship's altitude. Set here, before three
+          // copies the material's displacementScale into its uniform; the JSX
+          // prop below only gives the first frame's.
+          if (groundMaterial.current) applyTerrainScale(groundMaterial.current)
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
           groundHaze.update(groundRef.current!, camera)
           // The Sun in the Earth's frame, from this frame's final transform

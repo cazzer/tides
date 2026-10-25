@@ -4,6 +4,9 @@
 // TERRAIN_DISPLACEMENT (./cloud-layer.ts), from which everything that follows
 // the ground derives (the mesh, its slopes and shadows, the cloud layer and
 // its ceiling, the shells, the ship's floor), so a reload moves them together.
+// With ?blend=1 (./terrain-scale.ts, tides-zmw.9.5) this is the scale at
+// altitude, eased to true scale near the ground, and TERRAIN_DISPLACEMENT the
+// maximum bound the shells and the cloud layer stay sized for.
 // Clamped to [1, 25]: above 25 the highest stop outgrows the limb sphere's
 // MORPH_FLOOR (renderers/groundDisplacement.ts). 25 is also the reference the
 // displacement is given at (REFERENCE_RELIEF), the exaggeration the scene was

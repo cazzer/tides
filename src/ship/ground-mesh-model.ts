@@ -65,11 +65,18 @@ export function vertexGrey(levels: DemLevel[], { segments, uv }: MeshGrid): Floa
   return Float32Array.from({ length: uv.length / 2 }, (_, k) => readGround(levels, uv[2 * k], uv[2 * k + 1], lod))
 }
 
-/** The vertices displaced along their normals on a sphere of `radius`. */
-export function displace({ unit }: MeshGrid, grey: ArrayLike<number>, radius: number): Float64Array {
+/** The vertices displaced along their normals on a sphere of `radius`, at
+ * `displacement` (the displacementScale, the live terrain scale's:
+ * ../terrain-scale.ts, tides-zmw.9.5). */
+export function displace(
+  { unit }: MeshGrid,
+  grey: ArrayLike<number>,
+  radius: number,
+  displacement: number = TERRAIN_DISPLACEMENT
+): Float64Array {
   const out = new Float64Array(unit.length)
   for (let k = 0; k < grey.length; k++) {
-    const r = radius + (TERRAIN_DISPLACEMENT * grey[k]) / 255
+    const r = radius + (displacement * grey[k]) / 255
     for (let a = 0; a < 3; a++) out[3 * k + a] = unit[3 * k + a] * r
   }
   return out
@@ -162,9 +169,14 @@ export function vertexSurface(levels: DemLevel[], { segments, uv }: MeshGrid): F
 }
 
 /** A ground slope (GroundSurface's) as rise per run on a sphere of
- * `radius`: the vertex shader's vGroundSlope. */
-export function riseOverRun(slope: ArrayLike<number>, radius: number): [number, number, number] {
-  const scale = TERRAIN_DISPLACEMENT / 255 / radius
+ * `radius`, at `displacement` (as displace()'s): the vertex shader's
+ * vGroundSlope. */
+export function riseOverRun(
+  slope: ArrayLike<number>,
+  radius: number,
+  displacement: number = TERRAIN_DISPLACEMENT
+): [number, number, number] {
+  const scale = displacement / 255 / radius
   return [slope[0] * scale, slope[1] * scale, slope[2] * scale]
 }
 
@@ -233,9 +245,17 @@ const fract = (x: number) => x - Math.floor(x)
 /**
  * groundRelief.ts groundRelief(), line for line: the map's slope (rise per
  * run, the Earth's frame) at (u, v) on a sphere of `radius`, over a run of
- * `footprint` (at least a texel), from `levels`, the whole map's mips.
+ * `footprint` (at least a texel), from `levels`, the whole map's mips, at
+ * `displacement` (as displace()'s).
  */
-export function reliefSlope(levels: DemLevel[], u: number, v: number, radius: number, footprint: number): [number, number, number] {
+export function reliefSlope(
+  levels: DemLevel[],
+  u: number,
+  v: number,
+  radius: number,
+  footprint: number,
+  displacement: number = TERRAIN_DISPLACEMENT
+): [number, number, number] {
   const width = levels[0].width
   const texel = (2 * Math.PI * radius) / width
   const lat = (v - 0.5) * 180
@@ -250,7 +270,7 @@ export function reliefSlope(levels: DemLevel[], u: number, v: number, radius: nu
   const n = new THREE.Vector3(-Math.cos(lon) * Math.cos(phi), Math.sin(phi), Math.sin(lon) * Math.cos(phi))
   const e = new THREE.Vector3(0, 1, 0).cross(n).normalize()
   const up = n.clone().cross(e)
-  const scale = TERRAIN_DISPLACEMENT / 255 / (2 * run)
+  const scale = displacement / 255 / (2 * run)
   return [0, 1, 2].map((a) => scale * (east * e.getComponent(a) + north * up.getComponent(a))) as [number, number, number]
 }
 
