@@ -19,8 +19,13 @@
  */
 export const CORONA_MAX_ANGLE = 1.4
 
-/** The perspective corona's outer edge, in limb radii (vertex.glsl's `outer`). */
+/**
+ * The corona's outer edge, in limb radii (vertex.glsl's uOuter). The
+ * panels' perspective cameras show the Sun ~43x real size, where a 3R corona
+ * would fill the sky; the main view, which looks at it at true scale, keeps 3.
+ */
 export const CORONA_OUTER_PERSPECTIVE = 1.6
+export const CORONA_OUTER_MAIN = 3
 
 export interface CoronaQuad {
   /** Quad centre, view-space x and y at the Sun's depth (before `push`). */

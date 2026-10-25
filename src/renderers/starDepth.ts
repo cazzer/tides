@@ -6,9 +6,14 @@ import { MAIN_DISTANCE, zoomDistance } from '../main-view'
  * true scale every star is ~1e7 scene units away and shows no parallax from
  * anywhere the camera goes (tides-kzj.3.2). Instead each star's distance is
  * log-compressed into a shell around the usual star sphere, faded in as the
- * main view zooms out, so rotating the zoomed-out view shows the stars as a
- * cloud with depth. The shell is centred on the camera like the sphere, so
- * every star keeps its true direction; the Earth and Moon panels never get it.
+ * eye backs away from its target, so orbiting the zoomed-out view shows the
+ * stars as a cloud with depth. The shell's centre slides from the eye to the
+ * target as it fades in (centreStarfieldOn): centred on a perspective eye
+ * every radius projects to the same pixel, so only an off-centre eye sees
+ * near stars sweep faster than far ones. shellScale grows the shell with the
+ * eye's distance so the eye stays inside its nearest stars. With no fade
+ * (closer than MAIN_DISTANCE, and the Earth and Moon panels) it is the plain
+ * star sphere centred on the eye, every star in its true direction.
  */
 
 /** Distances (pc) mapped to the inside and outside of the shell. */
@@ -39,7 +44,23 @@ export function depthAmount(distance: number): number {
   return MathUtils.smoothstep(t, 0, 1)
 }
 
-/** A star's distance from the camera, in star-sphere radii. */
+/**
+ * The eye stays inside the shell's nearest stars by this factor: its distance
+ * from the shell's centre is at most 1 / EYE_MARGIN of their radius.
+ */
+export const EYE_MARGIN = 1.5
+
+/**
+ * The star sphere's radius for an eye `distance` from its target and a shell
+ * faded in to `amount`: `radius`, or bigger where the eye, `amount` of the
+ * way to the target from the shell's centre, would come within EYE_MARGIN of
+ * the nearest stars. Unchanged with no fade.
+ */
+export function shellScale(radius: number, distance: number, amount: number): number {
+  return Math.max(radius, (EYE_MARGIN * amount * distance) / shellRadius(0, amount))
+}
+
+/** A star's distance from the shell's centre, in star-sphere radii. */
 export function shellRadius(depth: number, amount: number): number {
   return MathUtils.lerp(
     1,
@@ -49,9 +70,9 @@ export function shellRadius(depth: number, amount: number): number {
 }
 
 /**
- * Star positions for the shell: each unit direction stretched to its shell
- * radius, so only its distance changes. With amount 0 they are the
- * directions themselves.
+ * Star positions for the shell, as shellVertex computes them on the GPU: each
+ * unit direction stretched to its shell radius, so only its distance
+ * changes. With amount 0 they are the directions themselves.
  */
 export function shellPositions(
   directions: Float32Array,
@@ -67,6 +88,12 @@ export function shellPositions(
   }
   return out
 }
+
+// Replaces begin_vertex: the stars' unit directions stretched to shellRadius
+// (the same lerps), so a dolly only moves uDepth.
+export const shellVertex = /* glsl */ `
+vec3 transformed = position * mix(1.0, mix(${SHELL_NEAR_RADIUS.toFixed(3)}, ${SHELL_FAR_RADIUS.toFixed(3)}, starDepth), uDepth);
+`
 
 // Replaces points' `gl_PointSize = size;`. Nearer stars draw bigger, and the
 // stars stay behind every body and clipped behind the eye at any shell radius

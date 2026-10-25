@@ -1,7 +1,8 @@
 // A quad around the Sun in the image plane, sized and centred on its
-// silhouette so the glow hugs the limb in the ortho main view and the
-// perspective panels alike.
+// silhouette so the glow hugs the limb in the main view and the panels alike.
 uniform float uRadius;
+// Outer edge in limb radii: CORONA_OUTER_MAIN or CORONA_OUTER_PERSPECTIVE.
+uniform float uOuter;
 // CORONA_MAX_ANGLE (src/renderers/corona-geometry.ts).
 uniform float uMaxAngle;
 varying vec2 vPlane;
@@ -54,11 +55,7 @@ void main() {
     // behind the whole Sun, it projects the same and stays hidden there.
     push = (depth + uRadius) / depth;
   }
-  // Perspective panels show the Sun ~43x real size; a 3R corona would fill
-  // the sky.
-  float outer = isOrthographic ? 3.0 : 1.6;
-
-  vPlane = position.xy * outer;
-  vOuter = outer;
+  vPlane = position.xy * uOuter;
+  vOuter = uOuter;
   gl_Position = projectionMatrix * vec4(vec3(centre + vPlane * limb, c.z) * push, 1.0);
 }

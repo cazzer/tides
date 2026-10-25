@@ -10,7 +10,7 @@ const forward = new THREE.Vector3()
  * Scene units per CSS pixel in an orthographic view `heightPx` CSS pixels
  * tall: (top − bottom) / (zoom · height), as camera.tsx measures it. The same
  * at every point in the view. drei's OrthographicCamera spans the canvas in
- * pixels (top − bottom = height), so the main view's is 1 / zoom.
+ * pixels (top − bottom = height), so it is 1 / zoom.
  */
 export function orthoUnitsPerPixel(
   top: number,

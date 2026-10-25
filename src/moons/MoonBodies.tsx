@@ -131,7 +131,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   )
   useEffect(() => () => looks.forEach(({ material }) => material.dispose()), [looks])
 
-  // Only the main view's perspective camera grows taps; the panels' keep the real sphere.
+  // Only the main view pads taps; ship mode's moons keep the real sphere.
   const viewHeight = useThree((s) => s.size.height)
   useEffect(() => {
     setViewHeight(looks, interactive ? viewHeight : 0)
