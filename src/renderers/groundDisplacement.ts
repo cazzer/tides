@@ -36,7 +36,12 @@ export const MORPH_END_PX = 2
  * on a short one the facets reach MORPH_END_PX only near the ground, or
  * never. It is just over the highest stop on either sphere's floor (0.066,
  * over the Karakoram; a test checks), and the morph runs over the altitudes
- * up to MORPH_TOP.
+ * up to MORPH_TOP. That stop is the highest ground plus the ship's clearance,
+ * TERRAIN_DISPLACEMENT × TERRAIN_MAX_GREY + EARTH_GROUND_CLEARANCE (0.0618 +
+ * 0.004 at the default relief), rounded up. A fixed number, not that sum, so
+ * the swap and the morph stay where they were tuned at any ?relief=: a lower
+ * relief only lowers the stop under it. A higher one would outgrow it past
+ * relief 26.7, hence ../relief.ts's clamp at 25.
  */
 export const MORPH_FLOOR = 0.07
 export const MORPH_TOP = 2 * MORPH_FLOOR

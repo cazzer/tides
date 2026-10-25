@@ -8,14 +8,19 @@
 // cloud tops by CLOUD_UNITS_PER_KM. Lighting (sunset colour, the horizon dip)
 // uses true kilometres instead, since those effects don't scale with the scene.
 import { MAX_CLOUD_TOP_KM } from './geo-clouds'
+import { RELIEF_SCALE } from './relief'
 
 export { MAX_CLOUD_TOP_KM }
 
 export const EARTH_RADIUS_KM = 6371
 
-/** The ground's displacementScale: scene units at grey 1, the old 8-bit bump
- * map's white. */
-export const TERRAIN_DISPLACEMENT = 0.075
+/** The ground's displacementScale at the default relief (./relief.ts, 25x
+ * true scale): scene units at grey 1, the old 8-bit bump map's white. The
+ * horizon map is baked at it (scripts/build-earth-horizon.mjs). */
+export const DEFAULT_TERRAIN_DISPLACEMENT = 0.075
+/** The ground's displacementScale at this page's relief (?relief=, read once
+ * at load). Everything that follows the drawn ground derives from it. */
+export const TERRAIN_DISPLACEMENT = DEFAULT_TERRAIN_DISPLACEMENT * RELIEF_SCALE
 /** Kilometres of elevation per unit of grey: the old bump map's 1/39 km a
  * level, which the 16-bit elevation map (earth-dem.ts) keeps. */
 export const TERRAIN_KM_PER_GREY = 255 / 39
@@ -41,7 +46,9 @@ export const TERRAIN_MAX_GREY = TERRAIN_MAX_METRES / (1000 * TERRAIN_KM_PER_GREY
  * did over almost none).
  */
 export const CLOUD_CLEARANCE = 0.012
-/** Cloud-top exaggeration: about 9x the true scale (terrain is about 25x). */
+/** Cloud-top exaggeration: about 9x the true scale, whatever the terrain's
+ * (25x by default; ?relief=, ./relief.ts). At a relief under about 8.7 the
+ * clouds are exaggerated more than the ground they sit on. */
 export const CLOUD_UNITS_PER_KM = 0.004
 /** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */
 export const MIN_MEASURED_TOP_KM = 1

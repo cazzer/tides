@@ -4,9 +4,10 @@
 //
 // Source: src/assets/earth-dem-4k.bin (scripts/build-earth-dem.mjs; run that
 // first), box-filtered to 1024 × 512 (its second mip down, as the GPU's own
-// mips would be). The angles are at the ground's exaggeration,
-// TERRAIN_DISPLACEMENT over Earth's scene radius; the shader rescales them
-// if that changes, so only a new DEM needs a rebuild. Deterministic, ~seconds.
+// mips would be). The angles are at the ground's default exaggeration,
+// DEFAULT_TERRAIN_DISPLACEMENT over Earth's scene radius; the shader rescales
+// them to the page's (?relief=, src/relief.ts), so only a new DEM or a new
+// default needs a rebuild. Deterministic, ~seconds.
 // usage: node scripts/build-earth-horizon.mjs
 
 import fs from "node:fs";
@@ -21,12 +22,12 @@ const assets = path.join(root, "src", "assets");
 const load = async (file) => (await runnerImport(file, { configFile: false, logLevel: "error" })).module;
 const dem = await load("/src/earth-dem.ts");
 const horizon = await load("/src/earth-horizon.ts");
-const { TERRAIN_DISPLACEMENT } = await load("/src/cloud-layer.ts");
+const { DEFAULT_TERRAIN_DISPLACEMENT } = await load("/src/cloud-layer.ts");
 const { sceneRadius } = await load("/src/planets.ts");
 
 // The ground sphere's radius in scene units (solar-system.tsx EARTH_DIAMETER,
 // which the renderer uses as a radius).
-const eRef = TERRAIN_DISPLACEMENT / sceneRadius(12742000);
+const eRef = DEFAULT_TERRAIN_DISPLACEMENT / sceneRadius(12742000);
 
 const source = await dem.decodeEarthDem(fs.readFileSync(path.join(assets, "earth-dem-4k.bin")));
 const level = dem.boxMips(dem.demLevel(source)).find((l) => l.width === horizon.HORIZON_WIDTH);
