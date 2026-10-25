@@ -394,7 +394,7 @@ function MainCameraSession() {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
   useEffect(() => {
-    if (!(camera instanceof THREE.OrthographicCamera) || !controls) return
+    if (!(camera instanceof THREE.OrthographicCamera || camera instanceof THREE.PerspectiveCamera) || !controls) return
     return useStore.subscribe((state, previous) => {
       if (!previous.shipMode && state.shipMode) {
         rememberMainCameraPose(camera, controls as OrbitControlsImpl)
