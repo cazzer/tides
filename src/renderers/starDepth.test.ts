@@ -2,10 +2,10 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import starsMeta from '../assets/stars.meta.json'
-import { MAIN_ZOOM } from '../main-view'
+import { MAIN_DISTANCE, zoomDistance } from '../main-view'
 import { centreStarfieldOn, DEFAULT_RADIUS, orientStarfield, starDirectionsEQJ } from './Starfield'
 import {
-  FULL_DEPTH_ZOOM,
+  FULL_DEPTH_DISTANCE,
   SHELL_FAR_RADIUS,
   SHELL_NEAR_RADIUS,
   depthAmount,
@@ -48,19 +48,25 @@ describe('stars.distance.bin', () => {
 })
 
 describe('depthAmount', () => {
-  it('is off at the default zoom and anywhere closer in', () => {
-    expect(depthAmount(MAIN_ZOOM)).toBe(0)
-    expect(depthAmount(40)).toBe(0)
+  it('is off at the default distance and anywhere closer in', () => {
+    expect(depthAmount(MAIN_DISTANCE)).toBe(0)
+    expect(depthAmount(zoomDistance(40))).toBe(0)
   })
 
   it('fades in steadily to a full shell zoomed out', () => {
     let previous = 0
-    for (let zoom = MAIN_ZOOM; zoom >= FULL_DEPTH_ZOOM; zoom -= 0.25) {
-      expect(depthAmount(zoom)).toBeGreaterThanOrEqual(previous)
-      previous = depthAmount(zoom)
+    for (let distance = MAIN_DISTANCE; distance <= FULL_DEPTH_DISTANCE; distance += 20) {
+      expect(depthAmount(distance)).toBeGreaterThanOrEqual(previous)
+      previous = depthAmount(distance)
     }
-    expect(depthAmount(FULL_DEPTH_ZOOM)).toBe(1)
-    expect(depthAmount(0.1)).toBe(1)
+    expect(depthAmount(FULL_DEPTH_DISTANCE)).toBe(1)
+    expect(depthAmount(zoomDistance(0.1))).toBe(1)
+  })
+
+  it('matches the ortho view it replaced at its zooms', () => {
+    // log(MAIN_ZOOM / zoom) / log(MAIN_ZOOM / 2), smoothstepped, at zoom 5.
+    const t = Math.log(2) / Math.log(5)
+    expect(depthAmount(zoomDistance(5))).toBeCloseTo(t * t * (3 - 2 * t), 10)
   })
 })
 

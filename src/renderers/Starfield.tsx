@@ -212,12 +212,12 @@ export default function Starfield({
   )
 
   const stars = useRef<THREE.Points>(null)
-  useFrame(({ camera }) => {
+  useFrame(({ camera, controls }) => {
     if (stars.current) {
       orientStarfield(stars.current, useStore.getState().timestamp ?? Date.now())
     }
-    const ortho = camera as THREE.OrthographicCamera
-    const amount = depth && ortho.isOrthographicCamera ? depthAmount(ortho.zoom) : 0
+    const target = (controls as { target?: THREE.Vector3 } | null)?.target
+    const amount = depth && target ? depthAmount(camera.position.distanceTo(target)) : 0
     spreadIntoShell(geometry, uniforms.uDepth, amount)
   })
 

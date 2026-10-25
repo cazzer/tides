@@ -19,6 +19,7 @@ function moonAt(x: number, y: number, parent: [number, number, number], parentRa
     radius: 0.2,
     parentPosition: new THREE.Vector3(...parent),
     parentRadius,
+    viewHeight: 600,
   }
   mesh.userData = data
   return mesh
@@ -54,16 +55,36 @@ describe('moonRaycast', () => {
     expect(tap(moon, 3.9, 0)).toHaveLength(1)
   })
 
-  it('uses the real radius under a perspective camera (ship mode)', () => {
+  it('uses the real radius under a perspective camera that has no view height (ship mode)', () => {
     const perspective = new THREE.PerspectiveCamera(60, 4 / 3, 0.1, 1000)
     perspective.position.set(0, 0, 100)
     perspective.updateMatrixWorld()
     const moon = moonAt(0, 0, far)
+    moon.userData.viewHeight = 0
     const raycaster = new THREE.Raycaster()
     raycaster.camera = perspective
     raycaster.ray.set(new THREE.Vector3(1, 0, 100), new THREE.Vector3(0, 0, -1))
     const hits: THREE.Intersection[] = []
     moonRaycast.call(moon, raycaster, hits)
     expect(hits).toHaveLength(0)
+  })
+
+  it(`picks within ${MOON_TAP_RADIUS_PX} px of a moon under the main view's perspective camera`, () => {
+    // 30 degrees over 600 px, 100 units out: a pixel is 2 · 100 · tan(15°) / 600 units.
+    const perspective = new THREE.PerspectiveCamera(30, 4 / 3, 0.1, 1000)
+    perspective.position.set(0, 0, 100)
+    perspective.updateMatrixWorld()
+    const px = (2 * 100 * Math.tan(Math.PI / 12)) / 600
+    const moon = moonAt(0, 0, far)
+    const tapAt = (x: number) => {
+      const raycaster = new THREE.Raycaster()
+      raycaster.camera = perspective
+      raycaster.ray.set(new THREE.Vector3(x, 0, 100), new THREE.Vector3(0, 0, -1))
+      const hits: THREE.Intersection[] = []
+      moonRaycast.call(moon, raycaster, hits)
+      return hits
+    }
+    expect(tapAt(21 * px)).toHaveLength(1)
+    expect(tapAt(23 * px)).toHaveLength(0)
   })
 })

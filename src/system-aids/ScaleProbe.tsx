@@ -4,11 +4,14 @@
 // outside ship mode.
 import { useEffect, type FC } from 'react'
 import { useFrame } from '@react-three/fiber'
+import type { Vector3 } from 'three'
 import { measureScale, resetScaleProbe } from './scale-probe'
 import type { SystemAidProps } from './types'
 
 export const ScaleProbe: FC<SystemAidProps> = () => {
   useEffect(() => resetScaleProbe, [])
-  useFrame(({ camera, size }) => measureScale(camera, size.height))
+  useFrame(({ camera, controls, size }) =>
+    measureScale(camera, (controls as { target?: Vector3 } | null)?.target, size.height)
+  )
   return null
 }

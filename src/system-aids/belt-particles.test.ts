@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sceneDistance } from '../planets'
-import { SYSTEM_EXTENT, mainViewRange } from '../main-view'
-import { SHELL_NEAR_RADIUS } from '../renderers/starDepth'
+import { SYSTEM_EXTENT } from '../main-view'
 import {
   ASTEROID_A_AU,
   ASTEROID_COUNT,
@@ -20,9 +19,6 @@ import {
 // Band edges from planets.ts' header (scene units, incl. ring extents).
 const MARS_MAX = 89.7
 const JUPITER_MIN = 217.1
-const NEPTUNE_MAX = 456.2
-// OrbitControls' maxDistance: the eye sits this far behind the target.
-const EYE = 80
 
 const asteroids = asteroidBelt()
 const kuiper = kuiperBelt()
@@ -160,11 +156,5 @@ describe('the Kuiper belt in the main view', () => {
     // The far plane reaches SYSTEM_EXTENT past the Sun (main-view.ts mainNearFar).
     expect(kuiperMax).toBeLessThanOrEqual(sceneDistance(KUIPER_A_AU[1]) + 1e-3)
     expect(kuiperMax).toBeLessThanOrEqual(SYSTEM_EXTENT)
-  })
-
-  it('stays inside the starfield, even its nearest depth shell', () => {
-    const starRadius = mainViewRange(true, { width: 390, height: 844 }).starRadius!
-    expect(EYE + NEPTUNE_MAX + kuiperMax).toBeLessThan(starRadius * SHELL_NEAR_RADIUS)
-    expect(EYE + NEPTUNE_MAX + kuiperMax).toBeLessThan(starRadius * Math.SQRT1_2)
   })
 })

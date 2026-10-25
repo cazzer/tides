@@ -18,6 +18,8 @@ export interface MoonPickData {
   parentPosition: THREE.Vector3
   /** Its parent's sphere radius, scene units. */
   parentRadius: number
+  /** The view's height, CSS px, kept current; sizes a perspective camera's tap radius. */
+  viewHeight: number
 }
 
 const sphere = new THREE.Sphere()
@@ -26,9 +28,10 @@ const hit = new THREE.Vector3()
 
 /**
  * A mesh raycast (assign to Mesh.raycast) that hits the moon's sphere, grown
- * to MOON_TAP_RADIUS_PX on screen under an orthographic camera (drei sizes
- * its frustum in CSS pixels, so a pixel is 1 / zoom units). Inside the
- * parent's disc only the real sphere counts.
+ * to MOON_TAP_RADIUS_PX on screen: under an orthographic camera (drei sizes
+ * its frustum in CSS pixels) a pixel is 1 / zoom units; under a perspective
+ * one it spans 2 · distance · tan(fov / 2) / (zoom · viewHeight) at the
+ * moon's distance. Inside the parent's disc only the real sphere counts.
  */
 export function moonRaycast(
   this: THREE.Mesh,
@@ -36,9 +39,16 @@ export function moonRaycast(
   intersects: THREE.Intersection[]
 ): void {
   const data = this.userData as MoonPickData
-  const camera = raycaster.camera as THREE.OrthographicCamera | undefined
-  const pixel = camera?.isOrthographicCamera ? 1 / camera.zoom : 0
+  const camera = raycaster.camera as THREE.Camera | undefined
   this.getWorldPosition(sphere.center)
+  let pixel = 0
+  if ((camera as THREE.OrthographicCamera | undefined)?.isOrthographicCamera) {
+    pixel = 1 / (camera as THREE.OrthographicCamera).zoom
+  } else if ((camera as THREE.PerspectiveCamera | undefined)?.isPerspectiveCamera && data.viewHeight > 0) {
+    const { fov, zoom } = camera as THREE.PerspectiveCamera
+    const distance = raycaster.ray.origin.distanceTo(sphere.center)
+    pixel = (2 * distance * Math.tan(THREE.MathUtils.degToRad(fov) / 2)) / (zoom * data.viewHeight)
+  }
   sphere.radius = Math.max(data.radius, MOON_TAP_RADIUS_PX * pixel)
   if (!raycaster.ray.intersectSphere(sphere, hit)) return
   parent.set(data.parentPosition, data.parentRadius)

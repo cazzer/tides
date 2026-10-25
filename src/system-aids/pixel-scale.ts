@@ -23,10 +23,10 @@ export function orthoUnitsPerPixel(
 
 /**
  * Scene units per CSS pixel at `point` (world space), for a view
- * `heightPx` CSS pixels tall. The ortho main view's is orthoUnitsPerPixel,
- * the same everywhere; ship mode's
- * perspective camera's grows with depth in front of the eye (clamped to the
- * near plane, so a point behind the eye never reads as huge).
+ * `heightPx` CSS pixels tall. A perspective camera's (the main view's and
+ * ship mode's) grows with depth in front of the eye, clamped to the near
+ * plane so a point behind the eye never reads as huge; an ortho one's is
+ * orthoUnitsPerPixel, the same everywhere.
  */
 export function worldUnitsPerPixel(
   camera: THREE.Camera,

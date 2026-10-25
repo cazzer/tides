@@ -1,5 +1,5 @@
 import { MathUtils } from 'three'
-import { MAIN_ZOOM } from '../main-view'
+import { MAIN_DISTANCE, zoomDistance } from '../main-view'
 
 /*
  * A representative depth for the main view's starfield, not a real one: at
@@ -22,8 +22,8 @@ export const SHELL_FAR_RADIUS = 1.6
 /** How much bigger the nearest stars draw, once fully faded in. */
 export const NEAR_SIZE_BOOST = 1.2
 
-/** Zoomed in from MAIN_ZOOM the stars are a sphere; by this zoom, a full shell. */
-export const FULL_DEPTH_ZOOM = 2
+/** Closer in than MAIN_DISTANCE the stars are a sphere; by this distance, a full shell. */
+export const FULL_DEPTH_DISTANCE = zoomDistance(2)
 
 /** Where a star at `distancePc` sits in the shell: 0 nearest, 1 farthest. */
 export function shellDepth(distancePc: number): number {
@@ -32,9 +32,10 @@ export function shellDepth(distancePc: number): number {
   return MathUtils.clamp(Number.isFinite(t) ? t : 1, 0, 1)
 }
 
-/** How far the shell has faded in at an orthographic `zoom`: 0 to 1. */
-export function depthAmount(zoom: number): number {
-  const t = Math.log(MAIN_ZOOM / zoom) / Math.log(MAIN_ZOOM / FULL_DEPTH_ZOOM)
+/** How far the shell has faded in with the eye `distance` from its target: 0 to 1. */
+export function depthAmount(distance: number): number {
+  const t =
+    Math.log(distance / MAIN_DISTANCE) / Math.log(FULL_DEPTH_DISTANCE / MAIN_DISTANCE)
   return MathUtils.smoothstep(t, 0, 1)
 }
 
@@ -69,7 +70,7 @@ export function shellPositions(
 
 // Replaces points' `gl_PointSize = size;`. Nearer stars draw bigger, and the
 // stars stay behind every body and clipped behind the eye at any shell radius
-// (the far side of the shell is past an ortho camera's far plane).
+// (the far side of the shell is past the camera's far plane).
 export const shellPointVertex = /* glsl */ `
 gl_PointSize = size * (1.0 + uDepth * ${NEAR_SIZE_BOOST.toFixed(3)} * (1.0 - starDepth));
 if (uDepth > 0.0) {
