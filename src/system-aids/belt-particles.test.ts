@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { sceneDistance } from '../planets'
-import { SYSTEM_EXTENT, mainViewRange } from '../main-view'
-import { SHELL_NEAR_RADIUS } from '../renderers/starDepth'
+import { MAIN_DISTANCE, PLANETS_STAR_RADIUS, SYSTEM_EXTENT } from '../main-view'
+import { depthAmount } from '../renderers/starDepth'
 import {
   ASTEROID_A_AU,
   ASTEROID_COUNT,
@@ -21,8 +21,6 @@ import {
 const MARS_MAX = 89.7
 const JUPITER_MIN = 217.1
 const NEPTUNE_MAX = 456.2
-// OrbitControls' maxDistance: the eye sits this far behind the target.
-const EYE = 80
 
 const asteroids = asteroidBelt()
 const kuiper = kuiperBelt()
@@ -162,9 +160,15 @@ describe('the Kuiper belt in the main view', () => {
     expect(kuiperMax).toBeLessThanOrEqual(SYSTEM_EXTENT)
   })
 
-  it('stays inside the starfield, even its nearest depth shell', () => {
-    const starRadius = mainViewRange(true, { width: 390, height: 844 }).starRadius!
-    expect(EYE + NEPTUNE_MAX + kuiperMax).toBeLessThan(starRadius * SHELL_NEAR_RADIUS)
-    expect(EYE + NEPTUNE_MAX + kuiperMax).toBeLessThan(starRadius * Math.SQRT1_2)
+  it('is drawn inside the real-radius star sphere wherever the depth shell is off', () => {
+    // The shell fades in only past MAIN_DISTANCE, and from there starDepth.ts
+    // grows it with the eye (shellScale); up to it the stars are at their real
+    // radius, so the eye, the Neptune-distance target and the belt must fit.
+    for (let d = 1; d <= MAIN_DISTANCE; d *= 1.05) expect(depthAmount(d)).toBe(0)
+    expect(depthAmount(MAIN_DISTANCE)).toBe(0)
+    for (let d = MAIN_DISTANCE * (1 + 1e-6); d < 6000; d *= 1.05) {
+      expect(depthAmount(d)).toBeGreaterThan(0)
+    }
+    expect(MAIN_DISTANCE + NEPTUNE_MAX + kuiperMax).toBeLessThan(PLANETS_STAR_RADIUS)
   })
 })

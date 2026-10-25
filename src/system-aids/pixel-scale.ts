@@ -10,7 +10,7 @@ const forward = new THREE.Vector3()
  * Scene units per CSS pixel in an orthographic view `heightPx` CSS pixels
  * tall: (top − bottom) / (zoom · height), as camera.tsx measures it. The same
  * at every point in the view. drei's OrthographicCamera spans the canvas in
- * pixels (top − bottom = height), so the main view's is 1 / zoom.
+ * pixels (top − bottom = height), so it is 1 / zoom.
  */
 export function orthoUnitsPerPixel(
   top: number,
@@ -23,10 +23,10 @@ export function orthoUnitsPerPixel(
 
 /**
  * Scene units per CSS pixel at `point` (world space), for a view
- * `heightPx` CSS pixels tall. The ortho main view's is orthoUnitsPerPixel,
- * the same everywhere; ship mode's
- * perspective camera's grows with depth in front of the eye (clamped to the
- * near plane, so a point behind the eye never reads as huge).
+ * `heightPx` CSS pixels tall. A perspective camera's (the main view's and
+ * ship mode's) grows with depth in front of the eye, clamped to the near
+ * plane so a point behind the eye never reads as huge; an ortho one's is
+ * orthoUnitsPerPixel, the same everywhere.
  */
 export function worldUnitsPerPixel(
   camera: THREE.Camera,

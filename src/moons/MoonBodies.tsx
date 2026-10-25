@@ -88,6 +88,11 @@ function placeMoons(meshes: readonly RefObject<THREE.Mesh | null>[], t: number, 
   }
 }
 
+// Tells moonRaycast how tall the view is. Module level, like placeMoons.
+function setViewHeight(looks: readonly { userData: MoonPickData }[], height: number) {
+  for (const { userData } of looks) userData.viewHeight = height
+}
+
 // Switches a moon's material to its map (one shared compiled program for
 // every textured moon). Module level, like placeMoons.
 function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
@@ -118,12 +123,19 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
           radius: moonRadius(key),
           parentPosition: new THREE.Vector3(),
           parentRadius: PLANETS[MOONS[key].parent].radius,
+          viewHeight: 0,
         }
         return { material, onBeforeRender: sun.onBeforeRender, userData }
       }),
     []
   )
   useEffect(() => () => looks.forEach(({ material }) => material.dispose()), [looks])
+
+  // Only the main view pads taps; ship mode's moons keep the real sphere.
+  const viewHeight = useThree((s) => s.size.height)
+  useEffect(() => {
+    setViewHeight(looks, interactive ? viewHeight : 0)
+  }, [looks, interactive, viewHeight])
 
   // Arrived maps upload one per frame (useFrame below), up front rather than
   // when each moon first comes into view, so maps that arrive or come into

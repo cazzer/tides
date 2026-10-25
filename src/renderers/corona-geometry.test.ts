@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
   CORONA_MAX_ANGLE,
-  CORONA_OUTER_PERSPECTIVE as OUTER,
+  CORONA_OUTER_MAIN,
+  CORONA_OUTER_PERSPECTIVE,
   perspectiveCoronaQuad,
   type CoronaQuad,
 } from './corona-geometry'
 
+// The wider edge bounds the quad and the glow's reach; the panels' is inside it.
+const OUTER = CORONA_OUTER_MAIN
 const DEG = Math.PI / 180
 const R = 10
 
@@ -187,5 +190,17 @@ describe('sun-corona vertex.glsl', () => {
     expect(glsl).toContain('if (!(abs(nearAngle) < uMaxAngle))')
     expect(glsl).toContain('tan(min(theta + beta, uMaxAngle))')
     expect(glsl).toContain('corona-geometry.ts')
+  })
+})
+
+describe('the corona\'s outer edge', () => {
+  const vertex = readFileSync(new URL('../shaders/sun-corona/vertex.glsl', import.meta.url), 'utf8')
+
+  it('is a per-view uniform: the main view reaches further than the panels', () => {
+    expect(CORONA_OUTER_MAIN).toBe(3)
+    expect(CORONA_OUTER_PERSPECTIVE).toBe(1.6)
+    expect(vertex).toMatch(/uniform float uOuter;/)
+    expect(vertex).toMatch(/vPlane = position\.xy \* uOuter;/)
+    expect(vertex).not.toMatch(/isOrthographic \? 3\.0/)
   })
 })
