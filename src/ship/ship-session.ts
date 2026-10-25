@@ -3,7 +3,8 @@
 
 import * as THREE from 'three'
 import type { CameraFocus, Layout, PanelKey } from '../store'
-import { createShipState, type Body as FlightBody, type ShipState } from './flight'
+import type { MainCameraPose } from '../main-camera-session'
+import { collisionRadius, createShipState, type Body as FlightBody, type ShipState } from './flight'
 import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
 
 /** The view state ship mode overrides or hides, put back on exit. */
@@ -174,6 +175,55 @@ export function narrowHalfFov(aspect: number): number {
 /** How far from a body of `radius` it fills SPAWN_EARTH_SHARE of the short side. */
 export function framingDistance(radius: number, aspect: number): number {
   return radius / (SPAWN_EARTH_SHARE * Math.tan(narrowHalfFov(aspect)))
+}
+
+/** Distance from a flight body that gives it the same screen radius as in the
+ * main view. The perspective branch uses the real eye distance; the current
+ * orthographic view uses its visible height instead of its arbitrary eye. */
+export function cameraToShipDistance(
+  pose: MainCameraPose,
+  systemRadius: number,
+  flightRadius: number
+): number | null {
+  if (!(systemRadius > 0 && flightRadius > 0 && pose.zoom > 0)) return null
+  const shipTan = Math.tan((SHIP_FOV * DEG) / 2)
+  const radiusRatio = flightRadius / systemRadius
+  let projectedDistance: number
+  if (pose.projection === 'orthographic') {
+    if (!(pose.visibleHeight > 0)) return null
+    projectedDistance = (pose.visibleHeight / pose.zoom) * radiusRatio / (2 * shipTan)
+  } else {
+    const eyeDistance = new THREE.Vector3(...pose.position).distanceTo(new THREE.Vector3(...pose.target))
+    if (!(pose.fov > 0 && pose.fov < 180 && eyeDistance > systemRadius)) return null
+    projectedDistance = Math.sqrt(eyeDistance ** 2 - systemRadius ** 2) *
+      radiusRatio * Math.tan((pose.fov * DEG) / 2) / (pose.zoom * shipTan)
+  }
+  const distance = Math.hypot(flightRadius, projectedDistance)
+  return Number.isFinite(distance) ? distance : null
+}
+
+/** Use the saved main view's eye direction and orientation at the flight
+ * scale. Null permits spawnPose for a direct ?ship=1 link with no main view. */
+export function spawnPoseFromCamera(
+  pose: MainCameraPose | null,
+  focus: CameraFocus,
+  bodies: readonly FlightBody[]
+): ShipState | null {
+  if (!pose) return null
+  const key = focus === 'clock' || focus === 'location' ? 'earth' : focus
+  const body = bodies.find((candidate) => candidate.key === key)
+  if (!body) return null
+  // The body radii are deliberately identical across system and flight
+  // scales (flight-scale.ts); their centres use different spacing.
+  const mappedDistance = cameraToShipDistance(pose, body.radius, body.radius)
+  if (mappedDistance === null) return null
+  const outward = new THREE.Vector3(...pose.position).sub(new THREE.Vector3(...pose.target))
+  if (!(outward.lengthSq() > 0) || !Number.isFinite(outward.lengthSq())) return null
+  const distance = Math.max(mappedDistance, collisionRadius(body) + 0.01)
+  const state = createShipState()
+  state.position.copy(body.position).addScaledVector(outward.normalize(), distance)
+  state.orientation.fromArray(pose.quaternion).normalize()
+  return state
 }
 
 function surfaceGap(position: THREE.Vector3, body: FlightBody): number {

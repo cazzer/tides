@@ -44,6 +44,7 @@ import {
 } from './main-view'
 import { LABEL_KEYS } from './system-aids/label-visibility'
 import { CLOCK_HALF_WIDTH } from './clock-size'
+import { mainCameraPose } from './main-camera-session'
 import {
   canPivot,
   clampTilt,
@@ -352,8 +353,10 @@ function useEyeDistance(
   useEffect(() => {
     const leftPlanet =
       previousFocus.current !== null && isSystemFocus(previousFocus.current)
+    const restoring = previousFocus.current === null && mainCameraPose() !== null
     previousFocus.current = cameraFocus
-    framing.current = isSystemFocus(cameraFocus) || leftPlanet
+    framing.current =
+      !restoring && (isSystemFocus(cameraFocus) || leftPlanet)
   }, [cameraFocus])
 
   useEffect(() => {
@@ -406,6 +409,9 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
   const cameraTarget = useRef(new Vector3())
+  useEffect(() => {
+    if (controls) cameraTarget.current.copy((controls as OrbitControlsImpl).target)
+  }, [controls])
   const anchor = useRef<FollowAnchor>({
     key: null,
     position: new Vector3(),

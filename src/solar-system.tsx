@@ -1,4 +1,4 @@
-import { Suspense, useRef, useEffect, useMemo } from 'react'
+import { Suspense, lazy, useRef, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useTexture } from '@react-three/drei'
 import OrbitingBody from './OrbitingBody'
@@ -28,6 +28,7 @@ import { SkyLookControls } from './SkyLookControls'
 import { sceneRadius } from './planets'
 import { useStore } from './store'
 import { isLowQuality } from './quality'
+import { SURFACE_TILES_ON } from './surface'
 import {
   DEFAULT_SURFACE_LOCATION,
   MOON_SKY_DISTANCE,
@@ -48,6 +49,10 @@ import {
 } from './ephemeris'
 
 const EARTH_DIAMETER = sceneRadius(12742000)
+
+// The streamed surface (tides-zmw.9.1) loads its own chunk, the tiles library
+// with it, and only when ?surface=1 asks for it in ship mode.
+const SurfaceTiles = lazy(() => import('./renderers/surface/SurfaceTiles'))
 
 useTexture.preload(getEarthTexture())
 
@@ -165,6 +170,13 @@ export default function SolarSystem({
         )}
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
+        {/* Under Earth's spin like the globe; its own Suspense, so the chunk
+            loading never hides Earth. */}
+        {ship && SURFACE_TILES_ON && (
+          <Suspense fallback={null}>
+            <SurfaceTiles />
+          </Suspense>
+        )}
       </OrbitingBody>
       {/* The month ring is a circle at the system Earth's radius; in flight
           Earth follows its true, slightly eccentric orbit, drawn as such. */}

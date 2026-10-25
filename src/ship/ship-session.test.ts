@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
+import type { MainCameraPose } from '../main-camera-session'
 import type { CameraFocus, Layout, PanelKey } from '../store'
 import { COLLISION_MARGIN } from './flight'
 import {
@@ -15,6 +16,7 @@ import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
 import {
   enterShipPatch,
   exitShipPatch,
+  cameraToShipDistance,
   framingDistance,
   narrowHalfFov,
   persistedView,
@@ -29,6 +31,7 @@ import {
   SPAWN_MIN_DISTANCE,
   SPAWN_MOON_GAP,
   spawnPose,
+  spawnPoseFromCamera,
   type ShipSessionState,
 } from './ship-session'
 import type { ShipState, Body as FlightBody } from './flight'
@@ -214,6 +217,64 @@ describe('spawnPose', () => {
     venus.position.copy(free.position)
     const moved = spawnPose(bodies, ASPECTS.laptop)
     expect(gap(moved, venus)).toBeGreaterThanOrEqual(gap(moved, earth))
+  })
+})
+
+describe('spawning from the main camera', () => {
+  const target: [number, number, number] = [10, -4, 7]
+  const eye: [number, number, number] = [34, 8, 39]
+  const quaternion = new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().lookAt(new THREE.Vector3(...eye), new THREE.Vector3(...target), new THREE.Vector3(0, 1, 0))
+  ).toArray() as [number, number, number, number]
+  const shared = { position: eye, target, quaternion, up: [0, 1, 0] as [number, number, number] }
+  const perspective: MainCameraPose = { ...shared, projection: 'perspective', fov: 30, zoom: 1 }
+  const orthographic: MainCameraPose = { ...shared, projection: 'orthographic', visibleHeight: 20, zoom: 2 }
+  const tanHalf = (fov: number) => Math.tan((fov * Math.PI) / 360)
+  const screenRadius = (radius: number, distance: number, fov: number) =>
+    radius / (Math.sqrt(distance ** 2 - radius ** 2) * tanHalf(fov))
+
+  it('matches a perspective dolly with a different source FOV and body radius', () => {
+    const sourceDistance = new THREE.Vector3(...eye).distanceTo(new THREE.Vector3(...target))
+    const shipDistance = cameraToShipDistance(perspective, 2, 4)!
+    expect(screenRadius(4, shipDistance, SHIP_FOV)).toBeCloseTo(
+      screenRadius(2, sourceDistance, perspective.fov), 12
+    )
+  })
+
+  it('maps orthographic zoom by visible height rather than eye distance', () => {
+    const shipDistance = cameraToShipDistance(orthographic, 2, 3)!
+    expect(screenRadius(3, shipDistance, SHIP_FOV)).toBeCloseTo(
+      2 * 2 / (orthographic.visibleHeight / orthographic.zoom), 12
+    )
+    expect(cameraToShipDistance({ ...orthographic, position: [340, 80, 390] }, 2, 3)).toBe(shipDistance)
+  })
+
+  it('starts every focused body from the same direction and apparent size', () => {
+    const bodies = createShipBodies()
+    updateShipBodies(bodies, Date.UTC(2026, 9, 25))
+    const direction = new THREE.Vector3(...eye).sub(new THREE.Vector3(...target)).normalize()
+    const sourceDistance = new THREE.Vector3(...eye).distanceTo(new THREE.Vector3(...target))
+    for (const body of bodies) {
+      const ship = spawnPoseFromCamera(perspective, body.key as CameraFocus, bodies)!
+      const offset = ship.position.clone().sub(body.position)
+      expect(offset.clone().normalize().distanceTo(direction)).toBeLessThan(1e-12)
+      expect(screenRadius(body.radius, offset.length(), SHIP_FOV)).toBeCloseTo(
+        screenRadius(body.radius, sourceDistance, perspective.fov), 10
+      )
+      expect(ship.orientation.toArray()).toEqual(quaternion)
+      expect(ship.velocity.length()).toBe(0)
+    }
+  })
+
+  it('keeps a zoomed-out start finite and falls back without a saved camera', () => {
+    const bodies = createShipBodies()
+    updateShipBodies(bodies, Date.UTC(2026, 9, 25))
+    const far: MainCameraPose = { ...perspective, position: [2400, 1200, 3200] }
+    const ship = spawnPoseFromCamera(far, 'earth', bodies)!
+    const earth = bodies.find((body) => body.key === 'earth')!
+    expect(ship.position.distanceTo(earth.position)).toBeGreaterThan(100)
+    expect(ship.position.length()).toBeLessThan(SHIP_FAR)
+    expect(spawnPoseFromCamera(null, 'earth', bodies)).toBeNull()
   })
 })
 

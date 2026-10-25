@@ -6,6 +6,7 @@ import { GROUND_DETAIL_OCTAVES, GROUND_DETAIL_OCTAVES_LOW, groundDetailPatch } f
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { RELIEF_DETAIL, RELIEF_MAX_SLOPE } from './groundRelief'
+import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { LIMB_SEGMENTS } from '../ship/limb-detail'
 import { EARTH_RADIUS } from '../ship/ship-bodies'
 import { meshGrid, riseOverRun, shadedSlope, vertexSurface } from '../ship/ground-mesh-model'
@@ -108,11 +109,13 @@ describe('ground detail patch', () => {
 
     it('lights a ridge at the terminator on its sunward face only', () => {
       // A north-south ridge on the limb sphere's ground at 0° E, 50 grey
-      // levels (~1.3 km) a vertex up to 200, under a Sun 5° over the west.
+      // levels (~1.3 km) a vertex up to 200 at the reference 25x (the same
+      // drawn ridge at any relief), under a Sun 5° over the west.
       const [width, height] = LIMB_SEGMENTS
+      const scale = REFERENCE_TERRAIN_DISPLACEMENT / TERRAIN_DISPLACEMENT
       const data = new Float32Array(width * height)
       for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) data[y * width + x] = Math.max(0, 200 - 50 * Math.abs(x + 0.5 - width / 2))
+        for (let x = 0; x < width; x++) data[y * width + x] = scale * Math.max(0, 200 - 50 * Math.abs(x + 0.5 - width / 2))
       }
       const levels = [{ width, height, data }]
       const grid = meshGrid(LIMB_SEGMENTS)

@@ -1,11 +1,15 @@
 import { useId, type ReactNode } from 'react'
 import styled from 'styled-components'
 import { OPEN_METEO_SITE } from './forecast-clouds'
+import { EOX_CREDIT, USGS_CREDIT } from './renderers/surface/credit-sources'
 
 export const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
 // Wording requested by the GIBS documentation.
 export const GIBS_ACKNOWLEDGEMENT =
   "We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS)."
+export const USGS_URL = 'https://www.usgs.gov/programs/national-geospatial-program/national-map'
+export const EOX_URL = 'https://s2maps.eu/'
+const CC_BY_NC_SA_URL = 'https://creativecommons.org/licenses/by-nc-sa/4.0/'
 const SOLAR_SYSTEM_SCOPE_URL = 'https://www.solarsystemscope.com/textures/'
 const CC_BY_URL = 'https://creativecommons.org/licenses/by/4.0/'
 const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/skycultures/modern'
@@ -39,7 +43,7 @@ export function Credits({ children }: { children?: ReactNode }) {
         >
           {GIBS_ACKNOWLEDGEMENT}
         </span>
-        {' · Blue Marble Next Generation'}
+        {' · Blue Marble Next Generation, VIIRS City Lights 2012'}
       </li>
       <li>
         Terrain: <Link href={MAPTERHORN_URL}>Mapterhorn</Link>,{' '}
@@ -56,6 +60,19 @@ export function Credits({ children }: { children?: ReactNode }) {
         >
           {COPERNICUS_DEM_NOTICE}
         </span>
+      </li>
+      <li>
+        Ground imagery in the US: <Link href={USGS_URL}>{USGS_CREDIT}</Link> (public domain)
+      </li>
+      <li>
+        Ground imagery elsewhere: <Link href={EOX_URL}>{EOX_CREDIT}</Link> (
+        <Link
+          href={CC_BY_NC_SA_URL}
+          title="Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International"
+        >
+          CC BY-NC-SA 4.0
+        </Link>
+        )
       </li>
       <li>
         Cloud forecasts: <Link href={OPEN_METEO_SITE}>Weather data by Open-Meteo.com</Link>

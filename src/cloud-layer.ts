@@ -8,14 +8,28 @@
 // cloud tops by CLOUD_UNITS_PER_KM. Lighting (sunset colour, the horizon dip)
 // uses true kilometres instead, since those effects don't scale with the scene.
 import { MAX_CLOUD_TOP_KM } from './geo-clouds'
+import { DEFAULT_RELIEF, REFERENCE_RELIEF, RELIEF } from './relief'
 
 export { MAX_CLOUD_TOP_KM }
 
 export const EARTH_RADIUS_KM = 6371
 
-/** The ground's displacementScale: scene units at grey 1, the old 8-bit bump
- * map's white. */
-export const TERRAIN_DISPLACEMENT = 0.075
+/** The ground's displacementScale at REFERENCE_RELIEF (./relief.ts, 25x true
+ * scale, the exaggeration the scene was first tuned at): scene units at grey
+ * 1, the old 8-bit bump map's white. The others are in proportion. */
+export const REFERENCE_TERRAIN_DISPLACEMENT = 0.075
+/** The ground's displacementScale at the default relief (12x, 0.036). The
+ * horizon map is baked at it (scripts/build-earth-horizon.mjs). */
+export const DEFAULT_TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (DEFAULT_RELIEF / REFERENCE_RELIEF)
+/** The ground's displacementScale at this page's relief (?relief=, read once
+ * at load). Everything that follows the drawn ground derives from it. With
+ * the live terrain scale on (../terrain-scale.ts, ?blend=1, tides-zmw.9.5)
+ * the ground is drawn lower near it, and this is the maximum bound: the
+ * shells, the cloud layer's top and the flat deck stay sized for it. */
+export const TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (RELIEF / REFERENCE_RELIEF)
+/** The ground's displacementScale at true scale (1x, 0.003): what the live
+ * terrain scale (../terrain-scale.ts, tides-zmw.9.5) multiplies. */
+export const TRUE_TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT / REFERENCE_RELIEF
 /** Kilometres of elevation per unit of grey: the old bump map's 1/39 km a
  * level, which the 16-bit elevation map (earth-dem.ts) keeps. */
 export const TERRAIN_KM_PER_GREY = 255 / 39
@@ -41,7 +55,9 @@ export const TERRAIN_MAX_GREY = TERRAIN_MAX_METRES / (1000 * TERRAIN_KM_PER_GREY
  * did over almost none).
  */
 export const CLOUD_CLEARANCE = 0.012
-/** Cloud-top exaggeration: about 9x the true scale (terrain is about 25x). */
+/** Cloud-top exaggeration: about 9x the true scale, whatever the terrain's
+ * (12x by default; ?relief=, ./relief.ts). At a relief under about 8.7 the
+ * clouds are exaggerated more than the ground they sit on. */
 export const CLOUD_UNITS_PER_KM = 0.004
 /** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */
 export const MIN_MEASURED_TOP_KM = 1
@@ -87,13 +103,17 @@ export function cloudShape(alpha: number): number {
   return 0.25 + 0.75 * smoothstep(0, 0.65, alpha)
 }
 
-/** A cloud column: base and top altitudes over ground of the given grey. */
+/** A cloud column: base and top altitudes over ground of the given grey,
+ * drawn at `displacement` (the ground's displacementScale: the full relief's
+ * maximum bound, as the cloud GLSL holds it until it follows the live
+ * terrain scale, tides-zmw.9.6). */
 export function cloudColumn(
   alpha: number,
   topKm: number,
-  terrainGrey: number
+  terrainGrey: number,
+  displacement: number = TERRAIN_DISPLACEMENT
 ): { base: number; top: number } {
-  const base = terrainGrey * TERRAIN_DISPLACEMENT + CLOUD_CLEARANCE
+  const base = terrainGrey * displacement + CLOUD_CLEARANCE
   return { base, top: base + CLOUD_UNITS_PER_KM * topKm * cloudShape(alpha) }
 }
 

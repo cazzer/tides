@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
+import { mainCameraPose } from '../main-camera-session'
 import { stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
 import { createShipBodies, EARTH_SHELL_RADII, updateShipBodies } from './ship-bodies'
-import { shellGap, shipFar, shipNear, spawnPose } from './ship-session'
+import { shellGap, shipFar, shipNear, spawnPose, spawnPoseFromCamera } from './ship-session'
 import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail'
+import { setTerrainEye } from '../terrain-scale'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -29,6 +31,7 @@ export function ShipController() {
     () => () => {
       clearLimbView()
       disposeLimbSpheres()
+      setTerrainEye(Infinity)
     },
     []
   )
@@ -44,8 +47,13 @@ export function ShipController() {
     }
     // On the first frame rather than on mount: a ?ship=1 link mounts this
     // before the clock has ticked, and the view's size is known by now.
-    ship.current ??= spawnPose(bodies, size.width / size.height)
+    ship.current ??= spawnPoseFromCamera(
+      mainCameraPose(),
+      useStore.getState().shipSaved?.cameraFocus ?? 'earth',
+      bodies
+    ) ?? spawnPose(bodies, size.width / size.height)
     const state = ship.current
+    setTerrainEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
 

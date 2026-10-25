@@ -11,7 +11,8 @@ import { groundDetailPatch } from './groundDetail'
 import { createGroundHaze } from './groundHaze'
 import { groundShadowPatch } from './groundShadow'
 import { useGibsPatch } from './gibsPatch'
-import { nightLightsPatch } from './nightLights'
+import { useGibsNightPatch } from './gibsNightPatch'
+import { nightLightsPatch, useNightFlight } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
 import {
@@ -21,6 +22,7 @@ import {
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
+import { applyTerrainScale } from '../terrain-scale'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { EarthDemLoader } from './earthDemTexture'
@@ -101,6 +103,9 @@ export default function EarthRenderer({
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibsPatch = useGibsPatch(groundRef, diameter)
+  // Sharper city lights, and the night lit for the adapted eye (tides-tvr.2).
+  const gibsNightPatch = useGibsNightPatch(groundRef, diameter)
+  const nightFlight = useNightFlight(clouds.uniforms.uSunDir, clouds.material.uniforms.uAmbient)
   // Aerial perspective from inside the atmosphere (tides-zmw.5).
   const groundHaze = useMemo(
     () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
@@ -111,14 +116,15 @@ export default function EarthRenderer({
       composePatches(
         eclipseShadow.material,
         clouds.groundPatch,
-        nightLightsPatch(clouds.uniforms.uSunDir),
+        nightLightsPatch(clouds.uniforms.uSunDir, nightFlight?.uniforms),
         poleSmoothingPatch(),
         groundDetailPatch(textureSet.low),
         groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
         gibsPatch,
+        gibsNightPatch,
         groundHaze.patch
       ),
-    [eclipseShadow, clouds, textureSet.low, gibsPatch, groundHaze]
+    [eclipseShadow, clouds, textureSet.low, gibsPatch, gibsNightPatch, nightFlight, groundHaze]
   )
   // The mesh's displacement, at its vertex spacing (tides-zmw.2).
   const displacement = useMemo(() => createGroundDisplacement(EARTH_BASE_SEGMENTS), [])
@@ -175,6 +181,11 @@ export default function EarthRenderer({
         geometry={groundSphere}
         raycast={meshBounds}
         onBeforeRender={(renderer, _scene, camera, geometry) => {
+          // The live terrain scale (tides-zmw.9.5): the page's relief unless
+          // ?blend=1 eases it with the ship's altitude. Set here, before three
+          // copies the material's displacementScale into its uniform; the JSX
+          // prop below only gives the first frame's.
+          if (groundMaterial.current) applyTerrainScale(groundMaterial.current)
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
           groundHaze.update(groundRef.current!, camera)
           // The Sun in the Earth's frame, from this frame's final transform
@@ -188,6 +199,7 @@ export default function EarthRenderer({
             .negate()
             .normalize()
             .applyQuaternion(_quaternion.invert())
+          nightFlight?.update(groundRef.current!, camera, diameter)
         }}
       >
         <meshPhongMaterial

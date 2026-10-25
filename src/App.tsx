@@ -30,8 +30,10 @@ import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
+import { mainCameraPose, rememberMainCameraPose } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
 import type { DistanceScale } from './distance-scale'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -217,6 +219,7 @@ export default function App() {
               onReady={readyHandler('main')}
             />
             <MainControls />
+            <MainCameraSession />
           </Panel>
         )}
         {!shipMode && showPanel('top') && (
@@ -369,11 +372,14 @@ const MAIN_EYE = new THREE.Vector3(100, 80, 80)
 
 // near and far are set every frame (camera.tsx useMainNearFar).
 function MainCamera() {
+  const pose = mainCameraPose()
   return (
     <PerspectiveCamera
       makeDefault
       fov={MAIN_FOV}
-      position={MAIN_EYE}
+      position={pose?.position ?? MAIN_EYE}
+      quaternion={pose?.quaternion}
+      up={pose?.up}
       near={1}
       far={4000}
     />
@@ -383,7 +389,27 @@ function MainCamera() {
 // camera.tsx useEyeDistance sets minDistance and maxDistance. The target
 // always follows the focus, so a pan would only be undone.
 function MainControls() {
-  return <OrbitControls enablePan={false} makeDefault />
+  return (
+    <OrbitControls
+      target={mainCameraPose()?.target ?? [0, 0, 0]}
+      enablePan={false}
+      makeDefault
+    />
+  )
+}
+
+function MainCameraSession() {
+  const camera = useThree((s) => s.camera)
+  const controls = useThree((s) => s.controls)
+  useEffect(() => {
+    if (!(camera instanceof THREE.OrthographicCamera || camera instanceof THREE.PerspectiveCamera) || !controls) return
+    return useStore.subscribe((state, previous) => {
+      if (!previous.shipMode && state.shipMode) {
+        rememberMainCameraPose(camera, controls as OrbitControlsImpl)
+      }
+    })
+  }, [camera, controls])
+  return null
 }
 
 /** Ensures the main view's camera sees the location pin (PIN_LAYER). Only used in the main panel. */

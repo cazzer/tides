@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { DEM_METRES_PER_UNIT, boxMips, decodeEarthDem, demLevel, toHalfBits } from '../earth-dem'
 import {
@@ -55,6 +55,7 @@ import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
+import { terrainDisplacement } from '../terrain-scale'
 
 const shipped = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
 const [dem4k, dem2k, demMean] = await Promise.all(['earth-dem-4k.bin', 'earth-dem-2k.bin', 'earth-dem-mean.bin'].map(shipped))
@@ -229,13 +230,15 @@ describe('ground displacement (tides-zmw.2)', () => {
 
     it("matches the map's own slope on broad relief, in the same frame and units (the detail's premise)", () => {
       // A Gaussian hill 6 limb cells wide (sigma) on the equator at 0° E,
-      // on a map the 4k's size, its mips as earthDemTexture.ts builds them.
+      // on a map the 4k's size, its mips as earthDemTexture.ts builds them,
+      // 150 levels high at the reference 25x: the same drawn hill at any relief.
       const [width, height] = [4096, 2048]
       const sigma = (6 / LIMB_SEGMENTS[0]) * width
+      const peak = (150 * REFERENCE_TERRAIN_DISPLACEMENT) / TERRAIN_DISPLACEMENT
       const data = new Float32Array(width * height)
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          data[y * width + x] = 150 * Math.exp(-((x + 0.5 - width / 2) ** 2 + (y + 0.5 - height / 2) ** 2) / (2 * sigma * sigma))
+          data[y * width + x] = peak * Math.exp(-((x + 0.5 - width / 2) ** 2 + (y + 0.5 - height / 2) ** 2) / (2 * sigma * sigma))
         }
       }
       const map = boxMips({ width, height, data })
@@ -357,7 +360,8 @@ describe('ground displacement (tides-zmw.2)', () => {
     }
 
     it('swaps well above the highest stop on any screen, so the floor never changes under the ship', () => {
-      // ~0.066 over the Karakoram, under the morph's floor.
+      // ~0.034 over the Karakoram at the default relief (~0.066 at 25x, the
+      // clamp's top), under the morph's floor.
       expect(highestStop).toBeLessThan(MORPH_FLOOR)
       for (const screenPx of [100, 200, 275, 300, 400, 450, 720, 1600]) {
         expect(swapGap(screenPx), String(screenPx)).toBeGreaterThan(MORPH_TOP)
@@ -465,5 +469,36 @@ describe('ground displacement (tides-zmw.2)', () => {
       const shader = { ...phongShader(), vertexShader: 'void main() {}' }
       expect(() => createGroundDisplacement(EARTH_BASE_SEGMENTS).patch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)).toThrow()
     })
+  })
+
+  // The live terrain scale (tides-zmw.9.5) moves the material's
+  // displacementScale, which the displacement and its slope read as three's
+  // uniform (the patch test above), never a constant: the CPU mirrors take it
+  // as a parameter, the full relief's by default, and scale with it.
+  it.each([1, 4])('mirrors the ground drawn at %dx: vertices, mesh slope and relief slope scale with the displacement', (scale) => {
+    const displacement = terrainDisplacement(scale)
+    const share = displacement / TERRAIN_DISPLACEMENT
+    const grid = meshGrid(EARTH_BASE_SEGMENTS)
+    const grey = vertexGrey(ground4k, grid)
+    const full = displace(grid, grey, EARTH_RADIUS)
+    const scaled = displace(grid, grey, EARTH_RADIUS, displacement)
+    for (let i = 0; i < full.length; i += 37) {
+      const sea = grid.unit[i] * EARTH_RADIUS
+      expect(scaled[i] - sea).toBeCloseTo((full[i] - sea) * share, 14)
+    }
+    const surface = vertexSurface(ground4k, grid)
+    const map = boxMips(demLevel(dem4k)).map(({ width, height, data }) => ({
+      width,
+      height,
+      data: Float32Array.from(data, (h) => THREE.DataUtils.fromHalfFloat(toHalfBits(h)) * 255),
+    }))
+    for (let k = 0; k < grey.length; k += 211) {
+      const slope = surface.subarray(4 * k + 1, 4 * k + 4)
+      const fullSlope = riseOverRun(slope, EARTH_RADIUS)
+      riseOverRun(slope, EARTH_RADIUS, displacement).forEach((x, a) => expect(x).toBeCloseTo(fullSlope[a] * share, 14))
+      const [u, v] = [grid.uv[2 * k], grid.uv[2 * k + 1]]
+      const fine = reliefSlope(map, u, v, EARTH_RADIUS, 0.01)
+      reliefSlope(map, u, v, EARTH_RADIUS, 0.01, displacement).forEach((x, a) => expect(x).toBeCloseTo(fine[a] * share, 14))
+    }
   })
 })

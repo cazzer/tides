@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
-import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, cloudColumn } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, cloudColumn } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
@@ -49,6 +49,9 @@ import {
 import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from './limb-detail'
 import { TERRAIN_READ_TEXELS } from '../cloud-layer'
 import { boxMips, decodeEarthDem, demLevel } from '../earth-dem'
+import { groundLevels, meshGrid, meshRadius, displace, vertexGrey } from './ground-mesh-model'
+import { RELIEF } from '../relief'
+import { setTerrainEye, terrainBlendTop, terrainDisplacement, terrainScale, terrainScaleUniform } from '../terrain-scale'
 
 const shippedDem = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
 const [demMax, demMean, dem4k] = await Promise.all(['earth-dem-max.bin', 'earth-dem-mean.bin', 'earth-dem-4k.bin'].map(shippedDem))
@@ -247,6 +250,8 @@ describe('ship bodies', () => {
     // The ground the cloud march stands its columns on (cloudShaders.ts
     // cloudTerrain()): the 4k map's TERRAIN_READ_TEXELS-wide mip.
     const marchGround = boxMips(demLevel(dem4k)).find(({ width }) => width === TERRAIN_READ_TEXELS)!
+    // Scene units the drawn ground stands per true kilometre, at this relief.
+    const unitsPerKm = TERRAIN_DISPLACEMENT / TERRAIN_KM_PER_GREY
 
     it('keeps the low-tier stop at EARTH_COLLISION_RADIUS everywhere, with the real terrain loaded', () => {
       setEarthTerrain(baseFloor())
@@ -260,7 +265,8 @@ describe('ship bodies', () => {
           expect(floorRadius(earth, direction)).toBe(EARTH_COLLISION_RADIUS)
         }
       }
-      expect(highest).toBeGreaterThan(EARTH_RADIUS + 0.05)
+      // Over 4.35 km on the floor's smoothed triangles (0.05 units at 25x).
+      expect(highest).toBeGreaterThan(EARTH_RADIUS + 4.35 * unitsPerKm)
       expect(highest + EARTH_GROUND_CLEARANCE).toBeLessThan(EARTH_COLLISION_RADIUS)
     })
 
@@ -277,7 +283,7 @@ describe('ship bodies', () => {
       // Mid-Pacific near sea level; Everest's summit, on the 128 × 128
       // sphere's smoothed triangles, ~3.4 km of its 8.8 (tides-zmw.2).
       expect(ground(0, -150) - EARTH_RADIUS).toBeLessThan(0.01)
-      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(0.035)
+      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(3.05 * unitsPerKm)
     })
 
     // The ship's stop under the cloud base, over land (where the pooled map's
@@ -357,16 +363,29 @@ describe('ship bodies', () => {
       const side = new THREE.Vector3()
       const point = new THREE.Vector3()
       let closest = Infinity
-      for (let lat = -88; lat <= 88; lat += 0.5) {
-        for (let lon = -180; lon < 180; lon += 0.5) {
-          const up = latLonToLocal(lat, lon)
-          const eye = up.clone().multiplyScalar(floorRadius(earth, toWorld(up, T)))
-          for (let k = 0; k < 8; k++) {
-            side.set(Math.cos(k), 0, Math.sin(k)).cross(up).normalize()
-            for (const s of [0, 0.001, 0.002, 0.003, 0.004]) {
-              local.copy(up).applyAxisAngle(side, s / EARTH_RADIUS)
-              closest = Math.min(closest, point.copy(local).multiplyScalar(meshTop(local)).distanceTo(eye))
-            }
+      // Sweep the globe coarsely, then concentrate on the 64 steepest mesh
+      // quads. A half-degree globe × 40 rays spent ~30 s checking mostly
+      // flat ground; the steep cells exercise the same near-plane property.
+      const locations: [number, number][] = []
+      for (let lat = -88; lat <= 88; lat += 4) {
+        for (let lon = -180; lon < 180; lon += 4) locations.push([lat, lon])
+      }
+      const [width, height] = drawn.segments
+      const steepest = Array.from(drawn.slope, (slope, index) => ({ slope, index }))
+        .sort((a, b) => b.slope - a.slope)
+        .slice(0, 64)
+      for (const { index } of steepest) {
+        locations.push([90 - (Math.floor(index / width) + 0.5) * 180 / height,
+          ((index % width) + 0.5) * 360 / width - 180])
+      }
+      for (const [lat, lon] of locations) {
+        const up = latLonToLocal(lat, lon)
+        const eye = up.clone().multiplyScalar(floorRadius(earth, toWorld(up, T)))
+        for (let k = 0; k < 8; k++) {
+          side.set(Math.cos(k * Math.PI / 4), 0, Math.sin(k * Math.PI / 4)).cross(up).normalize()
+          for (const s of [0, 0.001, 0.002, 0.003, 0.004]) {
+            local.copy(up).applyAxisAngle(side, s / EARTH_RADIUS)
+            closest = Math.min(closest, point.copy(local).multiplyScalar(meshTop(local)).distanceTo(eye))
           }
         }
       }
@@ -397,6 +416,55 @@ describe('ship bodies', () => {
       expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(fallback + EARTH_GROUND_CLEARANCE)
       expect(floorRadius(byKey(T, 'low').earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
     })
+
+    // The eye altitude at which the blend draws `scale` (tides-zmw.9.5).
+    function eyeFor(scale: number): number {
+      let [lo, hi] = [0, terrainBlendTop(RELIEF)]
+      for (let k = 0; k < 200; k++) {
+        const mid = (lo + hi) / 2
+        if (terrainScale(mid, RELIEF, true) < scale) lo = mid
+        else hi = mid
+      }
+      return hi
+    }
+
+    it.each([1, 4, RELIEF])(
+      'follows the live terrain scale at %dx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
+      (scale) => {
+        setEarthTerrain(baseFloor())
+        onTestFinished(() => setTerrainEye(Infinity))
+        const { earth } = byKey()
+        const pooled = pooledTerrain()
+        const fullShare = underBaseShare(earth, pooled)
+        const directions: THREE.Vector3[] = []
+        const locals: THREE.Vector3[] = []
+        for (let lat = -80; lat <= 80; lat += 4) {
+          for (let lon = -180; lon < 180; lon += 4) locals.push(latLonToLocal(lat, lon))
+        }
+        // Everest, K2, the Grand Canyon, the Altiplano.
+        for (const [lat, lon] of [[27.99, 86.93], [35.88, 76.51], [36.1, -112.1], [-16, -68]]) {
+          for (let k = 0; k < 25; k++) locals.push(latLonToLocal(lat + (k % 5) * 0.4 - 0.8, lon + Math.floor(k / 5) * 0.4 - 0.8))
+        }
+        for (const local of locals) directions.push(toWorld(local, T))
+        const full = directions.map((d) => earth.ground!(d))
+
+        setTerrainEye(eyeFor(scale), true)
+        expect(terrainScaleUniform.value).toBeCloseTo(scale, 9)
+        const displacement = terrainDisplacement(terrainScaleUniform.value)
+        const grid = meshGrid(EARTH_BASE_SEGMENTS)
+        const mesh = displace(grid, vertexGrey(groundLevels(dem4k), grid), EARTH_RADIUS, displacement)
+        directions.forEach((direction, k) => {
+          const ground = earth.ground!(direction)
+          expect(ground).toBeGreaterThanOrEqual(meshRadius(mesh, EARTH_BASE_SEGMENTS, locals[k]))
+          expect(ground - EARTH_RADIUS).toBeCloseTo(((full[k] - EARTH_RADIUS) * displacement) / TERRAIN_DISPLACEMENT, 14)
+          expect(floorRadius(earth, direction)).toBeCloseTo(ground + EARTH_GROUND_CLEARANCE, 12)
+        })
+        // A lower ground only lowers the stop, under the base (still on the
+        // full relief's ground until tides-zmw.9.6) over at least as much land.
+        expect(underBaseShare(earth, pooled)).toBeGreaterThanOrEqual(fullShare)
+      },
+      60_000
+    )
 
     it('gives no other body a ground', () => {
       for (const body of createShipBodies()) {

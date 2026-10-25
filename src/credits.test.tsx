@@ -12,6 +12,7 @@ describe('Credits', () => {
     expect(hrefs).toContain('https://earthdata.nasa.gov/gibs')
     expect(html).toContain(GIBS_ACKNOWLEDGEMENT.replace(/'/g, '&#x27;'))
     expect(html).toContain('Blue Marble Next Generation')
+    expect(html).toContain('VIIRS City Lights 2012')
   })
 
   test('credits Open-Meteo, Solar System Scope and Stellarium with their licences', () => {
@@ -30,6 +31,20 @@ describe('Credits', () => {
     expect(hrefs).toEqual(expect.arrayContaining(['https://mapterhorn.com/', 'https://mapterhorn.com/attribution/']))
     expect(html).toContain('Copernicus GLO-30')
     expect(html).toContain(COPERNICUS_DEM_NOTICE)
+  })
+
+  test('credits USGS (public domain) and EOX Sentinel-2 cloudless with its licence', () => {
+    expect(hrefs).toEqual(
+      expect.arrayContaining([
+        'https://www.usgs.gov/programs/national-geospatial-program/national-map',
+        'https://s2maps.eu/',
+        'https://creativecommons.org/licenses/by-nc-sa/4.0/',
+      ])
+    )
+    expect(html).toContain('USGS The National Map')
+    expect(html).toContain('public domain')
+    expect(html).toContain('Sentinel-2 cloudless')
+    expect(html).toContain('Contains modified Copernicus Sentinel data 2020')
   })
 
   test('opens every link in a new tab without an opener', () => {
