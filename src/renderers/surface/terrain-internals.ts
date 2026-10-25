@@ -12,7 +12,17 @@
 // linear-filtered 32-bit float texture (which needs OES_texture_float_linear:
 // no iOS). SurfaceGridCache replaces it, keeping the library's neighbour
 // stitching and disposal and changing only how a grid is made.
-import { DataTexture, FloatType, LinearFilter, NearestFilter, RedFormat, type Texture } from 'three'
+import {
+  DataTexture,
+  FloatType,
+  LinearFilter,
+  NearestFilter,
+  RedFormat,
+  type Mesh,
+  type MeshStandardMaterial,
+  type Object3D,
+  type Texture,
+} from 'three'
 import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/GridCache.js'
 import type { TerrariumMeshPlugin, XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
 import type { TilesRenderer } from '3d-tiles-renderer/three'
@@ -231,4 +241,33 @@ export function protectOverlayBitmaps(overlay: XYZTilesOverlay): void {
     const bitmap = texture?.image
     if (typeof ImageBitmap !== 'undefined' && bitmap instanceof ImageBitmap) ImageBitmap.prototype.close.call(bitmap)
   }
+}
+
+/**
+ * The tile bytes the cache counts are three's estimate of each tile's scene,
+ * which counts the elevation grid whole for every tile that reads it: up to
+ * five, the tile at the grid's level and its four children (the plugin
+ * fetches every other level), ~2 in the cache on average (1.6-2.2 tiles per
+ * grid at headless canyon poses). A grid (1 MB) is most of a tile's bytes,
+ * so the cache counted ~2x what the tiles hold and refused tiles at a 3 km
+ * 1080p pose. Charge each tile half its grid instead, through the
+ * renderer's (undocumented) calculateBytesUsed plugin hook, whose results it
+ * sums over the plugins and itself.
+ */
+export const GRID_READERS = 2
+
+export function shareGridBytes(tiles: TilesRenderer): void {
+  const plugin = {
+    name: 'SURFACE_GRID_BYTES',
+    calculateBytesUsed(_tile: unknown, scene: Object3D | null) {
+      let bytes = 0
+      scene?.traverse((object) => {
+        const map = ((object as Mesh).material as MeshStandardMaterial | undefined)?.displacementMap
+        const image = map?.image as { width?: number; height?: number } | undefined
+        if (image?.width && image.height) bytes -= image.width * image.height * 4 * (1 - 1 / GRID_READERS)
+      })
+      return bytes
+    },
+  }
+  tiles.registerPlugin(plugin as unknown as Parameters<TilesRenderer['registerPlugin']>[0])
 }

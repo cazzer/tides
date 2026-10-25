@@ -4,7 +4,17 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DataTexture, FloatType, LinearFilter, NearestFilter, RedFormat } from 'three'
+import {
+  BufferGeometry,
+  DataTexture,
+  FloatType,
+  Group,
+  LinearFilter,
+  Mesh,
+  MeshLambertMaterial,
+  NearestFilter,
+  RedFormat,
+} from 'three'
 import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/GridCache.js'
@@ -14,6 +24,7 @@ import {
   installSurfaceGridCache,
   PINNED_TILES_VERSION,
   protectOverlayBitmaps,
+  shareGridBytes,
   quietTilesetVersion,
   SurfaceGridCache,
   type SurfaceGridOptions,
@@ -74,6 +85,12 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     const src = read('src/three/plugins/images/sources/TiledImageSource.js')
     expect(src).toContain('.then( buffer => this.processBufferToTexture( buffer ) );')
     expect(src).toContain('texture.image.close();')
+  })
+
+  it("sums every plugin's calculateBytesUsed into a tile's bytes, three's estimate counting each scene's textures", () => {
+    const sum = /\w\.calculateBytesUsed && \(\w \+= \w\.calculateBytesUsed\(\w, \w\.engineData\.scene\) \|\| 0\)/
+    expect(built(sum)).toHaveLength(1)
+    expect(read('src/three/renderer/tiles/TilesRenderer.js')).toContain('bytesUsed.set( tile, estimateBytesUsed( scene ) );')
   })
 
   it('keeps stitchNeighbors on the source GridCache', () => {
@@ -400,5 +417,20 @@ describe('protectOverlayBitmaps (tides-zmw.9.2)', () => {
     expect(realClose).not.toHaveBeenCalled()
     source.disposeItem(texture)
     expect(realClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('shareGridBytes (tides-zmw.9.2)', () => {
+  it("charges a tile half its grid on top of three's whole-grid estimate", () => {
+    const tiles = new TilesRenderer()
+    shareGridBytes(tiles)
+    const grid = new DataTexture(new Float32Array(10 * 10), 10, 10, RedFormat, FloatType)
+    const material = new MeshLambertMaterial()
+    material.displacementMap = grid.clone()
+    material.bumpMap = material.displacementMap
+    const scene = new Group().add(new Mesh(new BufferGeometry(), material))
+    const getBytesUsed = (tiles as unknown as { getBytesUsed(tile: unknown): number }).getBytesUsed
+    // three counts the grid once per scene (400 bytes); the hook takes back half
+    expect(getBytesUsed.call(tiles, { engineData: { scene } })).toBeCloseTo(400 / 2, 6)
   })
 })

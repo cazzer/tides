@@ -17,7 +17,13 @@ import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceBumpScale, applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
-import { installSurfaceGridCache, protectOverlayBitmaps, quietTilesetVersion, type SurfaceGridCache } from './terrain-internals'
+import {
+  installSurfaceGridCache,
+  protectOverlayBitmaps,
+  quietTilesetVersion,
+  shareGridBytes,
+  type SurfaceGridCache,
+} from './terrain-internals'
 import { decodeTerrariumImage } from './terrarium'
 import { createTerrariumDecoder, type DecodeWorker } from './terrariumDecoder'
 
@@ -30,9 +36,8 @@ export const MAPTERHORN_MAX_ZOOM = 16
 const GIGABYTE = 2 ** 30
 /**
  * The instance's tile memory (the library's default shared cache allows 0.3
- * to 0.4 GB): evicts down to the low mark once past the high one. Counted
- * per tile, so a grid shared by the tiles reading subviews of it counts once
- * for each.
+ * to 0.4 GB): evicts down to the low mark once past the high one. Each tile
+ * is charged half the elevation grid it shares (shareGridBytes).
  */
 export const SURFACE_CACHE_BYTES = { min: 0.15 * GIGABYTE, max: 0.25 * GIGABYTE }
 /** Downloads in flight per server (the library's shared queue allows 25). */
@@ -124,6 +129,7 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
   overlay.downloadQueue = downloads
   quietTilesetVersion(tiles)
   tiles.registerPlugin(terrain)
+  shareGridBytes(tiles)
   applySurfaceFrame(tiles.group)
   tiles.group.name = 'surface-tiles'
   tiles.group.userData.tiles = tiles
