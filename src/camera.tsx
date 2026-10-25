@@ -38,6 +38,7 @@ import {
   bodyReach,
   systemExtent,
 } from './system-aids/label-visibility'
+import { mainCameraPose } from './main-camera-session'
 import { isMoonKey } from './moons/moon-keys'
 import {
   canPivot,
@@ -347,9 +348,10 @@ function usePlanetFraming(cameraFocus: CameraFocus) {
   useEffect(() => {
     const leftPlanet =
       previousFocus.current !== null && isSystemFocus(previousFocus.current)
+    const restoring = previousFocus.current === null && mainCameraPose() !== null
     previousFocus.current = cameraFocus
     framing.current =
-      isSystemFocus(cameraFocus) || leftPlanet ? { written: null } : null
+      !restoring && (isSystemFocus(cameraFocus) || leftPlanet) ? { written: null } : null
   }, [cameraFocus])
 
   // Only the main view has controls; the other panels' cameras stay put.
@@ -380,6 +382,9 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
   const cameraTarget = useRef(new Vector3())
+  useEffect(() => {
+    if (controls) cameraTarget.current.copy((controls as OrbitControlsImpl).target)
+  }, [controls])
   const rideRef = useClockRide(controls)
   const focusedObject = useRef<{
     object: Object3D

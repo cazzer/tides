@@ -25,8 +25,10 @@ import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
+import { mainCameraPose, rememberMainCameraPose } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
 import type { DistanceScale } from './distance-scale'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -212,6 +214,7 @@ export default function App() {
               onReady={readyHandler('main')}
             />
             <MainControls />
+            <MainCameraSession />
           </Panel>
         )}
         {!shipMode && showPanel('top') && (
@@ -359,11 +362,14 @@ function SceneReadySignal({ onReady }: { onReady: () => void }) {
 }
 
 function MainCamera() {
+  const pose = mainCameraPose()
   return (
     <OrthographicCamera
       makeDefault
-      position={[100, 80, 80]}
-      zoom={MAIN_ZOOM}
+      position={pose?.position ?? [100, 80, 80]}
+      quaternion={pose?.quaternion}
+      up={pose?.up}
+      zoom={pose?.zoom ?? MAIN_ZOOM}
       near={0}
     />
   )
@@ -375,12 +381,27 @@ function MainControls() {
   const size = useThree((s) => s.size)
   return (
     <OrbitControls
+      target={mainCameraPose()?.target ?? [0, 0, 0]}
       maxDistance={80}
       minDistance={5}
       minZoom={mainViewRange(showPlanets, size).minZoom}
       makeDefault
     />
   )
+}
+
+function MainCameraSession() {
+  const camera = useThree((s) => s.camera)
+  const controls = useThree((s) => s.controls)
+  useEffect(() => {
+    if (!(camera instanceof THREE.OrthographicCamera) || !controls) return
+    return useStore.subscribe((state, previous) => {
+      if (!previous.shipMode && state.shipMode) {
+        rememberMainCameraPose(camera, controls as OrbitControlsImpl)
+      }
+    })
+  }, [camera, controls])
+  return null
 }
 
 /** Ensures the main view's camera sees the location pin (PIN_LAYER). Only used in the main panel. */
