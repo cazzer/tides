@@ -55,6 +55,7 @@ import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
+import { terrainDisplacement } from '../terrain-scale'
 
 const shipped = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
 const [dem4k, dem2k, demMean] = await Promise.all(['earth-dem-4k.bin', 'earth-dem-2k.bin', 'earth-dem-mean.bin'].map(shipped))
@@ -468,5 +469,36 @@ describe('ground displacement (tides-zmw.2)', () => {
       const shader = { ...phongShader(), vertexShader: 'void main() {}' }
       expect(() => createGroundDisplacement(EARTH_BASE_SEGMENTS).patch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)).toThrow()
     })
+  })
+
+  // The live terrain scale (tides-zmw.9.5) moves the material's
+  // displacementScale, which the displacement and its slope read as three's
+  // uniform (the patch test above), never a constant: the CPU mirrors take it
+  // as a parameter, the full relief's by default, and scale with it.
+  it.each([1, 4])('mirrors the ground drawn at %dx: vertices, mesh slope and relief slope scale with the displacement', (scale) => {
+    const displacement = terrainDisplacement(scale)
+    const share = displacement / TERRAIN_DISPLACEMENT
+    const grid = meshGrid(EARTH_BASE_SEGMENTS)
+    const grey = vertexGrey(ground4k, grid)
+    const full = displace(grid, grey, EARTH_RADIUS)
+    const scaled = displace(grid, grey, EARTH_RADIUS, displacement)
+    for (let i = 0; i < full.length; i += 37) {
+      const sea = grid.unit[i] * EARTH_RADIUS
+      expect(scaled[i] - sea).toBeCloseTo((full[i] - sea) * share, 14)
+    }
+    const surface = vertexSurface(ground4k, grid)
+    const map = boxMips(demLevel(dem4k)).map(({ width, height, data }) => ({
+      width,
+      height,
+      data: Float32Array.from(data, (h) => THREE.DataUtils.fromHalfFloat(toHalfBits(h)) * 255),
+    }))
+    for (let k = 0; k < grey.length; k += 211) {
+      const slope = surface.subarray(4 * k + 1, 4 * k + 4)
+      const fullSlope = riseOverRun(slope, EARTH_RADIUS)
+      riseOverRun(slope, EARTH_RADIUS, displacement).forEach((x, a) => expect(x).toBeCloseTo(fullSlope[a] * share, 14))
+      const [u, v] = [grid.uv[2 * k], grid.uv[2 * k + 1]]
+      const fine = reliefSlope(map, u, v, EARTH_RADIUS, 0.01)
+      reliefSlope(map, u, v, EARTH_RADIUS, 0.01, displacement).forEach((x, a) => expect(x).toBeCloseTo(fine[a] * share, 14))
+    }
   })
 })

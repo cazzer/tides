@@ -22,8 +22,14 @@ export const REFERENCE_TERRAIN_DISPLACEMENT = 0.075
  * horizon map is baked at it (scripts/build-earth-horizon.mjs). */
 export const DEFAULT_TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (DEFAULT_RELIEF / REFERENCE_RELIEF)
 /** The ground's displacementScale at this page's relief (?relief=, read once
- * at load). Everything that follows the drawn ground derives from it. */
+ * at load). Everything that follows the drawn ground derives from it. With
+ * the live terrain scale on (../terrain-scale.ts, ?blend=1, tides-zmw.9.5)
+ * the ground is drawn lower near it, and this is the maximum bound: the
+ * shells, the cloud layer's top and the flat deck stay sized for it. */
 export const TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (RELIEF / REFERENCE_RELIEF)
+/** The ground's displacementScale at true scale (1x, 0.003): what the live
+ * terrain scale (../terrain-scale.ts, tides-zmw.9.5) multiplies. */
+export const TRUE_TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT / REFERENCE_RELIEF
 /** Kilometres of elevation per unit of grey: the old bump map's 1/39 km a
  * level, which the 16-bit elevation map (earth-dem.ts) keeps. */
 export const TERRAIN_KM_PER_GREY = 255 / 39
@@ -97,13 +103,17 @@ export function cloudShape(alpha: number): number {
   return 0.25 + 0.75 * smoothstep(0, 0.65, alpha)
 }
 
-/** A cloud column: base and top altitudes over ground of the given grey. */
+/** A cloud column: base and top altitudes over ground of the given grey,
+ * drawn at `displacement` (the ground's displacementScale: the full relief's
+ * maximum bound, as the cloud GLSL holds it until it follows the live
+ * terrain scale, tides-zmw.9.6). */
 export function cloudColumn(
   alpha: number,
   topKm: number,
-  terrainGrey: number
+  terrainGrey: number,
+  displacement: number = TERRAIN_DISPLACEMENT
 ): { base: number; top: number } {
-  const base = terrainGrey * TERRAIN_DISPLACEMENT + CLOUD_CLEARANCE
+  const base = terrainGrey * displacement + CLOUD_CLEARANCE
   return { base, top: base + CLOUD_UNITS_PER_KM * topKm * cloudShape(alpha) }
 }
 

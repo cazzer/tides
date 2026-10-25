@@ -10,7 +10,8 @@ import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN } from './flight'
-import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
+import { liveTerrainDisplacement } from '../terrain-scale'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
 import { SHIP_FOV, shipNear } from './ship-session'
@@ -133,7 +134,7 @@ function earthStop(
       const floor = (limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null) ?? earthTerrain()
       if (!floor) return terrainFloorRadius(null, EARTH_RADIUS, local)
       const grey = terrainFloorGreyAround(floor, local, EARTH_FLOOR_REACH / EARTH_RADIUS)
-      return EARTH_RADIUS + (TERRAIN_DISPLACEMENT * grey) / 255
+      return EARTH_RADIUS + (liveTerrainDisplacement() * grey) / 255
     },
     groundClearance: EARTH_GROUND_CLEARANCE,
     minSpeed: low ? undefined : EARTH_GROUND_SPEED,

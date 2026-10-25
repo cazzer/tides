@@ -153,16 +153,19 @@ export function terrainFloorGrey({ segments: [width, height], grey, poles }: Ter
 
 /**
  * How far out from the centre the ground of a sphere of `radius` can stand
- * along `local` (see terrainFloorGrey), scene units. With no floor loaded,
- * TERRAIN_FALLBACK_GREY's, over any ground.
+ * along `local` (see terrainFloorGrey), scene units, drawn at `displacement`
+ * (the ground's displacementScale: the live terrain scale's,
+ * ../terrain-scale.ts, tides-zmw.9.5). With no floor loaded,
+ * TERRAIN_FALLBACK_GREY's at the full relief, over any ground at any scale.
  */
 export function terrainFloorRadius(
   floor: TerrainFloor | null,
   radius: number,
-  local: THREE.Vector3
+  local: THREE.Vector3,
+  displacement: number = TERRAIN_DISPLACEMENT
 ): number {
-  const grey = floor ? terrainFloorGrey(floor, local) : TERRAIN_FALLBACK_GREY
-  return radius + (TERRAIN_DISPLACEMENT * grey) / 255
+  if (!floor) return radius + (TERRAIN_DISPLACEMENT * TERRAIN_FALLBACK_GREY) / 255
+  return radius + (displacement * terrainFloorGrey(floor, local)) / 255
 }
 
 const AROUND = 16
