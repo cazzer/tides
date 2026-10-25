@@ -25,6 +25,7 @@ import {
   labelDistancePx,
   labelOpacity,
   steerClearOfSun,
+  whollyEclipsed,
 } from './label-visibility'
 
 const EARTH_RADIUS = sceneRadius(12_742_000)
@@ -309,6 +310,29 @@ describe('resolveLabels', () => {
     expect(layout.shown[0]).toBe(1)
   })
 
+  it('keeps the focused name on its side while a globe only grazes it there', () => {
+    // No side clear of the view's edges; side 1's box (0, 16–28) overlaps
+    // the globe above by 1 px, under the hysteresis pad.
+    const tight = { focus: 0, left: -15, right: 15, bottom: -15, top: 15 }
+    const grazed = () => {
+      const layout = setup([
+        [0, 0, 10],
+        [0, 47, 20],
+      ])
+      layout.wanted[1] = 0
+      layout.side[0] = 1
+      return layout
+    }
+    const shown = grazed()
+    shown.shown[0] = 1
+    resolveLabels(shown, frame(shown, tight))
+    expect(shown.side[0]).toBe(1)
+    // Not yet shown, it waits for a side clear by the pad.
+    const hidden = grazed()
+    resolveLabels(hidden, frame(hidden, tight))
+    expect(hidden.side[0]).not.toBe(1)
+  })
+
   it('fades the focused name only while all of its body is behind a nearer globe', () => {
     const layout = setup([
       [0, 0, 10],
@@ -386,6 +410,11 @@ describe('resolveLabels', () => {
     ])
     layout.nearness[1] = 10
     expect(eclipsed(layout, 0)).toBe(true)
+    expect(whollyEclipsed(layout, 0)).toBe(true)
+    // Centre behind, edge out: eclipsed, but not wholly.
+    layout.discX[1] = 27
+    expect(eclipsed(layout, 0)).toBe(true)
+    expect(whollyEclipsed(layout, 0)).toBe(false)
     layout.nearness[1] = -10
     expect(eclipsed(layout, 0)).toBe(false)
   })

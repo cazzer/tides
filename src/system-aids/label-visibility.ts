@@ -518,9 +518,20 @@ function placeOnSide(layout: LabelLayout, frame: LabelFrame, i: number, s: numbe
 /**
  * Whether body i is out of sight behind a larger, nearer globe (its name
  * goes with it): depth, not priority, decides. Its centre behind the globe
- * counts, or with `whole`, all of it.
+ * counts.
  */
-export function eclipsed(layout: LabelLayout, i: number, whole = false): boolean {
+export function eclipsed(layout: LabelLayout, i: number): boolean {
+  return behindGlobe(layout, i, 0)
+}
+
+/** As eclipsed, but only with all of body i's globe behind the other. */
+export function whollyEclipsed(layout: LabelLayout, i: number): boolean {
+  return behindGlobe(layout, i, layout.discR[i])
+}
+
+// Whether body i's centre is behind a larger, nearer globe, at least
+// `inset` px inside its edge.
+function behindGlobe(layout: LabelLayout, i: number, inset: number): boolean {
   const { discX, discY, discR, nearness, inView } = layout
   for (let j = 0; j < layout.n; j++) {
     if (
@@ -528,7 +539,7 @@ export function eclipsed(layout: LabelLayout, i: number, whole = false): boolean
       inView[j] &&
       nearness[j] > nearness[i] &&
       discR[j] > discR[i] &&
-      Math.hypot(discX[i] - discX[j], discY[i] - discY[j]) < discR[j] - (whole ? discR[i] : 0)
+      Math.hypot(discX[i] - discX[j], discY[i] - discY[j]) < discR[j] - inset
     ) {
       return true
     }
@@ -620,7 +631,8 @@ export function resolveLabels(layout: LabelLayout, frame: LabelFrame): void {
     const focused = i === frame.focus
     let target = 0
     // The focused body is named while any of it shows.
-    if (wanted[i] >= MIN_NAME_OPACITY && discOnScreen(layout, frame, i) && !eclipsed(layout, i, focused)) {
+    const hidden = focused ? whollyEclipsed(layout, i) : eclipsed(layout, i)
+    if (wanted[i] >= MIN_NAME_OPACITY && discOnScreen(layout, frame, i) && !hidden) {
       // The default side first, so a name goes back to it once it's free;
       // then the side it is on, so it doesn't hop between the others. It
       // stays where it is (if shown) until that is overlapped by the pad,
@@ -640,10 +652,14 @@ export function resolveLabels(layout: LabelLayout, frame: LabelFrame): void {
       }
       // Nothing ahead of the focused name but the view's edges, the clock
       // and the globes, as it is placed first and outranks the obstacles:
-      // with no side clear of all of them, it still keeps off the globes.
-      for (let s = 0; focused && !clear && s < LABEL_SIDES.length; s++) {
+      // with no side clear of all of them, it still keeps off the globes,
+      // staying on its side as above until a globe overlaps it by the pad.
+      for (let tried = -1; focused && !clear && tried < LABEL_SIDES.length; tried++) {
+        const s = tried === -1 ? was : tried
+        if (tried >= 0 && s === was) continue
         placeOnSide(layout, frame, i, s)
-        if (!collides(layout, frame, i, keptCount, 0, true)) {
+        const pad = staying && s === was ? -LABEL_COLLISION_PAD_PX : LABEL_COLLISION_PAD_PX
+        if (!collides(layout, frame, i, keptCount, pad, true)) {
           clear = true
           side[i] = s
         }
