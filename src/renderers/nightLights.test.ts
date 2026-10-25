@@ -74,16 +74,18 @@ describe('night lights in flight', () => {
   })
 
   // EarthRenderer's ground outside ship mode: no flight for the night lights
-  // and no side for either GIBS patch. The hashes are of b74a0ff's chain
-  // (main before tides-tvr.2: nightLightsPatch(sun), no night patch), so drift
-  // from it fails here. To regenerate: `git archive b74a0ff src package.json
+  // and no side for either GIBS patch. The hashes are of f7208eb's chain
+  // (main before tides-tvr.2, at the 12x default relief of tides-zmw.6:
+  // nightLightsPatch(sun), no night patch), so drift from it fails here. A
+  // change to the relief or other constants the chain writes into its GLSL
+  // regenerates them. To regenerate: `git archive f7208eb src package.json
   // vite.config.ts tsconfig*.json` into a scratch directory with this repo's
   // node_modules linked, and log systemGroundHash's digest there for the old
   // chain from a throwaway test (three's ShaderLib is part of the hash: a
   // three upgrade regenerates them).
   const SYSTEM_GROUND_SHA256 = {
-    high: '7245a2ed3616ebfe1dbbeeb35248cb39d08e51f1a21f6e0fef23f7e055e20ebf',
-    low: 'e9130322dd67b5a12346d402799bf1c9a4f27a7f2bf462786172c6a503eebc62',
+    high: '25cb7d341aacbe72a7df02d2874693d8c1b2f85f7c63510ab1376f16db209fe6',
+    low: 'ace44b8f3662a5fcff23a711b5110e37012a3bcbf2ff4c3ed02eeaefa7d3a275',
   }
 
   function systemGroundHash(low: boolean) {
