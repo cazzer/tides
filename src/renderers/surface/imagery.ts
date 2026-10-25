@@ -8,7 +8,8 @@
 // The US boxes are conservative on purpose: USGS answers 200 with a blank
 // tile over parts of Canada and Mexico, which a status check can't catch, so
 // a tile has to sit wholly inside one box (a straddling tile takes EOX).
-// Inside a box, USGS 404s over open water; those fall back to EOX by status.
+// Inside a box, USGS 404s over open water or answers a blank tile; both fall
+// back to EOX (by status, and by size: fetchFirstOk).
 // No zoom threshold: the first tiles to fit a box are at z5 (interior Alaska
 // and the Southeast), where USGS's low levels are a natural-colour mosaic with the sea filled in.
 
@@ -87,21 +88,80 @@ export function imageryUrlsFor(tile: ImageryTile): string[] {
 }
 
 /**
- * Fetches the first of `urls` that answers ok; the last answer (or error)
- * stands if none does. A network error falls through like a bad status, but
- * an abort (the tile went out of view) ends the chain. A skipped answer's
- * body is cancelled, so its connection isn't held open unread.
+ * Below this many bytes, an ok answer from a source with another behind it
+ * is a blank tile: USGS answers 200 with an all-black 872-byte JPEG over
+ * much of the sea it has no imagery for (and 404 elsewhere), which drew
+ * black squares off every US coast. Real 256 px tiles, sea included, run
+ * from ~5.7 kB up (sampled 2026-10-25 off Big Sur, Puget Sound and Miami).
+ */
+export const BLANK_TILE_BYTES = 2048
+/**
+ * Above this fraction of pure-black pixels, a tile is blank too: along the
+ * coasts USGS's tiles are part imagery, part nodata black (9/200/82 off Big
+ * Sur is 64% black, 11/801/330 25%). Real imagery has next to no pure black
+ * (0.02% in a shadowed 8/100/40).
+ */
+export const BLANK_BLACK_FRACTION = 0.02
+/** The probe a tile is decoded to for the black count: every 8th pixel. */
+const PROBE_SIZE = 32
+
+/** The fraction of RGBA pixels that are pure black (nodata). */
+export function blackFraction(rgba: ArrayLike<number>): number {
+  let black = 0
+  const n = rgba.length / 4
+  for (let i = 0; i < rgba.length; i += 4) if (rgba[i] + rgba[i + 1] + rgba[i + 2] <= 3) black++
+  return n ? black / n : 0
+}
+
+/**
+ * Whether an image tile is blank: tiny (a uniform tile), or more than
+ * BLANK_BLACK_FRACTION nodata black, by a 32 px probe through the browser's
+ * decoder. By size alone where there's no decoder to probe with.
+ */
+export async function isBlankTile(body: ArrayBuffer): Promise<boolean> {
+  if (body.byteLength < BLANK_TILE_BYTES) return true
+  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return false
+  try {
+    const bitmap = await createImageBitmap(new Blob([body]), {
+      resizeWidth: PROBE_SIZE,
+      resizeHeight: PROBE_SIZE,
+      resizeQuality: 'pixelated',
+    })
+    const ctx = new OffscreenCanvas(PROBE_SIZE, PROBE_SIZE).getContext('2d', { willReadFrequently: true })
+    if (!ctx) return false
+    ctx.drawImage(bitmap, 0, 0, PROBE_SIZE, PROBE_SIZE)
+    bitmap.close()
+    return blackFraction(ctx.getImageData(0, 0, PROBE_SIZE, PROBE_SIZE).data) > BLANK_BLACK_FRACTION
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Fetches the first of `urls` that answers ok with a tile that isn't blank
+ * (isBlankTile); the last answer (or error) stands if none does. A network
+ * error falls through like a bad status, but an abort (the tile went out of
+ * view) ends the chain. A skipped answer's body is cancelled, so its
+ * connection isn't held open unread.
  */
 export async function fetchFirstOk(
   urls: readonly string[],
-  fetcher: (url: string) => Promise<Response>
+  fetcher: (url: string) => Promise<Response>,
+  isBlank: (body: ArrayBuffer) => Promise<boolean> = isBlankTile
 ): Promise<Response> {
   for (let i = 0; i < urls.length; i++) {
     const last = i === urls.length - 1
     try {
       const res = await fetcher(urls[i])
-      if (res.ok || last) return res
-      cancelBody(res)
+      if (last) return res
+      if (!res.ok) {
+        cancelBody(res)
+        continue
+      }
+      const body = await res.arrayBuffer()
+      if (!(await isBlank(body))) {
+        return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers })
+      }
     } catch (error) {
       if (last || (error as Error)?.name === 'AbortError') throw error
     }

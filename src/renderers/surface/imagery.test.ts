@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ImageOverlay } from '3d-tiles-renderer/three/plugins'
 import { inflateSync } from 'node:zlib'
 import {
+  blackFraction,
+  BLANK_BLACK_FRACTION,
   EOX_URL,
   fallbackImageryPng,
   FALLBACK_IMAGERY_RGB,
@@ -25,7 +27,8 @@ function tileAt(lat: number, lon: number, z: number): ImageryTile {
   return { z, x, y }
 }
 
-const response = (status: number) => new Response(status === 200 ? 'img' : null, { status })
+/** A 200 carries a tile-sized body (a blank one is a few hundred bytes). */
+const response = (status: number) => new Response(status === 200 ? new Uint8Array(8000) : null, { status })
 
 describe('imagery source per tile (tides-zmw.9.1)', () => {
   it('takes USGS over the Grand Canyon (16/25721/12355, z/y/x)', () => {
@@ -162,6 +165,30 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
     const idat = png.indexOf('IDAT')
     const raw = inflateSync(png.subarray(idat + 4, idat + 4 + png.readUInt32BE(idat - 4)))
     expect(Array.from(raw)).toEqual([0, ...FALLBACK_IMAGERY_RGB]) // filter byte, then RGB
+  })
+
+  it('skips a blank tile (USGS over open sea) for the next source, but takes a blank last answer', async () => {
+    const blank = () => new Response(new Uint8Array(872), { status: 200 })
+    const calls: string[] = []
+    const res = await fetchFirstOk(['usgs', 'eox'], async (u) => (calls.push(u), u === 'usgs' ? blank() : response(200)))
+    expect(calls).toEqual(['usgs', 'eox'])
+    expect((await res.arrayBuffer()).byteLength).toBe(8000)
+    const kept = await fetchFirstOk(['usgs', 'eox'], async (u) => (u === 'usgs' ? response(200) : blank()))
+    expect((await kept.arrayBuffer()).byteLength).toBe(8000)
+    expect((await (await fetchFirstOk(['eox'], async () => blank())).arrayBuffer()).byteLength).toBe(872)
+  })
+
+  it('skips a tile the probe finds part nodata black', async () => {
+    const calls: string[] = []
+    const blackish = async () => true
+    const res = await fetchFirstOk(['usgs', 'eox'], async (u) => (calls.push(u), response(200)), blackish)
+    expect(calls).toEqual(['usgs', 'eox'])
+    expect(res.status).toBe(200)
+    // the black count: pure black only, over the threshold
+    const px = (rgb: number[], n: number) => Array.from({ length: n }, () => [...rgb, 255]).flat()
+    expect(blackFraction([...px([0, 0, 0], 25), ...px([40, 60, 30], 75)])).toBe(0.25)
+    expect(blackFraction([...px([1, 1, 1], 10), ...px([4, 4, 4], 10)])).toBe(0.5)
+    expect(BLANK_BLACK_FRACTION).toBe(0.02)
   })
 
   it('cancels the body of an answer it skips', async () => {
