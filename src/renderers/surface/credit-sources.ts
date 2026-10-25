@@ -11,14 +11,19 @@ const ORDER: readonly SurfaceSource[] = ['mapterhorn', 'usgs', 'eox']
 
 /** Wording the sources ask for; also listed in settings (Credits.tsx). */
 export const EOX_CREDIT =
-  'Sentinel-2 cloudless – https://s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2020)'
+  'Sentinel-2 cloudless - https://s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2020)'
 export const USGS_CREDIT = 'USGS The National Map'
 
-/** What the in-flight line says for each source. */
+/** What the in-flight line says for each source (see creditLine). */
 export const SOURCE_TEXT: Record<SurfaceSource, string> = {
-  mapterhorn: 'Terrain: Mapterhorn',
-  usgs: `Imagery: ${USGS_CREDIT}`,
-  eox: `Imagery: ${EOX_CREDIT}`,
+  mapterhorn: 'Terrain \u00a9 Mapterhorn',
+  usgs: 'Imagery USGS',
+  eox: EOX_CREDIT,
+}
+
+/** The in-flight line for the active sources, as short as it can say it. */
+export function creditLine(sources: readonly SurfaceSource[]): string {
+  return sources.map((s) => SOURCE_TEXT[s]).join(' \u00b7 ')
 }
 
 /** A tile footprint in radians, as a 3D Tiles region volume gives it. */
@@ -48,8 +53,8 @@ export function sourcesForTile(b: RadianBounds): SurfaceSource[] {
 
 /** Metres, the tileset's sphere (surface-frame.ts SURFACE_ELLIPSOID_RADIUS). */
 const R = 6371000
-/** Slack for relief standing past the sea-level horizon, in radians (~64 km of arc). */
-const HORIZON_SLACK = 0.01
+/** Slack for relief standing past the sea-level horizon: Everest's height's worth of arc, in radians. */
+const HORIZON_SLACK = Math.acos(R / (R + 9000))
 
 /**
  * Whether a tile could be seen from a camera at `camera` (ECEF metres): the

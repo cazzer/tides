@@ -27,7 +27,7 @@ export default function SurfaceTiles() {
   const floatLinear = useMemo(() => gl.getContext().getExtension('OES_texture_float_linear') !== null, [gl])
   const holder = useRef<THREE.Group>(null)
   const surface = useRef<Tiles | null>(null)
-  const credits = useRef({ sources: new ActiveSources(), at: -Infinity })
+  const credits = useRef<{ sources: ActiveSources; at: number } | null>(null)
 
   // Created in an effect and hung under the holder by hand (no state, so no
   // extra render), so StrictMode's mount, unmount, mount disposes the first
@@ -45,6 +45,7 @@ export default function SurfaceTiles() {
     credits.current = { sources, at: -Infinity }
     return () => {
       surface.current = null
+      credits.current = null
       setActiveSurfaceSources([])
       parent.remove(created.tiles.group)
       created.tiles.deleteCamera(camera)
@@ -75,8 +76,9 @@ export default function SurfaceTiles() {
     tiles.group.updateWorldMatrix(true, false)
     tiles.update()
     const now = performance.now()
-    if (now - credits.current.at >= CREDIT_INTERVAL_MS) {
-      credits.current.at = now
+    const credit = credits.current
+    if (credit && now - credit.at >= CREDIT_INTERVAL_MS) {
+      credit.at = now
       const seen = new Set<SurfaceSource>()
       // The camera in the tiles' own frame (ECEF metres), for the horizon.
       const eye = tiles.group.worldToLocal(camera.getWorldPosition(creditEye))
@@ -84,7 +86,7 @@ export default function SurfaceTiles() {
         const bounds = tileRadianBounds(tile)
         if (bounds && tileOnNearSide(bounds, eye)) sourcesForTile(bounds).forEach((s) => seen.add(s))
       }
-      setActiveSurfaceSources(credits.current.sources.update(seen, now))
+      setActiveSurfaceSources(credit.sources.update(seen, now))
     }
   }, SURFACE_FRAME_PRIORITY)
 

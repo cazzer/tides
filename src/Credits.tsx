@@ -7,7 +7,7 @@ export const GIBS_URL = 'https://earthdata.nasa.gov/gibs'
 // Wording requested by the GIBS documentation.
 export const GIBS_ACKNOWLEDGEMENT =
   "We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS)."
-export const USGS_URL = 'https://www.usgs.gov/core-science-systems/national-geospatial-program/national-map'
+export const USGS_URL = 'https://www.usgs.gov/programs/national-geospatial-program/national-map'
 export const EOX_URL = 'https://s2maps.eu/'
 const CC_BY_NC_SA_URL = 'https://creativecommons.org/licenses/by-nc-sa/4.0/'
 const SOLAR_SYSTEM_SCOPE_URL = 'https://www.solarsystemscope.com/textures/'

@@ -36,7 +36,7 @@ describe('Credits', () => {
   test('credits USGS (public domain) and EOX Sentinel-2 cloudless with its licence', () => {
     expect(hrefs).toEqual(
       expect.arrayContaining([
-        'https://www.usgs.gov/core-science-systems/national-geospatial-program/national-map',
+        'https://www.usgs.gov/programs/national-geospatial-program/national-map',
         'https://s2maps.eu/',
         'https://creativecommons.org/licenses/by-nc-sa/4.0/',
       ])

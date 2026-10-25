@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type RadianBounds } from './credit-sources'
+import * as THREE from 'three'
+import { applySurfaceFrame, surfaceEcef } from './surface-frame'
 import { tileBounds } from './imagery'
 
 const RAD = Math.PI / 180
@@ -41,6 +43,22 @@ describe('tileOnNearSide', () => {
     const europe = rad(4, 8, 5)
     expect(tileOnNearSide(europe, eye(3000))).toBe(false)
     expect(tileOnNearSide(rad(2, 0, 1), eye(6000000))).toBe(true)
+  })
+})
+
+describe("tileOnNearSide through the tiles' group", () => {
+  test('the eye turned into the group frame sees the tile below it and not the antipode', () => {
+    const parent = new THREE.Group() // Earth's tilt and spin
+    parent.rotation.set(0.4, 1.1, -0.2)
+    parent.position.set(3, -2, 5)
+    const group = new THREE.Group()
+    applySurfaceFrame(group)
+    parent.add(group)
+    parent.updateWorldMatrix(true, true)
+    const eyeWorld = group.localToWorld(surfaceEcef(36.1, -112.1, 3000).multiplyScalar(1)) // metres in group-local
+    const eye = group.worldToLocal(eyeWorld.clone())
+    expect(tileOnNearSide(rad(10, 192, 405), eye)).toBe(true)
+    expect(tileOnNearSide({ west: 67 * RAD, east: 68 * RAD, south: -37 * RAD, north: -36 * RAD }, eye)).toBe(false)
   })
 })
 
