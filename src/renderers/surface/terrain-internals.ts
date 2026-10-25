@@ -12,9 +12,9 @@
 // linear-filtered 32-bit float texture (which needs OES_texture_float_linear:
 // no iOS). SurfaceGridCache replaces it, keeping the library's neighbour
 // stitching and disposal and changing only how a grid is made.
-import { DataTexture, FloatType, LinearFilter, NearestFilter, RedFormat } from 'three'
+import { DataTexture, FloatType, LinearFilter, NearestFilter, RedFormat, type Texture } from 'three'
 import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/GridCache.js'
-import type { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
+import type { TerrariumMeshPlugin, XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
 import type { TilesRenderer } from '3d-tiles-renderer/three'
 import type { FrameBudget } from './frame-budget'
 import { cancelBody } from './imagery'
@@ -43,6 +43,29 @@ export interface TerrainPluginInternals {
 /** Statuses meaning "no data here": Mapterhorn answers 404 over open ocean. */
 const EMPTY_STATUSES = new Set([204, 404, 410])
 
+/**
+ * Waits between retries of a transient failure (a network error, 429 or
+ * 5xx): without them, one dropped request for a z4 tile failed ~2500 km of
+ * ground for the rest of the flight (seen once in a headless descent).
+ */
+export const RETRY_DELAYS_MS = [1000, 4000]
+const transient = (status: number) => status === 429 || status >= 500
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason)
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export interface SurfaceGridOptions {
   /** 'linear' needs OES_texture_float_linear; 'nearest' is core WebGL2. */
   filter: 'linear' | 'nearest'
@@ -51,6 +74,8 @@ export interface SurfaceGridOptions {
   budget: Pick<FrameBudget, 'wait'>
   /** Uploads a finished grid now (renderer.initTexture), not at first draw. */
   upload?: (texture: DataTexture) => void
+  /** Overrides RETRY_DELAYS_MS (tests). */
+  retryDelays?: readonly number[]
 }
 
 const key = (x: number, y: number, level: number) => `${level}/${x}/${y}`
@@ -81,10 +106,27 @@ export class SurfaceGridCache extends GridCache {
     return false
   }
 
+  /** The tile's response, through the plugin's queue-routed fetch, retried while transient. */
+  private async fetchResponse(x: number, y: number, level: number, signal: AbortSignal): Promise<Response> {
+    const source = (this.plugin as TerrainPluginInternals)._source!
+    const url = source.getUrl(x, y, level)
+    const delays = this.options.retryDelays ?? RETRY_DELAYS_MS
+    for (let attempt = 0; ; attempt++) {
+      const last = attempt >= delays.length
+      try {
+        const res = await source.fetchData(url, { ...source.fetchOptions, signal })
+        if (last || !transient(res.status)) return res
+        cancelBody(res)
+      } catch (error) {
+        if (last || signal.aborted || (error as Error)?.name === 'AbortError') throw error
+      }
+      await sleep(delays[attempt], signal)
+    }
+  }
+
   private async fetchGrid(x: number, y: number, level: number, signal: AbortSignal): Promise<PaddedGrid | null> {
     if (this.underEmpty(x, y, level)) return null
-    const source = (this.plugin as TerrainPluginInternals)._source!
-    const res = await source.fetchData(source.getUrl(x, y, level), { ...source.fetchOptions, signal })
+    const res = await this.fetchResponse(x, y, level, signal)
     if (EMPTY_STATUSES.has(res.status)) {
       cancelBody(res)
       this.empty.add(key(x, y, level))
@@ -148,5 +190,43 @@ export function quietTilesetVersion(tiles: TilesRenderer): void {
   t.preprocessTileset = function (json, url, parent) {
     const quiet = json?.asset?.version === '1.1' ? { ...json, asset: { ...json.asset, version: '1.0' } } : json
     return original.call(this, quiet, url, parent)
+  }
+}
+
+/** overlay.imageSource (an XYZImageSource) as protectOverlayBitmaps patches it. */
+interface TiledImageSourceInternals {
+  processBufferToTexture(buffer: ArrayBuffer): Promise<Texture>
+  disposeItem(texture: Texture | null): void
+}
+
+const noClose = () => {}
+
+/**
+ * The library's TilesRenderer closes the ImageBitmap of every texture on a
+ * tile's materials when it drops the tile, and when a parse finishes after
+ * its load was aborted. The terrain plugin's overlay map is a clone sharing
+ * the overlay cache's bitmap, which that cache may still be handing to
+ * another load: closed, it uploads as a 0x0 texture ("texSubImage2D: The
+ * source data has been detached") and the tile draws black. Seen under
+ * cache pressure in a headless low descent. Make each overlay bitmap
+ * closable only by the cache that made it: its own close is a no-op, and
+ * the cache's dispose closes it for real.
+ */
+export function protectOverlayBitmaps(overlay: XYZTilesOverlay): void {
+  const source = (overlay as unknown as { imageSource: TiledImageSourceInternals }).imageSource
+  const process = source.processBufferToTexture.bind(source)
+  const dispose = source.disposeItem.bind(source)
+  source.processBufferToTexture = async (buffer) => {
+    const texture = await process(buffer)
+    const bitmap = texture.image
+    if (typeof ImageBitmap !== 'undefined' && bitmap instanceof ImageBitmap) {
+      Object.defineProperty(bitmap, 'close', { value: noClose, configurable: true })
+    }
+    return texture
+  }
+  source.disposeItem = (texture) => {
+    dispose(texture)
+    const bitmap = texture?.image
+    if (typeof ImageBitmap !== 'undefined' && bitmap instanceof ImageBitmap) ImageBitmap.prototype.close.call(bitmap)
   }
 }

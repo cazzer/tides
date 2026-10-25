@@ -17,7 +17,7 @@ import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceBumpScale, applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
-import { installSurfaceGridCache, quietTilesetVersion, type SurfaceGridCache } from './terrain-internals'
+import { installSurfaceGridCache, protectOverlayBitmaps, quietTilesetVersion, type SurfaceGridCache } from './terrain-internals'
 import { decodeTerrariumImage } from './terrarium'
 import { createTerrariumDecoder, type DecodeWorker } from './terrariumDecoder'
 
@@ -80,6 +80,7 @@ function createDecodeWorker(): DecodeWorker | null {
 
 export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions): SurfaceTiles {
   const overlay = new SurfaceImageryOverlay()
+  protectOverlayBitmaps(overlay)
   const terrain = new TerrariumMeshPlugin({
     url: MAPTERHORN_URL,
     tileDimension: MAPTERHORN_TILE_SIZE,

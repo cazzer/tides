@@ -9,9 +9,11 @@ import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/GridCache.js'
 import { FrameBudget } from './frame-budget'
+import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import {
   installSurfaceGridCache,
   PINNED_TILES_VERSION,
+  protectOverlayBitmaps,
   quietTilesetVersion,
   SurfaceGridCache,
   type SurfaceGridOptions,
@@ -63,6 +65,15 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     expect(others).toHaveLength(0)
     expect([...renderer.matchAll(/\.asset\.[\w.]+/g)].map((m) => m[0])).toEqual(['.asset.version.split'])
     expect(read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')).toContain("asset: { version: '1.1' }")
+  })
+
+  it("closes every material texture's ImageBitmap when TilesRenderer drops a tile; the overlay source makes and closes them", () => {
+    const [renderer, ...others] = built(/\.image instanceof ImageBitmap && \w\.image\.close\(\), \w\.dispose\(\)/)
+    expect(others).toHaveLength(0)
+    expect(renderer.match(/\.image instanceof ImageBitmap && \w\.image\.close\(\), \w\.dispose\(\)/g)).toHaveLength(2)
+    const src = read('src/three/plugins/images/sources/TiledImageSource.js')
+    expect(src).toContain('.then( buffer => this.processBufferToTexture( buffer ) );')
+    expect(src).toContain('texture.image.close();')
   })
 
   it('keeps stitchNeighbors on the source GridCache', () => {
@@ -121,6 +132,7 @@ function options(over: Partial<SurfaceGridOptions> = {}): SurfaceGridOptions & {
     filter: 'nearest',
     decode: async () => ({ data: new Float32Array(36).fill(7), width: 6, height: 6 }),
     budget,
+    retryDelays: [0, 0],
     ...over,
   } as SurfaceGridOptions & { budget: FrameBudget }
 }
@@ -251,11 +263,12 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
   it('fails a tile on any other bad status, cancelling the body', async () => {
     const { terrain } = await loadedPlugin()
     const cache = installSurfaceGridCache(terrain, options())
-    const res = new Response('busy', { status: 503 })
+    const res = new Response('no', { status: 403 })
     const cancel = vi.spyOn(res.body!, 'cancel')
     answer = async () => res
-    await expect(cache.lock(1, 1, 2)).rejects.toThrow(/2\/1\/1 answered 503/)
+    await expect(cache.lock(1, 1, 2)).rejects.toThrow(/2\/1\/1 answered 403/)
     expect(cancel).toHaveBeenCalled()
+    expect(fetches).toHaveLength(1) // not transient: no retry
   })
 
   it('ends in an AbortError when aborted while downloading or waiting for a turn', async () => {
@@ -293,6 +306,43 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     expect(dispose).toHaveBeenCalledTimes(1)
   })
 
+  it('retries a network error or 5xx, then takes the answer', async () => {
+    const { terrain } = await loadedPlugin()
+    const opts = options()
+    const cache = installSurfaceGridCache(terrain, opts)
+    let n = 0
+    answer = async () => {
+      n++
+      if (n === 1) throw new TypeError('Failed to fetch')
+      if (n === 2) return new Response('busy', { status: 503 })
+      return new Response(null, { status: 404 })
+    }
+    const pending = cache.lock(3, 3, 4)
+    await release(opts.budget)
+    await pending
+    expect(fetches).toHaveLength(3)
+    expect(cache.flatTiles).toBe(1)
+
+    fetches.length = 0
+    answer = async () => new Response('busy', { status: 503 })
+    await expect(cache.lock(1, 1, 2)).rejects.toThrow(/answered 503/)
+    expect(fetches).toHaveLength(3)
+  })
+
+  it('stops retrying at an abort', async () => {
+    const { terrain } = await loadedPlugin()
+    const cache = installSurfaceGridCache(terrain, options({ retryDelays: [60000] }))
+    answer = async () => {
+      throw new TypeError('Failed to fetch')
+    }
+    const abort = new AbortController()
+    const pending = cache.fetchItem([1, 1, 2], abort.signal)
+    await vi.waitFor(() => expect(fetches).toHaveLength(1))
+    abort.abort(new DOMException('gone', 'AbortError'))
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetches).toHaveLength(1)
+  })
+
   it('refuses a plugin that is not the 0.5.3 Terrarium one', () => {
     expect(() => installSurfaceGridCache({ name: 'X' } as unknown as TerrariumMeshPlugin, options())).toThrow()
     expect(new SurfaceGridCache({ name: 'TERRARIUM_MESH_PLUGIN', _gridCache: null, _source: null, tileDimension: 4 }, options()))
@@ -320,5 +370,35 @@ describe('quietTilesetVersion (tides-zmw.9.2)', () => {
     // the tileset the plugin hands back is untouched
     const tileset = (terrain as unknown as { getTileset(): { asset: { version: string } } }).getTileset()
     expect(tileset.asset.version).toBe('1.1')
+  })
+})
+
+describe('protectOverlayBitmaps (tides-zmw.9.2)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("lets only the overlay's cache close the bitmaps it makes", async () => {
+    const realClose = vi.fn()
+    class FakeImageBitmap {
+      width = 1
+      height = 1
+      close() {
+        realClose()
+      }
+    }
+    vi.stubGlobal('ImageBitmap', FakeImageBitmap)
+    vi.stubGlobal('createImageBitmap', async () => new FakeImageBitmap())
+    const overlay = new SurfaceImageryOverlay()
+    protectOverlayBitmaps(overlay)
+    const source = (overlay as unknown as {
+      imageSource: { processBufferToTexture(b: ArrayBuffer): Promise<DataTexture>; disposeItem(t: DataTexture): void }
+    }).imageSource
+    const texture = await source.processBufferToTexture(new ArrayBuffer(4))
+    const bitmap = texture.image as unknown as FakeImageBitmap
+    expect(bitmap).toBeInstanceOf(FakeImageBitmap)
+    // TilesRenderer's dispose of a tile: image.close() on a clone's shared bitmap
+    ;(texture.clone().image as unknown as FakeImageBitmap).close()
+    expect(realClose).not.toHaveBeenCalled()
+    source.disposeItem(texture)
+    expect(realClose).toHaveBeenCalledTimes(1)
   })
 })
