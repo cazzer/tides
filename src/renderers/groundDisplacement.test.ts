@@ -4,10 +4,25 @@ import * as THREE from 'three'
 import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { DEM_METRES_PER_UNIT, boxMips, decodeEarthDem, demLevel, toHalfBits } from '../earth-dem'
-import { LIMB_FACET_PX, LIMB_SEGMENTS, limbFacetPx, type SphereSegments } from '../ship/limb-detail'
-import { EARTH_GROUND_CLEARANCE, EARTH_RADIUS } from '../ship/ship-bodies'
+import {
+  LIMB_FACET_PX,
+  LIMB_HYSTERESIS,
+  LIMB_SEGMENTS,
+  clearLimbView,
+  limbFacetPx,
+  updateLimbView,
+  wantsLimbSphere,
+  type SphereSegments,
+} from '../ship/limb-detail'
+import { EARTH_FLOOR_REACH, EARTH_GROUND_CLEARANCE, EARTH_RADIUS } from '../ship/ship-bodies'
 import { SHIP_FOV } from '../ship/ship-session'
-import { EARTH_BASE_SEGMENTS, TERRAIN_GREY_MARGIN, buildTerrainFloor, meanGrey } from '../ship/terrain-floor'
+import {
+  EARTH_BASE_SEGMENTS,
+  TERRAIN_GREY_MARGIN,
+  buildTerrainFloor,
+  meanGrey,
+  terrainFloorGreyAround,
+} from '../ship/terrain-floor'
 import {
   baseGroundGrey,
   displace,
@@ -18,7 +33,16 @@ import {
   vertexGrey,
   worstNeedle,
 } from '../ship/ground-mesh-model'
-import { MORPH_END_PX, MORPH_FLOOR, MORPH_START_PX, createGroundDisplacement, groundLod, groundMorph } from './groundDisplacement'
+import {
+  EARTH_LIMB_SWAP_FLOOR,
+  MORPH_END_PX,
+  MORPH_FLOOR,
+  MORPH_START_PX,
+  MORPH_TOP,
+  createGroundDisplacement,
+  groundLod,
+  groundMorph,
+} from './groundDisplacement'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
@@ -118,26 +142,52 @@ describe('ground displacement (tides-zmw.2)', () => {
     })
   })
 
-  describe('groundMorph', () => {
-    const swapAt = (screenPx: number) => {
-      // The eye distance where the base sphere's facets pass LIMB_FACET_PX.
-      let lo = 1.0001
-      let hi = 100
-      for (let k = 0; k < 60; k++) {
-        const mid = (lo + hi) / 2
-        if (limbFacetPx(EARTH_BASE_SEGMENTS, mid, screenPx, SHIP_FOV) > LIMB_FACET_PX) lo = mid
-        else hi = mid
-      }
-      return lo * EARTH_RADIUS
-    }
+  describe('groundMorph and the swap', () => {
     const morph = (distance: number, screenPx: number) =>
       groundMorph(EARTH_BASE_SEGMENTS, distance, EARTH_RADIUS, screenPx, SHIP_FOV)
+    // The highest stop on either sphere's floor: around the near plane's
+    // reach, over the Karakoram and the Himalaya, where both floors peak.
+    const floors = [EARTH_BASE_SEGMENTS, LIMB_SEGMENTS].map((segments) => buildTerrainFloor(meanGrey(demMean), segments))
+    let highestStop = 0
+    for (const floor of floors) {
+      let top = 0
+      for (let lat = 25; lat <= 45; lat += 0.1) {
+        for (let lon = 65; lon <= 100; lon += 0.1) {
+          top = Math.max(top, terrainFloorGreyAround(floor, latLonToLocal(lat, lon), EARTH_FLOOR_REACH / EARTH_RADIUS))
+        }
+      }
+      // That is where its highest vertex is.
+      expect(top).toBeGreaterThanOrEqual(floor.grey.reduce((a, b) => Math.max(a, b), 0) + TERRAIN_GREY_MARGIN)
+      highestStop = Math.max(highestStop, (TERRAIN_DISPLACEMENT * top) / 255 + EARTH_GROUND_CLEARANCE)
+    }
+    // A descent straight down at 0.1% of the gap a frame: where Earth's ground
+    // first wants the limb sphere (EarthRenderer's swap floor), through the
+    // limb view's hysteresis.
+    const swapGap = (screenPx: number) => {
+      const earth = { key: 'earth', position: new THREE.Vector3(), radius: EARTH_RADIUS }
+      try {
+        for (let gap = 3 * EARTH_RADIUS; gap > 0.001; gap *= 0.999) {
+          updateLimbView('earth', [earth], new THREE.Vector3(EARTH_RADIUS + gap, 0, 0), screenPx, SHIP_FOV)
+          if (wantsLimbSphere('earth', EARTH_RADIUS, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)) return gap
+        }
+        return 0
+      } finally {
+        clearLimbView()
+      }
+    }
 
-    it('is 1 at the swap, past its hysteresis, and falls to 0 on the way down', () => {
-      for (const screenPx of [720, 1170, 1600, 2160]) {
-        const swap = swapAt(screenPx)
-        expect(morph(swap, screenPx)).toBe(1)
-        expect(morph(EARTH_RADIUS + (swap - EARTH_RADIUS) / 1.05, screenPx)).toBe(1)
+    it('swaps well above the highest stop on any screen, so the floor never changes under the ship', () => {
+      // ~0.066 over the Karakoram, under the morph's floor.
+      expect(highestStop).toBeLessThan(MORPH_FLOOR)
+      for (const screenPx of [100, 200, 275, 300, 400, 450, 720, 1600]) {
+        expect(swapGap(screenPx), String(screenPx)).toBeGreaterThan(MORPH_TOP)
+      }
+    })
+
+    it('is 1 at the swap on any screen, and falls to 0 on the way down', () => {
+      for (const screenPx of [100, 300, 400, 450, 500, 600, 720, 1170, 1600, 2160]) {
+        const swap = EARTH_RADIUS + swapGap(screenPx)
+        expect(morph(swap, screenPx), String(screenPx)).toBe(1)
         let previous = 1
         for (let distance = swap; distance > EARTH_RADIUS; distance -= 0.001) {
           const m = morph(distance, screenPx)
@@ -146,25 +196,20 @@ describe('ground displacement (tides-zmw.2)', () => {
         }
         expect(previous).toBe(0)
       }
-      expect(MORPH_START_PX).toBeGreaterThan(LIMB_FACET_PX)
+      expect(MORPH_START_PX).toBeGreaterThan(LIMB_FACET_PX * LIMB_HYSTERESIS)
     })
 
     it('is over by MORPH_END_PX', () => {
       for (const distance of [1.01, 1.02, 1.05].map((r) => r * EARTH_RADIUS)) {
         const screenPx = MORPH_END_PX / limbFacetPx(EARTH_BASE_SEGMENTS, distance / EARTH_RADIUS, 1, SHIP_FOV)
-        if (distance - EARTH_RADIUS > 2 * MORPH_FLOOR) expect(morph(distance, screenPx)).toBe(0)
         expect(morph(distance, screenPx * 1.01)).toBe(0)
       }
     })
 
-    it("is over above every stop on the limb sphere's floor, on any screen", () => {
-      const floor = buildTerrainFloor(meanGrey(demMean), LIMB_SEGMENTS)
-      const highest = floor.grey.reduce((a, b) => Math.max(a, b), 0) + TERRAIN_GREY_MARGIN
-      const stop = (TERRAIN_DISPLACEMENT * highest) / 255 + EARTH_GROUND_CLEARANCE
-      expect(stop).toBeLessThan(MORPH_FLOOR)
-      for (const screenPx of [200, 400, 720, 1600, 4320]) {
+    it('is over above every stop on either floor, on any screen', () => {
+      for (const screenPx of [100, 200, 400, 720, 1600, 4320]) {
         expect(morph(EARTH_RADIUS + MORPH_FLOOR, screenPx)).toBe(0)
-        expect(morph(EARTH_RADIUS + stop, screenPx)).toBe(0)
+        expect(morph(EARTH_RADIUS + highestStop, screenPx)).toBe(0)
       }
     })
   })
@@ -192,7 +237,8 @@ describe('ground displacement (tides-zmw.2)', () => {
       expect(vert.indexOf('float groundHeight(vec2 uv)')).toBeLessThan(vert.indexOf('void main()'))
       expect(vert).toContain('#define GROUND_BASE vec2(128.0, 128.0)')
       expect(vert).toMatch(/#include <begin_vertex>\s+vGroundDetailPos = position;/)
-      for (const name of ['uGroundHeights', 'uGroundLod', 'uGroundMorph'] as const) {
+      expect(vert).not.toContain('textureSize(')
+      for (const name of ['uGroundHeights', 'uGroundLod', 'uGroundBaseLod', 'uGroundMorph'] as const) {
         expect(shader.uniforms[name]).toBe(displacement.uniforms[name])
       }
       expect(patch.customProgramCacheKey()).toContain('ground-displacement-128x128')

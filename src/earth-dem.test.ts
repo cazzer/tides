@@ -145,15 +145,20 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
       expect(THREE.DataUtils.fromHalfFloat(toHalfBits(h))).toBeCloseTo(h, 3)
     }
     expect(toHalfBits(1 - 2 ** -13)).toBe(THREE.DataUtils.toHalfFloat(1))
-    const small = { width: 4, height: 2, metres: Uint16Array.of(0, 0, 0, 0, 1000, 2000, 3000, 4000) }
-    const { relief: texture, ground } = earthDemTextures(small)
+    // The southernmost row's first texels at 1000–4000 m, sea elsewhere.
+    const [width, height] = LIMB_SEGMENTS
+    const metres = new Uint16Array(width * height)
+    metres.set([1000, 2000, 3000, 4000], (height - 1) * width)
+    const { relief: texture, ground } = earthDemTextures({ width, height, metres })
     ground.dispose()
     const base = texture.mipmaps[0] as { data: Uint16Array; width: number }
     // A half's step is 1–2 m at these heights.
     Array.from(base.data.subarray(0, 4), THREE.DataUtils.fromHalfFloat).forEach((h, x) =>
       expect(Math.abs(h * DEM_METRES_PER_UNIT - 1000 * (x + 1))).toBeLessThan(1)
     )
-    expect(texture.mipmaps.length).toBe(3)
+    expect(texture.mipmaps.length).toBe(10)
+    // A map without the limb sphere's level can't draw the ground.
+    expect(() => earthDemTextures({ width: 4, height: 2, metres: new Uint16Array(8) })).toThrow()
     expect(texture.type).toBe(THREE.HalfFloatType)
     expect(texture.format).toBe(THREE.RedFormat)
     expect(texture.generateMipmaps).toBe(false)

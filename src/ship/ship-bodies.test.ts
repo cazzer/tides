@@ -334,10 +334,13 @@ describe('ship bodies', () => {
       ['128 × 128 sphere', false],
       ['limb sphere (tides-42p)', true],
     ])("keeps the near plane's corners off the ground at the high-tier stop over the %s, on steep slopes and 32:9 screens", (_, limb) => {
-      // The drawn ground stands at or under its sphere's floor
-      // (terrain-floor.test). From the stop, every point of that within the
-      // near rectangle's reach must be further than the reach, at SHIP_FOV:
-      // the FOV kick is nil this low.
+      // The drawn ground stands at or under its sphere's floor: terrain-floor
+      // .test checks that floor against ray hits on the GPU's mesh rebuilt
+      // independently (ground-mesh-model.ts), so the floor stands in for the
+      // ground here, and a lower point along the same ray only lies further
+      // from the eye. From the stop, every point of it within the near
+      // rectangle's reach must be further than the reach, at SHIP_FOV: the
+      // FOV kick is nil this low.
       const floors = { base: baseFloor(), limb: limbFloor() }
       setEarthTerrain(floors.base, floors.limb)
       const release = limb ? retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS)) : () => {}

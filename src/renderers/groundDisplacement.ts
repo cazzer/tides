@@ -12,11 +12,11 @@
 // them) and blend to their own heights on the way down, so the swap doesn't
 // reshape the peaks on screen. The morph is over above any ship stop, where
 // the terrain floor (ship/terrain-floor.ts) takes the limb sphere's own
-// ground.
+// ground, and the swap comes well above that on any screen
+// (EARTH_LIMB_SWAP_FLOOR), so the floor never changes under the ship.
 import * as THREE from 'three'
 import type { MaterialPatch } from './eclipseShadow'
-import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
-import { LIMB_FACET_PX, limbFacetPx, type SphereSegments } from '../ship/limb-detail'
+import { LIMB_FACET_PX, LIMB_HYSTERESIS, limbFacetPx, type SphereSegments } from '../ship/limb-detail'
 
 /** The texture level whose rows match a mesh's `meshRows` rows, for a
  * texture `textureRows` tall. */
@@ -33,10 +33,21 @@ export const MORPH_END_PX = 2
 /**
  * Below this altitude over the sea, the morph is over whatever the screen:
  * on a short one the facets reach MORPH_END_PX only near the ground, or
- * never. It is over every stop the limb sphere's floor can hold the ship at
- * (the displacement's full height plus the clearance; a test checks).
+ * never. It is just over the highest stop on either sphere's floor (0.066,
+ * over the Karakoram; a test checks), and the morph runs over the altitudes
+ * up to MORPH_TOP.
  */
-export const MORPH_FLOOR = 1.5 * TERRAIN_DISPLACEMENT
+export const MORPH_FLOOR = 0.07
+export const MORPH_TOP = 2 * MORPH_FLOOR
+
+/**
+ * Below this altitude Earth's ground is always the limb sphere
+ * (wantsLimbSphere's swapFloor): on a short screen the base sphere's facets
+ * pass LIMB_FACET_PX only near the ground, or never, where a swap would move
+ * the floor under the ship and cut the morph short. The limb view moves on
+ * in LIMB_HYSTERESIS steps, so the swap comes at MORPH_TOP or above.
+ */
+export const EARTH_LIMB_SWAP_FLOOR = LIMB_HYSTERESIS * MORPH_TOP
 
 const smoothstep = (e0: number, e1: number, x: number) => {
   const t = THREE.MathUtils.clamp((x - e0) / (e1 - e0), 0, 1)
@@ -59,7 +70,7 @@ export function groundMorph(
   if (eyeDistance <= radius) return 0
   const facets = limbFacetPx(base, eyeDistance / radius, screenPx, fovDeg)
   const byFacets = 1 - smoothstep(MORPH_START_PX, MORPH_END_PX, facets)
-  return Math.min(byFacets, smoothstep(MORPH_FLOOR, 2 * MORPH_FLOOR, eyeDistance - radius))
+  return Math.min(byFacets, smoothstep(MORPH_FLOOR, MORPH_TOP, eyeDistance - radius))
 }
 
 const f = (x: number) => x.toFixed(1)
@@ -73,6 +84,7 @@ const f = (x: number) => x.toFixed(1)
 const vertexHead = ([width, height]: SphereSegments) => /* glsl */ `
 uniform sampler2D uGroundHeights;
 uniform float uGroundLod;
+uniform float uGroundBaseLod;
 uniform float uGroundMorph;
 #define GROUND_BASE vec2(${f(width)}, ${f(height)})
 float groundBaseVertex(vec2 vertex, float lod) {
@@ -81,7 +93,7 @@ float groundBaseVertex(vec2 vertex, float lod) {
   return textureLod(uGroundHeights, uv, lod).r;
 }
 float groundBaseHeight(vec2 uv) {
-  float lod = max(0.0, log2(float(textureSize(uGroundHeights, 0).y) / GROUND_BASE.y));
+  float lod = uGroundBaseLod;
   vec2 cell = vec2(uv.x, 1.0 - uv.y) * GROUND_BASE;
   vec2 i = min(floor(cell), GROUND_BASE - 1.0);
   vec2 t = cell - i;
@@ -96,7 +108,8 @@ float groundBaseHeight(vec2 uv) {
 }
 float groundHeight(vec2 uv) {
   float own = textureLod(uGroundHeights, uv, uGroundLod).r;
-  return uGroundMorph > 0.0 ? mix(own, groundBaseHeight(uv), uGroundMorph) : own;
+  if (uGroundMorph > 0.0) own = mix(own, groundBaseHeight(uv), uGroundMorph);
+  return own;
 }
 `
 
@@ -116,11 +129,13 @@ export interface GroundDisplacement {
   /** For the ground's material, with a displacementMap set (it keeps that
    * map for the fragment's relief and its uv). */
   patch: MaterialPatch
-  /** The ground texture, the drawn mesh's level (groundLod) and the morph
-   * (groundMorph; 0 off the limb sphere), set before each draw. */
+  /** The ground texture, the drawn mesh's and the base sphere's levels
+   * (groundLod) and the morph (groundMorph; 0 off the limb sphere), set
+   * before each draw. */
   uniforms: {
     uGroundHeights: THREE.IUniform<THREE.Texture | null>
     uGroundLod: THREE.IUniform<number>
+    uGroundBaseLod: THREE.IUniform<number>
     uGroundMorph: THREE.IUniform<number>
   }
 }
@@ -130,6 +145,7 @@ export function createGroundDisplacement(base: SphereSegments): GroundDisplaceme
   const uniforms = {
     uGroundHeights: { value: null },
     uGroundLod: { value: 0 },
+    uGroundBaseLod: { value: 0 },
     uGroundMorph: { value: 0 },
   }
   return {

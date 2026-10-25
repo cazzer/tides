@@ -22,7 +22,13 @@ import { isLowQuality } from '../quality'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { EarthDemLoader } from './earthDemTexture'
-import { createGroundDisplacement, groundLod, groundMorph, type GroundDisplacement } from './groundDisplacement'
+import {
+  EARTH_LIMB_SWAP_FLOOR,
+  createGroundDisplacement,
+  groundLod,
+  groundMorph,
+  type GroundDisplacement,
+} from './groundDisplacement'
 
 // Import assets directly
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
@@ -87,7 +93,7 @@ export default function EarthRenderer({
   const scene = useThree((s) => s.scene)
   useEffect(() => cloudsFaceEachCamera(scene, clouds, cloudRef), [scene, clouds])
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
-  const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS)
+  const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibsPatch = useGibsPatch(groundRef, diameter)
@@ -268,6 +274,7 @@ function setGroundDisplacement(
   const limb = isLimbSphere(geometry)
   const [, rows] = limb ? LIMB_SEGMENTS : EARTH_BASE_SEGMENTS
   uniforms.uGroundLod.value = groundLod(texture.image.height, rows)
+  uniforms.uGroundBaseLod.value = groundLod(texture.image.height, EARTH_BASE_SEGMENTS[1])
   uniforms.uGroundMorph.value = 0
   if (!limb || !mesh || !(camera instanceof THREE.PerspectiveCamera)) return
   const scale = mesh.matrixWorld.getMaxScaleOnAxis()

@@ -60,24 +60,28 @@ function heightTexture(mipmaps: HalfLevel[]): THREE.DataTexture {
   return texture
 }
 
-function heightTextures(levels: DemLevel[]): EarthDemTextures {
-  const mipmaps = levels.map((level) => ({
-    data: halfRowsSouthFirst(level),
-    width: level.width,
-    height: level.height,
-  }))
-  const ground = Math.max(0, mipmaps.findIndex(({ width }) => width === LIMB_SEGMENTS[0]))
-  return { relief: heightTexture(mipmaps), ground: heightTexture(mipmaps.slice(ground)) }
-}
+const halfLevel = (level: DemLevel): HalfLevel => ({
+  data: halfRowsSouthFirst(level),
+  width: level.width,
+  height: level.height,
+})
 
-/** The DEM as mipmapped height textures. */
+/**
+ * The DEM as mipmapped height textures. Throws on a DEM with no level the
+ * limb sphere's width: the ground, the cloud march's ground mirror and the
+ * terrain floor all assume one.
+ */
 export function earthDemTextures(dem: EarthDem): EarthDemTextures {
-  return heightTextures(boxMips(demLevel(dem)))
+  const mipmaps = boxMips(demLevel(dem)).map(halfLevel)
+  const ground = mipmaps.findIndex(({ width, height }) => width === LIMB_SEGMENTS[0] && height === LIMB_SEGMENTS[1])
+  if (ground < 0) throw new Error(`Earth DEM ${dem.width}×${dem.height} has no ${LIMB_SEGMENTS.join('×')} level`)
+  return { relief: heightTexture(mipmaps), ground: heightTexture(mipmaps.slice(ground)) }
 }
 
 /** Sea level everywhere: what the ground shows if the DEM can't be read. */
 export function flatDemTextures(): EarthDemTextures {
-  return heightTextures([{ width: 1, height: 1, data: new Float32Array(1) }])
+  const level = () => [halfLevel({ width: 1, height: 1, data: new Float32Array(1) })]
+  return { relief: heightTexture(level()), ground: heightTexture(level()) }
 }
 
 /**

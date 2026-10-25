@@ -55,7 +55,7 @@ export const LIMB_FACET_PX = 0.5
 // is this much closer than the held one: hysteresis, so a ship hovering at a
 // facet threshold, or at the midpoint between a planet and its moon, doesn't
 // flip spheres every frame. It also keeps the store from changing per frame.
-const LIMB_HYSTERESIS = 1.05
+export const LIMB_HYSTERESIS = 1.05
 
 interface LimbView {
   key: string
@@ -135,17 +135,21 @@ export function useLimbBodyAmong<K extends string>(among: (key: string) => key i
  * Whether body `key`'s sphere of `radius` and `segments` wants the limb
  * sphere: `key` is the limb body, the eye is outside the sphere (a shell seen
  * from inside, like a planet's haze from the collision stop, has no limb),
- * and its facets would pass LIMB_FACET_PX.
+ * and its facets would pass LIMB_FACET_PX, or the eye is within `swapFloor`
+ * of the sphere: a short screen's facets pass it only near the ground, or
+ * never, and a sphere whose ground the ship stops on must swap well above
+ * that (EarthRenderer).
  */
-export function wantsLimbSphere(key: string | null, radius: number, segments: SphereSegments): boolean {
+export function wantsLimbSphere(key: string | null, radius: number, segments: SphereSegments, swapFloor = 0): boolean {
   if (view == null || key !== view.key || view.distance <= radius) return false
+  if (view.distance - radius < swapFloor) return true
   return limbFacetPx(segments, view.distance / radius, view.screenPx, view.fovDeg) > LIMB_FACET_PX
 }
 
 /** wantsLimbSphere, re-rendering only when it flips. */
-export function useWantsLimbSphere(key: string | null, radius: number, segments: SphereSegments): boolean {
+export function useWantsLimbSphere(key: string | null, radius: number, segments: SphereSegments, swapFloor = 0): boolean {
   const [width, height] = segments
-  return useSyncExternalStore(subscribeLimbBody, () => wantsLimbSphere(key, radius, [width, height]))
+  return useSyncExternalStore(subscribeLimbBody, () => wantsLimbSphere(key, radius, [width, height], swapFloor))
 }
 
 // One LIMB_SEGMENTS sphere's topology per ship session (tides-01v.18): every
@@ -389,14 +393,16 @@ export function useLimbSphere(radius: number, wanted: boolean): THREE.BufferGeom
 
 /**
  * Body `key`'s sphere of `radius`: its own `base` segments, or the shared
- * limb sphere while it wants one (wantsLimbSphere) and that is built.
+ * limb sphere while it wants one (wantsLimbSphere, with `swapFloor`) and
+ * that is built.
  */
 export function useBodySphere(
   key: string,
   radius: number,
-  [width, height]: SphereSegments
+  [width, height]: SphereSegments,
+  swapFloor = 0
 ): THREE.BufferGeometry {
   const base = useMemo(() => new THREE.SphereGeometry(radius, width, height), [radius, width, height])
   useEffect(() => () => base.dispose(), [base])
-  return useLimbSphere(radius, useWantsLimbSphere(key, radius, [width, height])) ?? base
+  return useLimbSphere(radius, useWantsLimbSphere(key, radius, [width, height], swapFloor)) ?? base
 }
