@@ -1,10 +1,10 @@
 // When and where a body's name shows in the system view (tides-2hv.10).
 // BodyLabels runs these every frame, so they are pure and allocation-free.
 //
-// The metric is scene units per CSS pixel (upp), the ortho main view's
-// "camera distance": 1 zoomed all the way out on a desktop (~2.7 on a
-// 390 px phone, whose zoom floor is lower), 0.1 at the default zoom, and
-// ~0.2 with Jupiter or Saturn framed. A label shows when, at the current upp:
+// The metric is scene units per CSS pixel (upp) at the body's depth, the
+// main view's "camera distance": 0.1 at the target at the default distance,
+// ~0.2 with Jupiter or Saturn framed, and over 1 zoomed all the way out
+// (main-view.ts' targetUnitsPerPixel). A label shows when, at its upp:
 //
 //   - its orbit is clear of its neighbours' (labelClearance) by enough
 //     pixels that two names can't stack, so Mercury and Venus come in as
@@ -199,9 +199,16 @@ export function systemExtent(system: LabelSystem): number {
 
 /**
  * The label's opacity, 0 to 1, at `upp` scene units per CSS pixel with the
- * camera on `focus` (see the header).
+ * camera on `focus` (see the header). `focusUpp` is the focused body's, which
+ * says how far in the view is zoomed: in perspective, a body far behind it
+ * has a larger upp of its own.
  */
-export function labelOpacity(key: LabelKey, upp: number, focus: CameraFocus): number {
+export function labelOpacity(
+  key: LabelKey,
+  upp: number,
+  focus: CameraFocus,
+  focusUpp = upp
+): number {
   const focused = focusBody(focus)
   if (key === focused) return 1
   const [clearFrom, clearTo] = isLabelMoon(key) ? MOON_CLEARANCE_PX : PLANET_CLEARANCE_PX
@@ -213,7 +220,7 @@ export function labelOpacity(key: LabelKey, upp: number, focus: CameraFocus): nu
   // Everything orbits the Sun, so with the camera on it nothing is "another
   // body's" system.
   if (focused !== 'sun' && system !== labelSystem(focused)) {
-    opacity *= 1 - THREE.MathUtils.smoothstep(bodyRadius(focused) / upp, ...FAR_IN_PX)
+    opacity *= 1 - THREE.MathUtils.smoothstep(bodyRadius(focused) / focusUpp, ...FAR_IN_PX)
   }
   return opacity
 }

@@ -114,6 +114,14 @@ describe('labelOpacity', () => {
     expect(labelOpacity('mars', titanClose, 'titan')).toBeLessThan(0.01)
   })
 
+  it("measures how far in the view is by the focused body's scale, not a far body's", () => {
+    // Saturn four times closer than framed, Jupiter ten times as deep: its
+    // own upp alone would read as zoomed out.
+    const close = SATURN_FRAMED / 4
+    expect(labelOpacity('jupiter', 10 * close, 'saturn')).toBeGreaterThan(0.5)
+    expect(labelOpacity('jupiter', 10 * close, 'saturn', close)).toBeLessThan(0.01)
+  })
+
   it('counts the clock and a location as Earth, keeping the Moon close in', () => {
     const close = at(40)
     expect(labelOpacity('moon', close, 'clock')).toBe(1)
