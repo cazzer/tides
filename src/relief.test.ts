@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
-import { DEFAULT_RELIEF, parseRelief, RELIEF, RELIEF_SCALE } from './relief'
+import { DEFAULT_RELIEF, MAX_RELIEF, parseRelief, REFERENCE_RELIEF, RELIEF } from './relief'
 import * as defaults from './cloud-layer'
 import { MARCH_STEPS as DEFAULT_MARCH_STEPS } from './renderers/cloudShaders'
 import { EARTH_RADIUS } from './ship/ship-bodies'
@@ -19,14 +19,34 @@ describe('parseRelief', () => {
     for (const search of ['', '?ship=1', '?relief=', '?relief=%20', '?relief=abc', '?relief=NaN', '?relief=Infinity']) {
       expect(parseRelief(search), search).toBe(DEFAULT_RELIEF)
     }
-    expect(DEFAULT_RELIEF).toBe(25)
+    expect(DEFAULT_RELIEF).toBe(12)
   })
 
-  it('is the default outside a browser, leaving the displacement as tuned', () => {
-    expect(RELIEF).toBe(25)
-    expect(RELIEF_SCALE).toBe(1)
-    expect(defaults.TERRAIN_DISPLACEMENT).toBe(0.075)
+  it('is the default outside a browser, at the default displacement', () => {
+    expect(RELIEF).toBe(12)
+    expect(defaults.TERRAIN_DISPLACEMENT).toBeCloseTo(0.036, 15)
     expect(defaults.TERRAIN_DISPLACEMENT).toBe(defaults.DEFAULT_TERRAIN_DISPLACEMENT)
+  })
+
+  it('keeps the clamp and the reference at 25, the exaggeration first tuned', () => {
+    expect(MAX_RELIEF).toBe(25)
+    expect(REFERENCE_RELIEF).toBe(25)
+    expect(defaults.REFERENCE_TERRAIN_DISPLACEMENT).toBe(0.075)
+  })
+})
+
+describe('?relief=25', () => {
+  it('draws the ground as it was tuned', async () => {
+    vi.resetModules()
+    vi.stubGlobal('location', { search: '?relief=25' })
+    try {
+      const layer = await import('./cloud-layer')
+      expect(layer.TERRAIN_DISPLACEMENT).toBe(0.075)
+      expect(layer.DEFAULT_TERRAIN_DISPLACEMENT).toBe(defaults.DEFAULT_TERRAIN_DISPLACEMENT)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
   })
 })
 

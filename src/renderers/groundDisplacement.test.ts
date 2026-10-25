@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { DEM_METRES_PER_UNIT, boxMips, decodeEarthDem, demLevel, toHalfBits } from '../earth-dem'
 import {
@@ -229,13 +229,15 @@ describe('ground displacement (tides-zmw.2)', () => {
 
     it("matches the map's own slope on broad relief, in the same frame and units (the detail's premise)", () => {
       // A Gaussian hill 6 limb cells wide (sigma) on the equator at 0° E,
-      // on a map the 4k's size, its mips as earthDemTexture.ts builds them.
+      // on a map the 4k's size, its mips as earthDemTexture.ts builds them,
+      // 150 levels high at the reference 25x: the same drawn hill at any relief.
       const [width, height] = [4096, 2048]
       const sigma = (6 / LIMB_SEGMENTS[0]) * width
+      const peak = (150 * REFERENCE_TERRAIN_DISPLACEMENT) / TERRAIN_DISPLACEMENT
       const data = new Float32Array(width * height)
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          data[y * width + x] = 150 * Math.exp(-((x + 0.5 - width / 2) ** 2 + (y + 0.5 - height / 2) ** 2) / (2 * sigma * sigma))
+          data[y * width + x] = peak * Math.exp(-((x + 0.5 - width / 2) ** 2 + (y + 0.5 - height / 2) ** 2) / (2 * sigma * sigma))
         }
       }
       const map = boxMips({ width, height, data })
@@ -357,7 +359,8 @@ describe('ground displacement (tides-zmw.2)', () => {
     }
 
     it('swaps well above the highest stop on any screen, so the floor never changes under the ship', () => {
-      // ~0.066 over the Karakoram, under the morph's floor.
+      // ~0.034 over the Karakoram at the default relief (~0.066 at 25x, the
+      // clamp's top), under the morph's floor.
       expect(highestStop).toBeLessThan(MORPH_FLOOR)
       for (const screenPx of [100, 200, 275, 300, 400, 450, 720, 1600]) {
         expect(swapGap(screenPx), String(screenPx)).toBeGreaterThan(MORPH_TOP)

@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
-import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, cloudColumn } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, cloudColumn } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
@@ -247,6 +247,8 @@ describe('ship bodies', () => {
     // The ground the cloud march stands its columns on (cloudShaders.ts
     // cloudTerrain()): the 4k map's TERRAIN_READ_TEXELS-wide mip.
     const marchGround = boxMips(demLevel(dem4k)).find(({ width }) => width === TERRAIN_READ_TEXELS)!
+    // Scene units the drawn ground stands per true kilometre, at this relief.
+    const unitsPerKm = TERRAIN_DISPLACEMENT / TERRAIN_KM_PER_GREY
 
     it('keeps the low-tier stop at EARTH_COLLISION_RADIUS everywhere, with the real terrain loaded', () => {
       setEarthTerrain(baseFloor())
@@ -260,7 +262,8 @@ describe('ship bodies', () => {
           expect(floorRadius(earth, direction)).toBe(EARTH_COLLISION_RADIUS)
         }
       }
-      expect(highest).toBeGreaterThan(EARTH_RADIUS + 0.05)
+      // Over 4.35 km on the floor's smoothed triangles (0.05 units at 25x).
+      expect(highest).toBeGreaterThan(EARTH_RADIUS + 4.35 * unitsPerKm)
       expect(highest + EARTH_GROUND_CLEARANCE).toBeLessThan(EARTH_COLLISION_RADIUS)
     })
 
@@ -277,7 +280,7 @@ describe('ship bodies', () => {
       // Mid-Pacific near sea level; Everest's summit, on the 128 × 128
       // sphere's smoothed triangles, ~3.4 km of its 8.8 (tides-zmw.2).
       expect(ground(0, -150) - EARTH_RADIUS).toBeLessThan(0.01)
-      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(0.035)
+      expect(ground(27.99, 86.93) - EARTH_RADIUS).toBeGreaterThan(3.05 * unitsPerKm)
     })
 
     // The ship's stop under the cloud base, over land (where the pooled map's

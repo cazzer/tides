@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { DEFAULT_TERRAIN_DISPLACEMENT, EARTH_RADIUS_KM, type Vec3 } from './cloud-layer'
+import { DEFAULT_TERRAIN_DISPLACEMENT, EARTH_RADIUS_KM, REFERENCE_TERRAIN_DISPLACEMENT, type Vec3 } from './cloud-layer'
 import type { DemLevel } from './earth-dem'
 import {
   HORIZON_BITS,
@@ -29,8 +29,11 @@ const N = 0
 const E = 2
 const S = 4
 const W = 6
-// The shipped map's exaggeration: the default relief's, about 25x.
+// The shipped map's exaggeration: the default relief's, 12x.
 const E_REF = DEFAULT_TERRAIN_DISPLACEMENT / sceneRadius(12742000)
+// The reference relief's, 25x, which the synthetic bakes' ridges and angles
+// were drawn for: they test the bake, not the shipped exaggeration.
+const E_25 = REFERENCE_TERRAIN_DISPLACEMENT / sceneRadius(12742000)
 
 const ASSET = new URL('./assets/earth-horizon-1k.bin', import.meta.url)
 const shippedFile = readFileSync(ASSET)
@@ -44,7 +47,7 @@ function level(width: number, height: number, raise: (x: number, y: number) => n
 }
 
 // 1.4° texels: wide enough for a quick bake, searched further to match.
-const WIDE: HorizonBakeOptions = { eRef: E_REF, radiusKm: 1000, firstKm: 50 }
+const WIDE: HorizonBakeOptions = { eRef: E_25, radiusKm: 1000, firstKm: 50 }
 
 /** Every direction's angle at texel x, y (radians). */
 const at = (map: EarthHorizon, x: number, y: number) => horizonAt(map, x, y)
@@ -109,7 +112,7 @@ describe('horizon bake', () => {
 
   it('sees a peak near the pole from the far meridian, across the pole', () => {
     // 0.5° texels; the peak at 89.75°N, 0.25°E; the eye at 88.25°N, 179.75°W.
-    const polar = bakeHorizon(level(720, 360, (x, y) => (x === 360 && y === 0 ? 1 : 0)), { eRef: E_REF })
+    const polar = bakeHorizon(level(720, 360, (x, y) => (x === 360 && y === 0 ? 1 : 0)), { eRef: E_25 })
     const eye = at(polar, 0, 3)
     expect(eye[N] / D).toBeGreaterThan(20)
     expect(eye[S]).toBe(0)
@@ -130,7 +133,7 @@ describe('horizon bake', () => {
     // Worst and mean error of the 25x map scaled to 10x against a 10x bake.
     const transformError = (options: HorizonBakeOptions) => {
       const at25 = bakeHorizon(hills, options)
-      const at10 = bakeHorizon(hills, { ...options, eRef: (E_REF * 10) / 25 })
+      const at10 = bakeHorizon(hills, { ...options, eRef: (E_25 * 10) / 25 })
       let worst = 0
       let total = 0
       for (let k = 0; k < at25.angles.length; k++) {
@@ -146,10 +149,11 @@ describe('horizon bake', () => {
     expect(flat.worst).toBeLessThanOrEqual(step)
     expect(flat.mean).toBeLessThan(step / 2)
     // Over the curve the shipped search's (k − 1)·γ/2 at most 0.6 · 1.35° comes on top.
-    const curved = transformError({ eRef: E_REF })
+    const curved = transformError({ eRef: E_25 })
     expect(curved.worst).toBeLessThanOrEqual(step + 0.6 * (HORIZON_RADIUS_KM / EARTH_RADIUS_KM / 2))
     expect(curved.mean).toBeLessThan(step / 2)
-    expect(horizonTangentScale(DEFAULT_TERRAIN_DISPLACEMENT * 0.4, sceneRadius(12742000), E_REF)).toBeCloseTo(0.4, 6)
+    expect(horizonTangentScale(REFERENCE_TERRAIN_DISPLACEMENT * 0.4, sceneRadius(12742000), E_25)).toBeCloseTo(0.4, 6)
+    expect(horizonTangentScale(REFERENCE_TERRAIN_DISPLACEMENT, sceneRadius(12742000), E_REF)).toBeCloseTo(25 / 12, 6)
   })
 })
 
@@ -196,12 +200,15 @@ describe('shipped horizon map', () => {
   })
 
   it('stands the Andes over Mendoza to the west and Santiago to the east', () => {
-    const mendoza = texel(-32.89, -68.83)
-    const santiago = texel(-33.45, -70.67)
+    // Read at the reference 25x, as the renderer would take the map there.
+    const k = E_25 / E_REF
+    const at25 = (angles: number[]) => angles.map((a) => Math.atan(k * Math.tan(a)))
+    const mendoza = at25(texel(-32.89, -68.83))
+    const santiago = at25(texel(-33.45, -70.67))
     expect(Math.max(mendoza[W], mendoza[W + 1]) / D).toBeGreaterThan(30)
     expect(Math.max(santiago[E - 1], santiago[E]) / D).toBeGreaterThan(30)
     expect(mendoza[E] / D).toBeLessThan(10)
-    expect(skyVisibility(santiago, 1)).toBeLessThan(0.9)
+    expect(skyVisibility(texel(-33.45, -70.67), k)).toBeLessThan(0.9)
     expect(texel(0, -150).every((a) => a === 0)).toBe(true)
   })
 })
