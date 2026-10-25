@@ -1,17 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { OrthographicCamera } from 'three'
 import {
+  MAIN_DISTANCE,
+  MAIN_FOV,
   MAIN_ZOOM,
-  PLANETS_MIN_ZOOM,
+  PLANETS_STAR_RADIUS,
+  REFERENCE_VIEW_HEIGHT,
+  SYSTEM_EXTENT,
   SYSTEM_FIT_RADIUS,
-  clearNear,
   focusedRef,
+  framingDistance,
+  mainNearFar,
   mainViewRange,
+  minDistance,
   planetFramingZoom,
-  planetsNear,
+  systemFitDistance,
+  targetUnitsPerPixel,
+  zoomDistance,
 } from './main-view'
+import { CLOCK_VIEW } from './clock-view'
+import { CLOUD_UNITS_PER_KM } from './cloud-layer'
 import { EARTH_ORBIT_RADIUS } from './ephemeris'
+import { CLOCK_HALF_WIDTH } from './orbit-label'
 import { PLANETS, sceneDistance } from './planets'
+import { FOCUS_VALUES, isSystemFocus, type CameraFocus } from './store'
+import { bodyRadius } from './system-aids/label-visibility'
 
 describe('planetFramingZoom', () => {
   const EARTH = 2.95
@@ -33,134 +45,134 @@ describe('planetFramingZoom', () => {
 
 const DESKTOP = { width: 1167, height: 830 }
 const PHONE = { width: 390, height: 844 }
+const TAN_HALF_FOV = Math.tan(((MAIN_FOV / 2) * Math.PI) / 180)
+const EARTH = bodyRadius('earth')
+
+// A sphere's radius on screen, CSS px, at `distance` in a view `height` tall.
+const radiusPx = (radius: number, distance: number, height: number) =>
+  ((radius / distance) * (height / 2)) / TAN_HALF_FOV
+
+describe('zoomDistance and framingDistance', () => {
+  it('frames Earth as large as the ortho view did at the default zoom', () => {
+    expect(framingDistance(EARTH, EARTH)).toBeCloseTo(MAIN_DISTANCE, 9)
+    expect(radiusPx(EARTH, MAIN_DISTANCE, REFERENCE_VIEW_HEIGHT)).toBeCloseTo(
+      EARTH * MAIN_ZOOM,
+      9
+    )
+    expect(radiusPx(EARTH, MAIN_DISTANCE, REFERENCE_VIEW_HEIGHT)).toBeCloseTo(29.5, 1)
+  })
+
+  it('frames each planet as large as Earth, within the zoom clamps', () => {
+    for (const { key, radius } of Object.values(PLANETS)) {
+      expect(radius / framingDistance(radius, EARTH), key).toBeCloseTo(
+        EARTH / MAIN_DISTANCE,
+        9
+      )
+    }
+  })
+
+  it('spans the old zoom’s units per pixel at the target', () => {
+    for (const zoom of [1, MAIN_ZOOM, 40]) {
+      expect(
+        targetUnitsPerPixel(zoomDistance(zoom), REFERENCE_VIEW_HEIGHT)
+      ).toBeCloseTo(1 / zoom, 12)
+    }
+  })
+})
+
+const SYSTEM_FOCI = FOCUS_VALUES.filter(
+  (focus): focus is Exclude<CameraFocus, 'clock' | 'location'> =>
+    focus !== 'clock' && focus !== 'location'
+)
+
+describe('minDistance', () => {
+  it('lets every focus reach its framing, and the framing stay in range', () => {
+    const { maxDistance } = mainViewRange(true, DESKTOP)
+    for (const focus of SYSTEM_FOCI) {
+      const framing = isSystemFocus(focus)
+        ? framingDistance(bodyRadius(focus), EARTH)
+        : MAIN_DISTANCE
+      expect(framing, focus).toBeGreaterThan(minDistance(focus))
+      expect(framing, focus).toBeLessThan(maxDistance)
+    }
+    expect(CLOCK_VIEW.distance).toBeGreaterThan(minDistance('clock'))
+  })
+
+  it('keeps the eye outside the focused body', () => {
+    for (const focus of SYSTEM_FOCI) {
+      expect(minDistance(focus), focus).toBeGreaterThan(1.3 * bodyRadius(focus))
+    }
+    // From a target on Earth's surface, straight above it.
+    expect(minDistance('location') - EARTH).toBeCloseTo(minDistance('earth'), 12)
+    expect(minDistance('clock')).toBe(2 * CLOCK_HALF_WIDTH)
+  })
+})
 
 describe('mainViewRange', () => {
   it('leaves the planets-off view exactly as it was', () => {
     for (const view of [DESKTOP, PHONE]) {
       expect(mainViewRange(false, view)).toEqual({
-        minZoom: 0,
+        maxDistance: Infinity,
         starRadius: undefined,
       })
     }
   })
 
-  it('frames the whole system across the shorter side at the zoom floor', () => {
-    for (const view of [DESKTOP, PHONE]) {
-      const { minZoom } = mainViewRange(true, view)
-      const shorter = Math.min(view.width, view.height) / minZoom
-      expect(shorter).toBeGreaterThanOrEqual(2 * SYSTEM_FIT_RADIUS)
+  it('frames the whole system across the shorter side at the distance limit', () => {
+    for (const view of [DESKTOP, PHONE, { width: 2000, height: 1200 }]) {
+      const { maxDistance } = mainViewRange(true, view)
+      const halfAngle = Math.atan(
+        (TAN_HALF_FOV * Math.min(view.width, view.height)) / view.height
+      )
+      expect(Math.asin(SYSTEM_FIT_RADIUS / maxDistance)).toBeCloseTo(halfAngle, 12)
     }
+    expect(systemFitDistance(PHONE)).toBeGreaterThan(systemFitDistance(DESKTOP))
     // Neptune's aphelion (~30.3 AU over 1900–2100) and its sphere, on the
     // far side of the Sun from an Earth target.
     expect(SYSTEM_FIT_RADIUS).toBeGreaterThan(
       EARTH_ORBIT_RADIUS + sceneDistance(30.4) + PLANETS.neptune.radius
     )
   })
-
-  it('zooms a large view out no further than PLANETS_MIN_ZOOM', () => {
-    expect(mainViewRange(true, { width: 2000, height: 1200 }).minZoom).toBe(
-      PLANETS_MIN_ZOOM
-    )
-    expect(mainViewRange(true, PHONE).minZoom).toBeLessThan(PLANETS_MIN_ZOOM)
-  })
 })
 
-describe('planetsNear', () => {
-  // The eye sits OrbitControls' maxDistance (and CLOCK_VIEW.distance) behind
-  // the target.
-  const EYE = 80
-  const EARTH = 2.95
-  // Bodies sit within ~470 units of the Sun (Neptune's aphelion surface ~456).
-  const SYSTEM_RADIUS = 470
+describe('mainNearFar', () => {
+  // 24-bit depth resolution, scene units, `depth` in front of the eye.
+  const depthStep = (near: number, far: number, depth: number) =>
+    (depth * depth * (far - near)) / (far * near * 2 ** 24)
 
-  it('draws nothing behind the eye at the default zoom or any planet framing', () => {
-    expect(planetsNear(MAIN_ZOOM, EYE)).toBe(0)
-    for (const { key, radius } of Object.values(PLANETS)) {
-      const zoom = planetFramingZoom(radius, EARTH)
-      expect(planetsNear(zoom, EYE), key).toBe(0)
+  it('never puts the near plane past the nearest surface', () => {
+    for (let surface = 0.02; surface < 1e4; surface *= 1.1) {
+      const { near } = mainNearFar(surface, 0)
+      expect(near).toBeLessThan(surface)
+      expect(near).toBeGreaterThan(0)
     }
   })
 
-  it('reaches every body, wherever the target is, zoomed all the way out', () => {
+  it('reaches past the whole system and the stars from any eye', () => {
     for (const view of [DESKTOP, PHONE]) {
-      const { minZoom } = mainViewRange(true, view)
-      expect(EYE - planetsNear(minZoom, EYE)).toBeGreaterThanOrEqual(
-        2 * SYSTEM_RADIUS
-      )
+      const { maxDistance, starRadius } = mainViewRange(true, view)
+      const eyeFromSun = maxDistance + SYSTEM_FIT_RADIUS
+      const { far } = mainNearFar(1000, eyeFromSun)
+      expect(far).toBeGreaterThanOrEqual(eyeFromSun + SYSTEM_EXTENT)
+      expect(far).toBeGreaterThan(starRadius!)
     }
+    expect(mainNearFar(1, 0).far).toBeGreaterThan(PLANETS_STAR_RADIUS)
+    // Neptune's aphelion surface; the Kuiper belt's edge is belt-particles.test.ts'.
+    expect(SYSTEM_EXTENT).toBeGreaterThan(sceneDistance(30.4) + PLANETS.neptune.radius)
   })
 
-  it('never reaches deeper than at the zoom floor', () => {
-    expect(planetsNear(PLANETS_MIN_ZOOM / 4, EYE)).toBe(
-      planetsNear(PLANETS_MIN_ZOOM, EYE)
-    )
-  })
-
-  it('opens up steadily as the view zooms out', () => {
-    let previous = 0
-    for (let zoom = 40; zoom >= 1; zoom -= 0.25) {
-      const near = planetsNear(zoom, EYE)
-      expect(near).toBeLessThanOrEqual(previous)
-      previous = near
-    }
-  })
-
-  it('keeps the stars behind every drawn body and their back half clipped', () => {
-    const far = new OrthographicCamera().far
-    // Stars sit R from the eye. Within 45° of the view axis (an offset of
-    // R·sin45 ≈ 1270 units, past the edges of a 2000 px wide view or a
-    // phone at the zoom floor) the front ones lie behind the deepest body
-    // and the back ones before the near plane.
-    const cos45 = Math.SQRT1_2
-    for (const view of [{ width: 2000, height: 1200 }, PHONE]) {
-      const { minZoom, starRadius } = mainViewRange(true, view)
-      const R = starRadius!
-      const near = planetsNear(minZoom, EYE)
-      const longer = Math.max(view.width, view.height)
-      expect(R * cos45).toBeGreaterThan(EYE + 2 * SYSTEM_RADIUS)
-      expect(-R * cos45).toBeLessThan(near)
-      expect(R * cos45).toBeGreaterThan(longer / 2 / minZoom)
-      expect(far).toBeGreaterThanOrEqual(R)
-    }
-  })
-})
-
-describe('clearNear', () => {
-  const EYE = 80
-  const cuts = (near: number, { depth, reach }: { depth: number; reach: number }) =>
-    depth - reach < near && near < depth + reach
-
-  it('leaves a near plane that cuts nothing where it is', () => {
-    const bodies = [{ depth: -40, reach: 3 }, { depth: 20, reach: 6 }]
-    expect(clearNear(-10, bodies, EYE)).toBe(-10)
-    expect(clearNear(0, [], EYE)).toBe(0)
-  })
-
-  it('never slices a body as the view zooms out (tides-o63)', () => {
-    // Focused on Venus, Oct 2026: Jupiter 84.5 units behind the eye was cut
-    // open as planetsNear swept through it (now from zoom ~2.52 to ~2.42).
-    const jupiter = { depth: -84.46, reach: PLANETS.jupiter.radius }
-    expect(cuts(planetsNear(2.45, EYE), jupiter)).toBe(true)
-    for (let zoom = 40; zoom >= 1; zoom -= 0.005) {
-      const near = clearNear(planetsNear(zoom, EYE), [jupiter], EYE)
-      expect(cuts(near, jupiter), `zoom ${zoom}`).toBe(false)
-    }
-  })
-
-  it('hides a body it would cut by stepping to its far side', () => {
-    expect(clearNear(-85, [{ depth: -84, reach: 6 }], EYE)).toBe(-78)
-  })
-
-  it('steps through bodies that overlap in depth', () => {
-    const bodies = [{ depth: -70, reach: 5 }, { depth: -78, reach: 6 }]
-    const near = clearNear(-80, bodies, EYE)
-    expect(near).toBe(-65)
-    for (const body of bodies) expect(cuts(near, body)).toBe(false)
-  })
-
-  it('never hides a body reaching the target', () => {
-    // A Sun-sized body centred on the target, with the plane inside it.
-    expect(clearNear(75, [{ depth: EYE, reach: 10 }], EYE)).toBe(75)
+  it('resolves 10 m of cloud height at an Earth close-up', () => {
+    const tenMetres = CLOUD_UNITS_PER_KM / 100
+    const atmosphere = 1.1 * EARTH
+    // Straight down at the closest distance...
+    const eye = minDistance('earth')
+    const down = mainNearFar(eye - atmosphere, EARTH_ORBIT_RADIUS)
+    expect(depthStep(down.near, down.far, eye - EARTH)).toBeLessThan(tenMetres)
+    // ...and tilted all the way, to ~1.115 radii, looking at the horizon.
+    const tilted = 1.115 * EARTH
+    const horizon = Math.sqrt(tilted ** 2 - EARTH ** 2)
+    const flat = mainNearFar(tilted - atmosphere, EARTH_ORBIT_RADIUS)
+    expect(depthStep(flat.near, flat.far, horizon)).toBeLessThan(tenMetres)
   })
 })
 

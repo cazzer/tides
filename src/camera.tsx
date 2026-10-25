@@ -14,7 +14,7 @@ import {
   type Camera,
   type InstancedMesh,
   type Object3D,
-  type OrthographicCamera,
+  type PerspectiveCamera,
 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import {
@@ -26,19 +26,18 @@ import {
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
 import {
-  MAIN_ZOOM,
-  clearNear,
+  MAIN_DISTANCE,
   focusedRef,
-  planetFramingZoom,
-  planetsNear,
-  type BodyDepth,
+  framingDistance,
+  mainNearFar,
+  targetUnitsPerPixel,
 } from './main-view'
 import {
   LABEL_KEYS,
+  bodyRadius,
   bodyReach,
-  systemExtent,
 } from './system-aids/label-visibility'
-import { isMoonKey } from './moons/moon-keys'
+import { CLOCK_HALF_WIDTH } from './orbit-label'
 import {
   canPivot,
   clampTilt,
@@ -267,80 +266,69 @@ function useEarthPivot(
 // Covers Earth's atmosphere and aurora shells beyond its sphere.
 const NEAR_CLEARANCE = 1.1
 
-// How far each body reaches for the near plane: a planet with moons counts
-// its whole system, so the moons go with it (tides-2hv.16).
-const NEAR_REACH = LABEL_KEYS.map(
-  (key) =>
-    NEAR_CLEARANCE *
-    (key === 'moon' || isMoonKey(key)
-      ? bodyReach(key)
-      : Math.max(bodyReach(key), systemExtent(key)))
+// How far each body reaches for the near plane: its shells, or its rings.
+const NEAR_REACH = LABEL_KEYS.map((key) =>
+  Math.max(NEAR_CLEARANCE * bodyRadius(key), bodyReach(key))
 )
 
 /**
- * With planets on, moves the main view's near plane with the zoom
- * (planetsNear), stepping it clear of any body it would cut (clearNear);
- * off, it stays at 0 as it always was.
+ * Sets the main view's near plane short of the nearest body's reach (and of
+ * the clock round its centre in clock focus) and its far plane past the whole
+ * system, every frame (mainNearFar). Call it after CameraProvider's frame,
+ * which moves the eye.
  */
-function usePlanetsNear() {
-  const bodies = useMemo<BodyDepth[]>(
-    () => LABEL_KEYS.map(() => ({ depth: 0, reach: 0 })),
-    []
-  )
-  const forward = useMemo(() => new Vector3(), [])
+function useMainNearFar() {
   const centre = useMemo(() => new Vector3(), [])
   useFrame(({ camera, controls }) => {
-    const ortho = camera as OrthographicCamera
-    if (!controls || !ortho.isOrthographicCamera) return
+    const perspective = camera as PerspectiveCamera
+    if (!controls || !perspective.isPerspectiveCamera) return
     const state = useStore.getState()
-    let near = 0
-    if (state.showPlanets) {
-      const eyeDistance = ortho.position.distanceTo(
-        (controls as OrbitControlsImpl).target
+    const eye = perspective.position
+    let surface =
+      eye.distanceTo((controls as OrbitControlsImpl).target) -
+      (state.cameraFocus === 'clock' ? CLOCK_HALF_WIDTH : 0)
+    LABEL_KEYS.forEach((key, i) => {
+      const object = (state[key] as { current?: Object3D | null } | undefined)
+        ?.current
+      if (!object) return
+      surface = Math.min(
+        surface,
+        object.getWorldPosition(centre).distanceTo(eye) - NEAR_REACH[i]
       )
-      ortho.getWorldDirection(forward)
-      LABEL_KEYS.forEach((key, i) => {
-        const object = (state[key] as { current?: Object3D | null } | undefined)
-          ?.current
-        const body = bodies[i]
-        if (object) {
-          object.getWorldPosition(centre)
-          body.depth = centre.sub(ortho.position).dot(forward)
-          body.reach = NEAR_REACH[i]
-        } else {
-          body.reach = 0
-        }
-      })
-      near = clearNear(planetsNear(ortho.zoom, eyeDistance), bodies, eyeDistance)
-    }
-    if (near !== ortho.near) {
-      ortho.near = near
-      ortho.updateProjectionMatrix()
+    })
+    const sun = state.sun?.current
+    const eyeFromSun = sun ? sun.getWorldPosition(centre).distanceTo(eye) : eye.length()
+    const { near, far } = mainNearFar(surface, eyeFromSun)
+    if (near !== perspective.near || far !== perspective.far) {
+      perspective.near = near
+      perspective.far = far
+      perspective.updateProjectionMatrix()
     }
   })
 }
 
 const FRAMING_EASE = 0.05
 
-/** The zoom framing eases toward, or null while a planet or moon hasn't registered. */
+/** The distance framing eases toward, or null while a planet or moon hasn't registered. */
 function framingGoal(focus: CameraFocus): number | null {
-  if (!isSystemFocus(focus)) return MAIN_ZOOM
+  if (!isSystemFocus(focus)) return MAIN_DISTANCE
   const { earthRadius, [focus]: ref } = useStore.getState()
   const radius = ref?.current?.userData?.radius
   return radius > 0 && earthRadius != null
-    ? planetFramingZoom(radius, earthRadius)
+    ? framingDistance(radius, earthRadius)
     : null
 }
 
 /**
- * Choosing a planet eases the zoom to planetFramingZoom once the planet has
- * registered its mesh (with userData.radius); leaving a planet eases it back
- * to MAIN_ZOOM. Any other zoom change, i.e. the user scrolling or pinching,
- * ends the framing so it never fights them.
+ * Choosing a planet dollies the eye to framingDistance once the planet has
+ * registered its mesh (with userData.radius); leaving a planet dollies it
+ * back to MAIN_DISTANCE. The ease runs on the inverse distance, i.e. the
+ * apparent size, as the ortho zoom did. Any other distance change, i.e. the
+ * user scrolling or pinching, ends the framing so it never fights them.
  */
 function usePlanetFraming(cameraFocus: CameraFocus) {
-  // The zoom this hook last saw or wrote; null until the first frame after
-  // the focus changed.
+  // The distance this hook last saw or wrote; null until the first frame
+  // after the focus changed.
   const framing = useRef<{ written: number | null } | null>(null)
   const previousFocus = useRef<CameraFocus | null>(null)
 
@@ -355,22 +343,24 @@ function usePlanetFraming(cameraFocus: CameraFocus) {
   // Only the main view has controls; the other panels' cameras stay put.
   useFrame(({ camera, controls }) => {
     const f = framing.current
-    const ortho = camera as OrthographicCamera
-    if (!f || !controls || !ortho.isOrthographicCamera) return
+    if (!f || !controls || !(camera as PerspectiveCamera).isPerspectiveCamera) {
+      return
+    }
+    const orbit = controls as OrbitControlsImpl
+    const distance = orbit.getDistance()
     if (f.written === null) {
-      f.written = ortho.zoom
-    } else if (ortho.zoom !== f.written) {
+      f.written = distance
+    } else if (Math.abs(distance - f.written) > f.written * 1e-6) {
       framing.current = null
       return
     }
     const goal = framingGoal(cameraFocus)
     if (goal === null) return
-    const next = MathUtils.lerp(ortho.zoom, goal, FRAMING_EASE)
+    const next = 1 / MathUtils.lerp(1 / distance, 1 / goal, FRAMING_EASE)
     const done = Math.abs(goal - next) < goal * 1e-3
-    ortho.zoom = done ? goal : next
-    ortho.updateProjectionMatrix()
+    orbit.setScale((done ? goal : next) / distance)
     if (done) framing.current = null
-    else f.written = ortho.zoom
+    else f.written = orbit.getDistance()
   })
 }
 
@@ -404,7 +394,6 @@ export const CameraProvider = ({ children }: { children: any }) => {
     connected || canvas
   )
   usePlanetFraming(cameraFocus)
-  usePlanetsNear()
 
   useFrame((state) => {
     const target = new Vector3()
@@ -471,12 +460,14 @@ export const CameraProvider = ({ children }: { children: any }) => {
       camera.lookAt(cameraTarget.current)
       // @ts-ignore
       controls.target.copy(cameraTarget.current)
-      const ortho = camera as OrthographicCamera
       // @ts-ignore
       controls.rotateSpeed =
-        cameraFocus === 'earth' && earthRadius != null && ortho.isOrthographicCamera
+        cameraFocus === 'earth' && earthRadius != null
           ? surfaceGrabRotateSpeed(
-              (ortho.top - ortho.bottom) / (ortho.zoom * state.size.height),
+              targetUnitsPerPixel(
+                (controls as OrbitControlsImpl).getDistance() - earthRadius,
+                state.size.height
+              ),
               // @ts-ignore
               controls.domElement.clientHeight,
               earthRadius
@@ -486,6 +477,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
       controls.update()
     }
   })
+  useMainNearFar()
 
   // Handle focus: update store (and thus dropdown) when a known body is clicked.
   const handleFocus = useCallback(

@@ -1,5 +1,6 @@
 import { MathUtils } from 'three'
-import { isSystemFocus, type BodyFocus } from './store'
+import { isSystemFocus, type BodyFocus, type CameraFocus } from './store'
+import { bodyRadius } from './system-aids/label-visibility'
 
 /** The main view's default zoom (App's MainCamera); Earth's framing at it is the reference. */
 export const MAIN_ZOOM = 10
@@ -17,12 +18,6 @@ export function planetFramingZoom(radius: number, earthRadius: number): number {
 }
 
 /**
- * The lowest zoom floor a large view gets, and where planetsDrawDepth stops
- * reaching deeper: a smaller view's floor goes lower (mainViewRange).
- */
-export const PLANETS_MIN_ZOOM = 1
-
-/**
  * How far from the target the zoom floor frames, scene units: Neptune's
  * aphelion surface (456, planets.ts) seen from Earth (50 from the Sun, the
  * default target) on the far side, with room for its label.
@@ -32,85 +27,109 @@ export const SYSTEM_FIT_RADIUS = 530
 /** The starfield's radius in the main view with planets on. */
 export const PLANETS_STAR_RADIUS = 1800
 
-/** The main view's size in CSS pixels (its camera's frustum at zoom 1). */
+/** The main view's vertical field of view, degrees. */
+export const MAIN_FOV = 30
+
+const TAN_HALF_FOV = Math.tan(MathUtils.degToRad(MAIN_FOV / 2))
+
+/** The view height, CSS px, at which a distance frames what the ortho view did at a zoom. */
+export const REFERENCE_VIEW_HEIGHT = 800
+
+/**
+ * The eye distance at which the target reads as large as it did in the ortho
+ * view at `zoom`, in a REFERENCE_VIEW_HEIGHT view. Taller or shorter views
+ * keep the same share of their height, so a pose looks the same everywhere.
+ */
+export function zoomDistance(zoom: number): number {
+  return REFERENCE_VIEW_HEIGHT / 2 / (TAN_HALF_FOV * zoom)
+}
+
+/** The main view's default eye distance (App's MainCamera, CLOCK_VIEW). */
+export const MAIN_DISTANCE = zoomDistance(MAIN_ZOOM)
+
+/** The eye distance at which a planet of `radius` reads as large as Earth does at MAIN_DISTANCE. */
+export function framingDistance(radius: number, earthRadius: number): number {
+  return zoomDistance(planetFramingZoom(radius, earthRadius))
+}
+
+/** Scene units per CSS px at `depth` in front of the eye, in a view `heightPx` tall. */
+export function targetUnitsPerPixel(depth: number, heightPx: number): number {
+  return (2 * depth * TAN_HALF_FOV) / heightPx
+}
+
+/** The main view's size in CSS pixels. */
 export interface ViewSize {
   width: number
   height: number
 }
 
 /**
- * Main view zoom floor and starfield size. With planets on, the floor frames
- * the whole system across the view's shorter side, however the view is
- * turned, but never zooms out past PLANETS_MIN_ZOOM: a phone gets a lower
- * floor than a desktop. The stars sit beyond every body planetsNear lets
- * through (see main-view.test.ts). Off, these are the values the view always
- * had (minZoom is OrbitControls' default, and an undefined starRadius keeps
+ * The eye distance at which a sphere of SYSTEM_FIT_RADIUS round the target
+ * fits across the view's shorter side, however the view is turned.
+ */
+export function systemFitDistance(view: ViewSize): number {
+  const tan = TAN_HALF_FOV * Math.min(1, view.width / view.height)
+  return SYSTEM_FIT_RADIUS / Math.sin(Math.atan(tan))
+}
+
+/**
+ * Main view zoom-out limit and starfield size. With planets on, the eye backs
+ * off until the whole system fits (systemFitDistance), so a phone goes
+ * further out than a desktop. Off, these are the values the view always had
+ * (maxDistance is OrbitControls' default, and an undefined starRadius keeps
  * Starfield's).
  */
 export function mainViewRange(
   showPlanets: boolean,
   view: ViewSize
 ): {
-  minZoom: number
+  maxDistance: number
   starRadius: number | undefined
 } {
-  if (!showPlanets) return { minZoom: 0, starRadius: undefined }
-  const fit = Math.min(view.width, view.height) / (2 * SYSTEM_FIT_RADIUS)
-  return { minZoom: Math.min(PLANETS_MIN_ZOOM, fit), starRadius: PLANETS_STAR_RADIUS }
+  if (!showPlanets) return { maxDistance: Infinity, starRadius: undefined }
+  return { maxDistance: systemFitDistance(view), starRadius: PLANETS_STAR_RADIUS }
 }
 
 /**
- * How far in front of the target the main view draws at `zoom`: 1000 units
- * once zoomed out to the whole system (bodies sit within ~470 of the Sun, so
- * two are at most ~940 apart), shrinking with the square of the zoom so that
- * from zoom ~3.5 in, i.e. at every planet's framing, it is inside the eye.
+ * How close the eye comes to a focused body's centre, as a share of its
+ * radius: tilted to MAX_TILT about the ground (pivot.ts) it still ends ~1.115
+ * radii out, outside Earth's atmosphere and aurora shells.
  */
-export function planetsDrawDepth(zoom: number): number {
-  return 1000 / Math.max(zoom, PLANETS_MIN_ZOOM) ** 2
+export const MIN_DISTANCE_FACTOR = 1.35
+
+// Twice orbit-label.tsx's CLOCK_HALF_WIDTH, so the eye never enters the clock.
+const CLOCK_MIN_DISTANCE = 16
+
+/** OrbitControls' minDistance for `focus`. 'location' targets Earth's surface. */
+export function minDistance(focus: CameraFocus): number {
+  if (focus === 'clock') return CLOCK_MIN_DISTANCE
+  if (focus === 'location') return bodyRadius('earth') * (1 + MIN_DISTANCE_FACTOR)
+  return bodyRadius(focus) * MIN_DISTANCE_FACTOR
 }
+
+/** How far past the Sun the farthest drawn thing (the Kuiper belt's edge, 514) reaches. */
+export const SYSTEM_EXTENT = 520
+
+const NEAR_SHARE = 0.5
+const NEAR_MIN = 0.01
+const NEAR_MAX = 10
 
 /**
- * The ortho near plane with planets on, for an eye `eyeDistance` behind the
- * target. Never past the eye up close, so a planet behind the eye (an ortho
- * camera would draw it over the target) stays hidden, as Earth's neighbours
- * always were; zoomed out it reaches back to take in the whole system, which
- * is the same picture as pulling the eye back that far.
+ * The main view's near and far planes for an eye `surface` from the nearest
+ * thing it must not cut and `eyeFromSun` from the Sun. Near goes halfway to
+ * that surface, so no body is cut, but no further than NEAR_MAX, so the
+ * orbits and belts it doesn't measure are only cut right at the eye; NEAR_MIN
+ * keeps the depth buffer usable as a small moon sweeps past the eye. Far
+ * reaches past the whole system and the starfield.
  */
-export function planetsNear(zoom: number, eyeDistance: number): number {
-  return Math.min(0, eyeDistance - planetsDrawDepth(zoom))
-}
-
-/** A body's centre depth in front of the eye and how far it reaches from it. */
-export interface BodyDepth {
-  depth: number
-  reach: number
-}
-
-/**
- * Moves `near` forward past every body it would cut, so each is drawn whole
- * or not at all (tides-o63): as planetsNear sweeps back through the system
- * with the zoom, a body it passed through showed sliced open. Bodies reaching
- * past `limit` (the target's depth) are left alone, so the focused body is
- * never the one hidden.
- */
-export function clearNear(
-  near: number,
-  bodies: readonly BodyDepth[],
-  limit: number
-): number {
-  // Each move lands on a far side, so no body can stop the plane twice.
-  for (let moved = true; moved; ) {
-    moved = false
-    for (const { depth, reach } of bodies) {
-      const back = depth - reach
-      const front = depth + reach
-      if (back < near && near < front && front <= limit) {
-        near = front
-        moved = true
-      }
-    }
+export function mainNearFar(
+  surface: number,
+  eyeFromSun: number
+): { near: number; far: number } {
+  return {
+    near: MathUtils.clamp(NEAR_SHARE * surface, NEAR_MIN, NEAR_MAX),
+    far: Math.max(eyeFromSun + SYSTEM_EXTENT, 1.1 * PLANETS_STAR_RADIUS),
   }
-  return near
 }
 
 /**

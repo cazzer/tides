@@ -15,6 +15,9 @@ import {
   wrapAngle,
   type Pivot,
 } from './pivot'
+import { surfaceGrabRotateSpeed } from './camera'
+import { minDistance, targetUnitsPerPixel } from './main-view'
+import { bodyRadius } from './system-aids/label-visibility'
 
 describe('pixelsToPivot', () => {
   it('turns half a turn per view height', () => {
@@ -194,11 +197,21 @@ describe('applyTilt', () => {
     expect(viewDirection(quaternion).dot(screenUp)).toBeGreaterThan(0)
   })
 
-  it('keeps the camera outside Earth at the closest distance', () => {
-    for (const depth of [0, 0.5, 1]) {
-      const { position, quaternion } = setup(5)
-      applyTilt(position, quaternion, centre, radius, depth, MAX_TILT)
-      expect(position.distanceTo(centre)).toBeGreaterThan(radius)
+  it("keeps the camera outside Earth's shells from the closest distance out", () => {
+    const earth = bodyRadius('earth')
+    for (let distance = minDistance('earth'); distance < 40; distance *= 1.05) {
+      // The pivot depth CameraProvider's surface grab gives at this distance.
+      const height = 800
+      const depth = pivotDepth(
+        surfaceGrabRotateSpeed(
+          targetUnitsPerPixel(distance - earth, height),
+          height,
+          earth
+        )
+      )
+      const { position, quaternion } = setup(distance)
+      applyTilt(position, quaternion, centre, earth, depth, MAX_TILT)
+      expect(position.distanceTo(centre), `${distance}`).toBeGreaterThan(1.1 * earth)
     }
   })
 })
@@ -265,6 +278,22 @@ describe('tiltControls', () => {
       12
     )
     expect(camera.up).toEqual(new Vector3(0, 1, 0))
+  })
+
+  it('carries the eye with a moved target, keeping its distance', () => {
+    const pivot = { tilt: 0.6, heading: 0.8, depth: 1 }
+    const start = new Vector3(30, 40, 50)
+    const { camera, controls } = setup(pivot, start)
+    controls.update()
+    expect(controls.getDistance()).toBeCloseTo(start.length(), 9)
+    const move = new Vector3(5, -3, 2)
+    controls.target.add(move)
+    controls.update()
+    expect(controls.getDistance()).toBeCloseTo(start.length(), 9)
+    const fresh = setup(pivot, start.clone().add(move))
+    fresh.controls.target.copy(move)
+    fresh.controls.update()
+    expect(camera.position.distanceTo(fresh.camera.position)).toBeLessThan(1e-9)
   })
 
   it('takes an outside move as the new untilted pose', () => {

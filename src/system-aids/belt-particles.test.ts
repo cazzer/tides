@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sceneDistance } from '../planets'
-import { PLANETS_MIN_ZOOM, mainViewRange, planetsDrawDepth } from '../main-view'
+import { SYSTEM_EXTENT, mainViewRange } from '../main-view'
 import { SHELL_NEAR_RADIUS } from '../renderers/starDepth'
 import {
   ASTEROID_A_AU,
@@ -156,11 +156,10 @@ describe('the belts', () => {
 describe('the Kuiper belt in the main view', () => {
   const kuiperMax = Math.max(...radii(kuiper, 0))
 
-  it('stays within the planets draw depth from any planet the view targets', () => {
-    // A particle on the far side of the Sun from a target at Neptune is
-    // still within reach of the near plane at the zoom floor (main-view.ts).
+  it('stays within the far plane from any eye', () => {
+    // The far plane reaches SYSTEM_EXTENT past the Sun (main-view.ts mainNearFar).
     expect(kuiperMax).toBeLessThanOrEqual(sceneDistance(KUIPER_A_AU[1]) + 1e-3)
-    expect(NEPTUNE_MAX + kuiperMax).toBeLessThanOrEqual(planetsDrawDepth(PLANETS_MIN_ZOOM))
+    expect(kuiperMax).toBeLessThanOrEqual(SYSTEM_EXTENT)
   })
 
   it('stays inside the starfield, even its nearest depth shell', () => {

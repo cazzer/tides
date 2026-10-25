@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Spherical, Vector3, type EventDispatcher } from 'three'
+import { MAIN_DISTANCE } from './main-view'
 
 const DEG = Math.PI / 180
 const Y = new Vector3(0, 1, 0)
@@ -7,11 +8,11 @@ const SETTLED = 1e-3
 
 // Azimuth runs from the trailing tangent toward the outward radial, so the
 // clock text (reading outward along the radial) runs left to right on screen.
-// Distance matches OrbitControls' maxDistance in the main view.
+// Distance is the main view's default eye distance.
 export const CLOCK_VIEW = {
   azimuth: 20 * DEG,
   elevation: 40 * DEG,
-  distance: 80,
+  distance: MAIN_DISTANCE,
 } as const
 export const CLOCK_FRAMING_EASE = 0.05
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { PLANETS, sceneRadius } from '../planets'
-import { MAIN_ZOOM, PLANETS_MIN_ZOOM, mainViewRange, planetFramingZoom } from '../main-view'
+import {
+  MAIN_ZOOM,
+  mainViewRange,
+  planetFramingZoom,
+  targetUnitsPerPixel,
+} from '../main-view'
 import { MOON_KEYS, moonRadius, moonsOf } from '../moons/moons'
 import type { CameraFocus } from '../store'
 import {
@@ -29,7 +34,7 @@ const SATURN_FRAMED = framed(PLANETS.saturn.radius)
 
 describe('labelOpacity', () => {
   it('names the Sun, Earth and the outer planets zoomed all the way out', () => {
-    const upp = at(PLANETS_MIN_ZOOM)
+    const upp = at(1)
     for (const key of ['sun', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'] as const) {
       expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.9)
     }
@@ -37,7 +42,8 @@ describe('labelOpacity', () => {
 
   it('names the giants at a phone’s lower zoom floor, where Mars gives way', () => {
     // Earth and Mars orbit ~11 px apart there, too close for two names.
-    const upp = at(mainViewRange(true, { width: 390, height: 844 }).minZoom)
+    const phone = { width: 390, height: 844 }
+    const upp = targetUnitsPerPixel(mainViewRange(true, phone).maxDistance, phone.height)
     for (const key of ['sun', 'earth', 'jupiter', 'saturn'] as const) {
       expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.9)
     }
