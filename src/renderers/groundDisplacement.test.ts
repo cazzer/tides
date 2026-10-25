@@ -25,13 +25,17 @@ import {
 } from '../ship/terrain-floor'
 import {
   baseGroundGrey,
+  baseGroundSurface,
   displace,
   groundLevels,
   meshGrid,
   meshRadius,
   readGround,
+  riseOverRun,
   vertexGrey,
+  vertexSurface,
   worstNeedle,
+  type MeshGrid,
 } from '../ship/ground-mesh-model'
 import {
   EARTH_LIMB_SWAP_FLOOR,
@@ -142,6 +146,124 @@ describe('ground displacement (tides-zmw.2)', () => {
     })
   })
 
+  describe("the ground's slope at its vertices (tides-zmw.3)", () => {
+    const toDegrees = THREE.MathUtils.radToDeg
+    // A vertex's shading normal: the sphere's at unit, tilted by its slope.
+    const shadingNormal = (unit: THREE.Vector3, slope: ArrayLike<number>) =>
+      unit
+        .clone()
+        .normalize()
+        .sub(new THREE.Vector3(...riseOverRun(slope, EARTH_RADIUS)))
+        .normalize()
+    const unitAt = (grid: MeshGrid, k: number) => new THREE.Vector3().fromArray(grid.unit, 3 * k)
+    const slopeAt = (surface: Float64Array, k: number) => surface.subarray(4 * k + 1, 4 * k + 4)
+    // The area-weighted normal of the displaced mesh's faces around each
+    // vertex, the date line's two columns as one.
+    function faceNormals(grid: MeshGrid, mesh: Float64Array): THREE.Vector3[] {
+      const sphere = new THREE.SphereGeometry(1, ...grid.segments)
+      const index = sphere.getIndex()!.array
+      sphere.dispose()
+      const sums = Array.from({ length: mesh.length / 3 }, () => new THREE.Vector3())
+      const [a, b, c] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]
+      for (let t = 0; t < index.length; t += 3) {
+        a.fromArray(mesh, 3 * index[t])
+        b.fromArray(mesh, 3 * index[t + 1]).sub(a)
+        c.fromArray(mesh, 3 * index[t + 2]).sub(a)
+        b.cross(c)
+        for (let q = 0; q < 3; q++) sums[index[t + q]].add(b)
+      }
+      const [width] = grid.segments
+      for (let k = 0; k < sums.length; k += width + 1) {
+        sums[k].add(sums[k + width])
+        sums[k + width].copy(sums[k])
+      }
+      return sums.map((n) => n.normalize())
+    }
+    const quantile = (values: number[], q: number) => [...values].sort((x, y) => x - y)[Math.floor(q * (values.length - 1))]
+
+    it.each([
+      ['base', base],
+      ['limb', limb],
+    ])('tilts each vertex of the %s sphere as the drawn faces around it', (_, grid) => {
+      const surface = vertexSurface(ground4k, grid)
+      const grey = Float64Array.from({ length: surface.length / 4 }, (_, k) => surface[4 * k])
+      const faces = faceNormals(grid, displace(grid, grey, EARTH_RADIUS))
+      const [width, height] = grid.segments
+      const all: number[] = []
+      const relief: number[] = []
+      for (let k = width + 1; k < (width + 1) * height; k++) {
+        const off = toDegrees(shadingNormal(unitAt(grid, k), slopeAt(surface, k)).angleTo(faces[k]))
+        all.push(off)
+        if (toDegrees(faces[k].angleTo(unitAt(grid, k))) > 1) relief.push(off)
+      }
+      // Central differences leave out the faces' diagonal neighbours, which
+      // only the sharpest features feel: over every vertex 1.7° (base) and
+      // 1.9° (limb) at p99; where the faces tilt over 1°, 2.7° and 3.1°.
+      expect(quantile(all, 0.99)).toBeLessThan(2)
+      expect(quantile(relief, 0.5)).toBeLessThan(0.5)
+      expect(quantile(relief, 0.99)).toBeLessThan(3.5)
+    })
+
+    it("has no seam at the date line, and no slope at the poles' apexes", () => {
+      for (const grid of [base, limb]) {
+        const surface = vertexSurface(ground4k, grid)
+        const [width, height] = grid.segments
+        const row = width + 1
+        for (let j = 0; j <= height; j++) {
+          for (let n = 0; n < 4; n++) expect(surface[4 * (j * row + width) + n]).toBeCloseTo(surface[4 * j * row + n], 9)
+        }
+        for (const j of [0, height]) {
+          for (let i = 0; i <= width; i++) expect([...slopeAt(surface, j * row + i)]).toEqual([0, 0, 0])
+        }
+        // The row next to the south pole's apex, on Antarctica's plateau.
+        const south = surface.slice(4 * (height - 1) * row, 4 * height * row).filter((_, n) => n % 4)
+        expect(south.every(Number.isFinite)).toBe(true)
+        expect(Math.max(...south.map(Math.abs))).toBeGreaterThan(0)
+      }
+    })
+
+    it("morphs to the base sphere's slopes: fully morphed, the limb sphere shades as the base sphere", () => {
+      const baseSurface = vertexSurface(ground4k, base)
+      const [width, height] = LIMB_SEGMENTS
+      const [baseWidth, baseHeight] = EARTH_BASE_SEGMENTS
+      // Where the two share a vertex, their normals.
+      let shared = 0
+      for (let j = 0; j <= height; j++) {
+        for (let i = 0; i <= width; i++) {
+          if ((i * baseWidth) % width || (j * baseHeight) % height) continue
+          const k = j * (width + 1) + i
+          const b = ((j * baseHeight) / height) * (baseWidth + 1) + (i * baseWidth) / width
+          const morphed = baseGroundSurface(ground4k, EARTH_BASE_SEGMENTS, limb.uv[2 * k], limb.uv[2 * k + 1])
+          shared = Math.max(shared, shadingNormal(unitAt(limb, k), morphed.slice(1)).angleTo(shadingNormal(unitAt(base, b), slopeAt(baseSurface, b))))
+        }
+      }
+      expect(shared).toBeLessThan(1e-3)
+      // Between them, the limb sphere's triangles (which straddle the base's
+      // diagonals) against the base's: p99 0.14°, worst ~1.7° in the Andes.
+      const limbAt = (x: number, y: number) => baseGroundSurface(ground4k, EARTH_BASE_SEGMENTS, x / width, 1 - y / height).slice(1)
+      const off: number[] = []
+      for (let y = 1.05; y < height - 1; y += 0.37) {
+        for (let x = 0.03; x < width; x += 1.13) {
+          const [i, j] = [Math.floor(x), Math.floor(y)]
+          const [tx, ty] = [x - i, y - j]
+          const nw = limbAt(i, j)
+          const se = limbAt(i + 1, j + 1)
+          const east = ty <= tx
+          const mid = east ? limbAt(i + 1, j) : limbAt(i, j + 1)
+          const [wx, wy] = east ? [tx, ty] : [ty, tx]
+          const drawn = nw.map((s, n) => s + wx * (mid[n] - s) + wy * (se[n] - mid[n]))
+          const lon = (2 * Math.PI * x) / width
+          const theta = (Math.PI * y) / height
+          const unit = new THREE.Vector3(-Math.cos(lon) * Math.sin(theta), Math.cos(theta), Math.sin(lon) * Math.sin(theta))
+          const target = baseGroundSurface(ground4k, EARTH_BASE_SEGMENTS, x / width, 1 - y / height).slice(1)
+          off.push(toDegrees(shadingNormal(unit, drawn).angleTo(shadingNormal(unit, target))))
+        }
+      }
+      expect(quantile(off, 0.99)).toBeLessThan(0.3)
+      expect(quantile(off, 1)).toBeLessThan(3)
+    })
+  })
+
   describe('groundMorph and the swap', () => {
     const morph = (distance: number, screenPx: number) =>
       groundMorph(EARTH_BASE_SEGMENTS, distance, EARTH_RADIUS, screenPx, SHIP_FOV)
@@ -233,14 +355,36 @@ describe('ground displacement (tides-zmw.2)', () => {
       const vert = shader.vertexShader
       expect(vert).not.toContain('#include <displacementmap_vertex>')
       expect(vert).not.toContain('texture2D( displacementMap')
-      expect(vert).toContain('transformed += normalize(objectNormal) * (groundHeight(vDisplacementMapUv) * displacementScale + displacementBias);')
-      expect(vert.indexOf('float groundHeight(vec2 uv)')).toBeLessThan(vert.indexOf('void main()'))
+      expect(vert).toContain('transformed += normalize(objectNormal) * (groundAt.x * displacementScale + displacementBias);')
+      expect(vert.indexOf('vec4 groundSurface(vec2 uv)')).toBeLessThan(vert.indexOf('void main()'))
       expect(vert).toContain('#define GROUND_BASE vec2(128.0, 128.0)')
       expect(vert).toMatch(/#include <begin_vertex>\s+vGroundDetailPos = position;/)
       expect(vert).not.toContain('textureSize(')
-      for (const name of ['uGroundHeights', 'uGroundLod', 'uGroundBaseLod', 'uGroundMorph'] as const) {
+      // The slope ground-mesh-model.ts groundVertexSlope(), baseGroundSurface()
+      // and riseOverRun() mirror: a change to one side fails here.
+      for (const line of [
+        'if (uv.y <= 0.0 || uv.y >= 1.0) return vec3(0.0);',
+        'float east = textureLod(uGroundHeights, uv + vec2(d.x, 0.0), lod).r - textureLod(uGroundHeights, uv - vec2(d.x, 0.0), lod).r;',
+        'float north = textureLod(uGroundHeights, uv + vec2(0.0, d.y), lod).r - textureLod(uGroundHeights, uv - vec2(0.0, d.y), lod).r;',
+        'float lat = 3.141592654 * (uv.y - 0.5);',
+        'vec3 e = vec3(sin(lon), 0.0, cos(lon));',
+        'vec3 n = vec3(cos(lon) * sin(lat), cos(lat), -sin(lon) * sin(lat));',
+        'return east / (12.566370614 * d.x * cos(lat)) * e + north / (6.283185307 * d.y) * n;',
+        'return vec4(textureLod(uGroundHeights, uv, lod).r, groundVertexSlope(uv, GROUND_BASE, lod));',
+        'vec4 own = vec4(textureLod(uGroundHeights, uv, uGroundLod).r, groundVertexSlope(uv, uGroundCells, uGroundLod));',
+        'if (uGroundMorph > 0.0) own = mix(own, groundBaseSurface(uv), uGroundMorph);',
+        'vGroundSlope = groundAt.yzw * displacementScale / length(position);',
+      ]) {
+        expect(vert).toContain(line)
+      }
+      for (const name of ['uGroundHeights', 'uGroundLod', 'uGroundBaseLod', 'uGroundMorph', 'uGroundCells'] as const) {
         expect(shader.uniforms[name]).toBe(displacement.uniforms[name])
       }
+      // The ground detail tilts the land by it.
+      const frag = shader.fragmentShader
+      expect(frag.indexOf('#define GROUND_MESH_SLOPE')).toBeGreaterThan(frag.indexOf('#include <common>'))
+      expect(frag.indexOf('varying vec3 vGroundSlope;')).toBeLessThan(frag.indexOf('vec3 groundMeshSlope = vGroundSlope;'))
+      expect(frag.indexOf('#define GROUND_MESH_SLOPE')).toBeLessThan(frag.indexOf('#ifdef GROUND_MESH_SLOPE'))
       expect(patch.customProgramCacheKey()).toContain('ground-displacement-128x128')
       clouds.dispose()
     })

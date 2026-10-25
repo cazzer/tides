@@ -13,8 +13,10 @@
 // octaves it already resolves. Changing groundDetailTexel itself across the
 // ground would warp the noise.
 //
-// The bump map's own relief (tides-01v.13, ./groundRelief.ts) tilts the land's
-// normal first, from the same footprint; the detail's finer tilt adds to it.
+// The ground's own slope (tides-01v.13, tides-zmw.3, ./groundRelief.ts: the
+// drawn mesh's, from ./groundDisplacement.ts, plus the elevation map's finer
+// relief) tilts the land's normal first, from the same footprint; the
+// detail's finer tilt adds to it.
 //
 // Skylight on the tilted ground (tides-01v.19): the Sun is the ground's only
 // direct light, so under a low Sun every slope facing away went black.
@@ -118,7 +120,12 @@ vec3 groundUp = normal;
   float groundLand = 1.0 - specularStrength;
 #ifdef GROUND_RELIEF
   if (groundLand > 0.0) {
-    normal = normalize(normal - normalMatrix * (groundLand * groundRelief(vMapUv, vGroundDetailPos, groundFootprint)));
+#ifdef GROUND_MESH_SLOPE
+    vec3 groundMeshSlope = vGroundSlope;
+#else
+    vec3 groundMeshSlope = vec3(0.0);
+#endif
+    normal = normalize(normal - normalMatrix * (groundLand * groundSlope(vMapUv, vGroundDetailPos, groundFootprint, groundMeshSlope)));
   }
 #endif
   if (groundLand > 0.0

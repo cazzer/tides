@@ -258,8 +258,8 @@ function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Te
 }
 
 /**
- * The ground mesh's displacement level and morph for this draw: the base
- * sphere's level, or the limb sphere's blended toward the base's
+ * The ground mesh's displacement level, segments and morph for this draw:
+ * the base sphere's level, or the limb sphere's blended toward the base's
  * (groundMorph) as seen by `camera`.
  */
 function setGroundDisplacement(
@@ -272,8 +272,9 @@ function setGroundDisplacement(
   radius: number
 ) {
   const limb = isLimbSphere(geometry)
-  const [, rows] = limb ? LIMB_SEGMENTS : EARTH_BASE_SEGMENTS
-  uniforms.uGroundLod.value = groundLod(texture.image.height, rows)
+  const segments = limb ? LIMB_SEGMENTS : EARTH_BASE_SEGMENTS
+  uniforms.uGroundLod.value = groundLod(texture.image.height, segments[1])
+  uniforms.uGroundCells.value.set(...segments)
   uniforms.uGroundBaseLod.value = groundLod(texture.image.height, EARTH_BASE_SEGMENTS[1])
   uniforms.uGroundMorph.value = 0
   if (!limb || !mesh || !(camera instanceof THREE.PerspectiveCamera)) return

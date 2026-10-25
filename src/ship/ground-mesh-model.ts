@@ -2,12 +2,14 @@
 // ground texture's levels as the GPU holds them (earthDemTexture.ts: box
 // mips of the DEM, half floats), each vertex displaced as
 // renderers/groundDisplacement.ts reads it, and where a ray from the centre
-// meets the mesh's flat triangles. Independent of terrain-floor.ts, which
+// meets the mesh's flat triangles; and the slopes its shading takes
+// (tides-zmw.3), the vertex shader's and renderers/groundRelief.ts' blend. Independent of terrain-floor.ts, which
 // tests check against it.
 import * as THREE from 'three'
 import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { boxMips, demLevel, toHalfBits, type DemLevel, type EarthDem } from '../earth-dem'
 import { groundLod } from '../renderers/groundDisplacement'
+import { RELIEF_DETAIL, RELIEF_MAX_SLOPE } from '../renderers/groundRelief'
 import { LIMB_SEGMENTS, type SphereSegments } from './limb-detail'
 
 /** The ground texture's levels in grey levels (255 = TERRAIN_DISPLACEMENT),
@@ -120,15 +122,62 @@ export function meshRadius(mesh: Float64Array, [width, height]: SphereSegments, 
   return best
 }
 
+/** A vertex's ground: grey, then its slope (grey per run on the unit
+ * sphere, the Earth's frame), as groundDisplacement.ts' vec4s. */
+export type GroundSurface = [number, number, number, number]
+
 /**
- * groundDisplacement.ts groundBaseHeight(), line for line: the base sphere's
- * (`base`) triangles' grey at `uv`, the limb sphere's morph target.
+ * groundDisplacement.ts groundVertexSlope(), line for line: the slope at a
+ * vertex at (u, v) of a mesh of `cells`, from the heights at `lod`.
  */
-export function baseGroundGrey(levels: DemLevel[], [width, height]: SphereSegments, u: number, v: number): number {
+export function groundVertexSlope(levels: DemLevel[], [cellsX, cellsY]: SphereSegments, u: number, v: number, lod: number): [number, number, number] {
+  if (v <= 0 || v >= 1) return [0, 0, 0]
+  const dx = 1 / cellsX
+  const dy = 1 / cellsY
+  const east = readGround(levels, u + dx, v, lod) - readGround(levels, u - dx, v, lod)
+  const north = readGround(levels, u, v + dy, lod) - readGround(levels, u, v - dy, lod)
+  const lon = 2 * Math.PI * u
+  const lat = Math.PI * (v - 0.5)
+  const a = east / (4 * Math.PI * dx * Math.cos(lat))
+  const b = north / (2 * Math.PI * dy)
+  return [
+    a * Math.sin(lon) + b * Math.cos(lon) * Math.sin(lat),
+    b * Math.cos(lat),
+    a * Math.cos(lon) - b * Math.sin(lon) * Math.sin(lat),
+  ]
+}
+
+/** Each vertex's ground as the displacement reads it at the mesh's level,
+ * unmorphed: four to a vertex. */
+export function vertexSurface(levels: DemLevel[], { segments, uv }: MeshGrid): Float64Array {
+  const lod = groundLod(levels[0].height, segments[1])
+  const out = new Float64Array(uv.length * 2)
+  for (let k = 0; k < uv.length / 2; k++) {
+    const [u, v] = [uv[2 * k], uv[2 * k + 1]]
+    out[4 * k] = readGround(levels, u, v, lod)
+    out.set(groundVertexSlope(levels, segments, u, v, lod), 4 * k + 1)
+  }
+  return out
+}
+
+/** A ground slope (GroundSurface's) as rise per run on a sphere of
+ * `radius`: the vertex shader's vGroundSlope. */
+export function riseOverRun(slope: ArrayLike<number>, radius: number): [number, number, number] {
+  const scale = TERRAIN_DISPLACEMENT / 255 / radius
+  return [slope[0] * scale, slope[1] * scale, slope[2] * scale]
+}
+
+/**
+ * groundDisplacement.ts groundBaseSurface(), line for line: the base
+ * sphere's (`base`) triangles' ground at `uv`, the limb sphere's morph target.
+ */
+export function baseGroundSurface(levels: DemLevel[], [width, height]: SphereSegments, u: number, v: number): GroundSurface {
   const lod = groundLod(levels[0].height, height)
-  const vertex = (x: number, y: number) => {
+  const vertex = (x: number, y: number): GroundSurface => {
     const shift = y === 0 ? 0.5 : y === height ? -0.5 : 0
-    return readGround(levels, (x + shift) / width, 1 - y / height, lod)
+    const vu = (x + shift) / width
+    const vv = 1 - y / height
+    return [readGround(levels, vu, vv, lod), ...groundVertexSlope(levels, [width, height], vu, vv, lod)]
   }
   const cx = u * width
   const cy = (1 - v) * height
@@ -138,15 +187,32 @@ export function baseGroundGrey(levels: DemLevel[], [width, height]: SphereSegmen
   const ty = cy - j
   const nw = vertex(i, j)
   const se = vertex(i + 1, j + 1)
-  const mix = (a: number, b: number, t: number) => a + (b - a) * t
+  const mix = (a: GroundSurface, b: GroundSurface, t: number) => a.map((x, n) => x + (b[n] - x) * t) as GroundSurface
   if (j === 0) return mix(nw, mix(vertex(i, j + 1), se, tx), ty)
   if (j === height - 1) return mix(mix(nw, vertex(i + 1, j), tx), se, ty)
-  if (ty <= tx) {
-    const ne = vertex(i + 1, j)
-    return nw + tx * (ne - nw) + ty * (se - ne)
-  }
-  const sw = vertex(i, j + 1)
-  return nw + ty * (sw - nw) + tx * (se - sw)
+  const east = ty <= tx
+  const mid = east ? vertex(i + 1, j) : vertex(i, j + 1)
+  const [wx, wy] = east ? [tx, ty] : [ty, tx]
+  return nw.map((x, n) => x + wx * (mid[n] - x) + wy * (se[n] - mid[n])) as GroundSurface
+}
+
+/** baseGroundSurface's grey. */
+export function baseGroundGrey(levels: DemLevel[], base: SphereSegments, u: number, v: number): number {
+  return baseGroundSurface(levels, base, u, v)[0]
+}
+
+/**
+ * groundRelief.ts groundSlope()'s blend, line for line: the slope to shade
+ * from the mesh's (`mesh`, rise per run) and the map's finer one (`fine`),
+ * the detail faded by `fade`.
+ */
+export function shadedSlope(mesh: ArrayLike<number>, fine: ArrayLike<number>, fade: number): [number, number, number] {
+  const m: [number, number, number] = [mesh[0], mesh[1], mesh[2]]
+  if (fade <= 0) return m
+  const detail = m.map((x, n) => RELIEF_DETAIL * (fine[n] - x))
+  const s = Math.hypot(...detail)
+  const cap = fade / Math.sqrt(1 + (s * s) / (RELIEF_MAX_SLOPE * RELIEF_MAX_SLOPE))
+  return m.map((x, n) => x + detail[n] * cap) as [number, number, number]
 }
 
 /** The highest any vertex stands over all 8 of its neighbours, grey (≤ 0
