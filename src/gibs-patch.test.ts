@@ -5,10 +5,15 @@ import {
   GIBS_GROUND_WIDTH,
   GIBS_ROWS,
   gibsGroundTileUrl,
+  gibsNightTileUrl,
+  gibsPatchReachDeg,
   gibsPatchSide,
   gibsPatchTiles,
   gibsTileAt,
   nextGibsPatchOrigin,
+  NIGHT_PATCH_HOLD_DEG,
+  NIGHT_PATCH_SUN_DEG,
+  nightPatchWanted,
 } from './gibs-patch'
 
 describe('GIBS ground tiles', () => {
@@ -18,6 +23,12 @@ describe('GIBS ground tiles', () => {
     )
     expect(GIBS_GROUND_WIDTH).toBe(81920)
     expect(GIBS_COLS / GIBS_ROWS).toBe(2)
+  })
+
+  it("reads VIIRS's 2012 city lights from the same matrix, at its one date", () => {
+    expect(gibsNightTileUrl(18, 81)).toBe(
+      'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_CityLights_2012/default/2016-01-01/500m/7/18/81.jpeg'
+    )
   })
 
   it('caps phones and tablets at a 2048 px patch and skips GPUs without 4k', () => {
@@ -83,6 +94,14 @@ describe('GIBS patch placement', () => {
     expect(Math.max(...tiles.map((t) => t.col))).toBe(159)
   })
 
+  it('names its tiles from the layer it is given, the day imagery unless told', () => {
+    const night = gibsPatchTiles({ row: 16, col: 36 }, 4, { row: 18, col: 38 }, gibsNightTileUrl)
+    expect(night.map((t) => t.url)).toEqual(night.map((t) => gibsNightTileUrl(t.row, t.col)))
+    const day = gibsPatchTiles({ row: 16, col: 36 }, 4, { row: 18, col: 38 })
+    expect(day.map((t) => t.url)).toEqual(day.map((t) => gibsGroundTileUrl(t.row, t.col)))
+    expect(night.map((t) => [t.row, t.col, t.slot])).toEqual(day.map((t) => [t.row, t.col, t.slot]))
+  })
+
   it('keeps the tiles a one-tile move shares in their slots, so only a column refills', () => {
     const before = gibsPatchTiles({ row: 16, col: 36 }, 8, { row: 20, col: 40 })
     const after = gibsPatchTiles({ row: 16, col: 37 }, 8, { row: 20, col: 41 })
@@ -90,6 +109,29 @@ describe('GIBS patch placement', () => {
     const refilled = after.filter((t) => slotOf.get(t.url) !== t.slot)
     expect(refilled).toHaveLength(8)
     expect(new Set(refilled.map((t) => t.col))).toEqual(new Set([44]))
+  })
+})
+
+describe('GIBS night patch', () => {
+  const sinDeg = (deg: number) => Math.sin((deg * Math.PI) / 180)
+
+  it('reaches out to a corner of the patch and the tile beyond its middle', () => {
+    expect(gibsPatchReachDeg(8)).toBeCloseTo(15.91, 2)
+    expect(gibsPatchReachDeg(4)).toBeCloseTo(9.55, 2)
+  })
+
+  it('streams while the Sun is down within reach of the sub-point, and holds a few degrees longer', () => {
+    for (const side of [8, 4]) {
+      const start = NIGHT_PATCH_SUN_DEG + gibsPatchReachDeg(side)
+      const hold = start + NIGHT_PATCH_HOLD_DEG
+      expect(nightPatchWanted(sinDeg(-90), side, false)).toBe(true)
+      expect(nightPatchWanted(sinDeg(start - 0.1), side, false)).toBe(true)
+      expect(nightPatchWanted(sinDeg(start + 0.1), side, false)).toBe(false)
+      expect(nightPatchWanted(sinDeg(start + 0.1), side, true)).toBe(true)
+      expect(nightPatchWanted(sinDeg(hold - 0.1), side, true)).toBe(true)
+      expect(nightPatchWanted(sinDeg(hold + 0.1), side, true)).toBe(false)
+      expect(nightPatchWanted(sinDeg(90), side, true)).toBe(false)
+    }
   })
 })
 

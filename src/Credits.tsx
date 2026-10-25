@@ -39,7 +39,7 @@ export function Credits({ children }: { children?: ReactNode }) {
         >
           {GIBS_ACKNOWLEDGEMENT}
         </span>
-        {' · Blue Marble Next Generation'}
+        {' · Blue Marble Next Generation, VIIRS City Lights 2012'}
       </li>
       <li>
         Terrain: <Link href={MAPTERHORN_URL}>Mapterhorn</Link>,{' '}

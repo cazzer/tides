@@ -27,6 +27,18 @@ export function gibsGroundTileUrl(row: number, col: number): string {
 }
 
 /**
+ * The night side's city lights under the ship (tides-tvr.2): VIIRS's 2012
+ * composite, the same epoch and grid as the night map (earth-night.jpg
+ * registers with it to the texel), on the same level-7 matrix. A single
+ * dated layer; GIBS serves it with CORS * and no key, but no-store.
+ */
+export const GIBS_NIGHT_LAYER = 'VIIRS_CityLights_2012'
+
+export function gibsNightTileUrl(row: number, col: number): string {
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/${GIBS_NIGHT_LAYER}/default/2016-01-01/500m/${GIBS_GROUND_LEVEL}/${row}/${col}.jpeg`
+}
+
+/**
  * Tiles along the patch's side for a device whose flight maps are capped at
  * `cap` (quality.ts flightTextureCap): 8 (4096 px, 18 deg) on desktops, 4
  * (2048 px, 9 deg, a fifth of the VRAM) on phones and tablets, none where
@@ -85,8 +97,14 @@ export interface GibsPatchTile extends GibsTile {
   url: string
 }
 
-/** The patch's tiles, nearest `centre` first (the order to fetch them). */
-export function gibsPatchTiles(origin: GibsPatchOrigin, side: number, centre: GibsTile): GibsPatchTile[] {
+/** The patch's tiles, nearest `centre` first (the order to fetch them),
+ * from the layer `tileUrl` names. */
+export function gibsPatchTiles(
+  origin: GibsPatchOrigin,
+  side: number,
+  centre: GibsTile,
+  tileUrl: (row: number, col: number) => string = gibsGroundTileUrl
+): GibsPatchTile[] {
   const tiles: (GibsPatchTile & { distance: number })[] = []
   for (let y = 0; y < side; y++) {
     for (let x = 0; x < side; x++) {
@@ -97,12 +115,38 @@ export function gibsPatchTiles(origin: GibsPatchOrigin, side: number, centre: Gi
         row,
         col,
         slot: (row % side) * side + (col % side),
-        url: gibsGroundTileUrl(row, col),
+        url: tileUrl(row, col),
         distance: Math.hypot(dc, row - centre.row),
       })
     }
   }
   return tiles.sort((a, b) => a.distance - b.distance).map(({ distance: _, ...tile }) => tile)
+}
+
+/**
+ * How far, in degrees of arc, the patch reaches from the sub-point: half its
+ * side and the tile the ship may stray into before it moves, out to a
+ * corner. 15.9 deg for a side of 8, 9.5 for 4.
+ */
+export function gibsPatchReachDeg(side: number): number {
+  return (side / 2 + 1) * (180 / GIBS_ROWS) * Math.SQRT2
+}
+
+/**
+ * The night patch streams only while some of it can be on the night side:
+ * the Sun under NIGHT_PATCH_SUN_DEG (where the city lights start to come
+ * on, ../renderers/nightLights.ts) somewhere within its reach of the
+ * sub-point. Once streaming it holds NIGHT_PATCH_HOLD_DEG longer, so a ship
+ * on the terminator doesn't refill it back and forth.
+ */
+export const NIGHT_PATCH_SUN_DEG = 3
+export const NIGHT_PATCH_HOLD_DEG = 5
+
+/** `sunSin`: sin of the Sun's elevation at the ship's sub-point.
+ * `active`: the patch is streaming now. */
+export function nightPatchWanted(sunSin: number, side: number, active: boolean): boolean {
+  const elevation = (Math.asin(Math.min(1, Math.max(-1, sunSin))) * 180) / Math.PI
+  return elevation < NIGHT_PATCH_SUN_DEG + gibsPatchReachDeg(side) + (active ? NIGHT_PATCH_HOLD_DEG : 0)
 }
 
 export interface GibsTileStore {
