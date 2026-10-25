@@ -5,15 +5,22 @@
 // the full exaggeration, interpolated over its triangles), so lit slopes
 // match the silhouette, plus a share of the elevation map's finer relief
 // about it: central differences a pixel's footprint (at least a texel)
-// either side, read from the mip that wide. Averaged over a mesh cell the
-// fine slope is the mesh's, so the share only adds detail. The mesh is
+// either side, read from the mip that wide. On relief a few mesh cells
+// across or broader the fine slope averages to the mesh's, and the share
+// only adds detail. On sharper relief it doesn't: the mesh's slope is a
+// vertex's central difference over box-filtered heights, which smooths a
+// ridge one or two cells wide to a quarter or half of its faces' slope, and
+// the share gives part of that back. Such a ridge's lit slope is about
+// 50-65% of its drawn faces', 25-50% once the detail fades. The mesh is
 // exaggerated about 25x (../cloud-layer.ts), which on the map's few-km slopes
 // would stand the detail on end and black out every lee slope under a low
 // Sun, so the detail is a fraction of it, softly capped.
 //
 // The detail fades out as the footprint grows past a few texels, and toward
 // the poles, where the map's stretched rows would show as streaks (as the
-// albedo's, ./poleSmoothing.ts); the mesh's slope stays. The ground detail
+// albedo's, ./poleSmoothing.ts); the mesh's own slope fades where its cells
+// shrink under a few pixels and toward the poles too
+// (groundDisplacement.ts groundDrawnSlope()). The ground detail
 // (./groundDetail.ts) calls it on land only, before its own finer tilt, so
 // the open water's glint is untouched; it adds no albedo, so the GIBS patch
 // (./gibsPatch.ts) and the night lights are unaffected.

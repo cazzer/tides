@@ -8,7 +8,8 @@
 import * as THREE from 'three'
 import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { boxMips, demLevel, toHalfBits, type DemLevel, type EarthDem } from '../earth-dem'
-import { groundLod } from '../renderers/groundDisplacement'
+import { MESH_SLOPE_FADE_END, MESH_SLOPE_FADE_START, groundLod } from '../renderers/groundDisplacement'
+import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from '../renderers/poleSmoothing'
 import { RELIEF_DETAIL, RELIEF_MAX_SLOPE } from '../renderers/groundRelief'
 import { LIMB_SEGMENTS, type SphereSegments } from './limb-detail'
 
@@ -199,6 +200,58 @@ export function baseGroundSurface(levels: DemLevel[], [width, height]: SphereSeg
 /** baseGroundSurface's grey. */
 export function baseGroundGrey(levels: DemLevel[], base: SphereSegments, u: number, v: number): number {
   return baseGroundSurface(levels, base, u, v)[0]
+}
+
+const smoothstep = (e0: number, e1: number, x: number) => {
+  const t = THREE.MathUtils.clamp((x - e0) / (e1 - e0), 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
+/**
+ * groundDisplacement.ts groundDrawnSlope()'s fade, line for line: how much
+ * of the mesh's slope (a mesh of `rows` rows on a sphere of `radius`) shows
+ * at latitude `lat` (degrees), seen at `footprint`.
+ */
+export function groundMeshSlopeFade(footprint: number, radius: number, rows: number, lat: number): number {
+  const cell = (Math.PI * radius) / rows
+  return (
+    (1 - smoothstep(MESH_SLOPE_FADE_START, MESH_SLOPE_FADE_END, footprint / cell)) *
+    (1 - smoothstep(POLE_SMOOTH_FROM, POLE_SMOOTH_TO, Math.abs(lat)))
+  )
+}
+
+/** textureLod at any `lod`: trilinear between levels, clamped to them. */
+export function readGroundLod(levels: DemLevel[], u: number, v: number, lod: number): number {
+  const at = THREE.MathUtils.clamp(lod, 0, levels.length - 1)
+  const level = Math.floor(at)
+  const below = readGround(levels, u, v, level)
+  return at > level ? below + (readGround(levels, u, v, level + 1) - below) * (at - level) : below
+}
+
+const fract = (x: number) => x - Math.floor(x)
+
+/**
+ * groundRelief.ts groundRelief(), line for line: the map's slope (rise per
+ * run, the Earth's frame) at (u, v) on a sphere of `radius`, over a run of
+ * `footprint` (at least a texel), from `levels`, the whole map's mips.
+ */
+export function reliefSlope(levels: DemLevel[], u: number, v: number, radius: number, footprint: number): [number, number, number] {
+  const width = levels[0].width
+  const texel = (2 * Math.PI * radius) / width
+  const lat = (v - 0.5) * 180
+  const run = Math.max(footprint, texel)
+  const c = Math.max(Math.cos(THREE.MathUtils.degToRad(lat)), 0.05)
+  const lod = Math.log2(run / texel)
+  const [dx, dy] = [run / (texel * width * c), (2 * run) / (texel * width)]
+  const east = readGroundLod(levels, fract(u + dx), v, lod - Math.log2(c)) - readGroundLod(levels, fract(u - dx), v, lod - Math.log2(c))
+  const north = readGroundLod(levels, u, Math.min(v + dy, 1), lod) - readGroundLod(levels, u, Math.max(v - dy, 0), lod)
+  const lon = 2 * Math.PI * u
+  const phi = THREE.MathUtils.degToRad(lat)
+  const n = new THREE.Vector3(-Math.cos(lon) * Math.cos(phi), Math.sin(phi), Math.sin(lon) * Math.cos(phi))
+  const e = new THREE.Vector3(0, 1, 0).cross(n).normalize()
+  const up = n.clone().cross(e)
+  const scale = TERRAIN_DISPLACEMENT / 255 / (2 * run)
+  return [0, 1, 2].map((a) => scale * (east * e.getComponent(a) + north * up.getComponent(a))) as [number, number, number]
 }
 
 /**

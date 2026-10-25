@@ -72,7 +72,7 @@ describe('ground detail patch', () => {
     expect(frag.indexOf('float groundFootprint =')).toBeLessThan(relief)
     expect(relief).toBeLessThan(frag.indexOf('vec4 detail = groundDetail('))
     // Without the displacement patch's slope (tides-zmw.3), just the map's detail.
-    expect(frag).toMatch(/#ifdef GROUND_MESH_SLOPE\s+vec3 groundMeshSlope = vGroundSlope;\s+#else\s+vec3 groundMeshSlope = vec3\(0\.0\);/)
+    expect(frag).toMatch(/#ifdef GROUND_MESH_SLOPE\s+vec3 groundMeshSlope = groundDrawnSlope\(vGroundDetailPos, groundFootprint\);\s+#else\s+vec3 groundMeshSlope = vec3\(0\.0\);/)
     expect(flat.fragmentShader).not.toContain('#define GROUND_RELIEF')
     expect(flat.fragmentShader).not.toContain('uniform sampler2D displacementMap;')
     // The blend ground-mesh-model.ts shadedSlope() mirrors: a change to one side fails here.

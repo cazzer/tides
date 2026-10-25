@@ -16,6 +16,7 @@
 // (EARTH_LIMB_SWAP_FLOOR), so the floor never changes under the ship.
 import * as THREE from 'three'
 import type { MaterialPatch } from './eclipseShadow'
+import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 import { LIMB_FACET_PX, LIMB_HYSTERESIS, limbFacetPx, type SphereSegments } from '../ship/limb-detail'
 
 /** The texture level whose rows match a mesh's `meshRows` rows, for a
@@ -74,6 +75,7 @@ export function groundMorph(
 }
 
 const f = (x: number) => x.toFixed(1)
+const f6 = (x: number) => x.toFixed(6)
 
 // The ground's slope at each vertex (tides-zmw.3): the central difference of
 // the same heights the mesh is displaced by, its neighbours' on either side,
@@ -147,9 +149,30 @@ const VERTEX_BODY = /* glsl */ `
 #endif
 `
 
+/**
+ * The mesh's slope fades out in the fragment as a pixel's footprint grows
+ * from this fraction of a mesh row to the next: its cells under ~3 to ~1.5
+ * pixels, where their shading would shimmer as the Earth turns.
+ */
+export const MESH_SLOPE_FADE_START = 1 / 3
+export const MESH_SLOPE_FADE_END = 2 / 3
+
+// The drawn slope at p on the sea-level sphere (the Earth's frame), seen at
+// footprint (a pixel's width on the ground). It fades toward the poles as
+// the map's detail does (groundRelief.ts): the polar fans interpolate it
+// from a flat apex to the next row's slopes (half-float steps over a
+// shrinking run), a starburst. groundMeshSlopeFade()
+// (../ship/ground-mesh-model.ts) is its mirror.
 const FRAGMENT_HEAD = /* glsl */ `
 #define GROUND_MESH_SLOPE
+uniform vec2 uGroundCells;
 varying vec3 vGroundSlope;
+vec3 groundDrawnSlope(vec3 p, float footprint) {
+  float cell = 3.141592654 * length(p) / uGroundCells.y;
+  float lat = degrees(asin(clamp(p.y / length(p), -1.0, 1.0)));
+  return vGroundSlope * (1.0 - smoothstep(${f6(MESH_SLOPE_FADE_START)}, ${f6(MESH_SLOPE_FADE_END)}, footprint / cell))
+    * (1.0 - smoothstep(${f6(POLE_SMOOTH_FROM)}, ${f6(POLE_SMOOTH_TO)}, abs(lat)));
+}
 `
 
 function replace(source: string, chunk: string, code: string): string {

@@ -121,7 +121,7 @@ vec3 groundUp = normal;
 #ifdef GROUND_RELIEF
   if (groundLand > 0.0) {
 #ifdef GROUND_MESH_SLOPE
-    vec3 groundMeshSlope = vGroundSlope;
+    vec3 groundMeshSlope = groundDrawnSlope(vGroundDetailPos, groundFootprint);
 #else
     vec3 groundMeshSlope = vec3(0.0);
 #endif
