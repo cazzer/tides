@@ -154,6 +154,12 @@ const SEA_LEVEL = sceneRadius(2000 * EARTH_RADIUS_KM)
 export const MARCH_STEPS = Math.ceil(
   (2 * Math.sqrt((SEA_LEVEL + CLOUD_LAYER_TOP) ** 2 - SEA_LEVEL ** 2)) / MARCH_STEP
 )
+// Reads of the field within the step where the march from inside went down
+// through a top (tides-ndh), once it has stopped there: each halves where in
+// the step the ray meets the top, which is then solved linearly over the
+// half left, so the top holds still to about 2^-MARCH_REFINE of a step
+// however the steps fall along the ray. 0 leaves the step's own crossing.
+export const MARCH_REFINE = 2
 
 // Height field shared by the cloud shell and the ground's shadow.
 const FIELD = /* glsl */ `
@@ -480,6 +486,7 @@ void cloudOut(vec4 color, float z, vec3 haze, float share) {
 #define WRAP 0.6
 #define MARCH_STEP ${f(MARCH_STEP)}
 #define MARCH_STEPS ${MARCH_STEPS}
+#define MARCH_REFINE ${MARCH_REFINE}
 // How far the ground under a march may rise above the ground at its entry.
 #define TERRAIN_SLACK 0.01
 #ifdef CLOUD_FLAT
@@ -923,8 +930,13 @@ void main() {
   // where the field taken linear over the step crosses. The steps hold
   // still as the camera turns (above), but in flight they slide along each
   // ray by the eye's motion, and the crossing moves within its step with
-  // them (tides-16z: reading the field again within the hit's step pinned
-  // it, but cost about half a millisecond a frame inside the deck). Through
+  // them: tops and walls rolled with a period of a step's travel. A top the
+  // march stops at is pinned to the field after the march (MARCH_REFINE,
+  // tides-ndh), from the step's two ends, which the march leaves as they
+  // were when it stops: so nothing more is carried from step to step for it
+  // (tides-16z's refinement, which stored every crossing's step through the
+  // march, cost about half a millisecond a frame inside the deck however
+  // few its reads). Sides and veils keep the step's crossing. Through
   // a faint column's top or base it carries on. From above the tops around
   // the camera, as from outside, a top is met however faint (the shading
   // drops it): carried on, grazing rays would find sides along every far
@@ -1139,6 +1151,17 @@ void main() {
         upThrough = from == overBase.x;
         if (!side) {
           depthHit = 0.0;
+          // For the refinement after the march (tides-ndh): the step's end,
+          // the ray's height over the top there, and how far through the
+          // cloud the step has the ray, in the march's own altPrev, underPrev
+          // and alphaPrev, which nothing reads after it. Its start is the
+          // march's sPrev, gapPrev and colPrev, which the stop leaves as they
+          // were. A value of its own, carried through the march to be set
+          // only here, held registers all through it (about 0.05 ms a frame
+          // over the tops).
+          altPrev = s;
+          underPrev = gap;
+          alphaPrev = sPrev + stepLen * until;
           break;
         }
         iSide = i;
@@ -1159,6 +1182,41 @@ void main() {
     gapPrev = gap;
     underPrev = under;
     alphaPrev = colq.x;
+  }
+  if (depthHit == 0.0) {
+    // Down through a top: where within its step the ray meets the top
+    // itself, rather than the top taken linear over the step, which slides
+    // with the steps (tides-ndh). Each read, at the step's own mip there,
+    // halves the stretch the ray comes down to the top over, as its height
+    // over the top changes sign; on the last the crossing is solved
+    // linearly. The ground under the reads is taken linear between the
+    // step's ends (the elevation map's texels are several steps across),
+    // and the step's end, in the cloud, needs no read. No further than the
+    // step has the ray in cloud. The march's own steps stay as they were:
+    // its register peak is within them, and this runs only on rays that
+    // stop at a top. Mirrored by cloud-layer.ts refineTopCrossing.
+    float lo = sPrev;
+    float gLo = gapPrev;
+    float hi = altPrev;
+    float gHi = underPrev;
+    float len = max(hi - sPrev, 1e-6);
+    for (int k = 0; k < MARCH_REFINE; k++) {
+      float sm = 0.5 * (lo + hi);
+      vec3 qm = eye + d * sm;
+      float rm = length(qm);
+      float ground = mix(colPrev.y, colIn.y, (sm - sPrev) / len) - CLOUD_CLEARANCE;
+      float gm = rm - uSeaLevel - cloudMarchColumn(cloudUv(qm / rm), rm, dot(d, qm / rm), ground,
+        sm, ds, spread, fromAbove).z;
+      if (gm <= 0.0) {
+        hi = sm;
+        gHi = gm;
+      } else {
+        lo = sm;
+        gLo = gm;
+      }
+    }
+    // Above the top at lo, at or under it at hi.
+    sHit = min(lo + (hi - lo) * gLo / (gLo - gHi), alphaPrev);
   }
   if (fogged) {
     // The fog's light: as cloud at the eye's height, lit from straight

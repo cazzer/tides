@@ -13,6 +13,7 @@ import {
   detailErosion,
   detailFall,
   detailPixelScale,
+  MARCH_REFINE,
   MARCH_STEP,
   MARCH_STEPS,
 } from './cloudShaders'
@@ -37,6 +38,7 @@ import {
   marchSpanFromEye,
   marchSteps,
   type MarchSample,
+  refineTopCrossing,
   type ShadeSum,
   shadeAdd,
   shadePlace,
@@ -881,6 +883,162 @@ describe('cloud detail eroding only edges and grain (tides-tvr.3)', () => {
     } as unknown as THREE.WebGLRenderer
     material.onBeforeRender(renderer, new THREE.Scene(), new THREE.PerspectiveCamera(), new THREE.BufferGeometry(), new THREE.Mesh(), null)
     expect(material.uniforms.uPixelScale.value).toBe(1600 / DETAIL_VIEW_PX)
+    clouds.dispose()
+  })
+})
+
+describe('cloud tops holding still in flight (tides-ndh)', () => {
+  // A field of tops with a knot every 0.0072 (about a texel of the
+  // real-weather map, 2560 wide), linear between, along a ray. Flat ground:
+  // over a step the Earth's curve is nothing to the field's.
+  const TEXEL = 0.0072
+  const hash = (k: number) => {
+    const x = Math.sin(k * 12.9898 + 4.1414) * 43758.5453
+    return x - Math.floor(x)
+  }
+  const field = (knot: (k: number) => number) => (x: number) => {
+    const k = Math.floor(x / TEXEL)
+    const t = x / TEXEL - k
+    return knot(k) + (knot(k + 1) - knot(k)) * t
+  }
+  // Rays descending 5..20° from above tops 0.018..0.03 tall, over stretches
+  // of the field further and further on, in dense cloud.
+  const tops = field((k) => 0.018 + 0.012 * hash(k))
+  const rays: ((s: number) => MarchSample)[] = []
+  for (const deg of [5, 8, 12, 16, 20]) {
+    for (const x0 of [0, 0.05, 0.11, 0.23, 0.37]) {
+      const a = (deg * Math.PI) / 180
+      rays.push((s) => ({ alt: 0.034 - s * Math.sin(a), base: 0.006, top: tops(x0 + s * Math.cos(a)), alpha: 0.6 }))
+    }
+  }
+  const gap = (q: MarchSample) => q.alt - q.top
+
+  // Where a ray first comes down to the tops, to a thousandth of a step,
+  // then bisected; and whether it does so once within [s0, s1].
+  const firstDown = (sampleAt: (s: number) => MarchSample, s0: number, s1: number) => {
+    let lo = -1
+    let downs = 0
+    let was = gap(sampleAt(s0)) <= 0
+    const n = Math.ceil(((s1 - s0) / MARCH_STEP) * 1000)
+    for (let k = 1; k <= n; k++) {
+      const s = s0 + ((s1 - s0) * k) / n
+      const now = gap(sampleAt(s)) <= 0
+      if (now && !was) {
+        downs++
+        if (lo < 0) lo = s0 + ((s1 - s0) * (k - 1)) / n
+      }
+      was = now
+    }
+    if (lo < 0) return null
+    let hi = lo + (s1 - s0) / n
+    for (let k = 0; k < 40; k++) {
+      const mid = (lo + hi) / 2
+      if (gap(sampleAt(mid)) <= 0) hi = mid
+      else lo = mid
+    }
+    return { at: hi, once: downs === 1 }
+  }
+
+  // The top the march stops at over steps of MARCH_STEP from phase: as the
+  // step found it, refined `iterations` times, and where the field itself
+  // comes down to it where it does so once in the step.
+  const topHit = (sampleAt: (s: number) => MarchSample, phase: number, iterations: number) => {
+    let sPrev = 0
+    let prev = sampleAt(sPrev)
+    for (let i = 1; i < 400; i++) {
+      const s = MARCH_STEP * (i - phase)
+      if (s <= sPrev) continue
+      const next = sampleAt(s)
+      const found = marchCrossing(prev, next)
+      if (found && found.side) return null
+      if (found) {
+        const len = s - sPrev
+        const from = sPrev
+        const w = refineTopCrossing(prev, next, (t) => sampleAt(from + t * len), iterations, found.until)
+        const truth = firstDown(sampleAt, sPrev, s)
+        return {
+          hit: sPrev + w * len,
+          coarse: sPrev + found.at * len,
+          truth: truth?.once ? truth.at : null,
+        }
+      }
+      sPrev = s
+      prev = next
+    }
+    return null
+  }
+  const PHASES = Array.from({ length: 16 }, (_, p) => (p + 0.5) / 16)
+  const sorted = (xs: number[]) => xs.sort((a, b) => a - b)
+  const p95 = (xs: number[]) => sorted(xs)[Math.floor(0.95 * (xs.length - 1))]
+  // Over the phases, how far apart (in steps) the hits on a ray land, where
+  // the steps find the ray's first top (not one past a top they miss).
+  const spreads = (iterations: number) =>
+    rays.map((sampleAt) => {
+      const first = firstDown(sampleAt, 0, 0.6)!.at
+      const hits = PHASES.map((phase) => topHit(sampleAt, phase, iterations))
+        .filter((h) => h != null && Math.abs(h.coarse - first) < MARCH_STEP)
+        .map((h) => (iterations > 0 ? h!.hit : h!.coarse) / MARCH_STEP)
+      return Math.max(...hits) - Math.min(...hits)
+    })
+
+  it('pins a top the march stops at to the field, wherever the steps fall', () => {
+    const errors: number[] = []
+    const coarse: number[] = []
+    for (const sampleAt of rays) {
+      for (const phase of PHASES) {
+        const h = topHit(sampleAt, phase, MARCH_REFINE)
+        if (h?.truth == null) continue
+        errors.push(Math.abs(h.hit - h.truth) / MARCH_STEP)
+        coarse.push(Math.abs(h.coarse - h.truth) / MARCH_STEP)
+      }
+    }
+    expect(errors.length).toBeGreaterThan(150)
+    // Each read halves where the crossing can lie.
+    expect(Math.max(...errors)).toBeLessThanOrEqual(2 ** -MARCH_REFINE + 1e-9)
+    expect(p95(errors)).toBeLessThan(0.1)
+    expect(p95(coarse)).toBeGreaterThan(0.4)
+    // No reads: the step's own crossing.
+    for (const sampleAt of rays.slice(0, 5)) {
+      const h = topHit(sampleAt, 0.3, 0)
+      if (h) expect(h.hit).toBeCloseTo(h.coarse, 12)
+    }
+  })
+
+  it('holds a top still as the steps slide along the ray in flight', () => {
+    // How far a ray's top moves as the eye flies a step: the steps' phase
+    // along the ray runs through a whole step.
+    expect(p95(spreads(MARCH_REFINE))).toBeLessThan(0.15)
+    expect(p95(spreads(0))).toBeGreaterThan(0.5)
+  })
+
+  it('never takes a refined top past where the step has the ray leave the cloud', () => {
+    // A thin top: the ray is under it for a sliver of the step.
+    const prev = { alt: 0.03, base: 0.006, top: 0.02, alpha: 0.6 }
+    const next = { alt: 0.02, base: 0.006, top: 0.0201, alpha: 0.6 }
+    const sampleAt = (w: number) => ({ ...prev, alt: 0.03 - 0.01 * w, top: 0.02 + 0.0001 * w })
+    const hit = marchCrossing(prev, next)!
+    expect(hit.side).toBe(false)
+    expect(refineTopCrossing(prev, next, sampleAt, MARCH_REFINE, 0.9)).toBeLessThanOrEqual(0.9)
+  })
+
+  it('refines the top after the march, from the step it stopped in', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+    const outside = preprocess(clouds.material.fragmentShader, new Set())
+    expect(inside).toContain(`#define MARCH_REFINE ${MARCH_REFINE}`)
+    // Kept, as the march stops at a top, in its own state, which nothing
+    // reads after it: nothing more carried step to step.
+    expect(inside).toContain('altPrev = s;\n          underPrev = gap;\n          alphaPrev = sPrev + stepLen * until;\n          break;')
+    expect(inside).toContain('if (depthHit == 0.0) {')
+    expect(inside.match(/depthHit = 0\.0;/g)).toHaveLength(1)
+    // Each step's read, and the refinement's, after the march.
+    const calls = [...inside.matchAll(/[^\w ]\s*cloudMarchColumn\(|= cloudMarchColumn\(|- cloudMarchColumn\(/g)]
+    expect(calls).toHaveLength(2)
+    const march = inside.indexOf('for (int i = max(iFirst, 1);')
+    const refine = inside.indexOf('for (int k = 0; k < MARCH_REFINE; k++)')
+    expect(refine).toBeGreaterThan(march)
+    expect(refine).toBeLessThan(inside.indexOf('if (sHit < 0.0 && sVeil >= 0.0)'))
+    expect(outside).not.toContain('MARCH_REFINE; k++')
     clouds.dispose()
   })
 })

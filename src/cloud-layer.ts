@@ -368,6 +368,44 @@ export function marchCrossing(
   return { at, until, side, depth: side ? null : 0 }
 }
 
+/**
+ * Where within a step the march from inside meets a top it went down
+ * through (marchCrossing() with side false; cloudShaders.ts, after the
+ * march, tides-ndh), pinned to the field rather than to the field taken
+ * linear over the step, which lands wherever the steps fall: from `prev`
+ * (over the top) to `next` (at or under it), each of `iterations` reads
+ * (`sampleAt`, of a share of the step) halves the stretch where the ray's
+ * height over the top changes sign, and the crossing is solved linearly on
+ * the last; within 2^-iterations of a step of where the ray meets the top.
+ * No further than `until`, where the step has the ray leave the cloud. As a
+ * share of the step.
+ */
+export function refineTopCrossing(
+  prev: MarchSample,
+  next: MarchSample,
+  sampleAt: (w: number) => MarchSample,
+  iterations: number,
+  until = 1
+): number {
+  let lo = 0
+  let hi = 1
+  let gLo = prev.alt - prev.top
+  let gHi = next.alt - next.top
+  for (let k = 0; k < iterations; k++) {
+    const mid = (lo + hi) / 2
+    const m = sampleAt(mid)
+    const g = m.alt - m.top
+    if (g <= 0) {
+      hi = mid
+      gHi = g
+    } else {
+      lo = mid
+      gLo = g
+    }
+  }
+  return Math.min(lo + ((hi - lo) * gLo) / (gLo - gHi), until)
+}
+
 export type Vec3 = [number, number, number]
 
 /**
