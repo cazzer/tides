@@ -7,6 +7,11 @@
 // gives AMBIENT_INTENSITY / π · albedo. The day side should hold its colours
 // (white cloud near, not past, the shoulder), the night side should be dark
 // enough for city lights, aurora and the eclipsed Moon's glow to carry it.
+//
+// In flight, near the ground at night, the eye adapts (tides-tvr.2;
+// ../night-flight.ts): a night fill and the real Moon's light lift the
+// ground and the clouds' ambient, by an adaptation that is 0 by day, high
+// up and in the system view, which keeps exactly these levels.
 
 /** App.tsx's Canvas; everything tone-mapped (stars, Sun, labels) shares it. */
 export const TONE_MAPPING_EXPOSURE = 1
@@ -28,7 +33,20 @@ export const CLOUD_EXPOSURE = 0.95
 
 /** Cloud under the ambient light, relative to a white Lambertian ground:
  * the deck should just read on the night side, not grey it over. */
-export const CLOUD_AMBIENT = (0.7 * AMBIENT_INTENSITY) / Math.PI
+export const CLOUD_AMBIENT_SHARE = 0.7
+export const CLOUD_AMBIENT = (CLOUD_AMBIENT_SHARE * AMBIENT_INTENSITY) / Math.PI
+
+/** The adapted eye's fill at night in flight, in AMBIENT_COLOR and added
+ * to the ambient: land (~0.25 albedo) reaches ~0.035 before tone mapping and
+ * sea ~0.009, so coasts read, still well short of dark grey. */
+export const NIGHT_FILL_INTENSITY = 0.7
+
+/** The full Moon's light on the adapted eye's ground, cool and fainter than
+ * a tenth of the day's: overhead it brings land to ~0.10 (dark grey) and
+ * cloud tops to ~0.29, ~0.076 and ~0.23 at 40 deg up, against ~0.115 for
+ * cloud on a moonless night. Scaled down with the phase (night-flight.ts). */
+export const MOONLIGHT_INTENSITY = 1.2
+export const MOONLIGHT_COLOR = '#c8d6ff'
 
 /** City lights (the Earth's emissive night map), faded out on the day side. */
 export const CITY_LIGHTS_COLOR = '#ffd27a'

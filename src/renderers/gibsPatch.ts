@@ -1,11 +1,8 @@
 // The GIBS imagery patch under the ship (tides-01v.7; tiles in ../gibs-patch.ts),
-// on the ground's Phong material through composePatches. Tiles are drawn
-// into one sRGB render-target texture, each into its slot (row and
-// column mod the side), so moving the patch a tile refills one row or column
-// and every texture neighbour is a ground neighbour except across the patch's
-// own edge, which is faded out. An R8 mask, a texel a slot, holds each tile's
-// fade-in: a tile still loading, or failed (offline), leaves the global map,
-// and its shown neighbours fade out toward it.
+// on the ground's Phong material through composePatches. The tiles stream
+// into one sRGB render-target texture (./gibsStream.ts), with a mask of each
+// tile's fade-in: a tile still loading, or failed (offline), leaves the
+// global map, and its shown neighbours fade out toward it.
 //
 // No GIBS layer matches the day map's grading (its ocean is a lit teal, Blue
 // Marble's near black), so each tile is recoloured as it is written, through
@@ -24,48 +21,21 @@
 // read through an offset field fitted offline (tides-01v.20;
 // scripts/fit-gibs-warp.mjs), zero wherever the two agree to two texels or
 // the shores don't all confirm the shift.
-import { useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo, type RefObject } from 'react'
+import type { RefObject } from 'react'
 import * as THREE from 'three'
-import { useStore } from '../store'
-import { flightTextureCap } from '../quality'
 import {
   createGibsTileStore,
   GIBS_COLS,
   GIBS_GROUND_WIDTH,
-  GIBS_PATCH_RANGE,
-  GIBS_PATCH_RELEASE,
   GIBS_ROWS,
   GIBS_TILE_PX,
-  gibsPatchSide,
-  gibsPatchTiles,
-  gibsTileAt,
-  nextGibsPatchOrigin,
-  type GibsPatchOrigin,
-  type GibsPatchTile,
-  type GibsTile,
+  gibsGroundTileUrl,
 } from '../gibs-patch'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 import type { MaterialPatch } from './eclipseShadow'
+import { createGibsStream, EDGE_TILES, SEAM_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch } from './gibsStream'
 import colourLutUrl from '../assets/gibs-colour-lut.bin?url&inline'
 import warpUrl from '../assets/gibs-warp.bin?url&inline'
-
-/** Fetches in flight at once, and tiles uploaded a frame (each regenerates
- * the texture's mips, and a 512 px upload is ~1 MB). */
-const MAX_IN_FLIGHT = 6
-const UPLOADS_PER_FRAME = 2
-const FADE_IN_MS = 400
-/** A failed tile is tried again this much later, if still wanted. */
-const RETRY_MS = 30_000
-/** Of a tile's width: the patch's faded rim, and the fade toward an edge
- * shared with a tile that isn't shown. That one's slot holds nothing, or
- * another tile, so the fade must outrun the blurred sample's reach into it
- * (up to the day map's texel, 8 patch texels on desktops, ~40 on phones). */
-const EDGE_TILES = 0.5
-const SEAM_TILES = 0.25
-
-// Offline, every tile fails each retry: say so once, until one loads.
-let warned = false
 
 // Shared by every flight: a few hundred tiles is ~10-20 MB of JPEG.
 const store = createGibsTileStore(async (url) => {
@@ -140,16 +110,9 @@ void main() {
 }
 `
 
-interface Recolour {
-  scene: THREE.Scene
-  camera: THREE.Camera
-  tile: THREE.Texture
-  /** Everything, where freeing the tile's 1 MB copy keeps the program and
-   * the LUT for the next approach. */
-  dispose(): void
-}
-
-function createRecolour(): Recolour {
+// The stream's pass; freeing just its tile keeps the program and the LUT for
+// the next approach.
+function createRecolour(): GibsStreamPass {
   const tile = new THREE.Texture()
   tile.flipY = false
   tile.generateMipmaps = false
@@ -274,20 +237,19 @@ function inject(source: string, chunk: string, code: string, where: 'before' | '
   return source.replace(include, where === 'before' ? `${code}\n${include}` : `${include}\n${code}`)
 }
 
-type Slot =
-  | { state: 'empty' }
-  | { state: 'loading'; tile: GibsPatchTile }
-  | { state: 'failed'; tile: GibsPatchTile; retryAt: number }
-  | { state: 'ready'; tile: GibsPatchTile; bitmap: ImageBitmap }
-  | { state: 'shown'; tile: GibsPatchTile; since: number }
+export type GibsPatch = StreamedPatch
 
-export interface GibsPatch {
-  /** For composePatches; empty where the device takes no patch. */
-  material: MaterialPatch
-  /** `ground`: the ground mesh, whose local sphere has `radius`. */
-  update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number): void
-  /** Frees the texture; the patch fills again if update finds the ship near. */
-  release(): void
+function createTarget(side: number, gl: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
+  return new THREE.WebGLRenderTarget(side * GIBS_TILE_PX, side * GIBS_TILE_PX, {
+    colorSpace: THREE.SRGBColorSpace,
+    generateMipmaps: true,
+    minFilter: THREE.LinearMipmapLinearFilter,
+    magFilter: THREE.LinearFilter,
+    wrapS: THREE.RepeatWrapping,
+    wrapT: THREE.RepeatWrapping,
+    anisotropy: gl.capabilities.getMaxAnisotropy(),
+    depthBuffer: false,
+  })
 }
 
 /** A patch `side` tiles square (gibsPatchSide); 0 for none. */
@@ -299,187 +261,22 @@ export function createGibsPatch(side: number): GibsPatch {
       release() {},
     }
   }
-  const maskData = new Uint8Array(side * side)
-  const mask = new THREE.DataTexture(maskData, side, side, THREE.RedFormat, THREE.UnsignedByteType)
-  mask.magFilter = mask.minFilter = THREE.NearestFilter
-  mask.unpackAlignment = 1
-  mask.needsUpdate = true
+  const stream = createGibsStream({
+    side,
+    store,
+    tileUrl: gibsGroundTileUrl,
+    label: 'GIBS',
+    fallback: 'the day map',
+    createTarget: (gl) => createTarget(side, gl),
+    createPass: createRecolour,
+  })
   const warp = warpField()
   const uniforms = {
-    uGibsPatch: { value: null as THREE.Texture | null },
-    uGibsMask: { value: mask },
+    uGibsPatch: stream.uniforms.texture,
+    uGibsMask: stream.uniforms.mask,
     uGibsWarp: { value: warp },
-    uGibsOrigin: { value: new THREE.Vector2() },
-    uGibsActive: { value: 0 },
-  }
-  // In range (allocated on the first tile, so offline holds no texture).
-  let active = false
-  let target: THREE.WebGLRenderTarget | null = null
-  let recolour: Recolour | null = null
-  let origin: GibsPatchOrigin | null = null
-  let centre: GibsTile | null = null
-  // The patch's tiles, nearest the ship first, for the current origin and centre.
-  let tiles: GibsPatchTile[] = []
-  let slots: Slot[] = Array.from({ length: side * side }, () => ({ state: 'empty' }))
-  let inFlight = 0
-  // Bumped by release, so loads it orphaned drop their bitmaps.
-  let generation = 0
-
-  const local = new THREE.Vector3()
-  const at = new THREE.Vector2()
-
-  function createTarget(gl: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
-    const created = new THREE.WebGLRenderTarget(side * GIBS_TILE_PX, side * GIBS_TILE_PX, {
-      colorSpace: THREE.SRGBColorSpace,
-      generateMipmaps: true,
-      minFilter: THREE.LinearMipmapLinearFilter,
-      magFilter: THREE.LinearFilter,
-      wrapS: THREE.RepeatWrapping,
-      wrapT: THREE.RepeatWrapping,
-      anisotropy: gl.capabilities.getMaxAnisotropy(),
-      depthBuffer: false,
-    })
-    gl.initRenderTarget(created)
-    uniforms.uGibsPatch.value = created.texture
-    uniforms.uGibsActive.value = 1
-    return created
-  }
-
-  function release() {
-    generation++
-    for (const slot of slots) if (slot.state === 'ready') slot.bitmap.close()
-    slots = slots.map(() => ({ state: 'empty' }))
-    maskData.fill(0)
-    mask.needsUpdate = true
-    target?.dispose()
-    target = null
-    recolour?.tile.dispose()
-    active = false
-    origin = null
-    centre = null
-    tiles = []
-    inFlight = 0
-    uniforms.uGibsPatch.value = null
-    uniforms.uGibsActive.value = 0
-  }
-
-  function load(index: number, tile: GibsPatchTile, now: number) {
-    const loadedIn = generation
-    slots[index] = { state: 'loading', tile }
-    inFlight++
-    store
-      .get(tile.url)
-      .then((blob) => createImageBitmap(blob))
-      .then(
-        (bitmap) => {
-          if (loadedIn !== generation) return bitmap.close()
-          inFlight--
-          warned = false
-          const slot = slots[index]
-          if (slot.state === 'loading' && slot.tile === tile) slots[index] = { state: 'ready', tile, bitmap }
-          else bitmap.close()
-        },
-        (err: unknown) => {
-          if (loadedIn !== generation) return
-          inFlight--
-          if (!warned) console.warn(`GIBS tile ${tile.row}/${tile.col} failed; keeping the day map there`, err)
-          warned = true
-          const slot = slots[index]
-          if (slot.state === 'loading' && slot.tile === tile) {
-            slots[index] = { state: 'failed', tile, retryAt: now + RETRY_MS }
-          }
-        }
-      )
-  }
-
-  function update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number) {
-    ground.worldToLocal(local.copy(camera.position))
-    const gap = local.length() / radius - 1
-    if (active ? gap > GIBS_PATCH_RELEASE : gap > GIBS_PATCH_RANGE) {
-      if (active) release()
-      return
-    }
-    active = true
-
-    // The sub-point, as the day map's coordinate (SphereGeometry's uv).
-    local.normalize()
-    at.set(Math.atan2(local.z, -local.x) / (2 * Math.PI), 0.5 + Math.asin(local.y) / Math.PI)
-    const under = gibsTileAt(at.x, at.y)
-    const next = nextGibsPatchOrigin(under, side, origin)
-    let maskChanged = false
-    if (next !== origin || under.row !== centre?.row || under.col !== centre.col) {
-      centre = under
-      tiles = gibsPatchTiles(next, side, under)
-    }
-    if (next !== origin) {
-      origin = next
-      uniforms.uGibsOrigin.value.set(next.col, next.row)
-      for (const tile of tiles) {
-        const slot = slots[tile.slot]
-        if (slot.state !== 'empty' && slot.tile.url === tile.url) continue
-        if (slot.state === 'ready') slot.bitmap.close()
-        slots[tile.slot] = { state: 'empty' }
-        maskData[tile.slot] = 0
-        maskChanged = true
-      }
-    }
-
-    // Fetch the nearest missing tiles first.
-    for (const tile of tiles) {
-      if (inFlight >= MAX_IN_FLIGHT) break
-      const slot = slots[tile.slot]
-      if (slot.state === 'empty' || (slot.state === 'failed' && now >= slot.retryAt)) load(tile.slot, tile, now)
-    }
-
-    // Recoloured into the slot, without clearing the rest. The mips are
-    // rebuilt once, after the frame's last.
-    _ready.length = 0
-    for (let i = 0; i < slots.length && _ready.length < UPLOADS_PER_FRAME; i++) {
-      if (slots[i].state === 'ready') _ready.push(i)
-    }
-    if (_ready.length > 0) {
-      const into = (target ??= createTarget(gl))
-      const pass = (recolour ??= createRecolour())
-      const previous = gl.getRenderTarget()
-      const autoClear = gl.autoClear
-      gl.autoClear = false
-      try {
-        _ready.forEach((i, k) => {
-          const slot = slots[i]
-          if (slot.state !== 'ready') return
-          into.texture.generateMipmaps = k === _ready.length - 1
-          into.viewport.set(
-            (slot.tile.col % side) * GIBS_TILE_PX,
-            (slot.tile.row % side) * GIBS_TILE_PX,
-            GIBS_TILE_PX,
-            GIBS_TILE_PX
-          )
-          // The scissor too, so tiled GPUs load and store only the slot.
-          into.scissor.copy(into.viewport)
-          into.scissorTest = true
-          pass.tile.image = slot.bitmap
-          pass.tile.needsUpdate = true
-          gl.setRenderTarget(into)
-          gl.render(pass.scene, pass.camera)
-          into.texture.generateMipmaps = true
-          slot.bitmap.close()
-          slots[i] = { state: 'shown', tile: slot.tile, since: now }
-        })
-      } finally {
-        gl.setRenderTarget(previous)
-        gl.autoClear = autoClear
-      }
-    }
-
-    slots.forEach((slot, i) => {
-      if (slot.state !== 'shown') return
-      const fade = Math.round(255 * Math.min(1, (now - slot.since) / FADE_IN_MS))
-      if (maskData[i] !== fade) {
-        maskData[i] = fade
-        maskChanged = true
-      }
-    })
-    if (maskChanged) mask.needsUpdate = true
+    uGibsOrigin: stream.uniforms.origin,
+    uGibsActive: stream.uniforms.active,
   }
 
   return {
@@ -494,19 +291,14 @@ export function createGibsPatch(side: number): GibsPatch {
       },
       customProgramCacheKey: () => `gibs-patch-${side}`,
     },
-    update,
+    update: stream.update,
     release() {
-      release()
-      recolour?.dispose()
-      recolour = null
-      // three uploads them again if the patch is used after.
-      mask.dispose()
+      stream.dispose()
+      // three uploads it again if the patch is used after.
       warp.dispose()
     },
   }
 }
-
-const _ready: number[] = []
 
 /**
  * The patch for the ground mesh in `ground` (local sphere of `radius`): in
@@ -514,23 +306,5 @@ const _ready: number[] = []
  * freed when it leaves or the flight ends.
  */
 export function useGibsPatch(ground: RefObject<THREE.Object3D | null>, radius: number): MaterialPatch {
-  const shipMode = useStore((s) => s.shipMode)
-  const gl = useThree((s) => s.gl)
-  const side = useMemo(
-    () => (shipMode ? gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)) : 0),
-    [shipMode, gl]
-  )
-  const patch = useMemo(() => createGibsPatch(side), [side])
-  useEffect(() => () => patch.release(), [patch])
-  // A restored context has lost the texture (as for the cloud blend).
-  useEffect(() => {
-    const canvas = gl.domElement
-    const restart = () => patch.release()
-    canvas.addEventListener('webglcontextrestored', restart)
-    return () => canvas.removeEventListener('webglcontextrestored', restart)
-  }, [gl, patch])
-  useFrame(({ camera, gl }) => {
-    if (ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
-  })
-  return patch.material
+  return useStreamedPatch(createGibsPatch, ground, radius)
 }
