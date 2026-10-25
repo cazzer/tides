@@ -272,7 +272,7 @@ uniform mat4 modelMatrix;
 uniform vec2 uEclipseBody;
 ${ECLIPSE_GLSL.point}
 #define CLOUD_ECLIPSE_HIT eclipsePoint(p)
-// The highest ground the relief layer's bump map holds.
+// The highest ground the high tier's elevation map holds (TERRAIN_MAX_GREY).
 #define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
 // How far past a flank its cloud is read, and how many steps past a side.
 #define WALL_DEPTH ${f(MARCH_STEP / 2)}
@@ -321,8 +321,8 @@ float cloudCeilingRadius(vec3 q) {
 }
 
 // The ground mesh's altitude at uv (cloudUv()): within reach, the limb
-// sphere's (LIMB_SEGMENTS), its vertices raised by the bump map as three's
-// displacement reads it (the base level, at the vertex), and flat between
+// sphere's (LIMB_SEGMENTS), its vertices raised by the ground texture's top
+// level read at their texel corners (groundDisplacement.ts), and flat between
 // them over each of a quad's two triangles. The columns stand on the ground
 // smoothed (cloudTerrain()), so where the relief rises above that by more
 // than the clearance their cloud runs into it.

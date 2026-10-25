@@ -19,7 +19,6 @@ INPUTS=(
   "earth-specular.jpg"
   "earth-clouds.jpg"
   "earth-clouds-alpha.jpg"
-  "earth-bump.jpg"
   "moon.jpg"
   "sun-8k.jpg"
 )

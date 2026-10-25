@@ -4,25 +4,35 @@
 //
 // Altitudes are scene units above the sea-level sphere, in the Earth's local
 // frame (the cloud and ground meshes share it). The scene is compressed, so
-// heights are exaggerated: terrain by the bump map's displacement scale, cloud
-// tops by CLOUD_UNITS_PER_KM. Lighting (sunset colour, the horizon dip) uses
-// true kilometres instead, since those effects don't scale with the scene.
+// heights are exaggerated: terrain by the elevation map's displacement scale,
+// cloud tops by CLOUD_UNITS_PER_KM. Lighting (sunset colour, the horizon dip)
+// uses true kilometres instead, since those effects don't scale with the scene.
 import { MAX_CLOUD_TOP_KM } from './geo-clouds'
 
 export { MAX_CLOUD_TOP_KM }
 
 export const EARTH_RADIUS_KM = 6371
 
-/** The ground's displacementScale: scene units at bump-map white. */
+/** The ground's displacementScale: scene units at grey 1, the old 8-bit bump
+ * map's white. */
 export const TERRAIN_DISPLACEMENT = 0.075
-/** The brightest grey (Himalaya) of the bump map the relief layer reads,
- * earth-bump.jpg (4k, high quality); bounds the cloud layer. */
-export const TERRAIN_MAX_GREY = 219 / 255
-/** The same for the flat layer's map, earth-bump-2k.jpg (low quality), whose
- * smaller size averages the peaks down. */
-export const TERRAIN_MAX_GREY_FLAT = 206 / 255
-/** Kilometres of elevation per unit of bump-map grey (geo-clouds' 1/39 per level). */
+/** Kilometres of elevation per unit of grey: the old bump map's 1/39 km a
+ * level, which the 16-bit elevation map (earth-dem.ts) keeps. */
 export const TERRAIN_KM_PER_GREY = 255 / 39
+/**
+ * The highest the drawn ground stands, in metres, rounded up: the ground
+ * texture's top level (renderers/earthDemTexture.ts, the limb sphere's
+ * 512 × 256, as half floats) read at its texel corners, where the mesh's
+ * vertices sit, which is the most any ground read stands (the base sphere's
+ * coarser level and the cloud march's 256-wide one average lower). The same
+ * on either tier: the 2k map's level of that size is the 4k map's to the
+ * metre. A test checks it against the shipped maps. Its grey bounds the
+ * cloud layer and the flat deck. The full maps' peaks (6.4 km) are higher
+ * but only shade the ground; a streamed surface layer that draws them
+ * (tides-zmw.9) must raise this.
+ */
+export const TERRAIN_MAX_METRES = 5385
+export const TERRAIN_MAX_GREY = TERRAIN_MAX_METRES / (1000 * TERRAIN_KM_PER_GREY)
 
 /**
  * Gap between the (smoothed) ground and a cloud's base: three times the
@@ -40,10 +50,10 @@ export const MIN_MEASURED_TOP_KM = 1
 export const CLOUD_LAYER_TOP =
   TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * MAX_CLOUD_TOP_KM
 
-/** The low-quality path's single flat shell: just clear of the highest
+/** The low-quality path's single flat shell: the clearance over the highest
  * ground (tides-7oi), at a typical low-cloud top. */
 export const CLOUD_FLAT_ALTITUDE =
-  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY_FLAT + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
+  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
 
 /** Where no satellite measured a top: thicker (brighter) cloud, taller tops. */
 export function defaultTopKm(alpha: number): number {
@@ -77,7 +87,7 @@ export function cloudShape(alpha: number): number {
   return 0.25 + 0.75 * smoothstep(0, 0.65, alpha)
 }
 
-/** A cloud column: base and top altitudes over ground of the given bump grey. */
+/** A cloud column: base and top altitudes over ground of the given grey. */
 export function cloudColumn(
   alpha: number,
   topKm: number,
@@ -357,12 +367,12 @@ export function marchSteps({ origin, start, end }: MarchSpan, step: number, maxS
 
 /** How far around a point (degrees of arc) its cloud ceiling holds. */
 export const CEILING_ARC_DEG = 2
-/** Texels across the bump map's mip the cloud march reads its ground from
- * (cloudShaders.ts cloudTerrain()). */
+/** Texels across the elevation map's mip the cloud march reads its ground
+ * from (cloudShaders.ts cloudTerrain()). */
 export const TERRAIN_READ_TEXELS = 256
-/** Grey levels added to the ceiling, for decoders that round differently
- * (as ship/terrain-floor.ts TERRAIN_GREY_MARGIN). */
-export const CEILING_GREY_MARGIN = 4
+/** Grey levels (of 255) added to the ceiling, over the ground's half-float
+ * rounding on the GPU (under 0.07 of a level up to grey 1). */
+export const CEILING_GREY_MARGIN = 0.5
 
 /**
  * How far a straight path can run from a point and stay within the
@@ -378,7 +388,7 @@ export function ceilingReach(seaLevel: number, arcDeg = CEILING_ARC_DEG): number
  * either side of it, into `into`: van Herk's running maxima over blocks of
  * the window's width, forward and back, so the cost doesn't grow with it.
  */
-function wrappedWindowMax(row: Uint8Array, half: number, into: Uint8Array): void {
+function wrappedWindowMax(row: Float32Array, half: number, into: Float32Array): void {
   const n = row.length
   const size = 2 * half + 1
   if (size >= n) {
@@ -388,8 +398,8 @@ function wrappedWindowMax(row: Uint8Array, half: number, into: Uint8Array): void
   // The row from half before its start to half past its end.
   const length = n + 2 * half
   const at = (k: number) => row[(k - half + n) % n]
-  const ahead = new Uint8Array(length)
-  const behind = new Uint8Array(length)
+  const ahead = new Float32Array(length)
+  const behind = new Float32Array(length)
   for (let k = 0; k < length; k++) ahead[k] = k % size ? Math.max(ahead[k - 1], at(k)) : at(k)
   for (let k = length - 1; k >= 0; k--) {
     behind[k] = (k + 1) % size && k + 1 < length ? Math.max(behind[k + 1], at(k)) : at(k)
@@ -398,15 +408,16 @@ function wrappedWindowMax(row: Uint8Array, half: number, into: Uint8Array): void
 }
 
 /**
- * The cloud ceiling (tides-01v.8.10), from the bump maps max-pooled to
- * `width` × `height` (earth-terrain-max.bin, rows north first, columns from
- * −180° east): for each of its texels, a grey that no ground the cloud
- * march reads within `arcDeg` of any point in it rises above, so no cloud
- * top there stands above that grey's ground plus the clearance and the
- * tallest top. The march from inside the shell (cloudShaders.ts) skips
+ * The cloud ceiling (tides-01v.8.10), from the elevation map max-pooled to
+ * `width` × `height` (earth-dem-max.bin as grey, 1 at TERRAIN_DISPLACEMENT;
+ * rows north first, columns from −180° east): for each of its texels, a
+ * grey level (of 255, rounded up, with CEILING_GREY_MARGIN) that no ground
+ * the cloud march reads within `arcDeg` of any point in it rises above, so
+ * no cloud top there stands above that grey's ground plus the clearance and
+ * the tallest top. The march from inside the shell (cloudShaders.ts) skips
  * what lies above it.
  *
- * The march reads the ground bilinearly from the bump map's
+ * The march reads the ground bilinearly from the elevation map's
  * TERRAIN_READ_TEXELS-wide mip, whose texels average the ones the pooled
  * texels hold the max of; its taps reach 1½ of them from the point. Texels
  * within the arc are found centre to centre, with each one's reach from its
@@ -416,17 +427,17 @@ function wrappedWindowMax(row: Uint8Array, half: number, into: Uint8Array): void
  * as earth-cloud-ceiling.bin, and a test checks the two agree.
  */
 export function cloudCeiling(
-  pooled: Uint8Array,
+  pooled: Float32Array,
   width: number,
   height: number,
   arcDeg = CEILING_ARC_DEG
 ): Uint8Array<ArrayBuffer> {
-  const row = (grid: Uint8Array, j: number) => grid.subarray(j * width, (j + 1) * width)
+  const row = (grid: Float32Array, j: number) => grid.subarray(j * width, (j + 1) * width)
   // The highest ground a read from each texel can see.
   const read = Math.ceil((1.5 * width) / TERRAIN_READ_TEXELS)
-  const rows = new Uint8Array(width * height)
+  const rows = new Float32Array(width * height)
   for (let j = 0; j < height; j++) wrappedWindowMax(row(pooled, j), read, row(rows, j))
-  const seen = new Uint8Array(width * height)
+  const seen = new Float32Array(width * height)
   for (let j = 0; j < height; j++) {
     for (let i = 0; i < width; i++) {
       let max = 0
@@ -447,10 +458,10 @@ export function cloudCeiling(
   const corner = Array.from({ length: height }, (_, j) =>
     Math.max(arc(lat(j), lat(j) + dLat / 2, dLon / 2), arc(lat(j), lat(j) - dLat / 2, dLon / 2))
   )
-  const out = new Uint8Array(width * height)
-  const within = new Uint8Array(width)
+  const highest = new Float32Array(width * height)
+  const within = new Float32Array(width)
   for (let j = 0; j < height; j++) {
-    const into = row(out, j)
+    const into = row(highest, j)
     for (let j2 = 0; j2 < height; j2++) {
       const reach = (arcDeg * Math.PI) / 180 + corner[j] + corner[j2]
       if (Math.abs(lat(j) - lat(j2)) > reach) continue
@@ -462,8 +473,7 @@ export function cloudCeiling(
       for (let i = 0; i < width; i++) into[i] = Math.max(into[i], within[i])
     }
   }
-  for (let k = 0; k < out.length; k++) out[k] = Math.min(255, out[k] + CEILING_GREY_MARGIN)
-  return out
+  return Uint8Array.from(highest, (grey) => Math.min(255, Math.ceil(grey * 255 + CEILING_GREY_MARGIN)))
 }
 
 /**

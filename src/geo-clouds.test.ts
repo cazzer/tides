@@ -8,7 +8,6 @@ import {
   cosSunZenith,
   daylitTiles,
   decodeIr,
-  ELEVATION_KM_PER_LEVEL,
   GEO_FULL_DEG,
   GEO_SATELLITES,
   GEO_ZERO_DEG,
@@ -245,7 +244,7 @@ describe('sun', () => {
 })
 
 /** Sea level everywhere; fill in land and elevation. */
-const blankTerrain = () => ({ elevation: new Uint8Array(N), land: new Uint8Array(N) }) satisfies Terrain
+const blankTerrain = () => ({ elevation: new Uint16Array(N), land: new Uint8Array(N) }) satisfies Terrain
 
 /** Every satellite sees the whole globe at `celsius`. */
 const uniform = (celsius: number) => GEO_SATELLITES.map(() => new Float32Array(N).fill(celsius))
@@ -278,7 +277,7 @@ describe('clear-sky reference', () => {
     for (let y = row(40); y < row(20); y++) {
       for (let x = col(-130); x < col(-90); x++) {
         terrain.land[y * OUT_W + x] = 1
-        terrain.elevation[y * OUT_W + x] = 156 // 4 km
+        terrain.elevation[y * OUT_W + x] = 4000
       }
     }
     return terrain
@@ -288,7 +287,7 @@ describe('clear-sky reference', () => {
     const terrain = plateau()
     const rows = new Float32Array(OUT_H).fill(20)
     // Clear plateau at the lapse-rate temperature for 4 km.
-    const lapse = LAPSE_RATE_C_PER_KM * 156 * ELEVATION_KM_PER_LEVEL
+    const lapse = LAPSE_RATE_C_PER_KM * 4
     const t = new Float32Array(N).fill(20)
     for (let p = 0; p < N; p++) if (terrain.land[p]) t[p] = 20 - lapse
     const warm = landWarmGrid(t, GOES_WEST.lon, terrain)

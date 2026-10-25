@@ -61,6 +61,7 @@ import {
   type Terrain,
 } from '../geo-clouds'
 import { coverGrids } from './forecastGrid'
+import { decodeEarthDem, halveDem, resampleDem, type EarthDem } from '../earth-dem'
 import type { ImagerySource } from './realCloudController'
 
 /** Absolute URLs of the static textures the masks come from. A worker
@@ -69,10 +70,11 @@ import type { ImagerySource } from './realCloudController'
 export interface CloudAssets {
   specular: string
   day: string
-  bump: string
+  /** The elevation map the ground draws (earth-dem-*.bin; ../earth-dem.ts). */
+  dem: string
 }
 
-let assets: CloudAssets = { specular: '', day: '', bump: '' }
+let assets: CloudAssets = { specular: '', day: '', dem: '' }
 
 type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
@@ -162,7 +164,8 @@ async function loadTile(url: string, signal: AbortSignal): Promise<ImageBitmap |
  * heavy steps of a build. */
 const yieldToFrame = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
-// Built once and kept, all 1 byte per output pixel (~3.3 MB each).
+// Built once and kept: the masks 1 byte per output pixel (~3.3 MB each), the
+// terrain's elevation 2 (~6.6 MB).
 let iceMask: Promise<Uint8Array> | null = null
 let landMask: Promise<Uint8Array> | null = null
 let terrain: Promise<Terrain> | null = null
@@ -232,17 +235,30 @@ function getLand(): Promise<Uint8Array> {
   )
 }
 
-/** Elevation from the static bump map, and land, for the geostationary
+async function fetchDem(url: string): Promise<EarthDem> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
+  return decodeEarthDem(await res.arrayBuffer())
+}
+
+/** The elevation map on the output grid: halved by 2 × 2 means while wider
+ * than it (the 4k map to the 2k one; read bilinearly straight from the 4k
+ * map, the grid would alias its peaks), then read bilinearly. */
+function demOnGrid(dem: EarthDem): Uint16Array {
+  let level = dem
+  while (level.width > OUT_W) level = halveDem(level)
+  return resampleDem(level, OUT_W, OUT_H).metres
+}
+
+/** Elevation from the elevation map, and land, for the geostationary
  * clear-sky reference. */
 function getTerrain(): Promise<Terrain> {
   return (
     terrain ??
     memo(
       async () => {
-        const [bump, land] = await Promise.all([fetchBitmap(assets.bump).then(pixelsOf), getLand()])
-        const elevation = new Uint8Array(OUT_W * OUT_H)
-        for (let p = 0; p < elevation.length; p++) elevation[p] = bump[p * 4]
-        return { elevation, land }
+        const [dem, land] = await Promise.all([fetchDem(assets.dem), getLand()])
+        return { elevation: demOnGrid(dem), land }
       },
       (p) => (terrain = p)
     )

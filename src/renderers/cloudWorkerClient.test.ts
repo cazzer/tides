@@ -9,7 +9,7 @@ const source: ImagerySource = {
   snowLayer: 'VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1',
   date: '2026-10-18',
 }
-const assets = { specular: 'https://x/s.jpg', day: 'https://x/d.jpg', bump: 'https://x/b.jpg' }
+const assets = { specular: 'https://x/s.jpg', day: 'https://x/d.jpg', dem: 'https://x/e.bin' }
 const image = (): CloudImage => ({ rgba: new Uint8ClampedArray(4), geo: null })
 
 function fakeWorker() {
