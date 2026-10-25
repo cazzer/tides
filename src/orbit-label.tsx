@@ -28,7 +28,6 @@ export const MONTHS = [
 export const LABEL_INNER_RADIUS = 20
 export const CLOCK_INNER_RADIUS = LABEL_INNER_RADIUS + 1
 export const MONTH_SCALE = 3.5
-export { CLOCK_HALF_WIDTH }
 // Solid grey reads like the old 25%-opaque white on black, but stays visible
 // over the Sun, where translucent white blends into its bright surface.
 const MONTH_COLOR = '#404040'
