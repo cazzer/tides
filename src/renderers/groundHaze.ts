@@ -38,12 +38,18 @@
 // stands above the eye). Over the sea that is the sea's own horizon, the
 // sky's ray just above it, where columnAheadOverSea() is columnAhead(), so
 // the sea horizon's seam with the sky (tides-01v.8.20) holds; far land takes
-// the sky over its own horizon. Its share of the grazing line's is how much
-// of the ground's colour the haze hides. Not the eye's own ray, as tides-zmw.5
-// had: that column depends on the eye's height and the ray's depression, not
-// on the ground point, so the haze laid on a fixed point changed as the eye
-// bobbed over the terrain at the stop, and the ground's shading crawled. The
-// tangent's dip moves little with the eye, and the segment's depth with it.
+// the sky over its own horizon. Its share of half the grazing line's (a level
+// ray's from the base), up to all, is how much of the ground's colour the
+// haze hides. Not the eye's own ray, as tides-zmw.5 had: that column depends
+// on the eye's height and the ray's depression, not on the ground point, so
+// the haze laid on a fixed point changed as the eye bobbed over the terrain
+// at the stop, and the ground's shading crawled. The tangent's dip still
+// moves with the eye: a 0.004 bob moves a far point's reference column 7%
+// over lowland, 11% over Tibet, but by the same share across the whole view,
+// so the ground brightens or dims as one instead of sliding. Looking down,
+// where the tangent along each point's azimuth would light the haze far off
+// in a different direction for every azimuth (a pinch under the ship near
+// the terminator), the light's point eases to the ground point itself.
 // Only the ease toward the shell's top still takes the eye's own ray, which
 // is the atmosphere's draw there.
 //
@@ -64,11 +70,13 @@ import {
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
 import type { MaterialPatch } from './eclipseShadow'
 
-/** Reach lengths to the nearest sea horizon: e^-3, 95% of the haze there. */
+/** (tau / L)^GROUND_HAZE_POWER at the nearest sea horizon (s / L = sqrt(3)
+ * there): e^-3, 95% of the haze. */
 export const GROUND_HAZE_E = 3
 
 /** The haze's share is 1 - exp(-(tau / L)^this): a plain exponential's
- * share at the horizon, with clearer near ground. */
+ * share at the horizon, with clearer near ground. The shader squares
+ * (groundHaze()): a change here must change it too (the test checks). */
 export const GROUND_HAZE_POWER = 2
 
 /** The haze's reach L (scene units) over a sea level of this radius. */
@@ -160,8 +168,6 @@ varying vec3 vGroundHazeEye;
 #define uDusk ${v3(ATMOSPHERE_DUSK)}
 ${hazeGlsl}
 
-#define GROUND_HAZE_POWER ${f(GROUND_HAZE_POWER)}
-
 // The haze's density, the base's below it, as columnAhead() counts an eye.
 float groundHazeDensity(float r) {
   return exp(-max(r - uSurface, 0.0) / uScaleHeight);
@@ -181,7 +187,8 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   float rE = length(eye);
   float rP = length(eye + ray);
   float tau = s * (groundHazeDensity(rE) + 4.0 * groundHazeDensity(length(eye + 0.5 * ray)) + groundHazeDensity(rP)) / 6.0;
-  float share = 1.0 - exp(-pow(tau / uGroundHazeLength, GROUND_HAZE_POWER));
+  float reach = tau / uGroundHazeLength;
+  float share = 1.0 - exp(-reach * reach); // GROUND_HAZE_POWER 2
   // The ray tangent to the sphere through the point, in the eye's ray's
   // vertical plane (any across it looking straight down: that moves only at).
   vec3 up = eye / rE;
@@ -191,6 +198,11 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   float dip2 = clamp((rE - rP) * (rE + rP) / (rE * rE), 0.0, 1.0);
   vec3 at;
   float column = columnAhead(eye, across * sqrt(1.0 - dip2) - up * sqrt(dip2), grazing, at);
+  // Light it at the point itself as the ray steepens: the tangent's at swings
+  // with the azimuth and would pinch under the ship. Near the horizon (the
+  // sea's seam) the weight is a few thousandths.
+  float down = max(-dot(dir, up), 0.0);
+  at = mix(at, eye + ray, down * down);
   float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, rE);
   float haze = mix(share, 1.0, ease);
   vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun);
@@ -202,7 +214,6 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);
   return vec4(glow, haze);
 }
-#undef GROUND_HAZE_POWER
 #undef uSeaLevel
 #undef uSurface
 #undef uScaleHeight

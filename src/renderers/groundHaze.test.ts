@@ -6,6 +6,7 @@ import { groundDetailPatch } from './groundDetail'
 import {
   createGroundHaze,
   GROUND_HAZE_E,
+  GROUND_HAZE_POWER,
   groundHazeDepth,
   groundHazeWeights,
 } from './groundHaze'
@@ -17,6 +18,7 @@ import {
   pickShellFaces,
 } from './earth-shells'
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
+import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 
 // The ship's camera is near Earth (limb-detail's view).
 vi.mock('../ship/limb-detail', async (original) => ({
@@ -30,7 +32,8 @@ const H = R * ATMOSPHERE_SCALE_HEIGHT
 const GRAZING = Math.sqrt(2 * Math.PI * SURFACE * H)
 const V = (x: number, y: number, z = 0) => new THREE.Vector3(x, y, z)
 
-// haze.glsl's columns, ported for the seam and the bob below.
+// haze.glsl's columns, ported for the seam and the bob below (the first test
+// pins the lines they copy).
 function hazeAbove(r: number, mu: number): number {
   const x = r / H
   const z = mu * Math.sqrt(0.5 * x)
@@ -125,10 +128,16 @@ describe('ground haze', () => {
     for (const line of [
       'return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
       'float tau = s * (groundHazeDensity(rE) + 4.0 * groundHazeDensity(length(eye + 0.5 * ray)) + groundHazeDensity(rP)) / 6.0;',
-      'float share = 1.0 - exp(-pow(tau / uGroundHazeLength, GROUND_HAZE_POWER));',
+      'float grazing = sqrt(6.2831853 * uSurface * uScaleHeight);',
+      'vec3 dir = ray / s;',
+      'float rP = length(eye + ray);',
+      'float reach = tau / uGroundHazeLength;',
+      'float share = 1.0 - exp(-reach * reach); // GROUND_HAZE_POWER 2',
       'vec3 across = dir - up * dot(dir, up);',
+      'across = a2 > 1e-10 ? across * inversesqrt(a2) : normalize(cross(up, abs(up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));',
       'float dip2 = clamp((rE - rP) * (rE + rP) / (rE * rE), 0.0, 1.0);',
       'float column = columnAhead(eye, across * sqrt(1.0 - dip2) - up * sqrt(dip2), grazing, at);',
+      'at = mix(at, eye + ray, down * down);',
       'float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, rE);',
       'float haze = mix(share, 1.0, ease);',
       'glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun), ease / haze);',
@@ -139,8 +148,28 @@ describe('ground haze', () => {
     ]) {
       expect(frag).toContain(line)
     }
-    expect(frag).toContain('#define GROUND_HAZE_POWER 2.000000')
+    // The shader squares.
+    expect(GROUND_HAZE_POWER).toBe(2)
     clouds.dispose()
+  })
+
+  it("ports haze.glsl's columns as the shader has them", () => {
+    for (const line of [
+      'float z = mu * sqrt(0.5 * x);',
+      'return exp(-(r - uSurface) / H) * H * sqrt(2.0 * x) / (z + sqrt(z * z + 1.2732395));',
+      'float r = max(length(ro), uSurface);',
+      'float hs = uSurface * uSurface - c2;',
+      'line = grazing * exp(-(uSurface - p) / (1.5 * H));',
+      'line = grazing * sqrt(p / uSurface) * exp(-(p - uSurface) / H);',
+      'return max(line - hazeAbove(r, -mu), 0.0);',
+      '#define HAZE_SEA_RAMP 0.1',
+      'if (length(ro) < uSurface && length(ro) > uSeaLevel && bSea < 0.0 && hSea > 0.0) {',
+      'vec3 eye = normalize(ro) * uSurface;',
+      'float own = 1.0 - smoothstep(0.0, HAZE_SEA_RAMP, hSea / (bSea * bSea));',
+      'column = mix(columnAhead(eye, normalize(sea - eye), grazing, atSea), column, own);',
+    ]) {
+      expect(hazeGlsl).toContain(line)
+    }
   })
 
   it('hands over at the cloud shell\'s top, where the clouds ease to adding all the haze', () => {
@@ -167,7 +196,8 @@ describe('ground haze', () => {
     expect(sea.haze).toBeCloseTo(1 - Math.exp(-GROUND_HAZE_E), 6)
     expect(sea.cover).toBeCloseTo(sea.haze, 6)
     expect(sea.own).toBe(0)
-    // A steep ray's faint haze hides little of the ground.
+    // Under a horizon whose column is faint (an eye standing high over the
+    // point), little of the ground is hidden.
     expect(groundHazeWeights(stop, horizon, 0.05, R, false).cover).toBeCloseTo(0.1 * sea.haze, 6)
     // Through the ease band the haze is at least the ease, and its colour
     // turns to the eye's own ray's.
