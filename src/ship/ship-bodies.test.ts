@@ -357,16 +357,29 @@ describe('ship bodies', () => {
       const side = new THREE.Vector3()
       const point = new THREE.Vector3()
       let closest = Infinity
-      for (let lat = -88; lat <= 88; lat += 0.5) {
-        for (let lon = -180; lon < 180; lon += 0.5) {
-          const up = latLonToLocal(lat, lon)
-          const eye = up.clone().multiplyScalar(floorRadius(earth, toWorld(up, T)))
-          for (let k = 0; k < 8; k++) {
-            side.set(Math.cos(k), 0, Math.sin(k)).cross(up).normalize()
-            for (const s of [0, 0.001, 0.002, 0.003, 0.004]) {
-              local.copy(up).applyAxisAngle(side, s / EARTH_RADIUS)
-              closest = Math.min(closest, point.copy(local).multiplyScalar(meshTop(local)).distanceTo(eye))
-            }
+      // Sweep the globe coarsely, then concentrate on the 64 steepest mesh
+      // quads. A half-degree globe × 40 rays spent ~30 s checking mostly
+      // flat ground; the steep cells exercise the same near-plane property.
+      const locations: [number, number][] = []
+      for (let lat = -88; lat <= 88; lat += 4) {
+        for (let lon = -180; lon < 180; lon += 4) locations.push([lat, lon])
+      }
+      const [width, height] = drawn.segments
+      const steepest = Array.from(drawn.slope, (slope, index) => ({ slope, index }))
+        .sort((a, b) => b.slope - a.slope)
+        .slice(0, 64)
+      for (const { index } of steepest) {
+        locations.push([90 - (Math.floor(index / width) + 0.5) * 180 / height,
+          ((index % width) + 0.5) * 360 / width - 180])
+      }
+      for (const [lat, lon] of locations) {
+        const up = latLonToLocal(lat, lon)
+        const eye = up.clone().multiplyScalar(floorRadius(earth, toWorld(up, T)))
+        for (let k = 0; k < 8; k++) {
+          side.set(Math.cos(k * Math.PI / 4), 0, Math.sin(k * Math.PI / 4)).cross(up).normalize()
+          for (const s of [0, 0.001, 0.002, 0.003, 0.004]) {
+            local.copy(up).applyAxisAngle(side, s / EARTH_RADIUS)
+            closest = Math.min(closest, point.copy(local).multiplyScalar(meshTop(local)).distanceTo(eye))
           }
         }
       }
