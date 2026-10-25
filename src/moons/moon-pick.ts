@@ -44,8 +44,13 @@ export function moonRaycast(
   const data = this.userData as MoonPickData
   this.getWorldPosition(sphere.center)
   const { camera } = raycaster
+  const projects =
+    (camera as THREE.PerspectiveCamera | undefined)?.isPerspectiveCamera ||
+    (camera as THREE.OrthographicCamera | undefined)?.isOrthographicCamera
   const pixel =
-    camera && data.viewHeight > 0 ? worldUnitsPerPixel(camera, sphere.center, data.viewHeight) : 0
+    camera && projects && data.viewHeight > 0
+      ? worldUnitsPerPixel(camera, sphere.center, data.viewHeight)
+      : 0
   sphere.radius = Math.max(data.radius, MOON_TAP_RADIUS_PX * pixel)
   if (!raycaster.ray.intersectSphere(sphere, hit)) return
   parent.set(data.parentPosition, data.parentRadius)

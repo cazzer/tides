@@ -118,18 +118,15 @@ if (uExtinction > 0.5) {
 }
 `
 
-// Sets the shell's fade, size and the point it is centred toward (starDepth.ts).
+// Sets the shell's fade and size (starDepth.ts).
 // Module level, so the refs and memoised uniforms aren't mutated in a hook.
 function fadeShell(
   stars: THREE.Object3D | null,
   uDepth: { value: number },
-  centre: THREE.Vector3,
-  target: THREE.Vector3 | undefined,
   scale: number,
   amount: number
 ) {
   uDepth.value = amount
-  if (target) centre.copy(target)
   stars?.scale.setScalar(scale)
 }
 
@@ -217,7 +214,8 @@ export default function Starfield({
   )
 
   const stars = useRef<THREE.Points>(null)
-  const shellCentre = useRef(new THREE.Vector3())
+  // The controls' own target, so the shell centres toward this frame's, not last's.
+  const shellTarget = useRef<THREE.Vector3 | undefined>(undefined)
   useFrame(({ camera, controls }) => {
     if (stars.current) {
       orientStarfield(stars.current, useStore.getState().timestamp ?? Date.now())
@@ -225,7 +223,8 @@ export default function Starfield({
     const target = (controls as { target?: THREE.Vector3 } | null)?.target
     const distance = target ? camera.position.distanceTo(target) : 0
     const amount = depth && target ? depthAmount(distance) : 0
-    fadeShell(stars.current, uniforms.uDepth, shellCentre.current, target, shellScale(radius, distance, amount), amount)
+    shellTarget.current = target
+    fadeShell(stars.current, uniforms.uDepth, shellScale(radius, distance, amount), amount)
   })
 
   return (
@@ -233,7 +232,7 @@ export default function Starfield({
       ref={stars}
       onBeforeRender={(_renderer, _scene, camera) => {
         if (!stars.current) return
-        centreStarfieldOn(stars.current, camera, shellCentre.current, uniforms.uDepth.value)
+        centreStarfieldOn(stars.current, camera, shellTarget.current, uniforms.uDepth.value)
         if (fromSurface) zenithOf(camera, uniforms.uZenith.value)
       }}
       frustumCulled={false}
