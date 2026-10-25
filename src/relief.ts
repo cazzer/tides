@@ -5,7 +5,9 @@
 // the ground derives (the mesh, its slopes and shadows, the cloud layer and
 // its ceiling, the shells, the ship's floor), so a reload moves them together.
 // Clamped to [1, 25]: above 25 the highest stop outgrows the limb sphere's
-// MORPH_FLOOR (renderers/groundDisplacement.ts).
+// MORPH_FLOOR (renderers/groundDisplacement.ts). A worker has no location and
+// takes the default: the cloud worker uses only the DEM's units, which don't
+// depend on it, so pass the relief along if it ever needs more.
 
 export const DEFAULT_RELIEF = 25
 export const MIN_RELIEF = 1
@@ -20,7 +22,7 @@ export function parseRelief(search: string): number {
 }
 
 /** This page's relief; the default outside a browser. */
-export const RELIEF = typeof window === 'undefined' ? DEFAULT_RELIEF : parseRelief(window.location.search)
+export const RELIEF = typeof location === 'undefined' ? DEFAULT_RELIEF : parseRelief(location.search)
 
 /** RELIEF over the default: 1 unless ?relief= says otherwise. */
 export const RELIEF_SCALE = RELIEF / DEFAULT_RELIEF

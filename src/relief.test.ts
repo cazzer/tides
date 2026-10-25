@@ -33,7 +33,7 @@ describe('parseRelief', () => {
 describe('?relief=10', () => {
   it('moves every consumer of the displacement together', async () => {
     vi.resetModules()
-    vi.stubGlobal('window', { location: { search: '?ship=1&relief=10' } })
+    vi.stubGlobal('location', { search: '?ship=1&relief=10' })
     try {
       const layer = await import('./cloud-layer')
       const { groundHazeTop } = await import('./renderers/earth-shells')
