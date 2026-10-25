@@ -3,15 +3,16 @@
 // heightmap, so the ship can follow the terrain instead of a fixed sphere.
 //
 // The ground mesh displaces each vertex along its normal by
-// TERRAIN_DISPLACEMENT × the bump map's grey there (bilinear at the vertex),
+// TERRAIN_DISPLACEMENT × the elevation map's height there (bilinear at the
+// vertex; earth-dem.ts),
 // and a ray from the centre meets a flat triangle between vertices, never
 // above the highest of its corners. So a point sample under the ship is not
 // enough: the floor takes the max over every texel a mesh cell's vertices
 // can read. Built in three steps:
 //
-//   1. earth-terrain-max.bin (scripts/build-terrain-floor.mjs): the bump
-//      maps max-pooled to 512 × 256, so every texel of either map is at or
-//      below its block.
+//   1. earth-dem-max.bin (scripts/build-earth-dem.mjs): the 4k elevation
+//      map max-pooled to 512 × 256, so every texel of it and of the 2k map
+//      (its 2 × 2 means) is at or below its block.
 //   2. buildTerrainFloor: the max over each of FLOOR_CELLS' cells, then over
 //      each cell's 3 × 3 neighbourhood. The neighbours cover the texels a
 //      corner vertex's bilinear sample reaches across the cell's edge, and
@@ -30,15 +31,20 @@
 // so one floor covers both. While the limb sphere is the one drawn, the same
 // build over its own cells (earthLimbTerrain) covers it alone, much nearer
 // the ground: the coarse floor stands above the cloud base over nearly all
-// land (tides-42p). TERRAIN_GREY_MARGIN absorbs JPEG decoders disagreeing by
-// a level or two.
+// land (tides-42p).
+//
+// Heights are in grey levels, the old 8-bit bump map's (255 = the
+// displacement's full TERRAIN_DISPLACEMENT), as floats: the 16-bit map's
+// (tides-zmw.1) fall between levels, and nothing caps them at 255.
+// TERRAIN_GREY_MARGIN covers the GPU's half-float rounding of the map.
 
 import * as THREE from 'three'
 import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { LIMB_SEGMENTS, type SphereSegments } from './limb-detail'
-import terrainUrl from '../assets/earth-terrain-max.bin?url'
+import { DEM_METRES_PER_UNIT, decodeEarthDem, type EarthDem } from '../earth-dem'
+import terrainUrl from '../assets/earth-dem-max.bin?url'
 
-/** earth-terrain-max.bin's size: blocks across (longitude) and down. */
+/** earth-dem-max.bin's size: blocks across (longitude) and down. */
 export const TERRAIN_MAP_SIZE: SphereSegments = [512, 256]
 
 /**
@@ -47,14 +53,27 @@ export const TERRAIN_MAP_SIZE: SphereSegments = [512, 256]
  */
 export const FLOOR_CELLS: SphereSegments = [128, 128]
 
-/** Grey levels added to every cell, for decoders that round differently. */
-export const TERRAIN_GREY_MARGIN = 4
+/**
+ * Grey levels added to every cell: the elevation texture's half floats round
+ * by at most an eighth of a level below 2 × TERRAIN_DISPLACEMENT.
+ */
+export const TERRAIN_GREY_MARGIN = 0.5
+
+/** The floor's height where none is loaded: above any ground on Earth (9 km). */
+export const TERRAIN_FALLBACK_GREY = (9000 / DEM_METRES_PER_UNIT) * 255
 
 /** Highest grey per FLOOR_CELLS cell, dilated (see the header); rows north first. */
 export interface TerrainFloor {
   width: number
   height: number
-  grey: Uint8Array
+  grey: Float32Array
+}
+
+/** A DEM's heights in grey levels (see the header), rows north first. */
+export function demGrey({ metres }: EarthDem): Float32Array {
+  const grey = new Float32Array(metres.length)
+  for (let k = 0; k < metres.length; k++) grey[k] = (metres[k] / DEM_METRES_PER_UNIT) * 255
+  return grey
 }
 
 /**
@@ -63,7 +82,7 @@ export interface TerrainFloor {
  * whose size must be a multiple of `cells`.
  */
 export function buildTerrainFloor(
-  pooled: Uint8Array,
+  pooled: ArrayLike<number>,
   [pooledWidth, pooledHeight]: SphereSegments = TERRAIN_MAP_SIZE,
   [width, height]: SphereSegments = FLOOR_CELLS
 ): TerrainFloor {
@@ -73,12 +92,12 @@ export function buildTerrainFloor(
     pooledHeight % height !== 0
   ) {
     throw new Error(
-      `Terrain map ${pooledWidth}×${pooledHeight} (${pooled.length} bytes) does not tile ${width}×${height} cells`
+      `Terrain map ${pooledWidth}×${pooledHeight} (${pooled.length} heights) does not tile ${width}×${height} cells`
     )
   }
   const bx = pooledWidth / width
   const by = pooledHeight / height
-  const cell = new Uint8Array(width * height)
+  const cell = new Float32Array(width * height)
   for (let y = 0; y < pooledHeight; y++) {
     const row = Math.floor(y / by) * width
     for (let x = 0; x < pooledWidth; x++) {
@@ -88,7 +107,7 @@ export function buildTerrainFloor(
     }
   }
   // Longitude wraps; the poles' rows only reach toward the equator.
-  const grey = new Uint8Array(width * height)
+  const grey = new Float32Array(width * height)
   for (let j = 0; j < height; j++) {
     for (let i = 0; i < width; i++) {
       let max = 0
@@ -99,7 +118,7 @@ export function buildTerrainFloor(
           max = Math.max(max, cell[jj * width + ((i + di + width) % width)])
         }
       }
-      grey[j * width + i] = Math.min(255, max + TERRAIN_GREY_MARGIN)
+      grey[j * width + i] = max + TERRAIN_GREY_MARGIN
     }
   }
   for (const j of [0, height - 1]) {
@@ -110,7 +129,7 @@ export function buildTerrainFloor(
 }
 
 /**
- * The floor's grey, 0–255, along the unit `local` direction in Earth's own
+ * The floor's grey along the unit `local` direction in Earth's own
  * frame (lon 0 on +X, east toward −Z, north +Y, as THREE.SphereGeometry's
  * texture coordinates). Never below the grey any ground-mesh vertex
  * interpolates to there.
@@ -136,14 +155,14 @@ export function terrainFloorGrey({ width, height, grey }: TerrainFloor, local: T
 /**
  * How far out from the centre the ground of a sphere of `radius` can stand
  * along `local` (see terrainFloorGrey), scene units. With no floor loaded,
- * the highest the displacement reaches anywhere (bump-map white).
+ * TERRAIN_FALLBACK_GREY's, over any ground.
  */
 export function terrainFloorRadius(
   floor: TerrainFloor | null,
   radius: number,
   local: THREE.Vector3
 ): number {
-  const grey = floor ? terrainFloorGrey(floor, local) : 255
+  const grey = floor ? terrainFloorGrey(floor, local) : TERRAIN_FALLBACK_GREY
   return radius + (TERRAIN_DISPLACEMENT * grey) / 255
 }
 
@@ -234,8 +253,12 @@ export function loadEarthTerrain(): void {
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
       return response.arrayBuffer()
     })
-    .then((buffer) => {
-      const pooled = new Uint8Array(buffer)
+    .then((buffer) => decodeEarthDem(buffer))
+    .then((dem) => {
+      if (dem.width !== TERRAIN_MAP_SIZE[0] || dem.height !== TERRAIN_MAP_SIZE[1]) {
+        throw new Error(`Terrain map is ${dem.width}×${dem.height}, expected ${TERRAIN_MAP_SIZE.join('×')}`)
+      }
+      const pooled = demGrey(dem)
       earthFloor = buildTerrainFloor(pooled)
       earthLimbFloor = buildTerrainFloor(pooled, TERRAIN_MAP_SIZE, LIMB_SEGMENTS)
     })

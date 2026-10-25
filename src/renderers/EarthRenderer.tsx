@@ -20,6 +20,7 @@ import {
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
+import { EarthDemLoader } from './earthDemTexture'
 
 // Import assets directly
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
@@ -28,8 +29,8 @@ import earthCloudsTextureHigh from '../assets/earth-clouds.jpg'
 import earthCloudsTextureLow from '../assets/earth-clouds-2k.jpg'
 import earthNightTextureHigh from '../assets/earth-night.jpg'
 import earthNightTextureLow from '../assets/earth-night-2k.jpg'
-import earthBumpMapHigh from '../assets/earth-bump.jpg'
-import earthBumpMapLow from '../assets/earth-bump-2k.jpg'
+import earthDemHigh from '../assets/earth-dem-4k.bin?url'
+import earthDemLow from '../assets/earth-dem-2k.bin?url'
 
 interface EarthRendererProps {
   diameter: number
@@ -45,7 +46,7 @@ export default function EarthRenderer({
   useTexture.preload(textureSet.specular)
   useTexture.preload(textureSet.clouds)
   useTexture.preload(textureSet.night)
-  useTexture.preload(textureSet.bump)
+  useLoader.preload(EarthDemLoader, textureSet.dem)
 
   const cloudRef = useRef<THREE.Mesh>(null)
   const groundRef = useRef<THREE.Mesh>(null)
@@ -56,12 +57,12 @@ export default function EarthRenderer({
   const specularMap = useLoader(THREE.TextureLoader, textureSet.specular)
   const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
-  const bumpTexture = useLoader(THREE.TextureLoader, textureSet.bump)
+  const demTexture = useLoader(EarthDemLoader, textureSet.dem)
   const gl = useThree((s) => s.gl)
   prepareMaps(
     gl.capabilities.getMaxAnisotropy(),
     [earthTexture, nightTexture, cloudsTexture],
-    [specularMap, bumpTexture]
+    [specularMap, demTexture]
   )
   const real = useStore((s) => s.weatherSource) === 'real'
   useRealCloudsActive(real)
@@ -109,11 +110,8 @@ export default function EarthRenderer({
   // The static clouds, and with Real weather until the frame loop has a blend
   // to show, so the first frame isn't missing its map.
   if (!real || !clouds.uniforms.uCloudMap.value) setCloudMap(clouds, cloudsTexture, false)
-  clouds.uniforms.uTerrainMap.value = bumpTexture
+  clouds.uniforms.uTerrainMap.value = demTexture
   clouds.uniforms.uSeaLevel.value = diameter
-
-  // TODO: Add GeoTIFF loader for displacement mapping
-  // const displacementMap = useLoader(GeoTIFFLoader, '/assets/earth-elevation.tif')
 
   // The static clouds drift east, slower than the Earth turns; the shader
   // offsets the texture rather than turning the mesh, so the ground's shadows
@@ -175,7 +173,7 @@ export default function EarthRenderer({
           emissive={CITY_LIGHTS_COLOR}
           emissiveIntensity={CITY_LIGHTS_INTENSITY}
           shininess={100}
-          displacementMap={bumpTexture}
+          displacementMap={demTexture}
           displacementScale={TERRAIN_DISPLACEMENT}
         />
       </mesh>
@@ -233,7 +231,7 @@ function setCloudMap(clouds: CloudLayer, map: THREE.Texture, measured: boolean) 
 /**
  * Sets what three reads at a map's first upload (tides-01v.1): the full
  * anisotropy, which grazing views of the ground need, and one channel for
- * the grey data maps (the specular mask and the bump), a quarter of the
+ * the grey data maps (the specular mask and the elevation map), a quarter of the
  * VRAM. The material and the cloud shader read their red channel.
  */
 function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Texture[]) {
@@ -255,7 +253,7 @@ function getEarthTextureSet(baseTexture: string) {
       specular: earthSpecularMapHigh,
       clouds: earthCloudsTextureHigh,
       night: earthNightTextureHigh,
-      bump: earthBumpMapHigh,
+      dem: earthDemHigh,
       low: false,
     }
   }
@@ -265,7 +263,7 @@ function getEarthTextureSet(baseTexture: string) {
     specular: earthSpecularMapLow,
     clouds: earthCloudsTextureLow,
     night: earthNightTextureLow,
-    bump: earthBumpMapLow,
+    dem: earthDemLow,
     low: true,
   }
 }

@@ -10,11 +10,18 @@ const SOLAR_SYSTEM_SCOPE_URL = 'https://www.solarsystemscope.com/textures/'
 const CC_BY_URL = 'https://creativecommons.org/licenses/by/4.0/'
 const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/skycultures/modern'
 const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
+export const MAPTERHORN_URL = 'https://mapterhorn.com/'
+// Zoom 4 mixes Copernicus GLO-30 with national CC BY DEMs, each listed there.
+export const MAPTERHORN_ATTRIBUTION_URL = 'https://mapterhorn.com/attribution/'
+// Wording required by the Copernicus DEM licence.
+export const COPERNICUS_DEM_NOTICE =
+  '© DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved'
 
 /** Every source the scene draws from (tides-1qv), for the settings panel
  * rather than over the views. `children` adds live lines, as list items. */
 export function Credits({ children }: { children?: ReactNode }) {
   const acknowledgementId = useId()
+  const copernicusId = useId()
   return (
     <CreditList>
       <li>
@@ -33,6 +40,22 @@ export function Credits({ children }: { children?: ReactNode }) {
           {GIBS_ACKNOWLEDGEMENT}
         </span>
         {' · Blue Marble Next Generation'}
+      </li>
+      <li>
+        Terrain: <Link href={MAPTERHORN_URL}>Mapterhorn</Link>,{' '}
+        <Link
+          href={MAPTERHORN_ATTRIBUTION_URL}
+          title={COPERNICUS_DEM_NOTICE}
+          aria-describedby={copernicusId}
+        >
+          Copernicus GLO-30 and others
+        </Link>
+        <span
+          id={copernicusId}
+          className="visually-hidden"
+        >
+          {COPERNICUS_DEM_NOTICE}
+        </span>
       </li>
       <li>
         Cloud forecasts: <Link href={OPEN_METEO_SITE}>Weather data by Open-Meteo.com</Link>
