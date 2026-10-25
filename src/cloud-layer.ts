@@ -126,12 +126,68 @@ export function cloudPathClear(alpha: number, thickness: number, path: number): 
 /** How far along a stretch of even cloud that lets `clear` through (0..1 of
  * the stretch) the light it sends back comes from on average: half way
  * through a thin one, nearer its front the thicker it is. The march from
- * inside shades a side, a base met from below or a veil by the depth down
- * its column there (tides-tvr.1). */
+ * inside shades a side, a base met from below or a veil from there
+ * (shadeAdd(), tides-tvr.1). */
 export function lightCentroid(clear: number): number {
   const c = Math.max(clear, 1e-6)
   const tau = -Math.log(c)
   return tau < 0.05 ? 0.5 - tau / 12 : 1 / tau - c / (1 - c)
+}
+
+/** Where the light a hit sends back comes from (cloudShaders.ts'
+ * FLIP_SIDED march, tides-tvr.1): sums, by each stretch's share of the light,
+ * of its depth down its column (columnDepth()), its distance along the ray,
+ * and its column's top and base, and those shares. */
+export interface ShadeSum {
+  weight: number
+  depth: number
+  distance: number
+  top: number
+  base: number
+}
+
+/** A stretch of the march through cloud from `from` to `to` (its column and
+ * the ray's altitude taken to change linearly between, as the crossing takes
+ * them), at distances `s0` and `s1` along the ray, sending back `light`:
+ * added to `sum` as from `t` of the way, its light's centroid
+ * (lightCentroid()). cloudShaders.ts cloudShadeAdd(). */
+export function shadeAdd(
+  sum: ShadeSum,
+  light: number,
+  from: MarchSample,
+  to: MarchSample,
+  s0: number,
+  s1: number,
+  t: number
+): void {
+  const at = (a: number, b: number) => a + (b - a) * t
+  const top = at(from.top, to.top)
+  const base = at(from.base, to.base)
+  sum.weight += light
+  sum.depth += light * columnDepth(at(from.alt, to.alt), base, top)
+  sum.distance += light * at(s0, s1)
+  sum.top += light * top
+  sum.base += light * base
+}
+
+/** Where a hit is shaded from: the sides and veils the march went through
+ * (`sum`), with a top or flank at the end of it by `hitLight` (what of it
+ * shows past the veils; 0 for a side), at its own `hit` place. Null where
+ * nothing sends any light back. */
+export function shadePlace(
+  sum: ShadeSum,
+  hitLight: number,
+  hit: Omit<ShadeSum, 'weight'>
+): Omit<ShadeSum, 'weight'> | null {
+  const w = sum.weight + hitLight
+  if (!(w > 0)) return null
+  const mean = (a: number, b: number) => (a + hitLight * b) / w
+  return {
+    depth: mean(sum.depth, hit.depth),
+    distance: mean(sum.distance, hit.distance),
+    top: mean(sum.top, hit.top),
+    base: mean(sum.base, hit.base),
+  }
 }
 
 /** The path over which fog in opaque cloud stops its opacity's share of
@@ -321,10 +377,9 @@ export function distanceToRadius(r0: number, mu: number, r: number): number {
 }
 
 /** The stretch of a view ray the march from inside covers
- * (marchSpanFromEye()), and where its steps count from. */
+ * (marchSpanFromEye()): from where it starts and its steps count from. */
 export interface MarchSpan {
   origin: number
-  start: number
   end: number
 }
 
@@ -332,21 +387,20 @@ export interface MarchSpan {
  * The stretch of a view ray the cloud march covers within the ship camera's
  * reach of the shell (tides-01v.8.4; cloudShaders.ts' FLIP_SIDED branch), as
  * distances along the unit `dir` from `eye` (both in the body's frame, about
- * its centre): from `near`, the near plane's distance along the ray, or from
- * where the ray comes within `outer` of the centre if that is further, to
- * where it leaves that sphere or, if it goes on to meet the sea, drops below
- * the lowest base anywhere, or from below that, meets the sea (one that skims
- * over the sea comes back up under the deck). `origin`, where its steps
- * count from (marchSteps()): the eye, or from outside `outer`, where the ray
- * comes within it. Null when no part of the ray past the near plane comes
- * within `outer`.
+ * its centre): from its `origin`, the eye, or from outside `outer`, where the
+ * ray comes within it, to where it leaves that sphere or, if it goes on to
+ * meet the sea, drops below the lowest base anywhere, or from below that,
+ * meets the sea (one that skims over the sea comes back up under the deck).
+ * Not from the near plane (tides-tvr.1): what the ray starts in, and what it
+ * meets short of the near plane, would then hang on where the near plane
+ * cuts it; the near plane only bounds the depth a hit is drawn at. Null when
+ * the ray never comes within `outer`.
  */
 export function marchSpanFromEye(
   eye: Vec3,
   dir: Vec3,
   seaLevel: number,
-  outer: number,
-  near: number
+  outer: number
 ): MarchSpan | null {
   const b = eye[0] * dir[0] + eye[1] * dir[1] + eye[2] * dir[2]
   const eye2 = eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]
@@ -354,7 +408,6 @@ export function marchSpanFromEye(
   if (discOuter <= 0) return null
   const toOuter = -b - Math.sqrt(discOuter)
   const origin = Math.max(toOuter, 0)
-  const start = Math.max(toOuter, near)
   let end = -b + Math.sqrt(discOuter)
   const inner = seaLevel + CLOUD_CLEARANCE
   const discInner = b * b - (eye2 - inner * inner)
@@ -363,26 +416,25 @@ export function marchSpanFromEye(
   if (discSea > 0 && toSea > 0) {
     // From below every base, the sea itself.
     const toInner = -b - Math.sqrt(discInner)
-    end = toInner > start ? toInner : toSea
+    end = toInner > origin ? toInner : toSea
   }
-  return end > start ? { origin, start, end } : null
+  return end > origin ? { origin, end } : null
 }
 
 /**
  * Where along the ray the march from inside reads (cloudShaders.ts'
  * FLIP_SIDED branch, without the steps the cloud ceiling lets it leave out):
- * its start, then steps of `step` counted from the span's origin, the last
- * cut short at its end (tides-16z). At least three steps over the span from
- * the origin, and no more than `maxSteps`. Counted from the eye, not the
- * near plane, a ray's steps hold still as the camera turns about it.
+ * its origin, then steps of `step` from there, the last cut short at its end
+ * (tides-16z). At least three steps over the span, and no more than
+ * `maxSteps`. From the eye, with no near plane in them (tides-tvr.1), a
+ * ray's steps, the first too, hold still as the camera turns about it.
  */
-export function marchSteps({ origin, start, end }: MarchSpan, step: number, maxSteps: number): number[] {
+export function marchSteps({ origin, end }: MarchSpan, step: number, maxSteps: number): number[] {
   const span = end - origin
   const ds = Math.max(Math.min(step, span / 3), span / maxSteps)
-  const grid = origin + ds * Math.floor((start - origin) / ds)
-  const steps = Math.min(Math.max(Math.ceil((end - grid) / ds - 1e-3), 1), maxSteps)
-  const at = [start]
-  for (let i = 1; i <= steps; i++) at.push(Math.min(grid + ds * i, end))
+  const steps = Math.min(Math.max(Math.ceil(span / ds - 1e-3), 1), maxSteps)
+  const at = [origin]
+  for (let i = 1; i <= steps; i++) at.push(Math.min(origin + ds * i, end))
   return at
 }
 
