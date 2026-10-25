@@ -180,7 +180,7 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
       const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
       const defines = new Set(flat ? ['CLOUD_FLAT'] : [])
       const { vertexShader, fragmentShader } = clouds.material
-      for (const name of ['gl_FragDepth', 'vEye', 'sNear', 'eclipsePoint(p)']) {
+      for (const name of ['gl_FragDepth', 'vEye', 'sNear', 'eclipsePoint(pShade)']) {
         expect(preprocess(fragmentShader, defines)).not.toContain(name)
         expect(preprocess(fragmentShader, new Set([...defines, 'FLIP_SIDED']))).toContain(name)
       }
@@ -438,7 +438,7 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
       for (const name of ['cloudFogDensity', 'cloudHazeFront', 'fogged']) {
         expect(outside).not.toContain(name)
       }
-      expect(inside).toContain('cloudHazeFront(eye, d, eyeDist, shell)')
+      expect(inside).toContain('cloudHazeFront(eye, d, length(pShade - eye), shell)')
       // The atmosphere's own haze, shared with its shader.
       expect(inside).toContain('float columnAhead(')
       // Only the relief march has columns to stand in.
@@ -669,7 +669,7 @@ describe('cloud march from the eye, under and inside the deck (tides-tvr.1)', ()
     expect(inside).toContain('vec3 q0 = eye + d * sOrigin;')
     expect(inside).toContain('cloudColumn(uv0, cloudEyeLod()')
     expect(inside).toContain('for (int i = max(iFirst, 1);')
-    expect(inside.match(/sideShade \+=/g)).toHaveLength(3)
+    expect(inside.match(/cloudShadeAdd\(sideShade, sideLight,/g)).toHaveLength(3)
     expect(inside).toContain('max(eyeDist, sNear)')
     // With reduced motion, the fog's ease is read at the eye too.
     const ease = preprocess(clouds.material.vertexShader, new Set(['FLIP_SIDED', 'FOG_EASE']))
