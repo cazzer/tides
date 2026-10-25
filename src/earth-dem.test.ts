@@ -18,17 +18,19 @@ import {
   demLevel,
   halveDem,
   maxPoolDem,
+  meanPoolDem,
   packEarthDem,
   toHalfBits,
   unpackEarthDem,
   type DemLevel,
   type EarthDem,
 } from './earth-dem'
-import { earthDemTexture } from './renderers/earthDemTexture'
+import { earthDemTextures } from './renderers/earthDemTexture'
+import { LIMB_SEGMENTS } from './ship/limb-detail'
 
 const shipped = (name: string) => decodeEarthDem(readFileSync(new URL(`./assets/${name}`, import.meta.url)))
-const [dem4k, dem2k, demMax] = await Promise.all(
-  ['earth-dem-4k.bin', 'earth-dem-2k.bin', 'earth-dem-max.bin'].map(shipped)
+const [dem4k, dem2k, demMax, demMean] = await Promise.all(
+  ['earth-dem-4k.bin', 'earth-dem-2k.bin', 'earth-dem-max.bin', 'earth-dem-mean.bin'].map(shipped)
 )
 
 /** Displacement units at a latitude and longitude, from a north-first DEM. */
@@ -76,14 +78,16 @@ describe('Earth DEM format', () => {
 })
 
 describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
-  it('ship as built: the 2k map is the 4k one halved, the max map its 8 × 8 maxima', () => {
+  it('ship as built: the 2k map is the 4k one halved, the max and mean maps its 8 × 8 maxima and means', () => {
     expect([dem4k.width, dem4k.height, dem2k.width, dem2k.height, demMax.width, demMax.height]).toEqual([
       4096, 2048, 2048, 1024, 512, 256,
     ])
+    expect([demMean.width, demMean.height]).toEqual([512, 256])
     // The first height that differs, if any.
     const differs = (a: EarthDem, b: EarthDem) => a.metres.findIndex((m, k) => m !== b.metres[k])
     expect(differs(dem2k, halveDem(dem4k))).toBe(-1)
     expect(differs(demMax, maxPoolDem(dem4k, 8))).toBe(-1)
+    expect(differs(demMean, meanPoolDem(dem4k, 8))).toBe(-1)
     // So the max map bounds the 2k one too.
     expect(maxPoolDem(dem2k, 4).metres.findIndex((m, k) => m > demMax.metres[k])).toBe(-1)
   })
@@ -141,14 +145,20 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
       expect(THREE.DataUtils.fromHalfFloat(toHalfBits(h))).toBeCloseTo(h, 3)
     }
     expect(toHalfBits(1 - 2 ** -13)).toBe(THREE.DataUtils.toHalfFloat(1))
-    const small = { width: 4, height: 2, metres: Uint16Array.of(0, 0, 0, 0, 1000, 2000, 3000, 4000) }
-    const texture = earthDemTexture(small)
+    // The southernmost row's first texels at 1000–4000 m, sea elsewhere.
+    const [width, height] = LIMB_SEGMENTS
+    const metres = new Uint16Array(width * height)
+    metres.set([1000, 2000, 3000, 4000], (height - 1) * width)
+    const { relief: texture, ground } = earthDemTextures({ width, height, metres })
+    ground.dispose()
     const base = texture.mipmaps[0] as { data: Uint16Array; width: number }
     // A half's step is 1–2 m at these heights.
     Array.from(base.data.subarray(0, 4), THREE.DataUtils.fromHalfFloat).forEach((h, x) =>
       expect(Math.abs(h * DEM_METRES_PER_UNIT - 1000 * (x + 1))).toBeLessThan(1)
     )
-    expect(texture.mipmaps.length).toBe(3)
+    expect(texture.mipmaps.length).toBe(10)
+    // A map without the limb sphere's level can't draw the ground.
+    expect(() => earthDemTextures({ width: 4, height: 2, metres: new Uint16Array(8) })).toThrow()
     expect(texture.type).toBe(THREE.HalfFloatType)
     expect(texture.format).toBe(THREE.RedFormat)
     expect(texture.generateMipmaps).toBe(false)
@@ -163,10 +173,11 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
       const f = x - i
       return data[row * width + wrap(i)] * (1 - f) + data[row * width + wrap(i + 1)] * f
     }
-    const texture = earthDemTexture(dem2k)
-    expect(texture.wrapS).toBe(THREE.RepeatWrapping)
-    expect(texture.wrapT).toBe(THREE.ClampToEdgeWrapping)
-    texture.dispose()
+    for (const texture of Object.values(earthDemTextures(dem2k))) {
+      expect(texture.wrapS).toBe(THREE.RepeatWrapping)
+      expect(texture.wrapT).toBe(THREE.ClampToEdgeWrapping)
+      texture.dispose()
+    }
     for (const level of boxMips(demLevel(dem2k)).filter(({ width }) => width >= 256)) {
       const repeat = (i: number) => ((i % level.width) + level.width) % level.width
       const clamp = (i: number) => Math.min(level.width - 1, Math.max(0, i))
@@ -177,6 +188,32 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
       }
       // What clamping would have cracked open (Fiji, Chukotka).
       if (level.width === 2048) expect(clampedStep * DEM_METRES_PER_UNIT).toBeGreaterThan(100)
+    }
+  })
+
+  it("draws the ground from the limb sphere's level down: the relief map's own mips, and the mean map (tides-zmw.2)", () => {
+    for (const dem of [dem4k, dem2k]) {
+      const { relief, ground } = earthDemTextures(dem)
+      type Mip = { data: Uint16Array; width: number; height: number }
+      const [reliefMips, groundMips] = [relief.mipmaps as Mip[], ground.mipmaps as Mip[]]
+      const from = reliefMips.findIndex(({ width }) => width === LIMB_SEGMENTS[0])
+      expect(from).toBeGreaterThan(0)
+      expect(groundMips).toEqual(reliefMips.slice(from))
+      expect(groundMips[0].data).toBe(reliefMips[from].data)
+      expect([ground.image.width, ground.image.height]).toEqual([...LIMB_SEGMENTS])
+      // What the terrain floor reads (earth-dem-mean.bin), to the metre's rounding.
+      const [top] = groundMips
+      let worst = 0
+      for (let y = 0; y < top.height; y++) {
+        for (let x = 0; x < top.width; x++) {
+          const drawn = THREE.DataUtils.fromHalfFloat(top.data[(top.height - 1 - y) * top.width + x]) * DEM_METRES_PER_UNIT
+          worst = Math.max(worst, Math.abs(drawn - demMean.metres[y * top.width + x]))
+        }
+      }
+      // Half a metre's rounding, and a half float's step (~3 m near the top).
+      expect(worst).toBeLessThan(4)
+      relief.dispose()
+      ground.dispose()
     }
   })
 })

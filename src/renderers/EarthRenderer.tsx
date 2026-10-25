@@ -19,8 +19,16 @@ import {
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
-import { useBodySphere } from '../ship/limb-detail'
+import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
+import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { EarthDemLoader } from './earthDemTexture'
+import {
+  EARTH_LIMB_SWAP_FLOOR,
+  createGroundDisplacement,
+  groundLod,
+  groundMorph,
+  type GroundDisplacement,
+} from './groundDisplacement'
 
 // Import assets directly
 import earthSpecularMapHigh from '../assets/earth-specular.jpg'
@@ -57,7 +65,7 @@ export default function EarthRenderer({
   const specularMap = useLoader(THREE.TextureLoader, textureSet.specular)
   const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
-  const demTexture = useLoader(EarthDemLoader, textureSet.dem)
+  const { relief: demTexture, ground: groundTexture } = useLoader(EarthDemLoader, textureSet.dem)
   const gl = useThree((s) => s.gl)
   prepareMaps(
     gl.capabilities.getMaxAnisotropy(),
@@ -85,7 +93,7 @@ export default function EarthRenderer({
   const scene = useThree((s) => s.scene)
   useEffect(() => cloudsFaceEachCamera(scene, clouds, cloudRef), [scene, clouds])
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
-  const groundSphere = useBodySphere('earth', diameter, [128, 128])
+  const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibsPatch = useGibsPatch(groundRef, diameter)
@@ -101,16 +109,22 @@ export default function EarthRenderer({
       ),
     [eclipseShadow, clouds, textureSet.low, gibsPatch]
   )
+  // The mesh's displacement, at its vertex spacing (tides-zmw.2).
+  const displacement = useMemo(() => createGroundDisplacement(EARTH_BASE_SEGMENTS), [])
+  const drawnPatch = useMemo(() => composePatches(groundPatch, displacement.patch), [groundPatch, displacement])
+  displacement.uniforms.uGroundHeights.value = groundTexture
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
   const groundMaterial = useRef<THREE.MeshPhongMaterial>(null)
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
-  }, [groundPatch])
+  }, [drawnPatch])
   // The static clouds, and with Real weather until the frame loop has a blend
   // to show, so the first frame isn't missing its map.
   if (!real || !clouds.uniforms.uCloudMap.value) setCloudMap(clouds, cloudsTexture, false)
-  clouds.uniforms.uTerrainMap.value = demTexture
+  // The march's ground is the drawn ground's texture: its lod 0 is the limb
+  // sphere's vertices (cloudShaders.ts cloudGround()).
+  clouds.uniforms.uTerrainMap.value = groundTexture
   clouds.uniforms.uSeaLevel.value = diameter
 
   // The static clouds drift east, slower than the Earth turns; the shader
@@ -149,7 +163,8 @@ export default function EarthRenderer({
         ref={groundRef}
         geometry={groundSphere}
         raycast={meshBounds}
-        onBeforeRender={() => {
+        onBeforeRender={(renderer, _scene, camera, geometry) => {
+          setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
           // The Sun in the Earth's frame, from this frame's final transform
           // (the ground renders before the transparent clouds). The Sun is
           // the scene's origin, as for the directional light (sunlight.ts).
@@ -165,7 +180,7 @@ export default function EarthRenderer({
       >
         <meshPhongMaterial
           ref={groundMaterial}
-          {...groundPatch}
+          {...drawnPatch}
           map={earthTexture}
           specularMap={specularMap}
           // specular="#aaddff"
@@ -242,6 +257,40 @@ function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Te
   }
 }
 
+/**
+ * The ground mesh's displacement level and morph for this draw: the base
+ * sphere's level, or the limb sphere's blended toward the base's
+ * (groundMorph) as seen by `camera`.
+ */
+function setGroundDisplacement(
+  { uniforms }: GroundDisplacement,
+  texture: THREE.DataTexture,
+  mesh: THREE.Mesh | null,
+  renderer: THREE.WebGLRenderer,
+  camera: THREE.Camera,
+  geometry: THREE.BufferGeometry,
+  radius: number
+) {
+  const limb = isLimbSphere(geometry)
+  const [, rows] = limb ? LIMB_SEGMENTS : EARTH_BASE_SEGMENTS
+  uniforms.uGroundLod.value = groundLod(texture.image.height, rows)
+  uniforms.uGroundBaseLod.value = groundLod(texture.image.height, EARTH_BASE_SEGMENTS[1])
+  uniforms.uGroundMorph.value = 0
+  if (!limb || !mesh || !(camera instanceof THREE.PerspectiveCamera)) return
+  const scale = mesh.matrixWorld.getMaxScaleOnAxis()
+  const distance = _eye.setFromMatrixPosition(camera.matrixWorld).distanceTo(_centre.setFromMatrixPosition(mesh.matrixWorld))
+  uniforms.uGroundMorph.value = groundMorph(
+    EARTH_BASE_SEGMENTS,
+    distance / scale,
+    radius,
+    renderer.getDrawingBufferSize(_buffer).y,
+    camera.fov
+  )
+}
+
+const _eye = new THREE.Vector3()
+const _centre = new THREE.Vector3()
+const _buffer = new THREE.Vector2()
 const _position = new THREE.Vector3()
 const _quaternion = new THREE.Quaternion()
 const _scale = new THREE.Vector3()
