@@ -1,12 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
-import { createCloudLayer, MARCH_STEP, MARCH_STEPS } from './cloudShaders'
+import {
+  createCloudLayer,
+  DETAIL_EDGE_FAR,
+  DETAIL_EDGE_NEAR,
+  DETAIL_GRAIN_PX,
+  DETAIL_HOLE_PX,
+  DETAIL_INTERIOR,
+  detailEdge,
+  detailErosion,
+  MARCH_STEP,
+  MARCH_STEPS,
+} from './cloudShaders'
 import {
   CLOUD_CLEARANCE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
   cloudPathClear,
+  DETAIL_BASE_TEXELS,
+  DETAIL_OCTAVES,
+  detailOctaveWeights,
   columnDepth,
   easedFogExtinction,
   eyePastOffsets,
@@ -347,6 +361,7 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
         'sidePrev',
         'sideDensity',
         'sideShade',
+        'edge',
       ]
       for (const name of names) {
         if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
@@ -731,6 +746,91 @@ describe('cloud depth on either depth buffer (tides-zmw.9.3)', () => {
     expect(preprocess(fragmentShader, new Set(['FLIP_SIDED', 'USE_LOGARITHMIC_DEPTH_BUFFER']))).toContain(
       '#error'
     )
+    clouds.dispose()
+  })
+})
+
+describe('cloud detail eroding only edges and grain (tides-tvr.3)', () => {
+  const texel = 0.01
+  // An octave's wavelength, coarsest first.
+  const wave = (k: number) => (DETAIL_BASE_TEXELS * texel) / 2 ** k
+
+  it('erodes every octave in full where the coarsest is no bigger than grain on screen', () => {
+    const far = (texel * DETAIL_BASE_TEXELS) / DETAIL_GRAIN_PX
+    for (const footprint of [far, 1.5 * far, 4 * far]) {
+      const shown = detailOctaveWeights(footprint, texel, DETAIL_OCTAVES).length
+      for (let k = 0; k < shown; k++) {
+        for (const edge of [0, 0.3, 1]) expect(detailErosion(footprint, wave(k), edge)).toBe(1)
+      }
+    }
+  })
+
+  it('erodes a cloud\'s inside less, an octave large on screen least, and its edges in full', () => {
+    for (const px of [DETAIL_HOLE_PX, 2 * DETAIL_HOLE_PX, 100]) {
+      expect(detailErosion(wave(0) / px, wave(0), 0)).toBeCloseTo(DETAIL_INTERIOR, 9)
+      expect(detailErosion(wave(0) / px, wave(0), 1)).toBe(1)
+    }
+    let last = 1
+    for (let px = 1; px < 200; px *= 1.2) {
+      for (const edge of [0, 0.5]) {
+        const erode = detailErosion(wave(0) / px, wave(0), edge)
+        expect(erode).toBeLessThanOrEqual(1)
+        expect(erode).toBeGreaterThanOrEqual(DETAIL_INTERIOR)
+      }
+      const erode = detailErosion(wave(0) / px, wave(0), 0)
+      expect(erode).toBeLessThanOrEqual(last)
+      last = erode
+    }
+    // At the ship's lowest stop over the deck (tides-01v.2: a pixel 1/53 of
+    // a texel), the two coarsest octaves erode a cloud's inside least.
+    for (const k of [0, 1]) expect(detailErosion(texel / 53, wave(k), 0)).toBeCloseTo(DETAIL_INTERIOR, 9)
+  })
+
+  it('finds a cloud\'s edge by how far on, in map texels, it stops showing', () => {
+    const fall = 0.1
+    expect(detailEdge(CLOUD_MIN_ALPHA + DETAIL_EDGE_NEAR * fall, fall)).toBe(1)
+    expect(detailEdge(CLOUD_MIN_ALPHA + 0.5 * fall, fall)).toBe(1)
+    expect(detailEdge(CLOUD_MIN_ALPHA + DETAIL_EDGE_FAR * fall, fall)).toBe(0)
+    const mid = detailEdge(CLOUD_MIN_ALPHA + 2.5 * fall, fall)
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(1)
+    // Where the map is level, no edge; where it doesn't show, all edge.
+    expect(detailEdge(0.3, 0)).toBe(0)
+    expect(detailEdge(0, fall)).toBe(1)
+  })
+
+  for (const variant of [[], ['CLOUD_FLAT'], ['FLIP_SIDED'], ['CLOUD_FLAT', 'FLIP_SIDED']]) {
+    it(`erodes by the edge at the hit, read only close up (${variant.join('+') || 'relief'})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const src = preprocess(clouds.material.fragmentShader, new Set(variant))
+      const edge = src.indexOf('float edge = 1.0;')
+      const call = src.indexOf('vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel, edge);')
+      expect(edge).toBeGreaterThan(0)
+      expect(call).toBeGreaterThan(edge)
+      expect(src).toContain('vec4 cloudDetail(vec3 p, float footprint, float texel, float edge)')
+      expect(src).toContain('float spare = (1.0 - DETAIL_INTERIOR) * (1.0 - edge);')
+      // Worked out only where the coarsest wave is large on screen, in CSS
+      // pixels, from the slope's reads.
+      expect(src).toContain('DETAIL_GRAIN_PX * topFootprint * uPixelRatio;')
+      expect(src).toContain('float cssRatio = footprint * uPixelRatio / wavelength;')
+      expect(src.slice(edge, call)).toContain('if (edgeNear) {')
+      expect(src.slice(edge, call)).toContain('vec3 fall3 = vec3(colC.x, colE.x, colN.x);')
+      // A side is all edge; shaded elsewhere, the hit reads its own.
+      expect(src.includes('edgeNear = edgeNear && !side;')).toBe(variant.includes('FLIP_SIDED'))
+      expect(src.includes('if (sideLight > 0.0) {')).toBe(variant.includes('FLIP_SIDED'))
+      // The slope reads where the hit is shaded, as before.
+      expect(src).toContain('vec2 slope = RELIEF * vec2(colE.z - colC.z, colN.z - colC.z) / h;')
+      clouds.dispose()
+    })
+  }
+
+  it('takes the detail\'s sizes on screen in CSS pixels', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const { material } = clouds
+    expect(material.uniforms.uPixelRatio.value).toBe(1)
+    const renderer = { getPixelRatio: () => 2 } as unknown as THREE.WebGLRenderer
+    material.onBeforeRender(renderer, new THREE.Scene(), new THREE.PerspectiveCamera(), new THREE.BufferGeometry(), new THREE.Mesh(), null)
+    expect(material.uniforms.uPixelRatio.value).toBe(2)
     clouds.dispose()
   })
 })
