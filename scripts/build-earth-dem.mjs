@@ -194,7 +194,7 @@ for (const [name, map] of outputs) {
     `Wrote ${path.relative(root, file)}: ${map.width}×${map.height}, ${packed.length} B raw, ${gz.length} B gzip, max ${map.metres.reduce((a, b) => Math.max(a, b), 0)} m`
   );
 }
-console.log("Then run scripts/build-cloud-ceiling.mjs, and update cloud-layer.ts TERRAIN_MAX_METRES(_FLAT) to the maxima above.");
+console.log("Then run scripts/build-cloud-ceiling.mjs; earth-dem.test checks cloud-layer.ts TERRAIN_MAX_METRES against the new maps.");
 
 const at = (lat, lon) =>
   metres[Math.min(HEIGHT - 1, Math.floor(((90 - lat) / 180) * HEIGHT)) * WIDTH + Math.min(WIDTH - 1, Math.floor(((lon + 180) / 360) * WIDTH))];

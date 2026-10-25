@@ -13,7 +13,9 @@ import { createCloudImageBuilder, type CloudWorker } from './cloudWorkerClient'
 import { createRealCloudController, type CloudSnapshot, type ImagerySource } from './realCloudController'
 import earthSpecular from '../assets/earth-specular-2k.jpg'
 import earthDay from '../assets/earth-day-2k.jpg'
-import earthDem from '../assets/earth-dem-2k.bin?url'
+import earthDemHigh from '../assets/earth-dem-4k.bin?url'
+import earthDemLow from '../assets/earth-dem-2k.bin?url'
+import { isLowQuality } from '../quality'
 
 export type { GeoTextureInfo }
 
@@ -22,7 +24,8 @@ const absolute = (url: string) => new URL(url, document.baseURI).href
 const assets: CloudAssets = {
   specular: absolute(earthSpecular),
   day: absolute(earthDay),
-  dem: absolute(earthDem),
+  // The ground's own (EarthRenderer), so the browser has it already.
+  dem: absolute(isLowQuality() ? earthDemLow : earthDemHigh),
 }
 
 /** The worker needs OffscreenCanvas 2D (Safari 16.4+) to draw the tiles. */

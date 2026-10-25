@@ -3,14 +3,8 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import {
   CEILING_ARC_DEG,
-  CLOUD_CLEARANCE,
-  CLOUD_FLAT_ALTITUDE,
   CEILING_GREY_MARGIN,
-  TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
-  TERRAIN_MAX_GREY_FLAT,
-  TERRAIN_MAX_METRES,
-  TERRAIN_MAX_METRES_FLAT,
   TERRAIN_READ_TEXELS,
   directionToUv,
   type Vec3,
@@ -52,9 +46,25 @@ const maxOf = (values: ArrayLike<number>) => {
   return max
 }
 
-// The mip the cloud march reads its ground from (cloudShaders.ts cloudTerrain()).
-const readMip = (dem: EarthDem) => boxMips(demLevel(dem)).find((level) => level.width === TERRAIN_READ_TEXELS)!
-const marchMips = [readMip(dem4k), readMip(dem2k)]
+// The ground texture's levels (earthDemTexture.ts) as the GPU reads them,
+// half floats, rows north first again.
+type HalfMip = { data: Uint16Array; width: number; height: number }
+const groundLevels = (dem: EarthDem): DemLevel[] => {
+  const { relief, ground } = earthDemTextures(dem)
+  const levels = (ground.mipmaps as HalfMip[]).map(({ data, width, height }) => {
+    const out = new Float32Array(width * height)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) out[y * width + x] = THREE.DataUtils.fromHalfFloat(data[(height - 1 - y) * width + x])
+    }
+    return { width, height, data: out }
+  })
+  relief.dispose()
+  ground.dispose()
+  return levels
+}
+const grounds = [groundLevels(dem4k), groundLevels(dem2k)]
+// The level the cloud march reads its ground from (cloudShaders.ts cloudTerrain()).
+const marchMips = grounds.map((levels) => levels.find((level) => level.width === TERRAIN_READ_TEXELS)!)
 
 describe('Earth DEM format', () => {
   it('round-trips heights through its packing, deltas wrapping both ways', () => {
@@ -251,21 +261,25 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
 })
 
 // The cloud layer's bounds over the DEM (tides-zmw.14): its relief bound and
-// flat deck from the shipped maps' maxima, and the cloud ceiling built from
+// flat deck from the drawn ground's highest, and the cloud ceiling built from
 // the max map.
 describe('the cloud bounds over the DEM', () => {
-  it("takes the relief bound and the flat deck's ground from the shipped maps' maxima", () => {
-    expect(TERRAIN_MAX_METRES).toBe(maxOf(dem4k.metres))
-    expect(TERRAIN_MAX_METRES_FLAT).toBe(maxOf(dem2k.metres))
-    expect(TERRAIN_MAX_METRES).toBe(maxOf(demMax.metres))
-    expect(TERRAIN_MAX_GREY).toBeCloseTo(TERRAIN_MAX_METRES / DEM_METRES_PER_UNIT, 12)
-    expect(TERRAIN_MAX_GREY_FLAT).toBeCloseTo(TERRAIN_MAX_METRES_FLAT / DEM_METRES_PER_UNIT, 12)
-  })
-
-  it("keeps the march's ground under its relief bound, and the low tier's ground the clearance under the flat deck", () => {
+  it('bounds the drawn ground on either tier, as the GPU reads it, to the metre', () => {
+    for (const [top] of grounds) {
+      // The mesh's vertices sit on the top level's texel corners: the mean
+      // of the 2 × 2 around each (wrapping east to west, held at the poles).
+      const at = (x: number, y: number) =>
+        top.data[Math.min(Math.max(y, 0), top.height - 1) * top.width + ((x + top.width) % top.width)]
+      let corners = 0
+      for (let y = 0; y <= top.height; y++) {
+        for (let x = 0; x < top.width; x++) {
+          corners = Math.max(corners, (at(x - 1, y - 1) + at(x, y - 1) + at(x - 1, y) + at(x, y)) / 4)
+        }
+      }
+      expect(TERRAIN_MAX_GREY).toBeGreaterThanOrEqual(corners)
+      expect((TERRAIN_MAX_GREY - corners) * DEM_METRES_PER_UNIT).toBeLessThan(2)
+    }
     for (const mip of marchMips) expect(maxOf(mip.data)).toBeLessThanOrEqual(TERRAIN_MAX_GREY)
-    const lowGround = maxOf(dem2k.metres) / DEM_METRES_PER_UNIT
-    expect(CLOUD_FLAT_ALTITUDE - lowGround * TERRAIN_DISPLACEMENT).toBeGreaterThanOrEqual(CLOUD_CLEARANCE)
   })
 
   it("keeps earth-cloud-ceiling.bin over the ground the march reads within its arc", () => {

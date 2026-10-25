@@ -19,14 +19,20 @@ export const TERRAIN_DISPLACEMENT = 0.075
 /** Kilometres of elevation per unit of grey: the old bump map's 1/39 km a
  * level, which the 16-bit elevation map (earth-dem.ts) keeps. */
 export const TERRAIN_KM_PER_GREY = 255 / 39
-/** The highest metres of earth-dem-4k.bin, the high tier's ground (a test
- * checks it against the shipped map). Its grey bounds the cloud layer. */
-export const TERRAIN_MAX_METRES = 6433
-/** The same for earth-dem-2k.bin, the low tier's, whose 2 × 2 means average
- * the peaks down: the flat layer's ground. */
-export const TERRAIN_MAX_METRES_FLAT = 6221
+/**
+ * The highest the drawn ground stands, in metres, rounded up: the ground
+ * texture's top level (renderers/earthDemTexture.ts, the limb sphere's
+ * 512 × 256, as half floats) read at its texel corners, where the mesh's
+ * vertices sit, which is the most any ground read stands (the base sphere's
+ * coarser level and the cloud march's 256-wide one average lower). The same
+ * on either tier: the 2k map's level of that size is the 4k map's to the
+ * metre. A test checks it against the shipped maps. Its grey bounds the
+ * cloud layer and the flat deck. The full maps' peaks (6.4 km) are higher
+ * but only shade the ground; a streamed surface layer that draws them
+ * (tides-zmw.9) must raise this.
+ */
+export const TERRAIN_MAX_METRES = 5385
 export const TERRAIN_MAX_GREY = TERRAIN_MAX_METRES / (1000 * TERRAIN_KM_PER_GREY)
-export const TERRAIN_MAX_GREY_FLAT = TERRAIN_MAX_METRES_FLAT / (1000 * TERRAIN_KM_PER_GREY)
 
 /**
  * Gap between the (smoothed) ground and a cloud's base: three times the
@@ -44,10 +50,10 @@ export const MIN_MEASURED_TOP_KM = 1
 export const CLOUD_LAYER_TOP =
   TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * MAX_CLOUD_TOP_KM
 
-/** The low-quality path's single flat shell: the clearance over its highest
+/** The low-quality path's single flat shell: the clearance over the highest
  * ground (tides-7oi), at a typical low-cloud top. */
 export const CLOUD_FLAT_ALTITUDE =
-  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY_FLAT + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
+  TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
 
 /** Where no satellite measured a top: thicker (brighter) cloud, taller tops. */
 export function defaultTopKm(alpha: number): number {

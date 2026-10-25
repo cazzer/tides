@@ -34,7 +34,6 @@ import {
   sunVisibility,
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
-  TERRAIN_MAX_GREY_FLAT,
   TERRAIN_READ_TEXELS,
   type Vec3,
 } from './cloud-layer'
@@ -108,8 +107,7 @@ describe('cloud tops', () => {
     }
   })
 
-  it('keeps the flat shell the clearance over the highest ground (tides-7oi)', () => {
-    expect(CLOUD_FLAT_ALTITUDE - TERRAIN_MAX_GREY_FLAT * TERRAIN_DISPLACEMENT).toBeGreaterThanOrEqual(CLOUD_CLEARANCE)
+  it('keeps the flat shell under the layer top (tides-7oi)', () => {
     expect(CLOUD_FLAT_ALTITUDE).toBeLessThan(CLOUD_LAYER_TOP)
   })
 

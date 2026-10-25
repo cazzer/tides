@@ -321,8 +321,8 @@ float cloudCeilingRadius(vec3 q) {
 }
 
 // The ground mesh's altitude at uv (cloudUv()): within reach, the limb
-// sphere's (LIMB_SEGMENTS), its vertices raised by the bump map as three's
-// displacement reads it (the base level, at the vertex), and flat between
+// sphere's (LIMB_SEGMENTS), its vertices raised by the ground texture's top
+// level read at their texel corners (groundDisplacement.ts), and flat between
 // them over each of a quad's two triangles. The columns stand on the ground
 // smoothed (cloudTerrain()), so where the relief rises above that by more
 // than the clearance their cloud runs into it.
