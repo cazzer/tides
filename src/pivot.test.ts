@@ -317,6 +317,20 @@ describe('tiltControls', () => {
     expect(controls.getDistance()).toBeCloseTo(new Vector3(30, 40, 50).length(), 9)
   })
 
+  it('reports an outside move, but not the first update or its own', () => {
+    const camera = new OrthographicCamera()
+    camera.position.set(30, 40, 50)
+    const controls = new OrbitControls(camera)
+    let moves = 0
+    tiltControls(controls, camera, { tilt: 0.6, heading: 0, depth: 1 }, () => radius, undefined, () => moves++)
+    controls.update()
+    controls.update()
+    expect(moves).toBe(0)
+    camera.position.set(0, 0, 50)
+    controls.update()
+    expect(moves).toBe(1)
+  })
+
   it('takes an outside move as the new untilted pose', () => {
     const pivot = { tilt: 0.6, heading: 0.8, depth: 1 }
     const { camera, controls } = setup(pivot)

@@ -19,6 +19,8 @@ import {
   nearestSurface,
   planetFramingZoom,
   stepEyeDistance,
+  stepFocusDistance,
+  turnTarget,
   systemFitDistance,
   targetUnitsPerPixel,
   zoomDistance,
@@ -243,6 +245,10 @@ describe('easeDistance', () => {
     }
   })
 
+  it('jumps to the goal from a distance of 0, where there is no ratio', () => {
+    expect(easeDistance(0, 10)).toBe(10)
+  })
+
   it('changes the apparent size by the same small share each frame', () => {
     // 5% of the remaining ratio: from 50x too far, ~18% a frame, not a jump.
     const next = easeDistance(1e5, 2048)
@@ -315,6 +321,58 @@ describe('stepEyeDistance', () => {
     }
     expect(frames.length).toBeGreaterThan(0)
     expect(controls.distance).toBeCloseTo(2048, 9)
+  })
+})
+
+describe('stepFocusDistance', () => {
+  const focus = new Vector3(100, 0, 0)
+  const anchor = { key: 'mars' as unknown, position: focus }
+  const at = (target: Vector3, distance: number) =>
+    Object.assign(dolly(distance), { target })
+
+  it('neither frames nor pushes while the target is on its way', () => {
+    const controls = at(new Vector3(50, 0, 0), 3)
+    expect(stepFocusDistance(controls, anchor, 300, 10, 2048)).toBe(false)
+    expect(controls.distance).toBe(3)
+    expect(controls.minDistance).toBe(3)
+  })
+
+  it('frames once the target has reached the focus', () => {
+    const controls = at(new Vector3(95, 0, 0), 100)
+    for (let frame = 0; frame < 300; frame++) {
+      if (stepFocusDistance(controls, anchor, 300, 10, 2048)) break
+    }
+    expect(controls.distance).toBeCloseTo(300, 9)
+  })
+})
+
+describe('turnTarget', () => {
+  const eye = new Vector3(0, 0, 0)
+
+  it('turns the view by the ease’s share of the angle, even to a focus behind the eye', () => {
+    const target = new Vector3(4, 0, 0)
+    const behind = new Vector3(-46, 1, 0)
+    const before = target.clone()
+    turnTarget(target, eye, behind, 0.05)
+    const turned = (before.angleTo(target) * 180) / Math.PI
+    expect(turned).toBeCloseTo(0.05 * ((before.angleTo(behind) * 180) / Math.PI), 6)
+    expect(target.length()).toBeCloseTo(MathUtils.lerp(4, behind.length(), 0.05), 9)
+  })
+
+  it('arrives at the focus', () => {
+    const target = new Vector3(4, 0, 0)
+    const focus = new Vector3(-46, 8, 3)
+    for (let frame = 0; frame < 600; frame++) turnTarget(target, eye, focus, 0.05)
+    expect(target.distanceTo(focus)).toBeLessThan(1e-4)
+  })
+
+  it('eases like a straight line when the focus is nearly ahead', () => {
+    const target = new Vector3(100, 0, 0)
+    const focus = new Vector3(100, 0.01, 0)
+    const straight = target.clone().lerp(focus, 0.05)
+    turnTarget(target, eye, focus, 0.05)
+    // To first order: they part by the square of the angle.
+    expect(target.distanceTo(straight)).toBeLessThan(1e-6)
   })
 })
 
