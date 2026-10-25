@@ -27,10 +27,11 @@ import { useRef, type FC } from 'react'
 import { Text } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore, type CameraFocus } from '../store'
 import { positionsFor, type ScalePositions } from '../flight-scale'
 import type { DistanceScale } from '../distance-scale'
-import type { ViewSize } from '../main-view'
+import { targetUnitsPerPixel, type ViewSize } from '../main-view'
 import { CLOCK_HALF_WIDTH, CLOCK_INNER_RADIUS, labelMaterial } from '../orbit-label'
 import { earthAngle } from '../ephemeris'
 import { MOONS, isMoonKey, moonOffsetInto } from '../moons/moons'
@@ -52,6 +53,7 @@ import {
   bodyRadius,
   bodyReach,
   createLabelLayout,
+  discOnScreen,
   focusBody,
   isLabelMoon,
   labelDirection,
@@ -61,7 +63,7 @@ import {
   type LabelKey,
   type ScreenDirection,
 } from './label-visibility'
-import { screenPointInto, type ScreenPoint } from './screen-point'
+import { screenPointInto, screenRateInto, type ScreenPoint } from './screen-point'
 import type { SystemAidProps } from './types'
 
 type TroikaText = THREE.Mesh & {
@@ -111,6 +113,10 @@ const noRaycast = () => {}
 const CLOCK_HALF_HEIGHT = 2.4
 const CLOCK_DISCS = 4
 const CLOCK_Y = 0.5
+// The most a disc covers, px. [TUNE] With the eye just over the clock its
+// letters fill the view and stand far apart; past this, names go between
+// them rather than all giving way. About seven times their default size.
+const CLOCK_DISC_MAX_PX = 160
 
 const layout = createLabelLayout(n, AU_RINGS.length, CLOCK_DISCS)
 // Each body's scene position this frame, xyz per name.
@@ -122,7 +128,10 @@ const position = new THREE.Vector3()
 const right = new THREE.Vector3()
 const up = new THREE.Vector3()
 const anchor = new THREE.Vector3()
+const across = new THREE.Vector3()
+const other = new THREE.Vector3()
 const screen: ScreenPoint = { x: 0, y: 0, depth: 0, upp: 1 }
+const rate = { x: 0, y: 0 }
 const direction: ScreenDirection = { x: 0, y: 1 }
 const pole = new THREE.Vector3()
 const along = new THREE.Vector3()
@@ -165,17 +174,6 @@ function bodyPositionInto(
   return out
 }
 
-// Whether body i's globe reaches into the view at all.
-function onScreen(i: number): boolean {
-  const { discX, discY, discR } = layout
-  return (
-    discX[i] + discR[i] > frame.left &&
-    discX[i] - discR[i] < frame.right &&
-    discY[i] + discR[i] > frame.bottom &&
-    discY[i] - discR[i] < frame.top
-  )
-}
-
 // Where `point` lands in the view (into `screen`), and whether the near and
 // far planes let it through.
 function project(camera: THREE.PerspectiveCamera, point: THREE.Vector3, size: ViewSize): boolean {
@@ -183,11 +181,21 @@ function project(camera: THREE.PerspectiveCamera, point: THREE.Vector3, size: Vi
   return screen.depth >= camera.near && screen.depth <= camera.far
 }
 
-// The clock's discs; one behind the eye or clipped by the near plane is
+// Screen direction of a step from scene point bodyAt[i] along `along`,
+// normalised into `direction`.
+function directionAlong(camera: THREE.PerspectiveCamera, i: number, along: THREE.Vector3, size: ViewSize) {
+  position.fromArray(bodyAt, i * 3)
+  screenRateInto(camera, position, along, size.width, size.height, rate)
+  labelDirection(rate.x, rate.y, direction)
+}
+
+// The clock's discs, each as wide as the text's height across the Sun–Earth
+// line looks from here; one behind the eye or clipped by the near plane is
 // left out.
 function placeClock(camera: THREE.PerspectiveCamera, size: ViewSize, t: number) {
   const angle = earthAngle(t)
   const length = 2 * CLOCK_HALF_WIDTH - 2 * CLOCK_HALF_HEIGHT
+  across.set(Math.sin(angle), 0, Math.cos(angle))
   layout.blockerCount = 0
   for (let d = 0; d < CLOCK_DISCS; d++) {
     const r = CLOCK_INNER_RADIUS + CLOCK_HALF_HEIGHT + (length * d) / (CLOCK_DISCS - 1)
@@ -196,7 +204,8 @@ function placeClock(camera: THREE.PerspectiveCamera, size: ViewSize, t: number) 
     const k = layout.blockerCount++
     layout.blockerX[k] = screen.x
     layout.blockerY[k] = screen.y
-    layout.blockerR[k] = CLOCK_HALF_HEIGHT / screen.upp
+    screenRateInto(camera, anchor, across, size.width, size.height, rate)
+    layout.blockerR[k] = Math.min(CLOCK_HALF_HEIGHT * Math.hypot(rate.x, rate.y), CLOCK_DISC_MAX_PX)
   }
 }
 
@@ -222,6 +231,15 @@ function placeRingLabels(camera: THREE.PerspectiveCamera, size: ViewSize) {
   }
 }
 
+// Body i's offset from body j, scene units (into `other`).
+function offsetFrom(i: number, j: number): THREE.Vector3 {
+  return other.set(
+    bodyAt[i * 3] - bodyAt[j * 3],
+    bodyAt[i * 3 + 1] - bodyAt[j * 3 + 1],
+    bodyAt[i * 3 + 2] - bodyAt[j * 3 + 2]
+  )
+}
+
 // Module level, so the troika meshes behind the refs aren't mutated in a hook.
 function placeLabels(
   texts: readonly (TroikaText | null)[],
@@ -231,6 +249,7 @@ function placeLabels(
   scale: DistanceScale,
   focus: CameraFocus,
   phone: boolean,
+  viewUpp: number,
   delta: number
 ) {
   const { positionAt } = positionsFor(scale)
@@ -264,30 +283,27 @@ function placeLabels(
     discR[i] = bodyRadius(LABEL_KEYS[i]) / screen.upp
     nearness[i] = -screen.depth
   }
-  const focusUpp = frame.focus >= 0 ? bodyUpp[frame.focus] : undefined
 
-  // Each wanted name's size and default side. Only a body in sight is named,
-  // and a moon only with its planet in sight too, so a lone moon at the edge
-  // doesn't read as a stray.
+  // Each wanted name's size and default side. A moon is named only with its
+  // planet in sight, so a lone moon at the edge doesn't read as a stray.
   for (let i = 0; i < n; i++) {
     const key = LABEL_KEYS[i]
     const text = texts[i]
     const bounds = text?.textRenderInfo?.blockBounds
     const parent = PARENT_INDEX[i]
-    const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && onScreen(parent))
-    wanted[i] =
-      text && bounds && inView[i] && onScreen(i) && parentSeen
-        ? labelOpacity(key, bodyUpp[i], focus, focusUpp)
-        : 0
+    const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && discOnScreen(layout, frame, parent))
+    wanted[i] = text && bounds && inView[i] && parentSeen ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
     if (!text || !bounds || wanted[i] < MIN_NAME_OPACITY) continue
-    if (parent >= 0) labelDirection(discX[i] - discX[parent], discY[i] - discY[parent], direction)
+    // Sides from the bodies' 3D offsets: what it orbits may be behind the
+    // eye, where its projection is mirrored through the view's centre.
+    if (parent >= 0) directionAlong(camera, i, offsetFrom(i, parent), size)
     else labelDirection(0, 0, direction)
     dirX[i] = direction.x
     dirY[i] = direction.y
     if (key === 'moon') {
       // Away from the Sun at the Moon, so its name never heads for the clock.
       layout.steer[i] = 1
-      labelDirection(discX[i] - discX[SUN_INDEX], discY[i] - discY[SUN_INDEX], direction)
+      directionAlong(camera, i, offsetFrom(i, SUN_INDEX), size)
       layout.awayX[i] = direction.x
       layout.awayY[i] = direction.y
     }
@@ -326,11 +342,15 @@ function Labels({ distanceScale }: { distanceScale: DistanceScale }) {
   // A boolean, so resizing re-renders only on crossing the phone width.
   const phone = useThree((state) => state.size.width <= PHONE_VIEW_PX)
 
-  useFrame(({ camera, size }, delta) => {
+  useFrame(({ camera, controls, size }, delta) => {
     const { timestamp, cameraFocus } = useStore.getState()
     const perspective = camera as THREE.PerspectiveCamera
-    if (timestamp == null || !perspective.isPerspectiveCamera) return
-    placeLabels(texts.current, perspective, size, timestamp, distanceScale, cameraFocus, phone, delta)
+    const orbit = controls as OrbitControlsImpl | null
+    if (timestamp == null || !perspective.isPerspectiveCamera || !orbit) return
+    // How far in the view is: the scale at the orbit target, as the ortho
+    // view's zoom was.
+    const viewUpp = targetUnitsPerPixel(orbit.getDistance(), size.height)
+    placeLabels(texts.current, perspective, size, timestamp, distanceScale, cameraFocus, phone, viewUpp, delta)
   })
 
   return (

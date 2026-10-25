@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { MAIN_DISTANCE, MAIN_FOV, targetUnitsPerPixel } from '../main-view'
-import { screenPointInto, type ScreenPoint } from './screen-point'
+import { screenPointInto, screenRateInto, type ScreenPoint } from './screen-point'
 
 const W = 1200
 const H = 800
@@ -64,5 +64,45 @@ describe('screenPointInto', () => {
     const camera = mainCamera()
     const behind = camera.position.clone().multiplyScalar(1.5)
     expect(screenPointInto(camera, behind, W, H, point()).depth).toBeCloseTo(-MAIN_DISTANCE / 2)
+  })
+
+  it('gives finite x and y rather than NaN at the eye’s own depth', () => {
+    const camera = mainCamera()
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+    const p = screenPointInto(camera, camera.position.clone().add(right), W, H, point())
+    expect(p.depth).toBeCloseTo(0)
+    expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true)
+  })
+})
+
+describe('screenRateInto', () => {
+  const rate = () => ({ x: 0, y: 0 })
+
+  it('is 1 / upp px per unit along the camera’s right', () => {
+    const camera = mainCamera()
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+    const p = screenPointInto(camera, at(0, 0, 0), W, H, point())
+    const r = screenRateInto(camera, at(0, 0, 0), right.multiplyScalar(5), W, H, rate())
+    expect(r.x).toBeCloseTo(1 / p.upp, 3)
+    expect(r.y).toBeCloseTo(0, 3)
+  })
+
+  it('points outward from the Sun with the Sun behind the eye, where projections mirror', () => {
+    // Close in on Earth's day side, the eye between it and the Sun.
+    const camera = new THREE.PerspectiveCamera(MAIN_FOV, W / H, 0.01, 4000)
+    camera.position.set(30, 2, 0)
+    const earth = at(50, 0, 0)
+    const sun = at(0, 0, 0)
+    camera.lookAt(earth)
+    camera.updateMatrixWorld()
+    const e = screenPointInto(camera, earth, W, H, point())
+    const s = screenPointInto(camera, sun, W, H, point())
+    expect(s.depth).toBeLessThan(0)
+    // Outward is up the screen (the eye sits above the ecliptic); the
+    // mirrored Sun's projection says down.
+    expect(e.y - s.y).toBeLessThan(0)
+    const r = screenRateInto(camera, earth, earth.clone().sub(sun), W, H, rate())
+    expect(r.y).toBeGreaterThan(0)
+    expect(Math.abs(r.x)).toBeLessThan(1e-6)
   })
 })
