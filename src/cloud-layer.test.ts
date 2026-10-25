@@ -38,6 +38,7 @@ import {
   TERRAIN_READ_TEXELS,
   type Vec3,
 } from './cloud-layer'
+import { decodeEarthDem, demLevel } from './earth-dem'
 
 const DEG = Math.PI / 180
 
@@ -107,8 +108,8 @@ describe('cloud tops', () => {
     }
   })
 
-  it('keeps the flat shell clear of the highest ground (tides-7oi)', () => {
-    expect(CLOUD_FLAT_ALTITUDE).toBeGreaterThan(TERRAIN_MAX_GREY_FLAT * TERRAIN_DISPLACEMENT)
+  it('keeps the flat shell the clearance over the highest ground (tides-7oi)', () => {
+    expect(CLOUD_FLAT_ALTITUDE - TERRAIN_MAX_GREY_FLAT * TERRAIN_DISPLACEMENT).toBeGreaterThanOrEqual(CLOUD_CLEARANCE)
     expect(CLOUD_FLAT_ALTITUDE).toBeLessThan(CLOUD_LAYER_TOP)
   })
 
@@ -286,26 +287,27 @@ describe('cloud detail octaves', () => {
   })
 })
 
+// earth-dem-max.bin as grey, the cloud ceiling's source.
+const demMax = demLevel(await decodeEarthDem(readFileSync(new URL('./assets/earth-dem-max.bin', import.meta.url))))
+
 describe('cloud ceiling', () => {
-  // earth-terrain-max.bin (ship/terrain-floor.ts TERRAIN_MAP_SIZE).
+  // ship/terrain-floor.ts TERRAIN_MAP_SIZE.
   const W = 512
   const H = 256
-  const pooled = new Uint8Array(
-    readFileSync(new URL('./assets/earth-terrain-max.bin', import.meta.url))
-  )
+  const pooled = demMax.data
   const ceiling = cloudCeiling(pooled, W, H)
   const atUv = (grid: Uint8Array, w: number, h: number, [u, v]: [number, number]) =>
     grid[Math.min(h - 1, Math.floor((1 - v) * h)) * w + Math.min(w - 1, Math.floor(u * w))]
   // The march's ground read at uv (cloudShaders.ts cloudTerrain()), at its
-  // worst: bilinear on the TERRAIN_READ_TEXELS-wide mip, each of whose
-  // texels is at most the max of the pooled texels it covers.
+  // worst, in grey levels: bilinear on the TERRAIN_READ_TEXELS-wide mip,
+  // each of whose texels is at most the max of the pooled texels it covers.
   const k = W / TERRAIN_READ_TEXELS
   const mipTexel = (i: number, j: number) => {
     let max = 0
     for (let y = j * k; y < (j + 1) * k; y++) {
       for (let x = i * k; x < (i + 1) * k; x++) max = Math.max(max, pooled[y * W + x])
     }
-    return max
+    return max * 255
   }
   const groundRead = ([u, v]: [number, number]) => {
     const w = TERRAIN_READ_TEXELS

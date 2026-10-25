@@ -457,20 +457,18 @@ export function cosSunZenith(latDeg: number, lonDeg: number, sun: { lat: number;
 
 // --- Clear-sky reference ---------------------------------------------------
 
-/** Terrain from the static textures, one byte per output pixel. */
+/** Terrain from the static maps, a value per output pixel. */
 export interface Terrain {
-  /** The bump map's grey, linear in elevation (ELEVATION_KM_PER_LEVEL). */
+  /** Metres above sea level (the elevation map, earth-dem.ts; 0 at sea). */
   elevation: ArrayLike<number>
   /** Nonzero on land. */
   land: ArrayLike<number>
 }
 
-// earth-bump: Tibet ~180, the Altiplano ~148, Greenland ~116, Colorado ~60.
-export const ELEVATION_KM_PER_LEVEL = 1 / 39
 export const LAPSE_RATE_C_PER_KM = 6.5
 
 function lapse(terrain: Terrain | null, p: number): number {
-  return terrain ? LAPSE_RATE_C_PER_KM * ELEVATION_KM_PER_LEVEL * terrain.elevation[p] : 0
+  return terrain ? (LAPSE_RATE_C_PER_KM * terrain.elevation[p]) / 1000 : 0
 }
 
 function percentile(values: number[], f: number): number {

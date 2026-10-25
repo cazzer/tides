@@ -13,7 +13,7 @@ import { createCloudImageBuilder, type CloudWorker } from './cloudWorkerClient'
 import { createRealCloudController, type CloudSnapshot, type ImagerySource } from './realCloudController'
 import earthSpecular from '../assets/earth-specular-2k.jpg'
 import earthDay from '../assets/earth-day-2k.jpg'
-import earthBump from '../assets/earth-bump-2k.jpg'
+import earthDem from '../assets/earth-dem-2k.bin?url'
 
 export type { GeoTextureInfo }
 
@@ -22,7 +22,7 @@ const absolute = (url: string) => new URL(url, document.baseURI).href
 const assets: CloudAssets = {
   specular: absolute(earthSpecular),
   day: absolute(earthDay),
-  bump: absolute(earthBump),
+  dem: absolute(earthDem),
 }
 
 /** The worker needs OffscreenCanvas 2D (Safari 16.4+) to draw the tiles. */

@@ -3,10 +3,14 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import {
   CEILING_ARC_DEG,
+  CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
   CEILING_GREY_MARGIN,
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
+  TERRAIN_MAX_GREY_FLAT,
+  TERRAIN_MAX_METRES,
+  TERRAIN_MAX_METRES_FLAT,
   TERRAIN_READ_TEXELS,
   directionToUv,
   type Vec3,
@@ -20,12 +24,14 @@ import {
   maxPoolDem,
   meanPoolDem,
   packEarthDem,
+  resampleDem,
   toHalfBits,
   unpackEarthDem,
   type DemLevel,
   type EarthDem,
 } from './earth-dem'
 import { earthDemTextures } from './renderers/earthDemTexture'
+import { OUT_H, OUT_W } from './real-clouds'
 import { LIMB_SEGMENTS } from './ship/limb-detail'
 
 const shipped = (name: string) => decodeEarthDem(readFileSync(new URL(`./assets/${name}`, import.meta.url)))
@@ -74,6 +80,32 @@ describe('Earth DEM format', () => {
     ])
     expect(mips[1].data[0]).toBeCloseTo((0 + 1 + 8 + 9) / 4, 6)
     expect(mips[3].data[0]).toBeCloseTo(15.5, 6)
+  })
+
+  it('resamples bilinearly between texel centres, wrapping east to west', () => {
+    const dem = { width: 4, height: 2, metres: Uint16Array.of(400, 0, 0, 0, 0, 0, 0, 800) }
+    expect(resampleDem(dem, 4, 2)).toEqual(dem)
+    const { metres } = resampleDem(dem, 8, 4)
+    // The first column straddles the date line, three quarters of the way
+    // from the last; the top row is held at the first's.
+    expect(metres[0]).toBe(300)
+    expect(metres[8]).toBe(275)
+    expect(metres[3 * 8 + 7]).toBe(600)
+    expect(metres[3 * 8]).toBe(200)
+  })
+
+  it("resamples the low tier's map to the cloud pipeline's grid in place, in metres", () => {
+    const grid = resampleDem(dem2k, OUT_W, OUT_H)
+    // Plateaus, so the step between grids barely moves them.
+    for (const [lat, lon] of [
+      [-17.5, -67.5],
+      [33, 88],
+      [72, -40],
+      [0, -150],
+    ]) {
+      expect(Math.abs(heightAt(grid, lat, lon) - heightAt(dem2k, lat, lon)) * DEM_METRES_PER_UNIT).toBeLessThan(150)
+    }
+    expect(heightAt(grid, 33, 88) * DEM_METRES_PER_UNIT).toBeGreaterThan(4500)
   })
 })
 
@@ -218,24 +250,22 @@ describe('shipped Earth DEMs (scripts/build-earth-dem.mjs)', () => {
   })
 })
 
-// The cloud layer's bounds, still 8-bit until tides-zmw.1's second step moves
-// them to the DEM: its relief bound and flat deck (TERRAIN_MAX_GREY,
-// TERRAIN_MAX_GREY_FLAT, from the old bump maps) and the cloud ceiling (built
-// from the DEM's max map rounded up to 8 bits).
-describe('the 8-bit cloud bounds over the DEM (tides-zmw.1)', () => {
-  it("keeps the march's ground under its relief bound, and the low tier's ground under the flat deck", () => {
-    for (const mip of marchMips) expect(maxOf(mip.data)).toBeLessThanOrEqual(TERRAIN_MAX_GREY)
-    const lowGround = maxOf(dem2k.metres) / DEM_METRES_PER_UNIT
-    expect(lowGround * TERRAIN_DISPLACEMENT).toBeLessThan(CLOUD_FLAT_ALTITUDE)
+// The cloud layer's bounds over the DEM (tides-zmw.14): its relief bound and
+// flat deck from the shipped maps' maxima, and the cloud ceiling built from
+// the max map.
+describe('the cloud bounds over the DEM', () => {
+  it("takes the relief bound and the flat deck's ground from the shipped maps' maxima", () => {
+    expect(TERRAIN_MAX_METRES).toBe(maxOf(dem4k.metres))
+    expect(TERRAIN_MAX_METRES_FLAT).toBe(maxOf(dem2k.metres))
+    expect(TERRAIN_MAX_METRES).toBe(maxOf(demMax.metres))
+    expect(TERRAIN_MAX_GREY).toBeCloseTo(TERRAIN_MAX_METRES / DEM_METRES_PER_UNIT, 12)
+    expect(TERRAIN_MAX_GREY_FLAT).toBeCloseTo(TERRAIN_MAX_METRES_FLAT / DEM_METRES_PER_UNIT, 12)
   })
 
-  it('ships earth-terrain-max.bin as the max map rounded up to grey levels', () => {
-    const terrainMax = new Uint8Array(readFileSync(new URL('./assets/earth-terrain-max.bin', import.meta.url)))
-    expect(terrainMax.length).toBe(demMax.metres.length)
-    const short = demMax.metres.findIndex(
-      (m, k) => terrainMax[k] < Math.min(255, Math.ceil((m / DEM_METRES_PER_UNIT) * 255))
-    )
-    expect(short).toBe(-1)
+  it("keeps the march's ground under its relief bound, and the low tier's ground the clearance under the flat deck", () => {
+    for (const mip of marchMips) expect(maxOf(mip.data)).toBeLessThanOrEqual(TERRAIN_MAX_GREY)
+    const lowGround = maxOf(dem2k.metres) / DEM_METRES_PER_UNIT
+    expect(CLOUD_FLAT_ALTITUDE - lowGround * TERRAIN_DISPLACEMENT).toBeGreaterThanOrEqual(CLOUD_CLEARANCE)
   })
 
   it("keeps earth-cloud-ceiling.bin over the ground the march reads within its arc", () => {

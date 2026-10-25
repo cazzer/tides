@@ -5,12 +5,11 @@
 // - src/assets/earth-dem-2k.bin: 2048 × 1024, the same on the low tier: the
 //   4k map's 2 × 2 means (its first mip).
 // - src/assets/earth-dem-max.bin: 512 × 256, the 4k map's 8 × 8 maxima, so
-//   at or above every texel of either map: earth-terrain-max.bin's source.
+//   at or above every texel of either map: the cloud ceiling's source
+//   (scripts/build-cloud-ceiling.mjs; run it next).
 // - src/assets/earth-dem-mean.bin: 512 × 256, the 4k map's 8 × 8 means: the
 //   level the ground mesh is displaced from (tides-zmw.2), and so the
 //   terrain floor's source (src/ship/terrain-floor.ts).
-// - src/assets/earth-terrain-max.bin: the max map in 8-bit grey levels,
-//   rounded up, for scripts/build-cloud-ceiling.mjs (run it next).
 //
 // Source: Mapterhorn's Terrarium tiles at zoom 4 (512 px lossless WebP,
 // Web Mercator; Copernicus GLO-30 and national DEMs; no key), about 2 source
@@ -18,8 +17,9 @@
 // the mean of the pixels whose centres fall in it, each clamped to sea level
 // first (no bathymetry; the Dead Sea reads 0). A tile that 404s is open
 // ocean. Web Mercator stops at 85.05°: north of it is Arctic Ocean (0), and
-// south of 85°S the old earth-bump.jpg (8-bit, ~25 m a level) fills the
-// polar cap, feathered in over 83–85°S. AWS Terrain Tiles
+// south of 85°S the old bump map, scripts/data/earth-bump.jpg (4096 × 2048,
+// 8-bit, ~25 m a level), fills the polar cap, feathered in over 83–85°S.
+// Nothing at runtime reads that map. AWS Terrain Tiles
 // (s3.amazonaws.com/elevation-tiles-prod/terrarium, 256 px) are the same
 // encoding, if Mapterhorn goes away.
 //
@@ -142,7 +142,7 @@ for (const [key, file] of tiles) {
 }
 
 // The old bump map, for the polar cap.
-const bumpFile = path.join(assets, "earth-bump.jpg");
+const bumpFile = path.join(root, "scripts", "data", "earth-bump.jpg");
 const bump = execFileSync("magick", [bumpFile, "-colorspace", "Gray", "-depth", "8", "gray:-"], {
   maxBuffer: WIDTH * HEIGHT + 1024,
 });
@@ -194,15 +194,7 @@ for (const [name, map] of outputs) {
     `Wrote ${path.relative(root, file)}: ${map.width}×${map.height}, ${packed.length} B raw, ${gz.length} B gzip, max ${map.metres.reduce((a, b) => Math.max(a, b), 0)} m`
   );
 }
-
-// The cloud ceiling's source stays 8-bit until the cloud layer reads the DEM
-// (tides-zmw.1's second step): the max map in grey levels (255 =
-// DEM_METRES_PER_UNIT), rounded up, so the ceiling stands over this ground.
-const maxMap = outputs[2][1];
-const terrainMax = Uint8Array.from(maxMap.metres, (m) => Math.min(255, Math.ceil((m / dem.DEM_METRES_PER_UNIT) * 255)));
-const terrainMaxFile = path.join(assets, "earth-terrain-max.bin");
-fs.writeFileSync(terrainMaxFile, terrainMax);
-console.log(`Wrote ${path.relative(root, terrainMaxFile)}: then run scripts/build-cloud-ceiling.mjs`);
+console.log("Then run scripts/build-cloud-ceiling.mjs, and update cloud-layer.ts TERRAIN_MAX_METRES(_FLAT) to the maxima above.");
 
 const at = (lat, lon) =>
   metres[Math.min(HEIGHT - 1, Math.floor(((90 - lat) / 180) * HEIGHT)) * WIDTH + Math.min(WIDTH - 1, Math.floor(((lon + 180) / 360) * WIDTH))];

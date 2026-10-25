@@ -272,7 +272,7 @@ uniform mat4 modelMatrix;
 uniform vec2 uEclipseBody;
 ${ECLIPSE_GLSL.point}
 #define CLOUD_ECLIPSE_HIT eclipsePoint(p)
-// The highest ground the relief layer's bump map holds.
+// The highest ground the high tier's elevation map holds (TERRAIN_MAX_GREY).
 #define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
 // How far past a flank its cloud is read, and how many steps past a side.
 #define WALL_DEPTH ${f(MARCH_STEP / 2)}

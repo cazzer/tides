@@ -176,6 +176,32 @@ export function meanPoolDem({ width, height, metres }: EarthDem, factor: number)
   return { width: w, height: h, metres: Uint16Array.from(sum, (s) => Math.round(s / (factor * factor))) }
 }
 
+/**
+ * A DEM resampled to `width` × `height`, bilinear between texel centres as
+ * a canvas draws an image scaled (wrapping east to west, held at the poles'
+ * rows), to the nearest metre.
+ */
+export function resampleDem({ width, height, metres }: EarthDem, outWidth: number, outHeight: number): EarthDem {
+  const out = new Uint16Array(outWidth * outHeight)
+  for (let y = 0; y < outHeight; y++) {
+    const sy = Math.min(Math.max(((y + 0.5) * height) / outHeight - 0.5, 0), height - 1)
+    const j0 = Math.floor(sy)
+    const j1 = Math.min(j0 + 1, height - 1)
+    const fy = sy - j0
+    for (let x = 0; x < outWidth; x++) {
+      const sx = ((x + 0.5) * width) / outWidth - 0.5
+      const i = Math.floor(sx)
+      const fx = sx - i
+      const i0 = (i + width) % width
+      const i1 = (i + 1) % width
+      const north = metres[j0 * width + i0] * (1 - fx) + metres[j0 * width + i1] * fx
+      const south = metres[j1 * width + i0] * (1 - fx) + metres[j1 * width + i1] * fx
+      out[y * outWidth + x] = Math.round(north * (1 - fy) + south * fy)
+    }
+  }
+  return { width: outWidth, height: outHeight, metres: out }
+}
+
 /** The mean of each 2 × 2 block of a DEM, to the nearest metre. */
 export function halveDem({ width, height, metres }: EarthDem): EarthDem {
   const w = width >> 1
