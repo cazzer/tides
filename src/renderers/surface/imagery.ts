@@ -84,6 +84,13 @@ export function boundsInsideUsgs(b: Omit<Box, 'name'>): boolean {
   )
 }
 
+/** Whether a footprint in degrees overlaps any of the US boxes. */
+export function boundsTouchUsgs(b: Omit<Box, 'name'>): boolean {
+  return USGS_BOXES.some(
+    (box) => b.south < box.north && b.north > box.south && b.west < box.east && b.east > box.west
+  )
+}
+
 /** The URLs to try for a tile, best first: USGS then EOX in the US, else EOX. */
 export function imageryUrlsFor(tile: ImageryTile): string[] {
   const eox = imageryUrl(EOX_URL, tile)

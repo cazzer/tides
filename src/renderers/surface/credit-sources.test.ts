@@ -16,8 +16,11 @@ describe('sourcesForTile', () => {
   test('a tile in the Alps takes Mapterhorn and EOX', () => {
     expect(sourcesForTile(rad(10, 541, 361))).toEqual(['mapterhorn', 'eox'])
   })
-  test('a tile straddling the Canadian border takes EOX', () => {
-    expect(sourcesForTile(rad(6, 10, 22))).toEqual(['mapterhorn', 'eox'])
+  test('a coarse tile straddling a box edge names both imagery sources', () => {
+    expect(sourcesForTile(rad(5, 6, 12))).toEqual(['mapterhorn', 'usgs', 'eox'])
+  })
+  test('a tile wholly in Canada takes EOX only', () => {
+    expect(sourcesForTile(rad(8, 50, 80))).toEqual(['mapterhorn', 'eox'])
   })
 })
 

@@ -3,7 +3,7 @@
 // under every tile, USGS imagery on tiles wholly inside the US boxes, EOX's
 // Sentinel-2 cloudless elsewhere (imagery.ts picks the same way). Pure: the
 // scene feeds in what is visible, the line reads what comes out.
-import { boundsInsideUsgs } from './imagery'
+import { boundsInsideUsgs, boundsTouchUsgs } from './imagery'
 
 export type SurfaceSource = 'mapterhorn' | 'usgs' | 'eox'
 
@@ -31,10 +31,19 @@ export interface RadianBounds {
 
 const DEG = 180 / Math.PI
 
-/** The sources for a terrain tile with this footprint: its terrain, and the imagery over it. */
+/**
+ * The sources for a terrain tile with this footprint: its terrain, and the
+ * imagery draped over it. The imagery is chosen per overlay tile, which can
+ * be finer than the terrain tile, so a footprint that straddles a US box
+ * names both: USGS where it touches a box, EOX unless it sits wholly inside
+ * one. (Open water inside a box falls back to EOX by status, uncredited.)
+ */
 export function sourcesForTile(b: RadianBounds): SurfaceSource[] {
   const deg = { west: b.west * DEG, south: b.south * DEG, east: b.east * DEG, north: b.north * DEG }
-  return ['mapterhorn', boundsInsideUsgs(deg) ? 'usgs' : 'eox']
+  const sources: SurfaceSource[] = ['mapterhorn']
+  if (boundsTouchUsgs(deg)) sources.push('usgs')
+  if (!boundsInsideUsgs(deg)) sources.push('eox')
+  return sources
 }
 
 /** The footprint of a loaded tile, or null when it has no region (the root). */
