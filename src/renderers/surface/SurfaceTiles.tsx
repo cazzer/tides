@@ -37,7 +37,13 @@ export default function SurfaceTiles() {
       surface.current = null
       parent.remove(created.tiles.group)
       created.tiles.deleteCamera(camera)
-      created.dispose()
+      // The library's cache refcounts throw synchronously on a broken
+      // invariant; thrown here, that would unmount the whole app on exit.
+      try {
+        created.dispose()
+      } catch (error) {
+        console.error('surface tiles: dispose failed', error)
+      }
     }
   }, [camera, floatLinear])
 

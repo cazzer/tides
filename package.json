@@ -20,7 +20,7 @@
     "@react-three/postprocessing": "^3.0.4",
     "@tabler/icons-react": "^3.36.1",
     "@tabler/icons-react-native": "^3.35.0",
-    "3d-tiles-renderer": "^0.5.3",
+    "3d-tiles-renderer": "0.5.3",
     "astronomy-engine": "2.1.19",
     "d3": "^7.9.0",
     "lodash": "^4.17.21",
