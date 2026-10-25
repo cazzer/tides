@@ -164,12 +164,17 @@ export function stepEyeDistance(
   return framed !== null && next === goal
 }
 
+/** The share of the way CameraProvider turns its target onto the focus each frame (turnTarget). */
+export const FOCUS_EASE = 0.05
+
 /**
  * One frame of the main view's eye distance with the camera on a focus:
- * stepEyeDistance, but while the target is still more than `closest` from
- * the focus (`anchor`), the eye is neither framed nor pushed off it, as the
- * target's travel moves the line any dolly would push along. Returns whether
- * it has landed on `framed`.
+ * stepEyeDistance, but while the target is still on its way to the focus
+ * (`anchor`), the eye is neither framed nor pushed off it, as the target's
+ * travel moves the line any dolly would push along. On its way means further
+ * than `closest`, plus twice the lag at which an eased target trails a body
+ * moving `anchor.speed` a frame (~speed / FOCUS_EASE), so a fast moon still
+ * gets framed. Returns whether it has landed on `framed`.
  */
 export function stepFocusDistance(
   controls: Dolly & { target: Vector3 },
@@ -178,8 +183,10 @@ export function stepFocusDistance(
   closest: number,
   farthest: number
 ): boolean {
+  const lag = (2 * anchor.speed) / FOCUS_EASE
   const arriving =
-    anchor.key !== null && controls.target.distanceTo(anchor.position) > closest
+    anchor.key !== null &&
+    controls.target.distanceTo(anchor.position) > closest + lag
   return arriving
     ? stepEyeDistance(controls, null, Math.min(closest, controls.getDistance()), farthest)
     : stepEyeDistance(controls, framed, closest, farthest)
@@ -226,10 +233,11 @@ export function allowDistance(controls: Dolly): void {
   controls.maxDistance = Math.max(controls.maxDistance, distance)
 }
 
-/** The body the eye rides along with, as it was last frame. */
+/** The body the eye rides along with, as it was last frame, and how far it moved then. */
 export interface FollowAnchor {
   key: unknown
   position: Vector3
+  speed: number
 }
 
 /**
@@ -249,6 +257,7 @@ export function followMotion(
   } else {
     carry.set(0, 0, 0)
   }
+  anchor.speed = carry.length()
   anchor.key = key
   anchor.position.copy(position)
 }

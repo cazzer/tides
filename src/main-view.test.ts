@@ -326,7 +326,7 @@ describe('stepEyeDistance', () => {
 
 describe('stepFocusDistance', () => {
   const focus = new Vector3(100, 0, 0)
-  const anchor = { key: 'mars' as unknown, position: focus }
+  const anchor = { key: 'mars' as unknown, position: focus, speed: 0 }
   const at = (target: Vector3, distance: number) =>
     Object.assign(dolly(distance), { target })
 
@@ -335,6 +335,14 @@ describe('stepFocusDistance', () => {
     expect(stepFocusDistance(controls, anchor, 300, 10, 2048)).toBe(false)
     expect(controls.distance).toBe(3)
     expect(controls.minDistance).toBe(3)
+  })
+
+  it('counts a target trailing a moving body as arrived', () => {
+    // 1 unit a frame trails ~19 behind; that much allowance and more still frames.
+    const moving = { ...anchor, speed: 1 }
+    const controls = at(new Vector3(70, 0, 0), 100)
+    stepFocusDistance(controls, moving, 300, 10, 2048)
+    expect(controls.distance).toBeGreaterThan(100)
   })
 
   it('frames once the target has reached the focus', () => {
@@ -392,7 +400,7 @@ describe('allowDistance', () => {
 
 describe('followMotion', () => {
   it('carries the eye by the followed body’s motion', () => {
-    const anchor = { key: null, position: new Vector3() }
+    const anchor = { key: null, position: new Vector3(), speed: 0 }
     const carry = new Vector3(9, 9, 9)
     followMotion(anchor, 'earth', new Vector3(50, 0, 0), carry)
     expect(carry.length()).toBe(0)
@@ -401,7 +409,7 @@ describe('followMotion', () => {
   })
 
   it('leaves the eye put on the frame the focus changes, or with none', () => {
-    const anchor = { key: 'earth' as unknown, position: new Vector3(50, 0, 0) }
+    const anchor = { key: 'earth' as unknown, position: new Vector3(50, 0, 0), speed: 0 }
     const carry = new Vector3()
     followMotion(anchor, 'sun', new Vector3(), carry)
     expect(carry.length()).toBe(0)
