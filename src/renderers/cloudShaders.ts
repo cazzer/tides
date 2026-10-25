@@ -155,11 +155,14 @@ float cloudLod(float footprint) {
   float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
   return max(0.0, log2(footprint / texel));
 }
+`
 
 // The mip the march from inside reads at the eye (tides-tvr.1): its own
 // steps' there, a level ray's a step across the map it was tuned to
 // (cloudMarchLod()). The same for every ray, so that all of them agree on
-// whether the eye is in a cloud; the base doesn't depend on it.
+// whether the eye is in a cloud; the base doesn't depend on it. The shell's
+// alone: the ground's shadow, which shares FIELD, never reads the eye.
+const EYE_LOD_GLSL = /* glsl */ `
 float cloudEyeLod() {
   return max(0.0, log2(float(textureSize(uCloudMap, 0).x) / ${f(MARCH_MAP_WIDTH)}));
 }
@@ -221,6 +224,7 @@ varying float vNear;
 varying vec3 vEclipseEye;
 #ifdef FOG_EASE
 ${FIELD}
+${EYE_LOD_GLSL}
 ${FOG_EASE_GLSL}
 #endif
 #endif
@@ -263,6 +267,7 @@ const FRAGMENT = /* glsl */ `
 #include <common>
 ${ECLIPSE_GLSL.fragmentHead}
 ${FIELD}
+${EYE_LOD_GLSL}
 uniform float uOpacity;
 uniform float uSunGain;
 uniform float uAmbient;
