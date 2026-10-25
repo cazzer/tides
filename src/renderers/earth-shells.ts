@@ -5,6 +5,7 @@
 // flies down through them to the terrain floor (tides-01v.8.7).
 import * as THREE from 'three'
 import { limbBody } from '../ship/limb-detail'
+import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
 
 /** The atmosphere's limb-glow shell (AtmosphereRenderer). */
 export const ATMOSPHERE_OUTER = 1.06
@@ -32,10 +33,27 @@ export const AURORA_RENDER_ORDER = 2
  * (cloudShaders.ts), so that the fog inside a cloud covers the rest; and
  * from under the aurora's shell, where the aurora lies past nearly every
  * cloud (only tall cloud over high ground reaches above its base), after
- * the aurora too.
+ * the aurora too. Inside the cloud shell (groundHazeTop()) the haze no
+ * longer lies under the clouds over the ground (tides-zmw.5): the
+ * atmosphere stops at the ground, which draws its own share, and a cloud
+ * adds the haze in front of it; at the shell's top both ease to all of the
+ * haze, added, as outside.
  */
 export const CLOUD_REACH_RENDER_ORDER = 1.5
 export const CLOUD_UNDER_AURORA_RENDER_ORDER = 3
+
+/**
+ * The cloud shell's top above sea level (cloudShaders.ts shellAltitude; flat
+ * on the low tier), where the atmosphere hands the haze over the ground to
+ * the ground (tides-zmw.5). Below it the clouds draw after the atmosphere
+ * and add the haze in front of them themselves (CLOUD_REACH_RENDER_ORDER),
+ * so the atmosphere can stop at the depth buffer's ground; above it, where
+ * the clouds draw first and write no depth, it must not, or it would skip
+ * every cloud.
+ */
+export function groundHazeTop(flat: boolean): number {
+  return flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP
+}
 
 const eye = new THREE.Vector3()
 
@@ -68,6 +86,14 @@ export function withinShellReach(
 }
 
 /**
+ * True when the ship's camera (shipNearEarth) is inside the shell of radius
+ * `outer` round `shell`'s origin: where the shell shows its back faces alone.
+ */
+export function insideShell(shell: THREE.Object3D, camera: THREE.Camera, outer: number): boolean {
+  return shipNearEarth(camera) && shell.worldToLocal(camera.getWorldPosition(eye)).length() < outer
+}
+
+/**
  * A shell mesh's onBeforeRender (tides-01v.8.2): which faces to draw for
  * this camera. Out of the shell's reach (withinShellReach), the front faces
  * alone, as ever. Within it, both, and the shader (shaders/shell/face.glsl,
@@ -75,19 +101,25 @@ export function withinShellReach(
  * the shell or where the near plane clips the front. Those back faces lie
  * beyond the globe, so there the depth test is off and the shaders stop
  * each ray at the ground themselves. three keeps both programs, so crossing
- * the reach compiles only once.
+ * the reach compiles only once. `stopAtGround` (the atmosphere's, tides-
+ * zmw.5): a radius (groundHazeTop() over sea level) inside which the depth
+ * test stays on, so the back faces stop at the ground, which draws its own
+ * share of the haze (groundHaze.ts).
  */
 export function pickShellFaces(
   mesh: THREE.Object3D,
   material: THREE.Material,
-  camera: THREE.Camera
+  camera: THREE.Camera,
+  stopAtGround?: number
 ): void {
   const shader = material as THREE.ShaderMaterial
-  const reach = withinShellReach(mesh, camera, shader.uniforms.uOuter.value)
+  const outer = shader.uniforms.uOuter.value
+  const reach = withinShellReach(mesh, camera, outer)
   const side = reach ? THREE.DoubleSide : THREE.FrontSide
   if (shader.side !== side) {
     shader.side = side
     shader.needsUpdate = true
   }
-  shader.depthTest = !reach
+  shader.depthTest =
+    !reach || (stopAtGround !== undefined && insideShell(mesh, camera, stopAtGround))
 }

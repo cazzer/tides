@@ -8,6 +8,7 @@ import { pickBlend } from '../cloud-frames'
 import { composePatches, useEclipseShadowState } from './eclipseShadow'
 import { createCloudLayer, type CloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
+import { createGroundHaze } from './groundHaze'
 import { groundShadowPatch } from './groundShadow'
 import { useGibsPatch } from './gibsPatch'
 import { nightLightsPatch } from './nightLights'
@@ -100,6 +101,11 @@ export default function EarthRenderer({
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibsPatch = useGibsPatch(groundRef, diameter)
+  // Aerial perspective from inside the atmosphere (tides-zmw.5).
+  const groundHaze = useMemo(
+    () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
+    [clouds, diameter, textureSet.low]
+  )
   const groundPatch = useMemo(
     () =>
       composePatches(
@@ -109,9 +115,10 @@ export default function EarthRenderer({
         poleSmoothingPatch(),
         groundDetailPatch(textureSet.low),
         groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
-        gibsPatch
+        gibsPatch,
+        groundHaze.patch
       ),
-    [eclipseShadow, clouds, textureSet.low, gibsPatch]
+    [eclipseShadow, clouds, textureSet.low, gibsPatch, groundHaze]
   )
   // The mesh's displacement, at its vertex spacing (tides-zmw.2).
   const displacement = useMemo(() => createGroundDisplacement(EARTH_BASE_SEGMENTS), [])
@@ -169,6 +176,7 @@ export default function EarthRenderer({
         raycast={meshBounds}
         onBeforeRender={(renderer, _scene, camera, geometry) => {
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
+          groundHaze.update(groundRef.current!, camera)
           // The Sun in the Earth's frame, from this frame's final transform
           // (the ground renders before the transparent clouds). The Sun is
           // the scene's origin, as for the directional light (sunlight.ts).
