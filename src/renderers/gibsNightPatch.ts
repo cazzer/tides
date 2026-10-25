@@ -1,21 +1,24 @@
 // City lights under the ship at night (tides-tvr.2): GIBS's VIIRS 2012
 // lights (../gibs-patch.ts GIBS_NIGHT_LAYER), streamed like the day imagery
 // (./gibsStream.ts) while some of the patch can be on the night side, into
-// an R8 linear texture, and added to the night map's texel on the ground's
-// Phong material through composePatches. Near the ground the night map's
+// an R8 linear texture, and brought onto the night map's texel on the
+// ground's Phong material through composePatches. Near the ground the night map's
 // texels are kilometres wide and its lights show as squares; VIIRS at 500 m
 // resolves them into towns and roads.
 //
 // VIIRS draws its lights on a faint blue ground, which the map lacks: each
 // tile is stripped to its warm light as it is written (stripNightLight). The
 // map and VIIRS are the same 2012 composite and register to the texel, but
-// the map is graded differently (its faint lights are cut, its cores much
-// as VIIRS's), so as for the day the patch adds only what the map lacks:
-// the lights less themselves at the map's texel, in linear light, tinted as
-// the map's lit texels are. The large scale stays the map's, so nothing
-// shows a seam, and the patch fades out by itself where the map resolves
-// the lights. The albedo, the night side's mask (./nightLights.ts, whose
-// code follows) and everything lit are untouched.
+// the map is graded far from linearly against VIIRS (its faint lights are
+// cut to black, its cores much as VIIRS's), so no one scale adds VIIRS's
+// detail to it without lighting what it left dark. The patch instead
+// redistributes each map texel's light: the map times the lights over
+// themselves at the map's texel. That keeps the map's colour and its light
+// at its texel, so nothing shows a seam and the patch fades out by itself
+// where the map resolves the lights, and it gathers a lit square into the
+// towns and roads inside it. Faint lights the map cut stay dark, as the map
+// shows them from altitude. The albedo, the night side's mask
+// (./nightLights.ts, whose code follows) and everything lit are untouched.
 import type { RefObject } from 'react'
 import * as THREE from 'three'
 import {
@@ -28,7 +31,7 @@ import {
   nightPatchWanted,
 } from '../gibs-patch'
 import type { MaterialPatch } from './eclipseShadow'
-import { createGibsStream, EDGE_TILES, SEAM_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch } from './gibsStream'
+import { createGibsStream, EDGE_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch } from './gibsStream'
 
 // Shared by every flight. GIBS serves these no-store, so this is the only
 // cache: 160 tiles is ~9 MB of JPEG, a desktop's patch twice over.
@@ -48,19 +51,26 @@ export function gibsNightTileRequests(): number {
  * every region sampled, linear), its lights warm. The strip
  * keeps red less NIGHT_STRIP_BLUE of blue and a floor for the JPEG's noise,
  * which leaves lightless tiles at exactly 0 and the lights ~0.85 of their
- * red. NIGHT_PATCH_GAIN brings that to the map's scale: the least-squares
- * slope of the map's red on the strip, both at the map's texel, its median
- * over seven regions (Europe, the Great Lakes, the US east coast, northern
- * India, Japan, the Nile, south-east Brazil: 0.36 to 1.12).
+ * red. The ratio cancels any scale, so NIGHT_PATCH_GAIN only spreads the
+ * strip over the 8-bit target, whose steps would otherwise band the dim
+ * lights: the brightest stripped texel in seven regions sampled (Europe, the
+ * Great Lakes, the US east coast, northern India, Japan, the Nile, south-east
+ * Brazil) is 0.944, which it takes to 0.99.
  */
 export const NIGHT_STRIP_BLUE = 0.35
 export const NIGHT_STRIP_FLOOR = 0.002
-export const NIGHT_PATCH_GAIN = 0.76
-/** The map's lit texels' colour, relative to their red (linear); the
- * patch's detail takes it, as its single channel holds the red. */
-export const NIGHT_DETAIL_TINT: [number, number, number] = [1.0, 0.97, 0.65]
+export const NIGHT_PATCH_GAIN = 1.05
+/** Added to both sides of the ratio, in stored units: three 8-bit steps and
+ * more, so the steps and the JPEG's noise in the dimmest lights don't swing
+ * it, and a texel VIIRS shows dark keeps the map's light. */
+export const NIGHT_RATIO_FLOOR = 4 / 255
+/** Of a tile's width, the fade toward an edge shared with a tile that isn't
+ * shown: wider than the day patch's (./gibsStream.ts SEAM_TILES), as the
+ * coarse reads reach a map texel and its mip's footprint each way, ~136
+ * texels on phones (2048 px map) against the day's 128 px ramp. */
+const NIGHT_SEAM_TILES = 0.3
 
-/** A VIIRS texel's light on the map's scale, from its linear colour. */
+/** A VIIRS texel's light as the target stores it, from its linear colour. */
 export function stripNightLight(r: number, _g: number, b: number): number {
   return Math.max(r - NIGHT_STRIP_BLUE * b - NIGHT_STRIP_FLOOR, 0) * NIGHT_PATCH_GAIN
 }
@@ -168,12 +178,12 @@ if (uGibsNightActive > 0.5) {
   float nightEdge = min(min(nightAt.x, GIBS_NIGHT_SIDE - nightAt.x), min(nightAt.y, GIBS_NIGHT_SIDE - nightAt.y));
   if (nightEdge > 0.0 && nightPixelLod < nightMapLod) {
     // Unwrapped tile coordinates, the fade-ins multiplied toward each edge,
-    // as for the day patch (./gibsPatch.ts).
+    // as for the day patch (./gibsPatch.ts) over a wider seam.
     vec2 q = uGibsNightOrigin + nightAt;
     ivec2 cell = ivec2(floor(q));
     vec2 e = fract(q) - 0.5;
     ivec2 toward = ivec2(sign(e));
-    vec2 ramp = smoothstep(${f(0.5 - SEAM_TILES)}, 0.5, abs(e));
+    vec2 ramp = smoothstep(${f(0.5 - NIGHT_SEAM_TILES)}, 0.5, abs(e));
     float mask = gibsNightMask(cell)
       * mix(1.0, gibsNightMask(cell + ivec2(toward.x, 0)), ramp.x)
       * mix(1.0, gibsNightMask(cell + ivec2(0, toward.y)), ramp.y)
@@ -195,8 +205,7 @@ if (uGibsNightActive > 0.5) {
         mix(textureLod(uGibsNight, s00, nightMapLod).r, textureLod(uGibsNight, s00 + vec2(texel.x, 0.0), nightMapLod).r, w.x),
         mix(textureLod(uGibsNight, s00 + vec2(0.0, texel.y), nightMapLod).r, textureLod(uGibsNight, s00 + texel, nightMapLod).r, w.x),
         w.y);
-      emissiveColor.rgb = max(emissiveColor.rgb + cover * (fine - coarse)
-        * vec3(${NIGHT_DETAIL_TINT.map(f).join(', ')}), 0.0);
+      emissiveColor.rgb *= mix(1.0, (fine + ${f(NIGHT_RATIO_FLOOR)}) / (coarse + ${f(NIGHT_RATIO_FLOOR)}), cover);
       // emissive is the material's colour times its intensity.
       totalEmissiveRadiance = emissive * emissiveColor.rgb;
     }

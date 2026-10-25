@@ -37,14 +37,17 @@ export const CLOUD_AMBIENT_SHARE = 0.7
 export const CLOUD_AMBIENT = (CLOUD_AMBIENT_SHARE * AMBIENT_INTENSITY) / Math.PI
 
 /** The adapted eye's fill at night in flight, in AMBIENT_COLOR and added
- * to the ambient: land (~0.25 albedo) reaches ~0.035 before tone mapping and
- * sea ~0.009, so coasts read, still well short of dark grey. */
-export const NIGHT_FILL_INTENSITY = 0.7
+ * to the ambient, on an albedo mostly greyed (renderers/nightLights.ts
+ * NIGHT_DESATURATION): land (~0.25 albedo) reaches ~0.019 before tone
+ * mapping (from ~0.006), sea ~0.004 and cloud tops ~0.067, so coasts and
+ * the deck read on a moonless night that still looks like night. At 0.7
+ * the same night read as a dim day. */
+export const NIGHT_FILL_INTENSITY = 0.3
 
 /** The full Moon's light on the adapted eye's ground, cool and fainter than
- * a tenth of the day's: overhead it brings land to ~0.10 (dark grey) and
- * cloud tops to ~0.29, ~0.076 and ~0.23 at 40 deg up, against ~0.115 for
- * cloud on a moonless night. Scaled down with the phase (night-flight.ts). */
+ * a tenth of the day's: overhead it brings land to ~0.083 (toward dark
+ * grey) and cloud tops to ~0.25; at 40 deg up ~0.060 and ~0.18, three times
+ * the moonless night's. Scaled down with the phase (night-flight.ts). */
 export const MOONLIGHT_INTENSITY = 1.2
 export const MOONLIGHT_COLOR = '#c8d6ff'
 

@@ -51,6 +51,13 @@ describe('GIBS night patch on the ground', () => {
     expect(code).not.toMatch(/uGibsWarp|diffuseColor|reflectedLight|gibsCover|gibsMask\(/)
     // The coarse read is at the map's texel, at its four texel centres.
     expect(code.match(/textureLod\(uGibsNight, s00/g)).toHaveLength(4)
+    // The map's light is redistributed, not added to: its mean and colour
+    // stay, and with no cover it is untouched.
+    expect(code).toContain('emissiveColor.rgb *= mix(1.0, (fine + 0.015686) / (coarse + 0.015686), cover);')
+    expect(code).not.toMatch(/max\(emissiveColor/)
+    // Its seam fade is its own, wider than the day patch's.
+    expect(code).toContain('vec2 ramp = smoothstep(0.200000, 0.5, abs(e));')
+    expect(frag).toContain('vec2 ramp = smoothstep(0.250000, 0.5, abs(e));')
     expect(code).toContain('log2(81920.000000 / nightMapSize.x)')
     expect(Object.keys(shader.uniforms)).toEqual(
       expect.arrayContaining(['uGibsNight', 'uGibsNightMask', 'uGibsNightOrigin', 'uGibsNightActive'])
@@ -69,7 +76,7 @@ describe('GIBS night patch on the ground', () => {
     expect(none.material.customProgramCacheKey()).toBe('')
   })
 
-  it("strips VIIRS's blue ground to nothing and keeps its warm lights", () => {
+  it("strips VIIRS's blue ground to nothing and keeps its warm lights, filling the 8-bit range", () => {
     // Linear means sampled from lightless tiles (Greenland, the Sahara, the
     // Southern Ocean) and rural Burgundy, and the bluest ground seen.
     for (const [r, g, b] of [
@@ -83,6 +90,9 @@ describe('GIBS night patch on the ground', () => {
     }
     expect(stripNightLight(1, 0.9, 0.5)).toBeGreaterThan(0.5)
     expect(stripNightLight(0.3, 0.2, 0.1)).toBeGreaterThan(0.15)
+    // The brightest stripped texel sampled, 0.944, just short of 1.
+    expect(stripNightLight(0.944 + 0.002, 0, 0)).toBeGreaterThan(0.98)
+    expect(stripNightLight(0.944 + 0.002, 0, 0)).toBeLessThan(1)
   })
 })
 

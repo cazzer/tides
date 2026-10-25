@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
+import { createHash } from 'node:crypto'
 import { useStore } from '../store'
 import { earthPosition } from '../ephemeris'
 import { CLOUD_AMBIENT } from '../lighting'
@@ -72,37 +73,44 @@ describe('night lights in flight', () => {
     expect(key).toContain('night-lights-flight')
   })
 
-  it("leaves the system view's ground exactly as it was", () => {
-    // EarthRenderer's chain outside ship mode, before tides-tvr.2 and after:
-    // no flight for the night lights and no side for either GIBS patch.
-    const chain = (after: boolean) => {
-      const eclipse = createEclipseShadow('earth')
-      const clouds = createCloudLayer(eclipse, false)
-      const sun = clouds.uniforms.uSunDir
-      const haze = createGroundHaze(sun, 1, false)
-      const ground = composePatches(
-        eclipse.material,
-        clouds.groundPatch,
-        after ? nightLightsPatch(sun, undefined) : nightLightsPatch(sun),
-        poleSmoothingPatch(),
-        groundDetailPatch(false),
-        groundShadowPatch(sun, earthHorizon('earth-horizon-test.bin')),
-        createGibsPatch(0).material,
-        ...(after ? [createGibsNightPatch(0).material] : []),
-        haze.patch
-      )
-      const out = compiled(composePatches(ground, createGroundDisplacement(EARTH_BASE_SEGMENTS).patch))
-      clouds.dispose()
-      return out
-    }
-    const before = chain(false)
-    const after = chain(true)
-    expect(after.fragment).toBe(before.fragment)
-    expect(after.vertex).toBe(before.vertex)
-    expect(after.uniforms).toEqual(before.uniforms)
-    // The empty night patch only adds an empty part to the cache key.
-    expect(after.key.split('+').filter(Boolean)).toEqual(before.key.split('+').filter(Boolean))
-    expect(after.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
+  // EarthRenderer's ground outside ship mode: no flight for the night lights
+  // and no side for either GIBS patch. The hashes are of e65dc59's chain
+  // (before tides-tvr.2: nightLightsPatch(sun), no night patch), so drift
+  // from it fails here. To regenerate: `git archive e65dc59 src package.json
+  // vite.config.ts tsconfig*.json` into a scratch directory with this repo's
+  // node_modules linked, and log systemGroundHash's digest there for the old
+  // chain from a throwaway test (three's ShaderLib is part of the hash: a
+  // three upgrade regenerates them).
+  const SYSTEM_GROUND_SHA256 = {
+    high: '067df69fecbaef95d4a8199d0c5a7d391118aa1a4922420df6b895d146cdcd75',
+    low: '5c1f06af351e101d58dd5d9e26274d551685091cc39c3074d1b5916e61cbd273',
+  }
+
+  function systemGroundHash(low: boolean) {
+    const eclipse = createEclipseShadow('earth')
+    const clouds = createCloudLayer(eclipse, low)
+    const sun = clouds.uniforms.uSunDir
+    const ground = composePatches(
+      eclipse.material,
+      clouds.groundPatch,
+      nightLightsPatch(sun, undefined),
+      poleSmoothingPatch(),
+      groundDetailPatch(low),
+      groundShadowPatch(sun, earthHorizon('earth-horizon-test.bin')),
+      createGibsPatch(0).material,
+      createGibsNightPatch(0).material,
+      createGroundHaze(sun, 1, low).patch
+    )
+    const out = compiled(composePatches(ground, createGroundDisplacement(EARTH_BASE_SEGMENTS).patch))
+    clouds.dispose()
+    expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
+    expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
+    return createHash('sha256').update(out.vertex + '\n' + out.fragment).digest('hex')
+  }
+
+  it("leaves the system view's ground exactly as it was before tides-tvr.2", () => {
+    expect(systemGroundHash(false)).toBe(SYSTEM_GROUND_SHA256.high)
+    expect(systemGroundHash(true)).toBe(SYSTEM_GROUND_SHA256.low)
   })
 })
 
@@ -148,5 +156,29 @@ describe('night flight', () => {
     // frame and toward the eye looking down at it.
     expect(full.uNightMoon.value.dot(full.away)).toBeGreaterThan(0.95)
     expect(full.uNightMoonView.value.z).toBeGreaterThan(0.95)
+  })
+
+  it("works in the ground's own frame: the Moon's direction there, the eye's sub-point from it", () => {
+    const t = Date.parse('2026-10-26T04:12:00Z')
+    useStore.setState({ timestamp: t })
+    const ground = new THREE.Object3D()
+    ground.position.fromArray(earthPosition(t))
+    ground.rotation.y = 1.3
+    ground.updateMatrixWorld()
+    // The Sun (the scene's origin) in the ground's frame, as uSunDir holds it.
+    const sunLocal = ground.worldToLocal(new THREE.Vector3()).normalize()
+    const night = sunLocal.clone().negate()
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.copy(ground.localToWorld(night.clone().multiplyScalar(1.01)))
+    camera.lookAt(ground.position)
+    camera.updateMatrixWorld()
+    const cloudAmbient = { value: CLOUD_AMBIENT }
+    const flight = createNightFlight({ value: sunLocal }, cloudAmbient)
+    flight.update(ground, camera, 1)
+    // The full Moon over the anti-solar point, in the ground's frame.
+    expect(flight.uniforms.uNightMoon.value.dot(night)).toBeGreaterThan(0.95)
+    // Fully adapted there.
+    expect(flight.uniforms.uNightFill.value.equals(NIGHT_FILL_RGB)).toBe(true)
+    expect(cloudAmbient.value).toBeGreaterThan(CLOUD_AMBIENT)
   })
 })
