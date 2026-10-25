@@ -123,6 +123,17 @@ export function cloudPathClear(alpha: number, thickness: number, path: number): 
   return (1 - Math.min(alpha, 0.995)) ** (path / Math.max(thickness, 1e-4))
 }
 
+/** How far along a stretch of even cloud that lets `clear` through (0..1 of
+ * the stretch) the light it sends back comes from on average: half way
+ * through a thin one, nearer its front the thicker it is. The march from
+ * inside shades a side, a base met from below or a veil by the depth down
+ * its column there (tides-tvr.1). */
+export function lightCentroid(clear: number): number {
+  const c = Math.max(clear, 1e-6)
+  const tau = -Math.log(c)
+  return tau < 0.05 ? 0.5 - tau / 12 : 1 / tau - c / (1 - c)
+}
+
 /** The path over which fog in opaque cloud stops its opacity's share of
  * the light, whatever the column's height: under a march step, as real
  * cloud is far denser inside than its opacity from above suggests. */

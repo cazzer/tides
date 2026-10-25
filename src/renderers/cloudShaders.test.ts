@@ -15,9 +15,11 @@ import {
   FOG_SOFT,
   fogEaseShare,
   fogExtinction,
+  lightCentroid,
   marchCrossing,
   marchSpanFromEye,
   marchSteps,
+  type MarchSample,
   type Vec3,
 } from '../cloud-layer'
 import { sceneRadius } from '../planets'
@@ -341,10 +343,11 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
         'fogEase',
         'sidePrev',
         'sideDensity',
+        'sideShade',
       ]
       for (const name of names) {
         if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
-          expect(src).toMatch(new RegExp(`(float|vec3|vec4|bool) ${name}\\b`))
+          expect(src).toMatch(new RegExp(`(float|vec2|vec3|vec4|bool) ${name}\\b`))
         }
       }
       clouds.dispose()
@@ -600,6 +603,79 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     // The march from outside is as it was.
     expect(outside).toContain('float spread = max(length(dFdx(d)), length(dFdy(d)));')
     expect(outside).not.toContain('cloudMarchColumn(')
+    clouds.dispose()
+  })
+})
+
+describe('cloud march from the eye, under and inside the deck (tides-tvr.1)', () => {
+  // A column based at 0.006 and topped at 0.03.
+  const at = (alt: number, alpha = 0.6) => ({ alt, base: 0.006, top: 0.03, alpha })
+
+  it('decides at the eye whether the march starts in a cloud', () => {
+    // The eye just under the base, the near plane past it: the first step,
+    // from the eye, goes up through the base short of the near plane.
+    const under = marchCrossing(at(0.0055), at(0.0075))!
+    expect(under.side).toBe(true)
+    expect(under.at).toBeCloseTo(0.25, 9)
+    expect(under.at).toBeLessThan(1)
+    // The eye in the cloud: nothing to cross, the fog runs from the eye.
+    expect(marchCrossing(at(0.007), at(0.009))).toBeNull()
+    // Under a gap, nothing.
+    expect(marchCrossing(at(0.0055, 0), at(0.0075, 0))).toBeNull()
+  })
+
+  it('shades a base and the side beside it alike where they meet', () => {
+    // The march's own model of a step: column and altitude linear over it.
+    const depthAt = (prev: MarchSample, next: MarchSample, w: number) =>
+      columnDepth(
+        prev.alt + (next.alt - prev.alt) * w,
+        prev.base + (next.base - prev.base) * w,
+        prev.top + (next.top - prev.top) * w
+      )
+    // Up through the base, and a ray a hair higher meeting the side beside
+    // that base from a gap.
+    const up: [MarchSample, MarchSample] = [at(0.0055), at(0.0075)]
+    const beside: [MarchSample, MarchSample] = [at(0.00605, 0), at(0.00615)]
+    const hitUp = marchCrossing(...up)!
+    const hitBeside = marchCrossing(...beside)!
+    expect(hitUp.side && hitBeside.side).toBe(true)
+    expect(depthAt(...up, hitUp.at)).toBeCloseTo(1, 9)
+    expect(Math.abs(depthAt(...beside, hitBeside.at) - 1)).toBeLessThan(0.05)
+  })
+
+  it('finds where a stretch of cloud sends its light back from', () => {
+    expect(lightCentroid(1)).toBeCloseTo(0.5, 9)
+    expect(lightCentroid(0.999)).toBeCloseTo(0.5, 3)
+    // Dense: about one optical depth in.
+    expect(lightCentroid(Math.exp(-10))).toBeCloseTo(1 / 10, 3)
+    // Continuous where the series hands over, and nearer the front the
+    // denser the stretch.
+    expect(lightCentroid(Math.exp(-0.04999))).toBeCloseTo(lightCentroid(Math.exp(-0.05001)), 5)
+    let last = 0.5
+    for (let tau = 0.01; tau < 30; tau *= 1.3) {
+      const c = lightCentroid(Math.exp(-tau))
+      expect(c).toBeLessThan(last + 1e-12)
+      expect(c).toBeGreaterThan(0)
+      last = c
+    }
+  })
+
+  it('starts the march at the eye and draws what it meets short of the near plane there', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+    // From the eye on, not from the near plane, which only bounds the depth.
+    expect(inside).not.toContain('max(sOuter, sNear)')
+    expect(inside).toContain('float s = min(sOrigin + ds * float(i), sEnd);')
+    expect(inside).toContain('vec3 q0 = eye + d * sOrigin;')
+    expect(inside).toContain('cloudColumn(uv0, cloudEyeLod()')
+    expect(inside).toContain('for (int i = max(iFirst, 1);')
+    expect(inside.match(/sideShade \+=/g)).toHaveLength(3)
+    expect(inside).toContain('max(eyeDist, sNear)')
+    // With reduced motion, the fog's ease is read at the eye too.
+    const ease = preprocess(clouds.material.vertexShader, new Set(['FLIP_SIDED', 'FOG_EASE']))
+    expect(ease).toContain('cloudFogEase(vEye)')
+    expect(ease).not.toContain('-vNear)')
+    expect(ease).toContain('cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv))')
     clouds.dispose()
   })
 })
