@@ -16,7 +16,7 @@ import {
   type Pivot,
 } from './pivot'
 import { surfaceGrabRotateSpeed } from './camera'
-import { minDistance, targetUnitsPerPixel } from './main-view'
+import { NEAR_CLEARANCE, minDistance, targetUnitsPerPixel } from './main-view'
 import { bodyRadius } from './system-aids/label-visibility'
 
 describe('pixelsToPivot', () => {
@@ -211,7 +211,9 @@ describe('applyTilt', () => {
       )
       const { position, quaternion } = setup(distance)
       applyTilt(position, quaternion, centre, earth, depth, MAX_TILT)
-      expect(position.distanceTo(centre), `${distance}`).toBeGreaterThan(1.1 * earth)
+      expect(position.distanceTo(centre), `${distance}`).toBeGreaterThan(
+        NEAR_CLEARANCE * earth
+      )
     }
   })
 })
@@ -223,8 +225,9 @@ describe('tiltControls', () => {
     camera.position.copy(start)
     const controls = new OrbitControls(camera)
     const original = controls.update
-    const undo = tiltControls(controls, camera, pivot, () => radius)
-    return { camera, controls, original, undo }
+    const carry = new Vector3()
+    const undo = tiltControls(controls, camera, pivot, () => radius, carry)
+    return { camera, controls, original, undo, carry }
   }
   const pose = (camera: OrthographicCamera) => ({
     position: camera.position.clone(),
@@ -280,20 +283,38 @@ describe('tiltControls', () => {
     expect(camera.up).toEqual(new Vector3(0, 1, 0))
   })
 
-  it('carries the eye with a moved target, keeping its distance', () => {
+  it('moves the eye by the carry once, under the same tilt', () => {
     const pivot = { tilt: 0.6, heading: 0.8, depth: 1 }
     const start = new Vector3(30, 40, 50)
-    const { camera, controls } = setup(pivot, start)
+    const { camera, controls, carry } = setup(pivot, start)
     controls.update()
-    expect(controls.getDistance()).toBeCloseTo(start.length(), 9)
     const move = new Vector3(5, -3, 2)
     controls.target.add(move)
+    carry.copy(move)
     controls.update()
+    controls.update()
+    expect(carry.length()).toBe(0)
     expect(controls.getDistance()).toBeCloseTo(start.length(), 9)
     const fresh = setup(pivot, start.clone().add(move))
     fresh.controls.target.copy(move)
     fresh.controls.update()
     expect(camera.position.distanceTo(fresh.camera.position)).toBeLessThan(1e-9)
+  })
+
+  it('leaves the eye put when only the target moves', () => {
+    const { camera, controls } = setup({ tilt: 0, heading: 0, depth: 0 })
+    controls.update()
+    const eye = camera.position.clone()
+    controls.target.set(10, 0, 0)
+    controls.update()
+    expect(camera.position.distanceTo(eye)).toBeLessThan(1e-9)
+    expect(controls.getDistance()).toBeCloseTo(eye.distanceTo(controls.target), 9)
+  })
+
+  it('reports the untilted distance', () => {
+    const { controls } = setup({ tilt: 0.6, heading: 0, depth: 1 })
+    controls.update()
+    expect(controls.getDistance()).toBeCloseTo(new Vector3(30, 40, 50).length(), 9)
   })
 
   it('takes an outside move as the new untilted pose', () => {

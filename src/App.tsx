@@ -25,12 +25,7 @@ import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
 import CompassButton from './CompassButton'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
-import {
-  MAIN_DISTANCE,
-  MAIN_FOV,
-  mainViewRange,
-  minDistance,
-} from './main-view'
+import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
@@ -385,18 +380,10 @@ function MainCamera() {
   )
 }
 
-// Inside the main view, so its zoom-out limit fits that view's size.
+// camera.tsx useEyeDistance sets minDistance and maxDistance. The target
+// always follows the focus, so a pan would only be undone.
 function MainControls() {
-  const showPlanets = useStore((s) => s.showPlanets)
-  const cameraFocus = useStore((s) => s.cameraFocus)
-  const size = useThree((s) => s.size)
-  return (
-    <OrbitControls
-      maxDistance={mainViewRange(showPlanets, size).maxDistance}
-      minDistance={minDistance(cameraFocus)}
-      makeDefault
-    />
-  )
+  return <OrbitControls enablePan={false} makeDefault />
 }
 
 /** Ensures the main view's camera sees the location pin (PIN_LAYER). Only used in the main panel. */

@@ -1,6 +1,11 @@
-import { MathUtils } from 'three'
+import { MathUtils, type Vector3 } from 'three'
+import { CLOCK_HALF_WIDTH } from './clock-size'
 import { isSystemFocus, type BodyFocus, type CameraFocus } from './store'
-import { bodyRadius } from './system-aids/label-visibility'
+import {
+  bodyRadius,
+  bodyReach,
+  type LabelKey,
+} from './system-aids/label-visibility'
 
 /** The main view's default zoom (App's MainCamera); Earth's framing at it is the reference. */
 export const MAIN_ZOOM = 10
@@ -86,50 +91,174 @@ export function mainViewRange(
   maxDistance: number
   starRadius: number | undefined
 } {
-  if (!showPlanets) return { maxDistance: Infinity, starRadius: undefined }
-  return { maxDistance: systemFitDistance(view), starRadius: PLANETS_STAR_RADIUS }
+  return {
+    maxDistance: maxDistance(showPlanets, view),
+    starRadius: showPlanets ? PLANETS_STAR_RADIUS : undefined,
+  }
+}
+
+/** mainViewRange's maxDistance, without the object. */
+export function maxDistance(showPlanets: boolean, view: ViewSize): number {
+  return showPlanets ? systemFitDistance(view) : Infinity
 }
 
 /**
  * How close the eye comes to a focused body's centre, as a share of its
- * radius: tilted to MAX_TILT about the ground (pivot.ts) it still ends ~1.115
- * radii out, outside Earth's atmosphere and aurora shells.
+ * reach (its radius, or its rings' for a ringed planet): tilted to MAX_TILT
+ * about the ground (pivot.ts) it still ends ~1.115 radii out, outside Earth's
+ * atmosphere and aurora shells.
  */
 export const MIN_DISTANCE_FACTOR = 1.35
 
-// Twice orbit-label.tsx's CLOCK_HALF_WIDTH, so the eye never enters the clock.
-const CLOCK_MIN_DISTANCE = 16
-
-/** OrbitControls' minDistance for `focus`. 'location' targets Earth's surface. */
+/**
+ * OrbitControls' minDistance for `focus`. 'location' targets Earth's surface;
+ * the clock's eye stays a whole clock's width away from the text's centre.
+ */
 export function minDistance(focus: CameraFocus): number {
-  if (focus === 'clock') return CLOCK_MIN_DISTANCE
+  if (focus === 'clock') return 2 * CLOCK_HALF_WIDTH
   if (focus === 'location') return bodyRadius('earth') * (1 + MIN_DISTANCE_FACTOR)
-  return bodyRadius(focus) * MIN_DISTANCE_FACTOR
+  return bodyReach(focus) * MIN_DISTANCE_FACTOR
+}
+
+const DISTANCE_EASE = 0.05
+
+/**
+ * One frame of an eye-distance ease toward `goal`: 5% of the remaining ratio
+ * (a lerp of the log), so the apparent size changes smoothly whichever way
+ * and however far it has to go, landing on `goal` once within 0.1% of it.
+ */
+export function easeDistance(distance: number, goal: number): number {
+  const next = distance * (goal / distance) ** DISTANCE_EASE
+  return Math.abs(goal - next) < goal * 1e-3 ? goal : next
+}
+
+/** The part of OrbitControls stepEyeDistance drives. */
+export interface Dolly {
+  minDistance: number
+  maxDistance: number
+  getDistance(): number
+  setScale(scale: number): void
+}
+
+/**
+ * One frame of the main view's eye distance: eases it (easeDistance) toward
+ * `framed`, or where it is if null, kept within [lo, hi], so a range that
+ * changed (a new focus, the planets toggled, a resize) is eased into rather
+ * than jumped to. OrbitControls' limits follow the eased distance, as they
+ * would otherwise snap the eye there in one frame. Returns whether it has
+ * landed on `framed`.
+ */
+export function stepEyeDistance(
+  controls: Dolly,
+  framed: number | null,
+  lo: number,
+  hi: number
+): boolean {
+  const distance = controls.getDistance()
+  const goal = MathUtils.clamp(framed ?? distance, lo, hi)
+  const next = easeDistance(distance, goal)
+  controls.minDistance = Math.min(lo, next)
+  controls.maxDistance = Math.max(hi, next)
+  if (next !== distance) controls.setScale(next / distance)
+  return framed !== null && next === goal
+}
+
+/**
+ * Widens OrbitControls' limits to take in the eye distance as it is now, so
+ * a target that moved without the eye (CameraProvider easing it onto a new
+ * focus) isn't met by OrbitControls snapping the eye to its limits: the next
+ * stepEyeDistance eases it back into range instead.
+ */
+export function allowDistance(controls: Dolly): void {
+  const distance = controls.getDistance()
+  controls.minDistance = Math.min(controls.minDistance, distance)
+  controls.maxDistance = Math.max(controls.maxDistance, distance)
+}
+
+/** The body the eye rides along with, as it was last frame. */
+export interface FollowAnchor {
+  key: unknown
+  position: Vector3
+}
+
+/**
+ * Writes into `carry` how far the followed body (`key`, now at `position`)
+ * moved since the last frame, for the eye to move with it. On the frame the
+ * key changes, a new focus, it is zero: the eye stays put while the view
+ * turns to the new body, so it never flies through anything on the way.
+ */
+export function followMotion(
+  anchor: FollowAnchor,
+  key: unknown,
+  position: Vector3,
+  carry: Vector3
+): void {
+  if (key !== null && key === anchor.key) {
+    carry.subVectors(position, anchor.position)
+  } else {
+    carry.set(0, 0, 0)
+  }
+  anchor.key = key
+  anchor.position.copy(position)
+}
+
+/** How far past a body's surface the near plane keeps clear: Earth's atmosphere and aurora shells. */
+export const NEAR_CLEARANCE = 1.1
+
+/** How far from its centre a body reaches for the near plane: its shells, or its rings. */
+export function nearReach(key: LabelKey): number {
+  return Math.max(NEAR_CLEARANCE * bodyRadius(key), bodyReach(key))
+}
+
+/** A body's centre and nearReach (the clock's: CLOCK_HALF_WIDTH), or a reach of 0 while it isn't there. */
+export interface NearBody {
+  centre: Vector3
+  reach: number
+}
+
+/**
+ * How far the eye is from the nearest thing the near plane must not cut: any
+ * body's reach, or the target, which may be off every body.
+ */
+export function nearestSurface(
+  eye: Vector3,
+  target: Vector3,
+  bodies: readonly NearBody[]
+): number {
+  let surface = eye.distanceTo(target)
+  for (const { centre, reach } of bodies) {
+    if (reach > 0) surface = Math.min(surface, eye.distanceTo(centre) - reach)
+  }
+  return surface
 }
 
 /** How far past the Sun the farthest drawn thing (the Kuiper belt's edge, 514) reaches. */
 export const SYSTEM_EXTENT = 520
 
 const NEAR_SHARE = 0.5
-const NEAR_MIN = 0.01
+/** The closest the near plane comes to the eye. */
+export const NEAR_MIN = 0.01
 const NEAR_MAX = 10
 
 /**
- * The main view's near and far planes for an eye `surface` from the nearest
- * thing it must not cut and `eyeFromSun` from the Sun. Near goes halfway to
- * that surface, so no body is cut, but no further than NEAR_MAX, so the
- * orbits and belts it doesn't measure are only cut right at the eye; NEAR_MIN
- * keeps the depth buffer usable as a small moon sweeps past the eye. Far
- * reaches past the whole system and the starfield.
+ * The main view's near and far planes, into `out`, for an eye `surface` from
+ * the nearest thing it must not cut (nearestSurface) and `eyeFromSun` from
+ * the Sun. Near goes halfway to that surface, so no body is cut, but no
+ * further than NEAR_MAX, so the orbits and belts it doesn't measure are only
+ * cut right at the eye. It never comes closer than NEAR_MIN, to keep the
+ * depth buffer usable, so the one cut it allows is of a body whose reach
+ * passes within 2 · NEAR_MIN of the eye (or through it): an inner moon
+ * sweeping past an eye at the closest distance shows sliced for a frame or
+ * two. Far reaches past the whole system and the starfield.
  */
 export function mainNearFar(
   surface: number,
-  eyeFromSun: number
+  eyeFromSun: number,
+  out = { near: 0, far: 0 }
 ): { near: number; far: number } {
-  return {
-    near: MathUtils.clamp(NEAR_SHARE * surface, NEAR_MIN, NEAR_MAX),
-    far: Math.max(eyeFromSun + SYSTEM_EXTENT, 1.1 * PLANETS_STAR_RADIUS),
-  }
+  out.near = MathUtils.clamp(NEAR_SHARE * surface, NEAR_MIN, NEAR_MAX)
+  out.far = Math.max(eyeFromSun + SYSTEM_EXTENT, 1.1 * PLANETS_STAR_RADIUS)
+  return out
 }
 
 /**

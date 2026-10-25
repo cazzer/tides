@@ -1,18 +1,24 @@
 import { describe, expect, it } from 'vitest'
+import { MathUtils, Vector3 } from 'three'
 import {
   MAIN_DISTANCE,
   MAIN_FOV,
   MAIN_ZOOM,
   PLANETS_STAR_RADIUS,
   REFERENCE_VIEW_HEIGHT,
-  SYSTEM_EXTENT,
-  SYSTEM_FIT_RADIUS,
+  NEAR_MIN,
+  allowDistance,
+  easeDistance,
   focusedRef,
+  followMotion,
   framingDistance,
   mainNearFar,
   mainViewRange,
   minDistance,
+  nearReach,
+  nearestSurface,
   planetFramingZoom,
+  stepEyeDistance,
   systemFitDistance,
   targetUnitsPerPixel,
   zoomDistance,
@@ -20,8 +26,9 @@ import {
 import { CLOCK_VIEW } from './clock-view'
 import { CLOUD_UNITS_PER_KM } from './cloud-layer'
 import { EARTH_ORBIT_RADIUS } from './ephemeris'
-import { CLOCK_HALF_WIDTH } from './orbit-label'
+import { CLOCK_HALF_WIDTH } from './clock-size'
 import { PLANETS, sceneDistance } from './planets'
+import { KUIPER_A_AU } from './system-aids/belt-particles'
 import { FOCUS_VALUES, isSystemFocus, type CameraFocus } from './store'
 import { bodyRadius } from './system-aids/label-visibility'
 
@@ -98,15 +105,27 @@ describe('minDistance', () => {
     expect(CLOCK_VIEW.distance).toBeGreaterThan(minDistance('clock'))
   })
 
-  it('keeps the eye outside the focused body', () => {
+  it('keeps the eye outside the focused body, its shells and its rings', () => {
     for (const focus of SYSTEM_FOCI) {
-      expect(minDistance(focus), focus).toBeGreaterThan(1.3 * bodyRadius(focus))
+      expect(minDistance(focus), focus).toBeGreaterThan(nearReach(focus))
     }
+    const saturn = PLANETS.saturn
+    expect(minDistance('saturn')).toBeGreaterThan(saturn.radius * saturn.rings!.outer)
     // From a target on Earth's surface, straight above it.
     expect(minDistance('location') - EARTH).toBeCloseTo(minDistance('earth'), 12)
     expect(minDistance('clock')).toBe(2 * CLOCK_HALF_WIDTH)
   })
 })
+
+const NEPTUNE_APHELION = sceneDistance(30.4)
+
+/** The angle from the view axis to the far edge of a sphere, for an eye looking at `target`. */
+function edgeAngle(eye: Vector3, target: Vector3, centre: Vector3, radius: number) {
+  const toCentre = centre.clone().sub(eye)
+  return (
+    toCentre.angleTo(target.clone().sub(eye)) + Math.asin(radius / toCentre.length())
+  )
+}
 
 describe('mainViewRange', () => {
   it('leaves the planets-off view exactly as it was', () => {
@@ -118,20 +137,23 @@ describe('mainViewRange', () => {
     }
   })
 
-  it('frames the whole system across the shorter side at the distance limit', () => {
-    for (const view of [DESKTOP, PHONE, { width: 2000, height: 1200 }]) {
+  it('shows Neptune across the Sun from an Earth target at the distance limit', () => {
+    const earth = new Vector3(EARTH_ORBIT_RADIUS, 0, 0)
+    const neptune = new Vector3(-NEPTUNE_APHELION, 0, 0)
+    // Looking at Earth square to the Sun line, from above and from the side.
+    const across = [new Vector3(0, 1, 0), new Vector3(0, 0, 1)]
+    for (const view of [DESKTOP, PHONE, { width: 844, height: 390 }]) {
       const { maxDistance } = mainViewRange(true, view)
-      const halfAngle = Math.atan(
-        (TAN_HALF_FOV * Math.min(view.width, view.height)) / view.height
-      )
-      expect(Math.asin(SYSTEM_FIT_RADIUS / maxDistance)).toBeCloseTo(halfAngle, 12)
+      const narrower = Math.atan(TAN_HALF_FOV * Math.min(1, view.width / view.height))
+      for (const direction of across) {
+        const eye = earth.clone().addScaledVector(direction, maxDistance)
+        expect(
+          edgeAngle(eye, earth, neptune, PLANETS.neptune.radius),
+          `${view.width}x${view.height}`
+        ).toBeLessThan(narrower)
+      }
     }
     expect(systemFitDistance(PHONE)).toBeGreaterThan(systemFitDistance(DESKTOP))
-    // Neptune's aphelion (~30.3 AU over 1900–2100) and its sphere, on the
-    // far side of the Sun from an Earth target.
-    expect(SYSTEM_FIT_RADIUS).toBeGreaterThan(
-      EARTH_ORBIT_RADIUS + sceneDistance(30.4) + PLANETS.neptune.radius
-    )
   })
 })
 
@@ -140,30 +162,35 @@ describe('mainNearFar', () => {
   const depthStep = (near: number, far: number, depth: number) =>
     (depth * depth * (far - near)) / (far * near * 2 ** 24)
 
-  it('never puts the near plane past the nearest surface', () => {
-    for (let surface = 0.02; surface < 1e4; surface *= 1.1) {
+  it('keeps the near plane short of the nearest surface down to 2 · NEAR_MIN', () => {
+    for (let surface = 2 * NEAR_MIN; surface < 1e4; surface *= 1.1) {
       const { near } = mainNearFar(surface, 0)
       expect(near).toBeLessThan(surface)
-      expect(near).toBeGreaterThan(0)
     }
   })
 
-  it('reaches past the whole system and the stars from any eye', () => {
-    for (const view of [DESKTOP, PHONE]) {
-      const { maxDistance, starRadius } = mainViewRange(true, view)
-      const eyeFromSun = maxDistance + SYSTEM_FIT_RADIUS
-      const { far } = mainNearFar(1000, eyeFromSun)
-      expect(far).toBeGreaterThanOrEqual(eyeFromSun + SYSTEM_EXTENT)
-      expect(far).toBeGreaterThan(starRadius!)
-    }
+  it('holds at NEAR_MIN closer in, cutting a body that close to the eye', () => {
+    expect(mainNearFar(NEAR_MIN, 0).near).toBe(NEAR_MIN)
+    expect(mainNearFar(0, 0).near).toBe(NEAR_MIN)
+    expect(mainNearFar(-1, 0).near).toBe(NEAR_MIN)
+  })
+
+  it('takes in the far side of the Kuiper belt from a phone zoomed out on Neptune', () => {
+    const { maxDistance, starRadius } = mainViewRange(true, PHONE)
+    const neptune = new Vector3(-NEPTUNE_APHELION, 0, 0)
+    // Looking back across the Sun at Neptune, as far out as the phone goes.
+    const eye = neptune.clone().add(new Vector3(-maxDistance, 0, 0))
+    const kuiperEdge = new Vector3(sceneDistance(KUIPER_A_AU[1]), 0, 0)
+    const { far } = mainNearFar(maxDistance, eye.length())
+    expect(eye.distanceTo(kuiperEdge)).toBeLessThan(far)
+    // The starfield is centred on the eye.
+    expect(far).toBeGreaterThan(starRadius!)
     expect(mainNearFar(1, 0).far).toBeGreaterThan(PLANETS_STAR_RADIUS)
-    // Neptune's aphelion surface; the Kuiper belt's edge is belt-particles.test.ts'.
-    expect(SYSTEM_EXTENT).toBeGreaterThan(sceneDistance(30.4) + PLANETS.neptune.radius)
   })
 
   it('resolves 10 m of cloud height at an Earth close-up', () => {
     const tenMetres = CLOUD_UNITS_PER_KM / 100
-    const atmosphere = 1.1 * EARTH
+    const atmosphere = nearReach('earth')
     // Straight down at the closest distance...
     const eye = minDistance('earth')
     const down = mainNearFar(eye - atmosphere, EARTH_ORBIT_RADIUS)
@@ -173,6 +200,157 @@ describe('mainNearFar', () => {
     const horizon = Math.sqrt(tilted ** 2 - EARTH ** 2)
     const flat = mainNearFar(tilted - atmosphere, EARTH_ORBIT_RADIUS)
     expect(depthStep(flat.near, flat.far, horizon)).toBeLessThan(tenMetres)
+  })
+
+  it('writes into the object it is given', () => {
+    const out = { near: 0, far: 0 }
+    expect(mainNearFar(4, 100, out)).toBe(out)
+  })
+})
+
+describe('nearestSurface', () => {
+  const eye = new Vector3(0, 0, 0)
+  const body = (x: number, reach: number) => ({ centre: new Vector3(x, 0, 0), reach })
+
+  it('measures to the nearest reach, or the target if nearer', () => {
+    const bodies = [body(10, 2), body(-6, 3), body(1, 0)]
+    expect(nearestSurface(eye, new Vector3(0, 50, 0), bodies)).toBe(3)
+    expect(nearestSurface(eye, new Vector3(0, 2, 0), bodies)).toBe(2)
+  })
+
+  it('skips a body that is not there', () => {
+    expect(nearestSurface(eye, new Vector3(0, 50, 0), [body(1, 0)])).toBe(50)
+  })
+
+  it('goes negative inside a reach', () => {
+    expect(nearestSurface(eye, new Vector3(0, 50, 0), [body(1, 3)])).toBe(-2)
+  })
+})
+
+describe('easeDistance', () => {
+  it('lands on the goal from either side without overshooting', () => {
+    for (const [from, goal] of [[3.98, 149.3], [1e5, 2048], [331, 149.3]]) {
+      let distance = from
+      let frames = 0
+      while (distance !== goal && frames < 1000) {
+        const next = easeDistance(distance, goal)
+        expect(Math.sign(goal - next) * Math.sign(goal - from)).toBeGreaterThanOrEqual(0)
+        distance = next
+        frames++
+      }
+      expect(distance).toBe(goal)
+      expect(frames).toBeLessThan(250)
+    }
+  })
+
+  it('changes the apparent size by the same small share each frame', () => {
+    // 5% of the remaining ratio: from 50x too far, ~18% a frame, not a jump.
+    const next = easeDistance(1e5, 2048)
+    expect(1e5 / next).toBeCloseTo((1e5 / 2048) ** 0.05, 9)
+    expect(1e5 / next).toBeLessThan(1.25)
+    expect(easeDistance(3.98, 149.3) / 3.98).toBeLessThan(1.25)
+  })
+})
+
+// The part of OrbitControls stepEyeDistance drives, clamping as it does.
+function dolly(distance: number, minDistance = 0, maxDistance = Infinity) {
+  return {
+    distance,
+    minDistance,
+    maxDistance,
+    getDistance() {
+      return this.distance
+    },
+    setScale(scale: number) {
+      this.distance = MathUtils.clamp(
+        this.distance * scale,
+        this.minDistance,
+        this.maxDistance
+      )
+    },
+  }
+}
+
+describe('stepEyeDistance', () => {
+  it('eases into a raised minDistance rather than jumping there', () => {
+    // An Earth close-up when the Sun is chosen.
+    const controls = dolly(minDistance('earth'), minDistance('earth'))
+    const lo = minDistance('sun')
+    let previous = controls.distance
+    for (let frame = 0; frame < 300; frame++) {
+      stepEyeDistance(controls, null, lo, 2048)
+      expect(controls.distance / previous).toBeLessThan(1.07)
+      expect(controls.minDistance).toBeLessThanOrEqual(controls.distance)
+      previous = controls.distance
+    }
+    expect(controls.distance).toBeCloseTo(lo, 9)
+    expect(controls.minDistance).toBe(lo)
+  })
+
+  it('eases into a lowered maxDistance, e.g. planets turned on far out', () => {
+    const controls = dolly(1e5)
+    const hi = systemFitDistance(DESKTOP)
+    let previous = controls.distance
+    for (let frame = 0; frame < 300; frame++) {
+      stepEyeDistance(controls, null, 1, hi)
+      expect(previous / controls.distance).toBeLessThan(1.25)
+      previous = controls.distance
+    }
+    expect(controls.distance).toBeCloseTo(hi, 9)
+    expect(controls.maxDistance).toBe(hi)
+  })
+
+  it('leaves a distance in range where it is', () => {
+    const controls = dolly(100, 0, 0)
+    expect(stepEyeDistance(controls, null, 10, 1000)).toBe(false)
+    expect(controls.distance).toBe(100)
+    expect([controls.minDistance, controls.maxDistance]).toEqual([10, 1000])
+  })
+
+  it('reports landing on the framing, kept within range', () => {
+    const controls = dolly(MAIN_DISTANCE)
+    const frames = []
+    for (let frame = 0; frame < 300; frame++) {
+      if (stepEyeDistance(controls, 5000, 1, 2048)) frames.push(frame)
+    }
+    expect(frames.length).toBeGreaterThan(0)
+    expect(controls.distance).toBeCloseTo(2048, 9)
+  })
+})
+
+describe('allowDistance', () => {
+  it('widens the limits to take in the distance, never narrows them', () => {
+    const controls = dolly(2, 13.5, 2048)
+    allowDistance(controls)
+    expect([controls.minDistance, controls.maxDistance]).toEqual([2, 2048])
+    controls.distance = 5000
+    allowDistance(controls)
+    expect([controls.minDistance, controls.maxDistance]).toEqual([2, 5000])
+    controls.distance = 100
+    allowDistance(controls)
+    expect([controls.minDistance, controls.maxDistance]).toEqual([2, 5000])
+  })
+})
+
+describe('followMotion', () => {
+  it('carries the eye by the followed body’s motion', () => {
+    const anchor = { key: null, position: new Vector3() }
+    const carry = new Vector3(9, 9, 9)
+    followMotion(anchor, 'earth', new Vector3(50, 0, 0), carry)
+    expect(carry.length()).toBe(0)
+    followMotion(anchor, 'earth', new Vector3(49, 0, 2), carry)
+    expect(carry.toArray()).toEqual([-1, 0, 2])
+  })
+
+  it('leaves the eye put on the frame the focus changes, or with none', () => {
+    const anchor = { key: 'earth' as unknown, position: new Vector3(50, 0, 0) }
+    const carry = new Vector3()
+    followMotion(anchor, 'sun', new Vector3(), carry)
+    expect(carry.length()).toBe(0)
+    followMotion(anchor, null, new Vector3(1, 1, 1), carry)
+    expect(carry.length()).toBe(0)
+    followMotion(anchor, null, new Vector3(2, 2, 2), carry)
+    expect(carry.length()).toBe(0)
   })
 })
 

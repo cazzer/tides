@@ -71,7 +71,8 @@ export function rideWithClock(
     const dRadius = framed.radius - spherical.radius
     spherical.theta += dTheta * ride.ease
     spherical.phi += dPhi * ride.ease
-    spherical.radius += dRadius * ride.ease
+    // By ratio, as the main view's distance eases (main-view.ts easeDistance).
+    spherical.radius *= (framed.radius / spherical.radius) ** ride.ease
     const remaining = 1 - ride.ease
     if (
       Math.abs(dTheta * remaining) < SETTLED &&

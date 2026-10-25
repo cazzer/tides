@@ -110,36 +110,34 @@ export type Pivot = { tilt: number; heading: number; depth: number }
  * untilted pose (damping, clamps, zoom and the surface grab unchanged) while
  * the camera rests tilted between updates, so clicks hit what is shown.
  * Heading enters as camera.up: OrbitControls rebuilds its orbit frame from it
- * each update, keeping left-drag screen-aligned. A target moved between
- * updates (CameraProvider eases it onto the focus) carries the eye with it,
- * so the eye distance stays where OrbitControls' dolly put it, and
- * getDistance reports that untilted distance. Returns the undo.
+ * each update, keeping left-drag screen-aligned. `carry` (CameraProvider's
+ * followMotion: the focused body's motion) moves the untilted eye on the
+ * next update and is then spent, so the eye rides along with the body;
+ * getDistance reports the untilted distance. Returns the undo.
  */
 export function tiltControls(
   controls: OrbitControls,
   camera: Camera,
   pivot: Pivot,
-  radius: () => number
+  radius: () => number,
+  carry = new Vector3()
 ): () => void {
   const original = controls.update
   const originalGetDistance = controls.getDistance
   const untilted = new Vector3()
   const shown = new Vector3(NaN, NaN, NaN)
-  const lastTarget = new Vector3()
   const lastShown = new Vector3(NaN, NaN, NaN)
   const lastShownQuaternion = new Quaternion()
   const normal = new Vector3()
   controls.update = () => {
     // Anything else that moved the camera wins over the stored pose.
-    if (camera.position.equals(shown)) {
-      camera.position.copy(untilted).add(controls.target).sub(lastTarget)
-    }
+    if (camera.position.equals(shown)) camera.position.copy(untilted).add(carry)
+    carry.set(0, 0, 0)
     normal.subVectors(camera.position, controls.target).normalize()
     headingUp(camera.up, normal, pivot.heading)
     // Typed void, but three-stdlib returns whether it dispatched 'change'.
     const changed = Boolean(original() as unknown)
     untilted.copy(camera.position)
-    lastTarget.copy(controls.target)
     applyTilt(
       camera.position,
       camera.quaternion,
@@ -163,7 +161,7 @@ export function tiltControls(
   }
   controls.getDistance = () =>
     camera.position.equals(shown)
-      ? untilted.distanceTo(lastTarget)
+      ? untilted.distanceTo(controls.target)
       : originalGetDistance()
   return () => {
     controls.update = original
