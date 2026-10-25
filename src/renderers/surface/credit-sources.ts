@@ -46,6 +46,31 @@ export function sourcesForTile(b: RadianBounds): SurfaceSource[] {
   return sources
 }
 
+/** Metres, the tileset's sphere (surface-frame.ts SURFACE_ELLIPSOID_RADIUS). */
+const R = 6371000
+/** Slack for relief standing past the sea-level horizon, in radians (~64 km of arc). */
+const HORIZON_SLACK = 0.01
+
+/**
+ * Whether a tile could be seen from a camera at `camera` (ECEF metres): the
+ * tile's visible set is by frustum, and looking down at the ground the cone
+ * runs on through the planet, so far-side tiles are "visible" too. A tile
+ * counts when its nearest part is inside the camera's horizon.
+ */
+export function tileOnNearSide(b: RadianBounds, camera: { x: number; y: number; z: number }): boolean {
+  const distance = Math.hypot(camera.x, camera.y, camera.z)
+  if (distance === 0) return true
+  const lat = (b.south + b.north) / 2
+  const lon = (b.west + b.east) / 2
+  const dot =
+    (camera.x * Math.cos(lat) * Math.cos(lon) + camera.y * Math.cos(lat) * Math.sin(lon) + camera.z * Math.sin(lat)) /
+    distance
+  const away = Math.acos(Math.min(1, Math.max(-1, dot)))
+  const horizon = Math.acos(Math.min(1, R / Math.max(distance, R)))
+  const radius = Math.hypot((b.north - b.south) / 2, ((b.east - b.west) / 2) * Math.cos(lat))
+  return away <= horizon + radius + HORIZON_SLACK
+}
+
 /** The footprint of a loaded tile, or null when it has no region (the root). */
 export function tileRadianBounds(tile: unknown): RadianBounds | null {
   const volume = (tile as { boundingVolume?: { region?: number[]; cartographicRange?: number[] } }).boundingVolume

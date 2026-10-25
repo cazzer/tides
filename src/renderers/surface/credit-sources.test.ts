@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { ActiveSources, sourcesForTile, tileRadianBounds, type RadianBounds } from './credit-sources'
+import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type RadianBounds } from './credit-sources'
 import { tileBounds } from './imagery'
 
 const RAD = Math.PI / 180
@@ -21,6 +21,26 @@ describe('sourcesForTile', () => {
   })
   test('a tile wholly in Canada takes EOX only', () => {
     expect(sourcesForTile(rad(8, 50, 80))).toEqual(['mapterhorn', 'eox'])
+  })
+})
+
+describe('tileOnNearSide', () => {
+  const R = 6371000
+  // 3 km over (36.1N, 112.1W)
+  const eye = (h: number, lat = 36.1, lon = -112.1) => ({
+    x: (R + h) * Math.cos(lat * RAD) * Math.cos(lon * RAD),
+    y: (R + h) * Math.cos(lat * RAD) * Math.sin(lon * RAD),
+    z: (R + h) * Math.sin(lat * RAD),
+  })
+  test('counts the tile underneath and drops the one on the far side of the planet', () => {
+    expect(tileOnNearSide(rad(10, 192, 405), eye(3000))).toBe(true)
+    // the antipode, in the Indian Ocean
+    expect(tileOnNearSide({ west: 67 * RAD, east: 68 * RAD, south: -37 * RAD, north: -36 * RAD }, eye(3000))).toBe(false)
+  })
+  test('sees more of the world from orbit', () => {
+    const europe = rad(4, 8, 5)
+    expect(tileOnNearSide(europe, eye(3000))).toBe(false)
+    expect(tileOnNearSide(rad(2, 0, 1), eye(6000000))).toBe(true)
   })
 })
 

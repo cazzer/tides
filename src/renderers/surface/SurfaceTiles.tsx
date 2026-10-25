@@ -6,13 +6,14 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
-import { ActiveSources, sourcesForTile, tileRadianBounds, type SurfaceSource } from './credit-sources'
+import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import { setActiveSurfaceSources } from './surface-credits'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 
 // How often the visible tiles are read for the credits line; it only needs to
 // notice tiles arriving and leaving.
 const CREDIT_INTERVAL_MS = 250
+const creditEye = new THREE.Vector3()
 
 export default function SurfaceTiles() {
   const camera = useThree((s) => s.camera)
@@ -77,9 +78,11 @@ export default function SurfaceTiles() {
     if (now - credits.current.at >= CREDIT_INTERVAL_MS) {
       credits.current.at = now
       const seen = new Set<SurfaceSource>()
+      // The camera in the tiles' own frame (ECEF metres), for the horizon.
+      const eye = tiles.group.worldToLocal(camera.getWorldPosition(creditEye))
       for (const tile of tiles.visibleTiles) {
         const bounds = tileRadianBounds(tile)
-        if (bounds) sourcesForTile(bounds).forEach((s) => seen.add(s))
+        if (bounds && tileOnNearSide(bounds, eye)) sourcesForTile(bounds).forEach((s) => seen.add(s))
       }
       setActiveSurfaceSources(credits.current.sources.update(seen, now))
     }
