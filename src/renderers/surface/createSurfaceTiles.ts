@@ -127,6 +127,9 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
   applySurfaceFrame(tiles.group)
   tiles.group.name = 'surface-tiles'
   tiles.group.userData.tiles = tiles
+  // Out of ShipWarmup's reach (ship-warmup.ts): tiles come and go too fast to
+  // queue, and the grids are uploaded as they finish (upload, above).
+  tiles.group.userData.warmup = false
 
   // Earth's mesh takes pointer events (OrbitingBody's onPointerDown), and R3F
   // raycasts its children too: the group's own raycast would hit-test every

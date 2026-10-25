@@ -205,12 +205,14 @@ const noClose = () => {}
  * The library's TilesRenderer closes the ImageBitmap of every texture on a
  * tile's materials when it drops the tile, and when a parse finishes after
  * its load was aborted. The terrain plugin's overlay map is a clone sharing
- * the overlay cache's bitmap, which that cache may still be handing to
- * another load: closed, it uploads as a 0x0 texture ("texSubImage2D: The
- * source data has been detached") and the tile draws black. Seen under
- * cache pressure in a headless low descent. Make each overlay bitmap
- * closable only by the cache that made it: its own close is a no-op, and
- * the cache's dispose closes it for real.
+ * the overlay cache's bitmap, and that bitmap can outlive the tile: the
+ * terrain tree runs a level past the imagery's deepest (16), so a z16 tile
+ * drapes the cached z16 image itself while its z17 children compose theirs
+ * from it. Dropping the z16 tile would close the image the cache still
+ * holds for the children (a z17 tile loading next fails to draw from it; a
+ * clone of it uploads 0x0, black). Make each overlay bitmap closable only by
+ * the cache that made it: its own close is a no-op, and the cache's dispose
+ * closes it for real.
  */
 export function protectOverlayBitmaps(overlay: XYZTilesOverlay): void {
   const source = (overlay as unknown as { imageSource: TiledImageSourceInternals }).imageSource

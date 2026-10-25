@@ -50,6 +50,12 @@ export function createWarmed(): Warmed {
  * program). Materials are keyed by `materialKey`: three's per-renderer record
  * of the material, which a dispose replaces, since a disposed material drops
  * its programs.
+ *
+ * An object with userData.warmup === false is skipped with everything under
+ * it: the streamed surface tiles (tides-zmw.9.2), which come and go by the
+ * dozen a second and upload their own grids. Queued here, a tile's map could
+ * be uploaded after the tile was dropped and its bitmap closed (a WebGL
+ * INVALID_VALUE per map, seen in a headless low descent).
  */
 export function coldWork(
   scene: THREE.Object3D,
@@ -57,7 +63,12 @@ export function coldWork(
   materialKey: (material: THREE.Material) => object
 ): Warmup[] {
   const work: Warmup[] = []
-  scene.traverseVisible((object) => {
+  const visit = (object: THREE.Object3D) => {
+    if (!object.visible || object.userData.warmup === false) return
+    check(object)
+    for (const child of object.children) visit(child)
+  }
+  const check = (object: THREE.Object3D) => {
     let cold = false
     const sides = new Set<THREE.Side>()
     for (const material of materialsOf(object)) {
@@ -74,7 +85,8 @@ export function coldWork(
     }
     if (cold) work.push({ object })
     for (const side of sides) work.push({ object, side })
-  })
+  }
+  visit(scene)
   return work
 }
 
