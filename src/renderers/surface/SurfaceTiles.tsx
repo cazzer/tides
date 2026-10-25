@@ -5,21 +5,23 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
+import { shipTelemetry } from '../../ship/ship-telemetry'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
+import { smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
 
 export default function SurfaceTiles() {
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
   const width = useThree((s) => s.size.width)
   const height = useThree((s) => s.size.height)
-  // The elevation maps are linear-filtered 32-bit float textures, which iOS
-  // can't sample (no OES_texture_float_linear): draw nothing there until
-  // tides-zmw.9.2 converts them. The tier gate keeps phones out already;
-  // this catches iPads, which report the high tier.
+  // Without linear filtering of float textures (iOS), the elevation grids
+  // are nearest-filtered instead (createSurfaceTiles, tides-zmw.9.2).
   const floatLinear = useMemo(() => gl.getContext().getExtension('OES_texture_float_linear') !== null, [gl])
+  const touch = useMemo(() => typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches, [])
   const holder = useRef<THREE.Group>(null)
   const surface = useRef<Tiles | null>(null)
+  const errorTarget = useRef(NaN)
 
   // Created in an effect and hung under the holder by hand (no state, so no
   // extra render), so StrictMode's mount, unmount, mount disposes the first
@@ -28,11 +30,20 @@ export default function SurfaceTiles() {
   // download with it.
   useEffect(() => {
     const parent = holder.current
-    if (!floatLinear || !parent) return
-    const created = createSurfaceTiles()
+    if (!parent) return
+    let created: Tiles
+    try {
+      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture) })
+    } catch (error) {
+      // e.g. no OffscreenCanvas (Safari before 16.4), which the library's
+      // terrain plugin needs to construct: fly over the globe alone.
+      console.warn('surface tiles: unavailable here', error)
+      return
+    }
     created.tiles.setCamera(camera)
     parent.add(created.tiles.group)
     surface.current = created
+    errorTarget.current = NaN
     return () => {
       surface.current = null
       parent.remove(created.tiles.group)
@@ -45,17 +56,24 @@ export default function SurfaceTiles() {
         console.error('surface tiles: dispose failed', error)
       }
     }
-  }, [camera, floatLinear])
+  }, [camera, gl, floatLinear])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
   // is in those pixels. After the effect above, so the camera is registered.
   useEffect(() => {
     surface.current?.tiles.setResolution(camera, width, height)
-  }, [camera, floatLinear, width, height])
+  }, [camera, gl, floatLinear, width, height])
 
-  useFrame(() => {
-    const tiles = surface.current?.tiles
-    if (!tiles?.group.parent) return
+  useFrame((_, delta) => {
+    const current = surface.current
+    if (!current?.tiles.group.parent) return
+    const { tiles, budget } = current
+    budget.tick()
+    // Less detail the faster the ground sweeps past (surface-lod.ts), set
+    // before update() picks this frame's tiles.
+    const target = surfaceErrorTarget(sweepRate(shipTelemetry.speed, shipTelemetry.nearest), touch)
+    errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
+    tiles.errorTarget = errorTarget.current
     // ShipController has moved the camera and OrbitingBody turned Earth this
     // frame, but neither world matrix is refreshed until the render: do it
     // here, so the tiles pick their detail and cull against where the camera
@@ -63,6 +81,7 @@ export default function SurfaceTiles() {
     camera.updateWorldMatrix(true, false)
     tiles.group.updateWorldMatrix(true, false)
     tiles.update()
+    current.syncCounters()
   }, SURFACE_FRAME_PRIORITY)
 
   return <group ref={holder} />

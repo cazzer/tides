@@ -6,17 +6,42 @@
 // status: a USGS 404 over water would decode as a broken image instead of
 // falling back. Everything still goes through super.fetch, so the library's
 // per-host download queue and abort signals stay in charge.
+//
+// When every source fails (tides-zmw.9.2), the tile gets a plain patch of
+// the day map's ocean colour instead (imagery.ts), counted in `fallbacks`:
+// the library fails a terrain tile whose overlay fails, so a missing image
+// would otherwise leave a hole in the ground. An abort still ends the chain.
 import { XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
-import { EOX_URL, fetchFirstOk, IMAGERY_LEVELS, IMAGERY_TILE_SIZE, imageryUrlsFor, parseImageryUrl } from './imagery'
+import {
+  cancelBody,
+  EOX_URL,
+  fallbackImageryResponse,
+  fetchFirstOk,
+  IMAGERY_LEVELS,
+  IMAGERY_TILE_SIZE,
+  imageryUrlsFor,
+  parseImageryUrl,
+} from './imagery'
 
 export class SurfaceImageryOverlay extends XYZTilesOverlay {
+  /** Tiles drawn in the fallback colour because no source answered. */
+  fallbacks = 0
+
   constructor() {
     super({ url: EOX_URL, levels: IMAGERY_LEVELS, tileDimension: IMAGERY_TILE_SIZE })
   }
 
-  override fetch(url: string, options: RequestInit = {}): Promise<Response> {
+  override async fetch(url: string, options: RequestInit = {}): Promise<Response> {
     const tile = parseImageryUrl(url)
     const urls = tile ? imageryUrlsFor(tile) : [url]
-    return fetchFirstOk(urls, (u) => super.fetch(u, options))
+    try {
+      const res = await fetchFirstOk(urls, (u) => super.fetch(u, options))
+      if (res.ok) return res
+      cancelBody(res)
+    } catch (error) {
+      if ((error as Error)?.name === 'AbortError') throw error
+    }
+    this.fallbacks++
+    return fallbackImageryResponse()
   }
 }

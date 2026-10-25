@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ImageOverlay } from '3d-tiles-renderer/three/plugins'
+import { inflateSync } from 'node:zlib'
 import {
   EOX_URL,
+  fallbackImageryPng,
+  FALLBACK_IMAGERY_RGB,
   fetchFirstOk,
   imageryUrl,
   imageryUrlsFor,
@@ -144,5 +147,59 @@ describe('SurfaceImageryOverlay (tides-zmw.9.1)', () => {
     const alps = tileAt(46.5, 8, 12)
     await overlay.fetch(imageryUrl(EOX_URL, alps), {})
     expect(calls).toEqual([imageryUrl(EOX_URL, alps)])
+  })
+})
+
+describe('imagery fallback (tides-zmw.9.2)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('is a 1x1 PNG of the day map ocean colour', () => {
+    expect(FALLBACK_IMAGERY_RGB).toEqual([25, 75, 101])
+    const png = Buffer.from(fallbackImageryPng())
+    expect(png.subarray(1, 4).toString()).toBe('PNG')
+    // IHDR: 1x1, 8-bit truecolour
+    expect([png.readUInt32BE(16), png.readUInt32BE(20), png[24], png[25]]).toEqual([1, 1, 8, 2])
+    const idat = png.indexOf('IDAT')
+    const raw = inflateSync(png.subarray(idat + 4, idat + 4 + png.readUInt32BE(idat - 4)))
+    expect(Array.from(raw)).toEqual([0, ...FALLBACK_IMAGERY_RGB]) // filter byte, then RGB
+  })
+
+  it('cancels the body of an answer it skips', async () => {
+    const skipped = new Response('Not Found', { status: 404 })
+    const cancel = vi.spyOn(skipped.body!, 'cancel')
+    await fetchFirstOk(['usgs', 'eox'], async (u) => (u === 'usgs' ? skipped : response(200)))
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers with the fallback when every source fails or the network does, and counts it', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    const canyon = imageryUrl(EOX_URL, { z: 16, y: 25721, x: 12355 })
+    const last = new Response('gone', { status: 500 })
+    const cancel = vi.spyOn(last.body!, 'cancel')
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async (url: string) =>
+      url.includes('nationalmap') ? response(404) : last
+    )
+    const res = await overlay.fetch(canyon, {})
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/png')
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual(Array.from(fallbackImageryPng()))
+    expect(cancel).toHaveBeenCalled()
+    expect(overlay.fallbacks).toBe(1)
+
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    expect((await overlay.fetch(canyon, {})).status).toBe(200)
+    expect(overlay.fallbacks).toBe(2)
+  })
+
+  it('still ends at an abort, and passes an ok answer through', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    const alps = imageryUrl(EOX_URL, tileAt(46.5, 8, 12))
+    const abort = new DOMException('gone', 'AbortError')
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockRejectedValue(abort)
+    await expect(overlay.fetch(alps, {})).rejects.toBe(abort)
+    const ok = response(200)
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockResolvedValue(ok)
+    expect(await overlay.fetch(alps, {})).toBe(ok)
+    expect(overlay.fallbacks).toBe(0)
   })
 })

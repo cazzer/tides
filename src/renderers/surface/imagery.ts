@@ -89,7 +89,8 @@ export function imageryUrlsFor(tile: ImageryTile): string[] {
 /**
  * Fetches the first of `urls` that answers ok; the last answer (or error)
  * stands if none does. A network error falls through like a bad status, but
- * an abort (the tile went out of view) ends the chain.
+ * an abort (the tile went out of view) ends the chain. A skipped answer's
+ * body is cancelled, so its connection isn't held open unread.
  */
 export async function fetchFirstOk(
   urls: readonly string[],
@@ -100,9 +101,39 @@ export async function fetchFirstOk(
     try {
       const res = await fetcher(urls[i])
       if (res.ok || last) return res
+      cancelBody(res)
     } catch (error) {
       if (last || (error as Error)?.name === 'AbortError') throw error
     }
   }
   throw new Error('fetchFirstOk: no URLs')
+}
+
+/** Drops a response's unread body; never throws. */
+export function cancelBody(res: Response): void {
+  res.body?.cancel().catch(() => {})
+}
+
+/**
+ * What a tile shows when no source has imagery for it (both fail, or the
+ * network does; tides-zmw.9.2): the day map's open-ocean colour, sRGB
+ * (earth-day.jpg's grading, measured for scripts/fit-gibs-colour.mjs).
+ * Without it a failed overlay fails its terrain tile too: a hole.
+ */
+export const FALLBACK_IMAGERY_RGB = [25, 75, 101] as const
+
+/** FALLBACK_IMAGERY_RGB as a 1x1 RGB PNG (69 bytes; the overlay stretches it over the tile). */
+const FALLBACK_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mOQ9E4FAAFKAMr0l52NAAAAAElFTkSuQmCC'
+
+export function fallbackImageryPng(): Uint8Array<ArrayBuffer> {
+  const bin = atob(FALLBACK_PNG_BASE64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+
+/** A fresh 200 response carrying the fallback PNG. */
+export function fallbackImageryResponse(): Response {
+  return new Response(fallbackImageryPng(), { status: 200, headers: { 'Content-Type': 'image/png' } })
 }
