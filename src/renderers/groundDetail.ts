@@ -156,6 +156,9 @@ const LIGHT_BODY = /* glsl */ `
 {
   float groundSunUp = saturate(dot(groundUp, directionalLights[0].direction));
   float groundSkyView = 0.5 + 0.5 * dot(normal, groundUp);
+#ifdef GROUND_HORIZON
+  groundSkyView = min(groundSkyView, groundHorizonSky);
+#endif
   reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse
     + GROUND_SKY_FILL * groundSunUp * groundSkyView * directionalLights[0].color
       * BRDF_Lambert(material.diffuseColor);
