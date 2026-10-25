@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { EARTH_RADIUS_KM, TERRAIN_DISPLACEMENT, type Vec3 } from './cloud-layer'
+import { DEFAULT_TERRAIN_DISPLACEMENT, EARTH_RADIUS_KM, type Vec3 } from './cloud-layer'
 import type { DemLevel } from './earth-dem'
 import {
   HORIZON_BITS,
@@ -29,8 +29,8 @@ const N = 0
 const E = 2
 const S = 4
 const W = 6
-// The ground's exaggeration: about 25x.
-const E_REF = TERRAIN_DISPLACEMENT / sceneRadius(12742000)
+// The shipped map's exaggeration: the default relief's, about 25x.
+const E_REF = DEFAULT_TERRAIN_DISPLACEMENT / sceneRadius(12742000)
 
 const ASSET = new URL('./assets/earth-horizon-1k.bin', import.meta.url)
 const shippedFile = readFileSync(ASSET)
@@ -149,7 +149,7 @@ describe('horizon bake', () => {
     const curved = transformError({ eRef: E_REF })
     expect(curved.worst).toBeLessThanOrEqual(step + 0.6 * (HORIZON_RADIUS_KM / EARTH_RADIUS_KM / 2))
     expect(curved.mean).toBeLessThan(step / 2)
-    expect(horizonTangentScale(TERRAIN_DISPLACEMENT * 0.4, sceneRadius(12742000), E_REF)).toBeCloseTo(0.4, 6)
+    expect(horizonTangentScale(DEFAULT_TERRAIN_DISPLACEMENT * 0.4, sceneRadius(12742000), E_REF)).toBeCloseTo(0.4, 6)
   })
 })
 
