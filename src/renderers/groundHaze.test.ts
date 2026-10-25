@@ -3,8 +3,19 @@ import * as THREE from 'three'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
-import { createGroundHaze, GROUND_HAZE_E, groundHazeWeights } from './groundHaze'
-import { ATMOSPHERE_OUTER, groundHazeTop, pickShellFaces } from './earth-shells'
+import {
+  createGroundHaze,
+  GROUND_HAZE_E,
+  groundHazeDepth,
+  groundHazeWeights,
+} from './groundHaze'
+import {
+  ATMOSPHERE_OUTER,
+  ATMOSPHERE_SCALE_HEIGHT,
+  ATMOSPHERE_SURFACE,
+  groundHazeTop,
+  pickShellFaces,
+} from './earth-shells'
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
 
 // The ship's camera is near Earth (limb-detail's view).
@@ -14,6 +25,63 @@ vi.mock('../ship/limb-detail', async (original) => ({
 }))
 
 const R = 3
+const SURFACE = R * ATMOSPHERE_SURFACE
+const H = R * ATMOSPHERE_SCALE_HEIGHT
+const GRAZING = Math.sqrt(2 * Math.PI * SURFACE * H)
+const V = (x: number, y: number, z = 0) => new THREE.Vector3(x, y, z)
+
+// haze.glsl's columns, ported for the seam and the bob below.
+function hazeAbove(r: number, mu: number): number {
+  const x = r / H
+  const z = mu * Math.sqrt(0.5 * x)
+  return (Math.exp(-(r - SURFACE) / H) * H * Math.sqrt(2 * x)) / (z + Math.sqrt(z * z + 1.2732395))
+}
+
+function columnAhead(ro: THREE.Vector3, rd: THREE.Vector3): number {
+  const r = Math.max(ro.length(), SURFACE)
+  const eye = ro.clone().setLength(r)
+  const b = eye.dot(rd)
+  const mu = b / r
+  if (mu >= 0) return hazeAbove(r, mu)
+  const c2 = r * r - b * b
+  const p = Math.sqrt(Math.max(c2, 0))
+  const line =
+    SURFACE * SURFACE - c2 > 0
+      ? GRAZING * Math.exp(-(SURFACE - p) / (1.5 * H))
+      : GRAZING * Math.sqrt(p / SURFACE) * Math.exp(-(p - SURFACE) / H)
+  return Math.max(line - hazeAbove(r, -mu), 0)
+}
+
+function columnAheadOverSea(ro: THREE.Vector3, rd: THREE.Vector3): number {
+  let column = columnAhead(ro, rd)
+  const bSea = ro.dot(rd)
+  const hSea = bSea * bSea - (ro.lengthSq() - R * R)
+  if (ro.length() < SURFACE && ro.length() > R && bSea < 0 && hSea > 0) {
+    const eye = ro.clone().setLength(SURFACE)
+    const sea = ro.clone().addScaledVector(rd, -bSea - Math.sqrt(hSea))
+    const own = 1 - THREE.MathUtils.smoothstep(hSea / (bSea * bSea), 0, 0.1)
+    column = THREE.MathUtils.lerp(columnAhead(eye, sea.sub(eye).normalize()), column, own)
+  }
+  return column
+}
+
+// groundHaze()'s reference ray: tangent to the sphere through the point, in
+// the eye's ray's vertical plane.
+function reference(eye: THREE.Vector3, ray: THREE.Vector3): THREE.Vector3 {
+  const rE = eye.length()
+  const rP = eye.clone().add(ray).length()
+  const up = eye.clone().divideScalar(rE)
+  const dir = ray.clone().normalize()
+  const across = dir.clone().addScaledVector(up, -dir.dot(up)).normalize()
+  const dip2 = THREE.MathUtils.clamp(((rE - rP) * (rE + rP)) / (rE * rE), 0, 1)
+  return across.multiplyScalar(Math.sqrt(1 - dip2)).addScaledVector(up, -Math.sqrt(dip2))
+}
+
+// A point at radius rP, s from an eye at (0, rE).
+function pointAt(rE: number, rP: number, s: number): THREE.Vector3 {
+  const cos = (rE * rE + rP * rP - s * s) / (2 * rE * rP)
+  return V(rP * Math.sqrt(1 - cos * cos), rP * cos)
+}
 
 function phongShader() {
   return {
@@ -51,16 +119,27 @@ describe('ground haze', () => {
     expect(at('#include <opaque_fragment>')).toBeLessThan(at('if (uGroundHaze > 0.0)'))
     expect(shader.vertexShader).toMatch(/#include <project_vertex>\s+vGroundHazeRay =/)
     expect(shader.uniforms.uGroundHazeSun).toBe(clouds.uniforms.uSunDir)
-    // The weights groundHazeWeights() mirrors: a change to one side fails here.
+    // The depth and weights groundHazeDepth() and groundHazeWeights()
+    // mirror, and the reference ray the tests port: a change to one side
+    // fails here.
     for (const line of [
-      'float share = 1.0 - exp(-s / uGroundHazeLength);',
-      'float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, length(eye));',
+      'return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
+      'float tau = s * (groundHazeDensity(rE) + 4.0 * groundHazeDensity(length(eye + 0.5 * ray)) + groundHazeDensity(rP)) / 6.0;',
+      'float share = 1.0 - exp(-pow(tau / uGroundHazeLength, GROUND_HAZE_POWER));',
+      'vec3 across = dir - up * dot(dir, up);',
+      'float dip2 = clamp((rE - rP) * (rE + rP) / (rE * rE), 0.0, 1.0);',
+      'float column = columnAhead(eye, across * sqrt(1.0 - dip2) - up * sqrt(dip2), grazing, at);',
+      'float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, rE);',
+      'float haze = mix(share, 1.0, ease);',
+      'glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun), ease / haze);',
       'cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);',
-      'return vec4(hazeGlow(column, grazing, at, uGroundHazeSun), mix(share, 1.0, ease));',
+      'return vec4(glow, haze);',
+      'vec4 haze = groundHaze(vGroundHazeEye, vGroundHazeRay, cover);',
       'groundHazeLit.rgb = groundHazeLit.rgb * (1.0 - cover) + gl_FragColor.rgb * haze.a;',
     ]) {
       expect(frag).toContain(line)
     }
+    expect(frag).toContain('#define GROUND_HAZE_POWER 2.000000')
     clouds.dispose()
   })
 
@@ -76,21 +155,114 @@ describe('ground haze', () => {
     const horizon = Math.sqrt(2 * R * EARTH_GROUND_CLEARANCE)
     const top = R + groundHazeTop(false)
     const stop = R + EARTH_GROUND_CLEARANCE
-    // A level ray's column from the base is half the grazing line's.
-    const near = groundHazeWeights(stop, 0.002, 0.5, R, false)
-    expect(near.cover).toBeLessThan(0.05)
-    expect(near.haze).toBeLessThan(0.05)
+    // Under the base the depth is the distance. A level ray's column from
+    // the base is half the grazing line's.
+    for (const s of [0.002, 0.01]) {
+      const near = groundHazeWeights(stop, s, 0.5, R, false)
+      expect(near.cover).toBeLessThan(0.015)
+      expect(near.haze).toBeLessThan(0.015)
+    }
+    expect(groundHazeWeights(stop, 0.02, 0.5, R, false).haze).toBeLessThan(0.05)
     const sea = groundHazeWeights(stop, horizon, 0.5, R, false)
     expect(sea.haze).toBeCloseTo(1 - Math.exp(-GROUND_HAZE_E), 6)
     expect(sea.cover).toBeCloseTo(sea.haze, 6)
+    expect(sea.own).toBe(0)
     // A steep ray's faint haze hides little of the ground.
     expect(groundHazeWeights(stop, horizon, 0.05, R, false).cover).toBeCloseTo(0.1 * sea.haze, 6)
-    // At the shell's top: none of the ground hidden, all of the haze added.
+    // Through the ease band the haze is at least the ease, and its colour
+    // turns to the eye's own ray's.
+    const band = top - 2 * R * ATMOSPHERE_SCALE_HEIGHT
+    let last = 0
+    for (let i = 1; i < 10; i++) {
+      const eye = band + (top - band) * (i / 10)
+      const w = groundHazeWeights(eye, 0.002, 0.5, R, false)
+      const ease = THREE.MathUtils.smoothstep(eye, band, top)
+      expect(w.haze).toBeGreaterThanOrEqual(ease)
+      expect(w.own).toBeGreaterThan(last)
+      expect(w.own).toBeLessThanOrEqual(1)
+      last = w.own
+    }
+    expect(groundHazeWeights(band, 0.002, 0.5, R, false).own).toBe(0)
+    // At the shell's top: none of the ground hidden, all of the haze added,
+    // the atmosphere's own.
     for (const eye of [top, top - 1e-9]) {
       const w = groundHazeWeights(eye, 0.002, 0.5, R, false)
       expect(w.cover).toBeCloseTo(0, 6)
       expect(w.haze).toBeCloseTo(1, 6)
+      expect(w.own).toBeCloseTo(1, 6)
     }
+  })
+
+  it("takes the segment's depth: the distance under the base, thinner above, finite straight down", () => {
+    const stop = V(0, R + EARTH_GROUND_CLEARANCE)
+    const low = pointAt(stop.y, R + 0.002, 0.1)
+    expect(groundHazeDepth(stop, low.clone().sub(stop), R)).toBeCloseTo(0.1, 9)
+    // Level, two scale heights over the base: about e^-2 of the distance.
+    const high = V(0, SURFACE + 2 * H)
+    const ray = pointAt(high.y, high.y, 0.05).sub(high)
+    const thin = groundHazeDepth(high, ray, R) / 0.05
+    expect(thin).toBeGreaterThan(Math.exp(-2))
+    expect(thin).toBeLessThan(1.1 * Math.exp(-2))
+    // Straight down to the sea: the base's thickness plus a scale height,
+    // to Simpson's few samples.
+    const eye = V(0, R + 0.2)
+    const down = groundHazeDepth(eye, V(0, -0.2), R)
+    const exact = SURFACE - R + H * (1 - Math.exp(-(R + 0.2 - SURFACE) / H))
+    expect(down).toBeGreaterThan(0.6 * exact)
+    expect(down).toBeLessThan(exact)
+  })
+
+  it("meets the sky at the sea horizon: the sea's colour is the sky's just above it", () => {
+    for (const g of [0.004, 0.02, 0.08]) {
+      const eye = V(0, R + g)
+      const tangentAngle = Math.acos(R / eye.y)
+      const horizon = V(R * Math.sin(tangentAngle), R * Math.cos(tangentAngle))
+      const tangent = horizon.clone().sub(eye).normalize()
+      const above = tangent.clone().applyAxisAngle(V(0, 0, 1), 1e-6)
+      const sky = columnAheadOverSea(eye, above)
+      for (const f of [0.3, 0.9, 1]) {
+        const a = f * tangentAngle
+        const sea = V(R * Math.sin(a), R * Math.cos(a))
+        const ref = reference(eye, sea.sub(eye))
+        expect(ref.angleTo(tangent)).toBeLessThan(1e-6)
+        expect(columnAhead(eye, ref) / GRAZING).toBeCloseTo(sky / GRAZING, 4)
+      }
+    }
+  })
+
+  it("keeps a fixed ground point's haze as the eye bobs, where the eye's own ray's moved it", () => {
+    const bob = EARTH_GROUND_CLEARANCE
+    const oldLength = Math.sqrt(2 * R * EARTH_GROUND_CLEARANCE) / GROUND_HAZE_E
+    let oldWorst = 0
+    // Lowland and the Tibetan plateau (4.5 km, under the base and over it);
+    // the far points on ridges standing over the plateau's horizon.
+    for (const ground of [0.002, 0.0516]) {
+      for (const [s, rise] of [
+        [0.02, 0],
+        [0.05, 0],
+        [0.1, 0],
+        [0.15, 0],
+        [0.2, 0.01],
+        [0.3, 0.02],
+      ]) {
+        const point = pointAt(R + ground + EARTH_GROUND_CLEARANCE, R + ground + rise, s)
+        const laid = (y: number) => {
+          const eye = V(0, R + ground + y)
+          const ray = point.clone().sub(eye)
+          const depth = groundHazeDepth(eye, ray, R)
+          const w = groundHazeWeights(eye.y, depth, 0, R, false)
+          const old = 1 - Math.exp(-ray.length() / oldLength)
+          return {
+            now: (w.haze * columnAhead(eye, reference(eye, ray))) / GRAZING,
+            old: (old * columnAheadOverSea(eye, ray.normalize())) / GRAZING,
+          }
+        }
+        const [a, b] = [laid(EARTH_GROUND_CLEARANCE), laid(EARTH_GROUND_CLEARANCE + bob)]
+        expect(Math.abs(b.now - a.now)).toBeLessThan(0.08)
+        oldWorst = Math.max(oldWorst, Math.abs(b.old - a.old))
+      }
+    }
+    expect(oldWorst).toBeGreaterThan(0.08)
   })
 
   it("takes over from the atmosphere only for the ship's camera under the cloud shell's top", () => {
