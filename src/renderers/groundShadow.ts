@@ -3,11 +3,14 @@
 //
 // - The Sun: where the horizon toward it stands above the Sun, the ground is
 //   in the range's shadow, with a soft edge HORIZON_SOFTNESS either side.
-//   Flat ground and the open sea have no horizon, so the terminator and
-//   the glint are as they were.
-// - The sky: a valley sees less of it than a ridge, so its ambient light and
-//   the ground detail's sky fill (./groundDetail.ts, which reads
-//   groundHorizonSky) are dimmed by the share it sees, to HORIZON_SKY_POWER.
+//   Flat ground and the open sea have no horizon, nor (to the shader) has
+//   ground rising less than the map's step, so the terminator and the glint
+//   are as they were.
+// - The sky: a valley sees less of it than a ridge, so its ambient light is
+//   dimmed by the share it sees, to HORIZON_SKY_POWER, and the ground
+//   detail's sky fill (./groundDetail.ts, which reads groundHorizonSky) by
+//   that or its own slope's share, whichever is less: both measure the same
+//   occlusion, so their product would count a tilted slope's twice.
 //
 // Both follow the ground's exaggeration: the map's tangents are scaled from
 // the exaggeration it was baked at to the material's displacementScale. Both
@@ -79,8 +82,10 @@ float groundHorizonSky = 1.0;
     vec4 tA = k * tan(min(hA, ${f(HORIZON_MAX_ANGLE)}));
     vec4 tB = k * tan(min(hB, ${f(HORIZON_MAX_ANGLE)}));
     float sky = dot(1.0 / (1.0 + tA * tA) + 1.0 / (1.0 + tB * tB), vec4(1.0));
+    // The Sun's azimuth, as sunAzimuth() (../earth-horizon.ts) has it.
     vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), up));
-    float bin = atan(dot(sun, east), dot(sun, cross(up, east))) * ${f(8 / (2 * Math.PI))};
+    vec2 sunFlat = vec2(dot(sun, east), dot(sun, cross(up, east)));
+    float bin = dot(sunFlat, sunFlat) > 1e-12 ? atan(sunFlat.x, sunFlat.y) * ${f(8 / (2 * Math.PI))} : 0.0;
     bin += bin < 0.0 ? 8.0 : 0.0;
     // The two directions either side of the Sun's azimuth, weighted by
     // nearness (wrapping round from NW to N).
@@ -90,9 +95,11 @@ float groundHorizonSky = 1.0;
     vec4 wB = max(1.0 - min(gapB, 8.0 - gapB), 0.0);
     float toward = atan(k * tan(min(dot(wA, hA) + dot(wB, hB), ${f(HORIZON_MAX_ANGLE)})));
     float elevation = asin(clamp(dot(sun, up), -1.0, 1.0));
+    // A horizon of a step or less never shadows (sunVisibility()).
+    float quantum = k * uGroundHorizonCode.x / 255.0;
     float sunLit = mix(1.0,
       smoothstep(toward - ${f(HORIZON_SOFTNESS)}, toward + ${f(HORIZON_SOFTNESS)}, elevation),
-      smoothstep(0.0, ${f(HORIZON_SOFTNESS)}, toward));
+      smoothstep(quantum, quantum + ${f(HORIZON_SOFTNESS)}, toward));
     sunLit = mix(1.0, sunLit, fade);
     groundHorizonSky = mix(1.0, pow(sky / 8.0, ${f(HORIZON_SKY_POWER)}), fade);
     reflectedLight.directDiffuse *= sunLit;

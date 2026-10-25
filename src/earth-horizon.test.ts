@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { TERRAIN_DISPLACEMENT } from './cloud-layer'
+import * as THREE from 'three'
+import { EARTH_RADIUS_KM, TERRAIN_DISPLACEMENT, type Vec3 } from './cloud-layer'
 import type { DemLevel } from './earth-dem'
 import {
   HORIZON_BITS,
   HORIZON_DIRECTIONS,
+  HORIZON_RADIUS_KM,
   HORIZON_WIDTH,
   bakeHorizon,
   decodeEarthHorizon,
@@ -13,6 +15,7 @@ import {
   horizonTangentScale,
   packEarthHorizon,
   skyVisibility,
+  sunAzimuth,
   sunVisibility,
   unpackEarthHorizon,
   type EarthHorizon,
@@ -112,21 +115,40 @@ describe('horizon bake', () => {
     expect(eye[S]).toBe(0)
   })
 
+  it('drops distant ground below the horizontal by the curve', () => {
+    // 0.14 units four texels (625 km) east: 2.1° up at 25x over a flat
+    // Earth, under the curve's 2.8° drop there.
+    const far = (x: number) => (x === 132 ? 0.14 : 0)
+    const options = { ...WIDE, radiusKm: 700, firstKm: (4 * 2 * Math.PI * EARTH_RADIUS_KM) / 256, steps: 2 }
+    expect(at(bakeHorizon(level(256, 128, far), options), 128, 64)[E]).toBe(0)
+    expect(at(bakeHorizon(level(256, 128, far), { ...options, curvature: false }), 128, 64)[E]).toBeGreaterThan(0)
+  })
+
   it('takes a map to another exaggeration by scaling its tangents', () => {
     const hills = level(256, 128, (x, y) => 0.15 * (1 + Math.sin(x * 0.37) * Math.cos(y * 0.53 + x * 0.11)))
-    const at25 = bakeHorizon(hills, WIDE)
-    const at10 = bakeHorizon(hills, { ...WIDE, eRef: (E_REF * 10) / 25 })
     const step = horizonAngle(1, HORIZON_BITS)
-    let worst = 0
-    let total = 0
-    for (let k = 0; k < at25.angles.length; k++) {
-      const scaled = Math.atan(0.4 * Math.tan(horizonAngle(at25.angles[k], HORIZON_BITS)))
-      const error = Math.abs(scaled - horizonAngle(at10.angles[k], HORIZON_BITS))
-      worst = Math.max(worst, error)
-      total += error
+    // Worst and mean error of the 25x map scaled to 10x against a 10x bake.
+    const transformError = (options: HorizonBakeOptions) => {
+      const at25 = bakeHorizon(hills, options)
+      const at10 = bakeHorizon(hills, { ...options, eRef: (E_REF * 10) / 25 })
+      let worst = 0
+      let total = 0
+      for (let k = 0; k < at25.angles.length; k++) {
+        const scaled = Math.atan(0.4 * Math.tan(horizonAngle(at25.angles[k], HORIZON_BITS)))
+        const error = Math.abs(scaled - horizonAngle(at10.angles[k], HORIZON_BITS))
+        worst = Math.max(worst, error)
+        total += error
+      }
+      return { worst, mean: total / at25.angles.length }
     }
-    expect(worst).toBeLessThanOrEqual(step)
-    expect(total / at25.angles.length).toBeLessThan(step / 3)
+    // Over a flat Earth, exact but for the steps.
+    const flat = transformError({ ...WIDE, curvature: false })
+    expect(flat.worst).toBeLessThanOrEqual(step)
+    expect(flat.mean).toBeLessThan(step / 2)
+    // Over the curve the shipped search's (k − 1)·γ/2 at most 0.6 · 1.35° comes on top.
+    const curved = transformError({ eRef: E_REF })
+    expect(curved.worst).toBeLessThanOrEqual(step + 0.6 * (HORIZON_RADIUS_KM / EARTH_RADIUS_KM / 2))
+    expect(curved.mean).toBeLessThan(step / 2)
     expect(horizonTangentScale(TERRAIN_DISPLACEMENT * 0.4, sceneRadius(12742000), E_REF)).toBeCloseTo(0.4, 6)
   })
 })
@@ -138,6 +160,17 @@ describe('shading from the horizon', () => {
   it('leaves unobstructed ground exactly as lit as before, at any Sun', () => {
     for (const elevation of [-10, -0.5, 0, 0.5, 3, 60]) expect(sunVisibility(flat, 1, 1.3, elevation * D)).toBe(1)
     expect(skyVisibility(flat, 1)).toBe(1)
+  })
+
+  it('never shadows from a horizon of a step or less, so plains keep the Sun to the terminator', () => {
+    const one = [horizonAngle(1, HORIZON_BITS), 0, 0, 0, 0, 0, 0, 0]
+    const two = [horizonAngle(2, HORIZON_BITS), 0, 0, 0, 0, 0, 0, 0]
+    for (const elevation of [-1, 0, 1, 2]) expect(sunVisibility(one, 1, 0, elevation * D)).toBe(1)
+    expect(sunVisibility(two, 1, 0, 0)).toBeLessThan(0.5)
+    // The step follows the exaggeration with the angles.
+    // (to a hair: the step scales linearly, the angle by its tangent).
+    expect(sunVisibility(one, 0.5, 0, -1 * D)).toBeCloseTo(1, 6)
+    expect(sunVisibility(one, 2, 0, 0)).toBeCloseTo(1, 6)
   })
 
   it('softens the edge and blends between directions', () => {
@@ -185,5 +218,41 @@ describe('horizon texture', () => {
     expect([0, 1, 2, 3].map((c) => read(0, c))).toEqual([10, 11, 12, 13])
     expect([0, 1, 2, 3].map((c) => read(1, c))).toEqual([14, 15, 16, 17])
     expect(texture.image.depth).toBe(2)
+  })
+})
+
+describe("the Sun's azimuth", () => {
+  // The ground mesh's own vertices: SphereGeometry, as useBodySphere builds
+  // it, at the uv the shader reads the map with.
+  const sphere = new THREE.SphereGeometry(1, 360, 180)
+  const uv = sphere.getAttribute('uv')
+  const position = sphere.getAttribute('position')
+  const vertexAt = (u: number, v: number): Vec3 => {
+    for (let k = 0; k < uv.count; k++) {
+      if (Math.abs(uv.getX(k) - u) < 1e-6 && Math.abs(uv.getY(k) - v) < 1e-6) {
+        return [position.getX(k), position.getY(k), position.getZ(k)]
+      }
+    }
+    throw new Error(`no vertex at ${u}, ${v}`)
+  }
+  // Longitude and latitude to the map's uv (columns from −180° east, v = 1 north).
+  const ground = (lat: number, lon: number) => vertexAt((lon + 180) / 360, (lat + 90) / 180)
+  const deg = (sun: Vec3, up: Vec3) => (sunAzimuth(sun, up) / D + 360) % 360
+
+  it("points east toward the map's next column and north toward the next row", () => {
+    const here = ground(0, 0)
+    expect(deg(ground(0, 90), here)).toBeCloseTo(90, 6)
+    expect(deg(ground(0, -90), here)).toBeCloseTo(270, 6)
+    expect(deg([0, 1, 0], here)).toBeCloseTo(0, 6)
+    expect(deg(ground(0, 1), here)).toBeCloseTo(90, 3)
+    expect(deg(ground(1, 0), here)).toBeCloseTo(0, 3)
+    // Off the equator, the Sun over the next texel south-west.
+    expect(deg(ground(44, 30), ground(45, 31))).toBeGreaterThan(180)
+    expect(deg(ground(44, 30), ground(45, 31))).toBeLessThan(270)
+  })
+
+  it('reads 0 with the Sun overhead, not atan(0, 0)', () => {
+    const here = ground(30, 60)
+    expect(sunAzimuth(here, here)).toBe(0)
   })
 })

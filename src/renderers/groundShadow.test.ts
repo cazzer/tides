@@ -5,6 +5,7 @@ import { createCloudLayer } from './cloudShaders'
 import { blankHorizonTexture, earthHorizon } from './earthHorizonTexture'
 import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
+import { HORIZON_SOFTNESS } from '../earth-horizon'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 
@@ -48,13 +49,32 @@ describe('ground shadow patch', () => {
 
   it("dims the ground detail's sky fill by the sky it sees", () => {
     const declared = at('#define GROUND_HORIZON\nfloat groundHorizonSky = 1.0;')
-    const used = at('#ifdef GROUND_HORIZON\n  groundSkyView *= groundHorizonSky;')
+    const used = at('#ifdef GROUND_HORIZON\n  groundSkyView = min(groundSkyView, groundHorizonSky);')
     expect(declared).toBeLessThan(used)
     expect(used).toBeLessThan(at('reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL)'))
     // Under the same guard as the sky fill, so wherever that compiles this does.
     expect(frag).toContain(
       '#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0\n#define GROUND_HORIZON'
     )
+  })
+
+  it("works out the Sun's azimuth as sunAzimuth() does, and gates the shadow at a step", () => {
+    // Line for line with ../earth-horizon.ts sunAzimuth(), which is tested
+    // against the ground mesh's uv: change one, change the other.
+    const lines = [
+      'vec3 up = vGroundDetailPos / radius;',
+      'vec3 sun = normalize(uGroundShadowSun);',
+      'vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), up));',
+      'vec2 sunFlat = vec2(dot(sun, east), dot(sun, cross(up, east)));',
+      `float bin = dot(sunFlat, sunFlat) > 1e-12 ? atan(sunFlat.x, sunFlat.y) * ${(8 / (2 * Math.PI)).toFixed(6)} : 0.0;`,
+      'bin += bin < 0.0 ? 8.0 : 0.0;',
+    ]
+    const positions = lines.map(at)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+    // As sunVisibility(): no shadow from a horizon of one step (the texture's
+    // unit over 255 levels) or less.
+    expect(frag).toContain('float quantum = k * uGroundHorizonCode.x / 255.0;')
+    expect(frag).toContain(`smoothstep(quantum, quantum + ${HORIZON_SOFTNESS.toFixed(6)}, toward));`)
   })
 
   it('leaves the night lights alone', () => {

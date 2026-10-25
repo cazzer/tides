@@ -4,14 +4,23 @@
 // (renderers/groundShadow.ts) reads it for the Sun's shadow (is the Sun above
 // the horizon toward it?) and for sky occlusion (how much of the sky a
 // valley sees). Pure, so the build, the tests and the renderer share it;
-// sunVisibility() and skyVisibility() mirror the shader's maths.
+// sunAzimuth(), sunVisibility() and skyVisibility() mirror the shader's
+// maths.
 //
 // Each angle is the highest elevation, above the local horizontal, of the
 // ground within HORIZON_RADIUS_KM along a great circle, at the relief's
-// exaggeration eRef (displacement scale over sea-level radius, scene units).
-// Ignoring the Earth's curvature, tan(angle) is proportional to the
-// exaggeration (the steepest sightline is the same one at any), so the shader
-// takes the map to its own exaggeration by scaling the tangent (horizonTangentScale()).
+// exaggeration eRef (displacement scale over sea-level radius, scene units),
+// over the curved Earth: ground an arc γ away sits γ/2 lower in tangent, up
+// to 1.35° at 300 km, which would otherwise raise a horizon over most plains
+// and darken them ahead of the sea at dusk. Angles are rounded down, so
+// ground that rises less than a step reads as flat.
+//
+// The shader takes the map to its own exaggeration by scaling the tangent
+// (horizonTangentScale()). Without curvature that is exact (the steepest
+// sightline is the same one at any exaggeration); with it, the curvature
+// term γ/2 is scaled too, so away from eRef the map's curvature is off by
+// (k − 1)·γ/2 and its steepest sightline may be another. Exact at the
+// exaggeration the ground is drawn at (k = 1).
 //
 // A file is gzip over: the magic "EHZ1", width and height (uint16, little
 // endian), the number of directions and bits per angle (uint8), eRef
@@ -20,7 +29,7 @@
 // 2^bits − 1 even steps. Direction d points 360° · d / directions clockwise
 // from north, so the second points north-east.
 
-import { EARTH_RADIUS_KM } from './cloud-layer'
+import { EARTH_RADIUS_KM, type Vec3 } from './cloud-layer'
 import { gunzip, type DemLevel } from './earth-dem'
 
 const MAGIC = 'EHZ1'
@@ -58,13 +67,16 @@ export interface HorizonBakeOptions {
   firstKm?: number
   steps?: number
   eRef: number
+  /** False bakes over a flat Earth (the tangent transform is then exact). */
+  curvature?: boolean
 }
 
 /**
  * Bakes `level` (heights in displacement units, rows north first, columns
  * wrapping at 180°) into a horizon map of its own size. For each texel, each
  * direction's great circle is sampled (bilinear) at `steps` geometric
- * distances from `firstKm` to `radiusKm`; the steepest rise is the angle.
+ * distances from `firstKm` to `radiusKm`; the steepest rise over the
+ * Earth's curve is the angle, rounded down to a step.
  * Every texel of a row shares its great circles' offsets, so those are
  * worked out once a row; a circle that passes over a pole comes down the far
  * meridian, as it should.
@@ -77,6 +89,7 @@ export function bakeHorizon(level: DemLevel, options: HorizonBakeOptions): Earth
     firstKm = HORIZON_FIRST_KM,
     steps = HORIZON_STEPS,
     eRef,
+    curvature = true,
   } = options
   const { width: W, height: H, data } = level
   const top = (1 << bits) - 1
@@ -108,6 +121,7 @@ export function bakeHorizon(level: DemLevel, options: HorizonBakeOptions): Earth
         const r0 = data.subarray(y0 * W, (y0 + 1) * W)
         const r1 = data.subarray(y1 * W, (y1 + 1) * W)
         const scale = eRef / arc
+        const drop = curvature ? arc / 2 : 0
         const w00 = (1 - tx) * (1 - ty)
         const w01 = tx * (1 - ty)
         const w10 = (1 - tx) * ty
@@ -116,12 +130,12 @@ export function bakeHorizon(level: DemLevel, options: HorizonBakeOptions): Earth
           const x0 = (((i + bx) % W) + W) % W
           const x1 = x0 + 1 === W ? 0 : x0 + 1
           const h = w00 * r0[x0] + w01 * r0[x1] + w10 * r1[x0] + w11 * r1[x1]
-          const rise = (h - row[i]) * scale
+          const rise = (h - row[i]) * scale - drop
           if (rise > best[i]) best[i] = rise
         }
       }
       const plane = d * W * H + j * W
-      for (let i = 0; i < W; i++) angles[plane + i] = Math.round((Math.atan(best[i]) / (Math.PI / 2)) * top)
+      for (let i = 0; i < W; i++) angles[plane + i] = Math.floor((Math.atan(best[i]) / (Math.PI / 2)) * top)
     }
   }
   return { width: W, height: H, directions, bits, eRef, angles }
@@ -193,14 +207,44 @@ function scaledAngle(angle: number, k: number): number {
   return Math.atan(k * Math.tan(Math.min(angle, HORIZON_MAX_ANGLE)))
 }
 
+const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+const normalize = (a: Vec3): Vec3 => {
+  const l = Math.hypot(...a)
+  return [a[0] / l, a[1] / l, a[2] / l]
+}
+
+/**
+ * The Sun's azimuth, radians clockwise from north (0 to 2π), at the ground
+ * point `up` (a unit vector), both in the ground mesh's frame (north +Y), by
+ * the shader's steps: east is +Y × up, north up × east. Overhead, where it
+ * has none, 0.
+ */
+export function sunAzimuth(sun: Vec3, up: Vec3): number {
+  const east = normalize(cross([0, 1, 0], up))
+  const x = dot(sun, east)
+  const y = dot(sun, cross(up, east))
+  if (x * x + y * y <= 1e-12) return 0
+  const azimuth = Math.atan2(x, y)
+  return azimuth < 0 ? azimuth + 2 * Math.PI : azimuth
+}
+
 /**
  * The share of the Sun's light reaching the ground (the shader's): the
  * horizon toward the Sun's azimuth (radians clockwise from north),
  * interpolated between the directions either side, against its elevation
- * (radians), over a soft edge HORIZON_SOFTNESS either side. Where the horizon
- * is flat the Sun is never shadowed, so the terminator stays where it was.
+ * (radians), over a soft edge HORIZON_SOFTNESS either side. A horizon of a
+ * step (`bits`' quantum) or less never shadows, and one starts to only over
+ * the next HORIZON_SOFTNESS, so flat ground and ground rising under a step
+ * keep their light to the terminator, as the sea does.
  */
-export function sunVisibility(angles: ArrayLike<number>, k: number, azimuth: number, elevation: number): number {
+export function sunVisibility(
+  angles: ArrayLike<number>,
+  k: number,
+  azimuth: number,
+  elevation: number,
+  bits = HORIZON_BITS
+): number {
   const n = angles.length
   const bin = ((((azimuth / (2 * Math.PI)) * n) % n) + n) % n
   const i0 = Math.floor(bin) % n
@@ -208,7 +252,8 @@ export function sunVisibility(angles: ArrayLike<number>, k: number, azimuth: num
   const horizon = scaledAngle(angles[i0] * (1 - t) + angles[(i0 + 1) % n] * t, k)
   const w = HORIZON_SOFTNESS
   const lit = smoothstep(horizon - w, horizon + w, elevation)
-  return 1 + (lit - 1) * smoothstep(0, w, horizon)
+  const quantum = k * horizonAngle(1, bits)
+  return 1 + (lit - 1) * smoothstep(quantum, quantum + w, horizon)
 }
 
 /**
