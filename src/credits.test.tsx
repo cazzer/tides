@@ -33,6 +33,20 @@ describe('Credits', () => {
     expect(html).toContain(COPERNICUS_DEM_NOTICE)
   })
 
+  test('credits USGS (public domain) and EOX Sentinel-2 cloudless with its licence', () => {
+    expect(hrefs).toEqual(
+      expect.arrayContaining([
+        'https://www.usgs.gov/core-science-systems/national-geospatial-program/national-map',
+        'https://s2maps.eu/',
+        'https://creativecommons.org/licenses/by-nc-sa/4.0/',
+      ])
+    )
+    expect(html).toContain('USGS The National Map')
+    expect(html).toContain('public domain')
+    expect(html).toContain('Sentinel-2 cloudless')
+    expect(html).toContain('Contains modified Copernicus Sentinel data 2020')
+  })
+
   test('opens every link in a new tab without an opener', () => {
     const anchors = [...html.matchAll(/<a [^>]*>/g)].map((m) => m[0])
     expect(anchors.length).toBe(hrefs.length)
