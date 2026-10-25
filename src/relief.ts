@@ -1,17 +1,21 @@
 // Earth's relief exaggeration (tides-zmw.6), chosen at load: ?relief=<factor>
-// in the URL, the multiple of true scale the ground is drawn at (25 if absent
-// or unreadable, the exaggeration the scene was tuned at). It scales
+// in the URL, the multiple of true scale the ground is drawn at (12 if absent
+// or unreadable, chosen by eye over orbit and low-flight shots). It scales
 // TERRAIN_DISPLACEMENT (./cloud-layer.ts), from which everything that follows
 // the ground derives (the mesh, its slopes and shadows, the cloud layer and
 // its ceiling, the shells, the ship's floor), so a reload moves them together.
 // Clamped to [1, 25]: above 25 the highest stop outgrows the limb sphere's
-// MORPH_FLOOR (renderers/groundDisplacement.ts). A worker has no location and
-// takes the default: the cloud worker uses only the DEM's units, which don't
-// depend on it, so pass the relief along if it ever needs more.
+// MORPH_FLOOR (renderers/groundDisplacement.ts). 25 is also the reference the
+// displacement is given at (REFERENCE_RELIEF), the exaggeration the scene was
+// first tuned at, so ?relief=25 shows it as it was. A worker has no location
+// and takes the default: the cloud worker uses only the DEM's units, which
+// don't depend on it, so pass the relief along if it ever needs more.
 
-export const DEFAULT_RELIEF = 25
+export const DEFAULT_RELIEF = 12
 export const MIN_RELIEF = 1
-export const MAX_RELIEF = DEFAULT_RELIEF
+export const MAX_RELIEF = 25
+/** The relief REFERENCE_TERRAIN_DISPLACEMENT (./cloud-layer.ts) is given at. */
+export const REFERENCE_RELIEF = 25
 
 export function parseRelief(search: string): number {
   const raw = new URLSearchParams(search).get('relief')
@@ -23,6 +27,3 @@ export function parseRelief(search: string): number {
 
 /** This page's relief; the default outside a browser. */
 export const RELIEF = typeof location === 'undefined' ? DEFAULT_RELIEF : parseRelief(location.search)
-
-/** RELIEF over the default: 1 unless ?relief= says otherwise. */
-export const RELIEF_SCALE = RELIEF / DEFAULT_RELIEF

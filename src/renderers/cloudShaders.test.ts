@@ -107,13 +107,15 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
 
   it('starts at the near plane inside the shell and at the shell outside it', () => {
     const near = 0.002
-    const inside = marchSpanFromEye([0, sea + 0.11, 0], [1, 0, 0], sea, outer, near)!
+    // An eye in the shell, under its top whatever the relief (0.11 at 25x).
+    const eye = CLOUD_LAYER_TOP - 0.028
+    const inside = marchSpanFromEye([0, sea + eye, 0], [1, 0, 0], sea, outer, near)!
     expect(inside.start).toBe(near)
     // Its steps count from the eye (tides-16z).
     expect(inside.origin).toBe(0)
-    expect(inside.end).toBeCloseTo(Math.sqrt(outer ** 2 - (sea + 0.11) ** 2), 9)
-    const down = marchSpanFromEye([0, sea + 0.11, 0], [0, -1, 0], sea, outer, near)!
-    expect(down.end).toBeCloseTo(0.11 - CLOUD_CLEARANCE, 9)
+    expect(inside.end).toBeCloseTo(Math.sqrt(outer ** 2 - (sea + eye) ** 2), 9)
+    const down = marchSpanFromEye([0, sea + eye, 0], [0, -1, 0], sea, outer, near)!
+    expect(down.end).toBeCloseTo(eye - CLOUD_CLEARANCE, 9)
     const outside = marchSpanFromEye([0, sea + 0.3, 0], [0, -1, 0], sea, outer, near)!
     expect(outside.start).toBeCloseTo(0.3 - CLOUD_LAYER_TOP, 9)
     expect(outside.origin).toBe(outside.start)

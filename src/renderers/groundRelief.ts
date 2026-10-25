@@ -12,7 +12,7 @@
 // ridge one or two cells wide to a quarter or half of its faces' slope, and
 // the share gives part of that back. Such a ridge's lit slope is about
 // 50-65% of its drawn faces', 25-50% once the detail fades. The mesh is
-// exaggerated about 25x by default (../cloud-layer.ts; ?relief= lowers it,
+// exaggerated 12x by default (../cloud-layer.ts; ?relief= sets it,
 // ../relief.ts, and the detail with it, its share unchanged), which on the
 // map's few-km slopes would stand the detail on end and black out every lee
 // slope under a low Sun, so the detail is a fraction of it, softly capped.
