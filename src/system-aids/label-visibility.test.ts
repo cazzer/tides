@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { PLANETS, sceneRadius } from '../planets'
 import {
   MAIN_ZOOM,
+  REFERENCE_VIEW_HEIGHT,
   mainViewRange,
   planetFramingZoom,
   targetUnitsPerPixel,
+  zoomDistance,
 } from '../main-view'
 import { MOON_KEYS, moonRadius, moonsOf } from '../moons/moons'
 import type { CameraFocus } from '../store'
@@ -23,11 +25,13 @@ import {
   labelDistancePx,
   labelOpacity,
   steerClearOfSun,
+  whollyEclipsed,
 } from './label-visibility'
 
 const EARTH_RADIUS = sceneRadius(12_742_000)
-// Scene units per CSS px at a zoom: the main view's is 1 / zoom.
-const at = (zoom: number) => 1 / zoom
+// Scene units per CSS px at the target with the eye where it frames what the
+// ortho view did at `zoom` (1 / zoom, in a REFERENCE_VIEW_HEIGHT view).
+const at = (zoom: number) => targetUnitsPerPixel(zoomDistance(zoom), REFERENCE_VIEW_HEIGHT)
 const framed = (radius: number) => at(planetFramingZoom(radius, EARTH_RADIUS))
 const JUPITER_FRAMED = framed(PLANETS.jupiter.radius)
 const SATURN_FRAMED = framed(PLANETS.saturn.radius)
@@ -36,7 +40,7 @@ describe('labelOpacity', () => {
   it('names the Sun, Earth and the outer planets zoomed all the way out', () => {
     const upp = at(1)
     for (const key of ['sun', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'] as const) {
-      expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.9)
+      expect(labelOpacity(key, upp, 'clock', upp), key).toBeGreaterThan(0.9)
     }
   })
 
@@ -45,53 +49,53 @@ describe('labelOpacity', () => {
     const phone = { width: 390, height: 844 }
     const upp = targetUnitsPerPixel(mainViewRange(true, phone).maxDistance, phone.height)
     for (const key of ['sun', 'earth', 'jupiter', 'saturn'] as const) {
-      expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.9)
+      expect(labelOpacity(key, upp, 'clock', upp), key).toBeGreaterThan(0.9)
     }
     for (const key of ['uranus', 'neptune'] as const) {
-      expect(labelOpacity(key, upp, 'clock'), key).toBeGreaterThan(0.4)
+      expect(labelOpacity(key, upp, 'clock', upp), key).toBeGreaterThan(0.4)
     }
-    expect(labelOpacity('mars', upp, 'clock')).toBe(0)
+    expect(labelOpacity('mars', upp, 'clock', upp)).toBe(0)
   })
 
   it('fades Mercury and Venus in as the inner system opens up', () => {
-    expect(labelOpacity('mercury', at(1), 'clock')).toBe(0)
-    expect(labelOpacity('venus', at(1), 'clock')).toBeLessThan(0.05)
-    expect(labelOpacity('venus', at(2), 'clock')).toBe(1)
-    expect(labelOpacity('mercury', at(2), 'clock')).toBeLessThan(0.1)
-    expect(labelOpacity('mercury', at(4), 'clock')).toBe(1)
+    expect(labelOpacity('mercury', at(1), 'clock', at(1))).toBe(0)
+    expect(labelOpacity('venus', at(1), 'clock', at(1))).toBeLessThan(0.05)
+    expect(labelOpacity('venus', at(2), 'clock', at(2))).toBe(1)
+    expect(labelOpacity('mercury', at(2), 'clock', at(2))).toBeLessThan(0.1)
+    expect(labelOpacity('mercury', at(4), 'clock', at(4))).toBe(1)
   })
 
   it('names the Moon at the default zoom but not zoomed out', () => {
-    expect(labelOpacity('moon', at(MAIN_ZOOM), 'clock')).toBe(1)
-    expect(labelOpacity('moon', at(1), 'clock')).toBe(0)
+    expect(labelOpacity('moon', at(MAIN_ZOOM), 'clock', at(MAIN_ZOOM))).toBe(1)
+    expect(labelOpacity('moon', at(1), 'clock', at(1))).toBe(0)
   })
 
   it("hides Jupiter's moons zoomed out and names all four with Jupiter framed", () => {
     for (const key of moonsOf('jupiter')) {
-      expect(labelOpacity(key, at(1), 'clock'), key).toBe(0)
-      expect(labelOpacity(key, JUPITER_FRAMED, 'jupiter'), key).toBeGreaterThan(0.9)
+      expect(labelOpacity(key, at(1), 'clock', at(1)), key).toBe(0)
+      expect(labelOpacity(key, JUPITER_FRAMED, 'jupiter', JUPITER_FRAMED), key).toBeGreaterThan(0.9)
     }
   })
 
   it("names Saturn's widely spaced moons first, with Saturn framed", () => {
-    expect(labelOpacity('titan', SATURN_FRAMED, 'saturn')).toBeGreaterThan(0.9)
-    expect(labelOpacity('iapetus', SATURN_FRAMED, 'saturn')).toBeGreaterThan(0.9)
-    expect(labelOpacity('enceladus', SATURN_FRAMED, 'saturn')).toBe(0)
-    expect(labelOpacity('mimas', SATURN_FRAMED, 'saturn')).toBe(0)
+    expect(labelOpacity('titan', SATURN_FRAMED, 'saturn', SATURN_FRAMED)).toBeGreaterThan(0.9)
+    expect(labelOpacity('iapetus', SATURN_FRAMED, 'saturn', SATURN_FRAMED)).toBeGreaterThan(0.9)
+    expect(labelOpacity('enceladus', SATURN_FRAMED, 'saturn', SATURN_FRAMED)).toBe(0)
+    expect(labelOpacity('mimas', SATURN_FRAMED, 'saturn', SATURN_FRAMED)).toBe(0)
     // Rhea next, zooming on in; Enceladus only closer still.
-    expect(labelOpacity('rhea', SATURN_FRAMED / 1.5, 'saturn')).toBeGreaterThan(0.9)
-    expect(labelOpacity('enceladus', SATURN_FRAMED / 1.5, 'saturn')).toBeLessThan(0.25)
-    expect(labelOpacity('enceladus', SATURN_FRAMED / 2.5, 'saturn')).toBe(1)
+    expect(labelOpacity('rhea', SATURN_FRAMED / 1.5, 'saturn', SATURN_FRAMED / 1.5)).toBeGreaterThan(0.9)
+    expect(labelOpacity('enceladus', SATURN_FRAMED / 1.5, 'saturn', SATURN_FRAMED / 1.5)).toBeLessThan(0.25)
+    expect(labelOpacity('enceladus', SATURN_FRAMED / 2.5, 'saturn', SATURN_FRAMED / 2.5)).toBe(1)
   })
 
   it('names Triton with Neptune framed', () => {
-    expect(labelOpacity('triton', framed(PLANETS.neptune.radius), 'neptune')).toBeGreaterThan(0.9)
+    expect(labelOpacity('triton', framed(PLANETS.neptune.radius), 'neptune', framed(PLANETS.neptune.radius))).toBeGreaterThan(0.9)
   })
 
   it('always names the focused body', () => {
     for (const key of LABEL_KEYS) {
       for (const upp of [at(1), at(10), at(40), at(400)]) {
-        expect(labelOpacity(key, upp, key as CameraFocus), `${key} @ ${upp}`).toBe(1)
+        expect(labelOpacity(key, upp, key as CameraFocus, upp), `${key} @ ${upp}`).toBe(1)
       }
     }
   })
@@ -99,38 +103,46 @@ describe('labelOpacity', () => {
   it('fades out names outside the focused system when zoomed far in on it', () => {
     // Saturn framed, then four times closer: Saturn ~120 px in radius.
     const close = SATURN_FRAMED / 4
-    expect(labelOpacity('jupiter', SATURN_FRAMED, 'saturn')).toBeGreaterThan(0.9)
+    expect(labelOpacity('jupiter', SATURN_FRAMED, 'saturn', SATURN_FRAMED)).toBeGreaterThan(0.9)
     // Under BodyLabels' 0.01 cut-off: gone.
-    expect(labelOpacity('jupiter', close, 'saturn')).toBeLessThan(0.01)
-    expect(labelOpacity('sun', close, 'saturn')).toBeLessThan(0.01)
-    expect(labelOpacity('io', close, 'saturn')).toBeLessThan(0.01)
+    expect(labelOpacity('jupiter', close, 'saturn', close)).toBeLessThan(0.01)
+    expect(labelOpacity('sun', close, 'saturn', close)).toBeLessThan(0.01)
+    expect(labelOpacity('io', close, 'saturn', close)).toBeLessThan(0.01)
     // ...but not Saturn's own moons.
-    expect(labelOpacity('titan', close, 'saturn')).toBe(1)
-    expect(labelOpacity('enceladus', close, 'saturn')).toBeGreaterThan(0.9)
+    expect(labelOpacity('titan', close, 'saturn', close)).toBe(1)
+    expect(labelOpacity('enceladus', close, 'saturn', close)).toBeGreaterThan(0.9)
     // A moon's focus spares its siblings and parent.
     const titanClose = at(4 * planetFramingZoom(moonRadius('titan'), EARTH_RADIUS))
-    expect(labelOpacity('saturn', titanClose, 'titan')).toBe(1)
-    expect(labelOpacity('rhea', titanClose, 'titan')).toBe(1)
-    expect(labelOpacity('mars', titanClose, 'titan')).toBeLessThan(0.01)
+    expect(labelOpacity('saturn', titanClose, 'titan', titanClose)).toBe(1)
+    expect(labelOpacity('rhea', titanClose, 'titan', titanClose)).toBe(1)
+    expect(labelOpacity('mars', titanClose, 'titan', titanClose)).toBeLessThan(0.01)
+  })
+
+  it("measures how far in the view is by the scale at the target, not a far body's", () => {
+    // Saturn four times closer than framed, Jupiter ten times as deep: its
+    // own upp alone would read as zoomed out.
+    const close = SATURN_FRAMED / 4
+    expect(labelOpacity('jupiter', 10 * close, 'saturn', 10 * close)).toBeGreaterThan(0.5)
+    expect(labelOpacity('jupiter', 10 * close, 'saturn', close)).toBeLessThan(0.01)
   })
 
   it('counts the clock and a location as Earth, keeping the Moon close in', () => {
     const close = at(40)
-    expect(labelOpacity('moon', close, 'clock')).toBe(1)
-    expect(labelOpacity('moon', close, 'location')).toBe(1)
-    expect(labelOpacity('sun', close, 'clock')).toBeLessThan(0.01)
+    expect(labelOpacity('moon', close, 'clock', close)).toBe(1)
+    expect(labelOpacity('moon', close, 'location', close)).toBe(1)
+    expect(labelOpacity('sun', close, 'clock', close)).toBeLessThan(0.01)
   })
 
   it('spares everything with the camera on the Sun, whose system is all of them', () => {
-    expect(labelOpacity('earth', at(40), 'sun')).toBe(1)
-    expect(labelOpacity('mars', at(40), 'sun')).toBe(1)
+    expect(labelOpacity('earth', at(40), 'sun', at(40))).toBe(1)
+    expect(labelOpacity('mars', at(40), 'sun', at(40))).toBe(1)
   })
 
   it("never brightens a moon's name as the view zooms out", () => {
     for (const key of [...MOON_KEYS, 'moon'] as const) {
       let previous = Infinity
       for (let zoom = 40; zoom >= 1; zoom /= 1.05) {
-        const opacity = labelOpacity(key, at(zoom), 'sun')
+        const opacity = labelOpacity(key, at(zoom), 'sun', at(zoom))
         expect(opacity, `${key} @ zoom ${zoom}`).toBeLessThanOrEqual(previous + 1e-12)
         previous = opacity
       }
@@ -277,6 +289,66 @@ describe('resolveLabels', () => {
     expect([...layout.shown]).toEqual([0, 1])
   })
 
+  it('eases a name out as its globe leaves the view, rather than dropping it', () => {
+    // Just past the right edge, where its name would fit on the inner side.
+    const layout = setup([[1012, 0, 10]])
+    layout.shown[0] = 1
+    resolveLabels(layout, frame(layout, { delta: 0.1 }))
+    expect(layout.shown[0]).toBeCloseTo(0.6, 9)
+  })
+
+  it('keeps the focused name off another globe when no side is clear of everything', () => {
+    // A view too small for any name; a big globe on the default side.
+    const layout = setup([
+      [0, 0, 10],
+      [36, 0, 20],
+    ])
+    layout.wanted[1] = 0
+    resolveLabels(layout, frame(layout, { focus: 0, left: -15, right: 15, bottom: -15, top: 15 }))
+    expect(layout.side[0]).not.toBe(0)
+    expect(boxHitsDisc(layout.boxX[0], layout.boxY[0], layout.halfW[0], layout.halfH[0], 36, 0, 20)).toBe(false)
+    expect(layout.shown[0]).toBe(1)
+  })
+
+  it('keeps the focused name on its side while a globe only grazes it there', () => {
+    // No side clear of the view's edges; side 1's box (0, 16–28) overlaps
+    // the globe above by 1 px, under the hysteresis pad.
+    const tight = { focus: 0, left: -15, right: 15, bottom: -15, top: 15 }
+    const grazed = () => {
+      const layout = setup([
+        [0, 0, 10],
+        [0, 47, 20],
+      ])
+      layout.wanted[1] = 0
+      layout.side[0] = 1
+      return layout
+    }
+    const shown = grazed()
+    shown.shown[0] = 1
+    resolveLabels(shown, frame(shown, tight))
+    expect(shown.side[0]).toBe(1)
+    // Not yet shown, it waits for a side clear by the pad.
+    const hidden = grazed()
+    resolveLabels(hidden, frame(hidden, tight))
+    expect(hidden.side[0]).not.toBe(1)
+  })
+
+  it('fades the focused name only while all of its body is behind a nearer globe', () => {
+    const layout = setup([
+      [0, 0, 10],
+      [5, 0, 50],
+    ])
+    layout.nearness[1] = 1
+    layout.wanted[1] = 0
+    resolveLabels(layout, frame(layout, { focus: 0 }))
+    expect(layout.shown[0]).toBe(0)
+    // Its centre covered but its top showing: named, above, off the globe.
+    layout.discY[1] = -45
+    resolveLabels(layout, frame(layout, { focus: 0 }))
+    expect(layout.shown[0]).toBe(1)
+    expect(boxHitsDisc(layout.boxX[0], layout.boxY[0], layout.halfW[0], layout.halfH[0], 5, -45, 50)).toBe(false)
+  })
+
   it('eases a name out over LABEL_COLLISION_FADE_S rather than at once', () => {
     const layout = setup([[0, 0, 10]])
     layout.shown[0] = 1
@@ -338,6 +410,11 @@ describe('resolveLabels', () => {
     ])
     layout.nearness[1] = 10
     expect(eclipsed(layout, 0)).toBe(true)
+    expect(whollyEclipsed(layout, 0)).toBe(true)
+    // Centre behind, edge out: eclipsed, but not wholly.
+    layout.discX[1] = 27
+    expect(eclipsed(layout, 0)).toBe(true)
+    expect(whollyEclipsed(layout, 0)).toBe(false)
     layout.nearness[1] = -10
     expect(eclipsed(layout, 0)).toBe(false)
   })

@@ -1,10 +1,12 @@
 // When and where a body's name shows in the system view (tides-2hv.10).
 // BodyLabels runs these every frame, so they are pure and allocation-free.
 //
-// The metric is scene units per CSS pixel (upp), the ortho main view's
-// "camera distance": 1 zoomed all the way out on a desktop (~2.7 on a
-// 390 px phone, whose zoom floor is lower), 0.1 at the default zoom, and
-// ~0.2 with Jupiter or Saturn framed. A label shows when, at the current upp:
+// The metric is scene units per CSS pixel (upp) at the body's depth, the
+// main view's "camera distance". At the orbit target, in a view
+// REFERENCE_VIEW_HEIGHT (800 px) tall, it is 0.1 at the default distance,
+// ~0.2 with Jupiter or Saturn framed and ~1.4 zoomed all the way out
+// (main-view.ts' targetUnitsPerPixel); a shorter view reads larger by
+// 800 / its height. A label shows when, at its upp:
 //
 //   - its orbit is clear of its neighbours' (labelClearance) by enough
 //     pixels that two names can't stack, so Mercury and Venus come in as
@@ -12,8 +14,9 @@
 //     Enceladus;
 //   - for a moon, its whole system is resolvable: the outermost orbit spans
 //     enough pixels to tell the moons apart from the planet;
-//   - outside the focused body's system, the focused body is not zoomed so
-//     far in that the others are off in the distance (or off screen).
+//   - outside the focused body's system, the view (its upp at the orbit
+//     target) is not zoomed so far in on the focused body that the others
+//     are off in the distance (or off screen).
 //
 // The focused body's own name always shows. Where bodies still line up on
 // screen (a conjunction, a moon passing its planet), the lower-priority name
@@ -198,10 +201,17 @@ export function systemExtent(system: LabelSystem): number {
 }
 
 /**
- * The label's opacity, 0 to 1, at `upp` scene units per CSS pixel with the
- * camera on `focus` (see the header).
+ * The label's opacity, 0 to 1, at `upp` scene units per CSS pixel at the
+ * body with the camera on `focus` (see the header). `viewUpp` is the upp at
+ * the orbit target, which says how far in the view is zoomed: in
+ * perspective, a body far behind the target has a larger upp of its own.
  */
-export function labelOpacity(key: LabelKey, upp: number, focus: CameraFocus): number {
+export function labelOpacity(
+  key: LabelKey,
+  upp: number,
+  focus: CameraFocus,
+  viewUpp: number
+): number {
   const focused = focusBody(focus)
   if (key === focused) return 1
   const [clearFrom, clearTo] = isLabelMoon(key) ? MOON_CLEARANCE_PX : PLANET_CLEARANCE_PX
@@ -213,7 +223,7 @@ export function labelOpacity(key: LabelKey, upp: number, focus: CameraFocus): nu
   // Everything orbits the Sun, so with the camera on it nothing is "another
   // body's" system.
   if (focused !== 'sun' && system !== labelSystem(focused)) {
-    opacity *= 1 - THREE.MathUtils.smoothstep(bodyRadius(focused) / upp, ...FAR_IN_PX)
+    opacity *= 1 - THREE.MathUtils.smoothstep(bodyRadius(focused) / viewUpp, ...FAR_IN_PX)
   }
   return opacity
 }
@@ -293,8 +303,10 @@ export function steerClearOfSun(dir: ScreenDirection, awayX: number, awayY: numb
 // body, then LABEL_KEYS' order), and each takes the first side of its body
 // (out, along the orbit either way, in) that is on screen and clear of the
 // names already placed, of every body's globe, of the clock and of the AU
-// rings' labels, or fades out where none is. The focused body's name shows
-// wherever it lands.
+// rings' labels, or fades out where none is. A body whose globe leaves the
+// view, or that goes behind a larger, nearer one (all of it, for the focused
+// body), fades its name out too. The focused body's name shows wherever it
+// lands otherwise, off other globes where it can be.
 
 /**
  * Hysteresis on a collision, CSS px: a shown name keeps showing until it
@@ -505,9 +517,21 @@ function placeOnSide(layout: LabelLayout, frame: LabelFrame, i: number, s: numbe
 
 /**
  * Whether body i is out of sight behind a larger, nearer globe (its name
- * goes with it): depth, not priority, decides.
+ * goes with it): depth, not priority, decides. Its centre behind the globe
+ * counts.
  */
 export function eclipsed(layout: LabelLayout, i: number): boolean {
+  return behindGlobe(layout, i, 0)
+}
+
+/** As eclipsed, but only with all of body i's globe behind the other. */
+export function whollyEclipsed(layout: LabelLayout, i: number): boolean {
+  return behindGlobe(layout, i, layout.discR[i])
+}
+
+// Whether body i's centre is behind a larger, nearer globe, at least
+// `inset` px inside its edge.
+function behindGlobe(layout: LabelLayout, i: number, inset: number): boolean {
   const { discX, discY, discR, nearness, inView } = layout
   for (let j = 0; j < layout.n; j++) {
     if (
@@ -515,7 +539,7 @@ export function eclipsed(layout: LabelLayout, i: number): boolean {
       inView[j] &&
       nearness[j] > nearness[i] &&
       discR[j] > discR[i] &&
-      Math.hypot(discX[i] - discX[j], discY[i] - discY[j]) < discR[j]
+      Math.hypot(discX[i] - discX[j], discY[i] - discY[j]) < discR[j] - inset
     ) {
       return true
     }
@@ -523,15 +547,34 @@ export function eclipsed(layout: LabelLayout, i: number): boolean {
   return false
 }
 
+/** Whether body i's globe reaches into the view at all. */
+export function discOnScreen(layout: LabelLayout, frame: LabelFrame, i: number): boolean {
+  const { discX, discY, discR } = layout
+  return (
+    discX[i] + discR[i] > frame.left &&
+    discX[i] - discR[i] < frame.right &&
+    discY[i] + discR[i] > frame.bottom &&
+    discY[i] - discR[i] < frame.top
+  )
+}
+
 // Whether name i, where it is now, runs off the view or covers a placed
 // name, an obstacle it doesn't outrank, or any other body's globe, with its
-// box grown by `pad` px.
-function collides(layout: LabelLayout, frame: LabelFrame, i: number, keptCount: number, pad: number): boolean {
+// box grown by `pad` px. `globesOnly` checks the globes alone.
+function collides(
+  layout: LabelLayout,
+  frame: LabelFrame,
+  i: number,
+  keptCount: number,
+  pad: number,
+  globesOnly = false
+): boolean {
   const { boxX, boxY, halfW, halfH, kept } = layout
   const w = halfW[i] + pad
   const h = halfH[i] + pad
   const x = boxX[i]
   const y = boxY[i]
+  if (globesOnly) return hitsGlobe(layout, i, x, y, w, h)
   if (
     x - w < frame.left + LABEL_EDGE_PX ||
     x + w > frame.right - LABEL_EDGE_PX ||
@@ -559,6 +602,10 @@ function collides(layout: LabelLayout, frame: LabelFrame, i: number, keptCount: 
   for (let b = 0; b < layout.blockerCount; b++) {
     if (boxHitsDisc(x, y, w, h, layout.blockerX[b], layout.blockerY[b], layout.blockerR[b])) return true
   }
+  return hitsGlobe(layout, i, x, y, w, h)
+}
+
+function hitsGlobe(layout: LabelLayout, i: number, x: number, y: number, w: number, h: number): boolean {
   const { discX, discY, discR, inView } = layout
   for (let j = 0; j < layout.n; j++) {
     if (j !== i && inView[j] && discR[j] >= MIN_BLOCKING_DISC_PX && boxHitsDisc(x, y, w, h, discX[j], discY[j], discR[j])) {
@@ -572,6 +619,7 @@ function collides(layout: LabelLayout, frame: LabelFrame, i: number, keptCount: 
  * Place every name (see Collisions, above): fills each name's side, box and
  * direction, and eases `shown` toward 1 where it fits, 0 where it doesn't.
  * A name keeps last frame's side while that stays clear, so it doesn't hop.
+ * One fading out keeps the side and distance it last had.
  */
 export function resolveLabels(layout: LabelLayout, frame: LabelFrame): void {
   const { n, wanted, shown, side, kept } = layout
@@ -582,7 +630,9 @@ export function resolveLabels(layout: LabelLayout, frame: LabelFrame): void {
     if (i < 0 || (k >= 0 && i === frame.focus)) continue
     const focused = i === frame.focus
     let target = 0
-    if (wanted[i] >= MIN_NAME_OPACITY && (focused || !eclipsed(layout, i))) {
+    // The focused body is named while any of it shows.
+    const hidden = focused ? whollyEclipsed(layout, i) : eclipsed(layout, i)
+    if (wanted[i] >= MIN_NAME_OPACITY && discOnScreen(layout, frame, i) && !hidden) {
       // The default side first, so a name goes back to it once it's free;
       // then the side it is on, so it doesn't hop between the others. It
       // stays where it is (if shown) until that is overlapped by the pad,
@@ -596,6 +646,20 @@ export function resolveLabels(layout: LabelLayout, frame: LabelFrame): void {
         placeOnSide(layout, frame, i, s)
         const pad = staying && s === was ? -LABEL_COLLISION_PAD_PX : LABEL_COLLISION_PAD_PX
         if (!collides(layout, frame, i, keptCount, pad)) {
+          clear = true
+          side[i] = s
+        }
+      }
+      // Nothing ahead of the focused name but the view's edges, the clock
+      // and the globes, as it is placed first and outranks the obstacles:
+      // with no side clear of all of them, it still keeps off the globes,
+      // staying on its side as above until a globe overlaps it by the pad.
+      for (let tried = -1; focused && !clear && tried < LABEL_SIDES.length; tried++) {
+        const s = tried === -1 ? was : tried
+        if (tried >= 0 && s === was) continue
+        placeOnSide(layout, frame, i, s)
+        const pad = staying && s === was ? -LABEL_COLLISION_PAD_PX : LABEL_COLLISION_PAD_PX
+        if (!collides(layout, frame, i, keptCount, pad, true)) {
           clear = true
           side[i] = s
         }
