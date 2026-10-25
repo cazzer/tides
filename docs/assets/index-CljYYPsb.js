@@ -5376,14 +5376,50 @@ float cloudFogEased(float sigma, float side, float edge, float ease) {
   return ease < 1.0 ? mix(edge > 0.0 ? side : 0.0, sigma, ease) : sigma;
 }
 #endif
+
+// The column (cloudColumn()) the march from inside reads at uv, r from the
+// centre and s along the ray from the eye (mu, the sine of its elevation
+// there), over ground at terrain, its steps ds apart: at a pixel's width
+// there, stretched by the slant toward a top or a base, but within the
+// deck's height, across a side, what a step meets; and no finer than a
+// step's way across the map (cloudMarchLod(), tides-01v.12). How much of
+// the deck the ray is in eases over a step past its base and past the
+// tallest top, read where the ray is rather than (as it was) whether the
+// last step was in it, so the mip changes smoothly along the ray and not as
+// the steps slide along it (tides-16z). From above the tops around the
+// camera, all of it is slant.
+vec4 cloudMarchColumn(vec2 uv, float r, float mu, float terrain, float s, float ds, float spread,
+    bool fromAbove) {
+  float h = r - uSeaLevel - terrain - CLOUD_CLEARANCE;
+  float deckH = CLOUD_UNITS_PER_KM * uCloudMaxKm;
+  float deck = fromAbove ? 0.0
+    : smoothstep(-MARCH_STEP, 0.0, h) * (1.0 - smoothstep(deckH, deckH + MARCH_STEP, h));
+  float slant = mix(max(abs(mu), 0.05), 1.0, deck);
+  float lod = max(cloudLod(spread * s / slant),
+    cloudMarchLod(ds * sqrt(max(1.0 - mu * mu, 0.0))));
+  return cloudColumn(uv, lod, terrain);
+}
+
 #endif
 
 void main() {
   vec3 d = normalize(vRayDir);
   // Derivatives before any discard: after one they are undefined.
   float footprint = max(length(dFdx(vLocal)), length(dFdy(vLocal)));
+#ifdef FLIP_SIDED
+  // The ray's spread: a pixel's width on the image plane a unit in front of
+  // the eye, the same anywhere on screen. A pixel's angle falls off toward
+  // the screen's edges, so turning the camera would change the mip each ray
+  // reads, and close up, the detail that shows (tides-16z). The price of
+  // holding still as the camera turns: toward the corners this is wider
+  // than a pixel's own angle (by up to 1/cos² of the ray's angle off the
+  // axis), so the clouds there read up to about a mip coarser.
+  vec3 plane = vRayDir / vViewDepth;
+  float spread = max(length(dFdx(plane)), length(dFdy(plane)));
+#else
   // The ray's spread, a pixel's angle; unlike vLocal's, smooth across facets.
   float spread = max(length(dFdx(d)), length(dFdy(d)));
+#endif
   float lod = cloudLod(footprint);
 
 #ifdef CLOUD_FLAT
@@ -5466,6 +5502,9 @@ void main() {
   if (discOuter <= 0.0) discard;
   float sOuter = -be - sqrt(discOuter);
   float sStart = max(sOuter, sNear);
+  // Where the steps count from: the eye, or from outside the reach, where
+  // the ray comes into it.
+  float sOrigin = max(sOuter, 0.0);
   float sEnd = -be + sqrt(discOuter);
   float inner = uSeaLevel + CLOUD_CLEARANCE;
   float discInner = be * be - (dot(eye, eye) - inner * inner);
@@ -5476,13 +5515,26 @@ void main() {
     sEnd = -be - sqrt(discInner) > sStart ? -be - sqrt(discInner) : sSea;
   }
   if (sEnd <= sStart) discard;
-  // Steps of MARCH_STEP from the start, the last cut short, so that from
+  // Steps of MARCH_STEP from the origin, the last cut short, so that from
   // ray to ray the steps slide rather than jump (as they would spread evenly
   // over each ray's span, a step's worth at the far end where the count
-  // changes: bands, tides-01v.8.12). At least three, and longer only for
-  // rays skimming the sea from the shell's top, by under 2%.
-  float ds = max(min(MARCH_STEP, (sEnd - sStart) / 3.0), (sEnd - sStart) / float(MARCH_STEPS));
-  int steps = int(clamp(ceil((sEnd - sStart) / ds - 1e-3), 1.0, float(MARCH_STEPS)));
+  // changes: bands, tides-01v.8.12). At least three over the span from the
+  // origin, and longer only for rays skimming the sea from the shell's top,
+  // by under 2%. The march starts at the near plane, then takes the steps
+  // on from there: not steps from the near plane itself, whose reach along
+  // a ray (near over the cosine of the ray's angle off the view axis)
+  // changes as the camera turns, and as the near plane follows the ground,
+  // moving every step over the clouds, which then swam (tides-16z). From
+  // the eye, a ray's steps hold still as the camera turns about it, and all
+  // rays' steps keep the same phase, so still no bands. Only the first step,
+  // within one of the near plane, slides. sEnd - sGrid is at most the span,
+  // so the steps stay within MARCH_STEPS. Mirrored by cloud-layer.ts
+  // marchSteps.
+  float span = sEnd - sOrigin;
+  float ds = max(min(MARCH_STEP, span / 3.0), span / float(MARCH_STEPS));
+  // The step at or before the start.
+  float sGrid = sOrigin + ds * floor((sStart - sOrigin) / ds);
+  int steps = int(clamp(ceil((sEnd - sGrid) / ds - 1e-3), 1.0, float(MARCH_STEPS)));
   // The march's steps at either end that lie above the ceiling would all
   // find clear air, so it leaves them out (tides-01v.8.10): from each end
   // the ray is read against the ceiling, then moved on to where it comes
@@ -5519,8 +5571,8 @@ void main() {
     sLast -= CEILING_REACH;
   }
   // A step clear of each, for the first to stand above the cloud.
-  int iFirst = max(int(floor((sFirst - sStart) / ds)) - 1, 0);
-  int iLast = min(int(ceil((sLast - sStart) / ds)) + 1, steps);
+  int iFirst = max(int(floor((sFirst - sGrid) / ds)) - 1, 0);
+  int iLast = min(int(ceil((sLast - sGrid) / ds)) + 1, steps);
   // A column holds cloud from its base to its top, where it is at least
   // CLOUD_MIN_ALPHA. Over each step the march takes the ray's altitude and
   // its column (top, base and opacity) to change linearly, as the fog below
@@ -5530,18 +5582,29 @@ void main() {
   // or into a side, where the ray was already between the base and the top
   // of the column it steps into, or the cloud beside it came up to showing.
   // So a ray that clips a cloud between two steps still meets it, and from
-  // ray to ray at the same place (tides-01v.8.12). Through a faint column's
-  // top or base it carries on. From above the tops around the camera, as
-  // from outside, a top is met however faint (the shading drops it): carried
-  // on, grazing rays would find sides along every far edge, a step apart.
-  // Mirrored by cloud-layer.ts marchCrossing. A march that starts in a cloud
-  // crosses its fog first (fogExtinction()), to where it leaves that cloud,
-  // and from there on as from anywhere else. Past the fog's start, whose
-  // depth the depth test then sees (gl_FragDepth below), nothing hides what
-  // lies beyond the ground, so the march ends where it goes under the
-  // ground mesh itself (cloudGround()), within the step: into a ridge, not
-  // only the ground the columns stand on (tides-01v.8.13). The mesh's
-  // vertices lie a few steps apart.
+  // ray to ray at the same place (tides-01v.8.12). That place is still
+  // where the field taken linear over the step crosses. The steps hold
+  // still as the camera turns (above), but in flight they slide along each
+  // ray by the eye's motion, and the crossing moves within its step with
+  // them (tides-16z: reading the field again within the hit's step pinned
+  // it, but cost about half a millisecond a frame inside the deck). Through
+  // a faint column's top or base it carries on. From above the tops around
+  // the camera, as from outside, a top is met however faint (the shading
+  // drops it): carried on, grazing rays would find sides along every far
+  // edge, a step apart. Mirrored by cloud-layer.ts marchCrossing. A march
+  // that starts in a cloud crosses its fog first (fogExtinction()), to
+  // where it leaves that cloud, and from there on as from anywhere else.
+  // Past the fog's start, whose depth the depth test then sees
+  // (gl_FragDepth below), nothing hides what lies beyond the ground, so the
+  // march ends where it goes under the ground mesh itself (cloudGround()),
+  // within the step: into a ridge, not only the ground the columns stand
+  // on (tides-01v.8.13). The mesh's vertices lie a few steps apart.
+  if (iFirst <= iLast) {
+    // Whether the camera is above the tops around it, for every step.
+    vec2 uvEye = cloudUv(normalize(eye));
+    float altEye = length(eye) - uSeaLevel;
+    fromAbove = altEye > cloudColumn(uvEye, NEAR_TOPS_LOD, cloudTerrain(uvEye)).z;
+  }
   float sPrev = sStart;
   float altPrev = 0.0;
   float gapPrev = 0.0;
@@ -5566,21 +5629,14 @@ void main() {
   vec2 fogShade = vec2(0.0);
   for (int i = iFirst; i <= MARCH_STEPS; i++) {
     if (i > iLast) break;
-    float s = min(sStart + ds * float(i), sEnd);
+    float s = i == 0 ? sStart : min(sGrid + ds * float(i), sEnd);
     if (s <= sSkip) continue;
     float stepLen = s - sPrev;
     vec3 q = eye + d * s;
     float r = length(q);
     vec2 uvq = cloudUv(q / r);
-    // A pixel's width on the map: stretched by the slant toward a top or a
-    // base, but across a side, what a step within the deck's height meets;
-    // and no finer than a step's way across the map (cloudMarchLod()).
-    bool inDeck = !fromAbove && i > iFirst && underPrev <= 0.0
-      && -underPrev < CLOUD_UNITS_PER_KM * uCloudMaxKm;
     float mu = dot(d, q / r);
-    float lodq = max(cloudLod(spread * s / (inDeck ? 1.0 : max(abs(mu), 0.05))),
-      cloudMarchLod(ds * sqrt(max(1.0 - mu * mu, 0.0))));
-    vec4 colq = cloudColumn(uvq, lodq, cloudTerrain(uvq));
+    vec4 colq = cloudMarchColumn(uvq, r, mu, cloudTerrain(uvq), s, ds, spread, fromAbove);
     // Above the top, and below the base.
     float alt = r - uSeaLevel;
     float gap = alt - colq.z;
@@ -5624,10 +5680,6 @@ void main() {
         under = mu < 0.0 ? 1e-6 : colq.y - alt;
       }
     } else if (i == iFirst) {
-      vec2 uvEye = cloudUv(normalize(eye));
-      float terrainEye = cloudTerrain(uvEye);
-      float altEye = length(eye) - uSeaLevel;
-      fromAbove = altEye > cloudColumn(uvEye, NEAR_TOPS_LOD, terrainEye).z;
       if (inCloud) {
         // The march starts in a cloud: the camera's, or one the near plane
         // cuts. Its fog runs from the eye (or where the ray comes within
@@ -5642,7 +5694,7 @@ void main() {
         sigmaPrev = cloudFogEased(sigmaPrev, sidePrev, cloudFogEdge(colq, alt), fogEase);
 #endif
         groundPrev = alt - cloudGround(uvq);
-        fogClear = exp(-sigmaPrev * (s - max(sOuter, 0.0)));
+        fogClear = exp(-sigmaPrev * (s - sOrigin));
         fogShade = (1.0 - fogClear)
           * vec2(clamp(-gap / max(colq.z - colq.y, 1e-6), 0.0, 1.0), colq.x);
       }
@@ -6781,7 +6833,7 @@ void main() {
   #include <colorspace_fragment>
 }
 `;function TIe({radius:n}){const e=Da(Lo,CIe),t=X.useMemo(()=>xIe(yIe),[]);X.useEffect(()=>()=>t.dispose(),[t]);const i=X.useMemo(()=>({uMap:{value:e},uColor:{value:new ht(SIe)},uOpacity:{value:bIe},uZenith:{value:new W(0,1,0)}}),[e]),r=X.useRef(null);return Cn(()=>{r.current&&qR(r.current,et.getState().timestamp??Date.now())}),k.jsxs("mesh",{ref:r,onBeforeRender:(a,s,o)=>{r.current&&(KR(r.current,o),PV(o,i.uZenith.value))},frustumCulled:!1,renderOrder:-1,scale:[n,n,n],children:[k.jsx("primitive",{attach:"geometry",object:t}),k.jsx("shaderMaterial",{uniforms:i,vertexShader:MIe,fragmentShader:EIe,transparent:!0,blending:Cl,depthWrite:!1,side:Jr})]})}function wIe({radius:n=JR}){return k.jsx(X.Suspense,{fallback:null,children:k.jsx(TIe,{radius:n})})}function RIe(){const n=new r2("white",S2);return n.position.set(0,0,0),n}function DIe(n,e){n.target.position.set(...wA(e))}function OIe(){const n=X.useMemo(RIe,[]);return X.useEffect(()=>()=>n.dispose(),[n]),Cn(()=>{const{timestamp:e}=et.getState();typeof e=="number"&&DIe(n,e)}),k.jsxs(k.Fragment,{children:[k.jsx("primitive",{object:n}),k.jsx("primitive",{object:n.target})]})}function NIe(){return k.jsxs(k.Fragment,{children:[k.jsx("ambientLight",{color:Kk,intensity:FR}),k.jsx(OIe,{})]})}const tL=["January","February","March","April","May","June","July","August","September","October","November","December"],tw=20,_3=tw+1,X4=3.5,BIe="#404040",GV=8,LIe=6*Math.PI/180,UIe=12*Math.PI/180,fA=new Oa({color:16777215,side:Jr,transparent:!0,depthWrite:!1}),HV=fA.clone();HV.depthTest=!1;const FIe=new Intl.DateTimeFormat(void 0,{weekday:"short"}),PIe=new Intl.DateTimeFormat(void 0,{year:"numeric",month:"short",day:"numeric"}),GIe=new Intl.DateTimeFormat(void 0,{hour:"numeric",minute:"2-digit",second:"2-digit"});function HIe(n){return`${FIe.format(n)}, ${PIe.format(n)}
-${GIe.format(n)}`}function zIe(n){return n-2*Math.PI*Math.round(n/(2*Math.PI))}function kIe(n,e,t){const i=Math.min(1,Math.max(0,(n-e)/(t-e)));return i*i*(3-2*i)}function VIe({radius:n,calendar:e=!0}){const t=X.useRef(null),i=X.useRef(null),r=X.useRef([]),{handleFocus:a}=IR(),s=et(C=>C.setPlanet),o=et(C=>C.showPlanets);X.useEffect(()=>{e&&s("clock",t)},[s,e]);const c=X.useMemo(()=>{const C=[];for(let v=0;v<256;v++){const S=v/256*2*Math.PI,_=n*Math.cos(S),x=n*Math.sin(S);C.push(new W(_,0,x))}return C.push(C[0]),new Xt().setFromPoints(C)},[n]);X.useEffect(()=>()=>c.dispose(),[c]);const[u,h]=X.useState(()=>new Date(et.getState().timestamp??Date.now()).getFullYear()),g=X.useMemo(()=>Lse(u),[u]),A=X.useRef(null);return Cn(()=>{if(!e)return;const C=et.getState().timestamp??Date.now(),v=TA(C),S=Math.cos(v),_=Math.sin(v),x=_3+GV;t.current?.position.set(x*S,.5,-x*_);for(let T=0;T<tL.length;T++){const N=r.current[T];N&&(N.fillOpacity=kIe(Math.abs(zIe(g[T]-v)),LIe,UIe))}const E=i.current;if(!E)return;E.position.set(_3*S,.5,-_3*_),E.rotation.set(-Math.PI/2,0,v);const w=Math.floor(C/1e3);if(w!==A.current){A.current=w;const T=new Date(C);E.text=HIe(T),E.sync();const N=T.getFullYear();N!==u&&h(N)}}),k.jsxs("group",{children:[k.jsx("line",{geometry:c,children:k.jsx("lineBasicMaterial",{attach:"material",color:"#BFBBDA",linewidth:10,transparent:!0,opacity:.2})}),e&&k.jsxs(k.Fragment,{children:[k.jsx("object3D",{ref:t,"userData-focus":"clock"}),k.jsx(jI,{ref:i,"userData-focus":"clock",onClick:a,material:o?HV:fA,renderOrder:o?3:0,scale:[2,2,2],color:"white",outlineWidth:"6%",outlineColor:"black",anchorX:"left",anchorY:"middle",textAlign:"left",children:""}),tL.map((C,v)=>k.jsx(jI,{ref:S=>{r.current[v]=S},material:fA,scale:[X4,X4,X4],color:BIe,anchorX:"left",anchorY:"middle",position:[tw*Math.cos(g[v]),0,-tw*Math.sin(g[v])],rotation:[-Math.PI/2,0,g[v]],children:C},C))]})]})}const NA=1440*60*1e3,nL=44,fb=1.2,iL=62.5,XIe=66,WIe=63.5,W4=2.2,jIe=178*NA,YIe=6*NA,rL=200*NA,ZIe=400*NA,aL=9*NA,nw=6*NA,sL=["Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"],x3=Math.PI/6;function JIe(n){const e=2*Math.PI,t=(n%e+e)%e;return Math.min(11,Math.floor(t/x3))}function qIe(n){const e=n.time.date.getTime();return{quarter:n.quarter,t:e,angle:TA(e)}}function S0(n){return qIe(vse(new Date(n)))}function KIe(n,e){const t=[];for(let i=S0(n);i.t<=e;i=S0(i.t+nw))t.push(i);return t}function QIe(n,e,t){const i=Math.min(1,Math.max(0,(n-e)/(t-e)));return i*i*(3-2*i)}function $Ie(n){return QIe(jIe-Math.abs(n),0,YIe)}class eve{events=[];before=null;after=null;lastNow=Number.NaN;update(e){const t=e-rL,i=e+rL,r=this.events;Math.abs(e-this.lastNow)<=ZIe||(r.length=0,r.push(...KIe(t,i)),this.before=S0(r[0].t-aL),this.after=S0(r[r.length-1].t+nw)),this.lastNow=e;let a=this.before,s=this.after;for(;s.t<=i;)r.push(s),s=S0(s.t+nw);for(;r.length>0&&r[r.length-1].t>i;)s=r.pop();for(;a.t>t;)r.unshift(a),a=S0(a.t-aL);for(;r.length>0&&r[0].t<=t;)a=r.shift();this.before=a,this.after=s}}const iw=56,zV=new ht("#404040"),tve=new ht("#9C98B8"),rw=.75*fb,aw=32;function nve(){const n=new ed().absarc(0,0,fb,0,2*Math.PI),e=new GI().moveTo(-rw,0).absarc(0,0,rw,Math.PI,2*Math.PI).closePath();return n.holes.push(e),new Rv(n,aw/2)}function ive(){const n=nve();return[new _A(rw,fb,aw),n,new Mv(fb,aw),n]}function rve(n){return Array.from({length:iw},()=>{const e=new Ci(n,new Oa({color:zV,side:Jr,transparent:!0,depthWrite:!1}));return e.visible=!1,e})}function ave(){return et.getState().timestamp??Date.now()}function sve(){const[n]=X.useState(()=>new eve),[e]=X.useState(ive),[t]=X.useState(()=>rve(e[0]));return X.useEffect(()=>()=>{new Set(e).forEach(i=>i.dispose()),t.forEach(i=>i.material.dispose())},[e,t]),Cn(()=>{const i=ave();n.update(i);let r=0,a=!1;for(const s of n.events){if(r===iw)break;const o=s.t-i,c=$Ie(o);if(c<=0)continue;const u=!a&&o>0;u&&(a=!0);const h=t[r++],g=h.material;h.visible=!0,h.geometry=e[s.quarter],h.position.set(nL*Math.cos(s.angle),0,-nL*Math.sin(s.angle)),h.rotation.set(-Math.PI/2,0,s.angle+(s.quarter===3?Math.PI:0)),g.opacity=c,g.color.copy(u?tve:zV)}for(;r<iw;r++)t[r].visible=!1}),k.jsx("group",{children:t.map((i,r)=>k.jsx("primitive",{object:i},r))})}const oL=256,lL="#404040",ove="#9C98B8",kV=fA.clone();kV.depthTest=!1;const cL=new $r({color:"#BFBBDA",transparent:!0,opacity:.15});function Fx(n,e){return new W(n*Math.cos(e),0,-n*Math.sin(e))}function lve(){return et.getState().timestamp??Date.now()}function cve(){const n=X.useRef([]),e=X.useRef(null),t=et(a=>a.showPlanets),i=X.useMemo(()=>new Xt().setFromPoints(Array.from({length:oL},(a,s)=>Fx(iL,s/oL*2*Math.PI))),[]),r=X.useMemo(()=>new Xt().setFromPoints(sL.flatMap((a,s)=>[Fx(iL,s*x3),Fx(XIe,s*x3)])),[]);return X.useEffect(()=>()=>{i.dispose(),r.dispose()},[i,r]),Cn(()=>{const a=JIe(TA(lve()));a!==e.current&&(e.current=a,n.current.forEach((s,o)=>{s&&(s.color=o===a?ove:lL)}))}),k.jsxs("group",{children:[k.jsx("lineLoop",{geometry:i,material:cL}),k.jsx("lineSegments",{geometry:r,material:cL}),sL.map((a,s)=>{const o=(s+.5)*x3;return k.jsx(jI,{ref:c=>{n.current[s]=c,e.current=null},material:t?kV:fA,renderOrder:t?3:0,scale:[W4,W4,W4],color:lL,anchorX:"left",anchorY:"middle",position:Fx(WIe,o),rotation:[-Math.PI/2,0,o],children:a},a)})]})}const uL=new W,fL=new Zn,uve=new W;function fve(n,e){return n.matrixWorld.decompose(uL,fL,uve),e.copy(uL).negate().normalize().applyQuaternion(fL.invert())}function hve(n,e){const t=new _A(n,e,256,1);t.rotateX(-Math.PI/2);const i=t.attributes.position,r=t.attributes.uv;for(let a=0;a<i.count;a++){const s=Math.hypot(i.getX(a),i.getZ(a));r.setXY(a,(s-n)/(e-n),.5)}return t}const N0=16;function dve(n,e,t,i){if(n.length>N0)throw new Error(`At most ${N0} ring bands, got ${n.length}`);const r=t-e;for(let a=0;a<N0;a++){const s=n[a];s?i[a].set(((s.inner+s.outer)/2-e)/r,(s.outer-s.inner)/2/r,s.opacity):i[a].set(0,0,0)}return n.length}class VV extends Lo{colorSpace;anisotropy=1;constructor(e,t){super(t),this.colorSpace=e}load(e,t,i,r){return super.load(e,a=>{a.colorSpace=this.colorSpace,a.anisotropy=this.anisotropy,t?.(a)},i,r)}}const QR=new i2,sw=new VV(Yr,QR),gve=new VV(hl,QR);function XV(n,{color:e=!0}={}){const t=n.filter(a=>a!==void 0);if(t.length===0)throw new Error("usePlanetTextures needs a url");const i=fn(a=>a.gl.capabilities.getMaxAnisotropy()),r=Da(e?sw:gve,t,a=>{a.anisotropy=i});return n.map(a=>a===void 0?null:r[t.indexOf(a)])}const ow=typeof createImageBitmap<"u"&&pve(navigator.userAgent)?new x6(QR):null;ow?.setOptions({imageOrientation:"flipY",premultiplyAlpha:"none"});function pve(n){if(/^((?!chrome|android).)*safari/i.test(n))return Number(n.match(/Version\/(\d+)/)?.[1]??0)>=17;const e=n.match(/Firefox\/(\d+)/);return!e||Number(e[1])>=98}function mve(n,e,t,i){if(!ow){sw.anisotropy=e,sw.load(n,t,void 0,i);return}ow.load(n,r=>{const a=new fi(r);a.flipY=!1,a.colorSpace=Yr,a.anisotropy=e,a.needsUpdate=!0,t(a)},void 0,i)}const Ave="/tides/assets/jupiter-4k-BOt-qf2V.ktx2",Cve="/tides/assets/mars-4k-BPHSRr6e.ktx2",Ive="/tides/assets/mars-8k-CAbjShBW.ktx2",vve="/tides/assets/mercury-4k-B998r4Ri.ktx2",yve="/tides/assets/mercury-8k-CdrHaz1d.ktx2",_ve="/tides/assets/saturn-4k-B1FFEWhX.ktx2",xve="/tides/assets/venus-4k-CQje4-II.ktx2",hL=Object.assign({"./assets/flight/jupiter-4k.ktx2":Ave,"./assets/flight/mars-4k.ktx2":Cve,"./assets/flight/mars-8k.ktx2":Ive,"./assets/flight/mercury-4k.ktx2":vve,"./assets/flight/mercury-8k.ktx2":yve,"./assets/flight/saturn-4k.ktx2":_ve,"./assets/flight/venus-4k.ktx2":xve});function Sve(n,e){return e>=8192&&hL[`./assets/flight/${n}-8k.ktx2`]||hL[`./assets/flight/${n}-4k.ktx2`]}const bve=40;function Mve(n,e){return n<bve*e}function Eve(n){return n("EXT_texture_compression_bptc")||n("WEBGL_compressed_texture_etc")?!0:n("WEBGL_compressed_texture_etc1")?!1:n("WEBGL_compressed_texture_s3tc")&&n("WEBGL_compressed_texture_s3tc_srgb")}function Tve(n){let e=new Map,t=0;return{request(i){let r=e.get(i);if(!r){const a=t;r=n(i,()=>a===t).then(s=>a===t?s:(s.dispose(),null),s=>(a===t&&console.warn(`Flight texture ${i} failed to load; keeping the 2k map`,s),null)),e.set(i,r)}return r},release(){t++;const i=e;e=new Map;for(const r of i.values())r.then(a=>a?.dispose())}}}let hb=null,lw=null;const db=new Set;async function wve(n,e,t){hb??=fae(()=>import("./ktx2Loader-Dn-lIkfZ.js"),[]).then(r=>r.createFlightKtx2Loader(e));const i=await(await hb).loadAsync(n);return t()&&(i.anisotropy=e.capabilities.getMaxAnisotropy(),e.initTexture(i)),i}function Rve(n){return lw??=Tve((e,t)=>{const i=wve(e,n,t);db.add(i);const r=()=>db.delete(i);return i.then(r,r),i})}function Dve(){lw?.release(),lw=null;const n=Promise.allSettled([...db]);db.clear();const e=hb;hb=null,n.then(()=>e?.then(t=>t.dispose(),()=>{}))}function Ove(n,e){const t=SV(e.capabilities.maxTextureSize);if(!(t===null||!Eve(i=>e.extensions.has(i))))return Sve(n,t)}const dL=new W,Nve=new W;function Bve(n,e,t){const i=et(h=>h.shipMode),r=fn(h=>h.gl),a=X.useMemo(()=>n?Ove(n,r):void 0,[n,r]),[s,o]=X.useState(null),c=X.useRef(!1),u=X.useRef(!0);return X.useEffect(()=>(u.current=!0,()=>{u.current=!1}),[]),Cn(({camera:h})=>{const g=e.current;if(!i||!a||c.current||!g)return;g.getWorldPosition(dL);const A=t*g.getWorldScale(Nve).x;Mve(h.position.distanceTo(dL)-A,A)&&(c.current=!0,Rve(r).request(a).then(C=>{u.current&&o(C)}))}),i?s:null}var Lve=`varying vec2 vUv;
+${GIe.format(n)}`}function zIe(n){return n-2*Math.PI*Math.round(n/(2*Math.PI))}function kIe(n,e,t){const i=Math.min(1,Math.max(0,(n-e)/(t-e)));return i*i*(3-2*i)}function VIe({radius:n,calendar:e=!0}){const t=X.useRef(null),i=X.useRef(null),r=X.useRef([]),{handleFocus:a}=IR(),s=et(C=>C.setPlanet),o=et(C=>C.showPlanets);X.useEffect(()=>{e&&s("clock",t)},[s,e]);const c=X.useMemo(()=>{const C=[];for(let v=0;v<256;v++){const S=v/256*2*Math.PI,_=n*Math.cos(S),x=n*Math.sin(S);C.push(new W(_,0,x))}return C.push(C[0]),new Xt().setFromPoints(C)},[n]);X.useEffect(()=>()=>c.dispose(),[c]);const[u,h]=X.useState(()=>new Date(et.getState().timestamp??Date.now()).getFullYear()),g=X.useMemo(()=>Lse(u),[u]),A=X.useRef(null);return Cn(()=>{if(!e)return;const C=et.getState().timestamp??Date.now(),v=TA(C),S=Math.cos(v),_=Math.sin(v),x=_3+GV;t.current?.position.set(x*S,.5,-x*_);for(let T=0;T<tL.length;T++){const N=r.current[T];N&&(N.fillOpacity=kIe(Math.abs(zIe(g[T]-v)),LIe,UIe))}const E=i.current;if(!E)return;E.position.set(_3*S,.5,-_3*_),E.rotation.set(-Math.PI/2,0,v);const w=Math.floor(C/1e3);if(w!==A.current){A.current=w;const T=new Date(C);E.text=HIe(T),E.sync();const N=T.getFullYear();N!==u&&h(N)}}),k.jsxs("group",{children:[k.jsx("line",{geometry:c,children:k.jsx("lineBasicMaterial",{attach:"material",color:"#BFBBDA",linewidth:10,transparent:!0,opacity:.2})}),e&&k.jsxs(k.Fragment,{children:[k.jsx("object3D",{ref:t,"userData-focus":"clock"}),k.jsx(jI,{ref:i,"userData-focus":"clock",onClick:a,material:o?HV:fA,renderOrder:o?3:0,scale:[2,2,2],color:"white",outlineWidth:"6%",outlineColor:"black",anchorX:"left",anchorY:"middle",textAlign:"left",children:""}),tL.map((C,v)=>k.jsx(jI,{ref:S=>{r.current[v]=S},material:fA,scale:[X4,X4,X4],color:BIe,anchorX:"left",anchorY:"middle",position:[tw*Math.cos(g[v]),0,-tw*Math.sin(g[v])],rotation:[-Math.PI/2,0,g[v]],children:C},C))]})]})}const NA=1440*60*1e3,nL=44,fb=1.2,iL=62.5,XIe=66,WIe=63.5,W4=2.2,jIe=178*NA,YIe=6*NA,rL=200*NA,ZIe=400*NA,aL=9*NA,nw=6*NA,sL=["Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"],x3=Math.PI/6;function JIe(n){const e=2*Math.PI,t=(n%e+e)%e;return Math.min(11,Math.floor(t/x3))}function qIe(n){const e=n.time.date.getTime();return{quarter:n.quarter,t:e,angle:TA(e)}}function S0(n){return qIe(vse(new Date(n)))}function KIe(n,e){const t=[];for(let i=S0(n);i.t<=e;i=S0(i.t+nw))t.push(i);return t}function QIe(n,e,t){const i=Math.min(1,Math.max(0,(n-e)/(t-e)));return i*i*(3-2*i)}function $Ie(n){return QIe(jIe-Math.abs(n),0,YIe)}class eve{events=[];before=null;after=null;lastNow=Number.NaN;update(e){const t=e-rL,i=e+rL,r=this.events;Math.abs(e-this.lastNow)<=ZIe||(r.length=0,r.push(...KIe(t,i)),this.before=S0(r[0].t-aL),this.after=S0(r[r.length-1].t+nw)),this.lastNow=e;let a=this.before,s=this.after;for(;s.t<=i;)r.push(s),s=S0(s.t+nw);for(;r.length>0&&r[r.length-1].t>i;)s=r.pop();for(;a.t>t;)r.unshift(a),a=S0(a.t-aL);for(;r.length>0&&r[0].t<=t;)a=r.shift();this.before=a,this.after=s}}const iw=56,zV=new ht("#404040"),tve=new ht("#9C98B8"),rw=.75*fb,aw=32;function nve(){const n=new ed().absarc(0,0,fb,0,2*Math.PI),e=new GI().moveTo(-rw,0).absarc(0,0,rw,Math.PI,2*Math.PI).closePath();return n.holes.push(e),new Rv(n,aw/2)}function ive(){const n=nve();return[new _A(rw,fb,aw),n,new Mv(fb,aw),n]}function rve(n){return Array.from({length:iw},()=>{const e=new Ci(n,new Oa({color:zV,side:Jr,transparent:!0,depthWrite:!1}));return e.visible=!1,e})}function ave(){return et.getState().timestamp??Date.now()}function sve(){const[n]=X.useState(()=>new eve),[e]=X.useState(ive),[t]=X.useState(()=>rve(e[0]));return X.useEffect(()=>()=>{new Set(e).forEach(i=>i.dispose()),t.forEach(i=>i.material.dispose())},[e,t]),Cn(()=>{const i=ave();n.update(i);let r=0,a=!1;for(const s of n.events){if(r===iw)break;const o=s.t-i,c=$Ie(o);if(c<=0)continue;const u=!a&&o>0;u&&(a=!0);const h=t[r++],g=h.material;h.visible=!0,h.geometry=e[s.quarter],h.position.set(nL*Math.cos(s.angle),0,-nL*Math.sin(s.angle)),h.rotation.set(-Math.PI/2,0,s.angle+(s.quarter===3?Math.PI:0)),g.opacity=c,g.color.copy(u?tve:zV)}for(;r<iw;r++)t[r].visible=!1}),k.jsx("group",{children:t.map((i,r)=>k.jsx("primitive",{object:i},r))})}const oL=256,lL="#404040",ove="#9C98B8",kV=fA.clone();kV.depthTest=!1;const cL=new $r({color:"#BFBBDA",transparent:!0,opacity:.15});function Fx(n,e){return new W(n*Math.cos(e),0,-n*Math.sin(e))}function lve(){return et.getState().timestamp??Date.now()}function cve(){const n=X.useRef([]),e=X.useRef(null),t=et(a=>a.showPlanets),i=X.useMemo(()=>new Xt().setFromPoints(Array.from({length:oL},(a,s)=>Fx(iL,s/oL*2*Math.PI))),[]),r=X.useMemo(()=>new Xt().setFromPoints(sL.flatMap((a,s)=>[Fx(iL,s*x3),Fx(XIe,s*x3)])),[]);return X.useEffect(()=>()=>{i.dispose(),r.dispose()},[i,r]),Cn(()=>{const a=JIe(TA(lve()));a!==e.current&&(e.current=a,n.current.forEach((s,o)=>{s&&(s.color=o===a?ove:lL)}))}),k.jsxs("group",{children:[k.jsx("lineLoop",{geometry:i,material:cL}),k.jsx("lineSegments",{geometry:r,material:cL}),sL.map((a,s)=>{const o=(s+.5)*x3;return k.jsx(jI,{ref:c=>{n.current[s]=c,e.current=null},material:t?kV:fA,renderOrder:t?3:0,scale:[W4,W4,W4],color:lL,anchorX:"left",anchorY:"middle",position:Fx(WIe,o),rotation:[-Math.PI/2,0,o],children:a},a)})]})}const uL=new W,fL=new Zn,uve=new W;function fve(n,e){return n.matrixWorld.decompose(uL,fL,uve),e.copy(uL).negate().normalize().applyQuaternion(fL.invert())}function hve(n,e){const t=new _A(n,e,256,1);t.rotateX(-Math.PI/2);const i=t.attributes.position,r=t.attributes.uv;for(let a=0;a<i.count;a++){const s=Math.hypot(i.getX(a),i.getZ(a));r.setXY(a,(s-n)/(e-n),.5)}return t}const N0=16;function dve(n,e,t,i){if(n.length>N0)throw new Error(`At most ${N0} ring bands, got ${n.length}`);const r=t-e;for(let a=0;a<N0;a++){const s=n[a];s?i[a].set(((s.inner+s.outer)/2-e)/r,(s.outer-s.inner)/2/r,s.opacity):i[a].set(0,0,0)}return n.length}class VV extends Lo{colorSpace;anisotropy=1;constructor(e,t){super(t),this.colorSpace=e}load(e,t,i,r){return super.load(e,a=>{a.colorSpace=this.colorSpace,a.anisotropy=this.anisotropy,t?.(a)},i,r)}}const QR=new i2,sw=new VV(Yr,QR),gve=new VV(hl,QR);function XV(n,{color:e=!0}={}){const t=n.filter(a=>a!==void 0);if(t.length===0)throw new Error("usePlanetTextures needs a url");const i=fn(a=>a.gl.capabilities.getMaxAnisotropy()),r=Da(e?sw:gve,t,a=>{a.anisotropy=i});return n.map(a=>a===void 0?null:r[t.indexOf(a)])}const ow=typeof createImageBitmap<"u"&&pve(navigator.userAgent)?new x6(QR):null;ow?.setOptions({imageOrientation:"flipY",premultiplyAlpha:"none"});function pve(n){if(/^((?!chrome|android).)*safari/i.test(n))return Number(n.match(/Version\/(\d+)/)?.[1]??0)>=17;const e=n.match(/Firefox\/(\d+)/);return!e||Number(e[1])>=98}function mve(n,e,t,i){if(!ow){sw.anisotropy=e,sw.load(n,t,void 0,i);return}ow.load(n,r=>{const a=new fi(r);a.flipY=!1,a.colorSpace=Yr,a.anisotropy=e,a.needsUpdate=!0,t(a)},void 0,i)}const Ave="/tides/assets/jupiter-4k-BOt-qf2V.ktx2",Cve="/tides/assets/mars-4k-BPHSRr6e.ktx2",Ive="/tides/assets/mars-8k-CAbjShBW.ktx2",vve="/tides/assets/mercury-4k-B998r4Ri.ktx2",yve="/tides/assets/mercury-8k-CdrHaz1d.ktx2",_ve="/tides/assets/saturn-4k-B1FFEWhX.ktx2",xve="/tides/assets/venus-4k-CQje4-II.ktx2",hL=Object.assign({"./assets/flight/jupiter-4k.ktx2":Ave,"./assets/flight/mars-4k.ktx2":Cve,"./assets/flight/mars-8k.ktx2":Ive,"./assets/flight/mercury-4k.ktx2":vve,"./assets/flight/mercury-8k.ktx2":yve,"./assets/flight/saturn-4k.ktx2":_ve,"./assets/flight/venus-4k.ktx2":xve});function Sve(n,e){return e>=8192&&hL[`./assets/flight/${n}-8k.ktx2`]||hL[`./assets/flight/${n}-4k.ktx2`]}const bve=40;function Mve(n,e){return n<bve*e}function Eve(n){return n("EXT_texture_compression_bptc")||n("WEBGL_compressed_texture_etc")?!0:n("WEBGL_compressed_texture_etc1")?!1:n("WEBGL_compressed_texture_s3tc")&&n("WEBGL_compressed_texture_s3tc_srgb")}function Tve(n){let e=new Map,t=0;return{request(i){let r=e.get(i);if(!r){const a=t;r=n(i,()=>a===t).then(s=>a===t?s:(s.dispose(),null),s=>(a===t&&console.warn(`Flight texture ${i} failed to load; keeping the 2k map`,s),null)),e.set(i,r)}return r},release(){t++;const i=e;e=new Map;for(const r of i.values())r.then(a=>a?.dispose())}}}let hb=null,lw=null;const db=new Set;async function wve(n,e,t){hb??=fae(()=>import("./ktx2Loader-CIWadcFM.js"),[]).then(r=>r.createFlightKtx2Loader(e));const i=await(await hb).loadAsync(n);return t()&&(i.anisotropy=e.capabilities.getMaxAnisotropy(),e.initTexture(i)),i}function Rve(n){return lw??=Tve((e,t)=>{const i=wve(e,n,t);db.add(i);const r=()=>db.delete(i);return i.then(r,r),i})}function Dve(){lw?.release(),lw=null;const n=Promise.allSettled([...db]);db.clear();const e=hb;hb=null,n.then(()=>e?.then(t=>t.dispose(),()=>{}))}function Ove(n,e){const t=SV(e.capabilities.maxTextureSize);if(!(t===null||!Eve(i=>e.extensions.has(i))))return Sve(n,t)}const dL=new W,Nve=new W;function Bve(n,e,t){const i=et(h=>h.shipMode),r=fn(h=>h.gl),a=X.useMemo(()=>n?Ove(n,r):void 0,[n,r]),[s,o]=X.useState(null),c=X.useRef(!1),u=X.useRef(!0);return X.useEffect(()=>(u.current=!0,()=>{u.current=!1}),[]),Cn(({camera:h})=>{const g=e.current;if(!i||!a||c.current||!g)return;g.getWorldPosition(dL);const A=t*g.getWorldScale(Nve).x;Mve(h.position.distanceTo(dL)-A,A)&&(c.current=!0,Rve(r).request(a).then(C=>{u.current&&o(C)}))}),i?s:null}var Lve=`varying vec2 vUv;
 varying vec3 vNormalLocal;
 varying vec3 vNormalView;
 varying vec3 vViewPosition;
