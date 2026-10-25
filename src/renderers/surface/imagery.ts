@@ -74,9 +74,20 @@ export function tileBounds({ z, x, y }: ImageryTile): Omit<Box, 'name'> {
   return { west: (x / n) * 360 - 180, east: ((x + 1) / n) * 360 - 180, north: lat(y), south: lat(y + 1) }
 }
 export function insideUsgsCoverage(tile: ImageryTile): boolean {
-  const b = tileBounds(tile)
+  return boundsInsideUsgs(tileBounds(tile))
+}
+
+/** Whether a footprint in degrees lies wholly inside one of the US boxes. */
+export function boundsInsideUsgs(b: Omit<Box, 'name'>): boolean {
   return USGS_BOXES.some(
     (box) => b.south >= box.south && b.north <= box.north && b.west >= box.west && b.east <= box.east
+  )
+}
+
+/** Whether a footprint in degrees overlaps any of the US boxes. */
+export function boundsTouchUsgs(b: Omit<Box, 'name'>): boolean {
+  return USGS_BOXES.some(
+    (box) => b.south < box.north && b.north > box.south && b.west < box.east && b.east > box.west
   )
 }
 
