@@ -35,7 +35,8 @@ import {
   minDistance,
   nearReach,
   nearestSurface,
-  stepEyeDistance,
+  stepFocusDistance,
+  turnTarget,
   targetUnitsPerPixel,
   type FollowAnchor,
   type NearBody,
@@ -226,7 +227,8 @@ function useEarthPivot(
   controls: OrbitControlsImpl | null,
   cameraFocus: CameraFocus,
   dom: HTMLElement | undefined,
-  carry: Vector3
+  carry: Vector3,
+  outsideMoveRef: { current: boolean }
 ) {
   const pivot = useRef<Pivot>({ tilt: 0, heading: 0, depth: 0 })
 
@@ -238,10 +240,13 @@ function useEarthPivot(
             camera,
             pivot.current,
             () => useStore.getState().earthRadius ?? 0,
-            carry
+            carry,
+            () => {
+              outsideMoveRef.current = true
+            }
           )
         : undefined,
-    [camera, controls, carry]
+    [camera, controls, carry, outsideMoveRef]
   )
 
   useEffect(
@@ -327,16 +332,18 @@ function framingGoal(focus: CameraFocus): number | null {
  * Eases the eye distance (stepEyeDistance) into the focus's range
  * (minDistance, maxDistance) and, on choosing a planet, to framingDistance
  * once the planet has registered its mesh (with userData.radius); leaving a
- * planet eases back to MAIN_DISTANCE. The user scrolling, pinching or
- * middle-dragging ends the framing, so it never fights them. While the
- * target is still on its way to the focus (`anchor`), the eye isn't pushed
- * off it, as that would push the eye toward wherever the target came from.
- * Call it after CameraProvider's frame, which moves the target and the anchor.
+ * planet eases back to MAIN_DISTANCE, both from when the target reaches the
+ * focus (stepFocusDistance). The user scrolling, pinching or middle-dragging
+ * ends the framing, so it never fights them, as does anything else moving
+ * the camera itself (`outsideMoveRef`, from tiltControls: a restored pose, or
+ * the clock ride). Call it after CameraProvider's frame, which moves the
+ * target and the anchor.
  */
 function useEyeDistance(
   cameraFocus: CameraFocus,
   dom: HTMLElement | undefined,
-  anchor: FollowAnchor
+  anchor: FollowAnchor,
+  outsideMoveRef: { current: boolean }
 ) {
   const framing = useRef(false)
   const previousFocus = useRef<CameraFocus | null>(null)
@@ -379,18 +386,16 @@ function useEyeDistance(
   // Only the main view has controls; the other panels' cameras stay put.
   useFrame(({ camera, controls, size }) => {
     if (!controls || !(camera as PerspectiveCamera).isPerspectiveCamera) return
-    const orbit = controls as OrbitControlsImpl
-    const closest = minDistance(cameraFocus)
-    const arriving =
-      anchor.key !== null && orbit.target.distanceTo(anchor.position) > closest
-    const landed = stepEyeDistance(
-      orbit,
+    if (outsideMoveRef.current) framing.current = false
+    outsideMoveRef.current = false
+    const landed = stepFocusDistance(
+      controls as OrbitControlsImpl,
+      anchor,
       framing.current ? framingGoal(cameraFocus) : null,
-      arriving ? Math.min(closest, orbit.getDistance()) : closest,
+      minDistance(cameraFocus),
       maxDistance(useStore.getState().showPlanets, size)
     )
-    // The target's own travel still changes the distance until it arrives.
-    if (landed && !arriving) framing.current = false
+    if (landed) framing.current = false
   })
 }
 
@@ -402,6 +407,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const cameraTarget = useRef(new Vector3())
   const anchor = useRef<FollowAnchor>({ key: null, position: new Vector3() })
   const carry = useMemo(() => new Vector3(), [])
+  const outsideMoveRef = useRef(false)
   const rideRef = useClockRide(controls)
   const focusedObject = useRef<{
     object: Object3D
@@ -424,7 +430,8 @@ export const CameraProvider = ({ children }: { children: any }) => {
     controls as OrbitControlsImpl | null,
     cameraFocus,
     connected || canvas,
-    carry
+    carry,
+    outsideMoveRef
   )
 
   useFrame((state) => {
@@ -494,7 +501,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
         )
       } else {
         leaveClock(rideRef.current)
-        cameraTarget.current.lerp(target, smoothness)
+        turnTarget(cameraTarget.current, camera.position, target, smoothness)
       }
       camera.lookAt(cameraTarget.current)
       // @ts-ignore
@@ -517,7 +524,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
       controls.update()
     }
   })
-  useEyeDistance(cameraFocus, connected || canvas, anchor.current)
+  useEyeDistance(cameraFocus, connected || canvas, anchor.current, outsideMoveRef)
   useMainNearFar()
 
   // Handle focus: update store (and thus dropdown) when a known body is clicked.

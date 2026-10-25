@@ -113,14 +113,16 @@ export type Pivot = { tilt: number; heading: number; depth: number }
  * each update, keeping left-drag screen-aligned. `carry` (CameraProvider's
  * followMotion: the focused body's motion) moves the untilted eye on the
  * next update and is then spent, so the eye rides along with the body;
- * getDistance reports the untilted distance. Returns the undo.
+ * getDistance reports the untilted distance. `onOutsideMove` hears of an
+ * update that found the camera moved by something else. Returns the undo.
  */
 export function tiltControls(
   controls: OrbitControls,
   camera: Camera,
   pivot: Pivot,
   radius: () => number,
-  carry = new Vector3()
+  carry = new Vector3(),
+  onOutsideMove?: () => void
 ): () => void {
   const original = controls.update
   const originalGetDistance = controls.getDistance
@@ -131,7 +133,11 @@ export function tiltControls(
   const normal = new Vector3()
   controls.update = () => {
     // Anything else that moved the camera wins over the stored pose.
-    if (camera.position.equals(shown)) camera.position.copy(untilted).add(carry)
+    if (camera.position.equals(shown)) {
+      camera.position.copy(untilted).add(carry)
+    } else if (!Number.isNaN(shown.x)) {
+      onOutsideMove?.()
+    }
     carry.set(0, 0, 0)
     normal.subVectors(camera.position, controls.target).normalize()
     headingUp(camera.up, normal, pivot.heading)

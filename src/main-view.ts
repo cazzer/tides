@@ -1,4 +1,4 @@
-import { MathUtils, type Vector3 } from 'three'
+import { MathUtils, Quaternion, Vector3 } from 'three'
 import { CLOCK_HALF_WIDTH } from './clock-size'
 import { isSystemFocus, type BodyFocus, type CameraFocus } from './store'
 import {
@@ -128,6 +128,7 @@ const DISTANCE_EASE = 0.05
  * and however far it has to go, landing on `goal` once within 0.1% of it.
  */
 export function easeDistance(distance: number, goal: number): number {
+  if (!(distance > 0)) return goal
   const next = distance * (goal / distance) ** DISTANCE_EASE
   return Math.abs(goal - next) < goal * 1e-3 ? goal : next
 }
@@ -161,6 +162,56 @@ export function stepEyeDistance(
   controls.maxDistance = Math.max(hi, next)
   if (next !== distance) controls.setScale(next / distance)
   return framed !== null && next === goal
+}
+
+/**
+ * One frame of the main view's eye distance with the camera on a focus:
+ * stepEyeDistance, but while the target is still more than `closest` from
+ * the focus (`anchor`), the eye is neither framed nor pushed off it, as the
+ * target's travel moves the line any dolly would push along. Returns whether
+ * it has landed on `framed`.
+ */
+export function stepFocusDistance(
+  controls: Dolly & { target: Vector3 },
+  anchor: FollowAnchor,
+  framed: number | null,
+  closest: number,
+  farthest: number
+): boolean {
+  const arriving =
+    anchor.key !== null && controls.target.distanceTo(anchor.position) > closest
+  return arriving
+    ? stepEyeDistance(controls, null, Math.min(closest, controls.getDistance()), farthest)
+    : stepEyeDistance(controls, framed, closest, farthest)
+}
+
+const _from = new Vector3()
+const _to = new Vector3()
+const _turn = new Quaternion()
+const _identity = new Quaternion()
+
+/**
+ * Moves `target`, the point the view looks at, a share `ease` of the way to
+ * `focus` as seen from `eye`: its direction turns by that share of the angle
+ * (at most ~9° a frame at 0.05) and its distance moves by that share. A
+ * straight-line ease would pass right by the eye when the new focus is
+ * behind it and whip the view round.
+ */
+export function turnTarget(
+  target: Vector3,
+  eye: Vector3,
+  focus: Vector3,
+  ease: number
+): void {
+  _from.subVectors(target, eye)
+  _to.subVectors(focus, eye)
+  const distance = MathUtils.lerp(_from.length(), _to.length(), ease)
+  if (_from.lengthSq() === 0) _from.copy(_to)
+  _from.normalize()
+  _to.normalize()
+  _turn.setFromUnitVectors(_from, _to)
+  _from.applyQuaternion(_identity.identity().slerp(_turn, ease))
+  target.copy(eye).addScaledVector(_from, distance)
 }
 
 /**
