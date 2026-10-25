@@ -4,6 +4,7 @@ import { OrbitControls } from 'three-stdlib'
 import { surfaceGrabRotateSpeed } from './camera'
 import { EARTH_ORBIT_RADIUS } from './ephemeris'
 import {
+  FOCUS_EASE,
   MAIN_DISTANCE,
   NEAR_CLEARANCE,
   allowDistance,
@@ -13,6 +14,7 @@ import {
   stepFocusDistance,
   turnTarget,
 } from './main-view'
+import { MOONS, moonOrbitRadius, moonRadius } from './moons/moons'
 import { tiltControls } from './pivot'
 import type { CameraFocus } from './store'
 import { bodyRadius } from './system-aids/label-visibility'
@@ -40,7 +42,8 @@ describe('surfaceGrabRotateSpeed', () => {
 function focusChange(
   eye: Vector3,
   from: Vector3,
-  to: Vector3,
+  // The focus, or where it is on each frame.
+  path: Vector3 | ((frame: number) => Vector3),
   focus: CameraFocus,
   framed: number | null = null,
   fromFocus: CameraFocus = 'earth'
@@ -54,7 +57,7 @@ function focusChange(
   const carry = new Vector3()
   tiltControls(controls, camera, { tilt: 0, heading: 0, depth: 0 }, () => EARTH, carry)
   controls.update()
-  const anchor = { key: fromFocus as unknown, position: from.clone() }
+  const anchor = { key: fromFocus as unknown, position: from.clone(), speed: 0 }
   const target = from.clone()
   const eyes: Vector3[] = []
   const turns: number[] = []
@@ -63,9 +66,10 @@ function focusChange(
   let framing = framed
   let landedAt = -1
   for (let frame = 0; frame < 600; frame++) {
+    const to = typeof path === 'function' ? path(frame) : path
     controls.update()
     followMotion(anchor, focus, to, carry)
-    turnTarget(target, camera.position, to, 0.05)
+    turnTarget(target, camera.position, to, FOCUS_EASE)
     camera.lookAt(target)
     controls.target.copy(target)
     allowDistance(controls)
@@ -80,7 +84,15 @@ function focusChange(
     eyes.push(camera.position.clone())
     toTarget.push(camera.position.distanceTo(controls.target))
   }
-  return { eyes, turns, toTarget, landedAt, distance: controls.getDistance() }
+  const last = typeof path === 'function' ? path(599) : path
+  return {
+    eyes,
+    turns,
+    toTarget,
+    landedAt,
+    distance: controls.getDistance(),
+    eyeToFocus: camera.position.distanceTo(last),
+  }
 }
 
 const steps = (eyes: Vector3[]) => eyes.slice(1).map((e, i) => e.distanceTo(eyes[i]))
@@ -157,6 +169,25 @@ describe('changing focus', () => {
       expect(landedAt).toBeGreaterThan(arrived)
       expect(distance / goal).toBeCloseTo(1, 3)
     }
+  })
+
+  it.each([1, 30])('frames Io circling Jupiter at %s days a second', (days) => {
+    const jupiter = new Vector3(-150, 0, 0)
+    const radius = moonOrbitRadius('io')
+    // 60 frames a second.
+    const turn = ((2 * Math.PI) / MOONS.io.periodDays) * (days / 60)
+    const io = (frame: number) =>
+      new Vector3(Math.cos(turn * frame), 0, Math.sin(turn * frame))
+        .multiplyScalar(radius)
+        .add(jupiter)
+    const eye = new Vector3(100, 80, 80).setLength(MAIN_DISTANCE).add(jupiter)
+    const goal = framingDistance(moonRadius('io'), EARTH)
+    const { landedAt, eyeToFocus } = focusChange(eye, jupiter, io, 'io', goal, 'jupiter')
+    // Framed on the target, which trails Io by up to ~10%.
+    expect(Math.abs(eyeToFocus / goal - 1)).toBeLessThan(0.15)
+    // At 1 day a second the framing lands; at 30, where Io laps Jupiter
+    // every few frames and the target can only trail it, it keeps easing.
+    if (days === 1) expect(landedAt).toBeGreaterThan(0)
   })
 
   it('backs off a location on the surface below it smoothly', () => {

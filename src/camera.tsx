@@ -25,6 +25,7 @@ import {
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
 import {
+  FOCUS_EASE,
   MAIN_DISTANCE,
   allowDistance,
   focusedRef,
@@ -405,7 +406,11 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
   const cameraTarget = useRef(new Vector3())
-  const anchor = useRef<FollowAnchor>({ key: null, position: new Vector3() })
+  const anchor = useRef<FollowAnchor>({
+    key: null,
+    position: new Vector3(),
+    speed: 0,
+  })
   const carry = useMemo(() => new Vector3(), [])
   const outsideMoveRef = useRef(false)
   const rideRef = useClockRide(controls)
@@ -488,7 +493,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
     followMotion(anchor.current, key, target, carry)
 
     if (hasTarget && controls) {
-      const smoothness = 0.05
+      const smoothness = FOCUS_EASE
       if (cameraFocus === 'clock' && ref?.current) {
         rideWithClock(
           camera.position,
