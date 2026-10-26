@@ -14,6 +14,7 @@ import {
   SURFACE_FADE_START,
   SURFACE_MAX,
   SURFACE_MAX_METRES,
+  TERRAIN_BLEND_PEAK,
   TERRAIN_BLEND,
   TERRAIN_BLEND_MAX_GAIN,
   TERRAIN_BLEND_RAMP,
@@ -26,6 +27,7 @@ import {
   surfaceOpacity,
   surfaceOpacityUniform,
   terrainBlendOn,
+  terrainBlendPeak,
   terrainBlendTop,
   terrainDisplacement,
   terrainScale,
@@ -80,28 +82,39 @@ describe('terrainScale (tides-zmw.9.5)', () => {
     expect(TRUE_FLOOR_MAX).toBeCloseTo(TRUE_TERRAIN_DISPLACEMENT * (TERRAIN_MAX_GREY + TERRAIN_GREY_MARGIN / 255), 15)
   })
 
-  it('tops out at the ~100 km true handover, higher where the stop over true peaks needs it: ~183 km at 12x', () => {
+  it('tops out at the ~100 km true handover, higher where the stop needs it: ~110 km at 12x over the globe', () => {
+    expect(TERRAIN_BLEND_PEAK).toBe(TRUE_FLOOR_MAX)
     expect(terrainBlendTop(1) * EARTH_KM_PER_UNIT).toBeCloseTo(TERRAIN_BLEND_MIN_TOP_KM, 9)
     for (const relief of RELIEFS) expect(terrainBlendTop(relief) * EARTH_KM_PER_UNIT).toBeGreaterThanOrEqual(100 - 1e-9)
-    expect(terrainBlendTop(12)).toBeCloseTo(0.085, 3)
-    expect(terrainBlendTop(12) * EARTH_KM_PER_UNIT).toBeGreaterThan(178)
-    expect(terrainBlendTop(12) * EARTH_KM_PER_UNIT).toBeLessThan(188)
-    expect(terrainBlendTop(25)).toBeCloseTo(0.1855, 3)
+    expect(terrainBlendTop(12)).toBeCloseTo(0.0511, 3)
+    expect(terrainBlendTop(12) * EARTH_KM_PER_UNIT).toBeGreaterThan(105)
+    expect(terrainBlendTop(12) * EARTH_KM_PER_UNIT).toBeLessThan(115)
+    expect(terrainBlendTop(25)).toBeCloseTo(0.1115, 3)
+  })
+
+  it('tops out higher with the tiles, for their true peaks: ~183 km at 12x (tides-zmw.9.7)', () => {
+    const tiles = terrainBlendPeak(true)
+    expect(tiles).toBe(SURFACE_MAX)
+    expect(terrainBlendPeak(false)).toBe(TRUE_FLOOR_MAX)
+    expect(terrainBlendTop(12, 'smooth', tiles)).toBeCloseTo(0.085, 3)
+    expect(terrainBlendTop(12, 'smooth', tiles) * EARTH_KM_PER_UNIT).toBeGreaterThan(178)
+    expect(terrainBlendTop(12, 'smooth', tiles) * EARTH_KM_PER_UNIT).toBeLessThan(188)
+    expect(terrainBlendTop(25, 'smooth', tiles)).toBeCloseTo(0.1855, 3)
     // Sized for the tiles' true peaks, which stand above the globe's
     // smoothed highest (tides-zmw.9.7).
     expect(SURFACE_MAX_METRES).toBeGreaterThan(8849)
     expect(SURFACE_MAX).toBeCloseTo(SURFACE_MAX_METRES / 1000 / EARTH_KM_PER_UNIT, 15)
     expect(SURFACE_MAX).toBeGreaterThan(TRUE_FLOOR_MAX)
     // The linear ramp (Q1's choice B): two thirds as high, ~122 km.
-    expect(terrainBlendTop(12, 'linear') / terrainBlendTop(12)).toBeCloseTo(2 / 3, 12)
-    expect(terrainBlendTop(12, 'linear') * EARTH_KM_PER_UNIT).toBeGreaterThan(118)
-    expect(terrainBlendTop(12, 'linear') * EARTH_KM_PER_UNIT).toBeLessThan(126)
+    expect(terrainBlendTop(12, 'linear', tiles) / terrainBlendTop(12, 'smooth', tiles)).toBeCloseTo(2 / 3, 12)
+    expect(terrainBlendTop(12, 'linear', tiles) * EARTH_KM_PER_UNIT).toBeGreaterThan(118)
+    expect(terrainBlendTop(12, 'linear', tiles) * EARTH_KM_PER_UNIT).toBeLessThan(126)
     expect(TERRAIN_BLEND_RAMP).toBe('smooth')
   })
 
   it.each(RELIEFS)('at relief %d, eases linearly on the linear ramp, monotonic and continuous', (relief) => {
-    const top = terrainBlendTop(relief, 'linear')
-    const s = (a: number) => terrainScale(a, relief, true, 'linear')
+    const top = terrainBlendTop(relief, 'linear', SURFACE_MAX)
+    const s = (a: number) => terrainScale(a, relief, true, 'linear', SURFACE_MAX)
     expect(s(0)).toBe(1)
     expect(s(top)).toBe(relief)
     expect(s(top / 2)).toBeCloseTo((1 + relief) / 2, 12)
@@ -143,15 +156,17 @@ describe('terrainScale (tides-zmw.9.5)', () => {
     expect((s(top) - s(top - h)) / h).toBeLessThan(1e-3 * (relief - 1) + 1e-12)
   })
 
-  it.each(RELIEFS)("at relief %d, moves the stop's fixed point under TERRAIN_BLEND_MAX_GAIN of the eye's move, over true peaks too", (relief) => {
-    const top = terrainBlendTop(relief)
-    let gain = 0
-    for (let k = 0; k < 10000; k++) {
-      const a = (top * k) / 10000
-      const b = (top * (k + 1)) / 10000
-      gain = Math.max(gain, ((terrainScale(b, relief, true) - terrainScale(a, relief, true)) / (b - a)) * SURFACE_MAX)
+  it.each(RELIEFS)("at relief %d, moves the stop's fixed point under TERRAIN_BLEND_MAX_GAIN of the eye's move, over the globe and over the tiles' true peaks", (relief) => {
+    for (const peak of [TRUE_FLOOR_MAX, SURFACE_MAX]) {
+      const top = terrainBlendTop(relief, 'smooth', peak)
+      let gain = 0
+      for (let k = 0; k < 10000; k++) {
+        const a = (top * k) / 10000
+        const b = (top * (k + 1)) / 10000
+        gain = Math.max(gain, ((terrainScale(b, relief, true, 'smooth', peak) - terrainScale(a, relief, true, 'smooth', peak)) / (b - a)) * peak)
+      }
+      expect(gain).toBeLessThanOrEqual(TERRAIN_BLEND_MAX_GAIN + 1e-9)
     }
-    expect(gain).toBeLessThanOrEqual(TERRAIN_BLEND_MAX_GAIN + 1e-9)
     expect(TERRAIN_BLEND_MAX_GAIN).toBeLessThan(1)
   })
 
@@ -160,10 +175,10 @@ describe('terrainScale (tides-zmw.9.5)', () => {
     // rising at least 1 - TERRAIN_BLEND_MAX_GAIN per unit of a, so the stop
     // (g = clearance) is one altitude, and every eye above it clears the
     // drawn peak; and over the top the eye clears it by a margin.
-    const top = terrainBlendTop(relief)
+    const top = terrainBlendTop(relief, 'smooth', SURFACE_MAX)
     for (let i = 1; i <= 100; i++) {
       const h = (SURFACE_MAX * i) / 100
-      const g = (a: number) => a - terrainScale(a, relief, true) * h
+      const g = (a: number) => a - terrainScale(a, relief, true, 'smooth', SURFACE_MAX) * h
       for (let k = 0; k < 400; k++) {
         const a = h + ((top * 1.2 - h) * k) / 400
         const b = h + ((top * 1.2 - h) * (k + 1)) / 400
@@ -175,6 +190,7 @@ describe('terrainScale (tides-zmw.9.5)', () => {
 
   it("keeps the low tier's stop above the blend: that tier always draws the full relief", () => {
     expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(terrainBlendTop(RELIEF))
+    expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(terrainBlendTop(RELIEF, 'smooth', SURFACE_MAX))
   })
 })
 
@@ -227,12 +243,11 @@ describe('the live scale (tides-zmw.9.5)', () => {
       if (prev !== null) expect(Math.abs(fromAbove - prev)).toBeLessThanOrEqual(bound)
       prev = fromAbove
     }
-    // Over the sea near 1.07x; over the globe's highest ground, ~1.3x
-    // (the top sized for the tiles' true peaks, tides-zmw.9.7).
-    expect(terrainScale(settle(0, 1), RELIEF, true)).toBeCloseTo(1.07, 1)
+    // Over the sea near 1.15x; over the highest ground, a little over 2x.
+    expect(terrainScale(settle(0, 1), RELIEF, true)).toBeCloseTo(1.15, 1)
     const highest = terrainScale(settle(MAX_FLOOR_GREY, 1), RELIEF, true)
-    expect(highest).toBeGreaterThan(1.2)
-    expect(highest).toBeLessThan(1.5)
+    expect(highest).toBeGreaterThan(1.8)
+    expect(highest).toBeLessThan(2.6)
   })
 
   it('holds the ship its clearance over the drawn ground and under the cloud base every frame, down from orbit and across the ground', () => {

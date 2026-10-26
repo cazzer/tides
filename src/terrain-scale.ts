@@ -43,8 +43,9 @@
 // the fixed point a = s(a) h + c (h the true ground, c the clearance), unique
 // and reached smoothly when s'(a) h < 1 for all ground, which sets the
 // blend's lowest top (terrainBlendTop()). The tiles draw true peaks
-// (Everest's 8849 m), not the globe's smoothed 5385 m, so the top is sized
-// for SURFACE_MAX_METRES (tides-zmw.9.7): ~183 km at 12x.
+// (Everest's 8849 m), not the globe's smoothed 5385 m, so with the tiles on
+// the top is sized for SURFACE_MAX_METRES (tides-zmw.9.7): ~183 km at 12x;
+// the globe alone (?blend=1) keeps ~110 km.
 //
 // The handover (tides-zmw.9.7): the tiles dissolve in over the top's last
 // 40% (surfaceOpacity(), surfaceOpacityUniform, written with the scale), on
@@ -119,18 +120,31 @@ export const TERRAIN_BLEND_RAMP: TerrainBlendRamp = 'smooth'
 /** The ramp's steepest slope over its mean. */
 const rampPeak = (ramp: TerrainBlendRamp) => (ramp === 'linear' ? 1 : 1.5)
 
+/** The highest ground drawn on the live scale, scene units at true scale:
+ * the tiles' true peaks when they're on, else the globe's floor. */
+export function terrainBlendPeak(surfaceTiles: boolean): number {
+  return surfaceTiles ? Math.max(TRUE_FLOOR_MAX, SURFACE_MAX) : TRUE_FLOOR_MAX
+}
+
+/** This page's: SURFACE_MAX with the tiles, TRUE_FLOOR_MAX without. */
+export const TERRAIN_BLEND_PEAK = terrainBlendPeak(SURFACE_TILES_ON)
+
 /**
  * The altitude over the sea (scene units) at and above which the ground is
  * drawn at the full `relief`: TERRAIN_BLEND_MIN_TOP_KM, or higher where the
- * blend would be too steep for the stop over the highest ground anything
- * draws (the tiles' SURFACE_MAX; the globe's TRUE_FLOOR_MAX is lower):
- * (relief - 1) × the ramp's peak / top × SURFACE_MAX at most
- * TERRAIN_BLEND_MAX_GAIN. Smooth: ~0.0850 (~183 km) at 12x, ~0.193 at 25x.
+ * blend would be too steep for the stop over the highest ground drawn
+ * (`peak`): (relief - 1) × the ramp's peak / top × `peak` at most
+ * TERRAIN_BLEND_MAX_GAIN. Smooth over the globe: ~0.0511 (110 km) at 12x;
+ * over the tiles' true peaks: ~0.0850 (~183 km) at 12x, ~0.186 at 25x.
  */
-export function terrainBlendTop(relief: number = RELIEF, ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP): number {
+export function terrainBlendTop(
+  relief: number = RELIEF,
+  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP,
+  peak: number = TERRAIN_BLEND_PEAK
+): number {
   return Math.max(
     TERRAIN_BLEND_MIN_TOP_KM / EARTH_KM_PER_UNIT,
-    ((relief - 1) * rampPeak(ramp) * Math.max(TRUE_FLOOR_MAX, SURFACE_MAX)) / TERRAIN_BLEND_MAX_GAIN
+    ((relief - 1) * rampPeak(ramp) * peak) / TERRAIN_BLEND_MAX_GAIN
   )
 }
 
@@ -144,10 +158,11 @@ export function terrainScale(
   altitude: number,
   relief: number = RELIEF,
   blend: boolean = TERRAIN_BLEND,
-  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP
+  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP,
+  peak: number = TERRAIN_BLEND_PEAK
 ): number {
   if (!blend) return relief
-  const top = terrainBlendTop(relief, ramp)
+  const top = terrainBlendTop(relief, ramp, peak)
   // Exactly the relief at and above the top, which 1 + (relief - 1) needn't
   // round to.
   if (!(altitude < top)) return relief
@@ -167,9 +182,10 @@ export const SURFACE_FADE_START = 0.6
 export function surfaceOpacity(
   altitude: number,
   relief: number = RELIEF,
-  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP
+  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP,
+  peak: number = TERRAIN_BLEND_PEAK
 ): number {
-  const top = terrainBlendTop(relief, ramp)
+  const top = terrainBlendTop(relief, ramp, peak)
   const start = SURFACE_FADE_START * top
   if (!(altitude < top)) return 0
   if (altitude <= start) return 1

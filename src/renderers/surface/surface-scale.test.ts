@@ -18,8 +18,11 @@ import {
   patchSurfaceShader,
   prepareSurfaceMaterial,
   fitSurfaceBounds,
+  SURFACE_FIT_SLACK,
   SURFACE_FIT_STEP,
   SURFACE_STENCIL_REF,
+  nextSurfaceFit,
+  surfaceFitFloor,
   SURFACE_VERTEX_COUNT,
   surfaceElevationMetres,
   surfaceFitScale,
@@ -82,7 +85,7 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     const { fragmentShader } = compiled(material)
     const main = fragmentShader.indexOf('void main() {')
     const discard = fragmentShader.indexOf('/ 64.0 >= uSurfaceOpacity) discard;')
-    expect(main).toBeGreaterThan(0)
+    expect(fragmentShader.split('>= uSurfaceOpacity) discard;')).toHaveLength(2)
     expect(discard).toBeGreaterThan(main)
     expect(fragmentShader.slice(main, discard)).not.toContain(';')
     // The GLSL's patterns: the 64 thresholds each once over an 8x8 block,
@@ -140,6 +143,11 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     const params = wrapFadeMaterial(material, material.onBeforeCompile)
     const shader = compiled(material)
     expect(order).toEqual(['haze after scale'])
+    // The wrapper calls what it wraps unbound and without the renderer.
+    const unbound = lambertShader()
+    const run = material.onBeforeCompile
+    expect(() => run(unbound, undefined as unknown as THREE.WebGLRenderer)).not.toThrow()
+    expect(unbound.uniforms.uTerrainScale).toBe(terrainScaleUniform)
     expect(shader.uniforms.uTerrainScale).toBe(terrainScaleUniform)
     expect(shader.uniforms.uHaze).toBeDefined()
     expect(shader.uniforms.fadeIn).toBe(params.fadeIn)
@@ -301,13 +309,51 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
     expect(fits.size).toBeLessThanOrEqual(Math.ceil(Math.log(RELIEF) / Math.log(SURFACE_FIT_STEP)) + 1)
   })
 
-  it('writes every region at the fit, keeps the plugin at its own scale, and refits a tile once per step it is traversed at', () => {
+  it('steps the fit up at once, and down only two steps under, so level flight across a step refits nothing', () => {
+    expect(SURFACE_FIT_SLACK).toBe(2)
+    let fit = surfaceFitScale(3)
+    expect(nextSurfaceFit(fit, fit * 1.01)).toBeGreaterThan(fit)
+    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP)).toBe(fit)
+    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP ** 2 + 1e-9)).toBe(fit)
+    expect(nextSurfaceFit(fit, (fit / SURFACE_FIT_STEP ** 2) * 0.99)).toBeLessThan(fit)
+    // Level flight wobbling across a step boundary: one fit.
+    const boundary = SURFACE_FIT_STEP ** 5
+    fit = surfaceFitScale(boundary * 1.001)
+    const seen = new Set<number>()
+    for (let k = 0; k < 1000; k++) {
+      fit = nextSurfaceFit(fit, boundary * (1 + 0.001 * Math.sin(k)))
+      seen.add(fit)
+    }
+    expect(seen.size).toBe(1)
+    // Any descent and climb: the live scale always within the fitted band.
+    fit = surfaceFitScale(RELIEF)
+    let changes = 0
+    for (let k = 0; k <= 4000; k++) {
+      const s = k <= 2000 ? RELIEF - ((RELIEF - 1) * k) / 2000 : 1 + ((RELIEF - 1) * (k - 2000)) / 2000
+      const next = nextSurfaceFit(fit, s)
+      if (next !== fit) changes++
+      fit = next
+      expect(s).toBeLessThanOrEqual(fit + 1e-12)
+      expect(s).toBeGreaterThanOrEqual(surfaceFitFloor(fit) - 1e-12)
+    }
+    // ~6 down from 12x to 1x, ~11 back up.
+    expect(changes).toBeLessThanOrEqual(20)
+  })
+
+  it('writes every region across the fitted band, merged, keeps the plugin at its own scale, and refits a tile once per fit', () => {
+    // A tile 1500-2500 m high: the library's region at scale k is
+    // [1500k - (2500 - 1500)k - pad, 2500k + pad].
+    const pad = 20
     const written: number[] = []
+    const regionData: number[][] = []
     const terrain = {
       _heightScale: RELIEF,
-      _updateBoundingVolume(this: { _heightScale: number }, tile: object) {
-        written.push(this._heightScale)
-        void tile
+      tiles: { ellipsoid: 'E' },
+      _updateBoundingVolume(this: { _heightScale: number }, tile: { boundingVolume: { region: number[] } }) {
+        const k = this._heightScale
+        written.push(k)
+        tile.boundingVolume.region[4] = 1500 * k - 1000 * k - pad
+        tile.boundingVolume.region[5] = 2500 * k + pad
       },
     }
     const viewed: object[] = []
@@ -316,35 +362,48 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
         viewed.push(tile)
       },
     }
-    let scale = 1.1
+    let scale = 1.9
     const bounds = fitSurfaceBounds(tiles, terrain, () => scale)
-    expect(bounds.fit).toBe(1.25)
-    const tile = {}
-    // The plugin writing a region (a parse) writes it at the fit.
+    const fit = bounds.fit
+    const floor = surfaceFitFloor(fit)
+    expect(fit).toBe(surfaceFitScale(1.9))
+    const tile = {
+      boundingVolume: { region: [0, 0, 1, 1, 0, 0] },
+      engineData: { boundingVolume: { setRegionData: (...a: unknown[]) => regionData.push(a.slice(1) as number[]) } },
+    }
+    // The plugin writing a region (a parse) writes it across the band.
     terrain._updateBoundingVolume(tile)
-    expect(written).toEqual([1.25])
+    expect(written).toEqual([floor, fit])
     expect(terrain._heightScale).toBe(RELIEF)
-    // Traversed at the same fit: no refit.
+    // It holds the drawn ground at every scale in the band.
+    const [min, max] = tile.boundingVolume.region.slice(4)
+    for (const k of [floor, (floor + fit) / 2, fit]) {
+      expect(min).toBeLessThanOrEqual(1500 * k)
+      expect(max).toBeGreaterThanOrEqual(2500 * k)
+    }
+    expect(regionData[regionData.length - 1]).toEqual([0, 0, 1, 1, min, max])
+    // Traversed at the same fit, or within the band: no refit.
     tiles.calculateTileViewError(tile)
-    tiles.calculateTileViewError(tile)
-    expect(written).toEqual([1.25])
-    expect(viewed).toHaveLength(2)
-    // Within the step: none either.
-    scale = 1.2
+    scale = 1.3
     bounds.update()
     tiles.calculateTileViewError(tile)
-    expect(written).toEqual([1.25])
-    // A new step: refitted once, before its view error.
+    expect(written).toHaveLength(2)
+    expect(viewed).toHaveLength(2)
+    // Above the fit: refitted once, before its view error.
     scale = 3
     bounds.update()
     tiles.calculateTileViewError(tile)
     tiles.calculateTileViewError(tile)
-    expect(written).toEqual([1.25, surfaceFitScale(3)])
+    expect(written).toHaveLength(4)
     expect(bounds.refits).toBe(2)
-    // A tile never written is fitted on its first visit.
-    tiles.calculateTileViewError({})
-    expect(written).toHaveLength(3)
     expect(terrain._heightScale).toBe(RELIEF)
+  })
+
+  it('held RELIEF regions over the ground drawn lower, the culling the band fixes', () => {
+    // The 31 km canyon hole (headless): a depth-11 tile's region at 12x
+    // floated 7.5-25 km up over ground drawn at ~3 km.
+    const at = (k: number) => [1500 * k - 1000 * k, 2500 * k]
+    expect(at(RELIEF)[0]).toBeGreaterThan(2500 * 1.9)
   })
 
   it('refuses objects that are not the 0.5.3 plugin and renderer', () => {

@@ -106,6 +106,9 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     expect(src).toContain('mesh.material.displacementMap = displacement;')
     expect(src).toContain('surface.getCartographicToPosition( lat, lon, 0, _pos ).sub( _sphere.center );')
     expect(src).toContain('const skirtDepth = tile.geometricError + ( maxHeight - minHeight ) * _heightScale;')
+    // surface-scale.ts SURFACE_VERTEX_COUNT is (MESH_SIZE + 1)²
+    expect(src).toContain('const MESH_SIZE = 32;')
+    expect(src).toContain('const geometry = new SkirtedPlaneGeometry( 1, 1, MESH_SIZE, MESH_SIZE );')
   })
 
   it("shades the tiles' bump with the terrain material's own gradient, bumpScale times it", () => {

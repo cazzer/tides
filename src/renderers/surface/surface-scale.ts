@@ -17,16 +17,17 @@
 // surface-frame.ts) times uTerrainScale. A scale change is one uniform write:
 // no per-tile work and no recompiles.
 //
-// Bounds. Sized for RELIEF everywhere, a tile's bounding region stood up to
-// 12x its true relief over the ground, so near the ground the eye sat inside
-// the regions of the tiles around it, whose error the library then takes as
-// infinite: twice the tiles at the stop over the canyon, and tile-sized
-// holes near the eye (the globe filled them), both gone with the regions
-// fitted to the live scale (headless, tides-zmw.9.7). So the regions follow the live scale after all, but lazily and stepwise
-// (fitSurfaceBounds()): fitted to the scale rounded up to a power of
-// SURFACE_FIT_STEP (never under the drawn ground), each tile refitted the
-// next time the traversal visits it after the step changes; ~11 steps from
-// 12x to 1x, not one per frame, and never the setter's whole-tree walk.
+// Bounds. The library's region for a tile spans its lowest to highest
+// ground times heightScale. At RELIEF that is no bound for the ground drawn
+// at a lower scale: over high ground the region's floor floats above it, km
+// up over the canyon at 31 km (2x), and the library culled tiles plainly in
+// view, leaving holes the globe filled; the eye inside the tall regions also
+// took twice the tiles. So the regions follow the live scale after all,
+// lazily and stepwise (fitSurfaceBounds()): each spans the ground at every
+// scale across a band of SURFACE_FIT_SLACK steps of SURFACE_FIT_STEP under
+// the fit, refitted when the traversal next visits a tile after the band
+// moves, which a descent from 12x to 1x does about six times, level flight
+// never.
 //
 // Handover, by stencil. The tiles draw first (their group's renderOrder -1)
 // and mark every pixel they draw (stencil ref 1); the globe, when the tiles
@@ -41,9 +42,20 @@
 // differs from the globe's (headless, tides-zmw.9.7); 64 levels quarter it.
 // The 8x8's thresholds nest in the 4x4's, so with a tile's own fade the two
 // still keep about the smaller share.
+//
+// Holes as windows: any tile fragment marks the stencil, so a far tile seen
+// through a near hole would take the pixel from the nearer globe. The tiles'
+// skirts close nearly all of that: a ray that passes under the hole's globe
+// surface into a neighbouring tile meets that tile's skirt, which hangs
+// below its lowest ground (geometricError + range x scale under its edge).
+// Only where the globe stands above a tile's edge (its smoothed valleys) can
+// a ray slip over the edge and under the globe: a sliver at the hole's far
+// side no deeper than the DEM mismatch. Headless (a near z11 tile failed at
+// pitch -30, and on the south rim looking into the canyon), with the globe
+// hidden the hole stays black: no far tile shows through.
 import * as THREE from 'three'
 import type { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
-import { surfaceOpacityUniform, terrainScaleUniform } from '../../terrain-scale'
+import { surfaceOpacityUniform, TERRAIN_SCALE_UNIFORM_GLSL, terrainScaleUniform } from '../../terrain-scale'
 import type { MaterialPatch } from '../eclipseShadow'
 import { RELIEF } from '../../relief'
 import { SURFACE_SCALE } from './surface-frame'
@@ -89,6 +101,13 @@ float surfaceBayer4(vec2 v) { return 4.0 * surfaceBayer2(mod(v, 2.0)) + surfaceB
 float surfaceBayer8(vec2 v) { return 4.0 * surfaceBayer4(mod(v, 4.0)) + surfaceBayer2(floor(0.25 * mod(v, 8.0))); }
 `
 
+// First thing in main(), unlike the fade plugin's (after dithering): the
+// GLSL ES 3.00 rule leaves the bump's screen derivatives undefined in quads
+// a discard splits, but GPUs run discarded fragments on as helpers, and the
+// band's headless frames show no seams; the late discard cost +0.43 ms a
+// scene render at half opacity (960x600, 1.59 vs 1.16 ms), and one after
+// normal_fragment_maps saved nothing. Only within the band: at full opacity
+// nothing is discarded.
 const DISSOLVE_BODY = /* glsl */ `
   if ((0.5 + surfaceBayer8(floor(mod(gl_FragCoord.xy, 8.0)))) / 64.0 >= uSurfaceOpacity) discard;
 `
@@ -112,13 +131,13 @@ export function patchSurfaceShader(
   shader.uniforms.uSurfaceOpacity = surfaceOpacityUniform
   shader.uniforms.uSkirtRange = skirtRange
   shader.vertexShader = replaceOnce(
-    'uniform float uTerrainScale;\nuniform float uSkirtRange;\n' + shader.vertexShader,
+    TERRAIN_SCALE_UNIFORM_GLSL + 'uniform float uSkirtRange;\n' + shader.vertexShader,
     '#include <displacementmap_vertex>',
     DISPLACEMENT_VERTEX + skirtLift(relief),
     'vertex'
   )
   // Declared first: the bump chunk reads it, well before main().
-  let fragment = 'uniform float uTerrainScale;\n' + shader.fragmentShader
+  let fragment = TERRAIN_SCALE_UNIFORM_GLSL + shader.fragmentShader
   fragment = replaceOnce(fragment, BUMP_X, `${BUMP_X} uTerrainScale *`, 'fragment')
   fragment = replaceOnce(fragment, BUMP_Y, `${BUMP_Y} uTerrainScale *`, 'fragment')
   fragment = replaceOnce(fragment, 'void main() {', `${DISSOLVE_HEAD}\nvoid main() {\n${DISSOLVE_BODY}`, 'fragment')
@@ -153,9 +172,12 @@ export function prepareSurfaceMaterial(
   m.stencilFunc = THREE.AlwaysStencilFunc
   m.stencilRef = SURFACE_STENCIL_REF
   m.stencilZPass = THREE.ReplaceStencilOp
+  // Bound to the material by hand: the fade plugin's wrapper
+  // (wrapFadeMaterial.js) calls the onBeforeCompile it wraps unbound, and
+  // without the renderer.
   const own = m.onBeforeCompile
-  m.onBeforeCompile = function (shader, renderer) {
-    own.call(this, shader, renderer)
+  m.onBeforeCompile = (shader, renderer) => {
+    own.call(m, shader, renderer)
     patchSurfaceShader(shader, skirtRange)
     for (const patch of extra) patch.onBeforeCompile(shader, renderer)
   }
@@ -235,8 +257,12 @@ export function surfaceElevationMetres(terrain: TerrariumMeshPlugin, lat: number
 /** The ratio between the scales the bounding regions are fitted to. */
 export const SURFACE_FIT_STEP = 1.25
 
+/** The fit steps down only once the live scale is this many steps under it
+ * (hysteresis: level flight across a step boundary refits nothing). */
+export const SURFACE_FIT_SLACK = 2
+
 /**
- * The scale the tiles' bounding regions are fitted to for a live `scale`:
+ * The scale the tiles' bounding regions are fitted up to for a live `scale`:
  * the next power of SURFACE_FIT_STEP up (so at least the drawn scale), at
  * most `relief`, at least 1.
  */
@@ -246,10 +272,32 @@ export function surfaceFitScale(scale: number, relief: number = RELIEF): number 
   return Math.min(relief, Math.max(step, scale))
 }
 
+/**
+ * The next fit for a live `scale` from the current `fit`: up at once when
+ * the scale passes it, down only when the scale falls SURFACE_FIT_SLACK
+ * steps under it. The regions cover every scale in [fitFloor(fit), fit].
+ */
+export function nextSurfaceFit(fit: number, scale: number, relief: number = RELIEF): number {
+  if (scale > fit || scale < surfaceFitFloor(fit)) return surfaceFitScale(scale, relief)
+  return fit
+}
+
+/** The lowest scale the regions fitted at `fit` cover. */
+export function surfaceFitFloor(fit: number): number {
+  return Math.max(1, fit / SURFACE_FIT_STEP ** SURFACE_FIT_SLACK)
+}
+
 /** The terrain plugin's internals fitSurfaceBounds() drives (0.5.3, pinned). */
 interface BoundsPluginInternals {
   _heightScale: number
   _updateBoundingVolume(tile: object): void
+  tiles: { ellipsoid: unknown } | null
+}
+
+/** A tile's region and engine volume, as the plugin writes them. */
+interface RegionTile {
+  boundingVolume: { region?: number[] }
+  engineData?: { boundingVolume?: { setRegionData(ellipsoid: unknown, ...region: number[]): void } }
 }
 
 /** The renderer's per-tile view error, run on every tile it traverses. */
@@ -262,18 +310,23 @@ const FITTED = Symbol('surface fit scale')
 export interface SurfaceBounds {
   /** Before tiles.update(): takes this frame's fit from the live scale. */
   update(): void
-  /** The scale the regions are fitted to now. */
+  /** The scale the regions are fitted up to now. */
   readonly fit: number
   /** Tiles refitted so far (the headless checks read it). */
   readonly refits: number
 }
 
 /**
- * Fits the tiles' bounding regions to surfaceFitScale(scale()) instead of
- * the plugin's heightScale (RELIEF), which stays for the skirts: every
- * region the plugin writes is written at the fit, and a tile whose region
- * was written at an older fit is refitted when the traversal next reaches it
- * (before its view error, which also culls it).
+ * Fits the tiles' bounding regions to the live scale (scale()) instead of
+ * the plugin's heightScale (RELIEF), which stays for the skirts. A region
+ * at one scale doesn't hold the ground at another: its floor is the tile's
+ * lowest ground times the scale, so at RELIEF it floated over the ground
+ * drawn at ~2x (km up, over the canyon at 31 km), and the library culled
+ * tiles in view, leaving holes. So each region spans the ground at every
+ * scale from surfaceFitFloor(fit) to fit (the plugin's region written at
+ * both ends, merged), every region the plugin writes is written that way,
+ * and a tile written at an older fit is refitted when the traversal next
+ * reaches it, before its view error, which also culls it.
  */
 export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => number): SurfaceBounds {
   const plugin = terrain as BoundsPluginInternals
@@ -285,13 +338,31 @@ export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => nu
   }
   let fit = surfaceFitScale(scale())
   let refits = 0
-  const refit = (tile: object) => {
+  const writeAt = (tile: object, at: number) => {
     const full = plugin._heightScale
-    plugin._heightScale = fit
+    plugin._heightScale = at
     try {
       write.call(plugin, tile)
     } finally {
       plugin._heightScale = full
+    }
+  }
+  const refit = (tile: object) => {
+    const { boundingVolume, engineData } = tile as RegionTile
+    const region = boundingVolume?.region
+    const floor = surfaceFitFloor(fit)
+    if (region && floor < fit) {
+      writeAt(tile, floor)
+      const [low, high] = [region[4], region[5]]
+      writeAt(tile, fit)
+      if (low < region[4] || high > region[5]) {
+        region[4] = Math.min(low, region[4])
+        region[5] = Math.max(high, region[5])
+        const [w, s, e, n, min, max] = region
+        engineData?.boundingVolume?.setRegionData(plugin.tiles?.ellipsoid, w, s, e, n, min, max)
+      }
+    } else {
+      writeAt(tile, fit)
     }
     ;(tile as { [FITTED]?: number })[FITTED] = fit
     refits++
@@ -303,7 +374,7 @@ export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => nu
   }
   return {
     update() {
-      fit = surfaceFitScale(scale())
+      fit = nextSurfaceFit(fit, scale())
     },
     get fit() {
       return fit
@@ -313,4 +384,3 @@ export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => nu
     },
   }
 }
-
