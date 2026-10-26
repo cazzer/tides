@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
+  CLOUD_GROUND_GLSL,
   createCloudLayer,
   DETAIL_EDGE_FAR,
   DETAIL_EDGE_NEAR,
@@ -60,6 +62,9 @@ import {
   NEUTRAL_LOOK,
   STRETCH_EDGES,
   TYPE_LOOKS,
+  TYPED_CODE_STEPS,
+  TYPED_DELTA_KM,
+  TYPED_ZERO_CODE,
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
@@ -1510,4 +1515,130 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       clouds.dispose()
     }
   })
+})
+
+describe('typed tops in the march (tides-tvr.4.3)', () => {
+  // SHA-256 of each untyped program as three builds it (vertex, a newline,
+  // fragment, after the shader's own conditionals), and of the ground's and
+  // the tiles' cloud shadow as injected, at tides-tvr.4.2 (404f3eb): the
+  // typed tops are the typed program's alone.
+  const UNTYPED_SHELL_SHA256: Record<string, string> = {
+    'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
+    'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
+    'relief-full-back-noease': '33a8fa08be9db6e184b0d604dc66e92130fa519318a7568233256e48b3cb204f',
+    'relief-full-back-ease': '284fd6ba44b57ec22265dd5034a540954fb94bff5cacbbb13050f35ecdb0a11a',
+    'relief-live-front-noease': '1a3697c8510559cef3bf172e5947df02df00f8ecb8775a10d8eb259e68ec39e0',
+    'relief-live-front-ease': 'e1320333e3d7f68effb42d3a76ff5b58e485bf057e3ae9b0d194eaf0fa851e5d',
+    'relief-live-back-noease': '0376a321c46362daaf4e357d8e12670f9c208d1f6431fff0b3718b22b24a6ab3',
+    'relief-live-back-ease': '83855ae9be75032c00a0c189ff16e19300c802958c62eef812e349d5be7556a8',
+    'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
+    'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
+    'flat-full-back-noease': '134fda5cafc9c83446987adc34e10e8493f91addf4a4916e7e7da2afe6959285',
+    'flat-full-back-ease': '0a83b945871ad6257844a8c833a762b33a353bed9cf618debfa7ea31a97db503',
+    'flat-live-front-noease': '8a00294c3972906af55d7871fd8fe17d353f266f04005a29582ffd4384da4d52',
+    'flat-live-front-ease': 'd649b0f8aaf2a1288b68db5ce3b69df403650c9f4ce94ba58762b980f985b1d9',
+    'flat-live-back-noease': 'ad906524b157eb002a21d8a4feebee879ab99c884442b0c4ea8d074944b4d505',
+    'flat-live-back-ease': '6efa6daf0e4ae62d757f0a1893f93e9aeea47b07bb71a97ac5ead229a4155e97',
+  }
+  const GROUND_SHADOW_SHA256: Record<string, string> = {
+    'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
+    'relief-live': 'e0ba0ab8485c6b993da29d18da573f5cfbfe121f498c771e646cb4a44c08b000',
+    'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
+    'flat-live': '9774cc5d301fd5b2948150dc21b26bac52d6fd4a0c6716bd73b992e9ffb92121',
+  }
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+  const TYPED_WORDS = /TYPED_ZERO_CODE|TYPED_CODE_STEPS|TYPED_DELTA_KM|typedKm|CLOUD_TYPED/
+
+  for (const flat of [false, true]) {
+    for (const live of [false, true]) {
+      const name = `${flat ? 'flat' : 'relief'}-${live ? 'live' : 'full'}`
+      it(`leaves the untyped programs exactly as tides-tvr.4.2 left them (${name})`, () => {
+        const clouds = createCloudLayer(createEclipseShadow('earth'), flat, live)
+        const { vertexShader, fragmentShader } = clouds.material
+        for (const side of ['front', 'back']) {
+          for (const ease of ['noease', 'ease']) {
+            const defines = new Set([
+              ...(flat ? ['CLOUD_FLAT'] : []),
+              ...(side === 'back' ? ['FLIP_SIDED'] : []),
+              ...(ease === 'ease' ? ['FOG_EASE'] : []),
+            ])
+            const vertex = preprocess(vertexShader, defines)
+            const fragment = preprocess(fragmentShader, defines)
+            expect(vertex + fragment).not.toMatch(TYPED_WORDS)
+            expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
+              UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]
+            )
+          }
+        }
+        // The ground's shadow, the globe's and the tiles', is untyped
+        // whatever the map, and its text is as it was.
+        const head = CLOUD_GROUND_GLSL.head(flat, live)
+        expect(head).not.toMatch(TYPED_WORDS)
+        expect(sha256(head + '\n' + CLOUD_GROUND_GLSL.light)).toBe(GROUND_SHADOW_SHA256[name])
+        clouds.dispose()
+      })
+    }
+  }
+
+  const variants = [
+    [],
+    ['CLOUD_FLAT'],
+    ['FLIP_SIDED'],
+    ['CLOUD_FLAT', 'FLIP_SIDED'],
+    ['FLIP_SIDED', 'FOG_EASE'],
+  ]
+  const columnOf = (src: string) => src.slice(src.indexOf('vec4 cloudColumn('), src.indexOf('float cloudShade('))
+  for (const variant of variants) {
+    const name = variant.join('+') || 'relief'
+    it(`reads the typed top from the column's own read (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const untyped = new Set(variant)
+      const typed = new Set([...variant, 'CLOUD_TYPED'])
+      for (const stage of ['vertexShader', 'fragmentShader'] as const) {
+        const src = preprocess(clouds.material[stage], typed)
+        if (!src.includes('vec4 cloudColumn(')) continue
+        const column = columnOf(src)
+        const before = columnOf(preprocess(clouds.material[stage], untyped))
+        // No more reads than untyped: the alpha comes with the rgb.
+        const reads = (text: string) => text.match(/\btexture(Lod)?\(|cloudPoleSmoothed\(/g)?.length
+        expect(reads(column)).toBe(reads(before))
+        expect(column).toMatch(/vec4 c = cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\);/)
+        expect(column).toContain('float code = c.a * 255.0 - TYPED_ZERO_CODE;')
+        expect(column).toContain('float typedKm = abs(code) < 0.25 ? 0.0 : code * (TYPED_DELTA_KM / TYPED_CODE_STEPS);')
+        expect(column).toContain('float top = base + CLOUD_UNITS_PER_KM * km * shape;')
+        expect(column).toContain(
+          'return vec4(c.g, base + CLOUD_UNITS_PER_KM * max(typedKm, 0.0),\n' +
+            '    min(top + CLOUD_UNITS_PER_KM * typedKm, base + CLOUD_UNITS_PER_KM * uCloudMaxKm), base);'
+        )
+        const f = (x: number) => x.toFixed(6)
+        expect(src).toContain(`#define TYPED_ZERO_CODE ${f(TYPED_ZERO_CODE)}`)
+        expect(src).toContain(`#define TYPED_CODE_STEPS ${f(TYPED_CODE_STEPS)}`)
+        expect(src).toContain(`#define TYPED_DELTA_KM ${f(TYPED_DELTA_KM)}`)
+      }
+      // The vertex stage reads the tops, never the grid.
+      expect(preprocess(clouds.material.vertexShader, typed)).not.toMatch(/uCloudType\b|cloudLook/)
+      clouds.dispose()
+    })
+
+    it(`reckons from the ground under a lifted base where the untyped program took the base for it (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const src = preprocess(clouds.material.fragmentShader, new Set([...variant, 'CLOUD_TYPED']))
+      const code = src.replace(/\/\/.*$/gm, '')
+      const main = code.slice(code.indexOf('void main()'))
+      expect(main).toContain('cloudKm(colShade.z, colShade.w)')
+      expect(main).not.toMatch(/colShade\.y\b|colShade\.zy\b/)
+      if (variant.includes('FLIP_SIDED')) {
+        expect(code).toContain('shade += w * vec4(depth, mix(s0, s1, t), c.z, c.w);')
+      }
+      if (variant.includes('FLIP_SIDED') && !variant.includes('CLOUD_FLAT')) {
+        expect(main).toContain('cloudKm(length(eye) - uSeaLevel, colFog.w)')
+        expect(main).toContain('vec4 place = (sideShade + hitLight * vec4(depth, eyeDist, col.z, col.w)) / shadeW;')
+        expect(main).toContain('colShade.zw = place.zw;')
+        expect(main).toContain('terrainShade = place.w - CLOUD_CLEARANCE;')
+        expect(main).toContain('float ground = mix(colPrev.w, colIn.w, (sm - sPrev) / len) - CLOUD_CLEARANCE;')
+        expect(main).not.toMatch(/colFog\.y\b|colPrev\.y\b/)
+      }
+      clouds.dispose()
+    })
+  }
 })

@@ -10,11 +10,16 @@
 // The frames' cloud-type grids (tides-tvr.4.1, ../cloud-types.ts) are blended
 // the same way in a second, tiny pass of their own, so the output also has a
 // type grid that keeps step with the clouds. A frame without one (the static
-// clouds, a frame the cover grid didn't type) counts as confidence 0.
+// clouds, a frame the cover grid didn't type) counts as confidence 0. That
+// pass runs first, so that the main pass can write, into its output's alpha,
+// how far the typed tops lie from the untyped ones (tides-tvr.4.3,
+// ./cloudTypeGlsl.ts CLOUD_TYPED_TOP_GLSL), for the typed march to read in
+// the fetch it already makes.
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import { OUT_H, OUT_W, smoothstep } from '../real-clouds'
 import { TYPE_H, TYPE_W } from '../cloud-types'
+import { CLOUD_TYPED_TOP_GLSL } from './cloudTypeGlsl'
 
 export const FADE_MS = 500
 /** A bigger step in mix than this (between two frames) is a discontinuity. */
@@ -71,16 +76,23 @@ void main() {
 // Inputs are sampled at their full resolution (the static clouds are 2048 px
 // wide, the builds and the output 2560). Only geostationary builds carry
 // heights; elsewhere R and B are zeroed so the cloud layer uses its defaults.
+// The alpha is the typed top's code, from the blended type grid (uTypes,
+// this output's own, drawn first) and the blended texel, whose B is already
+// the trust the march takes (B times whether the output is measured): B is
+// 0 wherever no input measured heights. The frozen output's alpha is never
+// read: its code is worked out afresh from the blend.
 const fragmentShader = /* glsl */ `
 uniform sampler2D uPrev;
 uniform sampler2D uA;
 uniform sampler2D uB;
+uniform sampler2D uTypes;
 uniform float uPrevGeo;
 uniform float uAGeo;
 uniform float uBGeo;
 uniform float uMix;
 uniform float uFade;
 varying vec2 vUv;
+${CLOUD_TYPED_TOP_GLSL}
 
 vec3 cloudTexel(sampler2D t, float geo) {
   vec3 c = textureLod(t, vUv, 0.0).rgb;
@@ -97,7 +109,8 @@ vec3 blendCloud(vec3 x, vec3 y, float t) {
 
 void main() {
   vec3 frames = blendCloud(cloudTexel(uA, uAGeo), cloudTexel(uB, uBGeo), uMix);
-  gl_FragColor = vec4(blendCloud(cloudTexel(uPrev, uPrevGeo), frames, uFade), 1.0);
+  vec3 c = blendCloud(cloudTexel(uPrev, uPrevGeo), frames, uFade);
+  gl_FragColor = vec4(c, cloudTypedCode(textureLod(uTypes, vUv, 0.0), c));
 }
 `
 
@@ -245,6 +258,7 @@ export function createCloudBlender() {
         uPrev: { value: null },
         uA: { value: null },
         uB: { value: null },
+        uTypes: { value: null },
         uPrevGeo: { value: 0 },
         uAGeo: { value: 0 },
         uBGeo: { value: 0 },
@@ -303,6 +317,7 @@ export function createCloudBlender() {
     u.uBGeo.value = isGeo(pick.b) ? 1 : 0
     u.uMix.value = pick.mix
     u.uFade.value = fade
+    u.uTypes.value = out.types.texture
     const aTypes = typesOf(pick.a)
     const bTypes = typesOf(pick.b)
     const t = typeMaterial.uniforms
@@ -324,10 +339,10 @@ export function createCloudBlender() {
     out.typed = flags.typed
 
     const restore = gl.getRenderTarget()
-    gl.setRenderTarget(out.target)
-    quad.render(gl)
     gl.setRenderTarget(out.types)
     typeQuad.render(gl)
+    gl.setRenderTarget(out.target)
+    quad.render(gl)
     gl.setRenderTarget(restore)
     hasOutput = true
   }

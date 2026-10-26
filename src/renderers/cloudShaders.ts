@@ -18,7 +18,10 @@
 // blended cloud-type grid sets the tops' relief, the detail's erosion and
 // grain (drawn out east-west for cirrus), the self-shadow and the underside
 // (./cloudTypeGlsl.ts), in a program of their own (CLOUD_TYPED) for typed
-// maps. The march, and so which top is hit and where, never sees the types.
+// maps. The march never sees the types themselves, only their tops
+// (tides-tvr.4.3): how high each column's top stands, and its base where a
+// type lifts it, come with the map's own read in cloudColumn(), from its
+// alpha, which the blend (./cloudBlend.ts) fills in.
 //
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
@@ -58,7 +61,7 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { sceneRadius } from '../planets'
 import { neutralTypeTexture } from './cloudBlend'
-import { CLOUD_LOOK_GLSL } from './cloudTypeGlsl'
+import { CLOUD_LOOK_GLSL, TYPED_CODE_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
 import {
@@ -211,8 +214,15 @@ export function marchPhaseShare(stepExtinction: number): number {
   return 1 - t * t * (3 - 2 * t)
 }
 
-// Height field shared by the cloud shell and the ground's shadow.
-const FIELD = /* glsl */ `
+// The cloud map's texel at st for cloudColumn(), smoothed near the poles.
+const COLUMN_READ = `cloudPoleSmoothed(uCloudMap, st,
+    max(lod, log2(float(textureSize(uCloudMap, 0).x)) + ${f(poleSmoothingLod(1))}),
+    textureLod(uCloudMap, st, lod))`
+
+// Height field shared by the cloud shell and the ground's shadow. The
+// shell's (typed) also has typed tops (tides-tvr.4.3) under CLOUD_TYPED;
+// the ground's shadow is untyped, its text as it was before types.
+const field = (typed: boolean) => /* glsl */ `
 uniform sampler2D uCloudMap;
 uniform sampler2D uTerrainMap;
 uniform float uCloudShift;
@@ -229,7 +239,9 @@ uniform float uSeaLevel;
 #define TERRAIN_DISPLACEMENT ${f(TERRAIN_DISPLACEMENT)}
 
 ${poleSmoothingGlsl('cloudPoleSmoothed', POLE_SMOOTH_CLOUD_TAPS)}
-
+${typed ? `#ifdef CLOUD_TYPED
+${TYPED_CODE_GLSL}#endif
+` : ''}
 // directionToUv(): SphereGeometry's texture coordinates of a local direction.
 vec2 cloudUv(vec3 dir) {
   float u = atan(dir.z, -dir.x) / (2.0 * CLOUD_PI);
@@ -254,14 +266,32 @@ float cloudTerrain(vec2 uv) {
 vec4 cloudColumn(vec2 uv, float lod, float terrain) {
   vec2 st = vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0));
   // Smoothed near the poles (./poleSmoothing.ts).
-  vec3 c = cloudPoleSmoothed(uCloudMap, st,
-    max(lod, log2(float(textureSize(uCloudMap, 0).x)) + ${f(poleSmoothingLod(1))}),
-    textureLod(uCloudMap, st, lod)).rgb;
+${typed ? `#ifdef CLOUD_TYPED
+  // With its alpha: the typed top (below).
+  vec4 c = ${COLUMN_READ};
+#else
+  vec3 c = ${COLUMN_READ}.rgb;
+#endif` : `  vec3 c = ${COLUMN_READ}.rgb;`}
   float trust = c.b * uCloudMeasured;
   float km = mix(1.5 + 7.0 * c.g * c.g, max(c.r * ${f(MAX_CLOUD_TOP_KM)}, ${f(MIN_MEASURED_TOP_KM)}), trust);
   float base = terrain + CLOUD_CLEARANCE;
   float shape = 0.25 + 0.75 * smoothstep(0.0, 0.65, c.g);
+${typed ? `#ifdef CLOUD_TYPED
+  // Typed (tides-tvr.4.3), ../cloud-types.ts typedColumn(): the top moved as
+  // the map's alpha has it (the blend's, ./cloudBlend.ts), no taller than
+  // the map's tallest. A raised top lifts the base with it, so w is instead
+  // where the untyped base stands, the clearance over the ground, for what
+  // is reckoned from the ground rather than the cloud's own base. A code
+  // within a quarter of no change is none (decodeTypedTop()), so a texel
+  // the types leave alone (confidence 0) is the untyped column exactly.
+  float code = c.a * 255.0 - TYPED_ZERO_CODE;
+  float typedKm = abs(code) < 0.25 ? 0.0 : code * (TYPED_DELTA_KM / TYPED_CODE_STEPS);
+  float top = base + CLOUD_UNITS_PER_KM * km * shape;
+  return vec4(c.g, base + CLOUD_UNITS_PER_KM * max(typedKm, 0.0),
+    min(top + CLOUD_UNITS_PER_KM * typedKm, base + CLOUD_UNITS_PER_KM * uCloudMaxKm), base);
+#else
   return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, km);
+#endif` : `  return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, km);`}
 }
 
 // How much sunlight a cloud of this opacity stops: thin veils hardly any.
@@ -275,6 +305,8 @@ float cloudLod(float footprint) {
   return max(0.0, log2(footprint / texel));
 }
 `
+const FIELD = field(false)
+const SHELL_FIELD = field(true)
 
 // The mip the march from inside reads at the eye (tides-tvr.1): its own
 // steps' there, a level ray's a step across the map it was tuned to
@@ -387,7 +419,7 @@ varying float vViewDepth;
 varying float vNear;
 varying vec3 vEclipseEye;
 ${depthGlsl}
-${FIELD}
+${SHELL_FIELD}
 ${EYE_LOD_GLSL}
 ${FOG_EXTINCTION_GLSL}
 ${MARCH_PHASE_GLSL}
@@ -443,7 +475,7 @@ void main() {
 const FRAGMENT = /* glsl */ `
 #include <common>
 ${ECLIPSE_GLSL.fragmentHead}
-${FIELD}
+${SHELL_FIELD}
 ${EYE_LOD_GLSL}
 uniform float uOpacity;
 uniform float uSunGain;
@@ -639,7 +671,14 @@ void cloudShadeAdd(inout vec4 shade, inout float weight, float w, vec4 c0, vec4 
     float a1, float s0, float s1, float t) {
   vec4 c = mix(c0, c1, t);
   float depth = clamp((c.z - mix(a0, a1, t)) / max(c.z - c.y, 1e-6), 0.0, 1.0);
+#ifdef CLOUD_TYPED
+  // The base summed is where the untyped base stands (cloudColumn()'s w),
+  // the ground's, which is what the shading takes it for (terrainShade,
+  // cloudKm()): a type lifts a cloud's own base off it.
+  shade += w * vec4(depth, mix(s0, s1, t), c.z, c.w);
+#else
   shade += w * vec4(depth, mix(s0, s1, t), c.z, c.y);
+#endif
   weight += w;
 }
 #endif
@@ -1337,7 +1376,12 @@ void main() {
       float sm = 0.5 * (lo + hi);
       vec3 qm = eye + d * sm;
       float rm = length(qm);
+#ifdef CLOUD_TYPED
+      // The ground's base, not the cloud's, which a type can lift.
+      float ground = mix(colPrev.w, colIn.w, (sm - sPrev) / len) - CLOUD_CLEARANCE;
+#else
       float ground = mix(colPrev.y, colIn.y, (sm - sPrev) / len) - CLOUD_CLEARANCE;
+#endif
       float gm = rm - uSeaLevel - cloudMarchColumn(cloudUv(qm / rm), rm, dot(d, qm / rm), ground,
         sm, ds, spread, fromAbove).z;
       if (gm <= 0.0) {
@@ -1356,8 +1400,14 @@ void main() {
     // above, as far down its column and as thick as the fog it crossed.
     vec3 upEye = normalize(eye);
     vec2 shade = fogShade / max(1.0 - fogClear, 1e-6);
+#ifdef CLOUD_TYPED
+    // Heights over the sea from the ground's base, not the cloud's.
+    fogLight = cloudRadiance(upEye, upEye, d, shade.y, shade.x,
+      cloudKm(length(eye) - uSeaLevel, colFog.w), 0.0, vEclipseEye);
+#else
     fogLight = cloudRadiance(upEye, upEye, d, shade.y, shade.x,
       cloudKm(length(eye) - uSeaLevel, colFog.y), 0.0, vEclipseEye);
+#endif
   }
   if (sHit < 0.0 && sVeil >= 0.0) {
     // Nothing past the veils: the first is the side the ray meets, as clear
@@ -1491,10 +1541,18 @@ void main() {
   // The sums are each weight times a bounded value, so no faint weight
   // divides into more than it holds.
   if (shadeW > 0.0) {
+#ifdef CLOUD_TYPED
+    // The ground's base, as cloudShadeAdd() sums it (w).
+    vec4 place = (sideShade + hitLight * vec4(depth, eyeDist, col.z, col.w)) / shadeW;
+    depth = place.x;
+    pShade = eye + d * place.y;
+    colShade.zw = place.zw;
+#else
     vec4 place = (sideShade + hitLight * vec4(depth, eyeDist, col.z, col.y)) / shadeW;
     depth = place.x;
     pShade = eye + d * place.y;
     colShade.zy = place.zw;
+#endif
     terrainShade = place.w - CLOUD_CLEARANCE;
   }
 #else
@@ -1662,8 +1720,14 @@ void main() {
   depth *= lookL.z;
 #endif
 
+#ifdef CLOUD_TYPED
+  // Over the sea from the ground's base (w), not the cloud's.
+  vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth, cloudKm(colShade.z, colShade.w), occ,
+    CLOUD_ECLIPSE_HIT);
+#else
   vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth, cloudKm(colShade.z, colShade.y), occ,
     CLOUD_ECLIPSE_HIT);
+#endif
 
   float opacity = hitShow * uOpacity;
 #ifdef FLIP_SIDED
