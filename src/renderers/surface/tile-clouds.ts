@@ -22,12 +22,23 @@
 // footprint of ~0: not 0, whose log2 is undefined) and the fragment
 // interpolates it: +0.12 ms (min) to +0.3 ms (p50) on a shared GPU, where
 // per fragment measured +0.8 to +1.0. The fragment takes the footprint from
-// surfaceRay's derivatives (surfaceGround is quantised to ~0.5 m) as the
-// globe takes it from its point's, and where that asks for more blur than
-// the floor (pixels tens of km wide, a sliver at the horizon) runs the
-// globe's function itself. One float varying. Against the globe at the same
-// pose the shadow's edges sit within 1.2 to 1.5 px (median), 3.3 to 4.2 px
-// (p90), through the handover band.
+// surfaceRay's derivatives (surfaceGround is quantised to ~0.5 m), which
+// differentiate the displaced surface, not the globe's undisplaced sphere:
+// the step between neighbouring pixels' ground points with its rise
+// included, so at least the globe's footprint for the same ground and more
+// on steep relief (more blur, never less). Where that asks for more blur
+// than the floor (pixels tens of km wide, a sliver at the horizon) the
+// fragment runs the globe's function itself. One float varying.
+//
+// The switch is on the pixel's footprint, not the vertices' spacing, which
+// the errorTarget and coarse parent tiles stretch. Measured against the
+// same tiles shaded per fragment (headless, top of the band, 173 and 152
+// km, pitch -8 to -35, two Sun heights), the edges sit within p90 0.6 to
+// 1.1 px at errorTarget 4, 1.1 at 8 and 2.4 (3.2 in the horizon's third)
+// at 16, about two levels of children missing; p99 3 to 6.5 px. The field
+// is too blurred for a linear step across a vertex spacing to move an edge
+// far. Against the globe at the same pose the shadow's edges sit within
+// 1.2 to 1.5 px (median), 3.3 to 4.2 px (p90), through the handover band.
 //
 // The heads go after the base's (the fragment's reads surfaceRay); the
 // light after lights_fragment_end, as on the globe. The haze's head, later
