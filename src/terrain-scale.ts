@@ -121,6 +121,14 @@ export function terrainScale(altitude: number, relief: number = RELIEF, blend: b
 export const terrainScaleUniform: THREE.IUniform<number> = { value: RELIEF }
 
 /**
+ * terrainScaleUniform's GLSL declaration (uTerrainScale), guarded, so that
+ * patches composed onto one program (the cloud shadow and the streamed
+ * tiles' height, tides-zmw.9.12) can each declare it without redefining it.
+ */
+export const TERRAIN_SCALE_UNIFORM_GLSL =
+  '#ifndef TERRAIN_SCALE_DECLARED\n#define TERRAIN_SCALE_DECLARED\nuniform float uTerrainScale;\n#endif\n'
+
+/**
  * Sets the live scale for an eye `altitude` over the sea-level sphere
  * (Infinity: away from Earth, or no ship). ShipController's frame, once,
  * after the spawn and before the step (see the header); its unmount passes

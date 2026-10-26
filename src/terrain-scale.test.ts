@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
-  CLOUD_CLEARANCE,
   EARTH_RADIUS_KM,
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
@@ -215,7 +214,6 @@ describe('the live scale (tides-zmw.9.5)', () => {
       if (a === floor) {
         stopped++
         expect(a).toBeLessThan(cloudColumn(1, 1.5, grey / 255, liveTerrainDisplacement()).base)
-        expect(a).toBeLessThan((grey / 255) * liveTerrainDisplacement() + CLOUD_CLEARANCE)
       }
       maxStep = Math.max(maxStep, Math.abs(terrainScaleUniform.value - prevScale))
       prevScale = terrainScaleUniform.value

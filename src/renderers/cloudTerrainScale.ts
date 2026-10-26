@@ -15,6 +15,7 @@
 // With the scale off nothing changes: the programs are FIELD as written, to
 // the byte, so the system view's hash pin (nightLights.test.ts) holds.
 import { TERRAIN_DISPLACEMENT, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { TERRAIN_SCALE_UNIFORM_GLSL } from '../terrain-scale'
 
 const f = (x: number) => x.toFixed(6)
 
@@ -22,8 +23,10 @@ const f = (x: number) => x.toFixed(6)
 export const FIXED_TERRAIN_GLSL = `#define TERRAIN_DISPLACEMENT ${f(TERRAIN_DISPLACEMENT)}`
 
 /** Its live stand-in: the ground's displacementScale this frame, as
- * ../terrain-scale.ts terrainDisplacement() gives it (within an ulp). */
-export const LIVE_TERRAIN_GLSL = `uniform float uTerrainScale;\n#define TERRAIN_DISPLACEMENT (uTerrainScale * ${f(TRUE_TERRAIN_DISPLACEMENT)})`
+ * ../terrain-scale.ts terrainDisplacement() gives it (within an ulp). The
+ * uniform's declaration is the shared, guarded one, so a program that
+ * declares it elsewhere too (tides-zmw.9.7's tiles) still compiles. */
+export const LIVE_TERRAIN_GLSL = `${TERRAIN_SCALE_UNIFORM_GLSL}#define TERRAIN_DISPLACEMENT (uTerrainScale * ${f(TRUE_TERRAIN_DISPLACEMENT)})`
 
 /**
  * `source` (a shader holding FIELD) with its TERRAIN_DISPLACEMENT on the live
