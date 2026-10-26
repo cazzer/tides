@@ -8,8 +8,6 @@ import {
   PerspectiveCamera,
 } from '@react-three/drei'
 import useRefs from 'react-use-refs'
-import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
-import { ToneMappingMode, BlendFunction } from 'postprocessing'
 
 import SolarSystem from './solar-system'
 import {
@@ -430,6 +428,9 @@ function PanelCamera() {
     return null
   }
 
+  // Not the default camera, so nothing picks through it: under reversed-Z
+  // (tides-zmw.9.3) three r180's Raycaster starts an orthographic ray at the
+  // standard NDC depth, about 2 far out, so picking would miss everything.
   return (
     <OrthographicCamera
       position={[

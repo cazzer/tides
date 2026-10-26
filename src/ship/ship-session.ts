@@ -111,8 +111,8 @@ export function shipFar(distanceFromSun: number): number {
 // Saturn's rings were already unresolved by depth at 0.1 but are a few pixels
 // across from Earth. Just below 0.001 (0.000977), float32 clip maths drops the
 // star sphere at the far plane on the standard depth buffer; under reversed-Z
-// (tides-zmw.9.3) the far plane's clip z is ~0.2 · near, not w, so nothing
-// drops it there, down to NEAR_MIN_REVERSED.
+// (tides-zmw.9.3) the star sphere's clip z (it sits at 0.8 of far) is
+// ~0.2 · near, well above 0, so nothing drops it there, down to NEAR_MIN_REVERSED.
 const NEAR_SHARE = 0.4
 /** The near plane's floor on the standard depth buffer. */
 export const NEAR_MIN = 0.001
