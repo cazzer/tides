@@ -5,8 +5,9 @@
 //
 // tides-zmw.9.7: the tiles wait for their View's globe link (surface-link.ts;
 // the ground haze then, every globe feature since tides-zmw.9.16) so every
-// tile is built with it, and draw only below the blend's top
-// (surfaceOpacityUniform; surface-scale.ts dissolves them in under it).
+// tile is built with it, and draw only below the handover's top
+// (surfaceOpacityUniform, ../../surface-handover.ts; surface-scale.ts
+// dissolves them in under it).
 //
 // tides-zmw.9.8: the ship's floor reads the tiles it draws (surface-ground.ts,
 // registered in ../../surface-ground.ts while mounted), refreshed after each
@@ -15,7 +16,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
-import { surfaceOpacityUniform } from '../../terrain-scale'
+import { surfaceOpacityUniform } from '../../surface-handover'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
 import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import type { ImageryTile } from './imagery'
@@ -108,10 +109,8 @@ export default function SurfaceTiles() {
   useFrame((_, delta) => {
     const current = surface.current
     if (!current?.tiles.group.parent) return
-    const { tiles, budget, bounds } = current
+    const { tiles, budget } = current
     budget.tick()
-    // The regions' fit from this frame's scale (ShipController has written it).
-    bounds.update()
     // Less detail the faster the ground sweeps past (surface-lod.ts), but
     // the rest detail under and around the eye (a second's flight ahead),
     // set before update() picks this frame's tiles.
@@ -127,7 +126,7 @@ export default function SurfaceTiles() {
     tiles.group.updateWorldMatrix(true, false)
     tiles.update()
     ground.current?.invalidate()
-    // None of the ground is the tiles' above the blend's top (ShipController
+    // None of the ground is the tiles' above the handover's top (ShipController
     // has written this frame's share): the globe draws it all.
     tiles.group.visible = surfaceOpacityUniform.value > 0
     current.syncCounters()

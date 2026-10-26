@@ -19,7 +19,7 @@ import {
   spawnPoseFromCamera,
 } from './ship-session'
 import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail'
-import { setTerrainEye } from '../terrain-scale'
+import { setSurfaceEye } from '../surface-handover'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 import { SURFACE_TILES_ON } from '../surface'
 import { carryShip, earthSpinRate, fillAir, resetFrameCarry, shipCarry } from './frame-carry'
@@ -48,7 +48,7 @@ export function ShipController() {
     () => () => {
       clearLimbView()
       disposeLimbSpheres()
-      setTerrainEye(Infinity)
+      setSurfaceEye(Infinity)
       resetFrameCarry(shipCarry)
     },
     []
@@ -98,7 +98,7 @@ export function ShipController() {
     // ship where the ground left it (frame-carry.ts, tides-zmw.9.18).
     const spinRate = earthSpinRate(useStore.getState().timeScale)
     if (SURFACE_TILES_ON && earth) carryShip(shipCarry, state, earth, moon ?? null, delta, spinRate)
-    setTerrainEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
+    setSurfaceEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
     // Read each frame: the depth probe may answer after the first ones.
     if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)

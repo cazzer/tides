@@ -27,18 +27,16 @@
 // gains nothing.
 //
 // The detail's tilt was sized for ground drawn at 12x (DETAIL_TILT_RELIEF)
-// or more (it may well date from 25x). With the live terrain scale on
-// (terrain-scale.ts TERRAIN_BLEND) or the page under 12x, it follows the
-// drawn relief (displacementScale over 12x's, or the page relief's above
-// it), as the ground's own slope does: at 1x a tilt sized for 12x relief
-// stood ~12x too steep (tides-zmw.9.7, tides-zmw.21). It only ever shrinks:
-// at 12x and above without the blend the shader is as it was (?relief=25
-// shows the scene as first tuned).
+// or more (it may well date from 25x). With the page under 12x it follows
+// the drawn relief (displacementScale, the page's constant, over 12x's), as
+// the ground's own slope does: at 1x a tilt sized for 12x relief stood ~12x
+// too steep (tides-zmw.9.7, tides-zmw.21). It only ever shrinks: at 12x and
+// above the shader is as it was (?relief=25 shows the scene as first
+// tuned).
 //
 // Spread through composePatches onto the ground's Phong material.
 import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START, REFERENCE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { REFERENCE_RELIEF, RELIEF } from '../relief'
-import { TERRAIN_BLEND } from '../terrain-scale'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { GROUND_RELIEF_GLSL } from './groundRelief'
 import type { MaterialPatch } from './eclipseShadow'
@@ -55,9 +53,9 @@ export const GROUND_DETAIL_OCTAVES_LOW = 3
  * number at 12x), so the drawn relief over it never exceeds 1. */
 export const DETAIL_TILT_RELIEF = 12
 export const DETAIL_TILT_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (Math.max(DETAIL_TILT_RELIEF, RELIEF) / REFERENCE_RELIEF)
-/** Whether this page's tilt follows the drawn relief: with the blend on, or
- * under the relief it was sized at. */
-export const DETAIL_FOLLOWS_RELIEF = TERRAIN_BLEND || RELIEF < DETAIL_TILT_RELIEF
+/** Whether this page's tilt is scaled to its relief: under the relief it
+ * was sized at. */
+export const DETAIL_TILT_SCALED = RELIEF < DETAIL_TILT_RELIEF
 
 const f = (x: number) => x.toFixed(6)
 
@@ -125,15 +123,15 @@ float groundDetailFine = 0.0;
 `
 
 // The detail's tilt over the drawn relief's share of 12x's (only where the
-// relief's displacementScale is declared).
-const SCALED_TILT = /* glsl */ `
+// relief's displacementScale is declared), under 12x.
+const DETAIL_TILT_GLSL = /* glsl */ `
 #ifdef GROUND_RELIEF
     slope *= displacementScale / ${DETAIL_TILT_DISPLACEMENT.toExponential(9)};
 #endif`
 
 // After the albedo lookup, the specular mask and the normal; before the
 // emissive map and the lights.
-const fragmentBody = (followScale: boolean) => /* glsl */ `
+const fragmentBody = (scaled: boolean) => /* glsl */ `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP)
 vec3 groundUp = normal;
 {
@@ -168,7 +166,7 @@ vec3 groundUp = normal;
     vec3 up = normalize(vGroundDetailPos);
     vec3 slope = (detail.yzw - dot(detail.yzw, up) * up)
       * mix(GROUND_DETAIL_RELIEF, GROUND_DETAIL_RELIEF_ICE, ice)
-      * ${f(DETAIL_BASE_TEXELS)} * groundDetailTexel;${followScale ? SCALED_TILT : ''}
+      * ${f(DETAIL_BASE_TEXELS)} * groundDetailTexel;${scaled ? DETAIL_TILT_GLSL : ''}
     slope *= groundLand * min(1.0, GROUND_DETAIL_MAX_SLOPE / max(length(slope), 1e-6));
     normal = normalize(normal - normalMatrix * slope);
   }
@@ -208,9 +206,9 @@ function inject(source: string, chunk: string, code: string): string {
 }
 
 /** `low`: the low quality tier, which takes fewer octaves. The relief
- * comes with the material's displacement map. `followScale`: the tilt
- * follows the drawn relief (the blend's on, or the page isn't at 12x). */
-export function groundDetailPatch(low: boolean, followScale: boolean = DETAIL_FOLLOWS_RELIEF): MaterialPatch {
+ * comes with the material's displacement map. `scaled`: the tilt follows
+ * the drawn relief (the page's under 12x; the tests pass either). */
+export function groundDetailPatch(low: boolean, scaled: boolean = DETAIL_TILT_SCALED): MaterialPatch {
   const octaves = low ? GROUND_DETAIL_OCTAVES_LOW : GROUND_DETAIL_OCTAVES
   return {
     onBeforeCompile(shader) {
@@ -223,12 +221,12 @@ export function groundDetailPatch(low: boolean, followScale: boolean = DETAIL_FO
             TEXEL_BODY
           ),
           'normal_fragment_maps',
-          fragmentBody(followScale)
+          fragmentBody(scaled)
         ),
         'lights_fragment_end',
         LIGHT_BODY
       )
     },
-    customProgramCacheKey: () => `ground-detail-${octaves}${followScale ? '-scaled' : ''}`,
+    customProgramCacheKey: () => `ground-detail-${octaves}${scaled ? '-scaled' : ''}`,
   }
 }

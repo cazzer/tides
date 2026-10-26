@@ -46,7 +46,6 @@
 // after itself, so the cloud field's own uSeaLevel and uSunDir uniforms
 // declare as on the globe, where the haze comes after the clouds too.
 import { CLOUD_GROUND_GLSL } from '../cloudShaders'
-import { TERRAIN_BLEND } from '../../terrain-scale'
 import { injectAfterChunk, renameInSnippet, surfaceInject, type TileAdapter } from './tile-material'
 
 const WHAT = 'tile clouds'
@@ -56,11 +55,11 @@ export const CLOUD_GROUND_LOD_FLOOR = 2.5
 
 const VARYING = 'varying float vSurfaceCloudLit;'
 
-/** The adapter's GLSL for a cloud layer that is `flat` (the low tier's) and
- * on the `live` terrain scale (the test checks it against the globe's). */
-export function tileCloudsGlsl(flat: boolean, live: boolean) {
+/** The adapter's GLSL for a cloud layer that is `flat` (the low tier's)
+ * (the test checks it against the globe's). */
+export function tileCloudsGlsl(flat: boolean) {
   const footprint = renameInSnippet(
-    CLOUD_GROUND_GLSL.head(flat, live),
+    CLOUD_GROUND_GLSL.head(flat),
     'length(fwidth(vCloudGround))',
     'surfaceCloudFootprint',
     WHAT,
@@ -85,36 +84,31 @@ export function tileCloudsGlsl(flat: boolean, live: boolean) {
   }
 }
 
-/** The adapter for a cloud layer on the `live` terrain scale or not. */
-export function tileCloudsOn(live: boolean): TileAdapter {
-  return (link) => {
-    const { flat, uniforms } = link.clouds
-    const glsl = tileCloudsGlsl(flat, live)
-    return {
-      patch: {
-        onBeforeCompile(shader) {
-          Object.assign(shader.uniforms, uniforms)
-          shader.vertexShader = surfaceInject(
-            surfaceInject(shader.vertexShader, 'vertexHead', glsl.vertexHead),
-            'vertexBody',
-            glsl.vertexBody
-          )
-          shader.fragmentShader = injectAfterChunk(
-            surfaceInject(
-              surfaceInject(shader.fragmentShader, 'fragmentHead', glsl.fragmentHead),
-              'fragmentBody',
-              glsl.fragmentBody
-            ),
-            'lights_fragment_end',
-            glsl.light,
-            WHAT
-          )
-        },
-        customProgramCacheKey: () => `cloud-shadow${flat ? '-flat' : ''}${live ? '-live' : ''}-surface`,
+/** As the globe's cloud layer: its shadows on the tiles. */
+export const tileClouds: TileAdapter = (link) => {
+  const { flat, uniforms } = link.clouds
+  const glsl = tileCloudsGlsl(flat)
+  return {
+    patch: {
+      onBeforeCompile(shader) {
+        Object.assign(shader.uniforms, uniforms)
+        shader.vertexShader = surfaceInject(
+          surfaceInject(shader.vertexShader, 'vertexHead', glsl.vertexHead),
+          'vertexBody',
+          glsl.vertexBody
+        )
+        shader.fragmentShader = injectAfterChunk(
+          surfaceInject(
+            surfaceInject(shader.fragmentShader, 'fragmentHead', glsl.fragmentHead),
+            'fragmentBody',
+            glsl.fragmentBody
+          ),
+          'lights_fragment_end',
+          glsl.light,
+          WHAT
+        )
       },
-    }
+      customProgramCacheKey: () => `cloud-shadow${flat ? '-flat' : ''}-surface`,
+    },
   }
 }
-
-/** As the globe's cloud layer (createCloudLayer's default scale). */
-export const tileClouds: TileAdapter = tileCloudsOn(TERRAIN_BLEND)

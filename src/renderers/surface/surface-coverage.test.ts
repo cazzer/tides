@@ -87,7 +87,7 @@ function options(over: Partial<SurfaceViewErrorOptions> = {}): SurfaceViewErrorO
     coverageLevel: () => -1,
     hasCoverageEnds: () => false,
     maxSourceLevel: 16,
-    scale: () => 1,
+    relief: 1,
     ground: () => null,
     ...over,
   }
@@ -113,7 +113,7 @@ describe('the view error near the eye (tides-zmw.9.17)', () => {
     const { position } = eyeAt(e, 28, 87, 9000)
     const { renderer, volume } = fakeRenderer({ error: Infinity, distanceFromCamera: 0 }, position)
     const ground = vi.fn(() => 7500)
-    boundSurfaceViewError(renderer, options({ ground, scale: () => 1.1 }))
+    boundSurfaceViewError(renderer, options({ ground, relief: 1.1 }))
     const near = viewError(renderer, tileOf(volume, [], 10))
     expect(near.distanceFromCamera).toBeCloseTo(9000 - 7500 * 1.1, 6)
     expect(near.error).toBeCloseTo(10 / ((9000 - 8250) * 0.002), 6)

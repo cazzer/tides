@@ -1,5 +1,5 @@
 // Terrain cast shadows on the streamed tiles (tides-zmw.9.15), in two layers
-// on the live terrain scale:
+// at the page's relief:
 //
 // (a) The globe's, for the handover: groundShadow.ts's horizon-map shadows
 //     and sky occlusion, its own GLSL by rename, on the globe's horizon
@@ -13,10 +13,9 @@
 //     (a pixel never spans its texel here), and without the globe's
 //     footprint fade (0 here: that fades the shadows out where a pixel spans
 //     a texel, the system view). The globe scales the map's tangents by its
-//     displacementScale, the live scale's terrainDisplacement(); here that
-//     is uTerrainScale (the tiles' own height scale, the same uniform
-//     object) times terrainDisplacement(1), so both stand on the scale of the
-//     frame. It carries the long shadows of whole ranges, and through the
+//     displacementScale, TERRAIN_DISPLACEMENT; here that number is written
+//     in, so both stand on the page's relief. It carries the long shadows of
+//     whole ranges, and through the
 //     dissolve band the tiles shade as the globe pixels between them.
 // (b) The tiles' own, for detail: each elevation grid's horizon map
 //     (terrarium.ts bakeTileHorizon, baked in the decode worker at true
@@ -31,11 +30,11 @@
 //     The Sun against the horizon toward it, interpolated between the two
 //     directions either side as the globe does (sunAzimuth()), with the
 //     globe's soft edge (in tangent) and its "a step or less never shadows",
-//     the tangents times uTerrainScale. Per pixel it is one or two taps and
+//     the tangents times RELIEF. Per pixel it is one or two taps and
 //     a division: the map's code decodes without trigonometry, and what is
 //     the same across a tile is worked out per tile on the CPU, read by
 //     three as uniforms at the tile's draw (tileSun(), redone only when the
-//     Sun, the scale or the opacity moved, from the tile's frame set up
+//     Sun or the opacity moved, from the tile's frame set up
 //     once): the Sun's two directions (which layer, what weights), and
 //     whether the Sun can be under the grid's highest horizon anywhere on
 //     the tile at all (off when not, at night, and while the grid has no
@@ -53,7 +52,9 @@
 // baked yet) read a placeholder with uTileHorizonOn 0: (a) alone.
 import * as THREE from 'three'
 import { HORIZON_SOFTNESS } from '../../earth-horizon'
-import { surfaceOpacityUniform, terrainDisplacement, terrainScaleUniform } from '../../terrain-scale'
+import { TERRAIN_DISPLACEMENT } from '../../cloud-layer'
+import { RELIEF } from '../../relief'
+import { surfaceOpacityUniform } from '../../surface-handover'
 import { GROUND_SHADOW_GLSL } from '../groundShadow'
 import type { GlobeLink } from './surface-link'
 import { SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
@@ -71,7 +72,7 @@ function statement(body: string, head: string): string {
   return body.slice(at, body.indexOf(';', at) + 1)
 }
 
-/** (a)'s heads: the globe's uniforms (its scale is uTerrainScale's, which the scale's patch declares), and the varying. */
+/** (a)'s heads: the globe's uniforms (its scale written in: globeVertexBody()), and the varying. */
 function vertexHead(seaLevel: number): string {
   return `${renameInSnippet(GROUND_SHADOW_GLSL.fragmentHead, 'uniform float uGroundShadowScale;', '', WHAT, 1)}
 const float SURFACE_SHADOW_RADIUS = ${seaLevel.toFixed(9)};
@@ -105,7 +106,7 @@ function globeVertexBody(): string {
     s = renameInSnippet(s, `texture(uGroundHorizon, vec3(vMapUv, ${layer}))`, `textureLod(uGroundHorizon, vec3(surfaceShadowUv, ${layer}), 0.0)`, WHAT, 1)
   }
   s = renameInSnippet(s, 'vMapUv', 'surfaceShadowUv', WHAT, 1)
-  s = renameInSnippet(s, 'uGroundShadowScale', `(uTerrainScale * ${terrainDisplacement(1).toExponential(9)})`, WHAT, 1)
+  s = renameInSnippet(s, 'uGroundShadowScale', `(${TERRAIN_DISPLACEMENT.toExponential(9)})`, WHAT, 1)
   s = renameInSnippet(s, 'reflectedLight.directDiffuse *= sunLit;', 'vSurfaceShadow.x = sunLit;', WHAT, 1)
   s = renameInSnippet(s, 'reflectedLight.directSpecular *= sunLit;', '', WHAT, 1)
   s = renameInSnippet(s, 'reflectedLight.indirectDiffuse *= groundHorizonSky;', 'vSurfaceShadow.y = groundHorizonSky;', WHAT, 1)
@@ -132,12 +133,12 @@ float groundHorizonSky = vSurfaceShadow.y;
     float code = dot(uTileSunA, textureLod(uTileHorizon, vec3(vBumpMapUv, uTileSunLayers.x), 0.0));
     if (uTileSunLayers.y >= 0.0) code += dot(uTileSunB, textureLod(uTileHorizon, vec3(vBumpMapUv, uTileSunLayers.y), 0.0));
     code = min(code, ${f(TILE_HORIZON_CODE_MAX)});
-    float need = uTerrainScale * code / ((1.0 - code) * ${f(TILE_HORIZON_GAIN)});
+    float need = ${f(RELIEF)} * code / ((1.0 - code) * ${f(TILE_HORIZON_GAIN)});
     float sinSun = dot(normalize(uGroundShadowSun), surfaceUp);
     float cos2 = max(1.0 - sinSun * sinSun, 1e-4);
     float soft = ${f(HORIZON_SOFTNESS)} / cos2;
-    // One step of the code, on the live scale: less never shadows.
-    float quantum = uTerrainScale * ${f(1 / 254 / TILE_HORIZON_GAIN)};
+    // One step of the code, at the relief: less never shadows.
+    float quantum = ${f(RELIEF)} * ${f(1 / 254 / TILE_HORIZON_GAIN)};
     float fine = mix(1.0,
       smoothstep(-soft, soft, sinSun * inversesqrt(cos2) - need),
       smoothstep(quantum, quantum + ${f(HORIZON_SOFTNESS)}, need));
@@ -186,7 +187,8 @@ const DEG = Math.PI / 180
 /**
  * (b)'s per-tile values for a tile at `frame`, its grid's highest horizon
  * `maxTangent` (true scale), for the Sun `sun` (the ground's frame, unit),
- * the live `scale` and the tiles' `opacity`, into `target` (no allocation).
+ * the drawn `scale` (the page's relief) and the tiles' `opacity`, into
+ * `target` (no allocation).
  * The Sun's azimuth and the two directions' weights are the globe's
  * (sunAzimuth(): 360° · d / 8 clockwise from north, layer 0 N, NE, E, SE),
  * at the tile's centre. Across a tile the azimuth turns with the meridians'
@@ -223,26 +225,23 @@ export function tileSun(frame: TileFrame, maxTangent: number, sun: THREE.Vector3
   return target
 }
 
-/** The Sun, the scale and the opacity as the tiles' uniforms stand, with a version that moves when any of them does. */
+/** The Sun and the opacity as the tiles' uniforms stand, with a version that moves when either does. */
 interface SunNow {
   sun: THREE.Vector3
-  scale: number
   opacity: number
   version: number
 }
 
 /** Reads the link's Sun (normalised once a change, into one vector) for every tile of a composer. */
 function sunReader(link: GlobeLink): () => SunNow {
-  const now: SunNow = { sun: new THREE.Vector3(), scale: NaN, opacity: NaN, version: 0 }
+  const now: SunNow = { sun: new THREE.Vector3(), opacity: NaN, version: 0 }
   const seen = new THREE.Vector3(NaN, NaN, NaN)
   return () => {
     const sun = link.sunDir.value
-    const scale = terrainScaleUniform.value
     const opacity = surfaceOpacityUniform.value
-    if (sun.x !== seen.x || sun.y !== seen.y || sun.z !== seen.z || scale !== now.scale || opacity !== now.opacity) {
+    if (sun.x !== seen.x || sun.y !== seen.y || sun.z !== seen.z || opacity !== now.opacity) {
       seen.copy(sun)
       now.sun.copy(sun).normalize()
-      now.scale = scale
       now.opacity = opacity
       now.version++
     }
@@ -265,7 +264,7 @@ function noHorizon(): THREE.DataArrayTexture {
 /**
  * The tile's (b) uniforms, as getters three reads at each draw: its grid's
  * map (looked up each time, so a late or re-baked map reaches the tile;
- * bound as a clone), and tileSun()'s values, redone when the Sun, scale or
+ * bound as a clone), and tileSun()'s values, redone when the Sun or the
  * opacity moved (sunNow's version) or the map changed.
  */
 function tileUniforms(sunNow: () => SunNow, material: THREE.Material, mesh: THREE.Mesh): Record<string, THREE.IUniform> {
@@ -290,7 +289,7 @@ function tileUniforms(sunNow: () => SunNow, material: THREE.Material, mesh: THRE
     const now = sunNow()
     if (version !== now.version) {
       version = now.version
-      if (bound) tileSun(frame, maxTangent, now.sun, now.scale, now.opacity, state)
+      if (bound) tileSun(frame, maxTangent, now.sun, RELIEF, now.opacity, state)
       else state.on = 0
     }
     return state

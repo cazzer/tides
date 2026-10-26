@@ -8,7 +8,9 @@ import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
 import { latLonToLocal } from '../aurora'
 import { earthLatLon, setSurfaceGroundSampler, type SurfaceGroundSampler } from '../surface-ground'
-import { liveTerrainDisplacement, setTerrainEye, surfaceOpacityUniform, terrainScaleUniform } from '../terrain-scale'
+import { TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { RELIEF } from '../relief'
+import { setSurfaceEye, surfaceOpacityUniform } from '../surface-handover'
 import { collisionRadius, createShipState, floorRadius, settleShip, stepShip, type ShipState } from './flight'
 import type { ShipInput } from './ship-input'
 import {
@@ -82,10 +84,10 @@ function earthBody(): ShipBody {
   return bodies.find((b) => b.key === 'earth')!
 }
 
-// The ground drawn under a world point: the tile field at its lat/lon on the live scale.
+// The ground drawn under a world point: the tile field at its lat/lon at the relief.
 function drawnRadius(earth: ShipBody, field: ConeField, point: THREE.Vector3): number {
   const [lat, lon] = earthLatLon(toLocal(point.clone().sub(earth.position)).normalize())
-  return EARTH_RADIUS + field.at(lat, lon) * terrainScaleUniform.value * M
+  return EARTH_RADIUS + field.at(lat, lon) * RELIEF * M
 }
 
 const still: ShipInput = { throttle: 0, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true }
@@ -119,13 +121,12 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
     // A sea-level globe, so the tiles stand above it unless a test says otherwise.
     const [width, height] = TERRAIN_MAP_SIZE
     setEarthTerrain(buildTerrainFloor({ width, height, data: new Float32Array(width * height) }, EARTH_BASE_SEGMENTS))
-    terrainScaleUniform.value = 1
     surfaceOpacityUniform.value = 1
   })
   afterEach(() => {
     setSurfaceGroundSampler(null)
     setEarthTerrain(null)
-    setTerrainEye(Infinity)
+    setSurfaceEye(Infinity)
   })
 
   it('sets the clearances by the depth buffer: true scale on reversed-Z float, today’s on the standard one', () => {
@@ -148,12 +149,11 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
     const globe = earth.ground!(dir)
     const field = new ConeField(2100)
     setSurfaceGroundSampler(field)
-    // Above the blend's top: no tiles drawn.
+    // Above the handover's top: no tiles drawn.
     surfaceOpacityUniform.value = 0
     expect(earth.ground!(dir)).toBeCloseTo(globe, 12)
     surfaceOpacityUniform.value = 1
-    terrainScaleUniform.value = 2.5
-    const tile = EARTH_RADIUS + (2100 + SURFACE_GROUND_MARGIN_METRES) * 2.5 * M
+    const tile = EARTH_RADIUS + (2100 + SURFACE_GROUND_MARGIN_METRES) * RELIEF * M
     expect(earth.ground!(dir)).toBeCloseTo(tile, 12)
     // Under the globe there (sea level): the tiles win the max too.
     surfaceOpacityUniform.value = 0.5
@@ -203,7 +203,7 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       const state = shipAt(earth, 36.1, -112.1)
       return { earth, field, state }
     }
-    const raw = (metres: number) => EARTH_RADIUS + (metres + SURFACE_GROUND_MARGIN_METRES) * M
+    const raw = (metres: number) => EARTH_RADIUS + (metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * M
 
     it('holds the floor where ground fell, then lowers it no faster than its e-fold', () => {
       const { earth, field, state } = setup()
@@ -252,7 +252,7 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       expect(earth.floor!.lift).toBeCloseTo(FINE_HARD_CLEARANCE - FINE_GROUND_CLEARANCE, 15)
     })
 
-    it('takes in what changes between frames too (the dissolve ending), but not the scale the altitude sets', () => {
+    it('takes in what changes between frames too (the dissolve ending)', () => {
       const { earth, state } = setup()
       // A globe standing over the tiles there, which the floor takes in the dissolve.
       const [width, height] = TERRAIN_MAP_SIZE
@@ -268,12 +268,6 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       earth.floor!.beginFrame(true)
       expect(floorRadius(earth, dir)).toBeCloseTo(before, 12)
       expect(earth.floor!.lift).toBeGreaterThan(0)
-      // A new scale between frames moves the floor at once, as the ship's altitude does.
-      const lift = earth.floor!.lift
-      earth.floor!.mark(state.position)
-      terrainScaleUniform.value = 1.5
-      earth.floor!.beginFrame(true)
-      expect(earth.floor!.lift).toBeCloseTo(lift, 15)
     })
 
     it('holds still on a zero or NaN step, and counts neither the spin nor the ship’s motion as a change', () => {
@@ -317,7 +311,6 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       const field = new ConeField(1200 + 200 * rand(), cones)
       const earth = earthBody()
       setSurfaceGroundSampler(field)
-      terrainScaleUniform.value = 1 + 0.2 * rand()
       earth.floor!.beginFrame(true)
       const lat = lat0 / DEG + ((rand() - 0.5) * 400) / 111000
       const lon = lon0 / DEG + ((rand() - 0.5) * 400) / 90000
@@ -378,7 +371,7 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       const input: ShipInput = { ...still, throttle: 0.5 }
       let lowest = Infinity
       for (let k = 0; k < 2400; k++) {
-        setTerrainEye(radius(earth, state) - EARTH_RADIUS, true)
+        setSurfaceEye(radius(earth, state) - EARTH_RADIUS)
         // Every 37th frame the tiles change under the ship as it settles.
         const change = k % 37 === 0 ? () => (field.base += k % 74 === 0 ? 15 : -20) : undefined
         frameOf(state, earth, 1 / 60, input, change)
@@ -386,9 +379,9 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
         lowest = Math.min(lowest, gap)
         expect(gap).toBeGreaterThanOrEqual(FINE_HARD_CLEARANCE - 1e-12)
       }
-      // It got down there: under 100 m true over the ground drawn, nearly at true scale.
+      // It got down there: under 100 m true over the ground drawn, the tiles drawing all of it.
       expect(lowest / M).toBeLessThan(100)
-      expect(terrainScaleUniform.value).toBeLessThan(1.1)
+      expect(surfaceOpacityUniform.value).toBe(1)
     }
   )
 })
@@ -416,7 +409,7 @@ describe("Earth's stop without the surface tiles (production until tides-zmw.9.1
       // Main's floor: the globe over EARTH_FLOOR_REACH, the stop 0.004 over it, no settling.
       const dir = toWorld(latLonToLocal(27.99, 86.93))
       const floor = terrainFloorGreyAround(earthTerrain()!, latLonToLocal(27.99, 86.93), EARTH_FLOOR_REACH / EARTH_RADIUS)
-      const main = EARTH_RADIUS + (liveTerrainDisplacement() * floor) / 255
+      const main = EARTH_RADIUS + (TERRAIN_DISPLACEMENT * floor) / 255
       expect(earth.ground!(dir)).toBeCloseTo(main, 12)
       expect(floorRadius(earth, dir)).toBe(earth.ground!(dir) + EARTH_GROUND_CLEARANCE)
       const state = shipAt(earth, 27.99, 86.93, 0.01)

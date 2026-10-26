@@ -66,8 +66,8 @@ export function vertexGrey(levels: DemLevel[], { segments, uv }: MeshGrid): Floa
 }
 
 /** The vertices displaced along their normals on a sphere of `radius`, at
- * `displacement` (the displacementScale, the live terrain scale's:
- * ../terrain-scale.ts, tides-zmw.9.5). */
+ * `displacement` (the displacementScale: the page's TERRAIN_DISPLACEMENT by
+ * default; the tests pass others to compare reliefs). */
 export function displace(
   { unit }: MeshGrid,
   grey: ArrayLike<number>,

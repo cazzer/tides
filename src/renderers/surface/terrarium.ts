@@ -166,7 +166,7 @@ export async function decodeTerrariumImage(buffer: ArrayBuffer): Promise<PaddedG
 // shadows (tile-shadow.ts). Baked in a decode worker after the grid is
 // made, at a quarter of its resolution, at true scale: each value is the
 // steepest rise's tangent (metres per metre) over the curved Earth,
-// max (Δh / d - d / 2R), so the shader takes it to the live terrain scale s
+// max (Δh / d - d / 2R), so the shader takes it to the page's relief s
 // by multiplying. That scales the Earth's curvature drop with the relief
 // (s (Δh / d - d / 2R), where s Δh / d - d / 2R is exact): the drop is
 // ~1e-3 at the 12 km reach (0.05°), so at 12x a ridge 12 km out shades as

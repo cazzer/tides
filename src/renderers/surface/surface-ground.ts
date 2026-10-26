@@ -8,7 +8,7 @@
 // sphere (ECEF metres, relative to the mesh's position), each displaced
 // along the sphere's normal by its elevation grid (material.displacementMap,
 // metres; its image keeps the Float32Array) read at the vertex's uv, times
-// the live terrain scale (surface-scale.ts). Between vertices the mesh is
+// the page's relief (surface-scale.ts). Between vertices the mesh is
 // flat triangles, which stand no higher than the cell's highest corner (and
 // their chords dip under the sphere), so the highest corner of every cell a
 // window touches bounds the mesh across it, whichever way the cell is split.
@@ -20,8 +20,8 @@
 // Not sampleCartographicElevation or the library's raycast: a point read of
 // the finest grid (2.4-10 m texels) sits tens of metres under the mesh's
 // triangles on canyon walls (8-16 texels to a segment), and the raycast
-// takes the plugin's heightScale (the page's relief, not the live scale)
-// and rebuilds a tile's vertices per ray.
+// takes the plugin's heightScale (the page's relief: the caller scales
+// true metres itself) and rebuilds a tile's vertices per ray.
 //
 // Each vertex's height is the GPU's read at its uv: bilinear on a linear-
 // filtered grid, and on a nearest-filtered one (iOS, createSurfaceTiles) the
@@ -62,7 +62,7 @@
 
 import type * as THREE from 'three'
 import type { SurfaceGroundQuery, SurfaceGroundSampler } from '../../surface-ground'
-import { SURFACE_MAX_METRES } from '../../terrain-scale'
+import { SURFACE_MAX_METRES } from '../../surface-handover'
 import { SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
 
 /** Vertices to a tile's side (the library's MESH_SIZE 32, plus one). */

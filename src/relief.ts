@@ -5,16 +5,14 @@
 // the ground derives (the mesh, its slopes and shadows, the cloud layer and
 // its ceiling, the shells, the ship's floor), so a reload moves them together.
 // True scale since tides-zmw.21: nothing requires the relief exaggerated
-// from orbit or in the system view, and with the altitude blend (below) a
+// from orbit or in the system view, and with the altitude blend
+// (tides-zmw.9.5, behind ?blend=1 and ?surface=1, removed by tides-zmw.21) a
 // relief change was plain to see on every descent through the clouds. Earth
 // was drawn at 12x from tides-zmw.6 until then; ?relief=12 still shows that
 // look (the horizon map exact there ships too, ../earth-horizon.ts), and
 // any factor between compares. The clouds stay at their own ~9x
-// (CLOUD_UNITS_PER_KM), over true-scale ground.
-// With ?blend=1 (./terrain-scale.ts, tides-zmw.9.5) this is the scale at
-// altitude, eased to true scale near the ground (at 1x, true scale
-// throughout), and TERRAIN_DISPLACEMENT the maximum bound the shells and the
-// cloud layer stay sized for.
+// (CLOUD_UNITS_PER_KM), over true-scale ground. Static: the relief is the
+// same at every altitude, the streamed tiles' too (?surface=1).
 // Clamped to [1, 25]: above 25 the highest stop outgrows the limb sphere's
 // MORPH_FLOOR (renderers/groundDisplacement.ts). 25 is also the reference the
 // displacement is given at (REFERENCE_RELIEF), the exaggeration the scene was

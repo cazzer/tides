@@ -23,7 +23,6 @@ import {
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
-import { applyTerrainScale } from '../terrain-scale'
 import { SURFACE_TILES_ON } from '../surface'
 import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
@@ -253,11 +252,6 @@ export default function EarthRenderer({
         geometry={groundSphere}
         raycast={meshBounds}
         onBeforeRender={(renderer, _scene, camera, geometry) => {
-          // The live terrain scale (tides-zmw.9.5): the page's relief unless
-          // ?blend=1 eases it with the ship's altitude. Set here, before three
-          // copies the material's displacementScale into its uniform; the JSX
-          // prop below only gives the first frame's.
-          if (groundMaterial.current) applyTerrainScale(groundMaterial.current)
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
           // The haze and the Sun are set per camera before anything draws
           // (cloudsFaceEachCamera, above).

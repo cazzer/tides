@@ -36,7 +36,7 @@ import * as THREE from 'three'
 import { MAX_DT, type ShipState } from './flight'
 import type { ShipTelemetry } from './ship-telemetry'
 import { smoothstep } from './dust'
-import { EARTH_KM_PER_UNIT } from '../terrain-scale'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 
 /** Earth's sphere of influence, scene units from its centre: carried fully inside the first, not at all past the second. [TUNE] */
 export const EARTH_SOI: readonly [number, number] = [14, 20]

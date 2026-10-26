@@ -22,13 +22,10 @@ export const REFERENCE_TERRAIN_DISPLACEMENT = 0.075
  * horizon map is baked at it (scripts/build-earth-horizon.mjs). */
 export const DEFAULT_TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (DEFAULT_RELIEF / REFERENCE_RELIEF)
 /** The ground's displacementScale at this page's relief (?relief=, read once
- * at load). Everything that follows the drawn ground derives from it. With
- * the live terrain scale on (../terrain-scale.ts, ?blend=1, tides-zmw.9.5)
- * the ground is drawn lower near it, and this is the maximum bound: the
- * shells, the cloud layer's top and the flat deck stay sized for it. */
+ * at load), at every altitude. Everything that follows the drawn ground
+ * derives from it. */
 export const TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (RELIEF / REFERENCE_RELIEF)
-/** The ground's displacementScale at true scale (1x, 0.003): what the live
- * terrain scale (../terrain-scale.ts, tides-zmw.9.5) multiplies. */
+/** The ground's displacementScale at true scale (1x, 0.003). */
 export const TRUE_TERRAIN_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT / REFERENCE_RELIEF
 /** Kilometres of elevation per unit of grey: the old bump map's 1/39 km a
  * level, which the 16-bit elevation map (earth-dem.ts) keeps. */
@@ -105,9 +102,8 @@ export function cloudShape(alpha: number): number {
 }
 
 /** A cloud column: base and top altitudes over ground of the given grey,
- * drawn at `displacement` (the ground's displacementScale: TERRAIN_DISPLACEMENT
- * at the full relief; with the live terrain scale on, ../terrain-scale.ts
- * liveTerrainDisplacement(), which the cloud GLSL follows, tides-zmw.9.6).
+ * drawn at `displacement` (the ground's displacementScale,
+ * TERRAIN_DISPLACEMENT; the tests pass others).
  * The base follows the ground; the top stands CLOUD_UNITS_PER_KM over it. */
 export function cloudColumn(
   alpha: number,

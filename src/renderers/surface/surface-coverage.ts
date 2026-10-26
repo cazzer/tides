@@ -1,7 +1,6 @@
 // The streamed tiles' view error near the eye and past the source's
 // coverage (tides-zmw.9.17, tides-zmw.9.21), as a wrapper on the renderer's
-// calculateTileViewError, installed after fitSurfaceBounds' (surface-
-// scale.ts), so it sees the regions refitted to the live scale.
+// calculateTileViewError.
 //
 // Near the eye (9.17). 3d-tiles-renderer 0.5.3 takes a tile's distance as
 // its bounding volume's distanceToPoint (TilesRenderer.calculateTileViewError,
@@ -13,7 +12,7 @@
 // the tile under the eye) is taken again from the region itself: from the eye to the region's nearest point (its lat,
 // lon and height clamped into the region's), and with the eye inside the
 // region, from the eye down to the drawn ground under it (the ship's floor
-// sampler, surface-ground.ts, times the live scale), never under
+// sampler, surface-ground.ts, times the relief), never under
 // EYE_GROUND_MIN_METRES, the ship's stop on a float depth buffer: so the
 // tile under the eye still refines as the ground comes near (never a flat
 // cap: tides-zmw.9.8's floor is the window maximum over the drawn meshes,
@@ -51,6 +50,7 @@
 // keep the children's regions on their ground.
 import * as THREE from 'three'
 import { surfaceGroundSampler } from '../../surface-ground'
+import { RELIEF } from '../../relief'
 import { EARTH_UNITS_PER_METRE, FINE_GROUND_CLEARANCE } from '../../ship/ship-bodies'
 import { GRID_LEVEL_STEP } from './terrain-internals'
 import { SURFACE_TREE_DEEPEST, TILE_VERTICES } from './surface-ground'
@@ -170,8 +170,8 @@ export interface SurfaceViewErrorOptions {
   maxSourceLevel: number
   /** Levels under the data level a tile past the coverage end stops at (CAP_LEVELS). */
   capLevels?: number
-  /** The live terrain scale. */
-  scale(): number
+  /** The relief the tiles are drawn at (the page's, RELIEF, by default). */
+  relief?: number
   /** The highest drawn ground (true metres) within radiusM of (lat, lon), or null where no drawn tile covers it. */
   ground?(lat: number, lon: number, radiusM: number): number | null
   /** The factor on the error of tiles over or around the eye: the errorTarget over its rest value (1: none). */
@@ -206,21 +206,18 @@ function drawnGround(lat: number, lon: number, radiusM: number): number | null {
 interface EyeState {
   frame: number
   carto: Cartographic
-  /** Drawn ground under the eye, metres times the live scale; NaN until read, null when none covers it. */
+  /** Drawn ground under the eye, metres times the relief; NaN until read, null when none covers it. */
   ground: number | null
 }
 
-/**
- * Wraps the renderer's view error (see the header). Call after
- * fitSurfaceBounds.
- */
+/** Wraps the renderer's view error (see the header). */
 export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOptions): SurfaceViewError {
   const renderer = tiles as RendererInternals
   const view = renderer.calculateTileViewError
   if (typeof view !== 'function' || !Array.isArray(renderer.cameraInfo)) {
     throw new Error('surface coverage: not the 0.5.3 renderer')
   }
-  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround, capLevels = CAP_LEVELS, eyeErrorScale, eyeMarginRadians } = options
+  const { coverageLevel, hasCoverageEnds, maxSourceLevel, relief = RELIEF, ground = drawnGround, capLevels = CAP_LEVELS, eyeErrorScale, eyeMarginRadians } = options
   const eyes: EyeState[] = []
   let frame = -1
   let near = 0
@@ -241,7 +238,7 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
   const groundUnder = (eye: EyeState): number | null => {
     if (Number.isNaN(eye.ground)) {
       const metres = ground(eye.carto.lat, eye.carto.lon, EYE_GROUND_WINDOW_METRES)
-      eye.ground = metres === null ? null : metres * scale()
+      eye.ground = metres === null ? null : metres * relief
     }
     return eye.ground
   }
