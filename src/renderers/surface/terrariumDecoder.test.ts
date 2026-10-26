@@ -167,6 +167,78 @@ describe('horizon bakes in the decode workers (tides-zmw.9.15)', () => {
     worker.reply({ type: 'baked', id, baked: { horizon: null, ms: 1 } }) // ignored
   })
 
+  it('gives each worker one bake at a time, so a decode waits behind one bake at most (tides-zmw.9.25)', async () => {
+    const workers: FakeWorker[] = []
+    const decoder = createTerrariumDecoder({
+      createWorker: () => (workers.push(new FakeWorker()), workers[workers.length - 1]),
+      inThread: async () => grid(-1),
+    })
+    const signal = new AbortController().signal
+    const bakes = [0, 1, 2, 3].map(() => decoder.bake(job(), grid(1), signal))
+    for (const bake of bakes) bake.catch(() => {}) // the dispose below rejects the rest
+    const bakesPosted = () => workers.map((w) => w.posted.filter((m) => m.type === 'bake').length)
+    expect(bakesPosted()).toEqual([1, 1])
+    // a decode goes straight out, behind one bake
+    decoder.decode(buffer(), signal).catch(() => {})
+    expect(workers[0].decodes().length + workers[1].decodes().length).toBe(1)
+    // the first bake answered: the next waiting one goes to that worker
+    const [w0] = workers
+    w0.reply({ type: 'baked', id: w0.posted[0].id, baked: { horizon: null, ms: 1 } })
+    expect(await bakes[0]).toEqual({ horizon: null, ms: 1 })
+    expect(bakesPosted()).toEqual([2, 1])
+    // a waiting bake aborted never goes out; a cancelled one frees its worker
+    const abort = new AbortController()
+    const late = decoder.bake(job(), grid(1), abort.signal)
+    abort.abort(new DOMException('gone', 'AbortError'))
+    await expect(late).rejects.toMatchObject({ name: 'AbortError' })
+    decoder.dispose()
+    await expect(bakes[3]).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('keeps a cancelled bake on its worker until the worker answers it (tides-zmw.9.25)', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const abort = new AbortController()
+    const sent = decoder.bake(job(), grid(1), abort.signal)
+    const next = decoder.bake(job(), grid(1), new AbortController().signal)
+    const bakeIds = () => worker.posted.filter((m) => m.type === 'bake').map((m) => m.id)
+    expect(bakeIds()).toHaveLength(1)
+    abort.abort(new DOMException('gone', 'AbortError'))
+    await expect(sent).rejects.toMatchObject({ name: 'AbortError' })
+    const id = bakeIds()[0]
+    expect(worker.posted[worker.posted.length - 1]).toEqual({ type: 'cancel', id })
+    // the worker is still baking it: the next bake waits
+    expect(bakeIds()).toHaveLength(1)
+    // its answer (the bake, or the worker's 'cancelled') frees the worker
+    worker.reply({ type: 'cancelled', id })
+    expect(bakeIds()).toHaveLength(2)
+    worker.reply({ type: 'baked', id: bakeIds()[1], baked: { horizon: null, ms: 1 } })
+    expect(await next).toEqual({ horizon: null, ms: 1 })
+    // a late full reply for a cancelled bake frees it the same way
+    const abort2 = new AbortController()
+    const third = decoder.bake(job(), grid(1), abort2.signal)
+    const fourth = decoder.bake(job(), grid(1), new AbortController().signal)
+    abort2.abort(new DOMException('gone', 'AbortError'))
+    await expect(third).rejects.toMatchObject({ name: 'AbortError' })
+    expect(bakeIds()).toHaveLength(3)
+    worker.reply({ type: 'baked', id: bakeIds()[2], baked: { horizon: null, ms: 1 } })
+    expect(bakeIds()).toHaveLength(4)
+    fourth.catch(() => {})
+    decoder.dispose()
+  })
+
+  it('answers waiting bakes as a dead worker does when a worker dies', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(9), size: 1 })
+    const first = decoder.bake(job(), grid(1), new AbortController().signal)
+    const waiting = decoder.bake(job(), grid(1), new AbortController().signal)
+    expect(worker.posted).toHaveLength(1)
+    worker.fail(new Error('worker crashed'))
+    expect(await first).toBeNull()
+    expect(await waiting).toBeNull()
+  })
+
   it('bakes nothing without a worker, after one dies, or after dispose (bakes false)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const none = createTerrariumDecoder({ createWorker: () => null, inThread: async () => grid(9) })

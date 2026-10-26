@@ -128,8 +128,8 @@ export interface SurfaceGridOptions {
   bake?: TerrariumBake
   /** Whether bake would run now (the decoder's bakes): false, and no horizon work is done at all. */
   canBake?: () => boolean
-  /** Paces the main-thread end of each grid (texture, stitch, upload). */
-  budget: Pick<FrameBudget, 'wait'>
+  /** Paces the main-thread end of each grid (texture, stitch, upload) and each bake's copying, grids first. */
+  budget: Pick<FrameBudget, 'run'>
   /** Uploads a finished grid (and its horizon map) now (renderer.initTexture), not at first draw. */
   upload?: (texture: Texture) => void
   /** Overrides RETRY_DELAYS_MS (tests). */
@@ -539,31 +539,37 @@ export class SurfaceGridCache extends GridCache {
         signal
       ).finally(() => clearTimeout(timer))
     }
-    await this.options.budget.wait(signal)
-    signal.throwIfAborted()
-    const t0 = performance.now()
-    const context: HorizonSource[] = []
-    if (entry.first) context.push({ ...entry.first, data: entry.first.data.slice() })
-    const without: string[] = []
-    for (const [nx, ny] of neighbours) {
-      const grid = this.readable(nx, ny, level)
-      if (!grid) {
-        without.push(key(nx, ny, level))
-        continue
-      }
-      const sub = this.subview(x, y, level, { x: nx, y: ny, level })
-      context.push(horizonWindow(grid.image as unknown as PaddedGrid, sub, HORIZON_NEIGHBOUR_MARGIN_TEXELS))
-    }
-    for (const [ax, ay, at] of ancestors) {
-      const grid = this.readable(ax, ay, at)
-      if (grid) context.push(horizonWindow(grid.image as unknown as PaddedGrid, this.subview(x, y, level, { x: ax, y: ay, level: at })))
-    }
-    this.setWithout(k, entry, without)
-    const image = entry.grid.image as unknown as PaddedGrid
-    const grid = { data: image.data.slice(), width: image.width, height: image.height }
-    const ms = performance.now() - t0
-    if (ms > this.horizonStats.contextMaxMs) this.horizonStats.contextMaxMs = ms
-    return { horizon: { tileSize, south, north, context }, grid }
+    // copied in the frame's budget, after the grids waiting (a bake only sharpens a tile already drawn)
+    return this.options.budget.run(
+      () => {
+        signal.throwIfAborted()
+        const t0 = performance.now()
+        const context: HorizonSource[] = []
+        if (entry.first) context.push({ ...entry.first, data: entry.first.data.slice() })
+        const without: string[] = []
+        for (const [nx, ny] of neighbours) {
+          const grid = this.readable(nx, ny, level)
+          if (!grid) {
+            without.push(key(nx, ny, level))
+            continue
+          }
+          const sub = this.subview(x, y, level, { x: nx, y: ny, level })
+          context.push(horizonWindow(grid.image as unknown as PaddedGrid, sub, HORIZON_NEIGHBOUR_MARGIN_TEXELS))
+        }
+        for (const [ax, ay, at] of ancestors) {
+          const grid = this.readable(ax, ay, at)
+          if (grid) context.push(horizonWindow(grid.image as unknown as PaddedGrid, this.subview(x, y, level, { x: ax, y: ay, level: at })))
+        }
+        this.setWithout(k, entry, without)
+        const image = entry.grid.image as unknown as PaddedGrid
+        const grid = { data: image.data.slice(), width: image.width, height: image.height }
+        const ms = performance.now() - t0
+        if (ms > this.horizonStats.contextMaxMs) this.horizonStats.contextMaxMs = ms
+        return { horizon: { tileSize, south, north, context }, grid }
+      },
+      signal,
+      'bake'
+    )
   }
 
   /** Records a bake's cost and makes its texture for `grid` (null: none). */
@@ -707,20 +713,23 @@ export class SurfaceGridCache extends GridCache {
   override async fetchItem([x, y, level]: [number, number, number], itemSignal: AbortSignal): Promise<DataTexture> {
     const { budget } = this.options
     const { signal, release } = eitherSignal(itemSignal, this.lifetime.signal)
-    let source: SourceGrid
     let above: LockedGrid | null = null
     try {
-      source = await this.fetchGrid(x, y, level, signal)
+      const source = await this.fetchGrid(x, y, level, signal)
       if ('from' in source) above = await this.dataAbove(x, y, level, source.from, source.fresh, signal)
-      await budget.wait(signal)
-      signal.throwIfAborted()
+      const locked = above
+      // made in the frame's budget, ahead of the bakes; makeGrid releases the grid above once it runs
+      return await budget.run(() => {
+        signal.throwIfAborted()
+        above = null
+        return this.makeGrid(x, y, level, source, locked, itemSignal)
+      }, signal)
     } catch (error) {
       if (above) this.release(above.x, above.y, above.level)
       throw error
     } finally {
       release()
     }
-    return this.makeGrid(x, y, level, source, above, itemSignal)
   }
 
   /** fetchItem's main-thread end: the grid from what the source had, stitched, uploaded, its horizon begun. */

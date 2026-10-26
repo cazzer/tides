@@ -26,11 +26,17 @@
 // the speed ramp asks (setErrorTarget), and tides-zmw.9.24 sized the cache
 // and the detail resolution to the view (setViewSize, surface-lod.ts).
 //
+// tides-zmw.9.25 kept the stream flowing under load: grid fetches ahead of
+// the tiles' synthetic downloads, the tiles' own parse queue
+// (surface-queues.ts), the grids' main-thread end paced by time, ahead of
+// the horizon bakes (frame-budget.ts), and each tile's first uploads in the
+// budget's spare time (tile-upload.ts).
+//
 // tides-zmw.9.16 built each tile's material in one composer (tile-material.ts):
 // Phong, the relief and handover, and the globe's features from its link
 // (surface-link.ts) in the globe's order (tile-features.ts).
 import * as THREE from 'three'
-import { DEFAULT_DOWNLOAD_QUEUE, DEFAULT_LRU_CACHE, DownloadPriorityQueue, LRUCache } from '3d-tiles-renderer/core'
+import { DEFAULT_LRU_CACHE, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin, TilesFadePlugin } from '3d-tiles-renderer/three/plugins'
 import { RELIEF } from '../../relief'
@@ -40,8 +46,10 @@ import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
 import type { GlobeLink } from './surface-link'
 import { TILE_FEATURES } from './tile-features'
 import { createTileComposer, createTileMaterialPlugin, type TileComposer } from './tile-material'
+import { createTileUploadPlugin, trackUploads } from './tile-upload'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
+import { createSurfaceQueues } from './surface-queues'
 import {
   GRID_LEVEL_STEP,
   installSurfaceGridCache,
@@ -62,8 +70,6 @@ export const MAPTERHORN_MAX_ZOOM = 16
 
 /** How often failed tiles are retried, and the first wait of each one's backoff. */
 export const RETRY_FAILED_MS = 10_000
-/** Downloads in flight per server (the library's shared queue allows 25). */
-export const SURFACE_JOBS_PER_ORIGIN = 8
 
 export interface SurfaceTilesOptions {
   /** OES_texture_float_linear: the elevation grids filter linearly, else nearest. */
@@ -81,7 +87,7 @@ export interface SurfaceTiles {
   grids: SurfaceGridCache
   /** Builds each tile's material (tile-material.ts). */
   composer: TileComposer
-  /** Tick once per frame: lets the next grids finish. */
+  /** Tick once per frame: runs the next grids, then bakes, for up to FRAME_BUDGET_MS. */
   budget: FrameBudget
   /** The view error near the eye and past the coverage end (surface-coverage.ts). */
   viewError: SurfaceViewError
@@ -144,6 +150,9 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   })
   const decoder = createTerrariumDecoder({ createWorker: createDecodeWorker, inThread: decodeTerrariumImage })
   const budget = new FrameBudget()
+  // Every upload goes through one tracker, so a tile's queued upload knows
+  // what is already sent (tile-upload.ts).
+  const tracked = upload ? trackUploads(upload) : null
   const grids = installSurfaceGridCache(terrain, {
     // Nearest is core WebGL2 at full precision, and three warns about (and
     // the GPU refuses) linear float filtering without the extension. Its
@@ -153,7 +162,7 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
     bake: decoder.bake,
     canBake: () => decoder.bakes,
     budget,
-    upload,
+    upload: tracked?.upload,
   })
 
   const tiles = new TilesRenderer()
@@ -162,11 +171,13 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   // recommended settings); SurfaceTiles moves it with the ship's speed
   // (surface-lod.ts) every frame.
   tiles.ellipsoid.radius.setScalar(SURFACE_ELLIPSOID_RADIUS)
-  // Its own cache and queue, set before the first update (the cache can't be
-  // swapped after, though its marks can): the shared defaults would hold 0.3
-  // to 0.4 GB whatever the view and put 25 downloads at once on each server,
-  // with the decodes to match. The marks follow the view (setViewSize); each
-  // tile is charged half the elevation grid it shares (shareGridBytes).
+  // Its own cache and queues, set before the first update (neither the cache
+  // nor the parse queue can be swapped after, though the cache's marks can):
+  // the shared defaults would hold 0.3 to 0.4 GB whatever the view, and
+  // order the tiles' synthetic downloads ahead of the grid fetches their
+  // parses wait on (surface-queues.ts). The marks follow the view
+  // (setViewSize); each tile is charged half the elevation grid it shares
+  // (shareGridBytes).
   const lruCache = new LRUCache()
   const cacheMarks = cacheMarkSetter(({ min, max }) => {
     lruCache.minBytesSize = min
@@ -175,10 +186,9 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   cacheMarks.set(surfaceDetail(0, 0).cache)
   lruCache.unloadPriorityCallback = DEFAULT_LRU_CACHE.unloadPriorityCallback
   tiles.lruCache = lruCache
-  const downloads = new DownloadPriorityQueue()
-  downloads.maxJobsPerOrigin = SURFACE_JOBS_PER_ORIGIN
-  downloads.priorityCallback = DEFAULT_DOWNLOAD_QUEUE.priorityCallback
+  const { downloads, parse } = createSurfaceQueues()
   tiles.downloadQueue = downloads
+  tiles.parseQueue = parse
   overlay.downloadQueue = downloads
   quietTilesetVersion(tiles)
   tiles.registerPlugin(terrain)
@@ -188,6 +198,9 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   // tiles fade in too, over the globe they replace.
   const composer = createTileComposer(link, TILE_FEATURES)
   tiles.registerPlugin(createTileMaterialPlugin(composer))
+  // Then its textures queued for upload when the budget has time and bytes
+  // to spare, ahead of a crowded first draw; the tile doesn't wait (tile-upload.ts).
+  if (tracked) tiles.registerPlugin(createTileUploadPlugin(budget, tracked))
   tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
   // The error near the eye from the drawn ground, the eye's chain at rest
   // detail, and none past the source's coverage (surface-coverage.ts).
