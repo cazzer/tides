@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ImageOverlay } from '3d-tiles-renderer/three/plugins'
 import { inflateSync } from 'node:zlib'
 import {
-  blackFraction,
   BLANK_BLACK_FRACTION,
+  edgeBlackFraction,
   EOX_URL,
   fallbackImageryPng,
   FALLBACK_IMAGERY_RGB,
@@ -184,10 +184,15 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
     const res = await fetchFirstOk(['usgs', 'eox'], async (u) => (calls.push(u), response(200)), blackish)
     expect(calls).toEqual(['usgs', 'eox'])
     expect(res.status).toBe(200)
-    // the black count: pure black only, over the threshold
-    const px = (rgb: number[], n: number) => Array.from({ length: n }, () => [...rgb, 255]).flat()
-    expect(blackFraction([...px([0, 0, 0], 25), ...px([40, 60, 30], 75)])).toBe(0.25)
-    expect(blackFraction([...px([1, 1, 1], 10), ...px([4, 4, 4], 10)])).toBe(0.5)
+    // the black count: pure black reaching the edge only
+    const img = (rows: string[]) =>
+      rows.flatMap((row) => [...row].flatMap((c) => (c === '#' ? [0, 0, 0, 255] : c === '.' ? [2, 1, 0, 255] : [90, 70, 50, 255])))
+    // a nodata strip down the left edge: 4 of 16
+    expect(edgeBlackFraction(img(['#ooo', '#ooo', '#ooo', '#ooo']), 4, 4)).toBe(0.25)
+    // a shadow inside the tile, pure black but enclosed: none
+    expect(edgeBlackFraction(img(['oooo', 'o##o', 'o##o', 'oooo']), 4, 4)).toBe(0)
+    // near-black (sum <= 3) counts, and a corner patch follows its connection inward
+    expect(edgeBlackFraction(img(['..oo', '.#oo', 'oo#o', 'oooo']), 4, 4)).toBe(4 / 16)
     expect(BLANK_BLACK_FRACTION).toBe(0.02)
   })
 
@@ -200,6 +205,7 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
 
   it('answers with the fallback when every source fails or the network does, and counts it', async () => {
     const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
     const canyon = imageryUrl(EOX_URL, { z: 16, y: 25721, x: 12355 })
     const last = new Response('gone', { status: 500 })
     const cancel = vi.spyOn(last.body!, 'cancel')
@@ -220,6 +226,7 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
 
   it('still ends at an abort, and passes an ok answer through', async () => {
     const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
     const alps = imageryUrl(EOX_URL, tileAt(46.5, 8, 12))
     const abort = new DOMException('gone', 'AbortError')
     vi.spyOn(ImageOverlay.prototype, 'fetch').mockRejectedValue(abort)
@@ -227,6 +234,27 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
     const ok = response(200)
     vi.spyOn(ImageOverlay.prototype, 'fetch').mockResolvedValue(ok)
     expect(await overlay.fetch(alps, {})).toBe(ok)
+    expect(overlay.fallbacks).toBe(0)
+  })
+})
+
+describe('imagery retry (tides-zmw.9.2 review)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('retries a transient failure before falling back, so a blip recovers to real imagery', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    const alps = imageryUrl(EOX_URL, tileAt(46.5, 8, 12))
+    let n = 0
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async () => {
+      n++
+      if (n === 1) return new Response('busy', { status: 503 })
+      if (n === 2) throw new TypeError('Failed to fetch')
+      return response(200)
+    })
+    const res = await overlay.fetch(alps, {})
+    expect(n).toBe(3)
+    expect((await res.arrayBuffer()).byteLength).toBe(8000)
     expect(overlay.fallbacks).toBe(0)
   })
 })

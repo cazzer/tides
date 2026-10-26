@@ -3,9 +3,11 @@
 // into the loaded neighbours and uploading it. Each step is a few ms; a fast
 // descent finishes dozens of tiles at once, which in one frame was the
 // 870 ms stall the spike measured. Work waits here and SurfaceTiles' frame
-// loop lets `perFrame` of it through each frame.
+// loop lets `perFrame` of it through each frame. Not budgeted: stitching
+// marks up to eight loaded neighbours dirty, and three re-uploads each (1 MB)
+// at its next draw.
 
-/** Grids finished per frame: two keep a burst's uploads to a few ms a frame. */
+/** Grids finished per frame: two keep a burst's own uploads to a few ms a frame. */
 export const GRIDS_PER_FRAME = 2
 
 interface Waiter {

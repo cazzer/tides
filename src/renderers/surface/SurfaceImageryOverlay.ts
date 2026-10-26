@@ -10,8 +10,12 @@
 // When every source fails (tides-zmw.9.2), the tile gets a plain patch of
 // the day map's ocean colour instead (imagery.ts), counted in `fallbacks`:
 // the library fails a terrain tile whose overlay fails, so a missing image
-// would otherwise leave a hole in the ground. An abort still ends the chain.
+// would otherwise leave a hole in the ground. A transient failure (network,
+// 429, 5xx) is retried first (fetch-retry.ts), so one blip doesn't paint a
+// land tile in the ocean colour for as long as it stays cached. An abort
+// still ends the chain.
 import { XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
+import { fetchWithRetry, RETRY_DELAYS_MS } from './fetch-retry'
 import {
   cancelBody,
   EOX_URL,
@@ -26,6 +30,8 @@ import {
 export class SurfaceImageryOverlay extends XYZTilesOverlay {
   /** Tiles drawn in the fallback colour because no source answered. */
   fallbacks = 0
+  /** Waits before each retry of a transient failure (tests shorten them). */
+  retryDelays: readonly number[] = RETRY_DELAYS_MS
 
   constructor() {
     super({ url: EOX_URL, levels: IMAGERY_LEVELS, tileDimension: IMAGERY_TILE_SIZE })
@@ -35,7 +41,11 @@ export class SurfaceImageryOverlay extends XYZTilesOverlay {
     const tile = parseImageryUrl(url)
     const urls = tile ? imageryUrlsFor(tile) : [url]
     try {
-      const res = await fetchFirstOk(urls, (u) => super.fetch(u, options))
+      const res = await fetchWithRetry(
+        () => fetchFirstOk(urls, (u) => super.fetch(u, options)),
+        options.signal,
+        this.retryDelays
+      )
       if (res.ok) return res
       cancelBody(res)
     } catch (error) {

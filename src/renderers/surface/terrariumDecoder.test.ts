@@ -101,3 +101,26 @@ describe('terrain decoder client (tides-zmw.9.2)', () => {
     expect(worker.terminated).toBe(true)
   })
 })
+
+describe('terrain decoder listeners (tides-zmw.9.2 review)', () => {
+  it('removes its abort listener when a job settles, so the signal keeps no buffer', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const abort = new AbortController()
+    const add = vi.spyOn(abort.signal, 'addEventListener')
+    const remove = vi.spyOn(abort.signal, 'removeEventListener')
+    const pending = decoder.decode(buffer(), abort.signal)
+    worker.reply({ type: 'done', id: worker.decodes()[0].id, grid: grid(1) })
+    await pending
+    expect(add).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0][1])
+  })
+
+  it('rejects every decode after dispose without decoding on the main thread', async () => {
+    const inThread = vi.fn(async () => grid(9))
+    const decoder = createTerrariumDecoder({ createWorker: () => new FakeWorker(), inThread })
+    decoder.dispose()
+    await expect(decoder.decode(buffer(), new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(inThread).not.toHaveBeenCalled()
+  })
+})

@@ -27,6 +27,7 @@ import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rg
 import type { TerrariumMeshPlugin, XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
 import type { TilesRenderer } from '3d-tiles-renderer/three'
 import type { FrameBudget } from './frame-budget'
+import { eitherSignal, fetchWithRetry, RETRY_DELAYS_MS } from './fetch-retry'
 import { cancelBody } from './imagery'
 import { flatGrid, type PaddedGrid } from './terrarium'
 import type { TerrariumDecode } from './terrariumDecoder'
@@ -53,29 +54,6 @@ export interface TerrainPluginInternals {
 /** Statuses meaning "no data here": Mapterhorn answers 404 over open ocean. */
 const EMPTY_STATUSES = new Set([204, 404, 410])
 
-/**
- * Waits between retries of a transient failure (a network error, 429 or
- * 5xx): without them, one dropped request for a z4 tile failed ~2500 km of
- * ground for the rest of the flight (seen once in a headless descent).
- */
-export const RETRY_DELAYS_MS = [1000, 4000]
-const transient = (status: number) => status === 429 || status >= 500
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(signal.reason)
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(signal.reason)
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
 export interface SurfaceGridOptions {
   /** 'linear' needs OES_texture_float_linear; 'nearest' is core WebGL2. */
   filter: 'linear' | 'nearest'
@@ -96,6 +74,7 @@ export class SurfaceGridCache extends GridCache {
   /** Tiles the source answered "no data" for, as level/x/y. */
   private readonly empty = new Set<string>()
   private readonly options: SurfaceGridOptions
+  private readonly lifetime = new AbortController()
 
   constructor(plugin: TerrainPluginInternals, options: SurfaceGridOptions) {
     super(plugin)
@@ -107,7 +86,9 @@ export class SurfaceGridCache extends GridCache {
    * a level wherever any deeper level does (checked 2026-10-25: the children
    * of the ocean tile 4/6/5 to z7 all 404, while the z4-z10 ancestors of
    * Pico, Tristan da Cunha, St Helena, Ascension and Bouvet all answer), so
-   * the whole subtree is open water and needn't be asked for.
+   * the whole subtree is open water and needn't be asked for. Accepted
+   * risk: a CDN 404 on a land tile (a bad deploy, say) flattens that tile's
+   * whole subtree to sea level for the session.
    */
   private underEmpty(x: number, y: number, level: number): boolean {
     for (let up = 1; up <= level; up++) {
@@ -117,21 +98,14 @@ export class SurfaceGridCache extends GridCache {
   }
 
   /** The tile's response, through the plugin's queue-routed fetch, retried while transient. */
-  private async fetchResponse(x: number, y: number, level: number, signal: AbortSignal): Promise<Response> {
+  private fetchResponse(x: number, y: number, level: number, signal: AbortSignal): Promise<Response> {
     const source = (this.plugin as TerrainPluginInternals)._source!
     const url = source.getUrl(x, y, level)
-    const delays = this.options.retryDelays ?? RETRY_DELAYS_MS
-    for (let attempt = 0; ; attempt++) {
-      const last = attempt >= delays.length
-      try {
-        const res = await source.fetchData(url, { ...source.fetchOptions, signal })
-        if (last || !transient(res.status)) return res
-        cancelBody(res)
-      } catch (error) {
-        if (last || signal.aborted || (error as Error)?.name === 'AbortError') throw error
-      }
-      await sleep(delays[attempt], signal)
-    }
+    return fetchWithRetry(
+      () => source.fetchData(url, { ...source.fetchOptions, signal }),
+      signal,
+      this.options.retryDelays ?? RETRY_DELAYS_MS
+    )
   }
 
   private async fetchGrid(x: number, y: number, level: number, signal: AbortSignal): Promise<PaddedGrid | null> {
@@ -149,15 +123,54 @@ export class SurfaceGridCache extends GridCache {
     return this.options.decode(await res.arrayBuffer(), signal)
   }
 
-  override async fetchItem([x, y, level]: [number, number, number], signal: AbortSignal): Promise<DataTexture> {
+  /**
+   * Stops every fetch, retry and decode in flight (createSurfaceTiles'
+   * dispose): the plugin releases its grids as tiles go, but a load still
+   * downloading would otherwise run on, retries and all, after the surface
+   * is gone.
+   */
+  shutDown(): void {
+    this.lifetime.abort(new DOMException('surface tiles disposed', 'AbortError'))
+  }
+
+  /**
+   * As the library's, but forgets a grid that failed for any reason but an
+   * abort (5xx after the retries, 403, a corrupt image). The plugin rethrows
+   * such a failure before it records the grid, so nothing ever releases it:
+   * the rejected promise would stay cached and fail every tile reading that
+   * grid, up to five, for the rest of the session, retries included.
+   */
+  override lock(x: number, y: number, level: number): DataTexture | Promise<DataTexture> {
+    const k = `${x}_${y}_${level}` // DataCache's key
+    const fresh = !(k in this.cache)
+    const result = super.lock(x, y, level)
+    if (fresh && result instanceof Promise) {
+      result.catch((error) => {
+        if ((error as Error)?.name === 'AbortError' || this.cache[k] === undefined) return
+        if ((this.cache[k] as { result: unknown }).result !== result) return
+        delete this.cache[k]
+        this.count--
+      })
+    }
+    return result
+  }
+
+  override async fetchItem([x, y, level]: [number, number, number], itemSignal: AbortSignal): Promise<DataTexture> {
     const { filter, budget, upload } = this.options
-    let padded = await this.fetchGrid(x, y, level, signal)
+    const { signal, release } = eitherSignal(itemSignal, this.lifetime.signal)
+    let padded: PaddedGrid | null
+    try {
+      padded = await this.fetchGrid(x, y, level, signal)
+      await budget.wait(signal)
+      signal.throwIfAborted()
+    } finally {
+      release()
+    }
     if (!padded) {
       // sea level, full size: stitching assumes every grid is the same size
       padded = flatGrid((this.plugin as TerrainPluginInternals).tileDimension)
       this.flatTiles++
     }
-    await budget.wait(signal)
     const grid = new DataTexture(padded.data, padded.width, padded.height, RedFormat, FloatType)
     grid.minFilter = grid.magFilter = filter === 'linear' ? LinearFilter : NearestFilter
     grid.needsUpdate = true
@@ -166,7 +179,7 @@ export class SurfaceGridCache extends GridCache {
     // If the cache drops the item before taking this result, it never
     // disposes it; the abort is the only word of that. (A normal release
     // aborts too, then disposes: a second dispose is a no-op.)
-    signal.addEventListener('abort', () => grid.dispose(), { once: true })
+    itemSignal.addEventListener('abort', () => grid.dispose(), { once: true })
     return grid
   }
 }
@@ -177,7 +190,8 @@ export class SurfaceGridCache extends GridCache {
  */
 export function installSurfaceGridCache(plugin: TerrariumMeshPlugin, options: SurfaceGridOptions): SurfaceGridCache {
   const internals = plugin as unknown as TerrainPluginInternals
-  if (internals.name !== 'TERRARIUM_MESH_PLUGIN' || !(internals._gridCache instanceof Object)) {
+  const current = internals._gridCache as { lock?: unknown } | null
+  if (internals.name !== 'TERRARIUM_MESH_PLUGIN' || typeof current?.lock !== 'function') {
     throw new Error('surface tiles: not a 0.5.3 TerrariumMeshPlugin')
   }
   const cache = new SurfaceGridCache(internals, options)

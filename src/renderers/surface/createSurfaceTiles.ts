@@ -40,6 +40,8 @@ const GIGABYTE = 2 ** 30
  * is charged half the elevation grid it shares (shareGridBytes).
  */
 export const SURFACE_CACHE_BYTES = { min: 0.15 * GIGABYTE, max: 0.25 * GIGABYTE }
+/** How often failed tiles are retried. */
+export const RETRY_FAILED_MS = 10_000
 /** Downloads in flight per server (the library's shared queue allows 25). */
 export const SURFACE_JOBS_PER_ORIGIN = 8
 
@@ -157,6 +159,14 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
     if (loadErrors === 1) console.warn('surface tiles: a tile failed to load (more are counted in userData.loadErrors)', event.url)
   })
 
+  // A failed tile stays failed in the library until resetFailedTiles; the
+  // grid cache forgets failed grids (terrain-internals.ts), so retry them
+  // when the network comes back and every RETRY_FAILED_MS (the library's
+  // reset returns at once while stats.failed is 0).
+  const retryFailed = () => tiles.resetFailedTiles()
+  const retryTimer = setInterval(retryFailed, RETRY_FAILED_MS)
+  if (typeof window !== 'undefined') window.addEventListener('online', retryFailed)
+
   const syncCounters = () => {
     const data = tiles.group.userData
     data.flatTiles = grids.flatTiles
@@ -178,9 +188,13 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
     // microtask later. Don't also dispose the overlay's caches: the library's
     // DataCache.dispose throws on an entry already released and awaiting that
     // microtask, and a throw in an effect cleanup unmounts the whole app.
-    // The budget and decoder go first: grids waiting on them reject as
-    // aborted, which the plugin takes as a cancelled load.
+    // The grid cache, budget and decoder go first: fetches, retries, decodes
+    // and grids waiting their turn reject as aborted, which the plugin takes
+    // as a cancelled load.
     dispose() {
+      clearInterval(retryTimer)
+      if (typeof window !== 'undefined') window.removeEventListener('online', retryFailed)
+      grids.shutDown()
       budget.dispose()
       decoder.dispose()
       tiles.dispose()

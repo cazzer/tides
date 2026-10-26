@@ -33,9 +33,13 @@ export interface TerrariumDecoder {
 interface Job {
   buffer: ArrayBuffer
   signal: AbortSignal
+  /** Removed once the job settles: its closure holds the buffer. */
+  onAbort: () => void
   resolve: (grid: PaddedGrid) => void
   reject: (err: unknown) => void
 }
+
+const disposedError = () => new DOMException('terrain decoder disposed', 'AbortError')
 
 interface Slot {
   worker: DecodeWorker
@@ -61,7 +65,13 @@ export function createTerrariumDecoder({
   const slots: Slot[] = []
   // false once a worker can't be made or has died: everything runs in thread
   let workersOk = true
+  let disposed = false
   let nextId = 1
+
+  /** Drops the job's abort listener (and with it the buffer). */
+  function detach(job: Job) {
+    job.signal.removeEventListener('abort', job.onAbort)
+  }
 
   function runInThread(job: Job) {
     job.signal.throwIfAborted()
@@ -77,6 +87,7 @@ export function createTerrariumDecoder({
       orphans.push(...slot.jobs.values())
     }
     for (const job of orphans) {
+      detach(job)
       try {
         runInThread(job)
       } catch (abort) {
@@ -95,6 +106,7 @@ export function createTerrariumDecoder({
         // Cancelled: the reply (and its buffer) is dropped.
         if (!job) return
         slot.jobs.delete(data.id)
+        detach(job)
         if (data.type === 'done') job.resolve(data.grid)
         else job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
       })
@@ -123,31 +135,34 @@ export function createTerrariumDecoder({
 
   return {
     decode(buffer, signal) {
+      // After dispose, nothing decodes (least of all on the main thread).
+      if (disposed) return Promise.reject(disposedError())
       signal.throwIfAborted()
       const slot = workersOk ? pick() : null
       if (!slot) return inThread(buffer)
       const id = nextId++
       return new Promise<PaddedGrid>((resolve, reject) => {
-        slot.jobs.set(id, { buffer, signal, resolve, reject })
-        signal.addEventListener(
-          'abort',
-          () => {
-            if (!slot.jobs.delete(id)) return
-            slot.worker.postMessage({ type: 'cancel', id })
-            reject(signal.reason)
-          },
-          { once: true }
-        )
+        const onAbort = () => {
+          if (!slot.jobs.delete(id)) return
+          slot.worker.postMessage({ type: 'cancel', id })
+          reject(signal.reason)
+        }
+        slot.jobs.set(id, { buffer, signal, onAbort, resolve, reject })
+        signal.addEventListener('abort', onAbort, { once: true })
         // Copied, not transferred (a WebP tile is ~10-300 kB): if the worker
         // dies, its jobs are decoded here from the same buffer.
         slot.worker.postMessage({ type: 'decode', id, buffer })
       })
     },
     dispose() {
+      disposed = true
       workersOk = false
       for (const slot of slots.splice(0)) {
         slot.worker.terminate()
-        for (const job of slot.jobs.values()) job.reject(new DOMException('terrain decoder disposed', 'AbortError'))
+        for (const job of slot.jobs.values()) {
+          detach(job)
+          job.reject(disposedError())
+        }
         slot.jobs.clear()
       }
     },

@@ -96,44 +96,89 @@ export function imageryUrlsFor(tile: ImageryTile): string[] {
  */
 export const BLANK_TILE_BYTES = 2048
 /**
- * Above this fraction of pure-black pixels, a tile is blank too: along the
- * coasts USGS's tiles are part imagery, part nodata black (9/200/82 off Big
- * Sur is 64% black, 11/801/330 25%). Real imagery has next to no pure black
- * (0.02% in a shadowed 8/100/40).
+ * Above this fraction of pure-black pixels reaching the edge, a tile is
+ * blank too: along the coasts USGS's tiles are part imagery, part nodata
+ * black (9/200/82 off Big Sur is 64% black, 11/801/330 25%). Real imagery
+ * has next to no pure black (0.02% in a shadowed 8/100/40).
  */
 export const BLANK_BLACK_FRACTION = 0.02
 /** The probe a tile is decoded to for the black count: every 8th pixel. */
 const PROBE_SIZE = 32
 
-/** The fraction of RGBA pixels that are pure black (nodata). */
-export function blackFraction(rgba: ArrayLike<number>): number {
-  let black = 0
-  const n = rgba.length / 4
-  for (let i = 0; i < rgba.length; i += 4) if (rgba[i] + rgba[i + 1] + rgba[i + 2] <= 3) black++
-  return n ? black / n : 0
-}
+const isBlack = (rgba: ArrayLike<number>, i: number) => rgba[4 * i] + rgba[4 * i + 1] + rgba[4 * i + 2] <= 3
 
 /**
- * Whether an image tile is blank: tiny (a uniform tile), or more than
- * BLANK_BLACK_FRACTION nodata black, by a 32 px probe through the browser's
- * decoder. By size alone where there's no decoder to probe with.
+ * The fraction of a width x height RGBA image that is pure black (nodata)
+ * and connected to the image's edge. USGS's nodata comes in from the edge
+ * (the sea beyond its coverage), while the pure black of a deep shadow
+ * inside a canyon doesn't reach it and isn't counted.
+ */
+export function edgeBlackFraction(rgba: ArrayLike<number>, width: number, height: number): number {
+  const n = width * height
+  if (!n) return 0
+  const seen = new Uint8Array(n)
+  const stack: number[] = []
+  const push = (i: number) => {
+    if (!seen[i] && isBlack(rgba, i)) {
+      seen[i] = 1
+      stack.push(i)
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    push(x)
+    push((height - 1) * width + x)
+  }
+  for (let y = 1; y < height - 1; y++) {
+    push(y * width)
+    push(y * width + width - 1)
+  }
+  let count = 0
+  while (stack.length) {
+    const i = stack.pop()!
+    count++
+    const x = i % width
+    if (x > 0) push(i - 1)
+    if (x < width - 1) push(i + 1)
+    if (i >= width) push(i - width)
+    if (i < n - width) push(i + width)
+  }
+  return count / n
+}
+
+let probeContext: OffscreenCanvasRenderingContext2D | null | undefined
+
+/**
+ * Whether an image tile is blank: tiny (a uniform tile), undecodable, or
+ * more than BLANK_BLACK_FRACTION nodata black reaching its edge, by a 32 px
+ * probe through the browser's decoder. By size alone where there's no
+ * decoder to probe with. A blank tile falls through to the next source.
  */
 export async function isBlankTile(body: ArrayBuffer): Promise<boolean> {
   if (body.byteLength < BLANK_TILE_BYTES) return true
   if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return false
+  let bitmap: ImageBitmap
   try {
-    const bitmap = await createImageBitmap(new Blob([body]), {
+    bitmap = await createImageBitmap(new Blob([body]), {
       resizeWidth: PROBE_SIZE,
       resizeHeight: PROBE_SIZE,
       resizeQuality: 'pixelated',
     })
-    const ctx = new OffscreenCanvas(PROBE_SIZE, PROBE_SIZE).getContext('2d', { willReadFrequently: true })
-    if (!ctx) return false
-    ctx.drawImage(bitmap, 0, 0, PROBE_SIZE, PROBE_SIZE)
-    bitmap.close()
-    return blackFraction(ctx.getImageData(0, 0, PROBE_SIZE, PROBE_SIZE).data) > BLANK_BLACK_FRACTION
+  } catch {
+    return true
+  }
+  try {
+    if (probeContext === undefined) {
+      probeContext = new OffscreenCanvas(PROBE_SIZE, PROBE_SIZE).getContext('2d', { willReadFrequently: true })
+    }
+    if (!probeContext) return false
+    probeContext.clearRect(0, 0, PROBE_SIZE, PROBE_SIZE)
+    probeContext.drawImage(bitmap, 0, 0, PROBE_SIZE, PROBE_SIZE)
+    const { data } = probeContext.getImageData(0, 0, PROBE_SIZE, PROBE_SIZE)
+    return edgeBlackFraction(data, PROBE_SIZE, PROBE_SIZE) > BLANK_BLACK_FRACTION
   } catch {
     return false
+  } finally {
+    bitmap.close()
   }
 }
 

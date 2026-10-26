@@ -360,6 +360,55 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     expect(fetches).toHaveLength(1)
   })
 
+  it('forgets a grid that failed for good, so the next lock fetches it again', async () => {
+    const { terrain } = await loadedPlugin()
+    const opts = options()
+    const cache = installSurfaceGridCache(terrain, opts)
+    answer = async () => new Response('no', { status: 403 })
+    const first = cache.lock(1, 1, 2)
+    const again = cache.lock(1, 1, 2) // a second tile reading the same grid
+    await expect(first).rejects.toThrow(/answered 403/)
+    await expect(again).rejects.toThrow(/answered 403/)
+    await vi.waitFor(() => expect(cache.get(1, 1, 2)).toBeNull())
+    expect(cache.count).toBe(0)
+    answer = async () => new Response(null, { status: 404 })
+    const retry = cache.lock(1, 1, 2)
+    await release(opts.budget)
+    await retry
+    expect(fetches).toHaveLength(2)
+    expect(cache.count).toBe(1)
+  })
+
+  it('keeps an aborted grid entry (the cache removed it itself)', async () => {
+    const { terrain } = await loadedPlugin()
+    const cache = installSurfaceGridCache(terrain, options())
+    answer = (_url, init) =>
+      new Promise((_, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason)))
+    const pending = cache.lock(1, 1, 2)
+    cache.release(1, 1, 2)
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(cache.count).toBe(0)
+  })
+
+  it('stops fetches, retries and turns in flight on shutDown', async () => {
+    const { terrain } = await loadedPlugin()
+    const opts = options({ retryDelays: [60000] })
+    const cache = installSurfaceGridCache(terrain, opts)
+    answer = async () => {
+      throw new TypeError('Failed to fetch')
+    }
+    const retrying = cache.fetchItem([1, 1, 2], new AbortController().signal)
+    await vi.waitFor(() => expect(fetches).toHaveLength(1))
+    answer = async () => new Response(null, { status: 404 })
+    const waiting = cache.fetchItem([2, 2, 2], new AbortController().signal)
+    await vi.waitFor(() => expect(opts.budget.pending).toBe(1))
+    cache.shutDown()
+    await expect(retrying).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(waiting).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(cache.fetchItem([3, 3, 2], new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetches).toHaveLength(2)
+  })
+
   it('refuses a plugin that is not the 0.5.3 Terrarium one', () => {
     expect(() => installSurfaceGridCache({ name: 'X' } as unknown as TerrariumMeshPlugin, options())).toThrow()
     expect(new SurfaceGridCache({ name: 'TERRARIUM_MESH_PLUGIN', _gridCache: null, _source: null, tileDimension: 4 }, options()))
