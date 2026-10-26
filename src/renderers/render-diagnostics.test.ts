@@ -1,6 +1,13 @@
 import * as THREE from 'three'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { logContextLoss, nonFiniteCamera, nonFiniteObject, watchForNonFinite } from './render-diagnostics'
+import {
+  depthMode,
+  depthModeDrift,
+  logContextLoss,
+  nonFiniteCamera,
+  nonFiniteObject,
+  watchForNonFinite,
+} from './render-diagnostics'
 
 function world() {
   const scene = new THREE.Scene()
@@ -97,5 +104,25 @@ describe('logContextLoss', () => {
     uninstall()
     canvas.dispatchEvent(new Event('webglcontextlost'))
     expect(error).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('depthModeDrift', () => {
+  // Just what the checks read of a renderer.
+  const renderer = (asked: boolean, live: boolean) =>
+    ({
+      capabilities: { reversedDepthBuffer: asked },
+      state: { buffers: { depth: { getReversed: () => live } } },
+    }) as unknown as THREE.WebGLRenderer
+
+  it('names the depth mode the context was set up with', () => {
+    expect(depthMode(renderer(true, true))).toBe('reversed')
+    expect(depthMode(renderer(false, false))).toBe('standard')
+  })
+
+  it('is quiet while the live mode matches, and names a drift (gl.resetState)', () => {
+    expect(depthModeDrift(renderer(true, true))).toBeNull()
+    expect(depthModeDrift(renderer(false, false))).toBeNull()
+    expect(depthModeDrift(renderer(true, false))).toBe('depth buffer standard, set up reversed')
   })
 })

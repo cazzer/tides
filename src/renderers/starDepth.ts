@@ -97,10 +97,18 @@ vec3 transformed = position * mix(1.0, mix(${SHELL_NEAR_RADIUS.toFixed(3)}, ${SH
 
 // Replaces points' `gl_PointSize = size;`. Nearer stars draw bigger, and the
 // stars stay behind every body and clipped behind the eye at any shell radius
-// (the far side of the shell is past the camera's far plane).
+// (the far side of the shell is past the camera's far plane). Under reversed-Z
+// (tides-zmw.9.3) clip z runs w at the near plane to 0 at the far one and
+// clip z / w is the window depth, so the stars sit at the same window depth as on
+// the standard buffer, 0.999995 of the way out: 1 − (0.5 + 0.5 · 0.99999).
+// 2w clips in both.
 export const shellPointVertex = /* glsl */ `
 gl_PointSize = size * (1.0 + uDepth * ${NEAR_SIZE_BOOST.toFixed(3)} * (1.0 - starDepth));
 if (uDepth > 0.0) {
+  #ifdef USE_REVERSED_DEPTH_BUFFER
+  gl_Position.z = mvPosition.z < 0.0 ? 0.000005 * gl_Position.w : 2.0 * gl_Position.w;
+  #else
   gl_Position.z = mvPosition.z < 0.0 ? 0.99999 * gl_Position.w : 2.0 * gl_Position.w;
+  #endif
 }
 `
