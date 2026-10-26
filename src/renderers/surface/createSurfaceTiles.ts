@@ -26,16 +26,22 @@
 // tides-zmw.9.22 kept the tiles under the eye at their rest detail whatever
 // the speed ramp asks (setErrorTarget), and tides-zmw.9.24 sized the cache
 // and the detail resolution to the view (setViewSize, surface-lod.ts).
+//
+// tides-zmw.9.16 built each tile's material in one composer (tile-material.ts):
+// Phong, the live scale and handover, and the globe's features from its link
+// (surface-link.ts) in the globe's order (tile-features.ts).
 import * as THREE from 'three'
 import { DEFAULT_DOWNLOAD_QUEUE, DEFAULT_LRU_CACHE, DownloadPriorityQueue, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin, TilesFadePlugin } from '3d-tiles-renderer/three/plugins'
 import { RELIEF } from '../../relief'
-import type { GroundHaze } from '../groundHaze'
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
-import { createSurfaceScalePlugin, fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
+import { fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
+import type { GlobeLink } from './surface-link'
+import { TILE_FEATURES } from './tile-features'
+import { createTileComposer, createTileMaterialPlugin, type TileComposer } from './tile-material'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { terrainScaleUniform } from '../../terrain-scale'
@@ -67,8 +73,8 @@ export interface SurfaceTilesOptions {
   floatLinear: boolean
   /** Uploads each finished grid at once (the renderer's initTexture). */
   upload?: (texture: THREE.Texture) => void
-  /** The globe's aerial perspective, laid on the tiles too (its surfacePatch). */
-  haze?: GroundHaze | null
+  /** The globe's side of the tiles' features (its haze, eclipse, ...). */
+  link?: GlobeLink | null
 }
 
 export interface SurfaceTiles {
@@ -76,6 +82,8 @@ export interface SurfaceTiles {
   terrain: TerrariumMeshPlugin
   overlay: SurfaceImageryOverlay
   grids: SurfaceGridCache
+  /** Builds each tile's material (tile-material.ts). */
+  composer: TileComposer
   /** Tick once per frame: lets the next grids finish. */
   budget: FrameBudget
   /** Update once per frame, before tiles.update(): the regions' fit. */
@@ -126,7 +134,7 @@ function createDecodeWorker(): DecodeWorker | null {
  * take by stencil (surface-scale.ts). three sorts a Group's children by it. */
 export const SURFACE_RENDER_ORDER = -1
 
-export function createSurfaceTiles({ floatLinear, upload, haze = null }: SurfaceTilesOptions): SurfaceTiles {
+export function createSurfaceTiles({ floatLinear, upload, link = null }: SurfaceTilesOptions): SurfaceTiles {
   const overlay = new SurfaceImageryOverlay()
   protectOverlayBitmaps(overlay)
   const terrain = new TerrariumMeshPlugin({
@@ -180,11 +188,11 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   quietTilesetVersion(tiles)
   tiles.registerPlugin(terrain)
   shareGridBytes(tiles)
-  // The scale and the handover on each tile's materials as it parses, then
-  // the fade, which wraps them at load-model; root tiles fade in too, over
-  // the globe they replace.
-  const hazePatches = haze ? [haze.surfacePatch] : []
-  tiles.registerPlugin(createSurfaceScalePlugin(() => hazePatches))
+  // Each tile's material as it parses (Phong, the scale and the handover,
+  // the globe's features), then the fade, which wraps it at load-model; root
+  // tiles fade in too, over the globe they replace.
+  const composer = createTileComposer(link, TILE_FEATURES)
+  tiles.registerPlugin(createTileMaterialPlugin(composer))
   tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
   // The bounding regions on the live scale, stepwise (surface-scale.ts).
   const bounds = fitSurfaceBounds(tiles, terrain, () => terrainScaleUniform.value)
@@ -252,6 +260,7 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     terrain,
     overlay,
     grids,
+    composer,
     budget,
     bounds,
     viewError,

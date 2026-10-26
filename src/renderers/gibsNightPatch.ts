@@ -217,6 +217,10 @@ if (uGibsNightActive > 0.5) {
 #endif
 `
 
+/** The patch's GLSL for the streamed tiles to reuse by text (tides-zmw.9.16):
+ * fragmentHead(side) after common, emissiveBody after emissivemap_fragment. */
+export const GIBS_NIGHT_GLSL = { fragmentHead, emissiveBody: EMISSIVE_BODY }
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
@@ -236,6 +240,8 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
       material: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
       update() {},
       release() {},
+      uniforms: {},
+      side: 0,
     }
   }
   const stream = createGibsStream({
@@ -269,6 +275,8 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
       },
       customProgramCacheKey: () => `gibs-night-${side}`,
     },
+    uniforms,
+    side,
     update: stream.update,
     release: stream.dispose,
   }

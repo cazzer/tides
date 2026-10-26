@@ -11,8 +11,8 @@ import { surfaceOpacityUniform, terrainScaleUniform } from '../../terrain-scale'
 import type { MaterialPatch } from '../eclipseShadow'
 import { createSurfaceTiles, SURFACE_RENDER_ORDER } from './createSurfaceTiles'
 import { SURFACE_SCALE } from './surface-frame'
+import { TerrainPhongMaterial } from './tile-material'
 import {
-  createSurfaceScalePlugin,
   DISPLACEMENT_VERTEX,
   globeStencil,
   patchSurfaceShader,
@@ -156,24 +156,7 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     expect(material.customProgramCacheKey()).toBe(material.onBeforeCompile.toString())
   })
 
-  it("prepares every mesh of a parsed tile in processTileModel, reading the extras per tile", () => {
-    let calls = 0
-    const plugin = createSurfaceScalePlugin(() => {
-      calls++
-      return []
-    })
-    const a = new TerrainLambertMaterial()
-    const b = new TerrainLambertMaterial()
-    const scene = new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), a), new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), b)))
-    plugin.processTileModel(scene, {})
-    expect(calls).toBe(1)
-    for (const m of [a, b]) {
-      expect(m.displacementScale).toBe(1)
-      expect(m.stencilRef).toBe(SURFACE_STENCIL_REF)
-    }
-  })
-
-  it('lifts the skirts from the full relief\'s depth to the live scale\'s, each tile by its own range', () => {
+  it('recovers a tile\'s elevation range from its skirt (the composer lifts the skirts by it, tile-material.test.ts)', () => {
     // A tile's geometry as the plugin leaves it: surface on the sphere, skirt
     // vertices dropped geometricError + range x RELIEF along the normal.
     const geometry = new SkirtedPlaneGeometry(1, 1, 32, 32)
@@ -186,21 +169,6 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     }
     expect(surfaceSkirtRange(geometry, geometricError)).toBeCloseTo(range, 2)
     expect(surfaceSkirtRange(new THREE.PlaneGeometry(), geometricError)).toBe(0)
-
-    const a = new TerrainLambertMaterial()
-    const b = new TerrainLambertMaterial()
-    createSurfaceScalePlugin().processTileModel(new THREE.Group().add(new THREE.Mesh(geometry, a)), { geometricError })
-    prepareSurfaceMaterial(b)
-    const sa = compiled(a)
-    const sb = compiled(b)
-    expect(sa.uniforms.uSkirtRange.value).toBeCloseTo(range, 2)
-    expect(sb.uniforms.uSkirtRange.value).toBe(0)
-    expect(sa.uniforms.uSkirtRange).not.toBe(sb.uniforms.uSkirtRange)
-    expect(sa.vertexShader).toContain(
-      `if ( gl_VertexID >= ${SURFACE_VERTEX_COUNT} ) transformed += normalize( objectNormal ) * uSkirtRange * ( ${RELIEF.toFixed(6)} - uTerrainScale );`
-    )
-    // After the displacement it corrects.
-    expect(sa.vertexShader.indexOf('gl_VertexID >=')).toBeGreaterThan(sa.vertexShader.indexOf('displacementScale * uTerrainScale'))
   })
 
   it('counts the surface vertices before the skirts as the library builds them', () => {
@@ -255,12 +223,14 @@ describe('createSurfaceTiles on the live scale (tides-zmw.9.7)', () => {
       expect(surface.terrain.heightScale).toBe(RELIEF)
       // the constructor's own assignment
       expect(setter).toHaveBeenCalledTimes(1)
-      const material = new TerrainLambertMaterial()
-      const scene = new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), material))
+      const mesh = new THREE.Mesh<THREE.BufferGeometry, THREE.Material>(new THREE.BufferGeometry(), new TerrainLambertMaterial())
+      const scene = new THREE.Group().add(mesh)
       const plugins = (surface.tiles as unknown as { plugins: { name: string; processTileModel?: (s: THREE.Object3D, t: unknown) => unknown }[] }).plugins
       for (const p of plugins) p.processTileModel?.(scene, {})
       expect(setter).toHaveBeenCalledTimes(1)
-      expect(material.displacementScale).toBe(1)
+      // The composer's Phong (tile-material.ts) in the Lambert's place.
+      expect(mesh.material).toBeInstanceOf(TerrainPhongMaterial)
+      expect((mesh.material as THREE.MeshPhongMaterial).displacementScale).toBe(1)
     } finally {
       surface.dispose()
     }

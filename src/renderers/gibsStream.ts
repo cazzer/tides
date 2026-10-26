@@ -304,10 +304,23 @@ const _ready: number[] = []
 export interface StreamedPatch {
   /** For composePatches; empty where the device takes no patch. */
   material: MaterialPatch
+  /** Its uniforms by GLSL name, the stream's texture among them (the
+   * streamed tiles bind them, tides-zmw.9.16); empty where none. */
+  uniforms: Record<string, THREE.IUniform>
+  /** Tiles a side (gibsPatchSide); 0 for none. */
+  side: number
   /** `ground`: the ground mesh, whose local sphere has `radius`. */
   update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number): void
   /** Frees everything; the patch fills again if update finds the ship near. */
   release(): void
+}
+
+const streamed = new WeakMap<MaterialPatch, StreamedPatch>()
+
+/** The streamed patch whose material useStreamedPatch returned, or null (the
+ * globe hands its uniforms and side to the streamed tiles, tides-zmw.9.16). */
+export function streamedPatch(material: MaterialPatch): StreamedPatch | null {
+  return streamed.get(material) ?? null
 }
 
 /**
@@ -328,6 +341,7 @@ export function useStreamedPatch(
     [shipMode, gl]
   )
   const patch = useMemo(() => create(side), [create, side])
+  streamed.set(patch.material, patch)
   useEffect(() => () => patch.release(), [patch])
   // A restored context has lost the texture (as for the cloud blend).
   useEffect(() => {
