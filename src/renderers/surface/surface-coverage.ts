@@ -1,0 +1,302 @@
+// The streamed tiles' view error near the eye and past the source's
+// coverage (tides-zmw.9.17, tides-zmw.9.21), as a wrapper on the renderer's
+// calculateTileViewError, installed after fitSurfaceBounds' (surface-
+// scale.ts), so it sees the regions refitted to the live scale.
+//
+// Near the eye (9.17). 3d-tiles-renderer 0.5.3 takes a tile's distance as
+// its bounding volume's distanceToPoint (TilesRenderer.calculateTileViewError,
+// TileBoundingVolume.distanceToPoint): 0 anywhere inside the region's
+// oriented box, and the error Infinity (1e13-1e16 a hair outside). So every
+// tile whose box holds the eye refines to the deepest level whatever the
+// ground under it. Here a distance under INSIDE_METRES is taken again from
+// the region itself: from the eye to the region's nearest point (its lat,
+// lon and height clamped into the region's), and with the eye inside the
+// region, from the eye down to the drawn ground under it (the ship's floor
+// sampler, surface-ground.ts, times the live scale), never under
+// EYE_GROUND_MIN_METRES, the ship's stop on a float depth buffer: so the
+// tile under the eye still refines as the ground comes near (never a flat
+// cap: tides-zmw.9.8's floor is the window maximum over the drawn meshes,
+// and a coarser one under the eye raises it in a canyon). Where no drawn
+// tile covers the ground under the eye, the region's top stands in for it
+// (the stop, so the tiles there refine as before, but finitely).
+//
+// Past the coverage end (9.21). Where the source has nothing finer than
+// some level (Mapterhorn: z12 over the Himalaya), SurfaceGridCache draws the
+// deeper grids from that data (terrain-internals.ts), so refining further
+// only adds tiles of the same ground. The library ends its tree a level past
+// its deepest grids (maxSourceLevel + EXTRA_LEVELS - 1); likewise a tile all
+// of whose children read grids past the coverage end takes error 0 (a leaf),
+// applied last, over the near-eye error. A tile with any child of its own
+// data (a coverage boundary, a coast) refines as before.
+//
+// The library's no-child-in-view rule (traverseFunctions.js, 0.5.3: a
+// REPLACE tile none of whose children is in the frustum clears its own
+// inFrustum, so it is kept in the cache but never drawn, cascading up) is
+// what turned 9.21's sea-level slabs into a hole; the coverage-end grids
+// keep the children's regions on their ground.
+import * as THREE from 'three'
+import { surfaceGroundSampler } from '../../surface-ground'
+import { EARTH_UNITS_PER_METRE, FINE_GROUND_CLEARANCE } from '../../ship/ship-bodies'
+import { GRID_LEVEL_STEP } from './terrain-internals'
+
+/** The least distance (m) the eye is taken to stand from the drawn ground: the ship's stop on a float depth buffer. */
+export const EYE_GROUND_MIN_METRES = FINE_GROUND_CLEARANCE / EARTH_UNITS_PER_METRE
+/** A library distance (m) under this is the eye inside the box: taken again from the region. */
+export const INSIDE_METRES = 1
+/** The window (m) the drawn ground under the eye is read across. */
+const EYE_GROUND_WINDOW_METRES = 1
+const TWO_PI = 2 * Math.PI
+
+/** The renderer's view error output (0.5.3). */
+export interface ViewErrorTarget {
+  inView: boolean
+  error: number
+  distanceFromCamera: number
+}
+
+interface Cartographic {
+  lat: number
+  lon: number
+  height: number
+}
+
+/** The renderer's ellipsoid, as the region distance uses it. */
+export interface RegionEllipsoid {
+  getPositionToCartographic(position: THREE.Vector3, target: Cartographic): Cartographic
+  getCartographicToPosition(lat: number, lon: number, height: number, target: THREE.Vector3): THREE.Vector3
+}
+
+/** One camera's state as the renderer keeps it for its view error (0.5.3, pinned). */
+interface CameraInfo {
+  isOrthographic: boolean
+  pixelSize: number
+  sseDenominator: number
+  /** The camera in the tiles' root frame (ECEF metres here). */
+  position: THREE.Vector3
+  frustum: unknown
+}
+
+interface RendererInternals {
+  calculateTileViewError(tile: object, target: ViewErrorTarget): void
+  cameraInfo: CameraInfo[]
+  ellipsoid: RegionEllipsoid
+  frameCount: number
+}
+
+/** A terrain tile as the wrapper reads it. */
+interface ViewTile {
+  geometricError: number
+  boundingVolume?: { region?: readonly number[] }
+  engineData?: { boundingVolume?: { intersectsFrustum(frustum: unknown): boolean } }
+  children?: readonly object[]
+}
+
+function wrapPi(a: number): number {
+  return a - TWO_PI * Math.round(a / TWO_PI)
+}
+
+const _clamped = new THREE.Vector3()
+
+/**
+ * The distance (m) from the eye (at `position`, `eye` its cartographic
+ * form) to the region [west, south, east, north, min, max] (radians,
+ * metres): to the point with the eye's latitude, longitude and height each
+ * clamped into the region's, which is the nearest point straight over or
+ * beside it, and near enough to it otherwise. null with the eye inside.
+ */
+export function regionDistance(
+  region: readonly number[],
+  eye: Cartographic,
+  position: THREE.Vector3,
+  ellipsoid: RegionEllipsoid
+): number | null {
+  const [west, south, east, north, min, max] = region
+  const mid = (west + east) / 2
+  const half = (east - west) / 2
+  const dLon = wrapPi(eye.lon - mid)
+  const lon = mid + Math.min(Math.max(dLon, -half), half)
+  const lat = Math.min(Math.max(eye.lat, south), north)
+  const height = Math.min(Math.max(eye.height, min), max)
+  if (lat === eye.lat && Math.abs(dLon) <= half && height === eye.height) return null
+  return ellipsoid.getCartographicToPosition(lat, lon, height, _clamped).distanceTo(position)
+}
+
+/** The plugin's per-tile symbols (module-private in 0.5.3, found by their descriptions; pinned). */
+interface TileSymbols {
+  x: symbol
+  y: symbol
+  level: symbol
+}
+
+let symbols: TileSymbols | null = null
+
+/** TILE_X, TILE_Y and TILE_LEVEL from a terrain tile, or null on any other. */
+export function terrainTileSymbols(tile: object): TileSymbols | null {
+  if (symbols && symbols.level in tile) return symbols
+  const own = Object.getOwnPropertySymbols(tile)
+  const find = (name: string) => own.find((s) => s.description === name)
+  const [x, y, level] = [find('TILE_X'), find('TILE_Y'), find('TILE_LEVEL')]
+  if (!x || !y || !level) return null
+  symbols = { x, y, level }
+  return symbols
+}
+
+export interface SurfaceViewErrorOptions {
+  /** The grid cache's coverage ends (SurfaceGridCache.coverageLevel). */
+  coverageLevel(x: number, y: number, level: number): number
+  /** Whether any coverage end is known yet (else the cap is skipped). */
+  hasCoverageEnds(): boolean
+  /** The plugin's deepest grid level (its _maxSourceLevel). */
+  maxSourceLevel: number
+  /** The live terrain scale. */
+  scale(): number
+  /** The highest drawn ground (true metres) within radiusM of (lat, lon), or null where no drawn tile covers it. */
+  ground?(lat: number, lon: number, radiusM: number): number | null
+}
+
+export interface SurfaceViewError {
+  /** Tiles whose error was taken from the region this frame (eye inside the box). */
+  readonly near: number
+  /** Tiles capped at the coverage end this frame. */
+  readonly capped: number
+  /** The largest error written this frame, the root's aside (never Infinity). */
+  readonly maxError: number
+}
+
+/** The drawn ground from the ship's floor sampler, where the tiles cover the window. */
+function drawnGround(lat: number, lon: number, radiusM: number): number | null {
+  const query = surfaceGroundSampler()?.maxElevation(lat, lon, radiusM)
+  return query?.covered ? query.metres : null
+}
+
+interface EyeState {
+  frame: number
+  carto: Cartographic
+  /** Drawn ground under the eye, metres times the live scale; NaN until read, null when none covers it. */
+  ground: number | null
+}
+
+/**
+ * Wraps the renderer's view error (see the header). Call after
+ * fitSurfaceBounds.
+ */
+export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOptions): SurfaceViewError {
+  const renderer = tiles as RendererInternals
+  const view = renderer.calculateTileViewError
+  if (typeof view !== 'function' || !Array.isArray(renderer.cameraInfo)) {
+    throw new Error('surface coverage: not the 0.5.3 renderer')
+  }
+  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround } = options
+  const eyes: EyeState[] = []
+  let frame = -1
+  let near = 0
+  let capped = 0
+  let maxError = 0
+
+  const eyeOf = (i: number): EyeState => {
+    const eye = (eyes[i] ??= { frame: -1, carto: { lat: 0, lon: 0, height: 0 }, ground: NaN })
+    if (eye.frame !== renderer.frameCount) {
+      eye.frame = renderer.frameCount
+      renderer.ellipsoid.getPositionToCartographic(renderer.cameraInfo[i].position, eye.carto)
+      eye.ground = NaN
+    }
+    return eye
+  }
+
+  const groundUnder = (eye: EyeState): number | null => {
+    if (Number.isNaN(eye.ground)) {
+      const metres = ground(eye.carto.lat, eye.carto.lon, EYE_GROUND_WINDOW_METRES)
+      eye.ground = metres === null ? null : metres * scale()
+    }
+    return eye.ground
+  }
+
+  /** The camera's distance (m) to the tile: the region's, or down to the drawn ground with the eye inside it. */
+  const distanceTo = (region: readonly number[], i: number): number => {
+    const eye = eyeOf(i)
+    const outside = regionDistance(region, eye.carto, renderer.cameraInfo[i].position, renderer.ellipsoid)
+    if (outside !== null) return Math.max(EYE_GROUND_MIN_METRES, outside)
+    const under = groundUnder(eye) ?? region[5]
+    return Math.max(EYE_GROUND_MIN_METRES, eye.carto.height - under)
+  }
+
+  // The library's loop (TilesRenderer.calculateTileViewError, 0.5.3) on
+  // the region's distance.
+  const nearError = (tile: ViewTile, target: ViewErrorTarget) => {
+    const region = tile.boundingVolume?.region
+    const volume = tile.engineData?.boundingVolume
+    if (!region || region.length < 6 || !volume) return
+    let inView = false
+    let inViewError = 0
+    let inViewDistance = Infinity
+    let maxCameraError = 0
+    let minCameraDistance = Infinity
+    const { cameraInfo } = renderer
+    for (let i = 0; i < cameraInfo.length; i++) {
+      const info = cameraInfo[i]
+      let error: number
+      let distance: number
+      if (info.isOrthographic) {
+        error = tile.geometricError / info.pixelSize
+        distance = Infinity
+      } else {
+        distance = distanceTo(region, i)
+        error = tile.geometricError / (distance * info.sseDenominator)
+      }
+      if (volume.intersectsFrustum(info.frustum)) {
+        inView = true
+        inViewError = Math.max(inViewError, error)
+        inViewDistance = Math.min(inViewDistance, distance)
+      }
+      maxCameraError = Math.max(maxCameraError, error)
+      minCameraDistance = Math.min(minCameraDistance, distance)
+    }
+    target.inView = inView
+    target.error = inView ? inViewError : maxCameraError
+    target.distanceFromCamera = inView ? inViewDistance : minCameraDistance
+    near++
+  }
+
+  /** Whether every child of the tile reads a grid past the coverage end. */
+  const pastCoverage = (tile: ViewTile): boolean => {
+    const children = tile.children
+    if (!children?.length) return false
+    for (const child of children) {
+      const sym = terrainTileSymbols(child)
+      if (!sym) return false
+      const c = child as Record<symbol, number>
+      const level = c[sym.level]
+      const source = Math.min(GRID_LEVEL_STEP * Math.floor(level / GRID_LEVEL_STEP), maxSourceLevel)
+      const shift = level - source
+      if (coverageLevel(c[sym.x] >> shift, c[sym.y] >> shift, source) < 0) return false
+    }
+    return true
+  }
+
+  renderer.calculateTileViewError = function (tile: ViewTile, target) {
+    view.call(this, tile, target)
+    if (renderer.frameCount !== frame) {
+      frame = renderer.frameCount
+      near = capped = maxError = 0
+    }
+    if (target.distanceFromCamera < INSIDE_METRES) nearError(tile, target)
+    if (target.error > 0 && hasCoverageEnds() && pastCoverage(tile)) {
+      target.error = 0
+      capped++
+    }
+    // (the synthetic root's geometricError is Infinity: it always refines)
+    if (target.error > maxError && Number.isFinite(tile.geometricError)) maxError = target.error
+  }
+
+  return {
+    get near() {
+      return near
+    },
+    get capped() {
+      return capped
+    },
+    get maxError() {
+      return maxError
+    },
+  }
+}

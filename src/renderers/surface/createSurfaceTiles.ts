@@ -16,6 +16,12 @@
 // is built at the page's RELIEF (the skirts of the largest scale; the
 // bounding regions follow the live scale stepwise), the tiles draw first, and each tile dithers in (TilesFadePlugin)
 // rather than popping over the globe it replaces.
+//
+// tides-zmw.9.21 drew the tiles past the source's coverage (Mapterhorn has
+// nothing finer than z12 over the Himalaya, and 404s under it as over the
+// sea) from the coarser data instead of sea level, and stopped refining
+// there; tides-zmw.9.17 took the view error near the eye from the drawn
+// ground rather than infinity (surface-coverage.ts).
 import * as THREE from 'three'
 import { DEFAULT_DOWNLOAD_QUEUE, DEFAULT_LRU_CACHE, DownloadPriorityQueue, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
@@ -26,8 +32,10 @@ import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
 import { createSurfaceScalePlugin, fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
+import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { terrainScaleUniform } from '../../terrain-scale'
 import {
+  GRID_LEVEL_STEP,
   installSurfaceGridCache,
   protectOverlayBitmaps,
   quietTilesetVersion,
@@ -74,6 +82,8 @@ export interface SurfaceTiles {
   budget: FrameBudget
   /** Update once per frame, before tiles.update(): the regions' fit. */
   bounds: SurfaceBounds
+  /** The view error near the eye and past the coverage end (surface-coverage.ts). */
+  viewError: SurfaceViewError
   /** Copies the robustness counters onto tiles.group.userData. */
   syncCounters(): void
   dispose(): void
@@ -161,6 +171,14 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
   // The bounding regions on the live scale, stepwise (surface-scale.ts).
   const bounds = fitSurfaceBounds(tiles, terrain, () => terrainScaleUniform.value)
+  // After it (so on the refitted regions): the error near the eye from the
+  // drawn ground, and none past the source's coverage (surface-coverage.ts).
+  const viewError = boundSurfaceViewError(tiles, {
+    coverageLevel: (x, y, level) => grids.coverageLevel(x, y, level),
+    hasCoverageEnds: () => grids.coverageEnd.size > 0,
+    maxSourceLevel: GRID_LEVEL_STEP * Math.floor(MAPTERHORN_MAX_ZOOM / GRID_LEVEL_STEP),
+    scale: () => terrainScaleUniform.value,
+  })
   applySurfaceFrame(tiles.group)
   tiles.group.renderOrder = SURFACE_RENDER_ORDER
   tiles.group.name = 'surface-tiles'
@@ -195,6 +213,11 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   const syncCounters = () => {
     const data = tiles.group.userData
     data.flatTiles = grids.flatTiles
+    data.cappedTiles = grids.cappedTiles
+    data.coverageEnds = grids.coverageEnd.size
+    data.nearViews = viewError.near
+    data.cappedViews = viewError.capped
+    data.maxViewError = viewError.maxError
     data.imageryFallbacks = overlay.fallbacks
     data.errorTarget = tiles.errorTarget
     data.fitScale = bounds.fit
@@ -208,6 +231,7 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     grids,
     budget,
     bounds,
+    viewError,
     syncCounters,
     // tiles.dispose() unregisters the terrain plugin, which releases every
     // loaded tile's grid and overlay texture; in-flight parses release theirs
