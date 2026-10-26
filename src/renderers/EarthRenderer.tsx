@@ -23,6 +23,9 @@ import {
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
 import { applyTerrainScale } from '../terrain-scale'
+import { SURFACE_TILES_ON } from '../surface'
+import { globeStencil } from './surface/surface-scale'
+import { setSurfaceHaze } from './surface/surface-link'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { EarthDemLoader } from './earthDemTexture'
@@ -97,7 +100,6 @@ export default function EarthRenderer({
   )
   useEffect(() => () => clouds.dispose(), [clouds])
   const scene = useThree((s) => s.scene)
-  useEffect(() => cloudsFaceEachCamera(scene, clouds, cloudRef), [scene, clouds])
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
@@ -110,6 +112,27 @@ export default function EarthRenderer({
   const groundHaze = useMemo(
     () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
     [clouds, diameter, textureSet.low]
+  )
+  // The streamed tiles (tides-zmw.9.7) take this haze, and the globe gives
+  // way under them (surface-scale.ts).
+  useEffect(() => {
+    if (!SURFACE_TILES_ON) return
+    setSurfaceHaze(scene, groundHaze)
+    return () => setSurfaceHaze(scene, null)
+  }, [scene, groundHaze])
+  // The cloud shell's faces, then the haze's camera and frame and the Sun in
+  // the Earth's frame, for each camera before anything draws (the tiles draw
+  // before the ground); one wrapper, so its cleanup restores the scene's.
+  useEffect(
+    () =>
+      cloudsFaceEachCamera(scene, clouds, cloudRef, (renderer, camera) => {
+        // The tiles' handover marks (surface-scale.ts), cleared within this
+        // View's scissor.
+        if (SURFACE_TILES_ON) renderer.clearStencil()
+        if (groundRef.current) groundHaze.update(groundRef.current, camera)
+        sunInEarthFrame(cloudRef.current?.parent, clouds.uniforms.uSunDir.value)
+      }),
+    [scene, clouds, groundHaze]
   )
   const groundPatch = useMemo(
     () =>
@@ -136,6 +159,9 @@ export default function EarthRenderer({
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
   }, [drawnPatch])
+  useLayoutEffect(() => {
+    if (groundMaterial.current) globeStencil(groundMaterial.current, SURFACE_TILES_ON)
+  }, [])
   // The static clouds, and with Real weather until the frame loop has a blend
   // to show, so the first frame isn't missing its map.
   if (!real || !clouds.uniforms.uCloudMap.value) setCloudMap(clouds, cloudsTexture, false)
@@ -187,18 +213,9 @@ export default function EarthRenderer({
           // prop below only gives the first frame's.
           if (groundMaterial.current) applyTerrainScale(groundMaterial.current)
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
-          groundHaze.update(groundRef.current!, camera)
-          // The Sun in the Earth's frame, from this frame's final transform
-          // (the ground renders before the transparent clouds). The Sun is
-          // the scene's origin, as for the directional light (sunlight.ts).
-          const mesh = cloudRef.current?.parent
-          if (!mesh) return
-          mesh.matrixWorld.decompose(_position, _quaternion, _scale)
-          clouds.uniforms.uSunDir.value
-            .copy(_position)
-            .negate()
-            .normalize()
-            .applyQuaternion(_quaternion.invert())
+          // The haze and the Sun are set per camera before anything draws
+          // (cloudsFaceEachCamera, above).
+          if (!cloudRef.current?.parent) return
           nightFlight?.update(groundRef.current!, camera, diameter)
         }}
       >
@@ -241,22 +258,34 @@ export default function EarthRenderer({
 }
 
 // The cloud shell picks its faces and draw order for each camera before
-// three sorts the scene (CloudLayer.faceCamera). Outside the component: the
-// react-hooks lint rejects mutating the scene from useThree in place.
+// three sorts the scene (CloudLayer.faceCamera); `each` runs after it, with
+// the world matrices updated and nothing drawn yet. Outside the component:
+// the react-hooks lint rejects mutating the scene from useThree in place.
 // Returns the cleanup.
 function cloudsFaceEachCamera(
   scene: THREE.Scene,
   clouds: CloudLayer,
-  cloudRef: RefObject<THREE.Mesh | null>
+  cloudRef: RefObject<THREE.Mesh | null>,
+  each?: (renderer: THREE.WebGLRenderer, camera: THREE.Camera) => void
 ) {
   const previous = scene.onBeforeRender
   scene.onBeforeRender = function (renderer, renderScene, camera, target) {
     previous.call(this, renderer, renderScene, camera, target)
     if (cloudRef.current) clouds.faceCamera(cloudRef.current, camera)
+    each?.(renderer, camera)
   }
   return () => {
     scene.onBeforeRender = previous
   }
+}
+
+// The Sun's direction in the Earth's frame, from `earth`'s final transform
+// this frame. The Sun is the scene's origin, as for the directional light
+// (sunlight.ts).
+function sunInEarthFrame(earth: THREE.Object3D | null | undefined, target: THREE.Vector3) {
+  if (!earth) return
+  earth.matrixWorld.decompose(_position, _quaternion, _scale)
+  target.copy(_position).negate().normalize().applyQuaternion(_quaternion.invert())
 }
 
 /** Only geostationary imagery carries cloud-top heights (R) and their

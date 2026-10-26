@@ -23,6 +23,7 @@ import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
 import CompassButton from './CompassButton'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
+import { SURFACE_TILES_ON } from './surface'
 import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
@@ -177,6 +178,9 @@ export default function App() {
             reversedDepthBuffer: true,
             toneMapping: THREE.ACESFilmicToneMapping,
             toneMappingExposure: TONE_MAPPING_EXPOSURE,
+            // The surface tiles' handover from the globe (tides-zmw.9.7)
+            // needs a stencil buffer; without the tiles, the default (none).
+            stencil: SURFACE_TILES_ON,
           }}
         >
           <SimClock running={sceneReady} />

@@ -26,8 +26,14 @@
 // system view) the two parts sum to the old sunlight, and the night side
 // gains nothing.
 //
+// With the live terrain scale on (terrain-scale.ts TERRAIN_BLEND), the
+// detail's tilt follows the drawn relief (displacementScale over the full
+// relief's), as the ground's own slope does: at 1x a tilt sized for 12x
+// relief stood ~12x too steep (tides-zmw.9.7). Off, the shader is as it was.
+//
 // Spread through composePatches onto the ground's Phong material.
-import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
+import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { TERRAIN_BLEND } from '../terrain-scale'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { GROUND_RELIEF_GLSL } from './groundRelief'
 import type { MaterialPatch } from './eclipseShadow'
@@ -103,9 +109,17 @@ float groundDetailFine = 0.0;
 #endif
 `
 
+// The detail's tilt over the drawn relief's share of the full relief's
+// (with the live scale on; only where the relief's displacementScale is
+// declared).
+const SCALED_TILT = /* glsl */ `
+#ifdef GROUND_RELIEF
+    slope *= displacementScale / ${TERRAIN_DISPLACEMENT.toExponential(9)};
+#endif`
+
 // After the albedo lookup, the specular mask and the normal; before the
 // emissive map and the lights.
-const FRAGMENT_BODY = /* glsl */ `
+const fragmentBody = (followScale: boolean) => /* glsl */ `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP)
 vec3 groundUp = normal;
 {
@@ -140,7 +154,7 @@ vec3 groundUp = normal;
     vec3 up = normalize(vGroundDetailPos);
     vec3 slope = (detail.yzw - dot(detail.yzw, up) * up)
       * mix(GROUND_DETAIL_RELIEF, GROUND_DETAIL_RELIEF_ICE, ice)
-      * ${f(DETAIL_BASE_TEXELS)} * groundDetailTexel;
+      * ${f(DETAIL_BASE_TEXELS)} * groundDetailTexel;${followScale ? SCALED_TILT : ''}
     slope *= groundLand * min(1.0, GROUND_DETAIL_MAX_SLOPE / max(length(slope), 1e-6));
     normal = normalize(normal - normalMatrix * slope);
   }
@@ -175,8 +189,9 @@ function inject(source: string, chunk: string, code: string): string {
 }
 
 /** `low`: the low quality tier, which takes fewer octaves. The relief
- * comes with the material's displacement map. */
-export function groundDetailPatch(low: boolean): MaterialPatch {
+ * comes with the material's displacement map. `followScale`: the tilt
+ * follows the live terrain scale (the blend's on). */
+export function groundDetailPatch(low: boolean, followScale: boolean = TERRAIN_BLEND): MaterialPatch {
   const octaves = low ? GROUND_DETAIL_OCTAVES_LOW : GROUND_DETAIL_OCTAVES
   return {
     onBeforeCompile(shader) {
@@ -189,12 +204,12 @@ export function groundDetailPatch(low: boolean): MaterialPatch {
             TEXEL_BODY
           ),
           'normal_fragment_maps',
-          FRAGMENT_BODY
+          fragmentBody(followScale)
         ),
         'lights_fragment_end',
         LIGHT_BODY
       )
     },
-    customProgramCacheKey: () => `ground-detail-${octaves}`,
+    customProgramCacheKey: () => `ground-detail-${octaves}${followScale ? '-scaled' : ''}`,
   }
 }

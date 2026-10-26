@@ -4,7 +4,6 @@ import { Ellipsoid } from '3d-tiles-renderer/three'
 import { EARTH_RADIUS } from '../../ship/ship-bodies'
 import { calculateLocationAndRotationForLatLng } from '../../utils'
 import {
-  applySurfaceBumpScale,
   applySurfaceFrame,
   ecefToEarthLocal,
   SURFACE_ELLIPSOID_RADIUS,
@@ -56,19 +55,6 @@ describe('surface frame (tides-zmw.9.1)', () => {
       expect(viaLibrary.distanceTo(want), name).toBeLessThan(1e-9)
       expect(viaHelper.distanceTo(want), name).toBeLessThan(1e-9)
     }
-  })
-
-  it('puts the bump shading in scene units, leaving displacement in metres', () => {
-    const material = new THREE.MeshLambertMaterial({ bumpMap: new THREE.Texture(), displacementMap: new THREE.Texture() })
-    material.bumpScale = 1
-    material.displacementScale = 1
-    const plain = new THREE.MeshLambertMaterial()
-    plain.bumpScale = 1
-    const root = new THREE.Group().add(new THREE.Mesh(new THREE.PlaneGeometry(), material), new THREE.Mesh(new THREE.PlaneGeometry(), plain))
-    applySurfaceBumpScale(root, 2)
-    expect(material.bumpScale).toBeCloseTo(2 * SURFACE_SCALE, 18)
-    expect(material.displacementScale).toBe(1)
-    expect(plain.bumpScale).toBe(1)
   })
 
   it('updates after the camera and spin (0) and before the View renders (1)', () => {

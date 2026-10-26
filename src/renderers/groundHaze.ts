@@ -56,6 +56,14 @@
 // Only for the ship's camera under the cloud shell's top (update()); elsewhere
 // the atmosphere still draws over the ground, so from outside nothing
 // changes. Spread through composePatches onto the ground's Phong material.
+//
+// The streamed surface tiles (tides-zmw.9.7) take the same haze through
+// surfacePatch, sharing these uniforms: their meshes aren't in the ground's
+// frame, so their ray comes from view space through the ground's frame
+// (uGroundHazeViewToLocal) and their eye is the ground frame's
+// (uGroundHazeEyeLocal), both filled by update() for each camera before
+// anything draws (EarthRenderer's per-camera scene hook), since the tiles
+// draw before the ground.
 import * as THREE from 'three'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import {
@@ -237,6 +245,18 @@ if (uGroundHaze > 0.0) {
 }
 `
 
+// The surface tiles' variant: view space to the ground's frame by this
+// frame's matrix (from double on the CPU), the eye the ground frame's.
+const SURFACE_VERTEX_HEAD = /* glsl */ `
+uniform mat3 uGroundHazeViewToLocal;
+uniform vec3 uGroundHazeEyeLocal;
+`
+
+const SURFACE_VERTEX_BODY = /* glsl */ `
+vGroundHazeRay = uGroundHazeViewToLocal * mvPosition.xyz;
+vGroundHazeEye = uGroundHazeEyeLocal;
+`
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
@@ -247,9 +267,15 @@ function inject(source: string, chunk: string, code: string): string {
 
 export interface GroundHaze {
   patch: MaterialPatch
-  /** The ground mesh's onBeforeRender: whether this camera takes it. */
+  /** The same haze for a mesh outside the ground's frame (the surface
+   * tiles), on the same uniforms. */
+  surfacePatch: MaterialPatch
+  /** For each camera before anything draws: whether this camera takes the
+   * haze, and the surface variant's frame. */
   update(ground: THREE.Object3D, camera: THREE.Camera): void
 }
+
+const _toLocal = new THREE.Matrix4()
 
 /** `sun`: the Sun's direction in the ground mesh's frame, kept up to date by
  * the caller (the cloud layer's uSunDir, while the atmosphere takes
@@ -269,21 +295,40 @@ export function createGroundHaze(
     uGroundHazeTop: { value: top },
     uGroundHazeSun: sun,
   }
+  const frame = {
+    uGroundHazeViewToLocal: { value: new THREE.Matrix3() },
+    uGroundHazeEyeLocal: { value: new THREE.Vector3() },
+  }
+  const fragment = (source: string) =>
+    inject(inject(source, 'common', FRAGMENT_HEAD), 'colorspace_fragment', FRAGMENT_BODY)
   return {
     patch: {
       onBeforeCompile(shader) {
         Object.assign(shader.uniforms, uniforms)
         shader.vertexShader = inject(VERTEX_HEAD + shader.vertexShader, 'project_vertex', VERTEX_BODY)
-        shader.fragmentShader = inject(
-          inject(shader.fragmentShader, 'common', FRAGMENT_HEAD),
-          'colorspace_fragment',
-          FRAGMENT_BODY
-        )
+        shader.fragmentShader = fragment(shader.fragmentShader)
       },
       customProgramCacheKey: () => 'ground-haze',
     },
+    surfacePatch: {
+      onBeforeCompile(shader) {
+        Object.assign(shader.uniforms, uniforms, frame)
+        shader.vertexShader = inject(
+          VERTEX_HEAD + SURFACE_VERTEX_HEAD + shader.vertexShader,
+          'project_vertex',
+          SURFACE_VERTEX_BODY
+        )
+        shader.fragmentShader = fragment(shader.fragmentShader)
+      },
+      customProgramCacheKey: () => 'ground-haze-surface',
+    },
     update(ground, camera) {
       uniforms.uGroundHaze.value = insideShell(ground, camera, top) ? 1 : 0
+      // The ground's frame from the camera's (view space, unscaled: the
+      // Earth's group and the camera carry no scale), in double.
+      _toLocal.copy(ground.matrixWorld).invert().multiply(camera.matrixWorld)
+      frame.uGroundHazeViewToLocal.value.setFromMatrix4(_toLocal)
+      frame.uGroundHazeEyeLocal.value.setFromMatrixPosition(_toLocal)
     },
   }
 }

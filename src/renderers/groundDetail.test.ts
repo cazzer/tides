@@ -151,4 +151,19 @@ describe('ground detail patch', () => {
       groundDetailPatch(false).customProgramCacheKey()
     )
   })
+
+  it('scales its tilt with the drawn relief only when the live scale is on (tides-zmw.9.7)', () => {
+    const off = phongShader()
+    const on = phongShader()
+    off.displacementMap = on.displacementMap = true
+    groundDetailPatch(false, false).onBeforeCompile(off, {} as THREE.WebGLRenderer)
+    groundDetailPatch(false, true).onBeforeCompile(on, {} as THREE.WebGLRenderer)
+    const line = `slope *= displacementScale / ${TERRAIN_DISPLACEMENT.toExponential(9)};`
+    expect(off.fragmentShader).not.toContain(line)
+    expect(on.fragmentShader).toContain(`#ifdef GROUND_RELIEF\n    ${line}\n#endif`)
+    // Off, the production shader to the byte (the system view's hash pins it too).
+    expect(on.fragmentShader.replace(/\n#ifdef GROUND_RELIEF\n {4}slope \*= displacementScale[^\n]*\n#endif/, '')).toBe(off.fragmentShader)
+    expect(groundDetailPatch(false, true).customProgramCacheKey()).not.toBe(groundDetailPatch(false, false).customProgramCacheKey())
+    expect(groundDetailPatch(false).customProgramCacheKey()).toBe(groundDetailPatch(false, false).customProgramCacheKey())
+  })
 })
