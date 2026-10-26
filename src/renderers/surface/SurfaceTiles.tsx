@@ -72,7 +72,7 @@ export default function SurfaceTiles() {
     const sampler = createSurfaceGround({
       group: created.tiles.group,
       forEachLoadedModel: (callback) => forEachCachedModel(created.tiles, callback),
-    })
+    }, { deepest: created.viewError.deepest })
     ground.current = sampler
     setSurfaceGroundSampler(sampler)
     errorTarget.current = NaN

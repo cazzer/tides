@@ -29,7 +29,7 @@ import type { TilesRenderer } from '3d-tiles-renderer/three'
 import type { FrameBudget } from './frame-budget'
 import { eitherSignal, fetchWithRetry, RETRY_DELAYS_MS } from './fetch-retry'
 import { cancelBody } from './imagery'
-import { flatGrid, type PaddedGrid } from './terrarium'
+import { flatGrid, gridRangeWithin, resampleGrid, type PaddedGrid } from './terrarium'
 import type { TerrariumDecode } from './terrariumDecoder'
 
 /** The library version everything here was read from. */
@@ -41,6 +41,8 @@ interface SourceInternals {
   /** Set by the plugin to route through tiles.downloadQueue. */
   fetchData(url: string, options: RequestInit): Promise<Response>
   fetchOptions: RequestInit
+  /** Its tiling scheme: a tile's bounds, normalized (v north, as the grids' rows). */
+  tiling: { getTileBounds(x: number, y: number, level: number, normalized: boolean): number[] }
 }
 
 /** The terrain plugin's fields the cache reads. */
@@ -51,8 +53,15 @@ export interface TerrainPluginInternals {
   tileDimension: number
 }
 
-/** Statuses meaning "no data here": Mapterhorn answers 404 over open ocean. */
+/** Statuses meaning "no data here": Mapterhorn answers 404 over open ocean, and past its coverage. */
 const EMPTY_STATUSES = new Set([204, 404, 410])
+
+/**
+ * The tree levels sharing each fetched grid level (the plugin's
+ * EXTRA_LEVELS, pinned): grids exist only at every second level, so a
+ * grid's nearest ancestor grid is two levels up.
+ */
+export const GRID_LEVEL_STEP = 2
 
 export interface SurfaceGridOptions {
   /** 'linear' needs OES_texture_float_linear; 'nearest' is core WebGL2. */
@@ -68,11 +77,78 @@ export interface SurfaceGridOptions {
 
 const key = (x: number, y: number, level: number) => `${level}/${x}/${y}`
 
+/**
+ * Waits for `promise` until `signal` aborts (then rejects with its reason;
+ * the promise runs on).
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+    )
+  })
+}
+
+/** A grid locked from the cache (release it), with where it sits. */
+interface LockedGrid {
+  grid: DataTexture
+  x: number
+  y: number
+  level: number
+}
+
+/**
+ * What the source has for a grid: its decoded data, or none. `fresh`: the
+ * grid itself answered "no data" just now; else an ancestor did, and `from`
+ * is what that answer was recorded as (a data level, or OCEAN).
+ */
+type SourceGrid = { padded: PaddedGrid } | { from: number; fresh: boolean }
+
+/** No ancestor grid holds ground here: open water. */
+const OCEAN = -1
+
+/** The stand-in a between-levels "no data" leaves in the cache (fetchItem): never data. */
+const isPlaceholder = (grid: DataTexture) => (grid.image as { width: number }).width < 3
+
+/**
+ * Data grids kept locked after a coverage end read them, the latest this
+ * many, where no tile may hold them: those at levels between the plugin's
+ * (odd levels: Israel's data, the Dead Sea's, ends at z13), which the grids
+ * under that coverage end all read, and those a between-levels "no data"
+ * read, which the grid under it reads next.
+ */
+export const HELD_BETWEEN_GRIDS = 8
+
 export class SurfaceGridCache extends GridCache {
-  /** Grids made flat because the source had no data for them. */
+  /** Grids made flat because the source had no data for them (open water). */
   flatTiles = 0
-  /** Tiles the source answered "no data" for, as level/x/y. */
+  /**
+   * Grids resampled from an ancestor's because the source's coverage ends
+   * above them (tides-zmw.9.21): Mapterhorn has nothing finer than z12 over
+   * the Himalaya, and answers 404 under it, as over the sea.
+   */
+  cappedTiles = 0
+  /**
+   * The tiles the source answered "no data" for under an ancestor grid with
+   * ground, as level/x/y: the level of that ancestor (the data level).
+   */
+  readonly coverageEnd = new Map<string, number>()
+  /** The levels coverageEnd holds keys at. */
+  private readonly coverageLevels = new Set<number>()
+  /** Tiles the source answered "no data" for over open water, as level/x/y. */
   private readonly empty = new Set<string>()
+  /** The data grids held (HELD_BETWEEN_GRIDS), oldest first. */
+  private readonly held: LockedGrid[] = []
   private readonly options: SurfaceGridOptions
   private readonly lifetime = new AbortController()
 
@@ -82,19 +158,42 @@ export class SurfaceGridCache extends GridCache {
   }
 
   /**
-   * Whether an ancestor answered "no data": Mapterhorn's pyramid has data at
-   * a level wherever any deeper level does (checked 2026-10-25: the children
-   * of the ocean tile 4/6/5 to z7 all 404, while the z4-z10 ancestors of
-   * Pico, Tristan da Cunha, St Helena, Ascension and Bouvet all answer), so
-   * the whole subtree is open water and needn't be asked for. Accepted
-   * risk: a CDN 404 on a land tile (a bad deploy, say) flattens that tile's
-   * whole subtree to sea level for the session.
+   * Whether an ancestor answered "no data", and what it was recorded as:
+   * open water (OCEAN), or a coverage end, as the level of the data grid
+   * above it, which this grid then reads too; undefined when none did.
+   * Mapterhorn's pyramid has data at a level wherever any deeper level does
+   * (checked 2026-10-25: the children of the ocean tile 4/6/5 to z7 all 404,
+   * while the z4-z10 ancestors of Pico, Tristan da Cunha, St Helena,
+   * Ascension and Bouvet all answer), so the whole subtree under a "no data"
+   * answer is the same and needn't be asked for. Accepted risk: a CDN 404 on
+   * a land tile (a bad deploy, say) draws that tile's whole subtree from its
+   * parent's coarser grid for the session (sea level only where that holds
+   * none above it).
    */
-  private underEmpty(x: number, y: number, level: number): boolean {
+  private noDataAbove(x: number, y: number, level: number): number | undefined {
     for (let up = 1; up <= level; up++) {
-      if (this.empty.has(key(x >> up, y >> up, level - up))) return true
+      const k = key(x >> up, y >> up, level - up)
+      if (this.empty.has(k)) return OCEAN
+      const from = this.coverageEnd.get(k)
+      if (from !== undefined) return from
     }
-    return false
+    return undefined
+  }
+
+  /**
+   * The data level the grid (x, y, level) reads, where it or an ancestor is
+   * past the source's coverage (a coverage end); -1 otherwise: data of its
+   * own, open water, or not answered yet. The view error's cap reads it
+   * (surface-coverage.ts).
+   */
+  coverageLevel(x: number, y: number, level: number): number {
+    // Only the levels holding coverage ends (one or two): it runs per tile traversed.
+    for (const at of this.coverageLevels) {
+      if (at > level) continue
+      const from = this.coverageEnd.get(key(x >> (level - at), y >> (level - at), at))
+      if (from !== undefined) return from
+    }
+    return OCEAN
   }
 
   /** The tile's response, through the plugin's queue-routed fetch, retried while transient. */
@@ -108,19 +207,104 @@ export class SurfaceGridCache extends GridCache {
     )
   }
 
-  private async fetchGrid(x: number, y: number, level: number, signal: AbortSignal): Promise<PaddedGrid | null> {
-    if (this.underEmpty(x, y, level)) return null
+  private async fetchGrid(x: number, y: number, level: number, signal: AbortSignal): Promise<SourceGrid> {
+    const above = this.noDataAbove(x, y, level)
+    if (above !== undefined) return { from: above, fresh: false }
     const res = await this.fetchResponse(x, y, level, signal)
     if (EMPTY_STATUSES.has(res.status)) {
       cancelBody(res)
-      this.empty.add(key(x, y, level))
-      return null
+      return { from: OCEAN, fresh: true }
     }
     if (!res.ok) {
       cancelBody(res)
       throw new Error(`surface tiles: terrain tile ${key(x, y, level)} answered ${res.status}`)
     }
-    return this.options.decode(await res.arrayBuffer(), signal)
+    return { padded: await this.options.decode(await res.arrayBuffer(), signal) }
+  }
+
+  /**
+   * Locks the grid (x, y, level), waiting until it is made or `signal`
+   * aborts; what it holds then is the caller's to release. On an abort the
+   * lock is let go once the grid settles; a grid that failed holds none
+   * (lock() forgot it).
+   */
+  private async lockGrid(x: number, y: number, level: number, signal: AbortSignal): Promise<LockedGrid> {
+    const k = `${x}_${y}_${level}` // DataCache's key
+    const result = this.lock(x, y, level)
+    const settled = result instanceof Promise ? result : Promise.resolve(result)
+    try {
+      return { grid: await untilAborted(settled, signal), x, y, level }
+    } catch (error) {
+      settled.then(
+        () => this.release(x, y, level),
+        () => {
+          if ((this.cache[k] as { result?: unknown } | undefined)?.result === result) this.release(x, y, level)
+        }
+      )
+      throw error
+    }
+  }
+
+  /** What a "no data" answer for the grid was recorded as: OCEAN, a data level, or undefined (none recorded). */
+  private answered(x: number, y: number, level: number): number | undefined {
+    const k = key(x, y, level)
+    return this.empty.has(k) ? OCEAN : this.coverageEnd.get(k)
+  }
+
+  /**
+   * The grid a tile the source has no data for reads from: the data grid
+   * above it, locked, or null over open water. A fresh "no data" answer
+   * asks the tile a level up, which at an odd level is not one of the
+   * plugin's grids (the source's coverage can end there: Israel's at z13),
+   * and its own "no data" asks its parent's grid (cached, as a rule: the
+   * traversal loads a parent before its children). The answer is recorded
+   * as a coverage end under data or as open water once read (fetchItem).
+   */
+  private async dataAbove(x: number, y: number, level: number, from: number, fresh: boolean, signal: AbortSignal): Promise<LockedGrid | null> {
+    const lockAt = (at: number) => (at === OCEAN ? null : this.lockGrid(x >> (level - at), y >> (level - at), at, signal))
+    if (!fresh) return lockAt(from)
+    if (level === 0) return null
+    // Answered above while this grid was being fetched (a sibling's "no
+    // data", at any level up): read what that was recorded as. Checked in
+    // the same turn as the lock below, which would otherwise make the tile
+    // a level up from that answer without recording it, a placeholder.
+    const late = this.noDataAbove(x, y, level)
+    if (late !== undefined) return lockAt(late)
+    const up = level - 1
+    const known = this.answered(x >> 1, y >> 1, up)
+    if (known !== undefined) return lockAt(known)
+    const above = await this.lockGrid(x >> 1, y >> 1, up, signal)
+    const answer = this.answered(above.x, above.y, up)
+    if (answer === undefined && !isPlaceholder(above.grid)) return above
+    this.release(above.x, above.y, up)
+    if (answer !== undefined) return lockAt(answer)
+    // A placeholder all the same (never data): what the answer above it says.
+    return lockAt(this.noDataAbove(x, y, level) ?? OCEAN)
+  }
+
+  /** Keeps a data grid locked a while (HELD_BETWEEN_GRIDS), the least recently read let go first. */
+  private hold(grid: LockedGrid): void {
+    const at = this.held.findIndex((h) => h.x === grid.x && h.y === grid.y && h.level === grid.level)
+    if (at >= 0) {
+      this.held.push(...this.held.splice(at, 1))
+      return
+    }
+    this.lock(grid.x, grid.y, grid.level)
+    this.held.push(grid)
+    if (this.held.length > HELD_BETWEEN_GRIDS) {
+      const old = this.held.shift()!
+      this.release(old.x, old.y, old.level)
+    }
+  }
+
+  /** The tile's rectangle in an ancestor's, normalized (the plugin's _getSubview). */
+  private subview(x: number, y: number, level: number, above: LockedGrid): number[] {
+    const { tiling } = (this.plugin as TerrainPluginInternals)._source!
+    const [a0, b0, a1, b1] = tiling.getTileBounds(above.x, above.y, above.level, true)
+    const [u0, v0, u1, v1] = tiling.getTileBounds(x, y, level, true)
+    const iw = 1 / (a1 - a0)
+    const ih = 1 / (b1 - b0)
+    return [(u0 - a0) * iw, (v0 - b0) * ih, (u1 - a0) * iw, (v1 - b0) * ih]
   }
 
   /**
@@ -131,6 +315,7 @@ export class SurfaceGridCache extends GridCache {
    */
   shutDown(): void {
     this.lifetime.abort(new DOMException('surface tiles disposed', 'AbortError'))
+    for (const grid of this.held.splice(0)) this.release(grid.x, grid.y, grid.level)
   }
 
   /**
@@ -157,25 +342,72 @@ export class SurfaceGridCache extends GridCache {
 
   override async fetchItem([x, y, level]: [number, number, number], itemSignal: AbortSignal): Promise<DataTexture> {
     const { filter, budget, upload } = this.options
+    const tileDimension = (this.plugin as TerrainPluginInternals).tileDimension
     const { signal, release } = eitherSignal(itemSignal, this.lifetime.signal)
-    let padded: PaddedGrid | null
+    let source: SourceGrid
+    let above: LockedGrid | null = null
     try {
-      padded = await this.fetchGrid(x, y, level, signal)
+      source = await this.fetchGrid(x, y, level, signal)
+      if ('from' in source) above = await this.dataAbove(x, y, level, source.from, source.fresh, signal)
       await budget.wait(signal)
       signal.throwIfAborted()
+    } catch (error) {
+      if (above) this.release(above.x, above.y, above.level)
+      throw error
     } finally {
       release()
     }
-    if (!padded) {
-      // sea level, full size: stitching assumes every grid is the same size
-      padded = flatGrid((this.plugin as TerrainPluginInternals).tileDimension)
-      this.flatTiles++
+    // A grid between the plugin's levels is only ever asked for by
+    // dataAbove: never drawn, so never stitched or uploaded.
+    const between = level % GRID_LEVEL_STEP !== 0
+    let padded = 'padded' in source ? source.padded : null
+    if (!('padded' in source)) {
+      // No data here (tides-zmw.9.21): past the source's coverage, the data
+      // grid above resampled, so the tile draws (and its region bounds, and
+      // the ship's floor reads) the coarser ground, not a sea-level slab the
+      // library would cull, hiding its parent too. Mapterhorn's sea is
+      // exactly 0 m (no bathymetry), so where the data above holds nothing
+      // but 0 there it is open water: sea level, full size (stitching
+      // assumes every grid is the same size). Land below the sea (the Dead
+      // Sea, the Caspian) resamples like any other.
+      let sea = true
+      if (above) {
+        try {
+          const image = above.grid.image as unknown as PaddedGrid
+          const sub = this.subview(x, y, level, above)
+          const [min, max] = gridRangeWithin(image, sub)
+          sea = min === 0 && max === 0
+          if (!sea && !between) padded = resampleGrid(image, sub, tileDimension)
+          if (!sea && (between || above.level % GRID_LEVEL_STEP !== 0)) this.hold(above)
+        } finally {
+          this.release(above.x, above.y, above.level)
+        }
+      }
+      if (source.fresh) {
+        if (sea) {
+          this.empty.add(key(x, y, level))
+        } else {
+          this.coverageEnd.set(key(x, y, level), above!.level)
+          this.coverageLevels.add(level)
+        }
+      }
+      if (between) {
+        // the answer is recorded; a placeholder for the cache, never read
+        padded = { data: new Float32Array(1), width: 1, height: 1 }
+      } else if (padded) {
+        this.cappedTiles++
+      } else {
+        padded = flatGrid(tileDimension)
+        this.flatTiles++
+      }
     }
     const grid = new DataTexture(padded.data, padded.width, padded.height, RedFormat, FloatType)
     grid.minFilter = grid.magFilter = filter === 'linear' ? LinearFilter : NearestFilter
     grid.needsUpdate = true
-    this.stitchNeighbors(grid, x, y, level)
-    upload?.(grid)
+    if (!between) {
+      this.stitchNeighbors(grid, x, y, level)
+      upload?.(grid)
+    }
     // If the cache drops the item before taking this result, it never
     // disposes it; the abort is the only word of that. (A normal release
     // aborts too, then disposes: a second dispose is a no-op.)
