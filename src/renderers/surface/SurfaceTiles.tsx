@@ -97,9 +97,10 @@ export default function SurfaceTiles() {
   }, [camera, gl, floatLinear, haze])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
-  // is in those pixels. After the effect above, so the camera is registered.
+  // is in those pixels, and the cache's marks follow them (surface-lod.ts).
+  // After the effect above, so the camera is registered.
   useEffect(() => {
-    surface.current?.tiles.setResolution(camera, width, height)
+    surface.current?.setViewSize(camera, width, height)
   }, [camera, gl, floatLinear, haze, width, height])
 
   useFrame((_, delta) => {
@@ -109,11 +110,12 @@ export default function SurfaceTiles() {
     budget.tick()
     // The regions' fit from this frame's scale (ShipController has written it).
     bounds.update()
-    // Less detail the faster the ground sweeps past (surface-lod.ts), set
-    // before update() picks this frame's tiles.
+    // Less detail the faster the ground sweeps past (surface-lod.ts), but
+    // the rest detail under the eye, set before update() picks this frame's
+    // tiles.
     const target = surfaceErrorTarget(sweepRate(shipTelemetry.air.speed, shipTelemetry.nearest), touch)
     errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
-    tiles.errorTarget = errorTarget.current
+    current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch))
     // ShipController has moved the camera and OrbitingBody turned Earth this
     // frame, but neither world matrix is refreshed until the render: do it
     // here, so the tiles pick their detail and cull against where the camera

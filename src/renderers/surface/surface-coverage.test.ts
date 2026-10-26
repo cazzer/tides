@@ -160,6 +160,39 @@ describe('the view error near the eye (tides-zmw.9.17)', () => {
   })
 })
 
+describe('the tiles under the eye at speed (tides-zmw.9.22)', () => {
+  const e = ellipsoid()
+
+  it("scales the error of tiles over the eye's latitude and longitude only, and only above 1", () => {
+    const over = eyeAt(e, 28, 87, 12000)
+    const a = fakeRenderer({ error: 3, distanceFromCamera: 3000 }, over.position)
+    let scale = 4
+    const bounds = boundSurfaceViewError(a.renderer, options({ eyeErrorScale: () => scale }))
+    expect(viewError(a.renderer, tileOf(a.volume)).error).toBe(12)
+    expect(bounds.underEye).toBe(1)
+    scale = 1
+    expect(viewError(a.renderer, tileOf(a.volume)).error).toBe(3)
+    scale = 0.5
+    expect(viewError(a.renderer, tileOf(a.volume)).error).toBe(3)
+    const beside = eyeAt(e, 29, 87, 12000)
+    const b = fakeRenderer({ error: 3, distanceFromCamera: 3000 }, beside.position)
+    boundSurfaceViewError(b.renderer, options({ eyeErrorScale: () => 4 }))
+    expect(viewError(b.renderer, tileOf(b.volume)).error).toBe(3)
+  })
+
+  it('takes the longitude across the antimeridian, and leaves a capped leaf at 0', () => {
+    const region = [179.5 * DEG, 27.5 * DEG, 180.5 * DEG, 28.5 * DEG, 7900, 9200]
+    const eye = eyeAt(e, 28, -179.8, 12000)
+    const { renderer, volume } = fakeRenderer({ error: 2, distanceFromCamera: 3000 }, eye.position)
+    boundSurfaceViewError(renderer, options({ eyeErrorScale: () => 2 }))
+    expect(viewError(renderer, { ...tileOf(volume), boundingVolume: { region } }).error).toBe(4)
+    const coverageLevel = () => 8
+    const capped = fakeRenderer({ error: 2, distanceFromCamera: 3000 }, eyeAt(e, 28, 87, 12000).position)
+    boundSurfaceViewError(capped.renderer, options({ coverageLevel, hasCoverageEnds: () => true, eyeErrorScale: () => 2 }))
+    expect(viewError(capped.renderer, tileOf(capped.volume, [child(0, 0, 13)], 10, [0, 0, 12])).error).toBe(0)
+  })
+})
+
 describe('the view error past the coverage end (tides-zmw.9.21)', () => {
   const e = ellipsoid()
   // grids at z14 (and under) past the coverage end over x 100-101, y 200-201

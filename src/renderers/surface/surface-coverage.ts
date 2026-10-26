@@ -34,6 +34,13 @@
 // such a leaf as the tree's end (deepest()): no anticipating children that
 // never come.
 //
+// Under the eye at speed (tides-zmw.9.22). The speed ramp raises the
+// errorTarget (surface-lod.ts), which would stop the chain of tiles holding
+// the eye's latitude and longitude short too, and the ship's floor reads
+// that chain (a coarser mesh raises it in a canyon): those tiles' error is
+// scaled by eyeErrorScale (the errorTarget over its rest value), so they
+// refine as at rest whatever the speed, before the coverage cap.
+//
 // The library's no-child-in-view rule (traverseFunctions.js, 0.5.3: a
 // REPLACE tile none of whose children is in the frustum clears its own
 // inFrustum, so it is kept in the cache but never drawn, cascading up) is
@@ -164,6 +171,8 @@ export interface SurfaceViewErrorOptions {
   scale(): number
   /** The highest drawn ground (true metres) within radiusM of (lat, lon), or null where no drawn tile covers it. */
   ground?(lat: number, lon: number, radiusM: number): number | null
+  /** The factor on the error of tiles holding the eye's latitude and longitude: the errorTarget over its rest value (1: none). */
+  eyeErrorScale?(): number
 }
 
 export interface SurfaceViewError {
@@ -171,6 +180,8 @@ export interface SurfaceViewError {
   readonly near: number
   /** Tiles capped at the coverage end this frame. */
   readonly capped: number
+  /** Tiles under the eye whose error was scaled up this frame (eyeErrorScale). */
+  readonly underEye: number
   /** The largest error written this frame, the root's and z0's aside (never Infinity). */
   readonly maxError: number
   /**
@@ -204,11 +215,12 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
   if (typeof view !== 'function' || !Array.isArray(renderer.cameraInfo)) {
     throw new Error('surface coverage: not the 0.5.3 renderer')
   }
-  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround, capLevels = CAP_LEVELS } = options
+  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround, capLevels = CAP_LEVELS, eyeErrorScale } = options
   const eyes: EyeState[] = []
   let frame = -1
   let near = 0
   let capped = 0
+  let underEye = 0
   let maxError = 0
 
   const eyeOf = (i: number): EyeState => {
@@ -236,6 +248,16 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     if (outside !== null) return Math.max(EYE_GROUND_MIN_METRES, outside)
     const under = groundUnder(eye) ?? region[5]
     return Math.max(EYE_GROUND_MIN_METRES, eye.carto.height - under)
+  }
+
+  /** Whether any camera's eye is over the region (its latitude and longitude inside it). */
+  const holdsEye = (region: readonly number[]): boolean => {
+    const [west, south, east, north] = region
+    for (let i = 0; i < renderer.cameraInfo.length; i++) {
+      const { carto } = eyeOf(i)
+      if (carto.lat >= south && carto.lat <= north && Math.abs(wrapPi(carto.lon - (west + east) / 2)) <= (east - west) / 2) return true
+    }
+    return false
   }
 
   // The library's loop (TilesRenderer.calculateTileViewError, 0.5.3) on
@@ -306,9 +328,17 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     view.call(this, tile, target)
     if (renderer.frameCount !== frame) {
       frame = renderer.frameCount
-      near = capped = maxError = 0
+      near = capped = underEye = maxError = 0
     }
     if (target.distanceFromCamera < EYE_GROUND_MIN_METRES) nearError(tile, target)
+    const eyeScale = eyeErrorScale ? eyeErrorScale() : 1
+    if (eyeScale > 1 && target.error > 0) {
+      const region = tile.boundingVolume?.region
+      if (region && region.length >= 6 && holdsEye(region)) {
+        target.error *= eyeScale
+        underEye++
+      }
+    }
     if (target.error > 0 && hasCoverageEnds() && pastCoverage(tile)) {
       target.error = 0
       capped++
@@ -324,6 +354,9 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     },
     get capped() {
       return capped
+    },
+    get underEye() {
+      return underEye
     },
     get maxError() {
       return maxError
