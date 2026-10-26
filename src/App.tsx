@@ -174,6 +174,9 @@ export default function App() {
           eventSource={document.getElementById('root')}
           className="canvas"
           gl={{
+            // Reversed-Z where EXT_clip_control is there, standard depth
+            // otherwise (tides-zmw.9.3; shaders/depth.glsl).
+            reversedDepthBuffer: true,
             toneMapping: THREE.ACESFilmicToneMapping,
             toneMappingExposure: TONE_MAPPING_EXPOSURE,
           }}

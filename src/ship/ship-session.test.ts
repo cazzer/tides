@@ -27,6 +27,9 @@ import {
   shellGap,
   shipFar,
   shipNear,
+  shipNearFloor,
+  NEAR_MIN,
+  NEAR_MIN_REVERSED,
   SPAWN_EARTH_SHARE,
   SPAWN_MIN_DISTANCE,
   SPAWN_MOON_GAP,
@@ -345,6 +348,41 @@ describe('ship camera range', () => {
     const z = Math.fround(-SHIP_STAR_RADIUS)
     const clipZ = Math.fround(Math.fround(m[10] * z) + m[14])
     expect(clipZ).toBeLessThan(-z)
+  })
+
+  // Under reversed-Z (tides-zmw.9.3) clip z runs w at the near plane to 0 at
+  // the far one, and the star sphere's lands ~0.2 · near above 0 rather than
+  // rounding into w, so it survives a canyon-scale near; on the standard
+  // buffer the same near drops it.
+  const starClip = (near: number, reversed: boolean) => {
+    const camera = new THREE.PerspectiveCamera(SHIP_FOV, 16 / 10, near, SHIP_FAR)
+    // As WebGLRenderer does on a reversed-depth context's first draw.
+    Object.assign(camera, { _reversedDepth: reversed })
+    camera.updateProjectionMatrix()
+    const m = new Float32Array(camera.projectionMatrix.elements)
+    const z = Math.fround(-SHIP_STAR_RADIUS)
+    return { clipZ: Math.fround(Math.fround(m[10] * z) + m[14]), w: -z }
+  }
+
+  it('keeps the star sphere inside the far plane in float32 under reversed-Z at its floor', () => {
+    const { clipZ, w } = starClip(shipNearFloor(true), true)
+    expect(clipZ).toBeGreaterThan(0)
+    expect(clipZ).toBeLessThan(w)
+    expect(clipZ).toBeCloseTo((0.2 * NEAR_MIN_REVERSED * SHIP_FAR) / (SHIP_FAR - NEAR_MIN_REVERSED), 12)
+    // The negative control: the standard buffer at that near drops it.
+    const standard = starClip(NEAR_MIN_REVERSED, false)
+    expect(standard.clipZ).toBeGreaterThanOrEqual(standard.w)
+  })
+
+  it('floors the near plane at NEAR_MIN unless told the depth is reversed and float', () => {
+    expect(shipNearFloor(false)).toBe(NEAR_MIN)
+    expect(NEAR_MIN).toBe(0.001)
+    expect(shipNearFloor(true)).toBe(NEAR_MIN_REVERSED)
+    expect(NEAR_MIN_REVERSED).toBe(1e-6)
+    expect(shipNear(-1, Infinity, shipNearFloor(true))).toBe(NEAR_MIN_REVERSED)
+    expect(shipNear(1e-4, Infinity, shipNearFloor(true))).toBeCloseTo(4e-5, 15)
+    // Above the floor the two agree.
+    expect(shipNear(0.004, Infinity, shipNearFloor(true))).toBe(shipNear(0.004))
   })
 
   // Neptune's furthest from the Sun at the flight scale, 1900–2100.

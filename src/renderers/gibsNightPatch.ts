@@ -115,7 +115,10 @@ function createStrip(): GibsStreamPass {
   const scene = new THREE.Scene().add(quad)
   return {
     scene,
-    camera: new THREE.Camera(),
+    // The quad ignores it, but under reversed-Z three refits the projection
+    // of any camera it first draws with (tides-zmw.9.3), and a bare Camera
+    // has no updateProjectionMatrix.
+    camera: new THREE.OrthographicCamera(),
     tile,
     dispose() {
       tile.dispose()

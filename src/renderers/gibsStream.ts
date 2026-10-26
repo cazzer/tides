@@ -45,7 +45,8 @@ export const SEAM_TILES = 0.25
 /** Draws a tile into the slot the target's viewport frames. */
 export interface GibsStreamPass {
   scene: THREE.Scene
-  camera: THREE.Camera
+  /** One with a projection to refit: three does under reversed-Z (tides-zmw.9.3). */
+  camera: THREE.OrthographicCamera | THREE.PerspectiveCamera
   tile: THREE.Texture
   /** Everything, where freeing the tile's 1 MB copy keeps the program (and
    * whatever else it holds) for the next approach. */

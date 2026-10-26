@@ -68,6 +68,7 @@ import { prefersReducedMotion } from '../ship/reduced-motion'
 import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
+import depthGlsl from '../shaders/depth.glsl'
 
 const f = (x: number) => x.toFixed(6)
 const v3 = (v: readonly number[]) => `vec3(${v.map(f).join(', ')})`
@@ -222,6 +223,7 @@ varying vec3 vEye;
 varying float vViewDepth;
 varying float vNear;
 varying vec3 vEclipseEye;
+${depthGlsl}
 #ifdef FOG_EASE
 ${FIELD}
 ${EYE_LOD_GLSL}
@@ -250,7 +252,7 @@ void main() {
   vEye = position - vRayDir;
   vEclipseEye = eclipsePoint(vEye);
   vViewDepth = -view.z;
-  vNear = isOrthographic ? 0.0 : projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+  vNear = isOrthographic ? 0.0 : viewDepthNear(projectionMatrix);
   #ifdef FOG_EASE
   // At the eye, where the march decides whether it starts in a cloud
   // (tides-tvr.1): the same at every vertex.
@@ -275,6 +277,7 @@ varying vec3 vLocal;
 varying vec3 vRayDir;
 #ifdef FLIP_SIDED
 uniform mat4 projectionMatrix;
+${depthGlsl}
 varying vec3 vEye;
 varying float vViewDepth;
 varying float vNear;
@@ -308,7 +311,7 @@ ${ECLIPSE_GLSL.point}
 #define CLOUD_VEILED (veilClear < 1.0)
 #define CLOUD_VEIL { if (sVeil < 0.0) { sVeil = sHit; colVeil = colIn; upVeil = upThrough; } veilClear *= sideClear; side = false; sHit = -1.0; }
 // A ray that meets no cloud past its fog draws the fog alone.
-#define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), 0.0, vec3(0.0), 0.0); return; } discard; }
+#define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), FRAG_DEPTH_NEAREST, vec3(0.0), 0.0); return; } discard; }
 #ifdef FOG_EASE
 // With reduced motion, how far the fog has eased in (FOG_EASE_GLSL): the
 // same at every vertex, so the same here but for rounding.
@@ -1293,8 +1296,8 @@ void main() {
 #ifdef FLIP_SIDED
   // Seen through the veils in front of it.
   opacity = 1.0 - (1.0 - (1.0 - veilClear) * uOpacity) * (1.0 - opacity);
-  #if defined(USE_LOGARITHMIC_DEPTH_BUFFER) || defined(USE_REVERSED_DEPTH_BUFFER)
-  #error "cloud layer: gl_FragDepth assumes the standard depth buffer"
+  #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
+  #error "cloud layer: gl_FragDepth assumes a standard or reversed depth buffer"
   #endif
   // The hit's depth, so the displaced ground hides clouds behind it: the
   // back face lies past the globe. View depth scales with distance along
@@ -1310,7 +1313,7 @@ void main() {
   float fogA = 1.0 - fogClear;
   float a = fogA + fogClear * opacity;
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
-    fogged ? 0.0 : 0.5 + 0.5 * (projectionMatrix[3][2] - projectionMatrix[2][2] * z) / z,
+    fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
     cloudHazeFront(eye, d, length(pShade - eye), shell), fogClear * opacity);
 #else
   gl_FragColor = vec4(radiance, opacity);

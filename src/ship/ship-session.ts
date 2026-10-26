@@ -110,19 +110,39 @@ export function shipFar(distanceFromSun: number): number {
 // 0.1; the Sun's corona needs its strict depth test (SunRenderer), and
 // Saturn's rings were already unresolved by depth at 0.1 but are a few pixels
 // across from Earth. Just below 0.001 (0.000977), float32 clip maths drops the
-// star sphere at the far plane.
+// star sphere at the far plane on the standard depth buffer; under reversed-Z
+// (tides-zmw.9.3) the far plane's clip z is ~0.2 · near, not w, so nothing
+// drops it there, down to NEAR_MIN_REVERSED.
 const NEAR_SHARE = 0.4
-const NEAR_MIN = 0.001
+/** The near plane's floor on the standard depth buffer. */
+export const NEAR_MIN = 0.001
+/**
+ * The floor under reversed-Z on a float depth buffer, for canyon-scale
+ * clearance (tides-zmw.9.8 applies it, once tides-zmw.9.4 says the buffer is
+ * float: on a 24-bit one, so short a near plane would leave everything past
+ * ~16 units at one depth).
+ */
+export const NEAR_MIN_REVERSED = 1e-6
 const NEAR_MAX = 0.1
+
+/** The near plane's floor: NEAR_MIN_REVERSED where `reversedFloatDepth`, else NEAR_MIN. */
+export function shipNearFloor(reversedFloatDepth: boolean): number {
+  return reversedFloatDepth ? NEAR_MIN_REVERSED : NEAR_MIN
+}
 
 /**
  * The ship camera's near plane `groundDistance` above the nearest body's
- * ground and `shellDistance` from the nearest shell it draws (shellGap).
+ * ground and `shellDistance` from the nearest shell it draws (shellGap), no
+ * closer than `floor` (shipNearFloor).
  */
-export function shipNear(groundDistance: number, shellDistance = Infinity): number {
+export function shipNear(
+  groundDistance: number,
+  shellDistance = Infinity,
+  floor = NEAR_MIN
+): number {
   return THREE.MathUtils.clamp(
     NEAR_SHARE * Math.min(groundDistance, shellDistance),
-    NEAR_MIN,
+    floor,
     NEAR_MAX
   )
 }
