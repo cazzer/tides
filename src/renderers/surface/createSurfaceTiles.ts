@@ -37,7 +37,7 @@ import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
 import { createSurfaceScalePlugin, fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
-import { surfaceDetail } from './surface-lod'
+import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { terrainScaleUniform } from '../../terrain-scale'
 import {
   GRID_LEVEL_STEP,
@@ -84,15 +84,16 @@ export interface SurfaceTiles {
   viewError: SurfaceViewError
   /**
    * Sets this frame's errorTarget and its rest value (surface-lod.ts): the
-   * tiles under the eye take their error times target / rest, so they refine
-   * as at rest (surface-coverage.ts).
+   * tiles within `eyeMargin` metres of the eye take their error times
+   * target / rest, so they refine as at rest (surface-coverage.ts).
    */
-  setErrorTarget(target: number, rest: number): void
+  setErrorTarget(target: number, rest: number, eyeMargin?: number): void
   /**
    * The view's size in CSS pixels, as setResolutionFromRenderer would give
    * (the error target is in those pixels): sets the camera's detail
-   * resolution and the cache's marks from it (surfaceDetail). Call after
-   * the camera is registered and on every resize.
+   * resolution and the cache's marks from it (surfaceDetail; marks that
+   * fall wait for the size to settle, cacheMarkSetter). Call after the
+   * camera is registered and on every resize.
    */
   setViewSize(camera: THREE.Camera, width: number, height: number): void
   /** Copies the robustness counters onto tiles.group.userData. */
@@ -164,11 +165,11 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   // with the decodes to match. The marks follow the view (setViewSize); each
   // tile is charged half the elevation grid it shares (shareGridBytes).
   const lruCache = new LRUCache()
-  const setCacheMarks = ({ min, max }: { min: number; max: number }) => {
+  const cacheMarks = cacheMarkSetter(({ min, max }) => {
     lruCache.minBytesSize = min
     lruCache.maxBytesSize = max
-  }
-  setCacheMarks(surfaceDetail(0, 0).cache)
+  })
+  cacheMarks.set(surfaceDetail(0, 0).cache)
   lruCache.unloadPriorityCallback = DEFAULT_LRU_CACHE.unloadPriorityCallback
   tiles.lruCache = lruCache
   const downloads = new DownloadPriorityQueue()
@@ -191,12 +192,14 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   // drawn ground, the eye's chain at rest detail, and none past the source's
   // coverage (surface-coverage.ts).
   let restErrorTarget = tiles.errorTarget
+  let eyeMarginRadians = 0
   const viewError = boundSurfaceViewError(tiles, {
     coverageLevel: (x, y, level) => grids.coverageLevel(x, y, level),
     hasCoverageEnds: () => grids.coverageEnd.size > 0,
     maxSourceLevel: GRID_LEVEL_STEP * Math.floor(MAPTERHORN_MAX_ZOOM / GRID_LEVEL_STEP),
     scale: () => terrainScaleUniform.value,
     eyeErrorScale: () => tiles.errorTarget / restErrorTarget,
+    eyeMarginRadians: () => eyeMarginRadians,
   })
   applySurfaceFrame(tiles.group)
   tiles.group.renderOrder = SURFACE_RENDER_ORDER
@@ -252,14 +255,15 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     budget,
     bounds,
     viewError,
-    setErrorTarget(target, rest) {
+    setErrorTarget(target, rest, eyeMargin = 0) {
       tiles.errorTarget = target
       restErrorTarget = rest > 0 ? rest : target
+      eyeMarginRadians = eyeMargin > 0 ? eyeMargin / SURFACE_ELLIPSOID_RADIUS : 0
     },
     setViewSize(camera, width, height) {
       const detail = surfaceDetail(width, height)
       tiles.setResolution(camera, detail.width, detail.height)
-      setCacheMarks(detail.cache)
+      cacheMarks.set(detail.cache)
     },
     syncCounters,
     // tiles.dispose() unregisters the terrain plugin, which releases every
@@ -273,6 +277,7 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     // and grids waiting their turn reject as aborted, which the plugin takes
     // as a cancelled load.
     dispose() {
+      cacheMarks.dispose()
       stopRetry()
       grids.shutDown()
       budget.dispose()

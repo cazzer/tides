@@ -24,7 +24,8 @@ import { forEachCachedModel } from './terrain-internals'
 import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { subscribeSurfaceHaze, surfaceHaze } from './surface-link'
-import { smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
+import { eyeMarginMetres, smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
+import { EARTH_UNITS_PER_METRE } from '../../ship/ship-bodies'
 
 // How often the visible tiles are read for the credits line; it only needs to
 // notice tiles arriving and leaving.
@@ -111,11 +112,12 @@ export default function SurfaceTiles() {
     // The regions' fit from this frame's scale (ShipController has written it).
     bounds.update()
     // Less detail the faster the ground sweeps past (surface-lod.ts), but
-    // the rest detail under the eye, set before update() picks this frame's
-    // tiles.
-    const target = surfaceErrorTarget(sweepRate(shipTelemetry.air.speed, shipTelemetry.nearest), touch)
+    // the rest detail under and around the eye (a second's flight ahead),
+    // set before update() picks this frame's tiles.
+    const speed = shipTelemetry.air.speed
+    const target = surfaceErrorTarget(sweepRate(speed, shipTelemetry.nearest), touch)
     errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
-    current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch))
+    current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch), eyeMarginMetres(speed / EARTH_UNITS_PER_METRE))
     // ShipController has moved the camera and OrbitingBody turned Earth this
     // frame, but neither world matrix is refreshed until the render: do it
     // here, so the tiles pick their detail and cull against where the camera

@@ -180,6 +180,45 @@ describe('the tiles under the eye at speed (tides-zmw.9.22)', () => {
     expect(viewError(b.renderer, tileOf(b.volume)).error).toBe(3)
   })
 
+  it('takes tiles within the margin around the eye too, the longitude margin over cos(latitude)', () => {
+    // REGION spans 27.5-28.5 N, 86.5-87.5 E; the eye 0.2 degrees north of it and 0.2 east of it
+    const north = eyeAt(e, 28.7, 87, 12000)
+    const n = fakeRenderer({ error: 3, distanceFromCamera: 3000 }, north.position)
+    let margin = 0.1 * DEG
+    boundSurfaceViewError(n.renderer, options({ eyeErrorScale: () => 2, eyeMarginRadians: () => margin }))
+    expect(viewError(n.renderer, tileOf(n.volume)).error).toBe(3)
+    margin = 0.25 * DEG
+    expect(viewError(n.renderer, tileOf(n.volume)).error).toBe(6)
+    // 0.2 degrees of longitude at 28 N is 0.177 degrees of arc
+    const east = eyeAt(e, 28, 87.7, 12000)
+    const m = fakeRenderer({ error: 3, distanceFromCamera: 3000 }, east.position)
+    let arc = 0.17 * DEG
+    boundSurfaceViewError(m.renderer, options({ eyeErrorScale: () => 2, eyeMarginRadians: () => arc }))
+    expect(viewError(m.renderer, tileOf(m.volume)).error).toBe(3)
+    arc = 0.18 * DEG
+    expect(viewError(m.renderer, tileOf(m.volume)).error).toBe(6)
+  })
+
+  it('takes every longitude where the margin passes a pole', () => {
+    const polar = [10 * DEG, 89 * DEG, 11 * DEG, 90 * DEG, 0, 100]
+    const eye = eyeAt(e, 89.99, -170, 12000)
+    const { renderer, volume } = fakeRenderer({ error: 3, distanceFromCamera: 3000 }, eye.position)
+    boundSurfaceViewError(renderer, options({ eyeErrorScale: () => 2, eyeMarginRadians: () => 0.001 }))
+    expect(viewError(renderer, { ...tileOf(volume), boundingVolume: { region: polar } }).error).toBe(6)
+  })
+
+  it('scales the near-eye error from the drawn ground (eye inside the box) too', () => {
+    const { position } = eyeAt(e, 28, 87, 9000)
+    const { renderer, volume } = fakeRenderer({ error: Infinity, distanceFromCamera: 0 }, position)
+    const bounds = boundSurfaceViewError(renderer, options({ ground: () => 8000, eyeErrorScale: () => 3 }))
+    const near = viewError(renderer, tileOf(volume, [], 10))
+    expect(near.distanceFromCamera).toBeCloseTo(1000, 6)
+    expect(near.error).toBeCloseTo((3 * 10) / (1000 * 0.002), 6)
+    expect(bounds.near).toBe(1)
+    expect(bounds.underEye).toBe(1)
+    expect(bounds.maxError).toBeCloseTo(near.error, 6)
+  })
+
   it('takes the longitude across the antimeridian, and leaves a capped leaf at 0', () => {
     const region = [179.5 * DEG, 27.5 * DEG, 180.5 * DEG, 28.5 * DEG, 7900, 9200]
     const eye = eyeAt(e, 28, -179.8, 12000)

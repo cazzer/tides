@@ -35,11 +35,14 @@
 // never come.
 //
 // Under the eye at speed (tides-zmw.9.22). The speed ramp raises the
-// errorTarget (surface-lod.ts), which would stop the chain of tiles holding
-// the eye's latitude and longitude short too, and the ship's floor reads
-// that chain (a coarser mesh raises it in a canyon): those tiles' error is
-// scaled by eyeErrorScale (the errorTarget over its rest value), so they
-// refine as at rest whatever the speed, before the coverage cap.
+// errorTarget (surface-lod.ts), which would stop the tiles under the eye
+// short too, and the ship's floor reads them (the highest drawn ground
+// within its window: a coarser mesh raises it in a canyon). So every tile
+// within eyeMarginRadians of the eye's latitude and longitude (the floor's
+// window, or a second's flight ahead, so the tile the ship crosses into is
+// refined before the floor reads it) takes its error times eyeErrorScale
+// (the errorTarget over its rest value), and refines as at rest whatever
+// the speed, before the coverage cap.
 //
 // The library's no-child-in-view rule (traverseFunctions.js, 0.5.3: a
 // REPLACE tile none of whose children is in the frustum clears its own
@@ -171,8 +174,10 @@ export interface SurfaceViewErrorOptions {
   scale(): number
   /** The highest drawn ground (true metres) within radiusM of (lat, lon), or null where no drawn tile covers it. */
   ground?(lat: number, lon: number, radiusM: number): number | null
-  /** The factor on the error of tiles holding the eye's latitude and longitude: the errorTarget over its rest value (1: none). */
+  /** The factor on the error of tiles over or around the eye: the errorTarget over its rest value (1: none). */
   eyeErrorScale?(): number
+  /** How far around the eye's latitude and longitude (radians of arc) a tile takes eyeErrorScale (0: the tiles over it only). */
+  eyeMarginRadians?(): number
 }
 
 export interface SurfaceViewError {
@@ -180,9 +185,9 @@ export interface SurfaceViewError {
   readonly near: number
   /** Tiles capped at the coverage end this frame. */
   readonly capped: number
-  /** Tiles under the eye whose error was scaled up this frame (eyeErrorScale). */
+  /** Tiles under or around the eye whose error was scaled up this frame (eyeErrorScale). */
   readonly underEye: number
-  /** The largest error written this frame, the root's and z0's aside (never Infinity). */
+  /** The largest error written this frame, the root's and z0's aside (never Infinity), the eye's scaling included. */
   readonly maxError: number
   /**
    * The deepest level the tree reaches over a tile, for the floor's
@@ -215,7 +220,7 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
   if (typeof view !== 'function' || !Array.isArray(renderer.cameraInfo)) {
     throw new Error('surface coverage: not the 0.5.3 renderer')
   }
-  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround, capLevels = CAP_LEVELS, eyeErrorScale } = options
+  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround, capLevels = CAP_LEVELS, eyeErrorScale, eyeMarginRadians } = options
   const eyes: EyeState[] = []
   let frame = -1
   let near = 0
@@ -250,12 +255,19 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     return Math.max(EYE_GROUND_MIN_METRES, eye.carto.height - under)
   }
 
-  /** Whether any camera's eye is over the region (its latitude and longitude inside it). */
-  const holdsEye = (region: readonly number[]): boolean => {
+  /**
+   * Whether any camera's eye is within `margin` (radians of arc) of the
+   * region: its latitude within margin of the region's, its longitude within
+   * margin / cos(latitude) (every longitude where that passes a pole).
+   */
+  const nearEye = (region: readonly number[], margin: number): boolean => {
     const [west, south, east, north] = region
     for (let i = 0; i < renderer.cameraInfo.length; i++) {
       const { carto } = eyeOf(i)
-      if (carto.lat >= south && carto.lat <= north && Math.abs(wrapPi(carto.lon - (west + east) / 2)) <= (east - west) / 2) return true
+      if (carto.lat < south - margin || carto.lat > north + margin) continue
+      const cos = Math.cos(carto.lat)
+      const lonMargin = cos > margin ? margin / cos : Math.PI
+      if (Math.abs(wrapPi(carto.lon - (west + east) / 2)) <= (east - west) / 2 + lonMargin) return true
     }
     return false
   }
@@ -334,7 +346,8 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     const eyeScale = eyeErrorScale ? eyeErrorScale() : 1
     if (eyeScale > 1 && target.error > 0) {
       const region = tile.boundingVolume?.region
-      if (region && region.length >= 6 && holdsEye(region)) {
+      const margin = eyeMarginRadians ? Math.max(0, eyeMarginRadians()) || 0 : 0
+      if (region && region.length >= 6 && nearEye(region, margin)) {
         target.error *= eyeScale
         underEye++
       }

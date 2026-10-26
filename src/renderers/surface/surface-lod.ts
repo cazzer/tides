@@ -11,22 +11,23 @@
 // the flight has settled rather than on every throttle wobble.
 //
 // tides-zmw.9.22 re-spanned the ramp for tides-zmw.9.18's speed law, under
-// which the sweep rate near the ground is twice the throttle (speed = 2 x
-// throttle x gap): the old 0.05-0.5/s ramp sat at 4 for any throttle over
-// 0.25. Headless 60 s Grand Canyon passes about 45 m over the ground at
-// 960x600 drew what errorTarget 1 asks for even at full throttle (the visible
-// tiles' error 0.9 px at the 90th percentile at 400 km/h, against 2.7 px at
-// 4): low down, the detail is not gone before it loads. What speed costs is
-// downloads, 34 MB/min at errorTarget 1 at full throttle against 12.5 at 3.
-// So 1 up to throttle 0.25, 2 at 0.5, 3 at full throttle, and 4 only past
-// 4/s (diving at the ground). The tile under the eye never coarsens with it
-// (surface-coverage.ts: the ship's floor reads it).
+// which the sweep rate near the ground is EARTH_GAP_RATE (2) x the throttle:
+// the old 0.05-0.5/s ramp sat at 4 for any throttle over 0.25. Low down, the
+// detail errorTarget 1 asks for is drawn even at full throttle (headless
+// canyon passes; numbers in the bead): it is not gone before it loads, and
+// what speed costs is downloads. So 1 up to throttle 0.25, 2 at 0.5, 3 at
+// full throttle, and 4 only past 4/s (diving at the ground). The tiles under
+// and around the eye never coarsen with it (surface-coverage.ts: the ship's
+// floor reads them), out to eyeMarginMetres.
 //
 // tides-zmw.9.24 sized the tile cache to the view: the tiles a view needs
-// grow with the square root of its pixels (its height, at one aspect),
-// 248 MB at 960x600 and 464 MB at 1920x1080 at the Grand Canyon gorge stop,
-// so the cache's marks scale with it, and past DETAIL_PIXELS_MAX the tiles
-// pick their detail for that many pixels rather than load a gigabyte.
+// grow with the square root of its pixels (its height, at one aspect), so
+// the cache's marks scale with it, and past DETAIL_PIXELS_MAX the tiles pick
+// their detail for that many pixels rather than load a gigabyte. Marks that
+// fall (a smaller view) wait out CACHE_LOWER_DELAY_MS of a steady size
+// (cacheMarkSetter), so a resize drag doesn't evict on every step.
+
+import { EARTH_UNITS_PER_METRE, FINE_GROUND_CLEARANCE, floorReach } from '../../ship/ship-bodies'
 
 /** errorTarget at rest: the plugin's recommended 1, 2 on touch devices. */
 export const BASE_ERROR_TARGET = { desktop: 1, touch: 2 }
@@ -64,24 +65,41 @@ export function sweepRate(speed: number, nearest: { key: string | null; surfaceD
   return speed / Math.max(nearest.surfaceDistance, 1e-9)
 }
 
+/** The floor's window around the eye (ship-bodies.ts floorReach at the fine stop), metres. */
+export const EYE_REACH_METRES = floorReach(FINE_GROUND_CLEARANCE) / EARTH_UNITS_PER_METRE
+/** How far ahead (seconds of flight) the tiles around the eye keep their rest detail. */
+export const EYE_LEAD_SECONDS = 1
+
+/**
+ * How far around the eye (metres) the tiles keep their rest detail at a
+ * `speed` (metres/s): the floor's window, or a second's flight, so the tile
+ * the ship crosses into next is already refined when the floor reads it.
+ */
+export function eyeMarginMetres(speed: number): number {
+  return Math.max(EYE_REACH_METRES, Number.isFinite(speed) ? Math.abs(speed) * EYE_LEAD_SECONDS : 0)
+}
+
 const GIGABYTE = 2 ** 30
 /** The view the cache's marks are given for. */
 export const REFERENCE_PIXELS = 1920 * 1080
 /**
  * The cache's marks (bytes) at REFERENCE_PIXELS, scaled by the square root of
  * the detail pixels: past `max` new tiles are refused (the parents stay
- * drawn), and unused ones are evicted down to `min`. 1.4x the gorge stop's
- * 464 MB at 1920x1080.
+ * drawn), and unused ones are evicted down to `min` (the library's LRU
+ * cache trims whenever it is over `min`). `min` is ~1.15x the working set
+ * of the heaviest stop measured (the Grand Canyon gorge, 464 MB at
+ * 1920x1080), so the tiles just out of view survive a look around; `max`
+ * leaves room over it for the loads in flight.
  */
-export const CACHE_BYTES_AT_REFERENCE = { min: 0.42 * GIGABYTE, max: 0.6 * GIGABYTE }
+export const CACHE_BYTES_AT_REFERENCE = { min: 0.5 * GIGABYTE, max: 0.65 * GIGABYTE }
 /** Never under tides-zmw.9.2's fixed marks, whatever the view. */
 export const CACHE_BYTES_FLOOR = { min: 0.15 * GIGABYTE, max: 0.25 * GIGABYTE }
 /**
  * The most CSS pixels the tiles pick their detail for, a 2560x1440 view's
  * (a 5K display at DPR 2 gets all of its own): a larger view's resolution is
  * scaled down to this many, so its error target counts pixels a little
- * larger than its own. Caps the cache at 0.8 GB, where 3840x2160 would want
- * over 1 GB.
+ * larger than its own. Caps the cache's high mark at 0.87 GB, where
+ * 3840x2160 would want over 1 GB for its working set alone.
  */
 export const DETAIL_PIXELS_MAX = 2560 * 1440
 
@@ -95,7 +113,10 @@ export interface SurfaceDetail {
 
 /** The detail resolution and cache marks for a view of `width` x `height` CSS pixels. */
 export function surfaceDetail(width: number, height: number): SurfaceDetail {
-  const pixels = Math.max(0, width) * Math.max(0, height)
+  // No size (NaN, negative) is an empty view.
+  width = width > 0 ? width : 0
+  height = height > 0 ? height : 0
+  const pixels = width * height
   const k = pixels > DETAIL_PIXELS_MAX ? Math.sqrt(DETAIL_PIXELS_MAX / pixels) : 1
   const scale = Math.sqrt((pixels * k * k) / REFERENCE_PIXELS) || 0
   return {
@@ -105,5 +126,48 @@ export function surfaceDetail(width: number, height: number): SurfaceDetail {
       min: Math.max(CACHE_BYTES_FLOOR.min, CACHE_BYTES_AT_REFERENCE.min * scale),
       max: Math.max(CACHE_BYTES_FLOOR.max, CACHE_BYTES_AT_REFERENCE.max * scale),
     },
+  }
+}
+
+/** How long (ms) a view must keep its size before the cache's marks fall to it. */
+export const CACHE_LOWER_DELAY_MS = 1000
+
+export interface CacheMarks {
+  min: number
+  max: number
+}
+
+/**
+ * Applies cache marks as the view changes: raised at once, lowered only
+ * once the size has held CACHE_LOWER_DELAY_MS (each new size restarts the
+ * wait), since lowering the high mark evicts down to it in one pass, in-
+ * flight loads under the eye included.
+ */
+export function cacheMarkSetter(apply: (marks: CacheMarks) => void, delayMs = CACHE_LOWER_DELAY_MS) {
+  let current: CacheMarks | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const cancel = () => {
+    if (timer !== null) clearTimeout(timer)
+    timer = null
+  }
+  const put = (marks: CacheMarks) => {
+    if (current && current.min === marks.min && current.max === marks.max) return
+    current = { ...marks }
+    apply(current)
+  }
+  return {
+    set(marks: CacheMarks) {
+      cancel()
+      if (!current) return put(marks)
+      // Whatever rises now; the rest once the size has settled.
+      put({ min: Math.max(current.min, marks.min), max: Math.max(current.max, marks.max) })
+      if (marks.min < current.min || marks.max < current.max) {
+        timer = setTimeout(() => {
+          timer = null
+          put(marks)
+        }, delayMs)
+      }
+    },
+    dispose: cancel,
   }
 }
