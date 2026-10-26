@@ -31,7 +31,9 @@
 // the tiles' synthetic downloads, the tiles' own parse queue
 // (surface-queues.ts), the grids' main-thread end paced by time, ahead of
 // the horizon bakes (frame-budget.ts), and each tile's first uploads in the
-// budget's spare time (tile-upload.ts).
+// budget's spare time (tile-upload.ts). tides-zmw.9.27 sent each grid
+// whole only once: a stitched neighbour sends its new border alone, and a
+// tile's clone of a grid nothing (grid-upload.ts).
 //
 // tides-zmw.9.16 built each tile's material in one composer (tile-material.ts):
 // Phong, the live scale and handover, and the globe's features from its link
@@ -49,6 +51,7 @@ import type { GlobeLink } from './surface-link'
 import { TILE_FEATURES } from './tile-features'
 import { createTileComposer, createTileMaterialPlugin, type TileComposer } from './tile-material'
 import { createTileUploadPlugin, trackUploads } from './tile-upload'
+import { GridEdges, type RectWriter } from './grid-upload'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { createSurfaceQueues } from './surface-queues'
@@ -79,6 +82,11 @@ export interface SurfaceTilesOptions {
   floatLinear: boolean
   /** Uploads each finished grid at once (the renderer's initTexture). */
   upload?: (texture: THREE.Texture) => void
+  /**
+   * With upload: sends texel rects of an uploaded grid (createRectWriter), so
+   * a stitched neighbour sends its new border alone (grid-upload.ts).
+   */
+  writeRects?: RectWriter
   /** The globe's side of the tiles' features (its haze, eclipse, ...). */
   link?: GlobeLink | null
 }
@@ -140,7 +148,7 @@ function createDecodeWorker(): DecodeWorker | null {
  * take by stencil (surface-scale.ts). three sorts a Group's children by it. */
 export const SURFACE_RENDER_ORDER = -1
 
-export function createSurfaceTiles({ floatLinear, upload, link = null }: SurfaceTilesOptions): SurfaceTiles {
+export function createSurfaceTiles({ floatLinear, upload, writeRects, link = null }: SurfaceTilesOptions): SurfaceTiles {
   const overlay = new SurfaceImageryOverlay()
   protectOverlayBitmaps(overlay)
   const terrain = new TerrariumMeshPlugin({
@@ -160,6 +168,9 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   // Every upload goes through one tracker, so a tile's queued upload knows
   // what is already sent (tile-upload.ts).
   const tracked = upload ? trackUploads(upload) : null
+  // Stitched borders go up alone, into the uploaded neighbours' GPU copies,
+  // and a tile's clone of a grid sends nothing (tides-zmw.9.27).
+  const edges = tracked && writeRects ? new GridEdges(writeRects, tracked) : undefined
   const grids = installSurfaceGridCache(terrain, {
     // Nearest is core WebGL2 at full precision, and three warns about (and
     // the GPU refuses) linear float filtering without the extension. Its
@@ -170,6 +181,7 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
     canBake: () => decoder.bakes,
     budget,
     upload: tracked?.upload,
+    edges,
   })
 
   const tiles = new TilesRenderer()
@@ -268,6 +280,7 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
     data.errorTarget = tiles.errorTarget
     data.fitScale = bounds.fit
     data.refits = bounds.refits
+    data.edgeUploads = edges?.stats ?? null
   }
 
   return {
