@@ -4,6 +4,7 @@ import {
   CORONA_MAX_ANGLE,
   CORONA_OUTER_MAIN,
   CORONA_OUTER_PERSPECTIVE,
+  coronaLimbNormal,
   perspectiveCoronaQuad,
   type CoronaQuad,
 } from './corona-geometry'
@@ -202,5 +203,38 @@ describe('the corona\'s outer edge', () => {
     expect(vertex).toMatch(/uniform float uOuter;/)
     expect(vertex).toMatch(/vPlane = position\.xy \* uOuter;/)
     expect(vertex).not.toMatch(/isOrthographic \? 3\.0/)
+  })
+})
+
+describe('coronaLimbNormal', () => {
+  it('is perpendicular to the eye ray through the limb, so the pattern stays on the Sun', () => {
+    for (const deg of [0, 10, 30, 60]) {
+      for (const distance of [12, 50, 400]) {
+        const c = sunAt(deg, distance, 0.7)
+        const quad = perspectiveCoronaQuad(c, R)
+        if (!quad) continue
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * 2 * Math.PI
+          const u: [number, number] = [Math.cos(a), Math.sin(a)]
+          const n = coronaLimbNormal(quad, -c[2], u)
+          // The limb point under u, at the Sun's depth.
+          const ray = [quad.centre[0] + quad.limb * u[0], quad.centre[1] + quad.limb * u[1], c[2]]
+          const dot = n[0] * ray[0] + n[1] * ray[1] + n[2] * ray[2]
+          expect(Math.abs(dot) / Math.hypot(...ray)).toBeLessThan(1e-9)
+          expect(Math.hypot(...n)).toBeCloseTo(1, 12)
+        }
+      }
+    }
+  })
+
+  it('lies in the image plane for the ortho main view', () => {
+    expect(coronaLimbNormal(null, 100, [0.6, 0.8])).toEqual([0.6, 0.8, 0])
+  })
+
+  it('is what vertex.glsl interpolates: slope = (centre, limb) / depth', () => {
+    const vertex = readFileSync(new URL('../shaders/sun-corona/vertex.glsl', import.meta.url), 'utf8')
+    expect(vertex).toContain('slope = vec3(centre, limb) / depth;')
+    expect(vertex).toContain('vSolarPlane = toSolar(vec3(vPlane, dot(vPlane, slope.xy)));')
+    expect(vertex).toContain('vSolarLimb = toSolar(vec3(0.0, 0.0, slope.z));')
   })
 })

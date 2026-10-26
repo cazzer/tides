@@ -1,9 +1,13 @@
 uniform float time;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
+// The Sun's own frame (ephemeris.ts sunOrientation turns the mesh), so the
+// baked detail rotates with the Sun and is the same on every date scrub.
+varying vec3 vSolar;
+// The plasma's two reading frames, each turning slowly on its own axis,
+// so their sum churns instead of sliding.
 varying vec3 vLayer0;
 varying vec3 vLayer1;
-varying vec3 vLayer2;
 
 mat2 rotate(float a) {
   float s = sin(a);
@@ -12,22 +16,12 @@ mat2 rotate(float a) {
 }
 
 void main() {
-  // Three copies of the noise cube, each turning on its own axis, so the
-  // surface churns instead of sliding.
-  float t = time * .005;
-
-  vec3 p0 = position;
-  p0.yz = rotate(t) * p0.yz;
-  vLayer0 = p0;
-
-  vec3 p1 = position;
-  p1.xz = rotate(t + .6) * p1.xz;
-  vLayer1 = p1;
-
-  vec3 p2 = position;
-  p2.xy = rotate(t + 1.2) * p2.xy;
-  vLayer2 = p2;
-
+  vSolar = normal;
+  float t = time * 0.006;
+  vLayer0 = normal;
+  vLayer0.yz = rotate(t) * vLayer0.yz;
+  vLayer1 = normal;
+  vLayer1.xz = rotate(0.6 - 0.8 * t) * vLayer1.xz;
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   vNormal = normalize(normalMatrix * normal);
   vViewPosition = -mvPosition.xyz;
