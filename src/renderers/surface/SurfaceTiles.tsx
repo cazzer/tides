@@ -3,8 +3,9 @@
 // EarthRenderer, so its group inherits Earth's tilt and spin; solar-system
 // lazy-loads this module so the library stays out of the main chunk.
 //
-// tides-zmw.9.7: the tiles wait for their View's ground haze (surface-link.ts)
-// so every tile is built with it, and draw only below the blend's top
+// tides-zmw.9.7: the tiles wait for their View's globe link (surface-link.ts;
+// the ground haze then, every globe feature since tides-zmw.9.16) so every
+// tile is built with it, and draw only below the blend's top
 // (surfaceOpacityUniform; surface-scale.ts dissolves them in under it).
 //
 // tides-zmw.9.8: the ship's floor reads the tiles it draws (surface-ground.ts,
@@ -23,7 +24,7 @@ import { createSurfaceGround, type SurfaceGround } from './surface-ground'
 import { forEachCachedModel } from './terrain-internals'
 import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
-import { subscribeSurfaceHaze, surfaceHaze } from './surface-link'
+import { subscribeSurfaceLink, surfaceLink } from './surface-link'
 import { eyeMarginMetres, smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
 import { EARTH_UNITS_PER_METRE } from '../../ship/ship-bodies'
 
@@ -36,8 +37,8 @@ export default function SurfaceTiles() {
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
-  // The globe's haze in this View, which EarthRenderer publishes.
-  const haze = useSyncExternalStore(subscribeSurfaceHaze, () => surfaceHaze(scene))
+  // The globe's link in this View, which EarthRenderer publishes.
+  const link = useSyncExternalStore(subscribeSurfaceLink, () => surfaceLink(scene))
   const width = useThree((s) => s.size.width)
   const height = useThree((s) => s.size.height)
   // Without linear filtering of float textures (iOS), the elevation grids
@@ -57,10 +58,10 @@ export default function SurfaceTiles() {
   // download with it.
   useEffect(() => {
     const parent = holder.current
-    if (!parent || !haze) return
+    if (!parent || !link) return
     let created: Tiles
     try {
-      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture), haze })
+      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture), link })
     } catch (error) {
       // e.g. no OffscreenCanvas (Safari before 16.4), which the library's
       // terrain plugin needs to construct: fly over the globe alone.
@@ -95,14 +96,14 @@ export default function SurfaceTiles() {
         console.error('surface tiles: dispose failed', error)
       }
     }
-  }, [camera, gl, floatLinear, haze])
+  }, [camera, gl, floatLinear, link])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
   // is in those pixels, and the cache's marks follow them (surface-lod.ts).
   // After the effect above, so the camera is registered.
   useEffect(() => {
     surface.current?.setViewSize(camera, width, height)
-  }, [camera, gl, floatLinear, haze, width, height])
+  }, [camera, gl, floatLinear, link, width, height])
 
   useFrame((_, delta) => {
     const current = surface.current

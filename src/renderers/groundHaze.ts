@@ -270,6 +270,13 @@ export interface GroundHaze {
   /** The same haze for a mesh outside the ground's frame (the surface
    * tiles), on the same uniforms. */
   surfacePatch: MaterialPatch
+  /** The surface variant's frame, filled by update(): view space to the
+   * ground mesh's frame, and the eye in it (the tiles' composer,
+   * tides-zmw.9.16, reads the same uniform objects). */
+  frame: {
+    uGroundHazeViewToLocal: THREE.IUniform<THREE.Matrix3>
+    uGroundHazeEyeLocal: THREE.IUniform<THREE.Vector3>
+  }
   /** For each camera before anything draws: whether this camera takes the
    * haze, and the surface variant's frame. */
   update(ground: THREE.Object3D, camera: THREE.Camera): void
@@ -322,6 +329,7 @@ export function createGroundHaze(
       },
       customProgramCacheKey: () => 'ground-haze-surface',
     },
+    frame,
     update(ground, camera) {
       uniforms.uGroundHaze.value = insideShell(ground, camera, top) ? 1 : 0
       // The ground's frame from the camera's (view space, unscaled: the

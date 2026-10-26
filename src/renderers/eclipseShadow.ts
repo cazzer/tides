@@ -101,12 +101,15 @@ function inject(source: string, chunk: string, code: string): string {
  * the heads, run vertexBody after `position` is known, and call
  * eclipseSunlight(vEclipsePoint) when uEclipseActive > 0.5. point is
  * eclipsePoint() alone, for a fragment shader that finds its own point; it
- * reads uEclipseBody and modelMatrix, which that shader declares. */
+ * reads uEclipseBody and modelMatrix, which that shader declares.
+ * fragmentLight is the lit materials' shading, after lights_fragment_end
+ * (the streamed surface tiles, tides-zmw.9.16, take it as the ground). */
 export const ECLIPSE_GLSL = {
   point: POINT,
   vertexHead: VERTEX_HEAD,
   vertexBody: VERTEX_BODY,
   fragmentHead: FRAGMENT_HEAD,
+  fragmentLight: FRAGMENT_LIGHT,
 }
 
 export type MaterialPatch = Pick<THREE.Material, 'onBeforeCompile' | 'customProgramCacheKey'>

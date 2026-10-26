@@ -10,8 +10,9 @@
 // tile's bounding volume, so it is never called after construction. Instead
 // the plugin is built at the page's RELIEF, which sizes the skirts for the
 // largest scale the blend reaches (the bounds: below), and each tile material
-// is patched (SurfaceScalePlugin, at processTileModel, before the fade
-// plugin wraps it at load-model) to read terrainScaleUniform, the uniform
+// is patched (prepareSurfaceMaterial, from the tile-material composer's
+// processTileModel plugin, tile-material.ts, before the fade plugin wraps
+// it at load-model) to read terrainScaleUniform, the uniform
 // object the globe's displacement reads: displacementScale becomes 1 (metres)
 // times uTerrainScale, bumpScale SURFACE_SCALE (metres to scene units, see
 // surface-frame.ts) times uTerrainScale. A scale change is one uniform write:
@@ -147,9 +148,9 @@ export function patchSurfaceShader(
 /**
  * Puts a loaded tile material on the live scale and the handover: metres for
  * the displacement and scene units for the bump (both times uTerrainScale in
- * the shader), the stencil mark, and `extra` patches (the ground haze's
- * surface variant) after the scale's. three's default program cache key
- * (the onBeforeCompile source) stays, so the fade plugin's wrapper keeps its.
+ * the shader), the stencil mark, and `extra` patches (the tile-material
+ * composer's base and features, tides-zmw.9.16) after the scale's. The
+ * program cache key is the caller's (the composer sets one per tileset).
  *
  * Why the bump takes SURFACE_SCALE: the terrain material shades with the
  * elevation map's gradient in metres against the surface's screen
@@ -194,29 +195,6 @@ export function globeStencil(material: THREE.Material, on: boolean): void {
   material.stencilFunc = THREE.NotEqualStencilFunc
   material.stencilRef = SURFACE_STENCIL_REF
   material.stencilWriteMask = 0
-}
-
-/**
- * A 3d-tiles-renderer plugin that prepares each tile's materials as the
- * tile parses (processTileModel runs in parseTile, before the load-model
- * event the fade plugin wraps materials at). `extra()` is read per tile.
- */
-export function createSurfaceScalePlugin(extra: () => readonly MaterialPatch[] = () => [], relief: number = RELIEF) {
-  return {
-    name: 'SURFACE_SCALE',
-    processTileModel(scene: THREE.Object3D, tile: { geometricError?: number }) {
-      const patches = extra()
-      scene.traverse((object) => {
-        const mesh = object as THREE.Mesh
-        if (mesh.isMesh && mesh.material) {
-          const range = surfaceSkirtRange(mesh.geometry, tile?.geometricError ?? 0, relief)
-          for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-            prepareSurfaceMaterial(material, patches, range)
-          }
-        }
-      })
-    },
-  }
 }
 
 /** The library's skirted tile geometry, as surfaceSkirtRange() reads it. */

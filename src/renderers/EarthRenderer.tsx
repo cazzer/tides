@@ -25,7 +25,7 @@ import { isLowQuality } from '../quality'
 import { applyTerrainScale } from '../terrain-scale'
 import { SURFACE_TILES_ON } from '../surface'
 import { globeStencil } from './surface/surface-scale'
-import { setSurfaceHaze } from './surface/surface-link'
+import { setSurfaceLink, type GlobeLink } from './surface/surface-link'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { EarthDemLoader } from './earthDemTexture'
@@ -113,13 +113,36 @@ export default function EarthRenderer({
     () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
     [clouds, diameter, textureSet.low]
   )
-  // The streamed tiles (tides-zmw.9.7) take this haze, and the globe gives
-  // way under them (surface-scale.ts).
+  // The streamed tiles (tides-zmw.9.7) take the globe's features through
+  // this link (its haze, eclipse, clouds, night, maps and horizon; the
+  // tiles' composer, tides-zmw.9.16, surface/tile-material.ts), and the globe
+  // gives way under them (surface-scale.ts). None of it without the tiles.
+  const surfaceLink = useMemo<GlobeLink | null>(
+    () =>
+      SURFACE_TILES_ON
+        ? {
+            haze: groundHaze,
+            sunDir: clouds.uniforms.uSunDir,
+            clouds: { uniforms: clouds.uniforms, flat: textureSet.low },
+            eclipse: eclipseShadow.uniforms,
+            nightFlight: nightFlight?.uniforms ?? null,
+            gibs: gibsPatch,
+            gibsNight: gibsNightPatch,
+            maps: { day: earthTexture, specular: specularMap, night: nightTexture },
+            horizon: earthHorizon(earthHorizonUrl),
+            seaLevel: diameter,
+          }
+        : null,
+    [groundHaze, clouds, textureSet.low, eclipseShadow, nightFlight, gibsPatch, gibsNightPatch, earthTexture, specularMap, nightTexture, diameter]
+  )
   useEffect(() => {
-    if (!SURFACE_TILES_ON) return
-    setSurfaceHaze(scene, groundHaze)
-    return () => setSurfaceHaze(scene, null)
-  }, [scene, groundHaze])
+    if (!surfaceLink) return
+    setSurfaceLink(scene, surfaceLink)
+    return () => setSurfaceLink(scene, null)
+  }, [scene, surfaceLink])
+  // The tiles draw before the ground, so with them on the night flight is
+  // set per camera before anything draws too (the ground's own call stays).
+  const tileNightFlight = SURFACE_TILES_ON ? nightFlight : null
   // The cloud shell's faces, then the haze's camera and frame and the Sun in
   // the Earth's frame, for each camera before anything draws (the tiles draw
   // before the ground); one wrapper, so its cleanup restores the scene's.
@@ -131,8 +154,12 @@ export default function EarthRenderer({
         if (SURFACE_TILES_ON) renderer.clearStencil()
         if (groundRef.current) groundHaze.update(groundRef.current, camera)
         sunInEarthFrame(cloudRef.current?.parent, clouds.uniforms.uSunDir.value)
+        // After the Sun, which it reads; as the ground's onBeforeRender.
+        if (tileNightFlight && groundRef.current && cloudRef.current?.parent) {
+          tileNightFlight.update(groundRef.current, camera, diameter)
+        }
       }),
-    [scene, clouds, groundHaze]
+    [scene, clouds, groundHaze, tileNightFlight, diameter]
   )
   const groundPatch = useMemo(
     () =>
