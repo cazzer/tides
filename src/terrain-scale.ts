@@ -1,6 +1,7 @@
 // Earth's live terrain scale (tides-zmw.9.5): how many times true scale the
 // ground is drawn at this frame, eased with the eye's altitude from the
-// page's relief (./relief.ts, 12x by default) at the top of the blend down to
+// page's relief (./relief.ts: 1x by default, so the blend is the identity
+// unless ?relief= raises it) at the top of the blend down to
 // true scale (1x) at the sea. Reload-time ?blend=1 turns it on, and so do the
 // streamed surface tiles (?surface=1, ../surface.ts; tides-zmw.9.7), which
 // take the same scale; without either the scale is the relief at every
@@ -222,11 +223,12 @@ export const surfaceOpacityUniform: THREE.IUniform<number> = { value: 0 }
  * Sets the live scale for an eye `altitude` over the sea-level sphere
  * (Infinity: away from Earth, or no ship). ShipController's frame, once,
  * after the spawn and before the step (see the header); its unmount passes
- * Infinity, so the system views draw the full relief.
+ * Infinity, so the system views draw the full relief. `relief`: the
+ * blend's (the page's; the tests pass 12 to exercise it at a 1x default).
  */
-export function setTerrainEye(altitude: number, blend: boolean = TERRAIN_BLEND): void {
-  terrainScaleUniform.value = terrainScale(altitude, RELIEF, blend)
-  surfaceOpacityUniform.value = surfaceOpacity(altitude)
+export function setTerrainEye(altitude: number, blend: boolean = TERRAIN_BLEND, relief: number = RELIEF): void {
+  terrainScaleUniform.value = terrainScale(altitude, relief, blend)
+  surfaceOpacityUniform.value = surfaceOpacity(altitude, relief)
 }
 
 /**

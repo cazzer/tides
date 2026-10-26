@@ -56,8 +56,9 @@ export const TERRAIN_MAX_GREY = TERRAIN_MAX_METRES / (1000 * TERRAIN_KM_PER_GREY
  */
 export const CLOUD_CLEARANCE = 0.012
 /** Cloud-top exaggeration: about 9x the true scale, whatever the terrain's
- * (12x by default; ?relief=, ./relief.ts). At a relief under about 8.7 the
- * clouds are exaggerated more than the ground they sit on. */
+ * (true scale by default since tides-zmw.21, 12x before; ?relief=,
+ * ./relief.ts). At a relief under about 8.7 the clouds are exaggerated more
+ * than the ground they sit on, as they are at the default. */
 export const CLOUD_UNITS_PER_KM = 0.004
 /** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */
 export const MIN_MEASURED_TOP_KM = 1

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { createHash } from 'node:crypto'
 import { useStore } from '../store'
@@ -74,45 +74,107 @@ describe('night lights in flight', () => {
   })
 
   // EarthRenderer's ground outside ship mode: no flight for the night lights
-  // and no side for either GIBS patch. The hashes are of f7208eb's chain
-  // (main before tides-tvr.2, at the 12x default relief of tides-zmw.6:
-  // nightLightsPatch(sun), no night patch), so drift from it fails here. A
-  // change to the relief or other constants the chain writes into its GLSL
-  // regenerates them. To regenerate: `git archive f7208eb src package.json
+  // and no side for either GIBS patch, hashed for the high and low tiers.
+  //
+  // At ?relief=12, the hashes of f7208eb's chain (main before tides-tvr.2,
+  // at tides-zmw.6's 12x default relief: nightLightsPatch(sun), no night
+  // patch), so drift from it fails here, and the old default's look stays one
+  // URL away. To regenerate: `git archive f7208eb src package.json
   // vite.config.ts tsconfig*.json` into a scratch directory with this repo's
   // node_modules linked, and log systemGroundHash's digest there for the old
-  // chain from a throwaway test (three's ShaderLib is part of the hash: a
-  // three upgrade regenerates them).
-  const SYSTEM_GROUND_SHA256 = {
+  // chain from a throwaway test.
+  //
+  // At the default (true scale since tides-zmw.21), the chain as that change
+  // left it (commit "tides-zmw.21 step A", whose horizon softness and detail
+  // tilt f7208eb predates, so no archive reproduces it): a change to the
+  // relief or to the constants the chain writes into its GLSL fails here on
+  // purpose. To regenerate, deliberately: log systemGroundHash's digests at
+  // the default from a throwaway test on the commit that should own them.
+  //
+  // three's ShaderLib is part of both: a three upgrade regenerates them.
+  const SYSTEM_GROUND_SHA256_12X = {
     high: '25cb7d341aacbe72a7df02d2874693d8c1b2f85f7c63510ab1376f16db209fe6',
     low: 'ace44b8f3662a5fcff23a711b5110e37012a3bcbf2ff4c3ed02eeaefa7d3a275',
   }
+  const SYSTEM_GROUND_SHA256 = {
+    high: '06380e1c5ca65c6b73b1f2facbb0263ae1ad6b1c035a65c1e662576ba487d2ba',
+    low: 'b5ffe74514f3358501e638243ac6f42c20528e24347e83c85ebe08b4f57f42b3',
+  }
 
-  function systemGroundHash(low: boolean) {
-    const eclipse = createEclipseShadow('earth')
-    const clouds = createCloudLayer(eclipse, low)
+  // The chain's makers, as imported here (the page's default relief) or
+  // afresh under another location (systemGroundHashesAt()).
+  const STATIC_CHAIN = {
+    createEclipseShadow,
+    createCloudLayer,
+    composePatches,
+    nightLightsPatch,
+    poleSmoothingPatch,
+    groundDetailPatch,
+    groundShadowPatch,
+    earthHorizon,
+    createGibsPatch,
+    createGibsNightPatch,
+    createGroundHaze,
+    createGroundDisplacement,
+    EARTH_BASE_SEGMENTS,
+  }
+  type Chain = typeof STATIC_CHAIN
+
+  function systemGroundHash(low: boolean, m: Chain = STATIC_CHAIN) {
+    const eclipse = m.createEclipseShadow('earth')
+    const clouds = m.createCloudLayer(eclipse, low)
     const sun = clouds.uniforms.uSunDir
-    const ground = composePatches(
+    const ground = m.composePatches(
       eclipse.material,
       clouds.groundPatch,
-      nightLightsPatch(sun, undefined),
-      poleSmoothingPatch(),
-      groundDetailPatch(low),
-      groundShadowPatch(sun, earthHorizon('earth-horizon-test.bin')),
-      createGibsPatch(0).material,
-      createGibsNightPatch(0).material,
-      createGroundHaze(sun, 1, low).patch
+      m.nightLightsPatch(sun, undefined),
+      m.poleSmoothingPatch(),
+      m.groundDetailPatch(low),
+      m.groundShadowPatch(sun, m.earthHorizon('earth-horizon-test.bin')),
+      m.createGibsPatch(0).material,
+      m.createGibsNightPatch(0).material,
+      m.createGroundHaze(sun, 1, low).patch
     )
-    const out = compiled(composePatches(ground, createGroundDisplacement(EARTH_BASE_SEGMENTS).patch))
+    const out = compiled(m.composePatches(ground, m.createGroundDisplacement(m.EARTH_BASE_SEGMENTS).patch))
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
     return createHash('sha256').update(out.vertex + '\n' + out.fragment).digest('hex')
   }
 
-  it("leaves the system view's ground exactly as it was before tides-tvr.2", () => {
+  /** Both tiers' hashes with the page at `search`: every module afresh. */
+  async function systemGroundHashesAt(search: string) {
+    vi.resetModules()
+    vi.stubGlobal('location', { search })
+    try {
+      const m: Chain = {
+        ...(await import('./eclipseShadow')),
+        ...(await import('./cloudShaders')),
+        ...(await import('./nightLights')),
+        ...(await import('./poleSmoothing')),
+        ...(await import('./groundDetail')),
+        ...(await import('./groundShadow')),
+        ...(await import('./earthHorizonTexture')),
+        ...(await import('./gibsPatch')),
+        ...(await import('./gibsNightPatch')),
+        ...(await import('./groundHaze')),
+        ...(await import('./groundDisplacement')),
+        ...(await import('../ship/terrain-floor')),
+      }
+      return { high: systemGroundHash(false, m), low: systemGroundHash(true, m) }
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
+  }
+
+  it("leaves the system view's ground at the default exactly as tides-zmw.21 left it", () => {
     expect(systemGroundHash(false)).toBe(SYSTEM_GROUND_SHA256.high)
     expect(systemGroundHash(true)).toBe(SYSTEM_GROUND_SHA256.low)
+  })
+
+  it("leaves the system view's ground at ?relief=12 exactly as it was before tides-tvr.2", async () => {
+    expect(await systemGroundHashesAt('?relief=12')).toEqual(SYSTEM_GROUND_SHA256_12X)
   })
 })
 

@@ -12,10 +12,11 @@
 // ridge one or two cells wide to a quarter or half of its faces' slope, and
 // the share gives part of that back. Such a ridge's lit slope is about
 // 50-65% of its drawn faces', 25-50% once the detail fades. The mesh is
-// exaggerated 12x by default (../cloud-layer.ts; ?relief= sets it,
-// ../relief.ts, and the detail with it, its share unchanged), which on the
-// map's few-km slopes would stand the detail on end and black out every lee
-// slope under a low Sun, so the detail is a fraction of it, softly capped.
+// drawn at ?relief= (../cloud-layer.ts, ../relief.ts: true scale by
+// default, 12x until tides-zmw.21; the detail follows, its share unchanged),
+// and at 12x, where it was tuned, its full slope on the map's few-km slopes
+// would stand the detail on end and black out every lee slope under a low
+// Sun, so the detail is a fraction of it, softly capped.
 //
 // The detail fades out as the footprint grows past a few texels, and toward
 // the poles, where the map's stretched rows would show as streaks (as the

@@ -19,12 +19,14 @@ describe('parseRelief', () => {
     for (const search of ['', '?ship=1', '?relief=', '?relief=%20', '?relief=abc', '?relief=NaN', '?relief=Infinity']) {
       expect(parseRelief(search), search).toBe(DEFAULT_RELIEF)
     }
-    expect(DEFAULT_RELIEF).toBe(12)
+    // True scale since tides-zmw.21 (12x from tides-zmw.6 until then).
+    expect(DEFAULT_RELIEF).toBe(1)
   })
 
   it('is the default outside a browser, at the default displacement', () => {
-    expect(RELIEF).toBe(12)
-    expect(defaults.TERRAIN_DISPLACEMENT).toBeCloseTo(0.036, 15)
+    expect(RELIEF).toBe(1)
+    expect(defaults.TERRAIN_DISPLACEMENT).toBeCloseTo(0.003, 15)
+    expect(defaults.TERRAIN_DISPLACEMENT).toBe(defaults.TRUE_TERRAIN_DISPLACEMENT)
     expect(defaults.TERRAIN_DISPLACEMENT).toBe(defaults.DEFAULT_TERRAIN_DISPLACEMENT)
   })
 
