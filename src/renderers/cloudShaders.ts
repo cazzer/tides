@@ -83,6 +83,66 @@ export const MARCH_MAP_WIDTH = 2048
 // (tides-01v.8.19): under the clearance, so cloud over level ground keeps
 // all of its opacity.
 export const GROUND_FADE = 0.005
+// Where the detail erodes a cloud's opacity (tides-tvr.3). Its coarsest
+// octave is DETAIL_BASE_TEXELS map texels, about 31 km at 2560 wide, and
+// real weather's broad decks sit at mid opacity, where the erosion
+// (DETAIL_EDGE times 4c(1-c)) is strongest: up close the whole deck was
+// pitted with holes at that one scale. The same pattern reads as texture a
+// few pixels a wave and as holes tens of pixels a wave, so an octave erodes
+// in full while its wave is at most DETAIL_GRAIN_PX pixels on screen, and
+// inside a cloud eases to DETAIL_INTERIOR of that by DETAIL_HOLE_PX; near
+// the cloud's edges it erodes in full whatever its size (detailEdge()).
+// Pixels on screen are a view DETAIL_VIEW_PX tall's (detailPixelScale()):
+// a share of the view, the same in any window and on any display. Seen from
+// a scene unit up, the coarsest wave over the deck is then at most about 15
+// such pixels on a 2048-wide map (11 on real weather's 2560), so far views
+// keep the fractal edges of tides-01v.2 exactly. Up close, what erodes the
+// deck's inside is the octaves under DETAIL_GRAIN_PX: the same grain a far
+// view shows, not holes.
+export const DETAIL_INTERIOR = 0.15
+export const DETAIL_GRAIN_PX = 16
+export const DETAIL_HOLE_PX = 20
+export const DETAIL_VIEW_PX = 800
+// The edge, in steps of the reads it is measured over: the slope's spacing,
+// h scene units (three equatorial texels close up), a mip down. The reads
+// can't tell how far on within a step a crisp rim lies: there, the fall
+// over the step reads as about two steps of reach, less toward the rim as
+// the opacity at the hit thins, so a crisp rim's band is the last texel or
+// two where it thins, a soft one's about a step wider.
+export const DETAIL_EDGE_NEAR = 1
+export const DETAIL_EDGE_FAR = 2
+
+/** Pixels of a view DETAIL_VIEW_PX tall a device pixel of a view
+ * `viewHeight` device pixels tall stands for: uPixelScale. */
+export function detailPixelScale(viewHeight: number): number {
+  return viewHeight / DETAIL_VIEW_PX
+}
+
+/** How much of an octave of `wavelength` erodes the opacity at a pixel
+ * `footprint` wide (both scene units; a pixel of a view DETAIL_VIEW_PX
+ * tall), 0..1, `edge` (detailEdge()) of the way to a cloud's edge:
+ * cloudDetail()'s. */
+export function detailErosion(footprint: number, wavelength: number, edge: number): number {
+  const grain = THREE.MathUtils.smoothstep(footprint / wavelength, 1 / DETAIL_HOLE_PX, 1 / DETAIL_GRAIN_PX)
+  // mix(mix(DETAIL_INTERIOR, 1, grain), 1, edge), as the shader folds it.
+  return 1 - (1 - DETAIL_INTERIOR) * (1 - edge) * (1 - grain)
+}
+
+/** How near a cloud of opacity `alpha` is to its edge, 1 there to 0 inside,
+ * by how many steps of the reads on it stops showing (CLOUD_MIN_ALPHA), for
+ * a fall in opacity of `fallPerStep` a step: the hit shading's. */
+export function detailEdge(alpha: number, fallPerStep: number): number {
+  const reach = (alpha - CLOUD_MIN_ALPHA) / Math.max(fallPerStep, 1e-4)
+  return 1 - THREE.MathUtils.smoothstep(reach, DETAIL_EDGE_NEAR, DETAIL_EDGE_FAR)
+}
+
+/** The fall in opacity a step, by central differences of four reads a
+ * step east, west, north and south of the hit: centred, so a rim facing
+ * any way reads alike. */
+export function detailFall(east: number, west: number, north: number, south: number): number {
+  return 0.5 * Math.hypot(east - west, north - south)
+}
+
 // Steps for the longest path a march can take: a ray from the layer's top
 // grazing the sea, under every base, and out again (sea level is Earth's
 // scene radius, as EarthRenderer sets it); one from outside stops at the
@@ -509,7 +569,9 @@ float cloudSunUp(float mu, float km) {
 // Fine detail where the map is magnified (detailOctaveWeights()): value-noise
 // fBm in object space, so it has no dateline seam and no polar pinch, in the
 // clouds' own frame, so it drifts with the static clouds and stays on the
-// ground under real ones. It erodes the edges and roughens the tops.
+// ground under real ones. It erodes the opacity, most at mid opacity, and
+// roughens the tops; an octave large on screen erodes only near the cloud's
+// edges (DETAIL_INTERIOR, tides-tvr.3).
 #ifdef CLOUD_FLAT
 #define DETAIL_OCTAVES ${DETAIL_OCTAVES_FLAT}
 ${detailTurnsGlsl(DETAIL_OCTAVES_FLAT)}
@@ -518,6 +580,11 @@ ${detailTurnsGlsl(DETAIL_OCTAVES_FLAT)}
 ${detailTurnsGlsl(DETAIL_OCTAVES)}
 #endif
 #define DETAIL_EDGE 0.8
+#define DETAIL_INTERIOR ${f(DETAIL_INTERIOR)}
+#define DETAIL_GRAIN_PX ${f(DETAIL_GRAIN_PX)}
+#define DETAIL_HOLE_PX ${f(DETAIL_HOLE_PX)}
+#define DETAIL_EDGE_NEAR ${f(DETAIL_EDGE_NEAR)}
+#define DETAIL_EDGE_FAR ${f(DETAIL_EDGE_FAR)}
 // Tilt of the tops per unit of noise slope, over the coarsest wavelength;
 // each finer octave tilts them DETAIL_ROUGH as much as the last, and the
 // whole is capped, so the texture's own slopes still read through.
@@ -527,21 +594,34 @@ ${detailTurnsGlsl(DETAIL_OCTAVES)}
 
 ${DETAIL_NOISE_GLSL}
 
-// fBm at p (scene units, the clouds' frame) seen at footprint: x in about
-// -1..1, yzw its gradient per scene unit. Octaves stop where they would
-// shrink under a few pixels.
-vec4 cloudDetail(vec3 p, float footprint, float texel) {
+// Pixels of a view DETAIL_VIEW_PX tall a device pixel of the view drawn
+// stands for (detailPixelScale()): an octave's size on screen, against
+// DETAIL_GRAIN_PX and DETAIL_HOLE_PX, is a share of the view.
+uniform float uPixelScale;
+
+// fBm at p (scene units, the clouds' frame) seen at footprint, edge
+// (detailEdge()) of the way to the cloud's edge: x in about -1..1, the
+// opacity's erosion, yzw its gradient per scene unit. Octaves stop where
+// they would shrink under a few pixels; one large on screen erodes less
+// inside a cloud (detailErosion()), but roughens the tops as ever.
+vec4 cloudDetail(vec3 p, float footprint, float texel, float edge) {
   float wavelength = ${f(DETAIL_BASE_TEXELS)} * texel;
   float amp = 0.5;
   float rough = 0.5;
   vec4 sum = vec4(0.0);
+  // What an octave large on screen spares of the erosion inside a cloud
+  // (detailErosion()), and a pixel (uPixelScale) over its wave.
+  float spare = (1.0 - DETAIL_INTERIOR) * (1.0 - edge);
+  float screenRatio = footprint * uPixelScale / wavelength;
   for (int k = 0; k < DETAIL_OCTAVES; k++) {
     float weight = 1.0 - smoothstep(${f(DETAIL_FADE_START)}, ${f(DETAIL_FADE_END)}, footprint / wavelength);
     if (weight <= 0.0) break;
+    float erode = 1.0 - spare * (1.0 - smoothstep(1.0 / DETAIL_HOLE_PX, 1.0 / DETAIL_GRAIN_PX, screenRatio));
     vec4 o = detailNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 17.31);
     // o.yzw * turn: the gradient turned back (the transpose).
-    sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
+    sum += weight * vec4(erode * amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
     wavelength *= 0.5;
+    screenRatio *= 2.0;
     amp *= 0.5;
     rough *= 0.5 * DETAIL_ROUGH;
   }
@@ -1246,10 +1326,61 @@ void main() {
   float footShade = footprint;
   float lodShade = lod;
 #endif
+  // The tops' slope, by forward differences a pixel or so apart, read
+  // ahead of the detail, which shares the reads where it can. A mip down,
+  // and the tilt capped (below): measured heights can jump kilometres
+  // between neighbouring texels, which would stand tops on edge.
+  float h = max(footShade, 3.0 * texel);
+  float lodN = lodShade + 1.0;
+  vec2 stepE = vec2(h / (2.0 * CLOUD_PI * rShade * max(length(upShade.xz), 0.05)), 0.0);
+  vec2 stepN = vec2(0.0, h / (CLOUD_PI * rShade));
+  float topC = cloudColumn(uvShade, lodN, terrainShade).z;
+  vec4 colE = cloudColumn(uvShade + stepE, lodN, terrainShade);
+  vec4 colN = cloudColumn(uvShade + stepN, lodN, terrainShade);
+  vec2 slope = RELIEF * vec2(colE.z - topC, colN.z - topC) / h;
+
+  // How near the hit is to the cloud's edge, for the detail (tides-tvr.3;
+  // detailEdge()): how many steps of the reads on it stops showing, by the
+  // map's own fall in opacity over them, by central differences
+  // (detailFall()), so that a rim facing any way reads alike: the slope's
+  // reads east and north, and two more west and south. Worked out only
+  // where the detail's coarsest wave is more than DETAIL_GRAIN_PX pixels on
+  // screen, so further out every octave erodes in full as ever and nothing
+  // more is read; and fixed to the map, so it neither swims nor sparkles as
+  // the camera moves.
+  float edge = 1.0;
+  bool edgeNear = ${f(DETAIL_BASE_TEXELS)} * texel > DETAIL_GRAIN_PX * topFootprint * uPixelScale;
+#ifdef FLIP_SIDED
+  // A side is all edge.
+  edgeNear = edgeNear && !side;
+#endif
+  if (edgeNear) {
+    // At the hit, as the detail is: the slope's reads where it is shaded
+    // there too.
+    vec2 hitE = stepE;
+    vec2 hitN = stepN;
+    float lodHit = lodN;
+    vec2 fallEN = vec2(colE.x, colN.x);
+#ifdef FLIP_SIDED
+    // Shaded from along the path through sides and veils, elsewhere.
+    if (sideLight > 0.0) {
+      float hHit = max(footprint, 3.0 * texel);
+      hitE = vec2(hHit / (2.0 * CLOUD_PI * r * max(length(up.xz), 0.05)), 0.0);
+      hitN = vec2(0.0, hHit / (CLOUD_PI * r));
+      lodHit = lod + 1.0;
+      fallEN = vec2(cloudColumn(uv + hitE, lodHit, terrain).x, cloudColumn(uv + hitN, lodHit, terrain).x);
+    }
+#endif
+    float fall = 0.5 * length(fallEN
+      - vec2(cloudColumn(uv - hitE, lodHit, terrain).x, cloudColumn(uv - hitN, lodHit, terrain).x));
+    edge = 1.0 - smoothstep(DETAIL_EDGE_NEAR, DETAIL_EDGE_FAR,
+      (col.x - CLOUD_MIN_ALPHA) / max(fall, 1e-4));
+  }
+
   // The detail at the hit itself: where it is shaded can sweep far along the
   // ray from one pixel to the next where a cloud past a veil starts to show,
   // and noise read there would streak along every such edge.
-  vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
+  vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel, edge);
   float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
   if (alpha < CLOUD_MIN_ALPHA) {
     if (!CLOUD_VEILED) CLOUD_MISS;
@@ -1258,19 +1389,9 @@ void main() {
   // How much of what lies behind it the hit hides, short of the veils.
   float hitShow = (1.0 - pow(1.0 - min(alpha, 0.995), slant)) * groundFade;
 
-  // The tops' slope, by forward differences a pixel or so apart.
-  float h = max(footShade, 3.0 * texel);
+  // The detail's own slope, along the top.
   vec3 east = normalize(vec3(upShade.z, 0.0, -upShade.x) + vec3(1e-5, 0.0, 0.0));
   vec3 north = cross(upShade, east);
-  float cosLat = max(length(upShade.xz), 0.05);
-  // A mip down, and the tilt capped: measured heights can jump kilometres
-  // between neighbouring texels, which would stand tops on edge.
-  float lodN = lodShade + 1.0;
-  float topC = cloudColumn(uvShade, lodN, terrainShade).z;
-  float topE = cloudColumn(uvShade + vec2(h / (2.0 * CLOUD_PI * rShade * cosLat), 0.0), lodN, terrainShade).z;
-  float topN = cloudColumn(uvShade + vec2(0.0, h / (CLOUD_PI * rShade)), lodN, terrainShade).z;
-  vec2 slope = RELIEF * vec2(topE - topC, topN - topC) / h;
-  // The detail's own slope, along the top.
   vec3 grain = cloudFrame(detail.yzw, -uCloudShift) * DETAIL_RELIEF * ${f(DETAIL_BASE_TEXELS)} * texel;
   vec2 grainSlope = vec2(dot(grain, east), dot(grain, north));
   slope += grainSlope * min(1.0, DETAIL_MAX_SLOPE / max(length(grainSlope), 1e-6));
@@ -1415,6 +1536,7 @@ export interface CloudLayer {
 }
 
 const eye = new THREE.Vector3()
+const viewport = new THREE.Vector4()
 
 // The cloud ceiling's texture (cloudCeiling(), built by
 // scripts/build-cloud-ceiling.mjs); until it has loaded, a
@@ -1460,6 +1582,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
       uAmbient: { value: CLOUD_AMBIENT },
       uFogPast: { value: Array.from({ length: FOG_EASE_SAMPLES }, () => new THREE.Vector3()) },
       uCloudCeiling: { value: ceilingTexture() },
+      uPixelScale: { value: 1 },
     },
     defines,
     vertexShader: liveTerrain(VERTEX, live),
@@ -1470,6 +1593,11 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
     // cloud (cloudHazeFront) isn't clipped before the blend.
     premultipliedAlpha: true,
   })
+  // The detail's sizes on screen (tides-tvr.3), from the view drawn: the
+  // canvas's, or a render target's (its viewport, in its own pixels).
+  material.onBeforeRender = (renderer) => {
+    material.uniforms.uPixelScale.value = detailPixelScale(renderer.getCurrentViewport(viewport).w)
+  }
   // The eye's recent path, while the fog eases in (FOG_EASE_SECONDS).
   const track: EyeSample[] = []
   const shellAltitude = flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP
