@@ -34,9 +34,13 @@
 // pixel is tile or globe, never both: no z-fighting at any scale or DEM
 // mismatch, and the globe still draws wherever no tile landed (not loaded
 // yet, failed, or above the handover). Over the top of the blend the tiles
-// dissolve out on the fade plugin's 4x4 Bayer screen-door
-// (surfaceOpacityUniform); a discarded fragment writes no stencil, so the
-// globe fills it.
+// dissolve out on an 8x8 Bayer screen-door (surfaceOpacityUniform); a
+// discarded fragment writes no stencil, so the globe fills it. Not the fade
+// plugin's 4x4: its 16 levels switched a sixteenth of the screen at once,
+// a ~3/255 luma step every few frames of a descent while the tiles' colour
+// differs from the globe's (headless, tides-zmw.9.7); 64 levels quarter it.
+// The 8x8's thresholds nest in the 4x4's, so with a tile's own fade the two
+// still keep about the smaller share.
 import * as THREE from 'three'
 import type { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { surfaceOpacityUniform, terrainScaleUniform } from '../../terrain-scale'
@@ -67,16 +71,26 @@ export const DISPLACEMENT_VERTEX = /* glsl */ `
 const BUMP_X = 'float dBx = bumpScale *'
 const BUMP_Y = 'float dBy = bumpScale *'
 
-// The fade plugin's pattern (wrapFadeMaterial.js), so the two combine as a
-// min of their opacities rather than as two independent screens.
+// The skirts: the plugin drops each tile's edge vertices (from
+// SURFACE_VERTEX_COUNT on) geometricError + range x RELIEF along the normal,
+// enough to close cracks at the largest scale; at the live scale they need
+// only range x uTerrainScale of it, and beside a hole (tiles not loaded, the
+// globe showing) the rest stood as a curtain. Lift them by the difference.
+const skirtLift = (relief: number) => /* glsl */ `
+if ( gl_VertexID >= ${SURFACE_VERTEX_COUNT} ) transformed += normalize( objectNormal ) * uSkirtRange * ( ${relief.toFixed(6)} - uTerrainScale );
+`
+
+// The fade plugin's 4x4 pattern (wrapFadeMaterial.js) refined to 8x8: each
+// 4x4 level split in four by the 2x2 block it falls in.
 const DISSOLVE_HEAD = /* glsl */ `
 uniform float uSurfaceOpacity;
 float surfaceBayer2(vec2 v) { return mod(3.0 * v.y + 2.0 * v.x, 4.0); }
 float surfaceBayer4(vec2 v) { return 4.0 * surfaceBayer2(mod(v, 2.0)) + surfaceBayer2(floor(0.5 * mod(v, 4.0))); }
+float surfaceBayer8(vec2 v) { return 4.0 * surfaceBayer4(mod(v, 4.0)) + surfaceBayer2(floor(0.25 * mod(v, 8.0))); }
 `
 
 const DISSOLVE_BODY = /* glsl */ `
-  if ((0.5 + surfaceBayer4(floor(mod(gl_FragCoord.xy, 4.0)))) / 16.0 >= uSurfaceOpacity) discard;
+  if ((0.5 + surfaceBayer8(floor(mod(gl_FragCoord.xy, 8.0)))) / 64.0 >= uSurfaceOpacity) discard;
 `
 
 function replaceOnce(source: string, from: string, to: string, what: string): string {
@@ -89,13 +103,18 @@ function replaceOnce(source: string, from: string, to: string, what: string): st
  * onBeforeCompile: height and bump on the live scale, and the dissolve.
  * Throws when an anchor is missing (a three or library bump).
  */
-export function patchSurfaceShader(shader: THREE.WebGLProgramParametersWithUniforms): void {
+export function patchSurfaceShader(
+  shader: THREE.WebGLProgramParametersWithUniforms,
+  skirtRange: THREE.IUniform<number> = { value: 0 },
+  relief: number = RELIEF
+): void {
   shader.uniforms.uTerrainScale = terrainScaleUniform
   shader.uniforms.uSurfaceOpacity = surfaceOpacityUniform
+  shader.uniforms.uSkirtRange = skirtRange
   shader.vertexShader = replaceOnce(
-    'uniform float uTerrainScale;\n' + shader.vertexShader,
+    'uniform float uTerrainScale;\nuniform float uSkirtRange;\n' + shader.vertexShader,
     '#include <displacementmap_vertex>',
-    DISPLACEMENT_VERTEX,
+    DISPLACEMENT_VERTEX + skirtLift(relief),
     'vertex'
   )
   // Declared first: the bump chunk reads it, well before main().
@@ -120,8 +139,14 @@ export function patchSurfaceShader(shader: THREE.WebGLProgramParametersWithUnifo
  * displacement stays in metres: it moves vertices in object space, before
  * the group's scale.
  */
-export function prepareSurfaceMaterial(material: THREE.Material, extra: readonly MaterialPatch[] = []): void {
+export function prepareSurfaceMaterial(
+  material: THREE.Material,
+  extra: readonly MaterialPatch[] = [],
+  skirtRangeMetres: number = 0
+): void {
   const m = material as THREE.MeshLambertMaterial
+  // Its own uniform: three runs onBeforeCompile per material.
+  const skirtRange = { value: skirtRangeMetres }
   m.displacementScale = 1
   m.bumpScale = SURFACE_SCALE
   m.stencilWrite = true
@@ -131,7 +156,7 @@ export function prepareSurfaceMaterial(material: THREE.Material, extra: readonly
   const own = m.onBeforeCompile
   m.onBeforeCompile = function (shader, renderer) {
     own.call(this, shader, renderer)
-    patchSurfaceShader(shader)
+    patchSurfaceShader(shader, skirtRange)
     for (const patch of extra) patch.onBeforeCompile(shader, renderer)
   }
 }
@@ -154,21 +179,47 @@ export function globeStencil(material: THREE.Material, on: boolean): void {
  * tile parses (processTileModel runs in parseTile, before the load-model
  * event the fade plugin wraps materials at). `extra()` is read per tile.
  */
-export function createSurfaceScalePlugin(extra: () => readonly MaterialPatch[] = () => []) {
+export function createSurfaceScalePlugin(extra: () => readonly MaterialPatch[] = () => [], relief: number = RELIEF) {
   return {
     name: 'SURFACE_SCALE',
-    processTileModel(scene: THREE.Object3D) {
+    processTileModel(scene: THREE.Object3D, tile: { geometricError?: number }) {
       const patches = extra()
       scene.traverse((object) => {
         const mesh = object as THREE.Mesh
         if (mesh.isMesh && mesh.material) {
+          const range = surfaceSkirtRange(mesh.geometry, tile?.geometricError ?? 0, relief)
           for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-            prepareSurfaceMaterial(material, patches)
+            prepareSurfaceMaterial(material, patches, range)
           }
         }
       })
     },
   }
+}
+
+/** The library's skirted tile geometry, as surfaceSkirtRange() reads it. */
+interface SkirtedGeometry {
+  surfaceVertexCount?: number
+  skirtSourceIndices?: ArrayLike<number>
+}
+
+/**
+ * A tile's elevation range in metres, recovered from its skirt: the plugin
+ * drops each skirt vertex geometricError + range x `relief` below the edge
+ * vertex it copies (both on the sphere, height 0). 0 for any other geometry.
+ */
+export function surfaceSkirtRange(geometry: THREE.BufferGeometry, geometricError: number, relief: number = RELIEF): number {
+  const { surfaceVertexCount, skirtSourceIndices } = geometry as THREE.BufferGeometry & SkirtedGeometry
+  const position = geometry.getAttribute('position')
+  if (!position || !surfaceVertexCount || !skirtSourceIndices?.length) return 0
+  const src = skirtSourceIndices[0]
+  const dst = surfaceVertexCount
+  const depth = Math.hypot(
+    position.getX(dst) - position.getX(src),
+    position.getY(dst) - position.getY(src),
+    position.getZ(dst) - position.getZ(src)
+  )
+  return Math.max(0, (depth - geometricError) / relief)
 }
 
 /**

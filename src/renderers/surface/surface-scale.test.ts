@@ -23,6 +23,7 @@ import {
   SURFACE_VERTEX_COUNT,
   surfaceElevationMetres,
   surfaceFitScale,
+  surfaceSkirtRange,
 } from './surface-scale'
 
 /** What three hands onBeforeCompile for a Lambert material (chunks unresolved). */
@@ -75,21 +76,32 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     }
   })
 
-  it("dissolves on the fade plugin's 4x4 Bayer pattern, first thing in main", () => {
+  it('dissolves on an 8x8 Bayer pattern nested in the fade plugin\'s 4x4, first thing in main', () => {
     const material = new TerrainLambertMaterial()
     prepareSurfaceMaterial(material)
     const { fragmentShader } = compiled(material)
     const main = fragmentShader.indexOf('void main() {')
-    const discard = fragmentShader.indexOf('>= uSurfaceOpacity) discard;')
+    const discard = fragmentShader.indexOf('/ 64.0 >= uSurfaceOpacity) discard;')
     expect(main).toBeGreaterThan(0)
     expect(discard).toBeGreaterThan(main)
     expect(fragmentShader.slice(main, discard)).not.toContain(';')
-    // The 16 thresholds, (0.5 + bayer) / 16, are each used once over a 4x4 block.
-    const b2 = (x: number, y: number) => (3 * y + 2 * x) % 4
-    const b4 = (x: number, y: number) => 4 * b2(x % 2, y % 2) + b2(Math.floor((x % 4) / 2), Math.floor((y % 4) / 2))
+    // The GLSL's patterns: the 64 thresholds each once over an 8x8 block,
+    // each 4x4 level split into four consecutive 8x8 ones.
+    const mod = (a: number, n: number) => ((a % n) + n) % n
+    const b2 = (x: number, y: number) => mod(3 * y + 2 * x, 4)
+    const b4 = (x: number, y: number) => 4 * b2(mod(x, 2), mod(y, 2)) + b2(Math.floor(mod(x, 4) / 2), Math.floor(mod(y, 4) / 2))
+    const b8 = (x: number, y: number) => 4 * b4(mod(x, 4), mod(y, 4)) + b2(Math.floor(mod(x, 8) / 4), Math.floor(mod(y, 8) / 4))
     const seen = new Set<number>()
-    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) seen.add(b4(x, y))
-    expect([...seen].sort((a, b) => a - b)).toEqual([...Array(16).keys()])
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        seen.add(b8(x, y))
+        expect(Math.floor(b8(x, y) / 4)).toBe(b4(x, y))
+      }
+    }
+    expect([...seen].sort((a, b) => a - b)).toEqual([...Array(64).keys()])
+    const four = new Set<number>()
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) four.add(b4(x, y))
+    expect(four.size).toBe(16)
   })
 
   it('throws when an anchor is missing', () => {
@@ -145,12 +157,42 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     const a = new TerrainLambertMaterial()
     const b = new TerrainLambertMaterial()
     const scene = new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), a), new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), b)))
-    plugin.processTileModel(scene)
+    plugin.processTileModel(scene, {})
     expect(calls).toBe(1)
     for (const m of [a, b]) {
       expect(m.displacementScale).toBe(1)
       expect(m.stencilRef).toBe(SURFACE_STENCIL_REF)
     }
+  })
+
+  it('lifts the skirts from the full relief\'s depth to the live scale\'s, each tile by its own range', () => {
+    // A tile's geometry as the plugin leaves it: surface on the sphere, skirt
+    // vertices dropped geometricError + range x RELIEF along the normal.
+    const geometry = new SkirtedPlaneGeometry(1, 1, 32, 32)
+    const position = geometry.getAttribute('position')
+    const geometricError = 150
+    const range = 1800
+    for (let k = 0; k < geometry.skirtSourceIndices.length; k++) {
+      const src = geometry.skirtSourceIndices[k]
+      position.setXYZ(geometry.surfaceVertexCount + k, position.getX(src), position.getY(src), position.getZ(src) - (geometricError + range * RELIEF))
+    }
+    expect(surfaceSkirtRange(geometry, geometricError)).toBeCloseTo(range, 2)
+    expect(surfaceSkirtRange(new THREE.PlaneGeometry(), geometricError)).toBe(0)
+
+    const a = new TerrainLambertMaterial()
+    const b = new TerrainLambertMaterial()
+    createSurfaceScalePlugin().processTileModel(new THREE.Group().add(new THREE.Mesh(geometry, a)), { geometricError })
+    prepareSurfaceMaterial(b)
+    const sa = compiled(a)
+    const sb = compiled(b)
+    expect(sa.uniforms.uSkirtRange.value).toBeCloseTo(range, 2)
+    expect(sb.uniforms.uSkirtRange.value).toBe(0)
+    expect(sa.uniforms.uSkirtRange).not.toBe(sb.uniforms.uSkirtRange)
+    expect(sa.vertexShader).toContain(
+      `if ( gl_VertexID >= ${SURFACE_VERTEX_COUNT} ) transformed += normalize( objectNormal ) * uSkirtRange * ( ${RELIEF.toFixed(6)} - uTerrainScale );`
+    )
+    // After the displacement it corrects.
+    expect(sa.vertexShader.indexOf('gl_VertexID >=')).toBeGreaterThan(sa.vertexShader.indexOf('displacementScale * uTerrainScale'))
   })
 
   it('counts the surface vertices before the skirts as the library builds them', () => {
