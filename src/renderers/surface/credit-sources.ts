@@ -60,16 +60,18 @@ export function imageryTileFor(b: RadianBounds): ImageryTile {
  * names both: USGS where it touches a box, EOX unless it sits wholly inside
  * one. Inside a box, `servedByEox` says whether EOX answered for the tile's
  * imagery instead (USGS had nothing there, or a blank: open water, mostly),
- * which then takes the credit.
+ * which then takes the credit alone. EOX is named on every tile.
  */
 export function sourcesForTile(b: RadianBounds, servedByEox?: (tile: ImageryTile) => boolean): SurfaceSource[] {
   const deg = { west: b.west * DEG, south: b.south * DEG, east: b.east * DEG, north: b.north * DEG }
   const sources: SurfaceSource[] = ['mapterhorn']
   if (boundsInsideUsgs(deg)) {
-    sources.push(servedByEox?.(imageryTileFor(b)) ? 'eox' : 'usgs')
-    return sources
-  }
-  if (boundsTouchUsgs(deg)) sources.push('usgs')
+    if (!servedByEox?.(imageryTileFor(b))) sources.push('usgs')
+  } else if (boundsTouchUsgs(deg)) sources.push('usgs')
+  // EOX on every tile (tides-zmw.9.11): USGS's tiles are matched to EOX's
+  // colour (imagery-match.ts) and every tile's colour is anchored through
+  // EOX's coarse imagery (tile-colour-ref.ts), so EOX-derived data shows
+  // wherever the surface layer draws.
   sources.push('eox')
   return sources
 }

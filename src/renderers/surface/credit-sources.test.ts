@@ -18,9 +18,9 @@ const rad = (z: number, x: number, y: number): RadianBounds => {
 }
 
 describe('sourcesForTile', () => {
-  test('a tile in the Grand Canyon takes Mapterhorn and USGS', () => {
+  test('a tile in the Grand Canyon takes Mapterhorn and USGS, and EOX (tides-zmw.9.11: its colour is matched and anchored through EOX)', () => {
     // z10 tile over 36.1N 112.1W
-    expect(sourcesForTile(rad(10, 192, 405))).toEqual(['mapterhorn', 'usgs'])
+    expect(sourcesForTile(rad(10, 192, 405))).toEqual(['mapterhorn', 'usgs', 'eox'])
   })
   test('a tile in the Alps takes Mapterhorn and EOX', () => {
     expect(sourcesForTile(rad(10, 541, 361))).toEqual(['mapterhorn', 'eox'])
@@ -108,12 +108,12 @@ describe('EOX standing in for USGS (tides-zmw.9.2)', () => {
   })
   test('credits EOX, not USGS, for a tile in a US box whose imagery EOX served', () => {
     const offBigSur = rad(11, 326, 801) // inside CONUS west, over the Pacific
-    expect(sourcesForTile(offBigSur)).toEqual(['mapterhorn', 'usgs'])
+    expect(sourcesForTile(offBigSur)).toEqual(['mapterhorn', 'usgs', 'eox'])
     const served = new Set(['11/326/801'])
     const byEox = ({ z, x, y }: { z: number; x: number; y: number }) => served.has(`${z}/${x}/${y}`)
     expect(sourcesForTile(offBigSur, byEox)).toEqual(['mapterhorn', 'eox'])
     // its land neighbour keeps USGS; outside the boxes nothing changes
-    expect(sourcesForTile(rad(11, 327, 801), byEox)).toEqual(['mapterhorn', 'usgs'])
+    expect(sourcesForTile(rad(11, 327, 801), byEox)).toEqual(['mapterhorn', 'usgs', 'eox'])
     expect(sourcesForTile(rad(10, 541, 361), byEox)).toEqual(['mapterhorn', 'eox'])
   })
 })

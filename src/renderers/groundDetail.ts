@@ -180,6 +180,11 @@ const LIGHT_BODY = /* glsl */ `
 #endif
 `
 
+/** The sky fill's GLSL for the streamed tiles to reuse by text
+ * (tides-zmw.9.11): lightBody after lights_fragment_end, reading groundUp
+ * (the unbent normal), normal and GROUND_SKY_FILL. */
+export const GROUND_DETAIL_GLSL = { lightBody: LIGHT_BODY }
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {

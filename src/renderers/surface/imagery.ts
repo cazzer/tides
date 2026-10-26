@@ -10,8 +10,10 @@
 // a tile has to sit wholly inside one box (a straddling tile takes EOX).
 // Inside a box, USGS 404s over open water or answers a blank tile; both fall
 // back to EOX (by status, and by size: fetchFirstOk).
-// No zoom threshold: the first tiles to fit a box are at z5 (interior Alaska
-// and the Southeast), where USGS's low levels are a natural-colour mosaic with the sea filled in.
+// USGS from its first orthoimagery level down (USGS_MIN_ZOOM, tides-zmw.9.11):
+// its levels above are a natural-colour mosaic of another colour balance,
+// which the local match to EOX (imagery-match.ts) isn't fitted to, and at
+// ~600 m a pixel EOX shows as much.
 
 /** EOX Sentinel-2 cloudless 2020 (CC BY-NC-SA 4.0; credited by tides-zmw.9.9). */
 export const EOX_URL =
@@ -92,10 +94,15 @@ export function boundsTouchUsgs(b: Omit<Box, 'name'>): boolean {
   )
 }
 
-/** The URLs to try for a tile, best first: USGS then EOX in the US, else EOX. */
+/** USGS's first orthoimagery level. */
+export const USGS_MIN_ZOOM = 9
+
+/** The URLs to try for a tile, best first: USGS then EOX in the US (from
+ * USGS_MIN_ZOOM down), else EOX. */
+
 export function imageryUrlsFor(tile: ImageryTile): string[] {
   const eox = imageryUrl(EOX_URL, tile)
-  return insideUsgsCoverage(tile) ? [imageryUrl(USGS_URL, tile), eox] : [eox]
+  return tile.z >= USGS_MIN_ZOOM && insideUsgsCoverage(tile) ? [imageryUrl(USGS_URL, tile), eox] : [eox]
 }
 
 /**
