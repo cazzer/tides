@@ -22,6 +22,10 @@
 // sea) from the coarser data instead of sea level, and stopped refining
 // there; tides-zmw.9.17 took the view error near the eye from the drawn
 // ground rather than infinity (surface-coverage.ts).
+//
+// tides-zmw.9.22 kept the tiles under the eye at their rest detail whatever
+// the speed ramp asks (setErrorTarget), and tides-zmw.9.24 sized the cache
+// and the detail resolution to the view (setViewSize, surface-lod.ts).
 import * as THREE from 'three'
 import { DEFAULT_DOWNLOAD_QUEUE, DEFAULT_LRU_CACHE, DownloadPriorityQueue, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
@@ -33,6 +37,7 @@ import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
 import { createSurfaceScalePlugin, fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
+import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { terrainScaleUniform } from '../../terrain-scale'
 import {
   GRID_LEVEL_STEP,
@@ -52,13 +57,6 @@ export const MAPTERHORN_TILE_SIZE = 512
 /** Mapterhorn's deepest level everywhere it has data (~2.4 m/px at the equator). */
 export const MAPTERHORN_MAX_ZOOM = 16
 
-const GIGABYTE = 2 ** 30
-/**
- * The instance's tile memory (the library's default shared cache allows 0.3
- * to 0.4 GB): evicts down to the low mark once past the high one. Each tile
- * is charged half the elevation grid it shares (shareGridBytes).
- */
-export const SURFACE_CACHE_BYTES = { min: 0.15 * GIGABYTE, max: 0.25 * GIGABYTE }
 /** How often failed tiles are retried, and the first wait of each one's backoff. */
 export const RETRY_FAILED_MS = 10_000
 /** Downloads in flight per server (the library's shared queue allows 25). */
@@ -84,6 +82,20 @@ export interface SurfaceTiles {
   bounds: SurfaceBounds
   /** The view error near the eye and past the coverage end (surface-coverage.ts). */
   viewError: SurfaceViewError
+  /**
+   * Sets this frame's errorTarget and its rest value (surface-lod.ts): the
+   * tiles within `eyeMargin` metres of the eye take their error times
+   * target / rest, so they refine as at rest (surface-coverage.ts).
+   */
+  setErrorTarget(target: number, rest: number, eyeMargin?: number): void
+  /**
+   * The view's size in CSS pixels, as setResolutionFromRenderer would give
+   * (the error target is in those pixels): sets the camera's detail
+   * resolution and the cache's marks from it (surfaceDetail; marks that
+   * fall wait for the size to settle, cacheMarkSetter). Call after the
+   * camera is registered and on every resize.
+   */
+  setViewSize(camera: THREE.Camera, width: number, height: number): void
   /** Copies the robustness counters onto tiles.group.userData. */
   syncCounters(): void
   dispose(): void
@@ -148,11 +160,16 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   // (surface-lod.ts) every frame.
   tiles.ellipsoid.radius.setScalar(SURFACE_ELLIPSOID_RADIUS)
   // Its own cache and queue, set before the first update (the cache can't be
-  // swapped after): the shared defaults would let the surface hold 0.4 GB and
-  // put 25 downloads at once on each server, with the decodes to match.
+  // swapped after, though its marks can): the shared defaults would hold 0.3
+  // to 0.4 GB whatever the view and put 25 downloads at once on each server,
+  // with the decodes to match. The marks follow the view (setViewSize); each
+  // tile is charged half the elevation grid it shares (shareGridBytes).
   const lruCache = new LRUCache()
-  lruCache.minBytesSize = SURFACE_CACHE_BYTES.min
-  lruCache.maxBytesSize = SURFACE_CACHE_BYTES.max
+  const cacheMarks = cacheMarkSetter(({ min, max }) => {
+    lruCache.minBytesSize = min
+    lruCache.maxBytesSize = max
+  })
+  cacheMarks.set(surfaceDetail(0, 0).cache)
   lruCache.unloadPriorityCallback = DEFAULT_LRU_CACHE.unloadPriorityCallback
   tiles.lruCache = lruCache
   const downloads = new DownloadPriorityQueue()
@@ -172,12 +189,17 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   // The bounding regions on the live scale, stepwise (surface-scale.ts).
   const bounds = fitSurfaceBounds(tiles, terrain, () => terrainScaleUniform.value)
   // After it (so on the refitted regions): the error near the eye from the
-  // drawn ground, and none past the source's coverage (surface-coverage.ts).
+  // drawn ground, the eye's chain at rest detail, and none past the source's
+  // coverage (surface-coverage.ts).
+  let restErrorTarget = tiles.errorTarget
+  let eyeMarginRadians = 0
   const viewError = boundSurfaceViewError(tiles, {
     coverageLevel: (x, y, level) => grids.coverageLevel(x, y, level),
     hasCoverageEnds: () => grids.coverageEnd.size > 0,
     maxSourceLevel: GRID_LEVEL_STEP * Math.floor(MAPTERHORN_MAX_ZOOM / GRID_LEVEL_STEP),
     scale: () => terrainScaleUniform.value,
+    eyeErrorScale: () => tiles.errorTarget / restErrorTarget,
+    eyeMarginRadians: () => eyeMarginRadians,
   })
   applySurfaceFrame(tiles.group)
   tiles.group.renderOrder = SURFACE_RENDER_ORDER
@@ -217,6 +239,7 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     data.coverageEnds = grids.coverageEnd.size
     data.nearViews = viewError.near
     data.cappedViews = viewError.capped
+    data.underEyeViews = viewError.underEye
     data.maxViewError = viewError.maxError
     data.imageryFallbacks = overlay.fallbacks
     data.errorTarget = tiles.errorTarget
@@ -232,6 +255,16 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     budget,
     bounds,
     viewError,
+    setErrorTarget(target, rest, eyeMargin = 0) {
+      tiles.errorTarget = target
+      restErrorTarget = rest > 0 ? rest : target
+      eyeMarginRadians = eyeMargin > 0 ? eyeMargin / SURFACE_ELLIPSOID_RADIUS : 0
+    },
+    setViewSize(camera, width, height) {
+      const detail = surfaceDetail(width, height)
+      tiles.setResolution(camera, detail.width, detail.height)
+      cacheMarks.set(detail.cache)
+    },
     syncCounters,
     // tiles.dispose() unregisters the terrain plugin, which releases every
     // loaded tile's grid and overlay texture; in-flight parses release theirs
@@ -244,6 +277,7 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     // and grids waiting their turn reject as aborted, which the plugin takes
     // as a cancelled load.
     dispose() {
+      cacheMarks.dispose()
       stopRetry()
       grids.shutDown()
       budget.dispose()
