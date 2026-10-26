@@ -373,7 +373,9 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       look.up.copy(dir)
       look.lookAt(state.position.clone().add(fwd))
       state.orientation.copy(look.quaternion)
-      const input: ShipInput = { ...still, throttle: 0.02 }
+      // Half throttle: the floor follows the gap here (tides-zmw.9.18), so the
+      // gap e-folds every ~1.4 s on the way down.
+      const input: ShipInput = { ...still, throttle: 0.5 }
       let lowest = Infinity
       for (let k = 0; k < 2400; k++) {
         setTerrainEye(radius(earth, state) - EARTH_RADIUS, true)

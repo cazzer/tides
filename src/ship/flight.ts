@@ -21,7 +21,10 @@
 //     than seconds. One continuous regime, no mode switch. The floor is
 //     V_NORMAL, or the minSpeed of the body setting d_eff (speedFloor): a
 //     body the ship can fly down to its ground (Earth) keeps its well
-//     slowing the ship below V_NORMAL all the way down.
+//     slowing the ship below V_NORMAL all the way down. Over the streamed
+//     tiles Earth's floor follows the gap instead (groundSpeed,
+//     speedFloorAt: tides-zmw.9.18), so the speed stays true to scale down
+//     to the 30 m stop.
 //   • With Flight Assist on the velocity "rides" the cap: after each step it
 //     is scaled by how much the cap changed over it, so speed / cap tracks
 //     the throttle in steady flight however fast the cap is moving (turning
@@ -110,10 +113,39 @@ export interface Body {
    */
   minSpeed?: number
   /**
+   * A speed floor that follows the gap to this body's ground, in place of
+   * minSpeed while it sets d_eff (speedFloorAt; Earth over the streamed
+   * tiles, tides-zmw.9.18): the cap stays true to scale down to the ground.
+   * minSpeed stays the least it can be, for what reads the body's floor as
+   * one number (approach.ts canCrash, ahead).
+   */
+  groundSpeed?: GroundSpeedLaw
+  /**
    * Mass in kg; sets the size of the body's gravity well (wellFactor).
    * Missing, non-positive or non-finite reads as the smallest well.
    */
   mass?: number
+}
+
+/**
+ * A speed floor `rate` · gap (1/s), never under `min` nor over `max`
+ * (scene units/s): flying at a share of it, the gap to the ground e-folds
+ * every 1 / (rate · share) seconds, whatever the height.
+ */
+export interface GroundSpeedLaw {
+  rate: number
+  min: number
+  max: number
+}
+
+/**
+ * The cap's floor while `body` sets d_eff `gap` over its surface: its
+ * groundSpeed law at that gap where it has one, else speedFloor.
+ */
+export function speedFloorAt(body: Body, gap: number): number {
+  const law = body.groundSpeed
+  if (!law) return speedFloor(body)
+  return Number.isFinite(gap) ? clamp(law.rate * gap, law.min, law.max) : law.max
 }
 
 /**
@@ -157,7 +189,9 @@ export interface FlightEnv {
 // covering seconds of flight in one jump. A step moves at most OVERSPEED_MAX ·
 // K_WELL · MAX_DT = 0.15 of the mass-weighted gap (wellFactor ≥ 1, so at most
 // 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor (0.006
-// at Earth's ground speed), so it cannot tunnel.
+// at Earth's ground speed; over the tiles, OVERSPEED_MAX · rate · MAX_DT =
+// 0.6 of the gap under a groundSpeed law), and the collision clamps a step to
+// the floor, so it cannot tunnel.
 export const MAX_DT = 0.1
 
 // Hard-sphere radius as a multiple of the body radius, for a body without its
@@ -212,6 +246,13 @@ export const VELOCITY_TAU_WELL = 2
 // target locked the ride isn't limited (rideWell), so this only applies
 // unlocked.
 export const WELL_BRAKE = 0.25
+
+// Fastest the velocity rides a rising cap up while a body with a groundSpeed
+// law sets it, 1/s: flying off a cliff the gap, and with it the cap, can
+// jump tenfold in a frame, which would throw the ship forward as hard.
+// Above the law's own rate (a steady climb's), so it never slows one.
+// [TUNE] (tides-zmw.9.18)
+export const RIDE_UP_RATE = 3
 
 // Hard ceiling on speed as a multiple of the cap, applied before and after
 // the move. [TUNE] Bounds overshoot and, with K_WELL · MAX_DT, the step size.
@@ -326,10 +367,12 @@ interface Proximity {
   targetGap: number
   /** min over bodies of max(0, gap) / wellFactor; Infinity with no bodies. */
   wellDistance: number
-  /** The body that sets wellDistance (d_eff), its wellFactor and speedFloor. */
+  /** The body that sets wellDistance (d_eff), its wellFactor and speedFloor (speedFloorAt its gap). */
   wellKey: string | null
   wellBodyFactor: number
   wellFloor: number
+  /** Whether that body has a groundSpeed law (RIDE_UP_RATE). */
+  wellGround: boolean
 }
 
 const proximity: Proximity = {
@@ -341,6 +384,7 @@ const proximity: Proximity = {
   wellKey: null,
   wellBodyFactor: 1,
   wellFloor: V_NORMAL,
+  wellGround: false,
 }
 
 const outward = new THREE.Vector3()
@@ -367,6 +411,7 @@ function measure(
   proximity.wellKey = null
   proximity.wellBodyFactor = 1
   proximity.wellFloor = V_NORMAL
+  proximity.wellGround = false
   for (const body of bodies) {
     const gap = surfaceGap(position, body)
     // A NaN gap never wins the nearest or well comparisons, so it can't
@@ -381,7 +426,8 @@ function measure(
       proximity.wellDistance = well
       proximity.wellKey = body.key
       proximity.wellBodyFactor = factor
-      proximity.wellFloor = speedFloor(body)
+      proximity.wellFloor = speedFloorAt(body, gap)
+      proximity.wellGround = body.groundSpeed !== undefined
     }
     if (targetKey != null && body.key === targetKey) {
       proximity.target = body
@@ -572,7 +618,7 @@ function translate(
   if (distance === 0) return
   toTarget.divideScalar(distance)
   const closing = v.dot(toTarget)
-  const limit = approachCap(targetGap, wellTime(target), dt, speedFloor(target))
+  const limit = approachCap(targetGap, wellTime(target), dt, speedFloorAt(target, targetGap))
   if (closing > limit) v.addScaledVector(toTarget, limit - closing)
 }
 
@@ -584,18 +630,20 @@ function translate(
 // throttle (tides-2hv.4). Unlocked, riding down is rate-limited to
 // WELL_BRAKE, which is where overshoot comes from; locked, it follows the cap
 // all the way, so no well (the target's or one on the way) is overshot. FA
-// off doesn't ride: the pilot owns the speed.
+// off doesn't ride: the pilot owns the speed. Under a groundSpeed law the
+// ride up is limited to RIDE_UP_RATE (`limitUp`).
 function rideWell(
   state: ShipState,
   input: Readonly<ShipInput>,
   dt: number,
   capBefore: number,
   capAfter: number,
-  locked: boolean
+  locked: boolean,
+  limitUp: boolean
 ): void {
   const v = state.velocity
   if (input.flightAssist) {
-    const ratio = capAfter / capBefore
+    const ratio = limitUp ? Math.min(capAfter / capBefore, Math.exp(RIDE_UP_RATE * dt)) : capAfter / capBefore
     v.multiplyScalar(locked ? ratio : Math.max(ratio, Math.exp(-WELL_BRAKE * dt)))
   }
   v.clampLength(0, OVERSPEED_MAX * capAfter)
@@ -640,6 +688,11 @@ function fillTelemetry(
   out.flightAssist = input.flightAssist
   out.velocity.copy(state.velocity)
   out.colliding = colliding
+  // The carry (frame-carry.ts fillAir) overwrites these after the step.
+  out.air.speed = out.speed
+  out.air.coupling = 0
+  out.air.density = 0
+  out.air.dynamicPressure = 0
 
   out.nearest.key = nearest ? nearest.key : null
   out.nearest.surfaceDistance = nearestGap
@@ -702,7 +755,7 @@ export function stepShip(
   // now is.
   const there = measure(state.position, env.bodies, env.targetKey)
   const capAfter = wellCap(there)
-  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null)
+  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, there.wellGround)
   if (telemetry) fillTelemetry(telemetry, state, input, there, capAfter, colliding)
   return state
 }

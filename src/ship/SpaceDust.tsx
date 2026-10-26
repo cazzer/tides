@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { shipTelemetry } from './ship-telemetry'
 import { prefersReducedMotion } from './reduced-motion'
+import { shipCarry } from './frame-carry'
 import {
   EDGE_FADE,
   NEAR_FADE,
   REDUCED_MOTION_OPACITY,
   STREAK_ENERGY_FLOOR,
+  dustAnchor,
   dustLevel,
   layerHalfSize,
   motionOpacity,
@@ -37,6 +39,7 @@ function glsl(x: number): string {
 const DUST_RENDER_ORDER = 10
 
 const viewport = new THREE.Vector4()
+const anchor = new THREE.Vector3()
 
 // Each mote is a capsule quad built in screen space from its head (where it
 // is) to its tail (where it was a shutter-time ago), so the CPU sets only
@@ -218,7 +221,7 @@ export function SpaceDust() {
         renderer.getCurrentViewport(viewport)
         const ratio = renderer.getPixelRatio()
         uniforms.uResolution.value.set(viewport.z / ratio, viewport.w / ratio)
-        const p = camera.position
+        const p = dustAnchor(camera.position, shipCarry.carried, anchor)
         uniforms.uHalf.value = half
         uniforms.uOffset.value.set(wrapOffset(p.x, half), wrapOffset(p.y, half), wrapOffset(p.z, half))
         const length = streakLength(speed, level, half)

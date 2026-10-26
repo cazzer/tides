@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useStore } from '../store'
-import { createShipBodies, updateShipBodies } from './ship-bodies'
+import { createShipBodies, updateShipBodies, updateShipBody } from './ship-bodies'
+import { SURFACE_TILES_ON } from '../surface'
 import { createShipRanges, measureRanges, trueBodies, type TrueBodies } from './ship-distances'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
 import { resetShipApproach, updateApproach } from './approach'
@@ -59,6 +60,8 @@ export function ShipTargeting() {
   // surface, under every overlay. Taps that land on an overlay never reach it.
   const surface = useThree((s) => s.events.connected) as HTMLElement | undefined
   const bodies = useMemo(() => createShipBodies(), [])
+  const earth = useMemo(() => bodies.find((b) => b.key === 'earth'), [bodies])
+  const moon = useMemo(() => bodies.find((b) => b.key === 'moon'), [bodies])
   const screen = useMemo(() => bodies.map(() => createScreenBody()), [bodies])
   const ranges = useMemo(() => createShipRanges(bodies.length), [bodies])
   const placement = useMemo(() => createMarkerPlacement(), [])
@@ -72,6 +75,11 @@ export function ShipTargeting() {
     if (bodiesAt.current == null || Math.abs(t - bodiesAt.current) >= BODY_REFRESH_MS) {
       updateShipBodies(bodies, t)
       bodiesAt.current = t
+    } else if (SURFACE_TILES_ON) {
+      // As ShipController: 30 m up, a quarter second of Earth's orbit and
+      // spin is ~100 m of approach gap (tides-zmw.9.18).
+      if (earth) updateShipBody(earth, t)
+      if (moon) updateShipBody(moon, t)
     }
     if (
       truth.current == null ||
