@@ -48,7 +48,7 @@ import { fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
 import type { GlobeLink } from './surface-link'
 import { TILE_FEATURES } from './tile-features'
 import { createTileComposer, createTileMaterialPlugin, type TileComposer } from './tile-material'
-import { createTileUploadPlugin } from './tile-upload'
+import { createTileUploadPlugin, trackUploads } from './tile-upload'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { createSurfaceQueues } from './surface-queues'
@@ -157,6 +157,9 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   })
   const decoder = createTerrariumDecoder({ createWorker: createDecodeWorker, inThread: decodeTerrariumImage })
   const budget = new FrameBudget()
+  // Every upload goes through one tracker, so a tile's queued upload knows
+  // what is already sent (tile-upload.ts).
+  const tracked = upload ? trackUploads(upload) : null
   const grids = installSurfaceGridCache(terrain, {
     // Nearest is core WebGL2 at full precision, and three warns about (and
     // the GPU refuses) linear float filtering without the extension. Its
@@ -166,7 +169,7 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
     bake: decoder.bake,
     canBake: () => decoder.bakes,
     budget,
-    upload,
+    upload: tracked?.upload,
   })
 
   const tiles = new TilesRenderer()
@@ -204,7 +207,7 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   tiles.registerPlugin(createTileMaterialPlugin(composer))
   // Then its textures queued for upload when the budget has time and bytes
   // to spare, ahead of a crowded first draw; the tile doesn't wait (tile-upload.ts).
-  if (upload) tiles.registerPlugin(createTileUploadPlugin(budget, upload))
+  if (tracked) tiles.registerPlugin(createTileUploadPlugin(budget, tracked))
   tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
   // The bounding regions on the live scale, stepwise (surface-scale.ts).
   const bounds = fitSurfaceBounds(tiles, terrain, () => terrainScaleUniform.value)

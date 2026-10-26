@@ -19,7 +19,9 @@
 // posted behind a run of bakes waited for all of them (bakes outnumber
 // decodes two to one). A worker now holds at most one bake at a time; the
 // rest wait here and go out as bakes finish, so a decode waits behind one
-// bake at most.
+// bake at most. A cancelled bake holds its worker until the worker replies
+// (it can't stop a bake once started), so cancels in a burst don't stack
+// bakes on a worker.
 import type { HorizonJob, PaddedGrid } from './terrarium'
 
 export type DecodeRequest =
@@ -39,6 +41,8 @@ export type DecodeReply =
   | { type: 'done'; id: number; grid: PaddedGrid }
   | { type: 'baked'; id: number; baked: BakedHorizon }
   | { type: 'error'; id: number; message: string; name?: string }
+  /** A cancelled job's end (its result dropped): every job posted gets exactly one reply. */
+  | { type: 'cancelled'; id: number }
 
 
 /** The part of Worker the client uses. */
@@ -90,8 +94,10 @@ const disposedError = () => new DOMException('terrain decoder disposed', 'AbortE
 interface Slot {
   worker: DecodeWorker
   jobs: Map<number, Job>
-  /** Bakes posted and not yet answered (at most one). */
+  /** Bakes posted and not yet answered (at most one), cancelled ones included. */
   bakes: number
+  /** Bakes cancelled here whose reply the worker hasn't sent yet (each still holds its worker). */
+  cancelledBakes: Set<number>
 }
 
 /** Two workers: decodes overlap with downloads without crowding the page's cores. */
@@ -154,16 +160,20 @@ export function createTerrariumDecoder({
     try {
       const worker = createWorker()
       if (!worker) return null
-      const slot: Slot = { worker, jobs: new Map(), bakes: 0 }
+      const slot: Slot = { worker, jobs: new Map(), bakes: 0, cancelledBakes: new Set() }
       worker.addEventListener('message', ({ data }) => {
         const job = slot.jobs.get(data.id)
-        // Cancelled: the reply (and its buffer) is dropped.
-        if (!job) return
+        // Cancelled: the reply (and its buffer) is dropped; a bake's frees its worker.
+        if (!job) {
+          if (slot.cancelledBakes.delete(data.id)) bakeDone(slot)
+          return
+        }
         slot.jobs.delete(data.id)
         detach(job)
         if (data.type === 'done') job.resolve(data.grid)
         else if (data.type === 'baked') job.resolve(data.baked)
-        else job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
+        else if (data.type === 'error') job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
+        else job.reject(new DOMException('terrain decode cancelled', 'AbortError'))
         if (job.bake) bakeDone(slot)
       })
       worker.addEventListener('error', fallBack)
@@ -215,8 +225,9 @@ export function createTerrariumDecoder({
     const onAbort = () => {
       if (!slot.jobs.delete(id)) return
       slot.worker.postMessage({ type: 'cancel', id })
+      // the worker still answers it: the bake keeps its worker till then
+      if (bake) slot.cancelledBakes.add(id)
       reject(signal.reason)
-      if (bake) bakeDone(slot)
     }
     slot.jobs.set(id, { inThread: fallback, signal, onAbort, resolve, reject, bake })
     if (bake) slot.bakes++

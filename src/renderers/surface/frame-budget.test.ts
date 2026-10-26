@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BAKE_MAX_WAIT_MS, FRAME_BUDGET_MS, FrameBudget, UPLOAD_BYTES_PER_FRAME, UPLOAD_MAX_FRAME_MS, UPLOAD_MAX_PENDING } from './frame-budget'
+import { BAKE_MAX_WAIT_MS, FRAME_BUDGET_MS, FrameBudget, UPLOAD_BYTES_PER_FRAME, UPLOAD_FRAME_WINDOW, UPLOAD_MAX_FRAME_MS, UPLOAD_MAX_PENDING } from './frame-budget'
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
@@ -73,52 +73,63 @@ describe('FrameBudget (tides-zmw.9.2, by time since tides-zmw.9.25)', () => {
     const clock = fakeClock()
     const budget = new FrameBudget(4, clock.read)
     const done: string[] = []
-    budget.run(() => ((clock.now += 1), done.push('u0'), 1), undefined, 'upload')
+    const upload = (name: string, ms: number) => budget.run(() => ((clock.now += ms), done.push(name)), undefined, 'upload', () => 1)
+    upload('u0', 1)
     budget.run(() => ((clock.now += 5), done.push('g0')))
     budget.run(() => ((clock.now += 1), done.push('b0')), undefined, 'bake')
     // the grid spends the frame: no bake, no upload
     budget.tick()
     expect(done).toEqual(['g0'])
+    clock.now += 10
     budget.tick()
     expect(done).toEqual(['g0', 'b0', 'u0'])
     // an upload alone costing more than the frame still runs (time was left when it started)
-    budget.run(() => ((clock.now += 10), done.push('u1'), 1), undefined, 'upload')
-    budget.run(() => ((clock.now += 1), done.push('u2'), 1), undefined, 'upload')
+    upload('u1', 10)
+    upload('u2', 1)
+    clock.now += 5
     budget.tick()
     expect(done.slice(3)).toEqual(['u1'])
   })
 
-  it('lets at most UPLOAD_BYTES_PER_FRAME of uploads through a frame, counting what each says it sent', () => {
+  it('sizes each upload just before its turn, the frame taking UPLOAD_BYTES_PER_FRAME at most', () => {
     expect(UPLOAD_BYTES_PER_FRAME).toBe(2 * 1024 * 1024)
     const budget = new FrameBudget(Infinity)
     const done: number[] = []
     const MB = 1024 * 1024
-    budget.run(() => (done.push(0), 0), undefined, 'upload') // skipped: sent nothing
-    for (let i = 1; i <= 4; i++) budget.run(() => (done.push(i), 1.2 * MB), undefined, 'upload')
+    const sizes = [0, 1.2 * MB, 0.7 * MB, 0.5 * MB, 1.2 * MB]
+    sizes.forEach((size, i) => budget.run(() => done.push(i), undefined, 'upload', () => size))
     budget.tick()
-    // 0 + 1.2 MB < 2 MB, then 2.4 MB: the frame's bytes are spent
+    // 0, then 1.2 MB, then 1.9 MB; 2.4 MB would pass the cap
     expect(done).toEqual([0, 1, 2])
     budget.tick()
+    // the first of a frame goes whatever its size
     expect(done).toEqual([0, 1, 2, 3, 4])
-    expect(budget.stats.uploadBytes).toBeCloseTo(4 * 1.2 * MB)
+    expect(budget.stats.uploadBytes).toBeCloseTo(3.6 * MB)
   })
 
-  it('runs no uploads in a tick after a frame longer than UPLOAD_MAX_FRAME_MS (a GPU-bound frame)', () => {
+  it('runs no uploads while any of the last frames was longer than UPLOAD_MAX_FRAME_MS (GPU-bound)', () => {
+    expect(UPLOAD_MAX_FRAME_MS).toBeLessThan(33)
     const clock = fakeClock()
     const budget = new FrameBudget(4, clock.read)
-    const done: string[] = []
-    const upload = (name: string) => budget.run(() => (done.push(name), 1), undefined, 'upload')
-    upload('u0')
-    budget.tick() // the first tick: no frame to judge
-    expect(done).toEqual(['u0'])
-    upload('u1')
-    clock.now += UPLOAD_MAX_FRAME_MS + 20
-    budget.tick()
-    expect(done).toEqual(['u0'])
-    expect(budget.stats.slowFrames).toBe(1)
-    clock.now += 16
-    budget.tick()
-    expect(done).toEqual(['u0', 'u1'])
+    const done: number[] = []
+    let n = 0
+    const frame = (ms: number) => {
+      const i = n++
+      budget.run(() => done.push(i), undefined, 'upload', () => 1)
+      clock.now += ms
+      budget.tick()
+    }
+    frame(16) // the first tick: no frame to judge
+    frame(16)
+    expect(done).toEqual([0, 1])
+    // a GPU-bound 30 fps, jittering either side of 33 ms: no frame uploads
+    for (const ms of [30, 36, 31, 35, 30, 36]) frame(ms)
+    expect(done).toEqual([0, 1])
+    expect(budget.stats.slowFrames).toBe(6)
+    // fast again: uploads resume once the window holds no slow frame
+    for (let i = 0; i < UPLOAD_FRAME_WINDOW; i++) frame(16)
+    expect(done.length).toBeGreaterThan(2)
+    expect(done).toContain(n - 1)
   })
 
   it('drops the oldest upload past UPLOAD_MAX_PENDING', async () => {

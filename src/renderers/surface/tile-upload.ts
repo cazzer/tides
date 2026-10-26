@@ -12,9 +12,9 @@
 // and its parse slot frees as before), and the upload waits in the budget's
 // last lane (after grids and bakes, only with time left, at most
 // UPLOAD_BYTES_PER_FRAME a frame, frame-budget.ts). A tile its draw got to
-// first (visible), or that isn't wanted (not used by the last traversal), or
-// that is no longer this load's (evicted, maybe loaded again since) uploads
-// nothing: its draw, if it ever comes, does what's left.
+// first (visible), or that isn't wanted (not used by the last traversal)
+// uploads nothing: its draw, if it ever comes, does what's left. An evicted
+// tile's job is dropped at once (disposeTile), letting its model go.
 import type * as THREE from 'three'
 import type { FrameBudget } from './frame-budget'
 
@@ -40,7 +40,7 @@ function tileTextures(scene: THREE.Object3D): THREE.Texture[] {
   return textures
 }
 
-/** What uploading the texture would send, at most (it may already be up to date). */
+/** What uploading the texture sends in full. */
 export function textureBytes(texture: THREE.Texture): number {
   const image = texture.image as { data?: ArrayBufferView; width?: number; height?: number } | null
   if (!image) return 0
@@ -48,35 +48,73 @@ export function textureBytes(texture: THREE.Texture): number {
   return (image.width ?? 0) * (image.height ?? 0) * 4
 }
 
+/** An upload function that remembers which texture data it has sent (by three's Source and its version). */
+export interface TrackedUpload {
+  upload: (texture: THREE.Texture) => void
+  /** Whether the texture's data is as it was when this last uploaded it (else, or never: false). */
+  isCurrent: (texture: THREE.Texture) => boolean
+}
+
+/**
+ * Wraps `upload` to remember each Source's version as it sends it: a clone
+ * shares its grid's Source, so a tile whose grid was uploaded and not
+ * stitched since has nothing to send. Uploads three makes at a draw aren't
+ * seen (such a texture counts as not current: at most a no-op upload).
+ */
+export function trackUploads(upload: (texture: THREE.Texture) => void): TrackedUpload {
+  const sent = new WeakMap<object, number>()
+  return {
+    upload(texture) {
+      upload(texture)
+      sent.set(texture.source, texture.source.version)
+    },
+    isCurrent: (texture) => sent.get(texture.source) === texture.source.version,
+  }
+}
+
 /**
  * A 3d-tiles-renderer plugin: each loaded tile's textures are queued as an
  * upload job in the budget's upload lane; processTileModel doesn't wait.
  */
-export function createTileUploadPlugin(budget: Pick<FrameBudget, 'run'>, upload: (texture: THREE.Texture) => void) {
+export function createTileUploadPlugin(budget: Pick<FrameBudget, 'run'>, { upload, isCurrent }: TrackedUpload) {
   let tiles: TilesLike | null = null
+  const jobs = new WeakMap<object, AbortController>()
+  const drop = (tile: object) => {
+    jobs.get(tile)?.abort(new DOMException('tile gone', 'AbortError'))
+    jobs.delete(tile)
+  }
   return {
     name: 'SURFACE_TILE_UPLOAD',
     init(renderer: TilesLike) {
       tiles = renderer
     },
     processTileModel(scene: THREE.Object3D, tile: TileLike): void {
+      drop(tile)
+      const job = new AbortController()
+      jobs.set(tile, job)
+      // what is left to send, or nothing: not this load's model any more,
+      // drawn already, or not wanted (the traversal read is last frame's:
+      // the budget ticks before this frame's update)
+      const pending = (): THREE.Texture[] => {
+        const wanted = !!tile?.traversal?.used && tile.traversal.lastFrameVisited === tiles?.frameCount
+        if (tile?.engineData?.scene !== scene || !wanted || tiles?.visibleTiles.has(tile)) return []
+        return tileTextures(scene).filter((texture) => !isCurrent(texture))
+      }
       budget
         .run(
           () => {
-            // this load's model, used by the last traversal and not drawn yet
-            const wanted = !!tile?.traversal?.used && tile.traversal.lastFrameVisited === tiles?.frameCount
-            if (tile?.engineData?.scene !== scene || !wanted || tiles?.visibleTiles.has(tile)) return 0
-            let bytes = 0
-            for (const texture of tileTextures(scene)) {
-              bytes += textureBytes(texture)
-              upload(texture)
-            }
-            return bytes
+            for (const texture of pending()) upload(texture)
+            if (jobs.get(tile) === job) jobs.delete(tile)
           },
-          undefined,
-          'upload'
+          job.signal,
+          'upload',
+          () => pending().reduce((bytes, texture) => bytes + textureBytes(texture), 0)
         )
         .catch(() => {})
+    },
+    /** Called by the library as a tile's content is dropped (eviction): its job goes too. */
+    disposeTile(tile: object) {
+      drop(tile)
     },
   }
 }

@@ -195,6 +195,38 @@ describe('horizon bakes in the decode workers (tides-zmw.9.15)', () => {
     await expect(bakes[3]).rejects.toMatchObject({ name: 'AbortError' })
   })
 
+  it('keeps a cancelled bake on its worker until the worker answers it (tides-zmw.9.25)', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const abort = new AbortController()
+    const sent = decoder.bake(job(), grid(1), abort.signal)
+    const next = decoder.bake(job(), grid(1), new AbortController().signal)
+    const bakeIds = () => worker.posted.filter((m) => m.type === 'bake').map((m) => m.id)
+    expect(bakeIds()).toHaveLength(1)
+    abort.abort(new DOMException('gone', 'AbortError'))
+    await expect(sent).rejects.toMatchObject({ name: 'AbortError' })
+    const id = bakeIds()[0]
+    expect(worker.posted[worker.posted.length - 1]).toEqual({ type: 'cancel', id })
+    // the worker is still baking it: the next bake waits
+    expect(bakeIds()).toHaveLength(1)
+    // its answer (the bake, or the worker's 'cancelled') frees the worker
+    worker.reply({ type: 'cancelled', id })
+    expect(bakeIds()).toHaveLength(2)
+    worker.reply({ type: 'baked', id: bakeIds()[1], baked: { horizon: null, ms: 1 } })
+    expect(await next).toEqual({ horizon: null, ms: 1 })
+    // a late full reply for a cancelled bake frees it the same way
+    const abort2 = new AbortController()
+    const third = decoder.bake(job(), grid(1), abort2.signal)
+    const fourth = decoder.bake(job(), grid(1), new AbortController().signal)
+    abort2.abort(new DOMException('gone', 'AbortError'))
+    await expect(third).rejects.toMatchObject({ name: 'AbortError' })
+    expect(bakeIds()).toHaveLength(3)
+    worker.reply({ type: 'baked', id: bakeIds()[2], baked: { horizon: null, ms: 1 } })
+    expect(bakeIds()).toHaveLength(4)
+    fourth.catch(() => {})
+    decoder.dispose()
+  })
+
   it('answers waiting bakes as a dead worker does when a worker dies', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const worker = new FakeWorker()
