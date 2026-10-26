@@ -8,6 +8,7 @@ import { getShipTarget, shipTelemetry } from './ship-telemetry'
 import { createShipBodies, EARTH_SHELL_RADII, updateShipBodies, updateShipBody } from './ship-bodies'
 import {
   SHIP_SETTLE_PRIORITY,
+  fineGroundDepth,
   shellGap,
   shipFar,
   shipNear,
@@ -18,6 +19,7 @@ import {
 import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail'
 import { setTerrainEye } from '../terrain-scale'
 import { reversedFloatDepth } from '../renderers/depth-precision'
+import { SURFACE_TILES_ON } from '../surface'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -67,7 +69,7 @@ export function ShipController() {
     const state = ship.current
     setTerrainEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
     // Read each frame: the depth probe may answer after the first ones.
-    earth?.floor?.beginFrame(reversedFloatDepth(gl))
+    earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
     earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
@@ -90,12 +92,16 @@ export function ShipController() {
     // Earth's shells stand off its ground, so the ground's gap alone would let
     // the near plane cut them on the way down through them.
     const nearest = shipTelemetry.nearest
+    // Over the tiles, the gap across the near rectangle's reach; without
+    // them, the gap under the ship, as before tides-zmw.9.8.
     const groundGap =
-      earth?.floor && nearest.key === earth.key ? earth.floor.nearGap(state.position) : nearest.surfaceDistance
+      SURFACE_TILES_ON && earth?.floor && nearest.key === earth.key
+        ? earth.floor.nearGap(state.position)
+        : nearest.surfaceDistance
     const near = shipNear(
       groundGap,
       earth ? shellGap(state.position.distanceTo(earth.position), EARTH_SHELL_RADII) : Infinity,
-      shipNearFloor(reversedFloatDepth(gl))
+      shipNearFloor(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     )
     // The Sun sits at the origin.
     const far = shipFar(state.position.length())

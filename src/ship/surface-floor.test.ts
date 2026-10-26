@@ -8,7 +8,7 @@ import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
 import { latLonToLocal } from '../aurora'
 import { earthLatLon, setSurfaceGroundSampler, type SurfaceGroundSampler } from '../surface-ground'
-import { setTerrainEye, surfaceOpacityUniform, terrainScaleUniform } from '../terrain-scale'
+import { liveTerrainDisplacement, setTerrainEye, surfaceOpacityUniform, terrainScaleUniform } from '../terrain-scale'
 import { collisionRadius, createShipState, floorRadius, settleShip, stepShip, type ShipState } from './flight'
 import type { ShipInput } from './ship-input'
 import {
@@ -29,8 +29,8 @@ import {
   updateShipBody,
   type ShipBody,
 } from './ship-bodies'
-import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_MIN_REVERSED, NEAR_SHARE, SHIP_FOV, shipNear } from './ship-session'
-import { EARTH_BASE_SEGMENTS, TERRAIN_MAP_SIZE, buildTerrainFloor, setEarthTerrain } from './terrain-floor'
+import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_MIN_REVERSED, NEAR_SHARE, SHIP_FOV, fineGroundDepth, shipNear, shipNearFloor } from './ship-session'
+import { EARTH_BASE_SEGMENTS, TERRAIN_MAP_SIZE, buildTerrainFloor, earthTerrain, setEarthTerrain, terrainFloorGreyAround } from './terrain-floor'
 
 const T = Date.UTC(2026, 9, 22, 12)
 const M = EARTH_UNITS_PER_METRE
@@ -77,7 +77,7 @@ const toWorld = (local: THREE.Vector3) => local.clone().applyQuaternion(frame.qu
 const toLocal = (world: THREE.Vector3) => world.clone().applyQuaternion(frame.quaternion.clone().invert())
 
 function earthBody(): ShipBody {
-  const bodies = createShipBodies('high')
+  const bodies = createShipBodies('high', true)
   updateShipBodies(bodies, T)
   return bodies.find((b) => b.key === 'earth')!
 }
@@ -389,4 +389,44 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       expect(terrainScaleUniform.value).toBeLessThan(1.1)
     }
   )
+})
+
+describe("Earth's stop without the surface tiles (production until tides-zmw.9.10)", () => {
+  afterEach(() => setEarthTerrain(null))
+
+  it("keeps the globe's stop, window and near plane as before tides-zmw.9.8, whatever the depth buffer", () => {
+    const [width, height] = TERRAIN_MAP_SIZE
+    const data = new Float32Array(width * height).map((_, i) => (i * 7919) % 255)
+    setEarthTerrain(buildTerrainFloor({ width, height, data }, EARTH_BASE_SEGMENTS))
+    const bodies = createShipBodies('high', false)
+    updateShipBodies(bodies, T)
+    const earth = bodies.find((b) => b.key === 'earth')!
+    // Even with a sampler registered (it never is without the tiles) and a float depth buffer.
+    setSurfaceGroundSampler(new ConeField(9000))
+    surfaceOpacityUniform.value = 1
+    try {
+      expect(fineGroundDepth(false, true)).toBe(false)
+      expect(shipNearFloor(fineGroundDepth(false, true))).toBe(NEAR_MIN)
+      earth.floor!.beginFrame(true)
+      expect(collisionRadius(earth)).toBe(EARTH_RADIUS + EARTH_GROUND_CLEARANCE)
+      expect(earth.groundClearance).toBe(EARTH_GROUND_CLEARANCE)
+      setSurfaceGroundSampler(null)
+      // Main's floor: the globe over EARTH_FLOOR_REACH, the stop 0.004 over it, no settling.
+      const dir = toWorld(latLonToLocal(27.99, 86.93))
+      const floor = terrainFloorGreyAround(earthTerrain()!, latLonToLocal(27.99, 86.93), EARTH_FLOOR_REACH / EARTH_RADIUS)
+      const main = EARTH_RADIUS + (liveTerrainDisplacement() * floor) / 255
+      expect(earth.ground!(dir)).toBeCloseTo(main, 12)
+      expect(floorRadius(earth, dir)).toBe(earth.ground!(dir) + EARTH_GROUND_CLEARANCE)
+      const state = shipAt(earth, 27.99, 86.93, 0.01)
+      earth.floor!.mark(state.position)
+      setEarthTerrain(null) // the fallback, 9 km at full relief: no lift taken
+      earth.floor!.settle(1 / 60)
+      earth.floor!.beginFrame(true)
+      expect(earth.floor!.lift).toBe(0)
+      expect(earth.floor!.nearGap(state.position)).toBe(state.position.distanceTo(earth.position) - earth.ground!(dir))
+    } finally {
+      setSurfaceGroundSampler(null)
+      surfaceOpacityUniform.value = 0
+    }
+  })
 })

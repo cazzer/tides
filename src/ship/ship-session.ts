@@ -142,6 +142,17 @@ export const NEAR_CORNER_REACH = Math.sqrt(1 + Math.tan(THREE.MathUtils.degToRad
  */
 export const SHIP_SETTLE_PRIORITY = 0.75
 
+/**
+ * Whether the ship flies the true-scale stop (tides-zmw.9.8): only over the
+ * streamed tiles (`surfaceTiles`, ../surface.ts) and on a reversed-Z float
+ * depth buffer (renderers/depth-precision.ts reversedFloatDepth). Without
+ * the tiles the ship keeps the globe's stop, near plane and floor as they
+ * were, whatever the depth buffer.
+ */
+export function fineGroundDepth(surfaceTiles: boolean, reversedFloatDepth: boolean): boolean {
+  return surfaceTiles && reversedFloatDepth
+}
+
 /** The near plane's floor: NEAR_MIN_REVERSED where `reversedFloatDepth` (depth-precision.ts), else NEAR_MIN. */
 export function shipNearFloor(reversedFloatDepth: boolean): number {
   return reversedFloatDepth ? NEAR_MIN_REVERSED : NEAR_MIN

@@ -171,10 +171,13 @@ describe('ship bodies', () => {
       expect(EARTH_COLLISION_RADIUS / earth.radius).toBeLessThan(1.15)
     })
 
-    it('drops the hard sphere to the bare ground on the high tier, at the hard clearance (tides-01v.8.7, tides-zmw.9.8)', () => {
+    it('drops the hard sphere to the bare ground on the high tier (tides-01v.8.7)', () => {
       const { earth } = byKey()
-      expect(collisionRadius(earth)).toBe(EARTH_RADIUS + EARTH_HARD_CLEARANCE)
-      expect(earth.groundClearance).toBe(EARTH_GROUND_CLEARANCE)
+      expect(collisionRadius(earth)).toBe(EARTH_RADIUS + EARTH_GROUND_CLEARANCE)
+      // Over the streamed tiles, to the hard clearance the floor may settle to (tides-zmw.9.8).
+      const tiled = createShipBodies('high', true).find((b) => b.key === 'earth')!
+      expect(collisionRadius(tiled)).toBe(EARTH_RADIUS + EARTH_HARD_CLEARANCE)
+      expect(tiled.groundClearance).toBe(EARTH_GROUND_CLEARANCE)
       expect(speedFloor(earth)).toBe(EARTH_GROUND_SPEED)
       // Under the cloud base, and far enough up that 0.4 of it stays over
       // shipNear's floor.

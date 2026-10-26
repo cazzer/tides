@@ -20,6 +20,7 @@ import {
   terrainScaleUniform,
 } from '../terrain-scale'
 import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
+import { SURFACE_TILES_ON } from '../surface'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
 import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE, shipNear } from './ship-session'
@@ -122,9 +123,11 @@ export interface EarthClearance {
 }
 
 /** The stop for a depth buffer that is (`fine`) reversed-Z float or not. */
-export function earthClearance(fine: boolean): EarthClearance {
-  const soft = fine ? FINE_GROUND_CLEARANCE : EARTH_GROUND_CLEARANCE
-  return { soft, hard: fine ? FINE_HARD_CLEARANCE : EARTH_HARD_CLEARANCE, reach: floorReach(soft) }
+export function earthClearance(fine: boolean, out: EarthClearance = { soft: 0, hard: 0, reach: 0 }): EarthClearance {
+  out.soft = fine ? FINE_GROUND_CLEARANCE : EARTH_GROUND_CLEARANCE
+  out.hard = fine ? FINE_HARD_CLEARANCE : EARTH_HARD_CLEARANCE
+  out.reach = floorReach(out.soft)
+  return out
 }
 
 /** Metres the floor stands over the highest tile vertex in its window. */
@@ -233,13 +236,16 @@ const DEG = Math.PI / 180
 // into the clearance down to the hard one (snapping beyond it) and lifts
 // the ship over GROUND_RISE_TAU. Ground the ship flies onto (a cliff ahead)
 // clamps at once, as before.
-function attachEarthStop(body: ShipBody, tier: QualityTier): void {
+function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolean): void {
   const toLocal = new THREE.Quaternion()
   const euler = new THREE.Euler()
   const local = new THREE.Vector3()
   const marked = new THREE.Vector3()
   const latLon: [number, number] = [0, 0]
   const low = tier === 'low'
+  // Without the tiles (production until tides-zmw.9.10) the stop is the
+  // globe's as it was: the standard clearance and window, no settling.
+  const fixed = low || !surfaceTiles
   const clearance: EarthClearance = earthClearance(false)
   let lift = 0
   // The ground at `marked` as true height (over the sea, / the live scale),
@@ -282,13 +288,15 @@ function attachEarthStop(body: ShipBody, tier: QualityTier): void {
   }
 
   const apply = () => {
-    if (low) return
+    if (fixed) return
     lift = Math.max(lift, clearance.hard - clearance.soft)
     body.collisionRadius = EARTH_RADIUS + clearance.hard
     body.groundClearance = clearance.soft + Math.min(lift, 0)
   }
 
-  body.collisionRadius = low ? EARTH_COLLISION_RADIUS : EARTH_RADIUS + clearance.hard
+  body.collisionRadius = low
+    ? EARTH_COLLISION_RADIUS
+    : EARTH_RADIUS + (surfaceTiles ? clearance.hard : EARTH_GROUND_CLEARANCE)
   body.groundClearance = EARTH_GROUND_CLEARANCE
   body.minSpeed = low ? undefined : EARTH_GROUND_SPEED
   body.ground = (direction, reach = clearance.reach) => drawn(toEarth(direction), reach) + Math.max(lift, 0)
@@ -306,22 +314,22 @@ function attachEarthStop(body: ShipBody, tier: QualityTier): void {
     },
     clearance,
     beginFrame(fineDepth) {
-      if (low) return
+      if (fixed) return
       // What changed since the last frame's settle (its closing mark): the
       // dissolve's end, the globe's sphere swapping.
       absorb()
-      Object.assign(clearance, earthClearance(fineDepth))
+      earthClearance(fineDepth, clearance)
       apply()
     },
     mark(position) {
-      const at = low ? null : up(position)
+      const at = fixed ? null : up(position)
       markedHeight = NaN
       if (!at || !(earthTerrain() || earthLimbTerrain())) return
       marked.copy(at)
       markedHeight = height(marked)
     },
     settle(dt) {
-      if (low) return
+      if (fixed) return
       const h = Number.isFinite(dt) ? THREE.MathUtils.clamp(dt, 0, MAX_DT) : 0
       if (h > 0) lift *= Math.exp(-h / (lift > 0 ? GROUND_DROP_TAU : GROUND_RISE_TAU))
       absorb()
@@ -332,7 +340,7 @@ function attachEarthStop(body: ShipBody, tier: QualityTier): void {
       const at = up(position)
       if (!at) return 0
       const field = drawn(at, clearance.reach)
-      if (low) return d - field
+      if (fixed) return d - field
       // The near rectangle at NEAR_SHARE of a gap g reaches NEAR_CORNER_REACH
       // · NEAR_SHARE · g from the eye: take the gap over the ground that far
       // round, but never under the clearance, which the floor already keeps
@@ -359,9 +367,10 @@ export const MOON_COLLISION_CLEARANCE = 0.02
 
 /**
  * Sun, Earth, Moon, the seven planets and their major moons, positions unset
- * until updated. `tier` sets Earth's stop (earthStop).
+ * until updated. `tier` sets Earth's stop (attachEarthStop), and
+ * `surfaceTiles` whether it follows the streamed tiles (tides-zmw.9.8).
  */
-export function createShipBodies(tier: QualityTier = qualityTier()): ShipBody[] {
+export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles: boolean = SURFACE_TILES_ON): ShipBody[] {
   const { positionAt } = positionsFor('flight')
   loadEarthTerrain()
   const earth: ShipBody = {
@@ -371,7 +380,7 @@ export function createShipBodies(tier: QualityTier = qualityTier()): ShipBody[] 
     mass: BODY_MASS_KG.earth,
     positionAt: positionAt.earth,
   }
-  attachEarthStop(earth, tier)
+  attachEarthStop(earth, tier, surfaceTiles)
   return [
     {
       key: 'sun',

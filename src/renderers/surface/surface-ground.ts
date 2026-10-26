@@ -19,9 +19,22 @@
 // takes the plugin's heightScale (the page's relief, not the live scale)
 // and rebuilds a tile's vertices per ray.
 //
-// Each vertex's height is max(bilinear, nearest texel) at its uv, so it
-// holds whether the grid is linear- or nearest-filtered (iOS,
-// createSurfaceTiles). Heights are true metres: the caller scales them.
+// Each vertex's height is the GPU's read at its uv: bilinear on a linear-
+// filtered grid, and on a nearest-filtered one (iOS, createSurfaceTiles) the
+// highest of the 2 x 2 texels its uv falls between (a vertex lands on texel
+// boundaries, where the GPU may pick either). Heights are true metres: the
+// caller scales them. A tile's grid can change after it is read: the grid
+// cache stitches a neighbour's edge into its border (GridCache.stitchNeighbors,
+// needsUpdate on the shared source), which the edge vertices read, so a
+// tile's heights are rebuilt when its grid's source version moves.
+//
+// Anticipating finer tiles: a tile above the tree's deepest level will be
+// replaced by children whose finer meshes read the same grid (or a finer
+// one), and stand higher than its own mesh on narrow ridges. For windows up
+// to ANTICIPATE_MAX_M the floor also takes the highest grid texel under the
+// window's cells, which no finer mesh read from that grid can exceed: such
+// a child fading in then no longer pushes the ship up past the clearance's
+// give (a snap), the floor lowering smoothly once it has instead.
 //
 // Which tiles count: those drawn (the group's children: visible, and fading
 // out, which the fade plugin keeps until it ends) and the loaded ones at the
@@ -49,6 +62,15 @@ const EDGE_EPS = 1e-7
 /** Above this many tiles in a window, coverage is checked on a grid of points. */
 const EXACT_COVER_MAX = 16
 const COVER_GRID = 16
+/** The widest window (metres) that also takes the grid's texels under it (see the header). */
+export const ANTICIPATE_MAX_M = 200
+/** The terrain tree's deepest level (createSurfaceTiles: Mapterhorn's z16 grids, a level past them). */
+export const SURFACE_TREE_DEEPEST = 17
+const NEAREST_FILTER = 1003 // THREE.NearestFilter
+
+function wrapPi(a: number): number {
+  return a - TWO_PI * Math.round(a / TWO_PI)
+}
 
 /** A tile mesh's vertex heights and where they stand. */
 export interface TileGround {
@@ -61,6 +83,14 @@ export interface TileGround {
   /** The highest vertex in each BLOCK x BLOCK block of cells, row-major. */
   blocks: Float32Array
   max: number
+  /** The grid, and its source's version when read (stitching bumps it). */
+  image: GridImage
+  version: number
+  /** Each column's and row's texture coordinate into the grid. */
+  colU: Float64Array
+  rowV: Float64Array
+  /** Each cell's highest grid texel, filled as queries need them (NaN until then). */
+  texels: Float32Array
 }
 
 /** The mesh in a tile's scene carrying the elevation grid. */
@@ -103,11 +133,35 @@ export function gridNearest({ data, width, height }: GridImage, tu: number, tv: 
   return data[y * width + x]
 }
 
+/** The highest of the 2 x 2 texels around texture coordinates: any nearest read there, on either side of a boundary. */
+export function gridFootprintMax({ data, width, height }: GridImage, tu: number, tv: number): number {
+  const x0 = Math.min(Math.max(Math.floor(tu * width - 0.5), 0), width - 1)
+  const y0 = Math.min(Math.max(Math.floor(tv * height - 0.5), 0), height - 1)
+  const x1 = Math.min(x0 + 1, width - 1)
+  const y1 = Math.min(y0 + 1, height - 1)
+  return Math.max(data[y0 * width + x0], data[y0 * width + x1], data[y1 * width + x0], data[y1 * width + x1])
+}
+
+/** The highest texel any read between texture coordinates [u0, u1] x [v0, v1] takes. */
+function gridSpanMax({ data, width, height }: GridImage, u0: number, u1: number, v0: number, v1: number): number {
+  const x0 = Math.min(Math.max(Math.floor(Math.min(u0, u1) * width - 0.5), 0), width - 1)
+  const x1 = Math.min(Math.max(Math.floor(Math.max(u0, u1) * width - 0.5) + 1, 0), width - 1)
+  const y0 = Math.min(Math.max(Math.floor(Math.min(v0, v1) * height - 0.5), 0), height - 1)
+  const y1 = Math.min(Math.max(Math.floor(Math.max(v0, v1) * height - 0.5) + 1, 0), height - 1)
+  let top = -Infinity
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) top = Math.max(top, data[y * width + x])
+  return top
+}
+
+const sourceVersion = (map: THREE.Texture) => (map.source as { version?: number } | undefined)?.version ?? map.version
+
 /** A tile scene's ground (see the header), or null when it carries no grid. */
 export function buildTileGround(scene: THREE.Object3D): TileGround | null {
   const mesh = terrainMesh(scene)
   if (!mesh) return null
-  const image = (mesh.material as THREE.MeshStandardMaterial).displacementMap!.image as GridImage
+  const map = (mesh.material as THREE.MeshStandardMaterial).displacementMap!
+  const image = map.image as GridImage
+  const nearest = map.magFilter === NEAREST_FILTER
   const { position, uv } = mesh.geometry.attributes
   if (!position || !uv || position.count < TILE_VERTICES * TILE_VERTICES) return null
   const { x: ox, y: oy, z: oz } = mesh.position
@@ -117,24 +171,30 @@ export function buildTileGround(scene: THREE.Object3D): TileGround | null {
   for (let i = 0; i < count; i++) {
     const tu = uv.getX(i)
     const tv = uv.getY(i)
-    const h = Math.max(gridLinear(image, tu, tv), gridNearest(image, tu, tv))
+    const h = nearest ? gridFootprintMax(image, tu, tv) : gridLinear(image, tu, tv)
     heights[i] = h
-    if (h > max) max = h
+    if (heights[i] > max) max = heights[i]
   }
   const rowLat = new Float64Array(TILE_VERTICES)
   const colLon = new Float64Array(TILE_VERTICES)
+  const colU = new Float64Array(TILE_VERTICES)
+  const rowV = new Float64Array(TILE_VERTICES)
   const mid = SEGMENTS / 2
+  // Longitudes unwrapped around the middle column's, which never sits on
+  // the antimeridian (tiles' edges do: float32 can put an edge at either +pi
+  // or -pi).
+  const midLon = Math.atan2(position.getY(mid * TILE_VERTICES + mid) + oy, position.getX(mid * TILE_VERTICES + mid) + ox)
   for (let k = 0; k < TILE_VERTICES; k++) {
-    // A row shares its latitude, a column its longitude.
+    // A row shares its latitude and v, a column its longitude and u.
     const r = k * TILE_VERTICES + mid
     const x = position.getX(r) + ox
     const y = position.getY(r) + oy
     const z = position.getZ(r) + oz
     rowLat[k] = Math.atan2(z, Math.hypot(x, y))
+    rowV[k] = uv.getY(r)
     const c = mid * TILE_VERTICES + k
-    colLon[k] = Math.atan2(position.getY(c) + oy, position.getX(c) + ox)
-    // Unwrapped across the antimeridian.
-    while (k > 0 && colLon[k] < colLon[k - 1] - Math.PI) colLon[k] += TWO_PI
+    colLon[k] = midLon + wrapPi(Math.atan2(position.getY(c) + oy, position.getX(c) + ox) - midLon)
+    colU[k] = uv.getX(c)
   }
   const blocks = new Float32Array(BLOCKS * BLOCKS)
   for (let bi = 0; bi < BLOCKS; bi++) {
@@ -146,7 +206,14 @@ export function buildTileGround(scene: THREE.Object3D): TileGround | null {
       blocks[bi * BLOCKS + bj] = top
     }
   }
-  return { rowLat, colLon, heights, blocks, max }
+  const texels = new Float32Array(SEGMENTS * SEGMENTS).fill(NaN)
+  return { rowLat, colLon, heights, blocks, max, image, version: sourceVersion(map), colU, rowV, texels }
+}
+
+/** Whether `scene`'s grid has changed since `ground` read it (stitching). */
+function stale(ground: TileGround, scene: THREE.Object3D): boolean {
+  const map = (terrainMesh(scene)?.material as THREE.MeshStandardMaterial | undefined)?.displacementMap
+  return !map || sourceVersion(map) !== ground.version
 }
 
 /** The window a query reads, latitude and (unwrapped) longitude, radians. */
@@ -182,14 +249,24 @@ const _cols: [number, number] = [0, 0]
  * The highest vertex of `ground`'s cells that meet `win`, whose longitudes
  * are `ground`'s plus `shift`; -Infinity when none does.
  */
-export function tileGroundMax(ground: TileGround, win: Window, shift = 0): number {
+export function tileGroundMax(ground: TileGround, win: Window, shift = 0, anticipate = false): number {
   const [r0, r1] = vertexRange(ground.rowLat, 0, win.south, win.north, _rows)
   if (r0 > r1) return -Infinity
   const [c0, c1] = vertexRange(ground.colLon, shift, win.west, win.east, _cols)
   if (c0 > c1) return -Infinity
-  if (r0 === 0 && c0 === 0 && r1 === SEGMENTS && c1 === SEGMENTS) return ground.max
   const { heights, blocks } = ground
   let top = -Infinity
+  if (anticipate) {
+    const { texels, image, colU, rowV } = ground
+    for (let r = r0; r < r1; r++) {
+      for (let c = c0; c < c1; c++) {
+        const k = r * SEGMENTS + c
+        if (Number.isNaN(texels[k])) texels[k] = gridSpanMax(image, colU[c], colU[c + 1], rowV[r], rowV[r + 1])
+        top = Math.max(top, texels[k])
+      }
+    }
+  }
+  if (r0 === 0 && c0 === 0 && r1 === SEGMENTS && c1 === SEGMENTS) return Math.max(top, ground.max)
   for (let bi = Math.floor(r0 / BLOCK); bi < BLOCKS && bi * BLOCK <= r1; bi++) {
     const br0 = Math.max(r0, bi * BLOCK)
     const br1 = Math.min(r1, (bi + 1) * BLOCK)
@@ -231,17 +308,39 @@ export interface SurfaceGround extends SurfaceGroundSampler {
   invalidate(): void
 }
 
-const wrapPi = (a: number) => a - TWO_PI * Math.round(a / TWO_PI)
 
-/** Whether `rects` (each [west, south, east, north]) cover `win` whole. */
-export function coversWindow(win: Window, rects: readonly (readonly [number, number, number, number])[]): boolean {
-  if (rects.length === 0) return false
-  for (const [w, s, e, n] of rects) {
-    if (w - EDGE_EPS <= win.west && e + EDGE_EPS >= win.east && s - EDGE_EPS <= win.south && n + EDGE_EPS >= win.north) return true
+// Scratch for coversWindow's exact pass.
+const xs: number[] = []
+const ys: number[] = []
+
+/**
+ * Whether the first `count` rectangles of `rects` (flat: west, south, east,
+ * north each) cover `win` whole.
+ */
+export function coversWindow(win: Window, rects: ArrayLike<number>, count = rects.length / 4): boolean {
+  if (count === 0) return false
+  for (let k = 0; k < count; k++) {
+    if (
+      rects[4 * k] - EDGE_EPS <= win.west &&
+      rects[4 * k + 2] + EDGE_EPS >= win.east &&
+      rects[4 * k + 1] - EDGE_EPS <= win.south &&
+      rects[4 * k + 3] + EDGE_EPS >= win.north
+    )
+      return true
   }
-  const inside = (x: number, y: number) =>
-    rects.some(([w, s, e, n]) => x >= w - EDGE_EPS && x <= e + EDGE_EPS && y >= s - EDGE_EPS && y <= n + EDGE_EPS)
-  if (rects.length > EXACT_COVER_MAX) {
+  const inside = (x: number, y: number) => {
+    for (let k = 0; k < count; k++) {
+      if (
+        x >= rects[4 * k] - EDGE_EPS &&
+        x <= rects[4 * k + 2] + EDGE_EPS &&
+        y >= rects[4 * k + 1] - EDGE_EPS &&
+        y <= rects[4 * k + 3] + EDGE_EPS
+      )
+        return true
+    }
+    return false
+  }
+  if (count > EXACT_COVER_MAX) {
     for (let i = 0; i <= COVER_GRID; i++) {
       for (let j = 0; j <= COVER_GRID; j++) {
         const x = win.west + ((win.east - win.west) * i) / COVER_GRID
@@ -253,11 +352,13 @@ export function coversWindow(win: Window, rects: readonly (readonly [number, num
   }
   // Exact: every cell of the grid the rectangles' edges cut the window into.
   const clip = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
-  const xs = [win.west, win.east]
-  const ys = [win.south, win.north]
-  for (const [w, s, e, n] of rects) {
-    xs.push(clip(w - EDGE_EPS, win.west, win.east), clip(e + EDGE_EPS, win.west, win.east))
-    ys.push(clip(s - EDGE_EPS, win.south, win.north), clip(n + EDGE_EPS, win.south, win.north))
+  xs.length = 0
+  ys.length = 0
+  xs.push(win.west, win.east)
+  ys.push(win.south, win.north)
+  for (let k = 0; k < count; k++) {
+    xs.push(clip(rects[4 * k] - EDGE_EPS, win.west, win.east), clip(rects[4 * k + 2] + EDGE_EPS, win.west, win.east))
+    ys.push(clip(rects[4 * k + 1] - EDGE_EPS, win.south, win.north), clip(rects[4 * k + 3] + EDGE_EPS, win.south, win.north))
   }
   xs.sort((a, b) => a - b)
   ys.sort((a, b) => a - b)
@@ -278,48 +379,69 @@ function tileRegion(tile: unknown): readonly number[] | null {
   return region && region.length >= 4 ? region : null
 }
 
+export interface SurfaceGroundOptions {
+  /** The tree's deepest level: tiles above it anticipate their children (see the header). */
+  deepest?: number
+}
+
 /**
  * The sampler over `tiles` (see the header). SurfaceTiles registers it
  * (../../surface-ground.ts) and calls invalidate() after every update.
  */
-export function createSurfaceGround(tiles: SurfaceGroundTiles): SurfaceGround {
-  // Tile content never changes once parsed; a reloaded tile is a new scene.
+export function createSurfaceGround(tiles: SurfaceGroundTiles, { deepest = SURFACE_TREE_DEEPEST }: SurfaceGroundOptions = {}): SurfaceGround {
+  // A reloaded tile is a new scene; a stitched grid bumps its version (stale()).
   const grounds = new WeakMap<THREE.Object3D, TileGround | null>()
-  let candidates: Candidate[] | null = null
+  // One frame's candidates, pooled: `count` of them are live.
+  const pool: Candidate[] = []
+  let count = 0
+  let fresh = false
+  const drawnSet = new Set<THREE.Object3D>()
   const hit: Candidate[] = []
-  const shifts: number[] = []
-  const rects: [number, number, number, number][] = []
+  const rects: number[] = []
   const win: Window = { south: 0, north: 0, west: 0, east: 0 }
 
   const groundOf = (scene: THREE.Object3D) => {
     let ground = grounds.get(scene)
-    if (ground === undefined) {
+    if (ground === undefined || (ground && stale(ground, scene))) {
       ground = buildTileGround(scene)
       grounds.set(scene, ground)
     }
     return ground
   }
 
-  const collect = (): Candidate[] => {
-    const drawn = new Set(tiles.group.children)
-    const list: Candidate[] = []
-    tiles.forEachLoadedModel((scene, tile) => {
-      const region = tileRegion(tile)
-      if (!scene || !region) return
-      const [west, south, east, north] = region
-      const span = east - west
-      if (!(span > 0)) return
-      list.push({ scene, drawn: drawn.has(scene), level: Math.round(Math.log2(TWO_PI / span)), west, south, east, north })
-    })
-    return list
+  const add = (scene: THREE.Object3D, tile: unknown) => {
+    const region = tileRegion(tile)
+    if (!scene || !region) return
+    const [west, south, east, north] = region
+    const span = east - west
+    if (!(span > 0)) return
+    const c = (pool[count] ??= { scene, drawn: false, level: 0, west: 0, south: 0, east: 0, north: 0 })
+    count++
+    c.scene = scene
+    c.drawn = drawnSet.has(scene)
+    c.level = Math.round(Math.log2(TWO_PI / span))
+    c.west = west
+    c.south = south
+    c.east = east
+    c.north = north
+  }
+
+  const collect = () => {
+    drawnSet.clear()
+    for (const child of tiles.group.children) drawnSet.add(child)
+    count = 0
+    tiles.forEachLoadedModel(add)
+    // Let go of scenes a shrunken list no longer holds.
+    for (let k = count; k < pool.length && pool[k].scene; k++) pool[k].scene = null as unknown as THREE.Object3D
+    fresh = true
   }
 
   return {
     invalidate() {
-      candidates = null
+      fresh = false
     },
     maxElevation(lat, lon, radiusM): SurfaceGroundQuery | null {
-      candidates ??= collect()
+      if (!fresh) collect()
       const reach = Math.max(0, radiusM) / SURFACE_ELLIPSOID_RADIUS
       win.south = lat - reach
       win.north = lat + reach
@@ -327,32 +449,41 @@ export function createSurfaceGround(tiles: SurfaceGroundTiles): SurfaceGround {
       const lonReach = poleward >= Math.PI / 2 - 1e-6 ? Math.PI : Math.min(Math.PI, reach / Math.cos(poleward))
       win.west = lon - lonReach
       win.east = lon + lonReach
+      const anticipating = radiusM <= ANTICIPATE_MAX_M
       // The tiles the window's box meets, and the deepest level among them.
       hit.length = 0
-      shifts.length = 0
-      let deepest = -Infinity
-      for (const c of candidates) {
+      let level = -Infinity
+      for (let k = 0; k < count; k++) {
+        const c = pool[k]
         if (c.south > win.north || c.north < win.south) continue
         // The tile's longitudes moved by whole turns to the window's.
-        const shift = lon - wrapPi(lon - (c.west + c.east) / 2) - (c.west + c.east) / 2
+        const mid = (c.west + c.east) / 2
+        const shift = lon - wrapPi(lon - mid) - mid
         if (c.west + shift > win.east || c.east + shift < win.west) continue
         hit.push(c)
-        shifts.push(shift)
-        if (c.level > deepest) deepest = c.level
+        if (c.level > level) level = c.level
       }
       let metres = -Infinity
       rects.length = 0
-      for (let k = 0; k < hit.length; k++) {
-        const c = hit[k]
-        if (!c.drawn && c.level !== deepest) continue
+      for (const c of hit) {
+        if (!c.drawn && c.level !== level) continue
         const ground = groundOf(c.scene)
         if (!ground) continue
-        metres = Math.max(metres, tileGroundMax(ground, win, shifts[k]))
-        rects.push([c.west + shifts[k], c.south, c.east + shifts[k], c.north])
+        // Shifted by the tile's own unwrapped longitudes.
+        const first = ground.colLon[0]
+        const last = ground.colLon[SEGMENTS]
+        const mid = (first + last) / 2
+        const shift = lon - wrapPi(lon - mid) - mid
+        const top = tileGroundMax(ground, win, shift, anticipating && c.level < deepest)
+        // A tile that adds no cell covers nothing: the globe stays in the floor there.
+        if (!(top > -Infinity)) continue
+        metres = Math.max(metres, top)
+        const r0 = ground.rowLat[0]
+        const r1 = ground.rowLat[SEGMENTS]
+        rects.push(first + shift, Math.min(r0, r1), last + shift, Math.max(r0, r1))
       }
-      // (No cell at all: boxes that met the window only at an edge.)
-      if (rects.length === 0 || !(metres > -Infinity)) return null
-      return { metres: Math.min(metres, SURFACE_MAX_METRES), covered: coversWindow(win, rects) }
+      if (rects.length === 0) return null
+      return { metres: Math.min(metres, SURFACE_MAX_METRES), covered: coversWindow(win, rects, rects.length / 4) }
     },
   }
 }
