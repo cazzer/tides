@@ -167,18 +167,19 @@ describe('ground detail patch', () => {
     groundDetailPatch(false, false).onBeforeCompile(off, {} as THREE.WebGLRenderer)
     groundDetailPatch(false, true).onBeforeCompile(on, {} as THREE.WebGLRenderer)
     // Over a fixed 12x: 1/12 at true scale, whatever the page's relief.
-    expect(DETAIL_TILT_DISPLACEMENT / TRUE_TERRAIN_DISPLACEMENT).toBeCloseTo(12, 12)
+    expect(DETAIL_TILT_DISPLACEMENT / TRUE_TERRAIN_DISPLACEMENT).toBeCloseTo(Math.max(12, RELIEF), 12)
     // TERRAIN_DISPLACEMENT's sum at ?relief=12, to the bit: the blend's
     // shader at 12x is as it was.
-    expect(DETAIL_TILT_DISPLACEMENT).toBe(REFERENCE_TERRAIN_DISPLACEMENT * (12 / REFERENCE_RELIEF))
+    expect(DETAIL_TILT_DISPLACEMENT).toBe(REFERENCE_TERRAIN_DISPLACEMENT * (Math.max(12, RELIEF) / REFERENCE_RELIEF))
     const line = `slope *= displacementScale / ${DETAIL_TILT_DISPLACEMENT.toExponential(9)};`
     expect(off.fragmentShader).not.toContain(line)
     expect(on.fragmentShader).toContain(`#ifdef GROUND_RELIEF\n    ${line}\n#endif`)
     // Off, the production shader to the byte (the system view's hash pins it too).
     expect(on.fragmentShader.replace(/\n#ifdef GROUND_RELIEF\n {4}slope \*= displacementScale[^\n]*\n#endif/, '')).toBe(off.fragmentShader)
     expect(groundDetailPatch(false, true).customProgramCacheKey()).not.toBe(groundDetailPatch(false, false).customProgramCacheKey())
-    // On by default with the blend or off 12x, so off at the 12x default.
-    expect(DETAIL_FOLLOWS_RELIEF).toBe(TERRAIN_BLEND || RELIEF !== 12)
+    // On by default with the blend or under 12x: never at 12x and above
+    // without the blend (where it would only grow).
+    expect(DETAIL_FOLLOWS_RELIEF).toBe(TERRAIN_BLEND || RELIEF < 12)
     expect(groundDetailPatch(false).customProgramCacheKey()).toBe(groundDetailPatch(false, DETAIL_FOLLOWS_RELIEF).customProgramCacheKey())
   })
 })

@@ -91,7 +91,9 @@ const SOFTNESS_1 = (0.5 * Math.PI) / 180
  * Most true-scale horizons are under 2°, so the 12x edge (which also ramps
  * a horizon's shadow in over its own width) left them weak and mushy. The
  * map's blur, in angle, scales with the tangents; the Sun's half-width
- * (0.27°) doesn't, hence the floor.
+ * (0.27°) doesn't, so the edge narrows by less than the relief does (the
+ * line meets 0.36° at zero relief, which the relief's clamp to [1, 25],
+ * ./relief.ts, keeps well away from).
  */
 export function horizonSoftness(relief: number): number {
   const r = Math.min(relief, SOFTNESS_RELIEF)

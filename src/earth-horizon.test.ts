@@ -170,18 +170,40 @@ describe('horizon bake', () => {
   it('takes the curvature exact at another exaggeration with eCurve (tides-zmw.21)', () => {
     const hills = level(256, 128, (x, y) => 0.15 * (1 + Math.sin(x * 0.37) * Math.cos(y * 0.53 + x * 0.11)))
     const step = horizonAngle(1, HORIZON_BITS)
-    // A 25x map whose curvature is exact at 10x, scaled to 10x, against a
-    // 10x bake: as exact as over a flat Earth, but for the steps.
-    const at25 = bakeHorizon(hills, { eRef: E_25, eCurve: (E_25 * 10) / 25 })
-    const at10 = bakeHorizon(hills, { eRef: (E_25 * 10) / 25 })
-    let worst = 0
-    for (let k = 0; k < at25.angles.length; k++) {
-      const scaled = Math.atan(0.4 * Math.tan(horizonAngle(at25.angles[k], HORIZON_BITS)))
-      worst = Math.max(worst, Math.abs(scaled - horizonAngle(at10.angles[k], HORIZON_BITS)))
+    // A 25x map scaled to 10x against a 10x bake, over the wide search
+    // (γ/2 up to 4.5° at 1000 km), with and without its curvature exact at 10x.
+    const at10 = bakeHorizon(hills, { ...WIDE, eRef: (E_25 * 10) / 25 })
+    const errors = (options: HorizonBakeOptions) => {
+      const at25 = bakeHorizon(hills, options)
+      let worst = 0
+      let total = 0
+      for (let k = 0; k < at25.angles.length; k++) {
+        const scaled = Math.atan(0.4 * Math.tan(horizonAngle(at25.angles[k], HORIZON_BITS)))
+        const error = Math.abs(scaled - horizonAngle(at10.angles[k], HORIZON_BITS))
+        worst = Math.max(worst, error)
+        total += error
+      }
+      return { worst, mean: total / at25.angles.length }
     }
-    expect(worst).toBeLessThanOrEqual(step)
+    // With eCurve, as exact as over a flat Earth, but for the steps.
+    const exact = errors({ ...WIDE, eCurve: (E_25 * 10) / 25 })
+    expect(exact.worst).toBeLessThanOrEqual(step)
+    expect(exact.mean).toBeLessThan(step / 2)
+    // Without it, more error, which a far ridge shows plainly: 1.0 units
+    // four texels (625 km) east, where γ/2 is 2.8°. Read at 10x it stands
+    // ~(1 − 0.4)·2.8° too high from the plain 25x map; with eCurve it is
+    // the 10x bake's but for a step.
+    expect(errors(WIDE).mean).toBeGreaterThan(exact.mean)
+    const far = level(256, 128, (x) => (x === 132 ? 1 : 0))
+    const reach = { radiusKm: 700, firstKm: (4 * 2 * Math.PI * EARTH_RADIUS_KM) / 256, steps: 2 }
+    const ridge = (options: HorizonBakeOptions) => at(bakeHorizon(far, { ...reach, ...options }), 128, 64)[E]
+    const truth = ridge({ eRef: (E_25 * 10) / 25 })
+    const read10 = (angle: number) => Math.atan(0.4 * Math.tan(angle))
+    expect(truth).toBeGreaterThan(2 * D)
+    expect(Math.abs(read10(ridge({ eRef: E_25, eCurve: (E_25 * 10) / 25 })) - truth)).toBeLessThanOrEqual(step)
+    expect(read10(ridge({ eRef: E_25 })) - truth).toBeGreaterThan(1.2 * D)
     // eCurve = eRef is the plain bake, to the byte.
-    expect(bakeHorizon(hills, { eRef: E_25, eCurve: E_25 }).angles).toEqual(bakeHorizon(hills, { eRef: E_25 }).angles)
+    expect(bakeHorizon(hills, { ...WIDE, eCurve: E_25 }).angles).toEqual(bakeHorizon(hills, WIDE).angles)
   })
 })
 

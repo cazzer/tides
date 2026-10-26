@@ -26,12 +26,14 @@
 // system view) the two parts sum to the old sunlight, and the night side
 // gains nothing.
 //
-// The detail's tilt was sized for ground drawn at 12x (DETAIL_TILT_RELIEF).
-// With the live terrain scale on (terrain-scale.ts TERRAIN_BLEND) or the
-// page at another relief, it follows the drawn relief (displacementScale
-// over 12x's), as the ground's own slope does: at 1x a tilt sized for 12x
-// relief stood ~12x too steep (tides-zmw.9.7, tides-zmw.21). At 12x without
-// the blend, the shader is as it was.
+// The detail's tilt was sized for ground drawn at 12x (DETAIL_TILT_RELIEF)
+// or more (it may well date from 25x). With the live terrain scale on
+// (terrain-scale.ts TERRAIN_BLEND) or the page under 12x, it follows the
+// drawn relief (displacementScale over 12x's, or the page relief's above
+// it), as the ground's own slope does: at 1x a tilt sized for 12x relief
+// stood ~12x too steep (tides-zmw.9.7, tides-zmw.21). It only ever shrinks:
+// at 12x and above without the blend the shader is as it was (?relief=25
+// shows the scene as first tuned).
 //
 // Spread through composePatches onto the ground's Phong material.
 import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START, REFERENCE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
@@ -47,14 +49,15 @@ import type { MaterialPatch } from './eclipseShadow'
 export const GROUND_DETAIL_OCTAVES = 5
 export const GROUND_DETAIL_OCTAVES_LOW = 3
 
-/** The relief the detail's tilt was sized at, and its displacementScale
- * there (as cloud-layer.ts works TERRAIN_DISPLACEMENT out, so the same
- * number at 12x). */
+/** The relief the detail's tilt was sized at (at least), and the
+ * displacementScale it is full strength at: 12x's, or the page relief's
+ * above that (as cloud-layer.ts works TERRAIN_DISPLACEMENT out, so the same
+ * number at 12x), so the drawn relief over it never exceeds 1. */
 export const DETAIL_TILT_RELIEF = 12
-export const DETAIL_TILT_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (DETAIL_TILT_RELIEF / REFERENCE_RELIEF)
+export const DETAIL_TILT_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (Math.max(DETAIL_TILT_RELIEF, RELIEF) / REFERENCE_RELIEF)
 /** Whether this page's tilt follows the drawn relief: with the blend on, or
- * at another relief than the one it was sized at. */
-export const DETAIL_FOLLOWS_RELIEF = TERRAIN_BLEND || RELIEF !== DETAIL_TILT_RELIEF
+ * under the relief it was sized at. */
+export const DETAIL_FOLLOWS_RELIEF = TERRAIN_BLEND || RELIEF < DETAIL_TILT_RELIEF
 
 const f = (x: number) => x.toFixed(6)
 

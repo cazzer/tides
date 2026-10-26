@@ -441,7 +441,7 @@ describe('ship bodies', () => {
 
     // The scales the page's relief can draw (1x only at ?relief=1).
     it.each([...new Set([1, Math.min(4, RELIEF), RELIEF])])(
-      'follows the live terrain scale at %dx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
+      'follows the live terrain scale at %sx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
       (scale) => {
         setEarthTerrain(baseFloor())
         onTestFinished(() => setTerrainEye(Infinity))
