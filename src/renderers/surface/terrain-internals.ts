@@ -117,6 +117,9 @@ type SourceGrid = { padded: PaddedGrid } | { from: number; fresh: boolean }
 /** No ancestor grid holds ground here: open water. */
 const OCEAN = -1
 
+/** The stand-in a between-levels "no data" leaves in the cache (fetchItem): never data. */
+const isPlaceholder = (grid: DataTexture) => (grid.image as { width: number }).width < 3
+
 /**
  * Data grids kept locked after a coverage end read them, the latest this
  * many, where no tile may hold them: those at levels between the plugin's
@@ -261,22 +264,31 @@ export class SurfaceGridCache extends GridCache {
     const lockAt = (at: number) => (at === OCEAN ? null : this.lockGrid(x >> (level - at), y >> (level - at), at, signal))
     if (!fresh) return lockAt(from)
     if (level === 0) return null
-    // Asked already (a "no data" under it answered first): no need to ask again.
-    const parent = level >= GRID_LEVEL_STEP ? this.answered(x >> GRID_LEVEL_STEP, y >> GRID_LEVEL_STEP, level - GRID_LEVEL_STEP) : undefined
-    if (parent !== undefined) return lockAt(parent)
+    // Answered above while this grid was being fetched (a sibling's "no
+    // data", at any level up): read what that was recorded as. Checked in
+    // the same turn as the lock below, which would otherwise make the tile
+    // a level up from that answer without recording it, a placeholder.
+    const late = this.noDataAbove(x, y, level)
+    if (late !== undefined) return lockAt(late)
     const up = level - 1
     const known = this.answered(x >> 1, y >> 1, up)
     if (known !== undefined) return lockAt(known)
     const above = await this.lockGrid(x >> 1, y >> 1, up, signal)
     const answer = this.answered(above.x, above.y, up)
-    if (answer === undefined) return above
+    if (answer === undefined && !isPlaceholder(above.grid)) return above
     this.release(above.x, above.y, up)
-    return lockAt(answer)
+    if (answer !== undefined) return lockAt(answer)
+    // A placeholder all the same (never data): what the answer above it says.
+    return lockAt(this.noDataAbove(x, y, level) ?? OCEAN)
   }
 
-  /** Keeps a data grid locked a while (HELD_BETWEEN_GRIDS). */
+  /** Keeps a data grid locked a while (HELD_BETWEEN_GRIDS), the least recently read let go first. */
   private hold(grid: LockedGrid): void {
-    if (this.held.some((h) => h.x === grid.x && h.y === grid.y && h.level === grid.level)) return
+    const at = this.held.findIndex((h) => h.x === grid.x && h.y === grid.y && h.level === grid.level)
+    if (at >= 0) {
+      this.held.push(...this.held.splice(at, 1))
+      return
+    }
     this.lock(grid.x, grid.y, grid.level)
     this.held.push(grid)
     if (this.held.length > HELD_BETWEEN_GRIDS) {

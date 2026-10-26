@@ -24,6 +24,7 @@ import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import {
   forEachCachedModel,
   GRID_LEVEL_STEP,
+  HELD_BETWEEN_GRIDS,
   installSurfaceGridCache,
   PINNED_TILES_VERSION,
   protectOverlayBitmaps,
@@ -584,6 +585,59 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       expect((cache.cache['0_0_2'] as { count: number }).count).toBe(2)
       expect(cache.get(2, 2, 4)).toBeNull()
       expect(cache.count).toBe(2)
+    })
+
+    it('reads an answer recorded above while its own grid was being fetched (a sibling\'s), never a placeholder', async () => {
+      const { terrain } = await loadedPlugin()
+      const opts = options({ decode: planeGrid })
+      const cache = installSurfaceGridCache(terrain, opts)
+      const base = coverage(4)
+      let answerLate!: () => void
+      const late = new Promise<void>((resolve) => (answerLate = resolve))
+      answer = async (url) => {
+        if (url.endsWith('/8/36/36.webp')) await late
+        return base(url)
+      }
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      // z8 (36, 36) asks; meanwhile z6 (8, 8) 404s, and its z5 (4, 4) answer is recorded, over z6 (9, 9) and z7 (18, 18)
+      const slow = cache.lock(36, 36, 8)
+      await vi.waitFor(() => expect(fetches).toContain('https://tiles.example/8/36/36.webp'))
+      const sibling = cache.lock(8, 8, 6)
+      await drain(opts.budget, sibling)
+      expect(cache.coverageLevel(36, 36, 8)).toBe(4)
+      answerLate()
+      await drain(opts.budget, slow)
+      const grid = (await slow) as DataTexture
+      expect(grid.image.width).toBe(6)
+      expect(Math.min(...(grid.image.data as unknown as Float32Array))).toBeGreaterThan(1000)
+      expect(cache.flatTiles).toBe(0)
+      expect(fetches.some((u) => u.includes('/7/'))).toBe(false)
+    })
+
+    it('holds the data grids coverage ends read, the least recently read let go first, and all on shutDown', async () => {
+      const { terrain } = await loadedPlugin()
+      const opts = options({ decode: planeGrid })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = coverage(5)
+      // a z6 404 under each z5 (a, 0) reads, and holds, that z5 grid
+      const under = async (a: number, odd = 0) => {
+        const grid = cache.lock(2 * a + odd, 0, 6)
+        await drain(opts.budget, grid)
+      }
+      for (let a = 0; a < HELD_BETWEEN_GRIDS; a++) await under(a)
+      const held = (a: number) => cache.get(a, 0, 5) !== null
+      expect([...Array(HELD_BETWEEN_GRIDS).keys()].every(held)).toBe(true)
+      // read z5 (0, 0) again: the most recent now; one more lets go of z5 (1, 0)
+      await under(0, 1)
+      await under(HELD_BETWEEN_GRIDS)
+      await Promise.resolve()
+      expect(held(0)).toBe(true)
+      expect(held(1)).toBe(false)
+      expect(held(HELD_BETWEEN_GRIDS)).toBe(true)
+      cache.shutDown()
+      await Promise.resolve()
+      expect([...Array(HELD_BETWEEN_GRIDS + 1).keys()].some(held)).toBe(false)
     })
 
     it('draws land below the sea from its data, not flat (the Dead Sea)', async () => {
