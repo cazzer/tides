@@ -21,9 +21,22 @@ export function DepthPrecisionProbe() {
   const gl = useThree((s) => s.gl)
   useLayoutEffect(() => {
     if (depthPrecision()) return
-    const result = probeDepthPrecision(gl)
+    // Thrown in a layout effect, an error would unmount the whole root; an
+    // unknown verdict only keeps the ship on the standard-depth floor.
+    let result
+    try {
+      result = probeDepthPrecision(gl)
+    } catch (error) {
+      console.warn('depth precision probe failed', error)
+      result = { kind: 'unknown' as const, bits: 0, maxPassK: 0, ms: 0 }
+    }
     setDepthPrecision(result)
-    if (DEPTH_INFO) setDepthReport(collectDepthReport(gl, result))
+    if (!DEPTH_INFO) return
+    try {
+      setDepthReport(collectDepthReport(gl, result))
+    } catch (error) {
+      console.warn('depth precision report failed', error)
+    }
   }, [gl])
   return null
 }
