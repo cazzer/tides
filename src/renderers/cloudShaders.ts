@@ -157,26 +157,36 @@ float cloudLod(float footprint) {
 }
 `
 
+// The mip the march from inside reads at the eye (tides-tvr.1): its own
+// steps' there, a level ray's a step across the map it was tuned to
+// (cloudMarchLod()). The same for every ray, so that all of them agree on
+// whether the eye is in a cloud; the base doesn't depend on it. The shell's
+// alone: the ground's shadow, which shares FIELD, never reads the eye.
+const EYE_LOD_GLSL = /* glsl */ `
+float cloudEyeLod() {
+  return max(0.0, log2(float(textureSize(uCloudMap, 0).x) / ${f(MARCH_MAP_WIDTH)}));
+}
+`
+
 // With reduced motion (FOG_EASE), fog thickens over the eye's first
 // FOG_EASE_SECONDS in a cloud (tides-01v.8.15) from the cloud as its side
 // looked from just outside, so that flying in neither flashes white nor
 // shows what lies past the wall. uFogPast holds where the eye was, among
 // the clouds (which drift), at FOG_EASE_SAMPLES times over those seconds
-// back, less where it is now; the vertex stage reads how long the march's
-// start has been in a cloud from it, the same at every vertex.
+// back, less where it is now; the vertex stage reads how long the eye, where
+// the march decides whether it starts in a cloud (tides-tvr.1), has been in
+// one from it, the same at every vertex.
 const FOG_EASE_GLSL = /* glsl */ `
 #define FOG_EASE_SAMPLES ${FOG_EASE_SAMPLES}
 uniform vec3 uFogPast[FOG_EASE_SAMPLES];
 varying float vFogEase;
 
 // How far inside a cloud q is, in its column's thickness, and over showing:
-// at most 0 outside it. Read at the mip the march reads near the eye
-// (cloudMarchLod() for a step across).
+// at most 0 outside it. Read as the march reads the eye (cloudEyeLod()).
 float cloudFogInside(vec3 q) {
   float r = length(q);
   vec2 uv = cloudUv(q / r);
-  float lod = max(0.0, log2(float(textureSize(uCloudMap, 0).x) / ${f(MARCH_MAP_WIDTH)}));
-  vec4 col = cloudColumn(uv, lod, cloudTerrain(uv));
+  vec4 col = cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv));
   float alt = r - uSeaLevel;
   return min(min(alt - col.y, col.z - alt) / max(col.z - col.y, 1e-6), col.x - ${f(CLOUD_MIN_ALPHA)});
 }
@@ -184,7 +194,7 @@ float cloudFogInside(vec3 q) {
 // How far the fog of a march from q has eased in (fogEaseShare()): the
 // share of FOG_EASE_SECONDS since q, moved as the eye has, was last out of
 // the cloud, smoothed. A still eye's, all of it; one moving outside a
-// cloud, none, for the cloud the near plane is about to enter.
+// cloud, none, for the cloud it is about to enter.
 float cloudFogEase(vec3 q) {
   if (dot(uFogPast[FOG_EASE_SAMPLES - 1], uFogPast[FOG_EASE_SAMPLES - 1]) < 1e-12) return 1.0;
   float prev = cloudFogInside(q);
@@ -214,6 +224,7 @@ varying float vNear;
 varying vec3 vEclipseEye;
 #ifdef FOG_EASE
 ${FIELD}
+${EYE_LOD_GLSL}
 ${FOG_EASE_GLSL}
 #endif
 #endif
@@ -241,9 +252,9 @@ void main() {
   vViewDepth = -view.z;
   vNear = isOrthographic ? 0.0 : projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
   #ifdef FOG_EASE
-  // At the near plane's centre, where the march starts: the same at every
-  // vertex.
-  vFogEase = cloudFogEase(vEye + transpose(mat3(modelViewMatrix)) * vec3(0.0, 0.0, -vNear));
+  // At the eye, where the march decides whether it starts in a cloud
+  // (tides-tvr.1): the same at every vertex.
+  vFogEase = cloudFogEase(vEye);
   #endif
   gl_Position = projectionMatrix * view;
   #else
@@ -256,6 +267,7 @@ const FRAGMENT = /* glsl */ `
 #include <common>
 ${ECLIPSE_GLSL.fragmentHead}
 ${FIELD}
+${EYE_LOD_GLSL}
 uniform float uOpacity;
 uniform float uSunGain;
 uniform float uAmbient;
@@ -271,7 +283,7 @@ varying vec3 vEclipseEye;
 uniform mat4 modelMatrix;
 uniform vec2 uEclipseBody;
 ${ECLIPSE_GLSL.point}
-#define CLOUD_ECLIPSE_HIT eclipsePoint(p)
+#define CLOUD_ECLIPSE_HIT eclipsePoint(pShade)
 // The highest ground the high tier's elevation map holds (TERRAIN_MAX_GREY).
 #define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
 // How far past a flank its cloud is read, and how many steps past a side.
@@ -428,6 +440,30 @@ vec2 cloudSpan(float f0, float f1) {
   float w = f0 / (f0 - f1);
   return f0 > 0.0 ? vec2(w, 1.0) : vec2(0.0, w);
 }
+
+#ifdef FLIP_SIDED
+// lightCentroid(): how far along a stretch of even cloud, letting clear
+// through, the light it sends back comes from on average. Half way through
+// a thin one, nearer its front the thicker it is.
+float cloudLightCentroid(float clear) {
+  float c = max(clear, 1e-6);
+  float tau = -log(c);
+  return tau < 0.05 ? 0.5 - tau / 12.0 : 1.0 / tau - c / (1.0 - c);
+}
+
+// Adds what a stretch of cloud sends back, by weight, to shade (the sums of
+// its depth down its column, its distance along the ray, and its column's
+// top and base) and weight: as from t of a step over which its column (c0 to
+// c1), the ray's altitude (a0 to a1) and distance (s0 to s1) change
+// linearly, as the crossing takes them.
+void cloudShadeAdd(inout vec4 shade, inout float weight, float w, vec4 c0, vec4 c1, float a0,
+    float a1, float s0, float s1, float t) {
+  vec4 c = mix(c0, c1, t);
+  float depth = clamp((c.z - mix(a0, a1, t)) / max(c.z - c.y, 1e-6), 0.0, 1.0);
+  shade += w * vec4(depth, mix(s0, s1, t), c.z, c.y);
+  weight += w;
+}
+#endif
 
 // The march meets the tops only at its steps, so it reads them no sharper
 // than the map it was tuned to (MARCH_MAP_WIDTH texels around) gives them a
@@ -636,8 +672,9 @@ void main() {
 #ifdef FLIP_SIDED
   // Every ray within reach meets the far side of the shell, so the back
   // faces alone draw them all, inside the shell or out, and the march
-  // covers the ray from the near plane on. s runs along d from the eye
-  // rather than from vLocal, which lies past the globe.
+  // covers the ray from the eye on, the near plane bounding only the depth
+  // it writes (tides-tvr.1). s runs along d from the eye rather than from
+  // vLocal, which lies past the globe.
   vec3 eye = vEye;
   float be = dot(eye, d);
   float discEye = be * be - (dot(eye, eye) - shell * shell);
@@ -663,6 +700,19 @@ void main() {
   vec4 colVeil = vec4(0.0);
   bool upVeil = false;
   float depthHit = -1.0;
+  // Where the sides and veils the ray goes through send their light back
+  // from: each stretch's depth down its column, distance along the ray, and
+  // its column's top and base, at its light's centroid, summed by the share
+  // of the light it sends back (cloudShadeAdd()), and those shares
+  // (tides-tvr.1). Where the ray goes up through a base, into a side or
+  // through veils, the hit is shaded from the path the march took through
+  // the cloud, in its own linear model of each step, rather than at the hit
+  // from the column there: so that a veil, a side and a base seen side by
+  // side shade alike where they meet, not as three kinds of hit, and a veil
+  // that gives way to a cloud further on shades as itself until the cloud
+  // past it shows.
+  vec4 sideShade = vec4(0.0);
+  float sideLight = 0.0;
   // Whether the camera is above the tops around it.
   bool fromAbove = false;
   // Whether the march started in a cloud, and that cloud's fog: how much
@@ -687,10 +737,13 @@ void main() {
   vec3 p = vLocal + d * tIn;
   float terrain = 0.0;
 #elif defined(FLIP_SIDED)
-  // March from the near plane (or where the ray comes within reach of the
-  // tallest top this texture can have anywhere, if that is further) to where
-  // it leaves that reach, or drops below the lowest base anywhere on its way
-  // to the sea: a ray that skims over the sea comes back up under the deck.
+  // March from the eye (or where the ray comes within reach of the tallest
+  // top this texture can have anywhere, if that is further) to where it
+  // leaves that reach, or drops below the lowest base anywhere on its way to
+  // the sea: a ray that skims over the sea comes back up under the deck.
+  // Not from the near plane (tides-tvr.1): what the ray starts in, and what
+  // it meets short of the near plane, would then hang on where the near
+  // plane cuts it, which moves as the camera turns and climbs.
   // Rays that never come within reach, the sky from inside, end at once. A ray from
   // inside can cross half the layer, so each step reads its own ground for
   // the column's base, and its own mip for the footprint there. What lies
@@ -701,9 +754,8 @@ void main() {
   float discOuter = be * be - (dot(eye, eye) - outer * outer);
   if (discOuter <= 0.0) discard;
   float sOuter = -be - sqrt(discOuter);
-  float sStart = max(sOuter, sNear);
-  // Where the steps count from: the eye, or from outside the reach, where
-  // the ray comes into it.
+  // Where the march starts and its steps count from: the eye, or from
+  // outside the reach, where the ray comes into it.
   float sOrigin = max(sOuter, 0.0);
   float sEnd = -be + sqrt(discOuter);
   float inner = uSeaLevel + CLOUD_CLEARANCE;
@@ -712,35 +764,35 @@ void main() {
   float sSea = -be - sqrt(max(discSea, 0.0));
   if (discSea > 0.0 && sSea > 0.0) {
     // From below every base, the sea itself.
-    sEnd = -be - sqrt(discInner) > sStart ? -be - sqrt(discInner) : sSea;
+    sEnd = -be - sqrt(discInner) > sOrigin ? -be - sqrt(discInner) : sSea;
   }
-  if (sEnd <= sStart) discard;
+  if (sEnd <= sOrigin) discard;
   // Steps of MARCH_STEP from the origin, the last cut short, so that from
   // ray to ray the steps slide rather than jump (as they would spread evenly
   // over each ray's span, a step's worth at the far end where the count
   // changes: bands, tides-01v.8.12). At least three over the span from the
   // origin, and longer only for rays skimming the sea from the shell's top,
-  // by under 2%. The march starts at the near plane, then takes the steps
-  // on from there: not steps from the near plane itself, whose reach along
-  // a ray (near over the cosine of the ray's angle off the view axis)
-  // changes as the camera turns, and as the near plane follows the ground,
-  // moving every step over the clouds, which then swam (tides-16z). From
-  // the eye, a ray's steps hold still as the camera turns about it, and all
-  // rays' steps keep the same phase, so still no bands. Only the first step,
-  // within one of the near plane, slides. sEnd - sGrid is at most the span,
-  // so the steps stay within MARCH_STEPS. Mirrored by cloud-layer.ts
+  // by under 2%. Not steps from the near plane, whose reach along a ray
+  // (near over the cosine of the ray's angle off the view axis) changes as
+  // the camera turns, and as the near plane follows the ground, moving
+  // every step over the clouds, which then swam (tides-16z). From the eye, a
+  // ray's steps hold still as the camera turns about it, and all rays'
+  // steps keep the same phase, so still no bands. Nor steps from the eye
+  // that start at the near plane, as they did: the first, from the near
+  // plane to the next, slid with it, and a first step from the eye to the
+  // near plane, longer than a step when the near plane is far, read the
+  // cloud between coarser the further the near plane (tides-tvr.1). The
+  // span is at most MARCH_STEPS steps. Mirrored by cloud-layer.ts
   // marchSteps.
   float span = sEnd - sOrigin;
   float ds = max(min(MARCH_STEP, span / 3.0), span / float(MARCH_STEPS));
-  // The step at or before the start.
-  float sGrid = sOrigin + ds * floor((sStart - sOrigin) / ds);
-  int steps = int(clamp(ceil((sEnd - sGrid) / ds - 1e-3), 1.0, float(MARCH_STEPS)));
+  int steps = int(clamp(ceil(span / ds - 1e-3), 1.0, float(MARCH_STEPS)));
   // The march's steps at either end that lie above the ceiling would all
   // find clear air, so it leaves them out (tides-01v.8.10): from each end
   // the ray is read against the ceiling, then moved on to where it comes
   // under it, or by the ceiling's reach. The steps between are the same
   // steps, so they meet the same cloud.
-  float sFirst = sStart;
+  float sFirst = sOrigin;
   for (int k = 0; k < CEILING_READS; k++) {
     vec3 q = eye + d * sFirst;
     float ceiling = cloudCeilingRadius(q);
@@ -771,8 +823,8 @@ void main() {
     sLast -= CEILING_REACH;
   }
   // A step clear of each, for the first to stand above the cloud.
-  int iFirst = max(int(floor((sFirst - sGrid) / ds)) - 1, 0);
-  int iLast = min(int(ceil((sLast - sGrid) / ds)) + 1, steps);
+  int iFirst = max(int(floor((sFirst - sOrigin) / ds)) - 1, 0);
+  int iLast = min(int(ceil((sLast - sOrigin) / ds)) + 1, steps);
   // A column holds cloud from its base to its top, where it is at least
   // CLOUD_MIN_ALPHA. Over each step the march takes the ray's altitude and
   // its column (top, base and opacity) to change linearly, as the fog below
@@ -799,13 +851,15 @@ void main() {
   // march ends where it goes under the ground mesh itself (cloudGround()),
   // within the step: into a ridge, not only the ground the columns stand
   // on (tides-01v.8.13). The mesh's vertices lie a few steps apart.
+  vec2 uvEye = vec2(0.0);
+  float terrainEye = 0.0;
   if (iFirst <= iLast) {
     // Whether the camera is above the tops around it, for every step.
-    vec2 uvEye = cloudUv(normalize(eye));
-    float altEye = length(eye) - uSeaLevel;
-    fromAbove = altEye > cloudColumn(uvEye, NEAR_TOPS_LOD, cloudTerrain(uvEye)).z;
+    uvEye = cloudUv(normalize(eye));
+    terrainEye = cloudTerrain(uvEye);
+    fromAbove = length(eye) - uSeaLevel > cloudColumn(uvEye, NEAR_TOPS_LOD, terrainEye).z;
   }
-  float sPrev = sStart;
+  float sPrev = sOrigin;
   float altPrev = 0.0;
   float gapPrev = 0.0;
   float underPrev = 0.0;
@@ -827,9 +881,50 @@ void main() {
   float sidePrev = 0.0;
 #endif
   vec2 fogShade = vec2(0.0);
-  for (int i = iFirst; i <= MARCH_STEPS; i++) {
+  if (iFirst == 0 && iFirst <= iLast) {
+    // The march's first step, at the eye or where the ray comes within
+    // reach: whether it starts in a cloud, read with the same mip on every
+    // ray (cloudEyeLod()), as a step's own mip changes with the ray's
+    // elevation (tides-tvr.1, tides-c08). Decided at the near plane, as it
+    // was, an eye just under a base saw fog from the eye where the near
+    // plane (near over the cosine of the ray's angle off the view axis)
+    // reached into the cloud, and the base beyond it elsewhere: a line that
+    // moved as the camera turned or climbed. The same with the eye in a
+    // cloud and the near plane past its wall. Where the ray comes within
+    // reach from outside it, no coarser than a pixel's width there, as a
+    // step's own mip would be.
+    vec3 q0 = eye + d * sOrigin;
+    float r0 = length(q0);
+    vec2 uv0 = sOrigin > 0.0 ? cloudUv(q0 / r0) : uvEye;
+    // (log2(0) is undefined, so not read at the eye.)
+    float lod0 = sOrigin > 0.0
+      ? max(cloudEyeLod(), cloudLod(spread * sOrigin / max(abs(dot(d, q0 / r0)), 0.05)))
+      : cloudEyeLod();
+    vec4 col0 = cloudColumn(uv0, lod0, sOrigin > 0.0 ? cloudTerrain(uv0) : terrainEye);
+    float alt0 = r0 - uSeaLevel;
+    sPrev = sOrigin;
+    colPrev = col0;
+    altPrev = alt0;
+    gapPrev = alt0 - col0.z;
+    underPrev = col0.y - alt0;
+    alphaPrev = col0.x;
+    if (gapPrev <= 0.0 && underPrev <= 0.0 && col0.x >= CLOUD_MIN_ALPHA) {
+      // The camera's cloud: its fog runs from the eye.
+      fogged = fogging = true;
+      colFog = col0;
+      densityPrev = cloudFogDensity(col0);
+      sigmaPrev = densityPrev * cloudFogEdge(col0, alt0);
+#ifdef FOG_EASE
+      fogEase = vFogEase > 0.9999 ? 1.0 : vFogEase;
+      sidePrev = cloudSideDensity(col0);
+      sigmaPrev = cloudFogEased(sigmaPrev, sidePrev, cloudFogEdge(col0, alt0), fogEase);
+#endif
+      groundPrev = alt0 - cloudGround(uv0);
+    }
+  }
+  for (int i = max(iFirst, 1); i <= MARCH_STEPS; i++) {
     if (i > iLast) break;
-    float s = i == 0 ? sStart : min(sGrid + ds * float(i), sEnd);
+    float s = min(sOrigin + ds * float(i), sEnd);
     if (s <= sSkip) continue;
     float stepLen = s - sPrev;
     vec3 q = eye + d * s;
@@ -858,12 +953,23 @@ void main() {
       // it leaves the column or the cloud thins out of showing.
       float through = min(min(cloudSpan(gapPrev, gap).y, cloudSpan(underPrev, under).y),
         cloudSpan(CLOUD_MIN_ALPHA - alphaPrev, CLOUD_MIN_ALPHA - colq.x).y);
-      sideClear *= cloudPathClear(colq.x, colq.z - colq.y, stepLen * max(min(through, clip), 0.0));
+      float wIn = max(min(through, clip), 0.0);
+      float stretchClear = cloudPathClear(colq.x, colq.z - colq.y, stepLen * wIn);
+      cloudShadeAdd(sideShade, sideLight, veilClear * sideClear * (1.0 - stretchClear),
+        colPrev, colq, altPrev, alt, sPrev, s, wIn * cloudLightCentroid(stretchClear));
+      sideClear *= stretchClear;
       if (clip < 1.0 || sideClear < 0.02) break;
       if (!inCloud) CLOUD_VEIL
       else if (i >= iSide + SIDE_STEPS) {
         float rest = mu > 0.0 ? -gap / mu : mu < 0.0 ? under / mu : SIDE_REST;
-        sideClear *= cloudPathClear(colq.x, colq.z - colq.y, min(rest, SIDE_REST));
+        // Through the column as it is here: down it from here to where the
+        // ray leaves it, or SIDE_REST on.
+        float thick = colq.z - colq.y;
+        float len = min(rest, SIDE_REST);
+        stretchClear = cloudPathClear(colq.x, thick, len);
+        cloudShadeAdd(sideShade, sideLight, veilClear * sideClear * (1.0 - stretchClear),
+          colq, colq, alt, alt + mu * len, s, s + len, cloudLightCentroid(stretchClear));
+        sideClear *= stretchClear;
         if (rest >= SIDE_REST || sideClear < 0.02) break;
         CLOUD_VEIL
         // On from where it leaves the column, out of the cloud, unless the
@@ -880,10 +986,11 @@ void main() {
         under = mu < 0.0 ? 1e-6 : colq.y - alt;
       }
     } else if (i == iFirst) {
+      // Past the steps above the ceiling: nothing before this one to cross
+      // from.
       if (inCloud) {
-        // The march starts in a cloud: the camera's, or one the near plane
-        // cuts. Its fog runs from the eye (or where the ray comes within
-        // reach), as thick up to here as here.
+        // The march starts in a cloud. Its fog runs from the eye (or where
+        // the ray comes within reach), as thick up to here as here.
         fogged = fogging = true;
         colFog = colq;
         densityPrev = cloudFogDensity(colq);
@@ -951,6 +1058,8 @@ void main() {
         }
         iSide = i;
         sideClear = cloudPathClear(colq.x, colq.z - colq.y, stepLen * (until - from));
+        cloudShadeAdd(sideShade, sideLight, veilClear * (1.0 - sideClear),
+          colPrev, colq, altPrev, alt, sPrev, s, from + (until - from) * cloudLightCentroid(sideClear));
         // Through it within the step.
         if (until < 1.0) {
           if (sideClear < 0.02) break;
@@ -1067,56 +1176,105 @@ void main() {
     col.x = 0.0;
   }
   float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
-  // A pixel's width where the ray meets the top, stretched by the slant.
-  // vRayDir is the eye's offset: the Earth group is unscaled.
+  // Seen edge-on, a cloud is a longer path.
+  float slant = 1.0 / max(abs(dot(d, up)), 0.3);
 #ifdef FLIP_SIDED
-  float topFootprint = footprint;
+  // A side's opacity already holds its path.
+  if (side) slant = 1.0;
+  // Thinning into the ground.
+  float groundFade = smoothstep(0.0, GROUND_FADE, r - uSeaLevel - cloudGround(uv));
 #else
-  float topFootprint = isOrthographic
-    ? footprint
-    : spread * (length(vRayDir) + length(p - vLocal)) / max(abs(dot(d, up)), 0.05);
+  float groundFade = 1.0;
 #endif
-  vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
-  float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
-  if (alpha < CLOUD_MIN_ALPHA) {
-    if (!CLOUD_VEILED) CLOUD_MISS;
-    alpha = 0.0;
-  }
   // How far down its column the hit lies (columnDepth()): 0 on a top, 1 on
   // a base seen from below, between on a side; the flat shell is all top or
-  // all base, and from outside only tops show.
+  // all base, and from outside only tops show. And where it is shaded from,
+  // over the ground there: the hit, its column's top and base.
+  vec3 pShade = p;
+  vec4 colShade = col;
+  float terrainShade = terrain;
 #if defined(CLOUD_FLAT) && defined(FLIP_SIDED)
   float depth = length(eye) < shell ? 1.0 : 0.0;
 #elif defined(FLIP_SIDED)
   float depth = depthHit >= 0.0
     ? depthHit
     : clamp((col.z - (r - uSeaLevel)) / max(col.z - col.y, 1e-6), 0.0, 1.0);
+  // Through a side, up through a base or through veils, shaded from where
+  // the light comes back from along the march's path through them
+  // (sideShade): its depth, its place on the ray and its column there, with
+  // a top's or a flank's own by what of it shows past the veils (before its
+  // detail) (tides-tvr.1), however faint they are. Shaded from the hit
+  // and the column there, as they were, a veil met alone and the same veil
+  // with a side behind it, or a side near its base and the base beside it,
+  // took depths a long way apart, and a veil that gave way to a cloud
+  // further on took that cloud's height, slope and shadow: grey slabs
+  // against white with straight edges, as the base lies at much the same
+  // height everywhere and the classes change at fixed elevations of the ray.
+  float hitLight = side ? 0.0 : veilClear * (1.0 - pow(1.0 - min(col.x, 0.995), slant)) * groundFade;
+  float shadeW = sideLight + hitLight;
+  // The sums are each weight times a bounded value, so no faint weight
+  // divides into more than it holds.
+  if (shadeW > 0.0) {
+    vec4 place = (sideShade + hitLight * vec4(depth, eyeDist, col.z, col.y)) / shadeW;
+    depth = place.x;
+    pShade = eye + d * place.y;
+    colShade.zy = place.zw;
+    terrainShade = place.w - CLOUD_CLEARANCE;
+  }
 #else
   float depth = 0.0;
 #endif
+  float rShade = length(pShade);
+  vec3 upShade = pShade / rShade;
+  vec2 uvShade = cloudUv(upShade);
+  // A pixel's width where the ray meets the top, stretched by the slant, at
+  // the hit for its detail, and where it is shaded for its slope. vRayDir is
+  // the eye's offset: the Earth group is unscaled.
+#ifdef FLIP_SIDED
+  float topFootprint = footprint;
+  float footShade = spread * length(pShade - eye) / (side ? 1.0 : max(abs(dot(d, upShade)), 0.05));
+  float lodShade = cloudLod(footShade);
+#else
+  float topFootprint = isOrthographic
+    ? footprint
+    : spread * (length(vRayDir) + length(p - vLocal)) / max(abs(dot(d, up)), 0.05);
+  float footShade = footprint;
+  float lodShade = lod;
+#endif
+  // The detail at the hit itself: where it is shaded can sweep far along the
+  // ray from one pixel to the next where a cloud past a veil starts to show,
+  // and noise read there would streak along every such edge.
+  vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel);
+  float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
+  if (alpha < CLOUD_MIN_ALPHA) {
+    if (!CLOUD_VEILED) CLOUD_MISS;
+    alpha = 0.0;
+  }
+  // How much of what lies behind it the hit hides, short of the veils.
+  float hitShow = (1.0 - pow(1.0 - min(alpha, 0.995), slant)) * groundFade;
 
   // The tops' slope, by forward differences a pixel or so apart.
-  float h = max(footprint, 3.0 * texel);
-  vec3 east = normalize(vec3(up.z, 0.0, -up.x) + vec3(1e-5, 0.0, 0.0));
-  vec3 north = cross(up, east);
-  float cosLat = max(length(up.xz), 0.05);
+  float h = max(footShade, 3.0 * texel);
+  vec3 east = normalize(vec3(upShade.z, 0.0, -upShade.x) + vec3(1e-5, 0.0, 0.0));
+  vec3 north = cross(upShade, east);
+  float cosLat = max(length(upShade.xz), 0.05);
   // A mip down, and the tilt capped: measured heights can jump kilometres
   // between neighbouring texels, which would stand tops on edge.
-  float lodN = lod + 1.0;
-  float topC = cloudColumn(uv, lodN, terrain).z;
-  float topE = cloudColumn(uv + vec2(h / (2.0 * CLOUD_PI * r * cosLat), 0.0), lodN, terrain).z;
-  float topN = cloudColumn(uv + vec2(0.0, h / (CLOUD_PI * r)), lodN, terrain).z;
+  float lodN = lodShade + 1.0;
+  float topC = cloudColumn(uvShade, lodN, terrainShade).z;
+  float topE = cloudColumn(uvShade + vec2(h / (2.0 * CLOUD_PI * rShade * cosLat), 0.0), lodN, terrainShade).z;
+  float topN = cloudColumn(uvShade + vec2(0.0, h / (CLOUD_PI * rShade)), lodN, terrainShade).z;
   vec2 slope = RELIEF * vec2(topE - topC, topN - topC) / h;
   // The detail's own slope, along the top.
   vec3 grain = cloudFrame(detail.yzw, -uCloudShift) * DETAIL_RELIEF * ${f(DETAIL_BASE_TEXELS)} * texel;
   vec2 grainSlope = vec2(dot(grain, east), dot(grain, north));
   slope += grainSlope * min(1.0, DETAIL_MAX_SLOPE / max(length(grainSlope), 1e-6));
   slope *= min(1.0, MAX_SLOPE / max(length(slope), 1e-6));
-  vec3 n = normalize(up - slope.x * east - slope.y * north);
+  vec3 n = normalize(upShade - slope.x * east - slope.y * north);
 
   // Taller cloud toward the Sun shades this top.
   vec3 s = uSunDir;
-  vec3 lit = up * (uSeaLevel + col.z);
+  vec3 lit = upShade * (uSeaLevel + colShade.z);
   float occ = 0.0;
   for (int j = 1; j <= SHADOW_STEPS; j++) {
     float ts = SHADOW_STEP * float(j * j);
@@ -1124,22 +1282,16 @@ void main() {
     float rq = length(q);
     float aq = rq - uSeaLevel;
     if (aq > CLOUD_LAYER_TOP) break;
-    vec4 cq = cloudColumn(cloudUv(q / rq), max(lod + 1.0, 2.0), terrain);
+    vec4 cq = cloudColumn(cloudUv(q / rq), max(lodShade + 1.0, 2.0), terrainShade);
     occ = max(occ, cloudShade(cq.x) * smoothstep(0.0, SHADOW_SOFT, cq.z - aq));
   }
 
-  vec3 radiance = cloudRadiance(up, n, d, alpha, depth, cloudKm(col.z, col.y), occ, CLOUD_ECLIPSE_HIT);
+  vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth, cloudKm(colShade.z, colShade.y), occ,
+    CLOUD_ECLIPSE_HIT);
 
-  // Seen edge-on, a cloud is a longer path.
-  float slant = 1.0 / max(abs(dot(d, up)), 0.3);
+  float opacity = hitShow * uOpacity;
 #ifdef FLIP_SIDED
-  // A side's opacity already holds its path.
-  if (side) slant = 1.0;
-#endif
-  float opacity = (1.0 - pow(1.0 - min(alpha, 0.995), slant)) * uOpacity;
-#ifdef FLIP_SIDED
-  // Thinning into the ground, and seen through the veils in front of it.
-  opacity *= smoothstep(0.0, GROUND_FADE, r - uSeaLevel - cloudGround(uv));
+  // Seen through the veils in front of it.
   opacity = 1.0 - (1.0 - (1.0 - veilClear) * uOpacity) * (1.0 - opacity);
   #if defined(USE_LOGARITHMIC_DEPTH_BUFFER) || defined(USE_REVERSED_DEPTH_BUFFER)
   #error "cloud layer: gl_FragDepth assumes the standard depth buffer"
@@ -1147,15 +1299,19 @@ void main() {
   // The hit's depth, so the displaced ground hides clouds behind it: the
   // back face lies past the globe. View depth scales with distance along
   // the ray. Fog starts at the eye, in front of everything; past it the
-  // march ended at the ground.
-  float z = vViewDepth * eyeDist / length(vRayDir);
+  // march ended at the ground. A hit short of the near plane (the march
+  // runs from the eye, tides-tvr.1) is drawn at it: it stays where the ray
+  // met it, for its shading and detail, which would otherwise slide with
+  // the near plane as the camera turns.
+  float z = vViewDepth * max(eyeDist, sNear) / length(vRayDir);
   // The fog over the hit (premultiplied, then back), and the haze in front
-  // of the hit as far as the fog lets it through.
+  // of where the hit is shaded from (pShade) as far as the fog lets it
+  // through.
   float fogA = 1.0 - fogClear;
   float a = fogA + fogClear * opacity;
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? 0.0 : 0.5 + 0.5 * (projectionMatrix[3][2] - projectionMatrix[2][2] * z) / z,
-    cloudHazeFront(eye, d, eyeDist, shell), fogClear * opacity);
+    cloudHazeFront(eye, d, length(pShade - eye), shell), fogClear * opacity);
 #else
   gl_FragColor = vec4(radiance, opacity);
   #include <tonemapping_fragment>
