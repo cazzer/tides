@@ -21,6 +21,7 @@ import {
   createShipState,
   floorRadius,
   nearestBody,
+  settleShip,
   speedCap,
   speedFloor,
   speedFraction,
@@ -770,6 +771,36 @@ describe('ground (tides-01v.8.3)', () => {
     }
     expect(state.position.length()).toBeCloseTo(1.1 + CLEARANCE, 9)
     expect(hit).toBe(true)
+  })
+
+  test.each([0, NaN, -1])('clamps to ground that rose under a still ship even on a %s step (tides-zmw.9.8)', (dt) => {
+    let rise = 0
+    const body: Body = { ...rock(0, 0), ground: () => 1 + rise }
+    const state = shipAt(along(0.1).multiplyScalar(1 + CLEARANCE), new THREE.Vector3())
+    rise = 0.05
+    const velocity = state.velocity.set(0.01, 0, 0).clone()
+    const orientation = state.orientation.clone()
+    stepShip(state, input({ throttle: 1, pitch: 1 }), dt, env([body]))
+    expect(state.position.length()).toBeCloseTo(1.05 + CLEARANCE, 12)
+    // Nothing else moved: no thrust, turn or ride on a zero step.
+    expect(state.orientation.equals(orientation)).toBe(true)
+    expect(state.velocity.equals(velocity)).toBe(true)
+  })
+
+  test('settleShip only puts the ship back over the ground', () => {
+    let rise = 0
+    const body: Body = { ...rock(0, 0), ground: () => 1 + rise }
+    const state = shipAt(along(0.1).multiplyScalar(1.2), new THREE.Vector3())
+    state.velocity.set(0, -0.3, 0)
+    const before = state.position.clone()
+    expect(settleShip(state, env([body]))).toBe(false)
+    expect(state.position.equals(before)).toBe(true)
+    rise = 0.3
+    // Moving into it faster than COLLISION_SPEED: a hit, the inward speed dropped.
+    state.velocity.copy(along(0.1).multiplyScalar(-0.3))
+    expect(settleShip(state, env([body]))).toBe(true)
+    expect(state.position.length()).toBeCloseTo(1.3 + CLEARANCE, 12)
+    expect(state.velocity.length()).toBeCloseTo(0, 12)
   })
 
   test('gaps and the speed cap measure from the ground under the ship', () => {

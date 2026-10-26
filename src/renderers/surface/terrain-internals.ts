@@ -410,3 +410,19 @@ export function shareGridBytes(tiles: TilesRenderer): void {
   }
   tiles.registerPlugin(plugin as unknown as Parameters<TilesRenderer['registerPlugin']>[0])
 }
+
+/**
+ * Calls `callback(scene, tile)` for every tile with a loaded scene, as
+ * TilesRenderer.forEachLoadedModel does, from the renderer's LRU cache's
+ * item list (lruCache.itemList, every tile it holds or is loading) instead
+ * of a walk of the whole tile tree: ~300 cached tiles against ~15,000 tree
+ * nodes at a canyon pose, 0.2 ms a call (headless, tides-zmw.9.8), which the
+ * ship's floor pays every frame.
+ */
+export function forEachCachedModel(tiles: TilesRenderer, callback: (scene: Object3D, tile: unknown) => void): void {
+  const items = (tiles.lruCache as unknown as { itemList: readonly { engineData?: { scene?: Object3D | null } }[] }).itemList
+  for (const tile of items) {
+    const scene = tile.engineData?.scene
+    if (scene) callback(scene, tile)
+  }
+}

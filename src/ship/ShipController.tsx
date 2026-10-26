@@ -1,18 +1,33 @@
 import { useEffect, useMemo, useRef } from 'react'
+import type * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { mainCameraPose } from '../main-camera-session'
-import { stepShip, type ShipState } from './flight'
+import { settleShip, stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
-import { createShipBodies, EARTH_SHELL_RADII, updateShipBodies } from './ship-bodies'
-import { shellGap, shipFar, shipNear, spawnPose, spawnPoseFromCamera } from './ship-session'
+import { createShipBodies, EARTH_SHELL_RADII, updateShipBodies, updateShipBody } from './ship-bodies'
+import {
+  NEAR_MIN,
+  SHIP_SETTLE_PRIORITY,
+  fineGroundDepth,
+  shellGap,
+  shipFar,
+  shipNear,
+  shipNearFloor,
+  spawnPose,
+  spawnPoseFromCamera,
+} from './ship-session'
 import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail'
 import { setTerrainEye } from '../terrain-scale'
+import { reversedFloatDepth } from '../renderers/depth-precision'
+import { SURFACE_TILES_ON } from '../surface'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
-// time to pass.
+// time to pass. Not Earth's over the streamed tiles: the ship can stand 30 m
+// over their ground, which Earth's orbit and spin move ~0.2 m a frame
+// (tides-zmw.9.8).
 const BODY_REFRESH_MS = 250
 
 /**
@@ -36,14 +51,35 @@ export function ShipController() {
     []
   )
 
+  // The near and far planes for the ship at `position`, `groundGap` over the
+  // ground and on a depth buffer whose floor is `nearFloor`.
+  const setPlanes = (camera: THREE.PerspectiveCamera, position: THREE.Vector3, groundGap: number, nearFloor: number) => {
+    // Earth's shells stand off its ground, so the ground's gap alone would let
+    // the near plane cut them on the way down through them.
+    const near = shipNear(
+      groundGap,
+      earth ? shellGap(position.distanceTo(earth.position), EARTH_SHELL_RADII) : Infinity,
+      nearFloor
+    )
+    // The Sun sits at the origin.
+    const far = shipFar(position.length())
+    if (camera.near !== near || camera.far !== far) {
+      camera.near = near
+      camera.far = far
+      camera.updateProjectionMatrix()
+    }
+  }
+
   // Priority 0: after SimClock (−1) has set this frame's time, before drei's
   // View renders (≥ 1), so the frame draws where the ship is now.
-  useFrame(({ camera, size, viewport }, delta) => {
+  useFrame(({ camera, gl, size, viewport }, delta) => {
     if (!('isPerspectiveCamera' in camera)) return
     const t = useStore.getState().timestamp ?? Date.now()
     if (bodiesAt.current == null || Math.abs(t - bodiesAt.current) >= BODY_REFRESH_MS) {
       updateShipBodies(bodies, t)
       bodiesAt.current = t
+    } else if (SURFACE_TILES_ON && earth) {
+      updateShipBody(earth, t)
     }
     // On the first frame rather than on mount: a ?ship=1 link mounts this
     // before the clock has ticked, and the view's size is known by now.
@@ -54,25 +90,36 @@ export function ShipController() {
     ) ?? spawnPose(bodies, size.width / size.height)
     const state = ship.current
     setTerrainEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
+    // Read each frame: the depth probe may answer after the first ones.
+    if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
+    if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
 
     camera.position.copy(state.position)
     camera.quaternion.copy(state.orientation)
-    // Earth's shells stand off its ground, so the ground's gap alone would let
-    // the near plane cut them on the way down through them.
-    const near = shipNear(
-      shipTelemetry.nearest.surfaceDistance,
-      earth ? shellGap(state.position.distanceTo(earth.position), EARTH_SHELL_RADII) : Infinity
-    )
-    // The Sun sits at the origin.
-    const far = shipFar(state.position.length())
-    if (camera.near !== near || camera.far !== far) {
-      camera.near = near
-      camera.far = far
-      camera.updateProjectionMatrix()
-    }
+    // Without the tiles, the planes from the gap under the ship, here, as
+    // before tides-zmw.9.8.
+    if (!SURFACE_TILES_ON) setPlanes(camera, state.position, shipTelemetry.nearest.surfaceDistance, NEAR_MIN)
   })
+
+  // Over the tiles, after their update (they're the ground this frame
+  // draws): take in what changed under the ship, put it back over the
+  // ground, and set the near plane from the ground across its reach, so the
+  // eye stands at least the hard clearance over the ground of the frame it
+  // draws (tides-zmw.9.8).
+  useFrame(({ camera, gl }, delta) => {
+    const state = ship.current
+    if (!SURFACE_TILES_ON || !state || !('isPerspectiveCamera' in camera)) return
+    earth?.floor?.settle(delta)
+    settleShip(state, { bodies })
+    earth?.floor?.mark(state.position)
+    camera.position.copy(state.position)
+    const nearest = shipTelemetry.nearest
+    const groundGap =
+      earth?.floor && nearest.key === earth.key ? earth.floor.nearGap(state.position) : nearest.surfaceDistance
+    setPlanes(camera, state.position, groundGap, shipNearFloor(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl))))
+  }, SHIP_SETTLE_PRIORITY)
 
   return null
 }

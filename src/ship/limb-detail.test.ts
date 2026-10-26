@@ -18,6 +18,8 @@ import {
   requestLimbSphere,
   retainLimbSphere,
   subscribeLimbBody,
+  LIMB_GAP_FLOOR,
+  LIMB_HYSTERESIS,
   updateLimbView,
   wantsLimbSphere,
 } from './limb-detail'
@@ -99,6 +101,20 @@ describe('the limb view', () => {
     unsubscribe()
     view('mars', mars, 1.5)
     expect(calls).toBe(3)
+  })
+
+  it('measures no gap under LIMB_GAP_FLOOR, so a true-scale stop bobbing a metre notifies nobody (tides-zmw.9.8)', () => {
+    let calls = 0
+    const unsubscribe = subscribeLimbBody(() => calls++)
+    const earth = [body('earth')]
+    const metre = 1 / 2_159_000
+    view('earth', earth, 1 + 30 * metre)
+    for (const m of [28.5, 31.5, 29, 30, 12, 60]) view('earth', earth, 1 + m * metre)
+    expect(calls).toBe(1)
+    // Past it, the hysteresis is as before.
+    view('earth', earth, 1 + LIMB_GAP_FLOOR * LIMB_HYSTERESIS * 1.01)
+    expect(calls).toBe(2)
+    unsubscribe()
   })
 
   it('holds the limb body until another is clearly nearer', () => {
