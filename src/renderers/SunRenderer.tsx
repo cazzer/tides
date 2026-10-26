@@ -1,22 +1,25 @@
 import { useMemo, useEffect } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import noiseVertex from '../shaders/sun-noise/vertex.glsl'
-import noiseFragment from '../shaders/sun-noise/fragment.frag'
 import sunVertex from '../shaders/sun/vertex.glsl'
 import sunFragment from '../shaders/sun/fragment.frag'
 import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
-import { CubeCamera, meshBounds } from '@react-three/drei'
+import { meshBounds } from '@react-three/drei'
 import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE } from './corona-geometry'
 import { SunGlare } from './SunGlare'
 import { useStore } from '../store'
 import { useBodySphere } from '../ship/limb-detail'
+import { isLowQuality } from '../quality'
+import { sunSurface } from './sun-surface'
+import { SunProminences } from './SunProminences'
 
-// https://www.youtube.com/watch?v=3krH52AhPqk
-// ended at 1:04:24
-
-const REFLECTION_LAYER = 1
+// Outside the component: the react-hooks lint rejects mutating a memoised
+// material in place, as three's uniforms are meant to be.
+function tick(surface: ReturnType<typeof sunSurface>, material: THREE.ShaderMaterial, time: number) {
+  surface.step()
+  material.uniforms.time.value = time
+}
 
 interface SunRendererProps {
   diameter: number
@@ -28,26 +31,21 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
   // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
   const shipMode = useStore((s) => s.shipMode)
   const sphere = useBodySphere('sun', diameter, [128, 128])
-  const noiseMaterial = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      vertexShader: noiseVertex,
-      fragmentShader: noiseFragment,
-      side: THREE.DoubleSide,
-      uniforms: {
-        time: { value: 0 },
-      },
-    })
-  }, [])
+  const gl = useThree((s) => s.gl)
+  // The photosphere's and corona's baked detail, shared by every view on
+  // this renderer.
+  const surface = useMemo(() => sunSurface(gl, isLowQuality()), [gl])
   const sunMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
         time: { value: 0 },
-        uPerlin: { value: null },
+        uSurface: { value: surface.surface },
+        uPlasma: { value: surface.plasma },
       },
       vertexShader: sunVertex,
       fragmentShader: sunFragment,
     })
-  }, [])
+  }, [surface])
   const coronaMaterial = useMemo(() => {
     return new THREE.ShaderMaterial({
       vertexShader: coronaVertex,
@@ -63,59 +61,30 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
       depthTest: true,
       depthFunc: THREE.LessDepth,
       uniforms: {
-        time: { value: 0 },
         uRadius: { value: diameter },
         uMaxAngle: { value: CORONA_MAX_ANGLE },
         uOuter: { value: interactive ? CORONA_OUTER_MAIN : CORONA_OUTER_PERSPECTIVE },
+        uCorona: { value: surface.corona },
       },
     })
-  }, [diameter, interactive])
+  }, [diameter, interactive, surface])
 
-  useEffect(() => {
-    return () => {
-      noiseMaterial.dispose()
-      sunMaterial.dispose()
-    }
-  }, [noiseMaterial, sunMaterial])
+  useEffect(() => () => sunMaterial.dispose(), [sunMaterial])
   useEffect(() => () => coronaMaterial.dispose(), [coronaMaterial])
 
-  useFrame((state) => {
-    const t = state.clock.elapsedTime
-    noiseMaterial.uniforms.time.value = t
-    sunMaterial.uniforms.time.value = t
-    coronaMaterial.uniforms.time.value = t
-  })
+  useFrame((state) => tick(surface, sunMaterial, state.clock.elapsedTime))
 
   return (
     <>
-      <CubeCamera
-        position={[0, 0, 0]}
-        resolution={256}
-        frames={Infinity}
-        near={0.5}
-        far={1000}
-        onUpdate={(cubeCamera) => {
-          cubeCamera.children.forEach((child) =>
-            child.layers.set(REFLECTION_LAYER)
-          )
-        }}
+      <mesh
+        geometry={sphere}
+        raycast={meshBounds}
       >
-        {(texture) => {
-          sunMaterial.uniforms.uPerlin.value = texture
-          return (
-            <mesh
-              position={[0, 0, 0]}
-              geometry={sphere}
-              raycast={meshBounds}
-            >
-              <primitive
-                object={sunMaterial}
-                attach="material"
-              />
-            </mesh>
-          )
-        }}
-      </CubeCamera>
+        <primitive
+          object={sunMaterial}
+          attach="material"
+        />
+      </mesh>
       {/* Corona: a billboard the vertex shader sizes and turns to the eye. */}
       <mesh
         frustumCulled={false}
@@ -128,20 +97,10 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
           attach="material"
         />
       </mesh>
+      <SunProminences radius={diameter} />
       {/* Far glare: keeps the Sun a bright point when its disc is sub-pixel
           at flight-scale ranges (tides-2hv.12); separate from the corona. */}
       {shipMode && <SunGlare radius={diameter} />}
-      {/* Noise sphere - only visible to CubeCamera */}
-      <mesh
-        position={[0, 0, 0]}
-        layers={REFLECTION_LAYER}
-      >
-        <sphereGeometry args={[diameter + 10, 128, 128]} />
-        <primitive
-          object={noiseMaterial}
-          attach="material"
-        />
-      </mesh>
     </>
   )
 }

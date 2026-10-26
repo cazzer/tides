@@ -71,3 +71,24 @@ export function perspectiveCoronaQuad(
     push: (depth + radius) / depth,
   }
 }
+
+/**
+ * The outward limb normal, in view space, under the corona quad's image
+ * plane direction `u` (a unit vector from the quad centre): the direction
+ * the corona's pattern is read from, before vertex.glsl turns it into the
+ * Sun's frame. Mirrors the shader's `slope` terms: change one, change the
+ * other. A perspective eye ray to the limb leans off the view axis, and the
+ * normal must be perpendicular to it; dropping the z term would pin the
+ * pattern to the screen, sliding it over the Sun as the eye turns. `quad`
+ * is null for the ortho main view, where the normal lies in the image plane.
+ */
+export function coronaLimbNormal(
+  quad: CoronaQuad | null,
+  depth: number,
+  u: readonly [number, number]
+): [number, number, number] {
+  if (!quad) return [u[0], u[1], 0]
+  const z = (u[0] * quad.centre[0] + u[1] * quad.centre[1] + quad.limb) / depth
+  const length = Math.hypot(u[0], u[1], z)
+  return [u[0] / length, u[1] / length, z / length]
+}
