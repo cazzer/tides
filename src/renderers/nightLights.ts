@@ -77,6 +77,16 @@ const FLIGHT_LIGHT_BODY = /* glsl */ `
 }
 `
 
+/** The patch's GLSL for the streamed tiles to reuse by text (tides-zmw.9.13):
+ * the heads after common, the mask after emissivemap_fragment, the flight's
+ * light after lights_fragment_end. */
+export const NIGHT_LIGHTS_GLSL = {
+  fragmentHead: FRAGMENT_HEAD,
+  fragmentBody: FRAGMENT_BODY,
+  flightFragmentHead: FLIGHT_FRAGMENT_HEAD,
+  flightLightBody: FLIGHT_LIGHT_BODY,
+}
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
