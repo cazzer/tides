@@ -1663,6 +1663,14 @@ const GROUND_FRAGMENT_LIGHT = /* glsl */ `
 }
 `
 
+/** groundPatch's fragment GLSL as it injects it (head after common, light
+ * after lights_fragment_end), for the streamed tiles to reuse by text
+ * (surface/tile-clouds.ts, tides-zmw.9.12). */
+export const CLOUD_GROUND_GLSL = {
+  head: (flat: boolean, live: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + liveTerrain(GROUND_FRAGMENT_HEAD, live),
+  light: GROUND_FRAGMENT_LIGHT,
+}
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
