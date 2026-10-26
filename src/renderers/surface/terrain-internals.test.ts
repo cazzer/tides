@@ -387,11 +387,11 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     expect((terrain as unknown as TerrainPluginInternals)._gridCache).toBe(cache)
     const add = vi.spyOn(tiles.downloadQueue, 'add')
     answer = async () => new Response(null, { status: 404 })
-    const grid = cache.lock(1, 1, 1)
+    const grid = cache.lock(0, 0, 0)
     await release(opts.budget)
     await grid
     expect(add).toHaveBeenCalledTimes(1)
-    expect(fetches).toEqual(['https://tiles.example/1/1/1.webp'])
+    expect(fetches).toEqual(['https://tiles.example/0/0/0.webp'])
   })
 
   it('makes a 404 a flat, full-size sea-level grid and cancels its body', async () => {
@@ -404,7 +404,7 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       vi.spyOn(res.body!, 'cancel').mockImplementation(cancel)
       return res
     }
-    const pending = cache.lock(1, 0, 1)
+    const pending = cache.lock(0, 0, 0)
     await release(opts.budget)
     const grid = (await pending) as DataTexture
     expect([grid.image.width, grid.image.height]).toEqual([6, 6]) // tileDimension 4 + border
@@ -415,7 +415,7 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
 
   it('asks nothing under a tile that answered no data over open water', async () => {
     const { terrain } = await loadedPlugin()
-    // sea level in the grids above z4, none at z4
+    // sea level (Mapterhorn's is exactly 0 m) in the grids above z4, none at z4
     const opts = options({ decode: async () => ({ data: new Float32Array(36), width: 6, height: 6 }) })
     const cache = installSurfaceGridCache(terrain, opts)
     answer = async (url) => new Response(url.includes('/4/') ? null : new Uint8Array([1]), { status: url.includes('/4/') ? 404 : 200 })
@@ -424,30 +424,30 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     await drain(opts.budget, above)
     const parent = cache.lock(6, 5, 4)
     await drain(opts.budget, parent)
-    // the "no data" reads the grid above, which holds nothing over the sea there
-    expect(fetches).toEqual(['https://tiles.example/2/1/1.webp', 'https://tiles.example/4/6/5.webp'])
+    // the "no data" reads the tile a level up (not one of the plugin's grids), all sea there
+    expect(fetches).toEqual(['https://tiles.example/2/1/1.webp', 'https://tiles.example/4/6/5.webp', 'https://tiles.example/3/3/2.webp'])
     const child = cache.lock(25, 21, 6)
     await drain(opts.budget, child)
-    expect(fetches).toHaveLength(2)
-    expect(cache.flatTiles).toBe(2)
+    expect(fetches).toHaveLength(3)
+    expect(cache.flatTiles).toBe(2) // the parent and the child
     expect(cache.cappedTiles).toBe(0)
     expect(cache.coverageEnd.size).toBe(0)
     expect(cache.coverageLevel(25, 21, 6)).toBe(-1)
     // a sibling of the parent is still asked for
     const sibling = cache.lock(7, 5, 4)
     await drain(opts.budget, sibling)
-    expect(fetches).toHaveLength(3)
-    expect(cache.flatTiles).toBe(3)
+    expect(fetches.slice(3)).toEqual(['https://tiles.example/4/7/5.webp', 'https://tiles.example/3/3/2.webp'])
   })
 
-  it('makes a "no data" with none above it open water, every grid up to the root asked once', async () => {
+  it('makes a "no data" with none above it open water, every level up to the root asked once', async () => {
     const { terrain } = await loadedPlugin()
     const opts = options()
     const cache = installSurfaceGridCache(terrain, opts)
     answer = async () => new Response(null, { status: 404 })
     const tile = cache.lock(6, 5, 4)
     await drain(opts.budget, tile)
-    expect(fetches).toEqual(['https://tiles.example/4/6/5.webp', 'https://tiles.example/2/1/1.webp', 'https://tiles.example/0/0/0.webp'])
+    expect(fetches.map((u) => u.slice(22))).toEqual(['4/6/5.webp', '3/3/2.webp', '2/1/1.webp', '1/0/0.webp', '0/0/0.webp'])
+    // the plugin's levels made flat; the levels between answered, never drawn
     expect(cache.flatTiles).toBe(3)
     expect(cache.coverageEnd.size).toBe(0)
   })
@@ -486,17 +486,18 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       const fromChild = points.map(([lat, lon]) => terrain.sampleCartographicElevation(lat, lon)!)
       for (let k = 0; k < points.length; k++) expect(fromChild[k]).toBeCloseTo(fromParent[k], 3)
       expect(new Set(fromChild).size).toBeGreaterThan(1)
-      expect(fetches).toEqual(['https://tiles.example/4/2/2.webp', 'https://tiles.example/6/9/9.webp'])
+      // the z6 "no data" asked z5 (between the plugin's levels), which had none either
+      expect(fetches.map((u) => u.slice(22))).toEqual(['4/2/2.webp', '6/9/9.webp', '5/4/4.webp'])
       expect(cache.flatTiles).toBe(0)
       expect(cache.cappedTiles).toBe(1)
-      expect([...cache.coverageEnd]).toEqual([['6/9/9', 4]])
+      expect([...cache.coverageEnd].sort()).toEqual([
+        ['5/4/4', 4],
+        ['6/9/9', 4],
+      ])
       expect(cache.coverageLevel(9, 9, 6)).toBe(4)
+      expect(cache.coverageLevel(8, 8, 6)).toBe(4) // a sibling under the same z5 answer
       expect(cache.coverageLevel(36, 37, 8)).toBe(4) // under it
       expect(cache.coverageLevel(2, 2, 4)).toBe(-1) // data of its own
-      // the parent lent its grid and was given it back
-      cache.release(2, 2, 4)
-      await Promise.resolve()
-      expect(cache.get(2, 2, 4)).toBeNull()
     })
 
     it('draws a tile under a coverage end from the same data grid, asking nothing', async () => {
@@ -514,26 +515,92 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       const grandchild = cache.lock(37, 38, 8)
       await drain(opts.budget, grandchild)
       expect(terrain.sampleCartographicElevation(at[0], at[1])).toBeCloseTo(fromChild, 3)
-      expect(fetches).toHaveLength(2)
-      expect(cache.cappedTiles).toBe(2)
-      expect(cache.coverageEnd.size).toBe(1) // only answers are recorded
+      const sibling = cache.lock(8, 8, 6)
+      await drain(opts.budget, sibling)
+      expect(fetches).toHaveLength(3)
+      expect(cache.cappedTiles).toBe(3)
+      expect(cache.coverageEnd.size).toBe(2) // only answers are recorded
     })
 
-    it('fetches the data grid above when no tile holds it, and lets it go after', async () => {
+    it('fetches the data grid above when no tile holds it, and holds it for the grids under the coverage end', async () => {
       const { terrain } = await loadedPlugin()
       const opts = options({ decode: planeGrid })
       const cache = installSurfaceGridCache(terrain, opts)
       answer = coverage(4)
       const child = cache.lock(9, 9, 6)
       await drain(opts.budget, child)
-      expect(fetches).toEqual(['https://tiles.example/6/9/9.webp', 'https://tiles.example/4/2/2.webp'])
+      expect(fetches.map((u) => u.slice(22))).toEqual(['6/9/9.webp', '5/4/4.webp', '4/2/2.webp'])
       expect(cache.cappedTiles).toBe(1)
       await Promise.resolve()
+      expect(cache.get(2, 2, 4)).not.toBeNull()
+      expect(cache.count).toBe(2) // the child's and the held one; z5's placeholder went
+      cache.shutDown()
+      await Promise.resolve()
       expect(cache.get(2, 2, 4)).toBeNull()
-      expect(cache.count).toBe(1)
     })
 
-    it('keeps a 404 flat where the data above holds no ground over the sea there (a coast)', async () => {
+    it('reads data a level between the plugin\'s where the coverage ends there (z13 over Israel)', async () => {
+      const { terrain } = await loadedPlugin()
+      // each level's grid one height: 100 m a level
+      const opts = options({ decode: async (buffer) => ({ data: new Float32Array(36).fill(100 * new Uint8Array(buffer)[0]), width: 6, height: 6 }) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = async (url) => {
+        const z = Number(url.split('/')[3])
+        return z > 5 ? new Response(null, { status: 404 }) : new Response(new Uint8Array([z]), { status: 200 })
+      }
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      const data = ((await child) as DataTexture).image.data as unknown as Float32Array
+      expect(data.every((v) => v === 500)).toBe(true)
+      expect([...cache.coverageEnd]).toEqual([['6/9/9', 5]])
+      // the z5 grid is held for the rest under it: asked once
+      const sibling = cache.lock(8, 8, 6)
+      await drain(opts.budget, sibling)
+      expect(fetches.map((u) => u.slice(22))).toEqual(['4/2/2.webp', '6/9/9.webp', '5/4/4.webp', '6/8/8.webp'])
+      expect(cache.cappedTiles).toBe(2)
+    })
+
+    it('reads data two levels further up where the grid above has none either', async () => {
+      const { terrain } = await loadedPlugin()
+      const opts = options({ decode: planeGrid })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = coverage(2)
+      const top = cache.lock(0, 0, 2)
+      await drain(opts.budget, top)
+      const [w, s, e, n] = tiling(terrain).getTileBounds(9, 9, 6, false)
+      const points = [0.2, 0.7].flatMap((a) => [0.3, 0.8].map((b) => [s + (n - s) * a, w + (e - w) * b]))
+      const fromTop = points.map(([lat, lon]) => terrain.sampleCartographicElevation(lat, lon)!)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      points.forEach(([lat, lon], k) => expect(terrain.sampleCartographicElevation(lat, lon)).toBeCloseTo(fromTop[k], 3))
+      expect(fetches.map((u) => u.slice(22))).toEqual(['2/0/0.webp', '6/9/9.webp', '5/4/4.webp', '4/2/2.webp', '3/1/1.webp'])
+      expect(cache.coverageLevel(9, 9, 6)).toBe(2)
+      expect(cache.coverageLevel(2, 2, 4)).toBe(2)
+      expect(cache.cappedTiles).toBe(2) // z4 and z6
+      // every lock taken on the way was given back: the z2 grid (test + held), the z4 one (resampled, released) and z6
+      await Promise.resolve()
+      expect((cache.cache['0_0_2'] as { count: number }).count).toBe(2)
+      expect(cache.get(2, 2, 4)).toBeNull()
+      expect(cache.count).toBe(2)
+    })
+
+    it('draws land below the sea from its data, not flat (the Dead Sea)', async () => {
+      const { terrain } = await loadedPlugin()
+      const opts = options({ decode: async () => ({ data: new Float32Array(36).fill(-432), width: 6, height: 6 }) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = coverage(4)
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      expect((((await child) as DataTexture).image.data as unknown as Float32Array).every((v) => v === -432)).toBe(true)
+      expect(cache.flatTiles).toBe(0)
+      expect(cache.cappedTiles).toBe(1)
+    })
+
+    it('keeps a 404 flat where the data above holds only the sea there (a coast)', async () => {
       const { terrain } = await loadedPlugin()
       // land only in the parent's westmost texel column
       const coast = async (): Promise<PaddedGrid> => {
@@ -549,10 +616,11 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       expect(((await sea) as DataTexture).image.data.every((v: number) => v === 0)).toBe(true)
       expect(cache.flatTiles).toBe(1)
       expect(cache.coverageEnd.size).toBe(0)
+      const asked = fetches.length
       // and its subtree is open water, asked for and resampled no more
       const under = cache.lock(44, 37, 8)
       await drain(opts.budget, under)
-      expect(fetches).toHaveLength(2)
+      expect(fetches).toHaveLength(asked)
       expect(cache.flatTiles).toBe(2)
       const land = cache.lock(8, 9, 6) // the west quarter, over the land
       await drain(opts.budget, land)
@@ -567,15 +635,18 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       answer = coverage(4)
       const parent = cache.lock(2, 2, 4)
       await drain(opts.budget, parent)
+      const first = cache.lock(9, 9, 6)
+      await drain(opts.budget, first)
+      const locks = () => (cache.cache['2_2_4'] as { count: number }).count
+      const before = locks()
+      // a sibling under the same z5 answer: reads the z4 grid straight away
       const abort = new AbortController()
-      const child = cache.fetchItem([9, 9, 6], abort.signal)
+      const child = cache.fetchItem([8, 8, 6], abort.signal)
       await vi.waitFor(() => expect(opts.budget.pending).toBe(1))
+      expect(locks()).toBe(before + 1)
       abort.abort(new DOMException('gone', 'AbortError'))
       await expect(child).rejects.toMatchObject({ name: 'AbortError' })
-      cache.release(2, 2, 4)
-      await Promise.resolve()
-      expect(cache.get(2, 2, 4)).toBeNull()
-      expect(cache.count).toBe(0)
+      expect(locks()).toBe(before)
     })
   })
 
@@ -645,7 +716,7 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
 
     answer = async () => new Response(null, { status: 404 })
     const waiting = new AbortController()
-    const b = cache.fetchItem([1, 1, 1], waiting.signal)
+    const b = cache.fetchItem([0, 0, 0], waiting.signal)
     await vi.waitFor(() => expect(opts.budget.pending).toBe(1))
     waiting.abort(new DOMException('gone', 'AbortError'))
     await expect(b).rejects.toMatchObject({ name: 'AbortError' })
@@ -658,7 +729,7 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     const cache = installSurfaceGridCache(terrain, opts)
     answer = async () => new Response(null, { status: 404 })
     const signal = new AbortController()
-    const pending = cache.fetchItem([1, 1, 1], signal.signal)
+    const pending = cache.fetchItem([0, 0, 0], signal.signal)
     await release(opts.budget)
     const grid = await pending
     const dispose = vi.spyOn(grid, 'dispose')
@@ -677,15 +748,17 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       if (n === 2) return new Response('busy', { status: 503 })
       return new Response(null, { status: 404 })
     }
-    const pending = cache.lock(1, 1, 1)
+    const pending = cache.lock(0, 0, 0)
     await release(opts.budget)
     await pending
     expect(fetches).toHaveLength(3)
     expect(cache.flatTiles).toBe(1)
 
+    // (a fresh cache: everything is under the root, open water in this one)
+    const other = installSurfaceGridCache((await loadedPlugin()).terrain, options())
     fetches.length = 0
     answer = async () => new Response('busy', { status: 503 })
-    await expect(cache.lock(1, 1, 2)).rejects.toThrow(/answered 503/)
+    await expect(other.lock(1, 1, 2)).rejects.toThrow(/answered 503/)
     expect(fetches).toHaveLength(3)
   })
 
@@ -708,14 +781,14 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     const opts = options()
     const cache = installSurfaceGridCache(terrain, opts)
     answer = async () => new Response('no', { status: 403 })
-    const first = cache.lock(1, 1, 1)
-    const again = cache.lock(1, 1, 1) // a second tile reading the same grid
+    const first = cache.lock(0, 0, 0)
+    const again = cache.lock(0, 0, 0) // a second tile reading the same grid
     await expect(first).rejects.toThrow(/answered 403/)
     await expect(again).rejects.toThrow(/answered 403/)
-    await vi.waitFor(() => expect(cache.get(1, 1, 1)).toBeNull())
+    await vi.waitFor(() => expect(cache.get(0, 0, 0)).toBeNull())
     expect(cache.count).toBe(0)
     answer = async () => new Response(null, { status: 404 })
-    const retry = cache.lock(1, 1, 1)
+    const retry = cache.lock(0, 0, 0)
     await release(opts.budget)
     await retry
     expect(fetches).toHaveLength(2)
@@ -743,7 +816,7 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     const retrying = cache.fetchItem([1, 1, 2], new AbortController().signal)
     await vi.waitFor(() => expect(fetches).toHaveLength(1))
     answer = async () => new Response(null, { status: 404 })
-    const waiting = cache.fetchItem([1, 1, 1], new AbortController().signal)
+    const waiting = cache.fetchItem([0, 0, 0], new AbortController().signal)
     await vi.waitFor(() => expect(opts.budget.pending).toBe(1))
     cache.shutDown()
     await expect(retrying).rejects.toMatchObject({ name: 'AbortError' })

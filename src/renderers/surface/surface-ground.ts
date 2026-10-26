@@ -339,6 +339,7 @@ export function tileGroundMax(ground: TileGround, win: Window, shift = 0, antici
 /** A loaded tile, as one frame's candidate list holds it. */
 interface Candidate {
   scene: THREE.Object3D
+  tile: unknown
   drawn: boolean
   level: number
   /** From its bounding region, radians: west, south, east, north. */
@@ -431,8 +432,12 @@ function tileRegion(tile: unknown): readonly number[] | null {
 }
 
 export interface SurfaceGroundOptions {
-  /** The tree's deepest level: tiles above it anticipate their children (see the header). */
-  deepest?: number
+  /**
+   * The tree's deepest level: tiles above it anticipate their children (see
+   * the header). Per tile where the tree ends sooner (a leaf at the source's
+   * coverage end, surface-coverage.ts).
+   */
+  deepest?: number | ((tile: unknown) => number)
 }
 
 /**
@@ -466,9 +471,10 @@ export function createSurfaceGround(tiles: SurfaceGroundTiles, { deepest = SURFA
     const [west, south, east, north] = region
     const span = east - west
     if (!(span > 0)) return
-    const c = (pool[count] ??= { scene, drawn: false, level: 0, west: 0, south: 0, east: 0, north: 0 })
+    const c = (pool[count] ??= { scene, tile, drawn: false, level: 0, west: 0, south: 0, east: 0, north: 0 })
     count++
     c.scene = scene
+    c.tile = tile
     c.drawn = drawnSet.has(scene)
     c.level = Math.round(Math.log2(TWO_PI / span))
     c.west = west
@@ -483,7 +489,10 @@ export function createSurfaceGround(tiles: SurfaceGroundTiles, { deepest = SURFA
     count = 0
     tiles.forEachLoadedModel(add)
     // Let go of scenes a shrunken list no longer holds.
-    for (let k = count; k < pool.length && pool[k].scene; k++) pool[k].scene = null as unknown as THREE.Object3D
+    for (let k = count; k < pool.length && pool[k].scene; k++) {
+      pool[k].scene = null as unknown as THREE.Object3D
+      pool[k].tile = null
+    }
     fresh = true
   }
 
@@ -525,7 +534,7 @@ export function createSurfaceGround(tiles: SurfaceGroundTiles, { deepest = SURFA
         const last = ground.colLon[SEGMENTS]
         const mid = (first + last) / 2
         const shift = lon - wrapPi(lon - mid) - mid
-        const top = tileGroundMax(ground, win, shift, anticipating && c.level < deepest)
+        const top = tileGroundMax(ground, win, shift, anticipating && c.level < (typeof deepest === 'number' ? deepest : deepest(c.tile)))
         // A tile that adds no cell covers nothing: the globe stays in the floor there.
         if (!(top > -Infinity)) continue
         metres = Math.max(metres, top)

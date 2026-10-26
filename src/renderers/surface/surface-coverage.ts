@@ -8,8 +8,9 @@
 // TileBoundingVolume.distanceToPoint): 0 anywhere inside the region's
 // oriented box, and the error Infinity (1e13-1e16 a hair outside). So every
 // tile whose box holds the eye refines to the deepest level whatever the
-// ground under it. Here a distance under INSIDE_METRES is taken again from
-// the region itself: from the eye to the region's nearest point (its lat,
+// ground under it. Here a distance under EYE_GROUND_MIN_METRES (the floor
+// the distance is held to below, so a neighbour 1-30 m off never out-refines
+// the tile under the eye) is taken again from the region itself: from the eye to the region's nearest point (its lat,
 // lon and height clamped into the region's), and with the eye inside the
 // region, from the eye down to the drawn ground under it (the ship's floor
 // sampler, surface-ground.ts, times the live scale), never under
@@ -21,13 +22,17 @@
 // (the stop, so the tiles there refine as before, but finitely).
 //
 // Past the coverage end (9.21). Where the source has nothing finer than
-// some level (Mapterhorn: z12 over the Himalaya), SurfaceGridCache draws the
-// deeper grids from that data (terrain-internals.ts), so refining further
-// only adds tiles of the same ground. The library ends its tree a level past
-// its deepest grids (maxSourceLevel + EXTRA_LEVELS - 1); likewise a tile all
-// of whose children read grids past the coverage end takes error 0 (a leaf),
-// applied last, over the near-eye error. A tile with any child of its own
-// data (a coverage boundary, a coast) refines as before.
+// some level (Mapterhorn: z12 over the Himalaya, z13 over Israel),
+// SurfaceGridCache draws the deeper grids from that data (terrain-
+// internals.ts). Refining on still draws that data finer, up to about a
+// texel a vertex (a 512-texel grid under 32-segment meshes: four levels
+// down), and no further: a tile at least CAP_LEVELS under the data level
+// all of whose children read grids past the coverage end takes error 0 (a
+// leaf), applied last, over the near-eye error; above that, the screen-space
+// error decides as anywhere. A tile with any child of its own data (a
+// coverage boundary, a coast) refines as before. The ship's floor takes
+// such a leaf as the tree's end (deepest()): no anticipating children that
+// never come.
 //
 // The library's no-child-in-view rule (traverseFunctions.js, 0.5.3: a
 // REPLACE tile none of whose children is in the frustum clears its own
@@ -38,11 +43,16 @@ import * as THREE from 'three'
 import { surfaceGroundSampler } from '../../surface-ground'
 import { EARTH_UNITS_PER_METRE, FINE_GROUND_CLEARANCE } from '../../ship/ship-bodies'
 import { GRID_LEVEL_STEP } from './terrain-internals'
+import { SURFACE_TREE_DEEPEST, TILE_VERTICES } from './surface-ground'
 
 /** The least distance (m) the eye is taken to stand from the drawn ground: the ship's stop on a float depth buffer. */
 export const EYE_GROUND_MIN_METRES = FINE_GROUND_CLEARANCE / EARTH_UNITS_PER_METRE
-/** A library distance (m) under this is the eye inside the box: taken again from the region. */
-export const INSIDE_METRES = 1
+/**
+ * Levels under the data level at which a tile past the coverage end stops
+ * refining: the grid's texels (512) over the mesh's segments (32), 2^4, so
+ * the data is drawn at about a texel a vertex.
+ */
+export const CAP_LEVELS = Math.round(Math.log2(512 / (TILE_VERTICES - 1)))
 /** The window (m) the drawn ground under the eye is read across. */
 const EYE_GROUND_WINDOW_METRES = 1
 const TWO_PI = 2 * Math.PI
@@ -148,6 +158,8 @@ export interface SurfaceViewErrorOptions {
   hasCoverageEnds(): boolean
   /** The plugin's deepest grid level (its _maxSourceLevel). */
   maxSourceLevel: number
+  /** Levels under the data level a tile past the coverage end stops at (CAP_LEVELS). */
+  capLevels?: number
   /** The live terrain scale. */
   scale(): number
   /** The highest drawn ground (true metres) within radiusM of (lat, lon), or null where no drawn tile covers it. */
@@ -159,8 +171,14 @@ export interface SurfaceViewError {
   readonly near: number
   /** Tiles capped at the coverage end this frame. */
   readonly capped: number
-  /** The largest error written this frame, the root's aside (never Infinity). */
+  /** The largest error written this frame, the root's and z0's aside (never Infinity). */
   readonly maxError: number
+  /**
+   * The deepest level the tree reaches over a tile, for the floor's
+   * anticipation (surface-ground.ts): the tile's own where it is a leaf at
+   * the coverage end, else the tree's.
+   */
+  deepest(tile: unknown): number
 }
 
 /** The drawn ground from the ship's floor sampler, where the tiles cover the window. */
@@ -186,7 +204,7 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
   if (typeof view !== 'function' || !Array.isArray(renderer.cameraInfo)) {
     throw new Error('surface coverage: not the 0.5.3 renderer')
   }
-  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround } = options
+  const { coverageLevel, hasCoverageEnds, maxSourceLevel, scale, ground = drawnGround, capLevels = CAP_LEVELS } = options
   const eyes: EyeState[] = []
   let frame = -1
   let near = 0
@@ -257,20 +275,31 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     near++
   }
 
-  /** Whether every child of the tile reads a grid past the coverage end. */
-  const pastCoverage = (tile: ViewTile): boolean => {
-    const children = tile.children
+  /**
+   * Whether the tile is at the coverage end's last level: CAP_LEVELS or more
+   * under the data level every one of its children reads past the coverage.
+   */
+  const pastCoverage = (tile: object): boolean => {
+    const children = (tile as ViewTile).children
     if (!children?.length) return false
+    const sym = terrainTileSymbols(tile)
+    if (!sym) return false
+    const own = (tile as Record<symbol, number>)[sym.level]
     for (const child of children) {
-      const sym = terrainTileSymbols(child)
-      if (!sym) return false
       const c = child as Record<symbol, number>
       const level = c[sym.level]
+      if (level === undefined) return false
       const source = Math.min(GRID_LEVEL_STEP * Math.floor(level / GRID_LEVEL_STEP), maxSourceLevel)
       const shift = level - source
-      if (coverageLevel(c[sym.x] >> shift, c[sym.y] >> shift, source) < 0) return false
+      const data = coverageLevel(c[sym.x] >> shift, c[sym.y] >> shift, source)
+      if (data < 0 || own < data + capLevels) return false
     }
     return true
+  }
+
+  const levelOf = (tile: object): number => {
+    const sym = terrainTileSymbols(tile)
+    return sym ? (tile as Record<symbol, number>)[sym.level] : -1
   }
 
   renderer.calculateTileViewError = function (tile: ViewTile, target) {
@@ -279,13 +308,14 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
       frame = renderer.frameCount
       near = capped = maxError = 0
     }
-    if (target.distanceFromCamera < INSIDE_METRES) nearError(tile, target)
+    if (target.distanceFromCamera < EYE_GROUND_MIN_METRES) nearError(tile, target)
     if (target.error > 0 && hasCoverageEnds() && pastCoverage(tile)) {
       target.error = 0
       capped++
     }
-    // (the synthetic root's geometricError is Infinity: it always refines)
-    if (target.error > maxError && Number.isFinite(tile.geometricError)) maxError = target.error
+    // Not the synthetic root's (geometricError Infinity: it always refines)
+    // nor z0's (~78 km at the 30 m stop: 1.3e6, refining as it must).
+    if (target.error > maxError && levelOf(tile) >= 1) maxError = target.error
   }
 
   return {
@@ -297,6 +327,9 @@ export function boundSurfaceViewError(tiles: object, options: SurfaceViewErrorOp
     },
     get maxError() {
       return maxError
+    },
+    deepest(tile) {
+      return tile && hasCoverageEnds() && pastCoverage(tile as object) ? levelOf(tile as object) : SURFACE_TREE_DEEPEST
     },
   }
 }

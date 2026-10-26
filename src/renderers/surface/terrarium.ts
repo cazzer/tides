@@ -102,11 +102,12 @@ export function resampleGrid(src: PaddedGrid, sub: readonly number[], tileSize: 
 }
 
 /**
- * The highest of an ancestor grid's texels whose centres lie in the
- * normalized rectangle `sub` (the nearest one when none does): over a tile
- * the source left out, whether the ancestor holds any ground above the sea.
+ * The lowest and highest of an ancestor grid's texels whose centres lie in
+ * the normalized rectangle `sub` (the nearest one when none does): over a
+ * tile the source left out, whether the ancestor holds anything but the sea
+ * (Mapterhorn's is exactly 0 m) there.
  */
-export function gridMaxWithin(src: PaddedGrid, sub: readonly number[]): number {
+export function gridRangeWithin(src: PaddedGrid, sub: readonly number[]): [number, number] {
   const { data, width, height } = src
   const span = (lo: number, hi: number, inner: number): [number, number] => {
     const clamp = (k: number) => Math.min(Math.max(k, 1), inner)
@@ -117,9 +118,16 @@ export function gridMaxWithin(src: PaddedGrid, sub: readonly number[]): number {
   }
   const [x0, x1] = span(sub[0], sub[2], width - 2)
   const [y0, y1] = span(sub[1], sub[3], height - 2)
-  let top = -Infinity
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) top = Math.max(top, data[y * width + x])
-  return top
+  let min = Infinity
+  let max = -Infinity
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const v = data[y * width + x]
+      if (v < min) min = v
+      if (v > max) max = v
+    }
+  }
+  return [min, max]
 }
 
 /**

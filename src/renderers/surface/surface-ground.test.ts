@@ -320,6 +320,11 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     // Wider windows read the vertices only; at the deepest level nothing finer comes.
     expect(sampler.maxElevation(lat, lon, ANTICIPATE_MAX_M + 1)!.metres).toBe(100)
     expect(createSurfaceGround(tilesOf([t], []), { deepest: 12 }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(100)
+    // per tile: a leaf at the source's coverage end (tides-zmw.9.21) anticipates nothing
+    const leafAt = vi.fn((tile: unknown) => (tile === t.tile ? 12 : SURFACE_TREE_DEEPEST))
+    expect(createSurfaceGround(tilesOf([t], []), { deepest: leafAt }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(100)
+    expect(leafAt).toHaveBeenCalledWith(t.tile)
+    expect(createSurfaceGround(tilesOf([t], []), { deepest: () => SURFACE_TREE_DEEPEST }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(2000)
   })
 
   it('raises a parent towards its child from the same grid, but bounds it only mostly (a heuristic)', async () => {

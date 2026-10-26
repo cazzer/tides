@@ -6,10 +6,11 @@ import * as THREE from 'three'
 import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
+import { SURFACE_TREE_DEEPEST } from './surface-ground'
 import {
   boundSurfaceViewError,
+  CAP_LEVELS,
   EYE_GROUND_MIN_METRES,
-  INSIDE_METRES,
   regionDistance,
   terrainTileSymbols,
   type RegionEllipsoid,
@@ -77,8 +78,8 @@ const Y = Symbol('TILE_Y')
 const LEVEL = Symbol('TILE_LEVEL')
 const child = (x: number, y: number, level: number) => ({ [X]: x, [Y]: y, [LEVEL]: level })
 
-function tileOf(volume: object, children: object[] = [], geometricError = 10) {
-  return { geometricError, boundingVolume: { region: REGION }, engineData: { boundingVolume: volume }, children }
+function tileOf(volume: object, children: object[] = [], geometricError = 10, at: [number, number, number] = [0, 0, 5]) {
+  return { geometricError, boundingVolume: { region: REGION }, engineData: { boundingVolume: volume }, children, ...child(...at) }
 }
 
 function options(over: Partial<SurfaceViewErrorOptions> = {}): SurfaceViewErrorOptions {
@@ -103,9 +104,9 @@ describe('the view error near the eye (tides-zmw.9.17)', () => {
 
   it("leaves the library's error where its distance is a metre or more", () => {
     const { position } = eyeAt(e, 28, 87, 9000)
-    const { renderer, volume } = fakeRenderer({ error: 3, distanceFromCamera: INSIDE_METRES }, position)
+    const { renderer, volume } = fakeRenderer({ error: 3, distanceFromCamera: EYE_GROUND_MIN_METRES }, position)
     boundSurfaceViewError(renderer, options())
-    expect(viewError(renderer, tileOf(volume))).toEqual({ inView: true, error: 3, distanceFromCamera: INSIDE_METRES })
+    expect(viewError(renderer, tileOf(volume))).toEqual({ inView: true, error: 3, distanceFromCamera: EYE_GROUND_MIN_METRES })
   })
 
   it('takes the distance down to the drawn ground with the eye inside the region, never under the stop', () => {
@@ -167,38 +168,47 @@ describe('the view error past the coverage end (tides-zmw.9.21)', () => {
     return level >= 14 && x >> s >= 100 && x >> s <= 101 && y >> s >= 200 && y >> s <= 201 ? 12 : -1
   }
 
-  it('caps a tile all of whose children read grids past it, and no other', () => {
+  // a tile and its four children
+  const family = (x: number, y: number, level: number) => [0, 1].flatMap((i) => [0, 1].map((j) => child(2 * x + i, 2 * y + j, level + 1)))
+
+  it('caps a tile four levels under the data level all of whose children read grids past it, and no other', () => {
     const { position } = eyeAt(e, 0, 0, 9000)
     const { renderer, volume } = fakeRenderer({ error: 40, distanceFromCamera: 500 }, position)
     const bounds = boundSurfaceViewError(renderer, options({ coverageLevel, hasCoverageEnds: () => true }))
-    // z13 (50, 100): its z14 children read 14/100-101/200-201
-    const kids = [child(100, 200, 14), child(101, 200, 14), child(100, 201, 14), child(101, 201, 14)]
-    expect(viewError(renderer, tileOf(volume, kids)).error).toBe(0)
-    // z14 (100, 200): its z15 children read the z14 grid itself
-    expect(viewError(renderer, tileOf(volume, [child(200, 400, 15), child(201, 401, 15)])).error).toBe(0)
+    expect(CAP_LEVELS).toBe(4)
+    // z16 (400, 800), data at z12: its z17 children read the z16 grid, past the coverage end
+    expect(viewError(renderer, tileOf(volume, family(400, 800, 16), 10, [400, 800, 16])).error).toBe(0)
+    // z13 (50, 100) and z15 (200, 400): their children read grids past it, but the data still draws finer
+    expect(viewError(renderer, tileOf(volume, family(50, 100, 13), 10, [50, 100, 13])).error).toBe(40)
+    expect(viewError(renderer, tileOf(volume, family(200, 400, 15), 10, [200, 400, 15])).error).toBe(40)
     // a child of its own data: refines
-    expect(viewError(renderer, tileOf(volume, [...kids.slice(1), child(102, 200, 14)])).error).toBe(40)
-    // a z12 tile: its z13 children read the z12 grid, which has data
-    expect(viewError(renderer, tileOf(volume, [child(50, 100, 13)])).error).toBe(40)
-    // no children (a leaf), or no coverage end known
-    expect(viewError(renderer, tileOf(volume, [])).error).toBe(40)
-    expect(bounds.capped).toBe(2)
+    const mixed = [...family(400, 800, 16).slice(1), child(1700, 1600, 17)]
+    expect(viewError(renderer, tileOf(volume, mixed, 10, [400, 800, 16])).error).toBe(40)
+    // no children (a leaf)
+    expect(viewError(renderer, tileOf(volume, [], 10, [400, 800, 16])).error).toBe(40)
+    expect(bounds.capped).toBe(1)
+    // the floor's tree ends at the capped tile, elsewhere at the tree's deepest
+    expect(bounds.deepest(tileOf(volume, family(400, 800, 16), 10, [400, 800, 16]))).toBe(16)
+    expect(bounds.deepest(tileOf(volume, family(50, 100, 13), 10, [50, 100, 13]))).toBe(SURFACE_TREE_DEEPEST)
+    expect(bounds.deepest(null)).toBe(SURFACE_TREE_DEEPEST)
     renderer.frameCount++
     viewError(renderer, tileOf(volume, []))
     expect(bounds.capped).toBe(0)
   })
 
-  it('caps after the near-eye error, and only with coverage ends known', () => {
+  it('caps after the near-eye error, and only with coverage ends known; takes no z0 into the largest error', () => {
     const { position } = eyeAt(e, 28, 87, 9000)
-    const kids = [child(100, 200, 14), child(101, 201, 14)]
+    const kids = family(400, 800, 16)
     const a = fakeRenderer({ error: Infinity, distanceFromCamera: 0 }, position)
-    boundSurfaceViewError(a.renderer, options({ coverageLevel, hasCoverageEnds: () => true, ground: () => 8900 }))
-    const capped = viewError(a.renderer, tileOf(a.volume, kids))
+    const bounds = boundSurfaceViewError(a.renderer, options({ coverageLevel, hasCoverageEnds: () => true, ground: () => 8900 }))
+    const capped = viewError(a.renderer, tileOf(a.volume, kids, 10, [400, 800, 16]))
     expect(capped.error).toBe(0)
     expect(capped.distanceFromCamera).toBeCloseTo(100, 6)
+    viewError(a.renderer, tileOf(a.volume, [], 1e5, [0, 0, 0]))
+    expect(bounds.maxError).toBe(0)
     const b = fakeRenderer({ error: 40, distanceFromCamera: 500 }, position)
     boundSurfaceViewError(b.renderer, options({ coverageLevel, hasCoverageEnds: () => false }))
-    expect(viewError(b.renderer, tileOf(b.volume, kids)).error).toBe(40)
+    expect(viewError(b.renderer, tileOf(b.volume, kids, 10, [400, 800, 16])).error).toBe(40)
   })
 })
 
