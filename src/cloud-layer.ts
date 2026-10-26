@@ -474,7 +474,8 @@ export function marchSpanFromEye(
  * Where along the ray the march from inside reads (cloudShaders.ts'
  * FLIP_SIDED branch, without the steps the cloud ceiling lets it leave out):
  * its origin, then steps of `step` from there, `phase` of a step short
- * (uMarchPhase, tides-ndh: moved on with the eye in flight), the last cut
+ * (vMarchPhase, tides-ndh: uMarchPhase, moved on with the eye in flight,
+ * times marchPhaseShare() of the fog at the eye), the last cut
  * short at its end (tides-16z). At least three steps over the span, and no
  * more than `maxSteps`, but for one more where the phase pushes the last
  * past them. From the eye, with no near plane in them (tides-tvr.1), a
