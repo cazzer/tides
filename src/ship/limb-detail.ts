@@ -57,6 +57,14 @@ export const LIMB_FACET_PX = 0.5
 // flip spheres every frame. It also keeps the store from changing per frame.
 export const LIMB_HYSTERESIS = 1.05
 
+/**
+ * The least gap the hysteresis measures, scene units (~216 m true): at
+ * Earth's true-scale stop over the sea (30 m, tides-zmw.9.8) 5% of the gap
+ * is a metre and a half, which the floor's settling would cross every few
+ * frames, each a store notification. The facets never care that close.
+ */
+export const LIMB_GAP_FLOOR = 1e-4
+
 interface LimbView {
   key: string
   /** From the eye to the body's centre. */
@@ -74,7 +82,7 @@ let view: LimbView | null = null
 const listeners = new Set<() => void>()
 const notify = () => listeners.forEach((listener) => listener())
 
-const gapRatio = (a: number, b: number) => Math.max(a, 1e-12) / Math.max(b, 1e-12)
+const gapRatio = (a: number, b: number) => Math.max(a, LIMB_GAP_FLOOR) / Math.max(b, LIMB_GAP_FLOOR)
 
 /**
  * ShipController's per-frame report: the nearest body (`nearestKey`, from

@@ -113,7 +113,8 @@ export function shipFar(distanceFromSun: number): number {
 // star sphere at the far plane on the standard depth buffer; under reversed-Z
 // (tides-zmw.9.3) the star sphere's clip z (it sits at 0.8 of far) is
 // ~0.2 · near, well above 0, so nothing drops it there, down to NEAR_MIN_REVERSED.
-const NEAR_SHARE = 0.4
+/** The near plane's share of the gap to the nearest surface. */
+export const NEAR_SHARE = 0.4
 /** The near plane's floor on the standard depth buffer. */
 export const NEAR_MIN = 0.001
 /**
@@ -124,6 +125,22 @@ export const NEAR_MIN = 0.001
  */
 export const NEAR_MIN_REVERSED = 1e-6
 const NEAR_MAX = 0.1
+
+/**
+ * How far the near rectangle's corners stand from the eye, per unit of
+ * near, on screens up to 32:9 at SHIP_FOV (the speed kick's wider FOV is
+ * nil near the ground, where this matters): the ground must stay clear of
+ * the eye that far around it, not only straight down (tides-42p).
+ */
+export const NEAR_CORNER_REACH = Math.sqrt(1 + Math.tan(THREE.MathUtils.degToRad(SHIP_FOV / 2)) ** 2 * (1 + (32 / 9) ** 2))
+
+/**
+ * ShipController's second frame callback (tides-zmw.9.8): after the
+ * surface tiles' update (SURFACE_FRAME_PRIORITY, 0.5) and before drei's View
+ * renders (1), it settles the ship on the ground this frame draws and sets
+ * the near plane from it.
+ */
+export const SHIP_SETTLE_PRIORITY = 0.75
 
 /** The near plane's floor: NEAR_MIN_REVERSED where `reversedFloatDepth` (depth-precision.ts), else NEAR_MIN. */
 export function shipNearFloor(reversedFloatDepth: boolean): number {

@@ -95,9 +95,11 @@ export interface Body {
    * Earth's displaced terrain (ship-bodies.ts). It must never read below the
    * ground drawn there, and must leave `direction` as it is. Gaps measure
    * from it in place of `radius`, and the ship stops groundClearance above
-   * it as well as outside collisionRadius (floorRadius).
+   * it as well as outside collisionRadius (floorRadius). Read over a window
+   * `reach` scene units around `direction` where given (the near plane's,
+   * ship-bodies.ts), else the body's own.
    */
-  ground?: (direction: THREE.Vector3) => number
+  ground?: (direction: THREE.Vector3, reach?: number) => number
   /** How far above `ground` the ship stops; 0 when missing. */
   groundClearance?: number
   /**
@@ -659,6 +661,16 @@ function fillTelemetry(
 }
 
 /**
+ * Puts the ship back over the ground after it moved under it between steps
+ * (tides-zmw.9.8: the surface tiles update after the step, and the ground
+ * the frame draws is theirs): stepShip's collision alone, no thrust, turn
+ * or ride. Returns whether that was a hit (COLLISION_SPEED).
+ */
+export function settleShip(state: ShipState, env: Pick<FlightEnv, 'bodies'>): boolean {
+  return collide(state, env.bodies)
+}
+
+/**
  * Advance the ship by `dt` seconds (clamped to MAX_DT; non-finite or negative
  * dt is a zero step). Mutates and returns `state`; fills `telemetry` when
  * given. Thrust and the approach cap use the caps at the start of the step,
@@ -678,13 +690,14 @@ export function stepShip(
   const here = measure(state.position, env.bodies, env.targetKey)
   const capBefore = wellCap(here)
   const { target, targetGap } = here
-  let colliding = false
   if (h > 0) {
     rotate(state, input, h, speedFraction(state.velocity.length(), capBefore))
     translate(state, input, h, capBefore, target, targetGap)
     state.position.addScaledVector(state.velocity, h)
-    colliding = collide(state, env.bodies)
   }
+  // Even on a zero step: the ground can rise under a still ship (the live
+  // terrain scale follows the altitude, tides-zmw.9.5; tiles load).
+  const colliding = collide(state, env.bodies)
   // End-of-step distances, so the ride and the HUD match where the camera
   // now is.
   const there = measure(state.position, env.bodies, env.targetKey)

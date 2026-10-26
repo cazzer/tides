@@ -9,12 +9,20 @@ import { qualityTier, type QualityTier } from '../quality'
 import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
-import { COLLISION_MARGIN } from './flight'
+import { COLLISION_MARGIN, MAX_DT } from './flight'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
-import { liveTerrainDisplacement } from '../terrain-scale'
+import {
+  EARTH_KM_PER_UNIT,
+  SURFACE_MAX_METRES,
+  TRUE_FLOOR_MAX,
+  liveTerrainDisplacement,
+  surfaceOpacityUniform,
+  terrainScaleUniform,
+} from '../terrain-scale'
+import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import type { Body as FlightBody } from './flight'
-import { SHIP_FOV, shipNear } from './ship-session'
+import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE, shipNear } from './ship-session'
 import {
   earthLimbTerrain,
   earthTerrain,
@@ -58,24 +66,83 @@ export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
  */
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
+/** Scene units per true metre at Earth (~4.63e-7). */
+export const EARTH_UNITS_PER_METRE = 1 / (EARTH_KM_PER_UNIT * 1000)
+
 /**
  * How far above the displaced ground (terrain-floor.ts) the ship stops over
- * Earth on the high tier (tides-01v.8.7): under the cloud base
- * (CLOUD_CLEARANCE), so the ship flies below the deck. At 0.4 of it the
- * near plane stays over shipNear's 0.001 floor, and its corners stay off the
- * ground on steep slopes up to 32:9 screens at SHIP_FOV (ship-bodies.test).
+ * Earth on the high tier (tides-01v.8.7), on the standard depth buffer:
+ * under the cloud base (CLOUD_CLEARANCE), so the ship flies below the deck.
+ * At 0.4 of it the near plane stays over shipNear's 0.001 floor, and its
+ * corners stay off the ground on steep slopes up to 32:9 screens at SHIP_FOV
+ * (ship-bodies.test). ~8.6 km true.
  */
 export const EARTH_GROUND_CLEARANCE = 0.004
 
 /**
- * How far the near plane's corners reach from the eye at Earth's stop, on
- * screens up to 32:9 at SHIP_FOV (the FOV kick is nil that low): the
- * floor holds the ship clear of the ground that far around it
- * (terrainFloorGreyAround), not only straight down (tides-42p).
+ * The least the ship ever stands over Earth's ground on the standard depth
+ * buffer, however the floor settles (earthStop): where the near plane, at
+ * NEAR_SHARE of it, is NEAR_MIN, the standard buffer's floor.
  */
-export const EARTH_FLOOR_REACH =
-  shipNear(EARTH_GROUND_CLEARANCE) *
-  Math.sqrt(1 + Math.tan(THREE.MathUtils.degToRad(SHIP_FOV / 2)) ** 2 * (1 + (32 / 9) ** 2))
+export const EARTH_HARD_CLEARANCE = NEAR_MIN / NEAR_SHARE
+
+/**
+ * The stop over Earth's ground with reversed-Z on a float depth buffer
+ * (tides-zmw.9.8; renderers/depth-precision.ts), where the near plane may
+ * fall to NEAR_MIN_REVERSED: true to scale, 30 m. [TUNE]
+ */
+export const FINE_GROUND_CLEARANCE = 30 * EARTH_UNITS_PER_METRE
+
+/**
+ * The least the ship stands over the ground on a float depth buffer: 10 m,
+ * whose near plane (NEAR_SHARE of it, 4 m) is over NEAR_MIN_REVERSED. The
+ * hard sphere is the sea plus this, so below-sea ground (the Dead Sea) is
+ * flown at sea level.
+ */
+export const FINE_HARD_CLEARANCE = 10 * EARTH_UNITS_PER_METRE
+
+/**
+ * How far around the eye the floor holds the ship clear of the ground for
+ * a stop `clearance` up: as far as the near rectangle's corners reach with
+ * the near plane at NEAR_SHARE of it (NEAR_CORNER_REACH), not only
+ * straight down (terrainFloorGreyAround, tides-42p).
+ */
+export function floorReach(clearance: number): number {
+  return NEAR_CORNER_REACH * NEAR_SHARE * clearance
+}
+
+/** floorReach at the standard depth buffer's stop. */
+export const EARTH_FLOOR_REACH = floorReach(EARTH_GROUND_CLEARANCE)
+
+/** Earth's stop on a depth buffer: `soft` the clearance it settles to, `hard` the least, `reach` its window. */
+export interface EarthClearance {
+  soft: number
+  hard: number
+  reach: number
+}
+
+/** The stop for a depth buffer that is (`fine`) reversed-Z float or not. */
+export function earthClearance(fine: boolean): EarthClearance {
+  const soft = fine ? FINE_GROUND_CLEARANCE : EARTH_GROUND_CLEARANCE
+  return { soft, hard: fine ? FINE_HARD_CLEARANCE : EARTH_HARD_CLEARANCE, reach: floorReach(soft) }
+}
+
+/** Metres the floor stands over the highest tile vertex in its window. */
+export const SURFACE_GROUND_MARGIN_METRES = 1
+
+/**
+ * Seconds per e-fold in which the floor catches up with ground that rose
+ * (within the clearance's give) or fell under a still ship as tiles loaded,
+ * changed level or went (earthStop's settling). [TUNE]
+ */
+export const GROUND_RISE_TAU = 0.3
+export const GROUND_DROP_TAU = 1
+
+/**
+ * The widest window the near plane's ground is sampled over, scene units
+ * (20 km true): from further up it takes the highest any ground stands.
+ */
+export const NEAR_SAMPLE_MAX = 20 / EARTH_KM_PER_UNIT
 
 /**
  * The slowest the speed cap falls to near Earth's ground on the high tier
@@ -102,44 +169,168 @@ export const BODY_MASS_KG: Readonly<Record<'sun' | 'earth' | 'moon' | PlanetKey,
   neptune: 1.024e26,
 }
 
+/**
+ * The frame-by-frame side of Earth's floor (earthStop), which ShipController
+ * drives: the depth buffer's stop, the settling as tiles change under the
+ * ship, and the near plane's gap.
+ */
+export interface GroundFloor {
+  /** Before the step: the stop for this frame's depth buffer (earthClearance). */
+  beginFrame(fineDepth: boolean): void
+  /** After the step: the ground under the ship before the tiles update. */
+  mark(position: THREE.Vector3): void
+  /** After the tiles' update, before settleShip: takes in what changed under the ship, `dt` s on. */
+  settle(dt: number): void
+  /**
+   * The gap the near plane takes NEAR_SHARE of at `position`: none of the
+   * near rectangle can reach the ground (ship-session.test).
+   */
+  nearGap(position: THREE.Vector3): number
+  /** The floor's offset from its settled height (raised: +, lowered into the clearance: -). */
+  readonly lift: number
+  readonly clearance: Readonly<EarthClearance>
+}
+
 export interface ShipBody extends FlightBody {
   /** Null for the Sun, which stays at the origin. */
   positionAt: ((t: number) => Vec3) | null
   /** Turns a body whose ground is sampled in its own frame (Earth) to `t`. */
   turnTo?: (t: number) => void
+  /** Earth's. */
+  floor?: GroundFloor
 }
 
 const DEG = Math.PI / 180
 
-// Earth's ground: its terrain floor, read in its own spinning frame. The
-// mesh tilts about X, then spins about the tilted Y (body-transform.ts), so
-// world → local undoes the spin after the tilt. On the high tier the ship
-// stops on it: the hard sphere drops to the bare sphere's clearance, which
-// the floor never reads below. On the low tier the shells' stop stays. The
-// floor is the sphere EarthRenderer's ground holds: the limb sphere's (its
-// radius is EARTH_RADIUS) while it does (tides-42p), else the 128 × 128
-// one's, each taken over the near plane's reach. The ground swaps only far
-// out, where both are far below the ship.
-function earthStop(
-  tier: QualityTier
-): Pick<ShipBody, 'collisionRadius' | 'ground' | 'groundClearance' | 'minSpeed' | 'turnTo'> {
+// Earth's ground, read in its own spinning frame. The mesh tilts about X,
+// then spins about the tilted Y (body-transform.ts), so world → local undoes
+// the spin after the tilt. On the low tier the shells' stop stays.
+//
+// The ground is the highest drawn within a window around the ship (`reach`,
+// the near plane's corners at the stop): over the globe its terrain floor
+// (terrain-floor.ts), the sphere EarthRenderer's ground holds (the limb
+// sphere's while it does, tides-42p, else the 128 × 128 one's); over the
+// streamed tiles their mesh (renderers/surface/surface-ground.ts, through
+// ../surface-ground.ts, tides-zmw.9.8). The tiles draw nothing above the
+// blend's top, the globe fills their screen-door through the dissolve, and
+// it shows wherever no tile has loaded, so the floor takes the higher of
+// the two there and the tiles' alone where they cover the window at full
+// opacity. Missing tiles (no sampler, 503s) leave today's floor.
+//
+// The stop is a clearance over that ground set by the depth buffer
+// (earthClearance): 0.004 on the standard one, 30 m true on reversed-Z
+// float, never under the hard clearance (0.0025 / 10 m). The ground also
+// changes under a still ship as tiles load, change level, fade or go:
+// rather than pop the ship, the floor settles. The change measured under
+// the ship across the tiles' update (mark, settle: at one point in Earth's
+// frame, so the ship's own motion and the spin don't count) goes into
+// `lift`, which the stop adds and then lets decay: ground that fell holds
+// the floor up and lowers it over GROUND_DROP_TAU; ground that rose eats
+// into the clearance down to the hard one (snapping beyond it) and lifts
+// the ship over GROUND_RISE_TAU. Ground the ship flies onto (a cliff ahead)
+// clamps at once, as before.
+function attachEarthStop(body: ShipBody, tier: QualityTier): void {
   const toLocal = new THREE.Quaternion()
   const euler = new THREE.Euler()
   const local = new THREE.Vector3()
+  const marked = new THREE.Vector3()
+  const latLon: [number, number] = [0, 0]
   const low = tier === 'low'
-  return {
-    collisionRadius: low ? EARTH_COLLISION_RADIUS : EARTH_RADIUS + EARTH_GROUND_CLEARANCE,
-    ground: (direction) => {
-      local.copy(direction).applyQuaternion(toLocal)
-      const floor = (limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null) ?? earthTerrain()
-      if (!floor) return terrainFloorRadius(null, EARTH_RADIUS, local)
-      const grey = terrainFloorGreyAround(floor, local, EARTH_FLOOR_REACH / EARTH_RADIUS)
-      return EARTH_RADIUS + (liveTerrainDisplacement() * grey) / 255
+  const clearance: EarthClearance = earthClearance(false)
+  let lift = 0
+  let markedGround = NaN
+
+  const toEarth = (direction: THREE.Vector3) => local.copy(direction).applyQuaternion(toLocal)
+
+  // The globe's floor around `at` (unit, Earth's frame).
+  const globe = (at: THREE.Vector3, reach: number) => {
+    const floor = (limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null) ?? earthTerrain()
+    if (!floor) return terrainFloorRadius(null, EARTH_RADIUS, at)
+    const grey = terrainFloorGreyAround(floor, at, reach / EARTH_RADIUS)
+    return EARTH_RADIUS + (liveTerrainDisplacement() * grey) / 255
+  }
+
+  // The highest ground drawn within `reach` of `at` (see the header).
+  const drawn = (at: THREE.Vector3, reach: number) => {
+    const sampler = surfaceGroundSampler()
+    const opacity = surfaceOpacityUniform.value
+    if (!sampler || !(opacity > 0)) return globe(at, reach)
+    const [lat, lon] = earthLatLon(at, latLon)
+    const tiles = sampler.maxElevation(lat, lon, reach / EARTH_UNITS_PER_METRE)
+    if (!tiles) return globe(at, reach)
+    const ground =
+      EARTH_RADIUS + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * terrainScaleUniform.value * EARTH_UNITS_PER_METRE
+    return opacity < 1 || !tiles.covered ? Math.max(ground, globe(at, reach)) : ground
+  }
+
+  const apply = () => {
+    if (low) return
+    lift = Math.max(lift, clearance.hard - clearance.soft)
+    body.collisionRadius = EARTH_RADIUS + clearance.hard
+    body.groundClearance = clearance.soft + Math.min(lift, 0)
+  }
+
+  body.collisionRadius = low ? EARTH_COLLISION_RADIUS : EARTH_RADIUS + clearance.hard
+  body.groundClearance = EARTH_GROUND_CLEARANCE
+  body.minSpeed = low ? undefined : EARTH_GROUND_SPEED
+  body.ground = (direction, reach = clearance.reach) => drawn(toEarth(direction), reach) + Math.max(lift, 0)
+  body.turnTo = (t) => {
+    toLocal.setFromEuler(euler.set(earthTilt(t) * DEG, earthSpin(t), 0, 'XYZ')).invert()
+  }
+  // Unit, Earth's frame, from the centre to `position`; null at the centre.
+  const up = (position: THREE.Vector3) => {
+    const d = local.subVectors(position, body.position).length()
+    return d > 0 ? local.divideScalar(d).applyQuaternion(toLocal) : null
+  }
+  body.floor = {
+    get lift() {
+      return lift
     },
-    groundClearance: EARTH_GROUND_CLEARANCE,
-    minSpeed: low ? undefined : EARTH_GROUND_SPEED,
-    turnTo: (t) => {
-      toLocal.setFromEuler(euler.set(earthTilt(t) * DEG, earthSpin(t), 0, 'XYZ')).invert()
+    clearance,
+    beginFrame(fineDepth) {
+      if (low) return
+      Object.assign(clearance, earthClearance(fineDepth))
+      apply()
+    },
+    mark(position) {
+      const at = low ? null : up(position)
+      if (!at) {
+        markedGround = NaN
+        return
+      }
+      marked.copy(at)
+      markedGround = drawn(marked, clearance.reach)
+    },
+    settle(dt) {
+      if (low) return
+      const h = Number.isFinite(dt) ? THREE.MathUtils.clamp(dt, 0, MAX_DT) : 0
+      if (h > 0) lift *= Math.exp(-h / (lift > 0 ? GROUND_DROP_TAU : GROUND_RISE_TAU))
+      if (Number.isFinite(markedGround)) {
+        const change = drawn(marked, clearance.reach) - markedGround
+        if (Number.isFinite(change)) lift -= change
+      }
+      markedGround = NaN
+      apply()
+    },
+    nearGap(position) {
+      const d = position.distanceTo(body.position)
+      const at = up(position)
+      if (!at) return 0
+      const field = drawn(at, clearance.reach)
+      if (low) return d - field
+      // The near rectangle at NEAR_SHARE of a gap g reaches NEAR_CORNER_REACH
+      // · NEAR_SHARE · g from the eye: take the gap over the ground that far
+      // round, but never under the clearance, which the floor already keeps
+      // across `reach` (ship-session.test).
+      const window = floorReach(Math.max(d - field, clearance.soft))
+      let top = field
+      if (window > NEAR_SAMPLE_MAX) {
+        const peak = Math.max(TRUE_FLOOR_MAX, (SURFACE_MAX_METRES + SURFACE_GROUND_MARGIN_METRES) * EARTH_UNITS_PER_METRE)
+        top = Math.max(field, EARTH_RADIUS + peak * terrainScaleUniform.value)
+      } else if (window > clearance.reach) {
+        top = drawn(at, window)
+      }
+      return Math.max(d - top, body.groundClearance ?? 0)
     },
   }
 }
@@ -158,6 +349,14 @@ export const MOON_COLLISION_CLEARANCE = 0.02
 export function createShipBodies(tier: QualityTier = qualityTier()): ShipBody[] {
   const { positionAt } = positionsFor('flight')
   loadEarthTerrain()
+  const earth: ShipBody = {
+    key: 'earth',
+    position: new THREE.Vector3(),
+    radius: EARTH_RADIUS,
+    mass: BODY_MASS_KG.earth,
+    positionAt: positionAt.earth,
+  }
+  attachEarthStop(earth, tier)
   return [
     {
       key: 'sun',
@@ -166,14 +365,7 @@ export function createShipBodies(tier: QualityTier = qualityTier()): ShipBody[] 
       mass: BODY_MASS_KG.sun,
       positionAt: null,
     },
-    {
-      key: 'earth',
-      position: new THREE.Vector3(),
-      radius: EARTH_RADIUS,
-      ...earthStop(tier),
-      mass: BODY_MASS_KG.earth,
-      positionAt: positionAt.earth,
-    },
+    earth,
     {
       key: 'moon',
       position: new THREE.Vector3(),
@@ -207,8 +399,15 @@ export function createShipBodies(tier: QualityTier = qualityTier()): ShipBody[] 
  * epoch ms.
  */
 export function updateShipBodies(bodies: readonly ShipBody[], t: number): void {
-  for (const body of bodies) {
-    if (body.positionAt) body.position.fromArray(body.positionAt(t))
-    body.turnTo?.(t)
-  }
+  for (const body of bodies) updateShipBody(body, t)
+}
+
+/**
+ * Move and turn one body to where it is at `t`: ShipController does Earth's
+ * every frame (tides-zmw.9.8), where its orbit and spin carry the ground
+ * ~0.2 m a frame, which a 30 m stop can't leave a quarter second stale.
+ */
+export function updateShipBody(body: ShipBody, t: number): void {
+  if (body.positionAt) body.position.fromArray(body.positionAt(t))
+  body.turnTo?.(t)
 }

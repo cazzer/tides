@@ -6,6 +6,10 @@
 // tides-zmw.9.7: the tiles wait for their View's ground haze (surface-link.ts)
 // so every tile is built with it, and draw only below the blend's top
 // (surfaceOpacityUniform; surface-scale.ts dissolves them in under it).
+//
+// tides-zmw.9.8: the ship's floor reads the tiles it draws (surface-ground.ts,
+// registered in ../../surface-ground.ts while mounted), refreshed after each
+// update.
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
@@ -15,6 +19,8 @@ import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceT
 import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import type { ImageryTile } from './imagery'
 import { setActiveSurfaceSources } from './surface-credits'
+import { createSurfaceGround, type SurfaceGround } from './surface-ground'
+import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { subscribeSurfaceHaze, surfaceHaze } from './surface-link'
 import { smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
@@ -38,6 +44,7 @@ export default function SurfaceTiles() {
   const touch = useMemo(() => typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches, [])
   const holder = useRef<THREE.Group>(null)
   const surface = useRef<Tiles | null>(null)
+  const ground = useRef<SurfaceGround | null>(null)
   const errorTarget = useRef(NaN)
   const credits = useRef<{ sources: ActiveSources; at: number } | null>(null)
 
@@ -61,11 +68,16 @@ export default function SurfaceTiles() {
     created.tiles.setCamera(camera)
     parent.add(created.tiles.group)
     surface.current = created
+    const sampler = createSurfaceGround(created.tiles)
+    ground.current = sampler
+    setSurfaceGroundSampler(sampler)
     errorTarget.current = NaN
     const sources = new ActiveSources()
     credits.current = { sources, at: -Infinity }
     return () => {
       surface.current = null
+      ground.current = null
+      if (surfaceGroundSampler() === sampler) setSurfaceGroundSampler(null)
       credits.current = null
       setActiveSurfaceSources([])
       parent.remove(created.tiles.group)
@@ -105,6 +117,7 @@ export default function SurfaceTiles() {
     camera.updateWorldMatrix(true, false)
     tiles.group.updateWorldMatrix(true, false)
     tiles.update()
+    ground.current?.invalidate()
     // None of the ground is the tiles' above the blend's top (ShipController
     // has written this frame's share): the globe draws it all.
     tiles.group.visible = surfaceOpacityUniform.value > 0

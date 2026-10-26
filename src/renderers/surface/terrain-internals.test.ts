@@ -151,6 +151,28 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     expect(read('src/core/renderer/tiles/traverseFunctions.js')).toContain('renderer.calculateTileViewErrorWithPlugin( tile, viewErrorTarget );')
   })
 
+  it("draws a tile's scene as a child of the group, kept there through its fade out, and lists loaded scenes by engineData.scene (tides-zmw.9.8)", () => {
+    const renderer = read('src/three/renderer/tiles/TilesRenderer.js')
+    expect(renderer).toContain('const scene = tile.engineData && tile.engineData.scene;\n\t\t\tif ( scene ) {\n\n\t\t\t\tcallback( scene, tile );')
+    expect(renderer).toContain('if ( visible ) {\n\n\t\t\t\tgroup.add( scene );\n\n\t\t\t} else {\n\n\t\t\t\tgroup.remove( scene );')
+    // An active, hidden scene keeps the group as its parent without being its child.
+    expect(renderer).toContain('scene.parent = group;')
+    // The fade plugin hides a tile (the built-in setTileVisible) only once its fade out ends.
+    expect(read('src/three/plugins/fade/TilesFadePlugin.js')).toContain(
+      'tiles.invokeOnePlugin( plugin => plugin !== this && plugin.setTileVisible && plugin.setTileVisible( tile, false ) );'
+    )
+  })
+
+  it("keeps each tile's grid on its material's displacementMap, a clone sharing the cached image, and its uvs into it (tides-zmw.9.8)", () => {
+    const src = read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')
+    expect(src).toContain('const displacement = grid.clone();\n\t\tmesh.material.displacementMap = displacement;')
+    expect(src).toContain('uv.setXY( i, tu, tv );')
+    expect(src).toContain('const height = sampleGrid( grid, tu, tv );')
+    expect(src).toContain('const MESH_SIZE = 32;')
+    // Its region is [west, south, east, north, min, max], radians.
+    expect(src).toContain('const region = boundingVolume.region;\n\t\t\tregion[ 4 ] = min;\n\t\t\tregion[ 5 ] = max;')
+  })
+
   it('keeps stitchNeighbors on the source GridCache', () => {
     expect(typeof GridCache.prototype.stitchNeighbors).toBe('function')
     const src = read('src/three/plugins/images/terrain-rgb/GridCache.js')
