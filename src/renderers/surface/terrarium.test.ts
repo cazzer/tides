@@ -226,6 +226,33 @@ describe('per-grid horizon maps (tides-zmw.9.15)', () => {
     expect(bakeTileHorizon(job([horizonWindow(ancestorOf(() => 0), sub)]), flatGrid(n))).toBeNull()
   })
 
+  it("agrees with its neighbour across their shared edge when each reads the other at its own texels (the seam)", () => {
+    // A narrow ridge running east-west through two grids side by side: the
+    // same ground either side of their shared edge, so a horizon looking
+    // across it should read alike from both. Through the ancestor alone (4x
+    // coarser) the side looking across loses the ridge's crest.
+    const ridge = (_gx: number, gy: number) => 400 + 1500 * Math.exp(-((gy - 16) ** 2) / (2 * 1.5 * 1.5))
+    const west = gridOf(ridge)
+    const east = gridOf(ridge)
+    const ancestor = ancestorOf(ridge)
+    const subEast = [sub[2], sub[1], 2 * sub[2] - sub[0], sub[3]]
+    const angle = (c: number) => Math.atan(tileHorizonTangent(c))
+    const seam = (w: Uint8Array, e: Uint8Array) => {
+      let worst = 0
+      for (let b = 0; b < size; b++) for (let d = 0; d < TILE_HORIZON_DIRECTIONS; d++) worst = Math.max(worst, Math.abs(angle(code(w, size - 1, b, d)) - angle(code(e, 0, b, d))))
+      return (worst * 180) / Math.PI
+    }
+    const margin = 48
+    const withNeighbours = seam(
+      bakeTileHorizon(job([horizonWindow(east, [-1, 0, 0, 1], margin), horizonWindow(ancestor, sub)]), west)!,
+      bakeTileHorizon(job([horizonWindow(west, [1, 0, 2, 1], margin), horizonWindow(ancestor, subEast)]), east)!
+    )
+    const ancestorOnly = seam(bakeTileHorizon(job([horizonWindow(ancestor, sub)]), west)!, bakeTileHorizon(job([horizonWindow(ancestor, subEast)]), east)!)
+    // the same horizon either side (0° here), against tens of degrees under the crest
+    expect(withNeighbours).toBeLessThan(0.5)
+    expect(ancestorOnly).toBeGreaterThan(10)
+  })
+
   it('maps an ancestor window\'s texels onto the grid\'s coordinates', () => {
     const ramp = (gx: number, gy: number) => 3 * gx - 7 * gy + 11
     const w = horizonWindow(ancestorOf(ramp), sub, 3)

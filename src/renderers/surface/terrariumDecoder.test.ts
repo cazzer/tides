@@ -135,47 +135,54 @@ describe('horizon bakes in the decode workers (tides-zmw.9.15)', () => {
     context: [{ data: new Float32Array(4), width: 2, height: 2, scale: 4, offsetX: 0, offsetY: 0, minX: 0, maxX: 1, minY: 0, maxY: 1 }],
   })
 
-  it('carries a horizon job with the decode, its windows transferred, and hands the map back with the grid', async () => {
+  it('bakes a copy of the grid with its job, the windows and the grid transferred, and hands the map back', async () => {
     const worker = new FakeWorker()
     const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    expect(decoder.bakes).toBe(true)
     const horizon = job()
-    const pending = decoder.decode(buffer(), new AbortController().signal, horizon)
-    const [posted] = worker.decodes()
-    expect(posted.horizon).toBe(horizon)
-    expect(worker.transfers[0]).toEqual([horizon.context[0].data.buffer])
-    const map = new Uint8Array(8).fill(3)
-    worker.reply({ type: 'done', id: posted.id, grid: grid(1), baked: { horizon: map, ms: 4.5 } })
-    const done = await pending
-    expect(done.data[0]).toBe(1)
-    expect(done.baked).toEqual({ horizon: map, ms: 4.5 })
-  })
-
-  it('bakes from a job alone (a resampled grid), and bakes nothing on the main thread', async () => {
-    const worker = new FakeWorker()
-    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
-    const pending = decoder.bake(job(), new AbortController().signal)
+    const own = grid(5)
+    const pending = decoder.bake(horizon, own, new AbortController().signal)
     const posted = worker.posted[0] as Extract<DecodeRequest, { type: 'bake' }>
     expect(posted.type).toBe('bake')
-    worker.reply({ type: 'baked', id: posted.id, baked: { horizon: null, ms: 1 } })
-    expect(await pending).toEqual({ horizon: null, ms: 1 })
-
-    const inThread = vi.fn(async () => grid(9))
-    const none = createTerrariumDecoder({ createWorker: () => null, inThread })
-    expect(await none.bake(job(), new AbortController().signal)).toBeNull()
-    const decoded = await none.decode(buffer(), new AbortController().signal, job())
-    expect(decoded.data[0]).toBe(9)
-    expect(decoded.baked).toBeUndefined()
+    expect(posted.horizon).toBe(horizon)
+    expect(posted.grid).toBe(own)
+    expect(worker.transfers[0]).toEqual([horizon.context[0].data.buffer, own.data.buffer])
+    const map = new Uint8Array(8).fill(3)
+    worker.reply({ type: 'baked', id: posted.id, baked: { horizon: map, ms: 4.5, max: 3 } })
+    expect(await pending).toEqual({ horizon: map, ms: 4.5, max: 3 })
+    // a decode carries nothing of it
+    decoder.decode(buffer(), new AbortController().signal)
+    expect(worker.posted[1]).toEqual({ type: 'decode', id: expect.any(Number), buffer: expect.any(ArrayBuffer) })
   })
 
-  it("decodes a dead worker's horizon job on the main thread without its map", async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('rejects a cancelled bake as aborted and tells the worker, dropping a late reply', async () => {
     const worker = new FakeWorker()
-    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(9), size: 1 })
-    const decode = decoder.decode(buffer(), new AbortController().signal, job())
-    const bake = decoder.bake(job(), new AbortController().signal)
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const abort = new AbortController()
+    const pending = decoder.bake(job(), grid(1), abort.signal)
+    abort.abort(new DOMException('gone', 'AbortError'))
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    const id = worker.posted[0].id
+    expect(worker.posted[1]).toEqual({ type: 'cancel', id })
+    worker.reply({ type: 'baked', id, baked: { horizon: null, ms: 1 } }) // ignored
+  })
+
+  it('bakes nothing without a worker, after one dies, or after dispose (bakes false)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const none = createTerrariumDecoder({ createWorker: () => null, inThread: async () => grid(9) })
+    expect(await none.bake(job(), grid(1), new AbortController().signal)).toBeNull()
+    expect(none.bakes).toBe(false)
+
+    const worker = new FakeWorker()
+    const dying = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(9), size: 1 })
+    const bake = dying.bake(job(), grid(1), new AbortController().signal)
     worker.fail(new Error('worker crashed'))
-    expect((await decode).data[0]).toBe(9)
     expect(await bake).toBeNull()
+    expect(dying.bakes).toBe(false)
+
+    const disposed = createTerrariumDecoder({ createWorker: () => new FakeWorker(), inThread: async () => grid(9) })
+    disposed.dispose()
+    expect(disposed.bakes).toBe(false)
     vi.restoreAllMocks()
   })
 })

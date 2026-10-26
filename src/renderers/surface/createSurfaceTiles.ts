@@ -158,6 +158,7 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
     filter: floatLinear ? 'linear' : 'nearest',
     decode: decoder.decode,
     bake: decoder.bake,
+    canBake: () => decoder.bakes,
     budget,
     upload,
   })

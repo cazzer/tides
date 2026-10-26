@@ -22,19 +22,25 @@
 //     (terrarium.ts bakeTileHorizon, baked in the decode worker at true
 //     scale, ~4 grid texels a texel, every grid searching the same 12 km),
 //     found by the grid's texture source (terrain-internals.ts
-//     gridHorizon()), bound per tile in onTile as a clone (the GPU copy is
-//     shared, and lives until its last tile and the grid are gone) and read
-//     at the bump's uv (vBumpMapUv: the grid's, so no varying of its own).
+//     gridHorizon()) whenever three reads the tile's uniforms, so a map that
+//     arrives after the tile was made (the bake follows the grid), or is
+//     baked again, reaches it at its next draw. Bound as a clone (the GPU
+//     copy is shared, and lives until its last tile and the grid are gone),
+//     read at the bump's uv (vBumpMapUv: the grid's, so no varying of its
+//     own).
 //     The Sun against the horizon toward it, interpolated between the two
 //     directions either side as the globe does (sunAzimuth()), with the
 //     globe's soft edge (in tangent) and its "a step or less never shadows",
 //     the tangents times uTerrainScale. Per pixel it is one or two taps and
 //     a division: the map's code decodes without trigonometry, and what is
 //     the same across a tile is worked out per tile on the CPU, read by
-//     three as uniforms at the tile's draw (tileSun()): the Sun's two
-//     directions (which layer, what weights), and whether the Sun can be
-//     under the grid's highest horizon anywhere on the tile at all (off when
-//     not, and at night). It eases in with the tiles' share of the ground
+//     three as uniforms at the tile's draw (tileSun(), redone only when the
+//     Sun, the scale or the opacity moved, from the tile's frame set up
+//     once): the Sun's two directions (which layer, what weights), and
+//     whether the Sun can be under the grid's highest horizon anywhere on
+//     the tile at all (off when not, at night, and while the grid has no
+//     map). The tangents are scaled with the curvature drop in them
+//     (terrarium.ts: ~0.6° at 12 km at 12x). It eases in with the tiles' share of the ground
 //     (uSurfaceOpacity) across the dissolve band, so the globe pixels the
 //     screen-door leaves (which have only (a)) and the tile pixels converge,
 //     and there is no step at either end.
@@ -43,8 +49,8 @@
 // where both see the same ridge). It dims the direct light only, as the
 // globe's; (a)'s sky occlusion (groundHorizonSky, which the colour slot's
 // sky fill reads after GROUND_HORIZON, as on the globe) dims the ambient.
-// Grids with no horizon (open water, flat ground, the main-thread decode
-// fallback) bind none: uTileHorizonOn 0, (a) alone.
+// Grids with no horizon (open water, flat ground, no decode worker, or not
+// baked yet) read a placeholder with uTileHorizonOn 0: (a) alone.
 import * as THREE from 'three'
 import { HORIZON_SOFTNESS } from '../../earth-horizon'
 import { surfaceOpacityUniform, terrainDisplacement, terrainScaleUniform } from '../../terrain-scale'
@@ -160,47 +166,53 @@ export interface TileSun {
   layers: THREE.Vector2
 }
 
+/** A tile's place on the globe, in the ground's frame (set up once a tile: tileFrame()). */
+export interface TileFrame {
+  up: THREE.Vector3
+  east: THREE.Vector3
+  north: THREE.Vector3
+  /** Half the tile's span, radians. */
+  angularRadius: number
+}
+
+/** The frame of a tile centred at `up` (the ground's frame, unit) spanning `angularRadius`. */
+export function tileFrame(up: THREE.Vector3, angularRadius: number): TileFrame {
+  const east = new THREE.Vector3(0, 1, 0).cross(up).normalize()
+  return { up: up.clone(), east, north: up.clone().cross(east), angularRadius }
+}
+
 const DEG = Math.PI / 180
 
 /**
- * (b)'s per-tile values for a tile centred at `up` (the ground's frame, unit)
- * spanning `angularRadius` (radians), its grid's highest horizon `maxTangent`
- * (true scale), for the Sun `sun` (the ground's frame), the live `scale` and
- * the tiles' `opacity`. The Sun's azimuth and the two directions' weights
- * are the globe's (sunAzimuth(): 360° · d / 8 clockwise from north, layer 0
- * N, NE, E, SE); across a tile they move a fraction of a degree, against
- * the directions' 45°.
+ * (b)'s per-tile values for a tile at `frame`, its grid's highest horizon
+ * `maxTangent` (true scale), for the Sun `sun` (the ground's frame, unit),
+ * the live `scale` and the tiles' `opacity`, into `target` (no allocation).
+ * The Sun's azimuth and the two directions' weights are the globe's
+ * (sunAzimuth(): 360° · d / 8 clockwise from north, layer 0 N, NE, E, SE),
+ * at the tile's centre. Across a tile the azimuth turns with the meridians'
+ * convergence: ±0.6° on a z8 tile at 60° latitude, ±2.4° on a z6 one (drawn
+ * only far off), against the directions' 45°: the weights shift by ~5% at
+ * most there, and by far less on the near tiles.
  */
-export function tileSun(
-  up: THREE.Vector3,
-  angularRadius: number,
-  maxTangent: number,
-  sun: THREE.Vector3,
-  scale: number,
-  opacity: number,
-  target: TileSun = { on: 0, a: new THREE.Vector4(), b: new THREE.Vector4(), layers: new THREE.Vector2() }
-): TileSun {
-  const s = sun.clone().normalize()
-  const elevation = Math.asin(THREE.MathUtils.clamp(s.dot(up), -1, 1))
+export function tileSun(frame: TileFrame, maxTangent: number, sun: THREE.Vector3, scale: number, opacity: number, target: TileSun): TileSun {
+  const { up, east, north, angularRadius } = frame
+  const elevation = Math.asin(THREE.MathUtils.clamp(sun.dot(up), -1, 1))
   const top = Math.atan(scale * maxTangent)
   // Somewhere on the tile the Sun is under its highest horizon (with the
   // soft edge), and it is up there (6° down: no direct light left).
   target.on = opacity > 0 && elevation + angularRadius > -6 * DEG && elevation - angularRadius - HORIZON_SOFTNESS < top ? 1 : 0
-  const east = new THREE.Vector3(0, 1, 0).cross(up).normalize()
-  const north = up.clone().cross(east)
-  const x = s.dot(east)
-  const y = s.dot(north)
+  const x = sun.dot(east)
+  const y = sun.dot(north)
   let bin = x * x + y * y > 1e-12 ? (Math.atan2(x, y) * 8) / (2 * Math.PI) : 0
   if (bin < 0) bin += 8
   const d0 = Math.floor(bin) % 8
   const d1 = (d0 + 1) % 8
   const t = bin - Math.floor(bin)
-  const w0 = 1 - t
   const l0 = d0 >> 2
   const l1 = d1 >> 2
   target.a.set(0, 0, 0, 0)
   target.b.set(0, 0, 0, 0)
-  target.a.setComponent(d0 & 3, w0)
+  target.a.setComponent(d0 & 3, 1 - t)
   if (l1 === l0) {
     target.a.setComponent(d1 & 3, target.a.getComponent(d1 & 3) + t)
     target.layers.set(l0, -1)
@@ -209,6 +221,33 @@ export function tileSun(
     target.layers.set(l0, l1)
   }
   return target
+}
+
+/** The Sun, the scale and the opacity as the tiles' uniforms stand, with a version that moves when any of them does. */
+interface SunNow {
+  sun: THREE.Vector3
+  scale: number
+  opacity: number
+  version: number
+}
+
+/** Reads the link's Sun (normalised once a change, into one vector) for every tile of a composer. */
+function sunReader(link: GlobeLink): () => SunNow {
+  const now: SunNow = { sun: new THREE.Vector3(), scale: NaN, opacity: NaN, version: 0 }
+  const seen = new THREE.Vector3(NaN, NaN, NaN)
+  return () => {
+    const sun = link.sunDir.value
+    const scale = terrainScaleUniform.value
+    const opacity = surfaceOpacityUniform.value
+    if (sun.x !== seen.x || sun.y !== seen.y || sun.z !== seen.z || scale !== now.scale || opacity !== now.opacity) {
+      seen.copy(sun)
+      now.sun.copy(sun).normalize()
+      now.scale = scale
+      now.opacity = opacity
+      now.version++
+    }
+    return now
+  }
 }
 
 let placeholder: THREE.DataArrayTexture | null = null
@@ -224,31 +263,45 @@ function noHorizon(): THREE.DataArrayTexture {
 }
 
 /**
- * The tile's (b) uniforms: its grid's map (a clone), and tileSun()'s values
- * as getters, worked out again whenever three reads them (each draw of the
- * tile) after the Sun, the scale or the opacity moved.
+ * The tile's (b) uniforms, as getters three reads at each draw: its grid's
+ * map (looked up each time, so a late or re-baked map reaches the tile;
+ * bound as a clone), and tileSun()'s values, redone when the Sun, scale or
+ * opacity moved (sunNow's version) or the map changed.
  */
-function tileUniforms(link: GlobeLink, mesh: THREE.Mesh, horizon: THREE.DataArrayTexture): Record<string, THREE.IUniform> {
+function tileUniforms(sunNow: () => SunNow, material: THREE.Material, mesh: THREE.Mesh): Record<string, THREE.IUniform> {
   const up = mesh.position.clone().applyMatrix3(SURFACE_GROUND_FROM_ECEF).normalize()
   if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
-  const angularRadius = (mesh.geometry.boundingSphere?.radius ?? 0) / SURFACE_ELLIPSOID_RADIUS
-  const maxTangent = tileHorizonTangent((horizon.userData.maxCode as number | undefined) ?? 255)
-  const state: TileSun = { on: 0, a: new THREE.Vector4(), b: new THREE.Vector4(), layers: new THREE.Vector2() }
-  const seen = new THREE.Vector4(NaN)
-  let seenOpacity = NaN
+  const frame = tileFrame(up, (mesh.geometry.boundingSphere?.radius ?? 0) / SURFACE_ELLIPSOID_RADIUS)
+  const grid = () => (material as THREE.MeshPhongMaterial).displacementMap
+  const state: TileSun = { on: 0, a: new THREE.Vector4(), b: new THREE.Vector4(), layers: new THREE.Vector2(0, -1) }
+  let map: THREE.DataArrayTexture | null = null
+  let bound: THREE.DataArrayTexture | null = null
+  let maxTangent = 0
+  let version = -1
   const fresh = () => {
-    const sun = link.sunDir.value
-    const scale = terrainScaleUniform.value
-    const opacity = surfaceOpacityUniform.value
-    if (seen.x !== sun.x || seen.y !== sun.y || seen.z !== sun.z || seen.w !== scale || seenOpacity !== opacity) {
-      seen.set(sun.x, sun.y, sun.z, scale)
-      seenOpacity = opacity
-      tileSun(up, angularRadius, maxTangent, sun, scale, opacity, state)
+    const current = gridHorizon(grid())
+    if (current !== map) {
+      bound?.dispose()
+      map = current
+      bound = current ? current.clone() : null
+      maxTangent = current ? tileHorizonTangent((current.userData.maxCode as number | undefined) ?? 255) : 0
+      version = -1
+    }
+    const now = sunNow()
+    if (version !== now.version) {
+      version = now.version
+      if (bound) tileSun(frame, maxTangent, now.sun, now.scale, now.opacity, state)
+      else state.on = 0
     }
     return state
   }
-  return {
-    uTileHorizon: { value: horizon.clone() },
+  const uniforms: Record<string, THREE.IUniform> = {
+    uTileHorizon: {
+      get value() {
+        fresh()
+        return bound ?? noHorizon()
+      },
+    },
     uTileHorizonOn: {
       get value() {
         return fresh().on
@@ -270,10 +323,19 @@ function tileUniforms(link: GlobeLink, mesh: THREE.Mesh, horizon: THREE.DataArra
       },
     },
   }
+  releasers.set(uniforms, () => {
+    bound?.dispose()
+    bound = map = null
+  })
+  return uniforms
 }
+
+/** Frees a tile's clone of its grid's map (onDispose). */
+const releasers = new WeakMap<object, () => void>()
 
 export const tileShadow: TileAdapter = (link) => {
   const glsl = tileShadowGlsl(link.seaLevel)
+  const sunNow = sunReader(link)
   return {
     patch: {
       onBeforeCompile(shader) {
@@ -296,12 +358,12 @@ export const tileShadow: TileAdapter = (link) => {
       customProgramCacheKey: () => 'shadow-surface',
     },
     onTile(material, mesh) {
-      const horizon = gridHorizon(material.displacementMap)
-      if (!horizon) return
-      return tileUniforms(link, mesh, horizon)
+      // every grid's tile: its map may come later
+      if (!material.displacementMap) return
+      return tileUniforms(sunNow, material, mesh)
     },
     onDispose(_material, uniforms) {
-      ;(uniforms.uTileHorizon?.value as THREE.Texture | undefined)?.dispose()
+      releasers.get(uniforms)?.()
     },
   }
 }

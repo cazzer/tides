@@ -163,22 +163,29 @@ export async function decodeTerrariumImage(buffer: ArrayBuffer): Promise<PaddedG
 // ---------------------------------------------------------------------------
 // Per-grid horizon maps (tides-zmw.9.15): how high the ground stands around
 // each point of a grid, in eight compass directions, for the tiles' cast
-// shadows (tile-shadow.ts). Baked in the decode worker with the grid, at a
-// quarter of its resolution, at true scale: each value is the steepest
-// rise's tangent (metres per metre) over the curved Earth, so the shader
-// takes it to the live terrain scale by multiplying (exact without the
-// curvature term, which is ~1e-3 at the reach and stays unscaled-small).
+// shadows (tile-shadow.ts). Baked in a decode worker after the grid is
+// made, at a quarter of its resolution, at true scale: each value is the
+// steepest rise's tangent (metres per metre) over the curved Earth,
+// max (Δh / d - d / 2R), so the shader takes it to the live terrain scale s
+// by multiplying. That scales the Earth's curvature drop with the relief
+// (s (Δh / d - d / 2R), where s Δh / d - d / 2R is exact): the drop is
+// ~1e-3 at the 12 km reach (0.05°), so at 12x a ridge 12 km out shades as
+// if ~0.6° lower than it would; nearer, less. The globe's map does the
+// same (earth-horizon.ts).
 //
 // Reach. A grid spans 0.5 km (z16) to hundreds of km, but a shadow's length
 // doesn't depend on which grid draws it: a search that stopped at the
 // grid's edge would cut shadows at every seam, and at a different length
 // on each level of detail. So every grid searches the same distance in
 // metres (TILE_HORIZON_REACH_METRES), on geometric steps from
-// TILE_HORIZON_FIRST_TEXELS of its own texels; past its own data a step
-// reads its ancestors' grids (the context: each a window around the grid,
-// coarser and wider up the chain), the finest that holds the point.
-// Ancestors that weren't loaded when the grid was are missing from the
-// chain, and that grid's reach is shorter (the caller's choice).
+// TILE_HORIZON_FIRST_TEXELS of its own texels; past its own inner texels a
+// step reads the context, the first window that holds the point: its
+// same-level neighbours' grids at their own texels (a band past each shared
+// edge, so two grids read the same ground there and agree at the seam),
+// then its ancestors' (each a window around the grid, coarser and wider up
+// the chain). Grids that weren't loaded when it was baked are missing, and
+// its reach is shorter (terrain-internals.ts bakes it again when a
+// neighbour turns up).
 //
 // Layout: two layers of RGBA8, TILE_HORIZON_DIVISOR times smaller than the
 // padded grid each way and spanning the same uv square (texel a's centre at
@@ -235,7 +242,7 @@ export interface HorizonJob {
   /** Its south and north edges, normalized Mercator v (the tiling's getTileBounds). */
   south: number
   north: number
-  /** Ancestor windows (horizonWindow()), finest first. */
+  /** Windows of the grids around it (horizonWindow()): a point reads the first that holds it (neighbours, then ancestors finest first). */
   context: HorizonSource[]
 }
 

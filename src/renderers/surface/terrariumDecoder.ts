@@ -7,18 +7,18 @@
 // 16.4), or if one dies, decodes run on the main thread instead. No DOM
 // here, so it is testable with a fake worker.
 //
-// tides-zmw.9.15: a decode may carry a horizon job (terrarium.ts
-// HorizonJob: where the grid is, and its ancestors' windows), and the worker
-// then bakes the grid's horizon map after decoding it and hands it back with
-// the grid; a grid that wasn't decoded (resampled from an ancestor past the
-// source's coverage) is baked from its job alone (bake()). The windows are
-// transferred. On the main thread (no worker) nothing is baked: a bake is
-// ~10 ms, and the horizon only adds detail (tile-shadow.ts).
+// tides-zmw.9.15: bake() makes a grid's horizon map (terrarium.ts
+// bakeTileHorizon) in a worker from a copy of the grid and its job (where
+// the grid is, and windows of its neighbours' and ancestors' grids), all
+// transferred. It is separate from the decode, so a grid never waits on its
+// context. On the main thread (no worker) nothing is baked (bakes is false
+// and bake() answers null): a bake is ~10 ms, and the horizon only adds
+// detail (tile-shadow.ts).
 import type { HorizonJob, PaddedGrid } from './terrarium'
 
 export type DecodeRequest =
-  | { type: 'decode'; id: number; buffer: ArrayBuffer; horizon?: HorizonJob }
-  | { type: 'bake'; id: number; horizon: HorizonJob }
+  | { type: 'decode'; id: number; buffer: ArrayBuffer }
+  | { type: 'bake'; id: number; horizon: HorizonJob; grid: PaddedGrid | null }
   | { type: 'cancel'; id: number }
 
 /** What a bake hands back: the map (null: no horizon anywhere), its worker time, and its highest byte. */
@@ -30,12 +30,10 @@ export interface BakedHorizon {
 }
 
 export type DecodeReply =
-  | { type: 'done'; id: number; grid: PaddedGrid; baked?: BakedHorizon }
+  | { type: 'done'; id: number; grid: PaddedGrid }
   | { type: 'baked'; id: number; baked: BakedHorizon }
   | { type: 'error'; id: number; message: string; name?: string }
 
-/** A decoded grid, and its horizon map when a job asked for one. */
-export type DecodedGrid = PaddedGrid & { baked?: BakedHorizon }
 
 /** The part of Worker the client uses. */
 export interface DecodeWorker {
@@ -45,13 +43,15 @@ export interface DecodeWorker {
   terminate(): void
 }
 
-export type TerrariumDecode = (buffer: ArrayBuffer, signal: AbortSignal, horizon?: HorizonJob) => Promise<DecodedGrid>
-export type TerrariumBake = (horizon: HorizonJob, signal: AbortSignal) => Promise<BakedHorizon | null>
+export type TerrariumDecode = (buffer: ArrayBuffer, signal: AbortSignal) => Promise<PaddedGrid>
+/** A horizon map for `grid` (a copy: transferred, as the job's windows are), or null where no worker bakes. */
+export type TerrariumBake = (horizon: HorizonJob, grid: PaddedGrid | null, signal: AbortSignal) => Promise<BakedHorizon | null>
 
 export interface TerrariumDecoder {
   decode: TerrariumDecode
-  /** A horizon map from a job alone; null where no worker bakes. */
   bake: TerrariumBake
+  /** Whether a bake would run (a worker is up or can be made, not disposed): false, and nothing need be gathered for one. */
+  readonly bakes: boolean
   /** Terminates the workers; decodes still pending reject with an AbortError. */
   dispose(): void
 }
@@ -62,7 +62,7 @@ interface Job {
   signal: AbortSignal
   /** Removed once the job settles. */
   onAbort: () => void
-  resolve: (result: DecodedGrid | BakedHorizon | null) => void
+  resolve: (result: PaddedGrid | BakedHorizon | null) => void
   reject: (err: unknown) => void
 }
 
@@ -102,7 +102,7 @@ export function createTerrariumDecoder({
 
   function runInThread(job: Job) {
     job.signal.throwIfAborted()
-    job.inThread().then((result) => job.resolve(result as DecodedGrid | BakedHorizon | null), job.reject)
+    job.inThread().then((result) => job.resolve(result as PaddedGrid | BakedHorizon | null), job.reject)
   }
 
   function fallBack(err: unknown) {
@@ -134,7 +134,7 @@ export function createTerrariumDecoder({
         if (!job) return
         slot.jobs.delete(data.id)
         detach(job)
-        if (data.type === 'done') job.resolve(data.baked ? { ...data.grid, baked: data.baked } : data.grid)
+        if (data.type === 'done') job.resolve(data.grid)
         else if (data.type === 'baked') job.resolve(data.baked)
         else job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
       })
@@ -162,7 +162,7 @@ export function createTerrariumDecoder({
   }
 
   /** Posts a job to the idlest worker, or runs `fallback` here. */
-  function post<T extends DecodedGrid | BakedHorizon | null>(
+  function post<T extends PaddedGrid | BakedHorizon | null>(
     signal: AbortSignal,
     request: (id: number) => DecodeRequest,
     transfer: Transferable[],
@@ -186,18 +186,20 @@ export function createTerrariumDecoder({
     })
   }
 
-  /** The horizon windows' buffers, transferred (the job's own copies). */
-  const windows = (horizon?: HorizonJob): Transferable[] => horizon?.context.map((w) => w.data.buffer) ?? []
-
   return {
-    decode(buffer, signal, horizon) {
+    decode(buffer, signal) {
       // The buffer is copied, not transferred (a WebP tile is ~10-300 kB):
-      // if the worker dies, its jobs are decoded here from the same buffer
-      // (without the horizon, whose windows went with it).
-      return post<DecodedGrid>(signal, (id) => ({ type: 'decode', id, buffer, horizon }), windows(horizon), () => inThread(buffer))
+      // if the worker dies, its jobs are decoded here from the same buffer.
+      return post<PaddedGrid>(signal, (id) => ({ type: 'decode', id, buffer }), [], () => inThread(buffer))
     },
-    bake(horizon, signal) {
-      return post<BakedHorizon | null>(signal, (id) => ({ type: 'bake', id, horizon }), windows(horizon), async () => null)
+    bake(horizon, grid, signal) {
+      // the job's own copies, transferred (a dead worker's bake answers null)
+      const transfer: Transferable[] = horizon.context.map((w) => w.data.buffer)
+      if (grid) transfer.push(grid.data.buffer)
+      return post<BakedHorizon | null>(signal, (id) => ({ type: 'bake', id, horizon, grid }), transfer, async () => null)
+    },
+    get bakes() {
+      return workersOk && !disposed
     },
     dispose() {
       disposed = true
