@@ -46,25 +46,6 @@ export function surfaceEcef(lat: number, lon: number, height: number, target = n
   return target.set(r * Math.cos(la) * Math.cos(lo), r * Math.cos(la) * Math.sin(lo), r * Math.sin(la))
 }
 
-/**
- * Rescales the bump shading of a loaded terrain tile's meshes to the group's
- * scale. The terrain material (the library's TerrainLambertMaterial) shades
- * with the elevation map's gradient in metres against the surface's screen
- * derivatives in view space, which the group's scale has shrunk to scene
- * units: left at the plugin's bumpScale (the height scale), every slope
- * shades ~2e6 times too steep, nearly black or white by its aspect. Scaling
- * bumpScale by SURFACE_SCALE puts both in scene units. displacementScale
- * stays in metres: it moves vertices in object space, before the scale.
- * The plugin resets bumpScale when its heightScale changes, so a live height
- * scale (tides-zmw.9.7) must reapply this.
- */
-export function applySurfaceBumpScale(root: THREE.Object3D, heightScale: number): void {
-  root.traverse((object) => {
-    const material = (object as THREE.Mesh).material as THREE.MeshLambertMaterial | undefined
-    if (material?.bumpMap) material.bumpScale = heightScale * SURFACE_SCALE
-  })
-}
-
 const _frame = new THREE.Object3D()
 applySurfaceFrame(_frame)
 

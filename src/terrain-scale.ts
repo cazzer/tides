@@ -1,13 +1,15 @@
 // Earth's live terrain scale (tides-zmw.9.5): how many times true scale the
 // ground is drawn at this frame, eased with the eye's altitude from the
 // page's relief (./relief.ts, 12x by default) at the top of the blend down to
-// true scale (1x) at the sea. Reload-time ?blend=1 turns it on; without it
-// the scale is the relief at every altitude and every reader below gets
-// TERRAIN_DISPLACEMENT to the bit, so production draws as it did. It stays
-// behind the flag until the cloud march follows it (tides-zmw.9.6: until
-// then its GLSL stands the columns on full-relief ground, so the shadows
-// drift and over mountains the march's ground can stand above the eye); the
-// last of tides-zmw.9.7 / 9.10 to land turns it on and drops ?blend.
+// true scale (1x) at the sea. Reload-time ?blend=1 turns it on, and so do the
+// streamed surface tiles (?surface=1, ../surface.ts; tides-zmw.9.7), which
+// take the same scale; without either the scale is the relief at every
+// altitude and every reader below gets TERRAIN_DISPLACEMENT to the bit, so
+// production draws as it did. It stays behind the flags until the cloud
+// march follows it (tides-zmw.9.6: until then its GLSL stands the columns on
+// full-relief ground, so the shadows drift and over mountains the march's
+// ground can stand above the eye); tides-zmw.9.10 turns it on and drops
+// ?blend.
 //
 // One writer, one value a frame: ShipController calls setTerrainEye() with
 // the ship's altitude before it steps the flight model, so the floor the
@@ -36,11 +38,19 @@
 // faster than the eye descends, above it near the ground. The ship's stop is
 // the fixed point a = s(a) h + c (h the true ground, c the clearance), unique
 // and reached smoothly when s'(a) h < 1 for all ground, which sets the
-// blend's lowest top (terrainBlendTop()).
+// blend's lowest top (terrainBlendTop()). The tiles draw true peaks
+// (Everest's 8849 m), not the globe's smoothed 5385 m, so the top is sized
+// for SURFACE_MAX_METRES (tides-zmw.9.7): ~183 km at 12x.
+//
+// The handover (tides-zmw.9.7): the tiles dissolve in over the top's last
+// 40% (surfaceOpacity(), surfaceOpacityUniform, written with the scale), on
+// a screen-door the globe fills, so between the two only the DEM and the
+// imagery differ, spread over ~70 km of descent; both stand on the one scale.
 import type * as THREE from 'three'
 import { EARTH_RADIUS_KM, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from './cloud-layer'
 import { sceneRadius } from './planets'
 import { RELIEF } from './relief'
+import { SURFACE_TILES_ON } from './surface'
 
 export { TRUE_TERRAIN_DISPLACEMENT }
 
@@ -49,8 +59,17 @@ export function parseTerrainBlend(search: string): boolean {
   return new URLSearchParams(search).get('blend') === '1'
 }
 
-/** This page's ?blend=1; off outside a browser. */
-export const TERRAIN_BLEND = typeof location === 'undefined' ? false : parseTerrainBlend(location.search)
+/** Whether the live scale is on: ?blend=1, or the surface tiles, which
+ * stand on it (tides-zmw.9.7); off outside a browser. */
+export function terrainBlendOn(blend: boolean, surfaceTiles: boolean): boolean {
+  return blend || surfaceTiles
+}
+
+/** This page's live scale: ?blend=1 or the tiles; off outside a browser. */
+export const TERRAIN_BLEND = terrainBlendOn(
+  typeof location === 'undefined' ? false : parseTerrainBlend(location.search),
+  SURFACE_TILES_ON
+)
 
 /** True kilometres per scene unit at Earth (sceneRadius(diameter) is the
  * drawn sphere's radius; ~2159). Not ship-bodies.ts' EARTH_RADIUS: that
@@ -70,22 +89,44 @@ export const FLOOR_MARGIN_GREY = 0.5
  * highest drawn ground (TERRAIN_MAX_GREY) plus the floor's margin. */
 export const TRUE_FLOOR_MAX = TRUE_TERRAIN_DISPLACEMENT * (TERRAIN_MAX_GREY + FLOOR_MARGIN_GREY / 255)
 
+/** The highest ground the streamed tiles draw, metres (Everest, 8849 m,
+ * with room): the globe's own highest (TRUE_FLOOR_MAX) is smoothed to
+ * 5385 m, but the tiles stand true peaks on the same scale (tides-zmw.9.7). */
+export const SURFACE_MAX_METRES = 8900
+
+/** SURFACE_MAX_METRES in scene units at true scale. */
+export const SURFACE_MAX = SURFACE_MAX_METRES / (EARTH_KM_PER_UNIT * 1000)
+
 /** The most the stop's fixed point may move per unit of altitude it moves
- * (s'(a) × TRUE_FLOOR_MAX at the blend's steepest): under 1, so the stop is
- * unique and continuous, with room to spare. */
+ * (s'(a) × the highest ground at the blend's steepest): under 1, so the stop
+ * is unique and continuous, with room to spare. */
 export const TERRAIN_BLEND_MAX_GAIN = 0.8
+
+/**
+ * The blend's shape from the sea to its top: 'smooth' (smoothstep: C1 at
+ * both ends, steepest 1.5x its mean slope, so the top sits 1.5x higher) or
+ * 'linear' (C0 at the top, a kink in the slope there, but a top two thirds
+ * as high: ~122 km at 12x against ~183). Q1 of tides-zmw.9.7; smooth until
+ * the user picks.
+ */
+export type TerrainBlendRamp = 'smooth' | 'linear'
+export const TERRAIN_BLEND_RAMP: TerrainBlendRamp = 'smooth'
+
+/** The ramp's steepest slope over its mean. */
+const rampPeak = (ramp: TerrainBlendRamp) => (ramp === 'linear' ? 1 : 1.5)
 
 /**
  * The altitude over the sea (scene units) at and above which the ground is
  * drawn at the full `relief`: TERRAIN_BLEND_MIN_TOP_KM, or higher where the
- * blend would be too steep for the stop (smoothstep's steepest slope is 1.5
- * over its span: (relief - 1) × 1.5 / top × TRUE_FLOOR_MAX at most
- * TERRAIN_BLEND_MAX_GAIN). ~0.0512 (110 km) at 12x, ~0.111 at 25x.
+ * blend would be too steep for the stop over the highest ground anything
+ * draws (the tiles' SURFACE_MAX; the globe's TRUE_FLOOR_MAX is lower):
+ * (relief - 1) × the ramp's peak / top × SURFACE_MAX at most
+ * TERRAIN_BLEND_MAX_GAIN. Smooth: ~0.0850 (~183 km) at 12x, ~0.193 at 25x.
  */
-export function terrainBlendTop(relief: number = RELIEF): number {
+export function terrainBlendTop(relief: number = RELIEF, ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP): number {
   return Math.max(
     TERRAIN_BLEND_MIN_TOP_KM / EARTH_KM_PER_UNIT,
-    ((relief - 1) * 1.5 * TRUE_FLOOR_MAX) / TERRAIN_BLEND_MAX_GAIN
+    ((relief - 1) * rampPeak(ramp) * Math.max(TRUE_FLOOR_MAX, SURFACE_MAX)) / TERRAIN_BLEND_MAX_GAIN
   )
 }
 
@@ -95,24 +136,58 @@ export function terrainBlendTop(relief: number = RELIEF): number {
  * terrainBlendTop() and holding it above. `relief` everywhere when the blend
  * is off. Infinity (no Earth) gives `relief`.
  */
-export function terrainScale(altitude: number, relief: number = RELIEF, blend: boolean = TERRAIN_BLEND): number {
+export function terrainScale(
+  altitude: number,
+  relief: number = RELIEF,
+  blend: boolean = TERRAIN_BLEND,
+  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP
+): number {
   if (!blend) return relief
-  const top = terrainBlendTop(relief)
+  const top = terrainBlendTop(relief, ramp)
   // Exactly the relief at and above the top, which 1 + (relief - 1) needn't
   // round to.
   if (!(altitude < top)) return relief
   const t = Math.max(0, altitude / top)
-  return 1 + (relief - 1) * t * t * (3 - 2 * t)
+  return 1 + (relief - 1) * (ramp === 'linear' ? t : t * t * (3 - 2 * t))
+}
+
+/** Where in the blend's top the tiles start to dissolve out, going up. */
+export const SURFACE_FADE_START = 0.6
+
+/**
+ * How much of the ground the streamed tiles draw for an eye `altitude` over
+ * the sea (tides-zmw.9.7): all of it up to SURFACE_FADE_START of the blend's
+ * top, none from the top up (smoothstep between), the rest left to the
+ * globe on a screen-door (surface-scale.ts). 0 for Infinity (no ship).
+ */
+export function surfaceOpacity(
+  altitude: number,
+  relief: number = RELIEF,
+  ramp: TerrainBlendRamp = TERRAIN_BLEND_RAMP
+): number {
+  const top = terrainBlendTop(relief, ramp)
+  const start = SURFACE_FADE_START * top
+  if (!(altitude < top)) return 0
+  if (altitude <= start) return 1
+  const t = (altitude - start) / (top - start)
+  return 1 - t * t * (3 - 2 * t)
 }
 
 /**
  * The live scale: one uniform object every reader shares (the ground's
  * displacement through applyTerrainScale(), the CPU floor through
- * liveTerrainDisplacement(); next the cloud march, tides-zmw.9.6, and the
- * streamed tiles' height, tides-zmw.9.7). The page's relief until a ship
- * sets it, and again once it leaves.
+ * liveTerrainDisplacement(), the streamed tiles' height and bump in their
+ * shaders, tides-zmw.9.7; next the cloud march, tides-zmw.9.6). The page's
+ * relief until a ship sets it, and again once it leaves.
  */
 export const terrainScaleUniform: THREE.IUniform<number> = { value: RELIEF }
+
+/**
+ * The tiles' share of the ground this frame (surfaceOpacity()), written with
+ * the scale: one uniform object every tile material reads (surface-scale.ts).
+ * 0 until a ship sets it, and again once it leaves.
+ */
+export const surfaceOpacityUniform: THREE.IUniform<number> = { value: 0 }
 
 /**
  * Sets the live scale for an eye `altitude` over the sea-level sphere
@@ -122,6 +197,7 @@ export const terrainScaleUniform: THREE.IUniform<number> = { value: RELIEF }
  */
 export function setTerrainEye(altitude: number, blend: boolean = TERRAIN_BLEND): void {
   terrainScaleUniform.value = terrainScale(altitude, RELIEF, blend)
+  surfaceOpacityUniform.value = surfaceOpacity(altitude)
 }
 
 /**

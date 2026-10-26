@@ -2,15 +2,21 @@
 // ?surface=1 (../../surface.ts). Mount inside Earth's OrbitingBody, beside
 // EarthRenderer, so its group inherits Earth's tilt and spin; solar-system
 // lazy-loads this module so the library stays out of the main chunk.
-import { useEffect, useMemo, useRef } from 'react'
+//
+// tides-zmw.9.7: the tiles wait for their View's ground haze (surface-link.ts)
+// so every tile is built with it, and draw only below the blend's top
+// (surfaceOpacityUniform; surface-scale.ts dissolves them in under it).
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
+import { surfaceOpacityUniform } from '../../terrain-scale'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
 import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import type { ImageryTile } from './imagery'
 import { setActiveSurfaceSources } from './surface-credits'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
+import { subscribeSurfaceHaze, surfaceHaze } from './surface-link'
 import { smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
 
 // How often the visible tiles are read for the credits line; it only needs to
@@ -21,6 +27,9 @@ const creditEye = new THREE.Vector3()
 export default function SurfaceTiles() {
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
+  // The globe's haze in this View, which EarthRenderer publishes.
+  const haze = useSyncExternalStore(subscribeSurfaceHaze, () => surfaceHaze(scene))
   const width = useThree((s) => s.size.width)
   const height = useThree((s) => s.size.height)
   // Without linear filtering of float textures (iOS), the elevation grids
@@ -39,10 +48,10 @@ export default function SurfaceTiles() {
   // download with it.
   useEffect(() => {
     const parent = holder.current
-    if (!parent) return
+    if (!parent || !haze) return
     let created: Tiles
     try {
-      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture) })
+      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture), haze })
     } catch (error) {
       // e.g. no OffscreenCanvas (Safari before 16.4), which the library's
       // terrain plugin needs to construct: fly over the globe alone.
@@ -69,19 +78,21 @@ export default function SurfaceTiles() {
         console.error('surface tiles: dispose failed', error)
       }
     }
-  }, [camera, gl, floatLinear])
+  }, [camera, gl, floatLinear, haze])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
   // is in those pixels. After the effect above, so the camera is registered.
   useEffect(() => {
     surface.current?.tiles.setResolution(camera, width, height)
-  }, [camera, gl, floatLinear, width, height])
+  }, [camera, gl, floatLinear, haze, width, height])
 
   useFrame((_, delta) => {
     const current = surface.current
     if (!current?.tiles.group.parent) return
-    const { tiles, budget } = current
+    const { tiles, budget, bounds } = current
     budget.tick()
+    // The regions' fit from this frame's scale (ShipController has written it).
+    bounds.update()
     // Less detail the faster the ground sweeps past (surface-lod.ts), set
     // before update() picks this frame's tiles.
     const target = surfaceErrorTarget(sweepRate(shipTelemetry.speed, shipTelemetry.nearest), touch)
@@ -94,6 +105,9 @@ export default function SurfaceTiles() {
     camera.updateWorldMatrix(true, false)
     tiles.group.updateWorldMatrix(true, false)
     tiles.update()
+    // None of the ground is the tiles' above the blend's top (ShipController
+    // has written this frame's share): the globe draws it all.
+    tiles.group.visible = surfaceOpacityUniform.value > 0
     current.syncCounters()
     const now = performance.now()
     const credit = credits.current

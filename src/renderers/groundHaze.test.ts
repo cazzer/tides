@@ -332,4 +332,48 @@ describe('ground haze', () => {
     haze.update(ground, ortho)
     expect(shader.uniforms.uGroundHaze.value).toBe(0)
   })
+
+  it('lays the same haze on the surface tiles, on the same uniforms, their ray through the ground frame (tides-zmw.9.7)', () => {
+    const haze = createGroundHaze({ value: new THREE.Vector3(1, 0, 0) }, R, false)
+    const ground = phongShader()
+    haze.patch.onBeforeCompile(ground, {} as THREE.WebGLRenderer)
+    const tile = {
+      uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.lambert.uniforms),
+      vertexShader: THREE.ShaderLib.lambert.vertexShader,
+      fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+    } as THREE.WebGLProgramParametersWithUniforms
+    haze.surfacePatch.onBeforeCompile(tile, {} as THREE.WebGLRenderer)
+    for (const name of ['uGroundHaze', 'uGroundHazeSeaLevel', 'uGroundHazeLength', 'uGroundHazeTop', 'uGroundHazeSun']) {
+      expect(tile.uniforms[name], name).toBe(ground.uniforms[name])
+    }
+    expect(tile.vertexShader).toContain('vGroundHazeRay = uGroundHazeViewToLocal * mvPosition.xyz;')
+    expect(tile.vertexShader).toContain('vGroundHazeEye = uGroundHazeEyeLocal;')
+    expect(ground.vertexShader).not.toContain('uGroundHazeViewToLocal')
+    // The fragment is the ground's, word for word.
+    const body = (f: string) => f.slice(f.indexOf('uniform float uGroundHaze;'), f.indexOf('#undef uDusk'))
+    expect(body(tile.fragmentShader)).toBe(body(ground.fragmentShader))
+    expect(tile.fragmentShader).toContain('vec4 haze = groundHaze(vGroundHazeEye, vGroundHazeRay, cover);')
+    expect(haze.surfacePatch.customProgramCacheKey()).not.toBe(haze.patch.customProgramCacheKey())
+
+    // update() fills the frame for this camera: a tile point's ray and eye
+    // in the ground frame match what the ground's own vertex stage forms.
+    const earth = new THREE.Group()
+    earth.position.set(5000, -300, 1200)
+    earth.rotation.set(0.3, 1.1, -0.4)
+    const groundMesh = new THREE.Mesh(new THREE.SphereGeometry(R))
+    earth.add(groundMesh)
+    earth.updateMatrixWorld(true)
+    const camera = new THREE.PerspectiveCamera()
+    const local = new THREE.Vector3(R + 0.01, 0.02, -0.03)
+    camera.position.copy(local).applyMatrix4(groundMesh.matrixWorld)
+    camera.lookAt(new THREE.Vector3(0, 0, 0).applyMatrix4(groundMesh.matrixWorld))
+    camera.updateMatrixWorld(true)
+    haze.update(groundMesh, camera)
+    const eye = tile.uniforms.uGroundHazeEyeLocal.value as THREE.Vector3
+    expect(eye.distanceTo(local)).toBeLessThan(1e-9)
+    const point = new THREE.Vector3(R, 0.05, 0.01)
+    const view = point.clone().applyMatrix4(groundMesh.matrixWorld).applyMatrix4(camera.matrixWorldInverse.copy(camera.matrixWorld).invert())
+    const ray = view.applyMatrix3(tile.uniforms.uGroundHazeViewToLocal.value as THREE.Matrix3)
+    expect(ray.distanceTo(point.clone().sub(local))).toBeLessThan(1e-9)
+  })
 })

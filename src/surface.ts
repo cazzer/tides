@@ -1,13 +1,14 @@
 // The streamed true-scale surface (tides-zmw.9.1), chosen at load: ?surface=1
 // in the URL mounts Mapterhorn terrain with satellite imagery under Earth's
 // spin group in ship mode; anything else (absent, 0, true, junk) leaves the
-// scene as it was. TEMPORARY: the tiles are drawn at true scale (1x relief)
-// while the globe is drawn at RELIEF (12x by default, ./relief.ts), so with
-// the flag the tiles sit up to tens of km under the globe's ground and only
-// show where the globe is hidden or clipped by the near plane, and the two
-// z-fight at sea level, where both are at the ellipsoid. That makes the flag
-// a developer preview of the streaming itself; the altitude blend
-// (tides-zmw.9.7) hands the ground over from the globe and removes the flag.
+// scene as it was. The tiles stand on the globe's live terrain scale, which
+// the flag turns on (terrain-scale.ts TERRAIN_BLEND), and take the ground
+// over from the globe below the blend's top by stencil, the globe filling
+// wherever no tile has loaded (tides-zmw.9.7, renderers/surface/
+// surface-scale.ts). Still a preview: the tiles lack the globe's cloud
+// shadows, night lights, sun glint and terrain shadows (beads under
+// tides-zmw.9), which must land before the flag becomes the default
+// (tides-zmw.9.10).
 //
 // High tier only: the tiles stream tens of MB of textures and meshes a phone
 // budget can't spare. iPads report the high tier; there, without linear

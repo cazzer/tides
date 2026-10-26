@@ -10,13 +10,23 @@
 // per frame (no long stalls), nearest-filtered where the GPU can't filter
 // float textures (iOS); and the instance has its own memory cap and
 // download queue rather than the library's shared defaults.
+//
+// tides-zmw.9.7 put the tiles on the globe's live terrain scale and handed
+// the ground over from the globe by stencil (surface-scale.ts): the plugin
+// is built at the page's RELIEF (the skirts of the largest scale; the
+// bounding regions follow the live scale stepwise), the tiles draw first, and each tile dithers in (TilesFadePlugin)
+// rather than popping over the globe it replaces.
 import * as THREE from 'three'
 import { DEFAULT_DOWNLOAD_QUEUE, DEFAULT_LRU_CACHE, DownloadPriorityQueue, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
-import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
+import { TerrariumMeshPlugin, TilesFadePlugin } from '3d-tiles-renderer/three/plugins'
+import { RELIEF } from '../../relief'
+import type { GroundHaze } from '../groundHaze'
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
-import { applySurfaceBumpScale, applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
+import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
+import { createSurfaceScalePlugin, fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
+import { terrainScaleUniform } from '../../terrain-scale'
 import {
   installSurfaceGridCache,
   protectOverlayBitmaps,
@@ -50,6 +60,8 @@ export interface SurfaceTilesOptions {
   floatLinear: boolean
   /** Uploads each finished grid at once (the renderer's initTexture). */
   upload?: (texture: THREE.Texture) => void
+  /** The globe's aerial perspective, laid on the tiles too (its surfacePatch). */
+  haze?: GroundHaze | null
 }
 
 export interface SurfaceTiles {
@@ -59,6 +71,8 @@ export interface SurfaceTiles {
   grids: SurfaceGridCache
   /** Tick once per frame: lets the next grids finish. */
   budget: FrameBudget
+  /** Update once per frame, before tiles.update(): the regions' fit. */
+  bounds: SurfaceBounds
   /** Copies the robustness counters onto tiles.group.userData. */
   syncCounters(): void
   dispose(): void
@@ -85,16 +99,22 @@ function createDecodeWorker(): DecodeWorker | null {
   }) as unknown as DecodeWorker
 }
 
-export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions): SurfaceTiles {
+/** The draw order of the tiles' group: before the globe, whose pixels they
+ * take by stencil (surface-scale.ts). three sorts a Group's children by it. */
+export const SURFACE_RENDER_ORDER = -1
+
+export function createSurfaceTiles({ floatLinear, upload, haze = null }: SurfaceTilesOptions): SurfaceTiles {
   const overlay = new SurfaceImageryOverlay()
   protectOverlayBitmaps(overlay)
   const terrain = new TerrariumMeshPlugin({
     url: MAPTERHORN_URL,
     tileDimension: MAPTERHORN_TILE_SIZE,
     maxZoom: MAPTERHORN_MAX_ZOOM,
-    // True scale for now: the globe's RELIEF exaggeration reaches the tiles
-    // with the shared terrain scale (tides-zmw.9.7).
-    heightScale: 1,
+    // The largest scale the live one reaches, for the skirts (the bounding
+    // regions follow the live scale stepwise, fitSurfaceBounds); the shaders
+    // draw at terrainScaleUniform (surface-scale.ts), and the setter is never
+    // called again (it rewrites every material and refits the whole tree).
+    heightScale: RELIEF,
     overlay,
     applyOverlayTexture: true,
   })
@@ -132,7 +152,16 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
   quietTilesetVersion(tiles)
   tiles.registerPlugin(terrain)
   shareGridBytes(tiles)
+  // The scale and the handover on each tile's materials as it parses, then
+  // the fade, which wraps them at load-model; root tiles fade in too, over
+  // the globe they replace.
+  const hazePatches = haze ? [haze.surfacePatch] : []
+  tiles.registerPlugin(createSurfaceScalePlugin(() => hazePatches))
+  tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
+  // The bounding regions on the live scale, stepwise (surface-scale.ts).
+  const bounds = fitSurfaceBounds(tiles, terrain, () => terrainScaleUniform.value)
   applySurfaceFrame(tiles.group)
+  tiles.group.renderOrder = SURFACE_RENDER_ORDER
   tiles.group.name = 'surface-tiles'
   tiles.group.userData.tiles = tiles
   // Out of ShipWarmup's reach (ship-warmup.ts): tiles come and go too fast to
@@ -145,10 +174,6 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
   // event. Returning false skips the tiles and everything under them, which
   // is what the scene did before they existed.
   tiles.group.raycast = () => false
-
-  // The plugin has set each tile's bump scale by the time it reports the
-  // model loaded; put it in scene units (see applySurfaceBumpScale).
-  tiles.addEventListener('load-model', ({ scene }) => applySurfaceBumpScale(scene, terrain.heightScale))
 
   // Ocean 404s and failed imagery no longer fail a tile (above); anything
   // else that does is said once, and counted.
@@ -172,6 +197,8 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
     data.flatTiles = grids.flatTiles
     data.imageryFallbacks = overlay.fallbacks
     data.errorTarget = tiles.errorTarget
+    data.fitScale = bounds.fit
+    data.refits = bounds.refits
   }
 
   return {
@@ -180,6 +207,7 @@ export function createSurfaceTiles({ floatLinear, upload }: SurfaceTilesOptions)
     overlay,
     grids,
     budget,
+    bounds,
     syncCounters,
     // tiles.dispose() unregisters the terrain plugin, which releases every
     // loaded tile's grid and overlay texture; in-flight parses release theirs

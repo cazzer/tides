@@ -93,6 +93,61 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     expect(read('src/three/renderer/tiles/TilesRenderer.js')).toContain('bytesUsed.set( tile, estimateBytesUsed( scene ) );')
   })
 
+  // tides-zmw.9.7 (surface-scale.ts): the tiles' height comes from the GPU
+  // (displacementMap x displacementScale, set once per parse and only again
+  // by the heightScale setter), the bump from the terrain material's own
+  // chunk, the bounds from heightScale at construction; and processTileModel
+  // runs before load-model, where the fade plugin wraps the materials.
+  it('displaces tiles on the GPU at displacementScale, set at parse and by the setter alone', () => {
+    const [plugins, ...others] = built(/\.material\.displacementScale = this\._heightScale/)
+    expect(others).toHaveLength(0)
+    expect(plugins.match(/\w+\.material\.displacementScale = this\._heightScale, \w+\.material\.bumpScale = this\._heightScale/g)).toHaveLength(2)
+    const src = read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')
+    expect(src).toContain('mesh.material.displacementMap = displacement;')
+    expect(src).toContain('surface.getCartographicToPosition( lat, lon, 0, _pos ).sub( _sphere.center );')
+    expect(src).toContain('const skirtDepth = tile.geometricError + ( maxHeight - minHeight ) * _heightScale;')
+  })
+
+  it("shades the tiles' bump with the terrain material's own gradient, bumpScale times it", () => {
+    const [plugins, ...others] = built(/float dBx = bumpScale \*/)
+    expect(others).toHaveLength(0)
+    expect(plugins).toContain('float dBx = bumpScale * ( gradU * dSTdx.x + gradV * dSTdx.y );')
+    expect(plugins).toContain('float dBy = bumpScale * ( gradU * dSTdy.x + gradV * dSTdy.y );')
+  })
+
+  it('sizes the bounding volumes from heightScale, up to 9000 m times it', () => {
+    const src = read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')
+    expect(src).toContain('const MAX_ELEVATION = 9000;')
+    expect(src).toContain('const maxHeight = MAX_ELEVATION * this.heightScale;')
+    expect(src).toContain('const scale = this._heightScale;')
+    expect(built(/\w+ = \w+ \* this\.heightScale - \w+, \w+ = \w+ \* this\.heightScale/)).toHaveLength(1)
+  })
+
+  it('runs processTileModel in parseTile, before the load-model the fade plugin wraps materials at', () => {
+    expect(built(/await this\.invokeAllPlugins\(\(\w\) => \w\.processTileModel && \w\.processTileModel\(/)).toHaveLength(1)
+    const base = read('src/core/renderer/tiles/TilesRendererBase.js')
+    const parse = base.indexOf('plugin.parseTile && plugin.parseTile( content, parseTile, extension, url, signal )')
+    const loaded = base.indexOf("type: 'load-model',")
+    expect(parse).toBeGreaterThan(0)
+    expect(loaded).toBeGreaterThan(parse)
+    const fade = read('src/three/plugins/fade/TilesFadePlugin.js')
+    expect(fade).toContain("tiles.addEventListener( 'load-model', this._onLoadModel );")
+    expect(fade).toContain('this._fadeMaterialManager.prepareScene( scene );')
+    expect(read('src/three/plugins/fade/FadeMaterialManager.js')).toContain(
+      'fadeParams.set( material, wrapFadeMaterial( material, material.onBeforeCompile ) );'
+    )
+  })
+
+  it('writes every bounding region through _updateBoundingVolume, and takes each traversed tile\'s view error through calculateTileViewError', () => {
+    const [plugins, ...others] = built(/this\._updateBoundingVolume\(\w\)/)
+    expect(others).toHaveLength(0)
+    expect(plugins.match(/this\._updateBoundingVolume\(\w\)/g)).toHaveLength(3)
+    const src = read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')
+    expect(src).toContain('tiles.traverse( tile => {\n\n\t\t\tthis._updateBoundingVolume( tile );')
+    expect(built(/calculateTileViewErrorWithPlugin\(\w, \w\) \{\s*this\.calculateTileViewError\(\w, \w\)/)).toHaveLength(1)
+    expect(read('src/core/renderer/tiles/traverseFunctions.js')).toContain('renderer.calculateTileViewErrorWithPlugin( tile, viewErrorTarget );')
+  })
+
   it('keeps stitchNeighbors on the source GridCache', () => {
     expect(typeof GridCache.prototype.stitchNeighbors).toBe('function')
     const src = read('src/three/plugins/images/terrain-rgb/GridCache.js')
