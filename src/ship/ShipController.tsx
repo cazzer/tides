@@ -85,6 +85,7 @@ export function ShipController() {
     if (!state || !('isPerspectiveCamera' in camera)) return
     earth?.floor?.settle(delta)
     settleShip(state, { bodies })
+    earth?.floor?.mark(state.position)
     camera.position.copy(state.position)
     // Earth's shells stand off its ground, so the ground's gap alone would let
     // the near plane cut them on the way down through them.

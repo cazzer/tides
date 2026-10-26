@@ -20,6 +20,7 @@ import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type S
 import type { ImageryTile } from './imagery'
 import { setActiveSurfaceSources } from './surface-credits'
 import { createSurfaceGround, type SurfaceGround } from './surface-ground'
+import { forEachCachedModel } from './terrain-internals'
 import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { subscribeSurfaceHaze, surfaceHaze } from './surface-link'
@@ -68,7 +69,10 @@ export default function SurfaceTiles() {
     created.tiles.setCamera(camera)
     parent.add(created.tiles.group)
     surface.current = created
-    const sampler = createSurfaceGround(created.tiles)
+    const sampler = createSurfaceGround({
+      group: created.tiles.group,
+      forEachLoadedModel: (callback) => forEachCachedModel(created.tiles, callback),
+    })
     ground.current = sampler
     setSurfaceGroundSampler(sampler)
     errorTarget.current = NaN

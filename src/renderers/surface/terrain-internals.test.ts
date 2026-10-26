@@ -13,6 +13,7 @@ import {
   Mesh,
   MeshLambertMaterial,
   NearestFilter,
+  Object3D,
   RedFormat,
 } from 'three'
 import { TilesRenderer } from '3d-tiles-renderer/three'
@@ -21,6 +22,7 @@ import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rg
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import {
+  forEachCachedModel,
   installSurfaceGridCache,
   PINNED_TILES_VERSION,
   protectOverlayBitmaps,
@@ -171,6 +173,20 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     expect(src).toContain('const MESH_SIZE = 32;')
     // Its region is [west, south, east, north, min, max], radians.
     expect(src).toContain('const region = boundingVolume.region;\n\t\t\tregion[ 4 ] = min;\n\t\t\tregion[ 5 ] = max;')
+  })
+
+  it('holds every tile it loads in lruCache.itemList, added on load and spliced out on removal (tides-zmw.9.8)', () => {
+    const lru = read('src/core/renderer/utilities/LRUCache.js')
+    expect(lru).toContain('this.itemList = [];')
+    expect(lru).toContain('itemList.push( item );')
+    expect(lru).toContain('const index = itemList.indexOf( item );\n\t\t\titemList.splice( index, 1 );')
+    expect(read('src/core/renderer/tiles/TilesRendererBase.js')).toContain('const addedSuccessfully = lruCache.add( tile, t => {')
+    // forEachCachedModel reads it as forEachLoadedModel walks the tree.
+    const scenes = [new Object3D(), new Object3D()]
+    const items = [{ engineData: { scene: scenes[0] } }, { engineData: { scene: null } }, {}, { engineData: { scene: scenes[1] } }]
+    const seen: unknown[] = []
+    forEachCachedModel({ lruCache: { itemList: items } } as unknown as TilesRenderer, (scene, tile) => seen.push(scene, tile))
+    expect(seen).toEqual([scenes[0], items[0], scenes[1], items[3]])
   })
 
   it('keeps stitchNeighbors on the source GridCache', () => {

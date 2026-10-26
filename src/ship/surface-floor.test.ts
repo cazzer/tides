@@ -99,6 +99,7 @@ function frameOf(state: ShipState, earth: ShipBody, dt: number, input: ShipInput
   change?.()
   earth.floor!.settle(dt)
   settleShip(state, env)
+  earth.floor!.mark(state.position)
 }
 
 // The ship at rest on the floor over (lat, lon) degrees.
@@ -249,6 +250,30 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       frameOf(state, earth, dt, still, () => (field.base = 600))
       expect(radius(earth, state)).toBeCloseTo(raw(600) + FINE_HARD_CLEARANCE, 12)
       expect(earth.floor!.lift).toBeCloseTo(FINE_HARD_CLEARANCE - FINE_GROUND_CLEARANCE, 15)
+    })
+
+    it('takes in what changes between frames too (the dissolve ending), but not the scale the altitude sets', () => {
+      const { earth, state } = setup()
+      // A globe standing over the tiles there, which the floor takes in the dissolve.
+      const [width, height] = TERRAIN_MAP_SIZE
+      setEarthTerrain(buildTerrainFloor({ width, height, data: new Float32Array(width * height).fill(40) }, EARTH_BASE_SEGMENTS))
+      surfaceOpacityUniform.value = 0.9
+      const dir = state.position.clone().sub(earth.position).normalize()
+      frameOf(state, earth, dt)
+      frameOf(state, earth, dt)
+      const before = floorRadius(earth, dir)
+      expect(earth.ground!(dir)).toBeGreaterThan(raw(500))
+      // The dissolve ends between frames: the globe drops out of the floor, which holds.
+      surfaceOpacityUniform.value = 1
+      earth.floor!.beginFrame(true)
+      expect(floorRadius(earth, dir)).toBeCloseTo(before, 12)
+      expect(earth.floor!.lift).toBeGreaterThan(0)
+      // A new scale between frames moves the floor at once, as the ship's altitude does.
+      const lift = earth.floor!.lift
+      earth.floor!.mark(state.position)
+      terrainScaleUniform.value = 1.5
+      earth.floor!.beginFrame(true)
+      expect(earth.floor!.lift).toBeCloseTo(lift, 15)
     })
 
     it('holds still on a zero or NaN step, and counts neither the spin nor the ship’s motion as a change', () => {

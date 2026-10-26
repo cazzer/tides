@@ -175,9 +175,12 @@ export const BODY_MASS_KG: Readonly<Record<'sun' | 'earth' | 'moon' | PlanetKey,
  * ship, and the near plane's gap.
  */
 export interface GroundFloor {
-  /** Before the step: the stop for this frame's depth buffer (earthClearance). */
+  /** Before the step: takes in what changed since the last mark, and the stop for this frame's depth buffer (earthClearance). */
   beginFrame(fineDepth: boolean): void
-  /** After the step: the ground under the ship before the tiles update. */
+  /**
+   * After the step (the ground under the ship before the tiles update) and
+   * again after settleShip (the ground the next frame starts from).
+   */
   mark(position: THREE.Vector3): void
   /** After the tiles' update, before settleShip: takes in what changed under the ship, `dt` s on. */
   settle(dt: number): void
@@ -222,9 +225,10 @@ const DEG = Math.PI / 180
 // float, never under the hard clearance (0.0025 / 10 m). The ground also
 // changes under a still ship as tiles load, change level, fade or go:
 // rather than pop the ship, the floor settles. The change measured under
-// the ship across the tiles' update (mark, settle: at one point in Earth's
-// frame, so the ship's own motion and the spin don't count) goes into
-// `lift`, which the stop adds and then lets decay: ground that fell holds
+// the ship across the tiles' update (mark, settle) and between frames
+// (mark, beginFrame: the dissolve's end, the globe's sphere swapping), at
+// one point in Earth's frame and in true height, so the ship's own motion,
+// the spin and the scale its altitude sets don't count, goes into `lift`, which the stop adds and then lets decay: ground that fell holds
 // the floor up and lowers it over GROUND_DROP_TAU; ground that rose eats
 // into the clearance down to the hard one (snapping beyond it) and lifts
 // the ship over GROUND_RISE_TAU. Ground the ship flies onto (a cliff ahead)
@@ -238,7 +242,10 @@ function attachEarthStop(body: ShipBody, tier: QualityTier): void {
   const low = tier === 'low'
   const clearance: EarthClearance = earthClearance(false)
   let lift = 0
-  let markedGround = NaN
+  // The ground at `marked` as true height (over the sea, / the live scale),
+  // so a change of scale (the ship's own altitude, spatial) never counts;
+  // NaN when unmarked, or marked over the globe's fallback (not on the scale).
+  let markedHeight = NaN
 
   const toEarth = (direction: THREE.Vector3) => local.copy(direction).applyQuaternion(toLocal)
 
@@ -261,6 +268,17 @@ function attachEarthStop(body: ShipBody, tier: QualityTier): void {
     const ground =
       EARTH_RADIUS + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * terrainScaleUniform.value * EARTH_UNITS_PER_METRE
     return opacity < 1 || !tiles.covered ? Math.max(ground, globe(at, reach)) : ground
+  }
+
+  const height = (at: THREE.Vector3) => (drawn(at, clearance.reach) - EARTH_RADIUS) / terrainScaleUniform.value
+
+  // Takes the change in the ground at the marked point since the mark into the lift.
+  const absorb = () => {
+    if (Number.isFinite(markedHeight)) {
+      const change = (height(marked) - markedHeight) * terrainScaleUniform.value
+      if (Number.isFinite(change)) lift -= change
+    }
+    markedHeight = NaN
   }
 
   const apply = () => {
@@ -289,27 +307,24 @@ function attachEarthStop(body: ShipBody, tier: QualityTier): void {
     clearance,
     beginFrame(fineDepth) {
       if (low) return
+      // What changed since the last frame's settle (its closing mark): the
+      // dissolve's end, the globe's sphere swapping.
+      absorb()
       Object.assign(clearance, earthClearance(fineDepth))
       apply()
     },
     mark(position) {
       const at = low ? null : up(position)
-      if (!at) {
-        markedGround = NaN
-        return
-      }
+      markedHeight = NaN
+      if (!at || !(earthTerrain() || earthLimbTerrain())) return
       marked.copy(at)
-      markedGround = drawn(marked, clearance.reach)
+      markedHeight = height(marked)
     },
     settle(dt) {
       if (low) return
       const h = Number.isFinite(dt) ? THREE.MathUtils.clamp(dt, 0, MAX_DT) : 0
       if (h > 0) lift *= Math.exp(-h / (lift > 0 ? GROUND_DROP_TAU : GROUND_RISE_TAU))
-      if (Number.isFinite(markedGround)) {
-        const change = drawn(marked, clearance.reach) - markedGround
-        if (Number.isFinite(change)) lift -= change
-      }
-      markedGround = NaN
+      absorb()
       apply()
     },
     nearGap(position) {
