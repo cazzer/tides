@@ -340,6 +340,47 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
     expect(changes).toBeLessThanOrEqual(20)
   })
 
+  it('steps down near the ground too, where two steps under would be under 1x', () => {
+    let fit = surfaceFitScale(1)
+    for (const s of [1.1, 1.2, 1.3, 1.4]) fit = nextSurfaceFit(fit, s)
+    expect(fit).toBe(SURFACE_FIT_STEP ** 2)
+    for (const s of [1.3, 1.2, 1.1, 1.05]) fit = nextSurfaceFit(fit, s)
+    expect(fit).toBe(SURFACE_FIT_STEP)
+    expect(surfaceFitFloor(fit)).toBe(1)
+  })
+
+  it('merges the band for ground under the sea too, where the lower scale gives the higher top', () => {
+    // A tile -400 to -100 m: at scale k the library's region is
+    // [-400k - 300k - pad, -100k + pad], its top highest at the band's floor.
+    const pad = 20
+    const terrain = {
+      _heightScale: RELIEF,
+      tiles: { ellipsoid: 'E' },
+      _updateBoundingVolume(this: { _heightScale: number }, tile: { boundingVolume: { region: number[] } }) {
+        const k = this._heightScale
+        tile.boundingVolume.region[4] = -400 * k - 300 * k - pad
+        tile.boundingVolume.region[5] = -100 * k + pad
+      },
+    }
+    const tiles = { calculateTileViewError() {} }
+    const bounds = fitSurfaceBounds(tiles, terrain, () => 3)
+    const floor = surfaceFitFloor(bounds.fit)
+    const data: number[][] = []
+    const tile = {
+      boundingVolume: { region: [0, 0, 1, 1, 0, 0] },
+      engineData: { boundingVolume: { setRegionData: (...a: unknown[]) => data.push(a.slice(1) as number[]) } },
+    }
+    terrain._updateBoundingVolume(tile)
+    const [min, max] = tile.boundingVolume.region.slice(4)
+    expect(max).toBeCloseTo(-100 * floor + pad, 9)
+    expect(min).toBeCloseTo(-700 * bounds.fit - pad, 9)
+    for (const k of [floor, bounds.fit]) {
+      expect(min).toBeLessThanOrEqual(-400 * k)
+      expect(max).toBeGreaterThanOrEqual(-100 * k)
+    }
+    expect(data[data.length - 1]).toEqual([0, 0, 1, 1, min, max])
+  })
+
   it('writes every region across the fitted band, merged, keeps the plugin at its own scale, and refits a tile once per fit', () => {
     // A tile 1500-2500 m high: the library's region at scale k is
     // [1500k - (2500 - 1500)k - pad, 2500k + pad].

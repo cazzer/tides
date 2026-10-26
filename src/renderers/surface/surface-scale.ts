@@ -275,10 +275,15 @@ export function surfaceFitScale(scale: number, relief: number = RELIEF): number 
 /**
  * The next fit for a live `scale` from the current `fit`: up at once when
  * the scale passes it, down only when the scale falls SURFACE_FIT_SLACK
- * steps under it. The regions cover every scale in [fitFloor(fit), fit].
+ * steps under it, or one step where that would be under 1x, which the live
+ * scale never is (else a fit near the ground, 1.5625 after a climb to
+ * ~20 km, could never come down). The regions cover every scale in
+ * [surfaceFitFloor(fit), fit].
  */
 export function nextSurfaceFit(fit: number, scale: number, relief: number = RELIEF): number {
-  if (scale > fit || scale < surfaceFitFloor(fit)) return surfaceFitScale(scale, relief)
+  const slack = fit / SURFACE_FIT_STEP ** SURFACE_FIT_SLACK
+  const down = slack > 1 ? slack : fit / SURFACE_FIT_STEP
+  if (scale > fit || scale < down) return surfaceFitScale(scale, relief)
   return fit
 }
 
@@ -351,6 +356,8 @@ export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => nu
     const { boundingVolume, engineData } = tile as RegionTile
     const region = boundingVolume?.region
     const floor = surfaceFitFloor(fit)
+    // The band covers region tiles (the ellipsoid projection's, all of
+    // them here); a box tile would be written at the fit alone.
     if (region && floor < fit) {
       writeAt(tile, floor)
       const [low, high] = [region[4], region[5]]
