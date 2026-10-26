@@ -35,8 +35,10 @@ import {
   TERRAIN_DISPLACEMENT,
   TERRAIN_MAX_GREY,
   TERRAIN_READ_TEXELS,
+  TRUE_TERRAIN_DISPLACEMENT,
   type Vec3,
 } from './cloud-layer'
+import { RELIEF } from './relief'
 import { decodeEarthDem, demLevel } from './earth-dem'
 
 const DEG = Math.PI / 180
@@ -238,8 +240,12 @@ describe('sunlight on cloud tops', () => {
   })
 })
 
-it('exaggerates cloud tops less than the terrain', () => {
-  expect(CLOUD_UNITS_PER_KM).toBeLessThan(TERRAIN_DISPLACEMENT / 6.5)
+it('exaggerates cloud tops less than the terrain at 12x, ~9x whatever the relief (more than the terrain under ~8.7x)', () => {
+  // At relief r the terrain's displacement is TRUE_TERRAIN_DISPLACEMENT · r.
+  const lessAbove = (6.5 * CLOUD_UNITS_PER_KM) / TRUE_TERRAIN_DISPLACEMENT
+  expect(lessAbove).toBeCloseTo(8.7, 1)
+  expect(CLOUD_UNITS_PER_KM).toBeLessThan((TRUE_TERRAIN_DISPLACEMENT * 12) / 6.5)
+  expect(CLOUD_UNITS_PER_KM < TERRAIN_DISPLACEMENT / 6.5).toBe(RELIEF > lessAbove)
 })
 
 describe('cloud detail octaves', () => {

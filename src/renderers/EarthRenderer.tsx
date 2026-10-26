@@ -48,7 +48,14 @@ import earthNightTextureHigh from '../assets/earth-night.jpg'
 import earthNightTextureLow from '../assets/earth-night-2k.jpg'
 import earthDemHigh from '../assets/earth-dem-4k.bin?url'
 import earthDemLow from '../assets/earth-dem-2k.bin?url'
-import earthHorizonUrl from '../assets/earth-horizon-1k.bin?url'
+import earthHorizonCurvedUrl from '../assets/earth-horizon-1k.bin?url'
+import earthHorizonTrueUrl from '../assets/earth-horizon-1k-true.bin?url'
+import { HORIZON_TRUE_CURVE_RELIEF, horizonCurveRelief } from '../earth-horizon'
+import { RELIEF } from '../relief'
+
+// The horizon map whose curvature is exact nearer the page's relief
+// (../earth-horizon.ts, tides-zmw.21): only that one is fetched.
+const earthHorizonUrl = horizonCurveRelief(RELIEF) === HORIZON_TRUE_CURVE_RELIEF ? earthHorizonTrueUrl : earthHorizonCurvedUrl
 
 interface EarthRendererProps {
   diameter: number

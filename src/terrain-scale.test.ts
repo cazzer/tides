@@ -243,11 +243,20 @@ describe('the live scale (tides-zmw.9.5)', () => {
       if (prev !== null) expect(Math.abs(fromAbove - prev)).toBeLessThanOrEqual(bound)
       prev = fromAbove
     }
-    // Over the sea near 1.15x; over the highest ground, a little over 2x.
-    expect(terrainScale(settle(0, 1), RELIEF, true)).toBeCloseTo(1.15, 1)
+    // At 12x: over the sea near 1.15x; over the highest ground, a little
+    // over 2x. As shares of the way from 1x to the page's relief (none at
+    // ?relief=1, where the blend is 1x throughout).
+    const sea = terrainScale(settle(0, 1), RELIEF, true)
     const highest = terrainScale(settle(MAX_FLOOR_GREY, 1), RELIEF, true)
-    expect(highest).toBeGreaterThan(1.8)
-    expect(highest).toBeLessThan(2.6)
+    if (RELIEF > 1) {
+      const share = (scale: number) => (scale - 1) / (RELIEF - 1)
+      expect(share(sea)).toBeCloseTo(0.15 / 11, 2)
+      expect(share(highest)).toBeGreaterThan(0.8 / 11)
+      expect(share(highest)).toBeLessThan(1.6 / 11)
+    } else {
+      expect(sea).toBe(1)
+      expect(highest).toBe(1)
+    }
   })
 
   it('holds the ship its clearance over the drawn ground and under the cloud base every frame, down from orbit and across the ground', () => {

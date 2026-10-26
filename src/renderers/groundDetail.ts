@@ -26,13 +26,16 @@
 // system view) the two parts sum to the old sunlight, and the night side
 // gains nothing.
 //
-// With the live terrain scale on (terrain-scale.ts TERRAIN_BLEND), the
-// detail's tilt follows the drawn relief (displacementScale over the full
-// relief's), as the ground's own slope does: at 1x a tilt sized for 12x
-// relief stood ~12x too steep (tides-zmw.9.7). Off, the shader is as it was.
+// The detail's tilt was sized for ground drawn at 12x (DETAIL_TILT_RELIEF).
+// With the live terrain scale on (terrain-scale.ts TERRAIN_BLEND) or the
+// page at another relief, it follows the drawn relief (displacementScale
+// over 12x's), as the ground's own slope does: at 1x a tilt sized for 12x
+// relief stood ~12x too steep (tides-zmw.9.7, tides-zmw.21). At 12x without
+// the blend, the shader is as it was.
 //
 // Spread through composePatches onto the ground's Phong material.
-import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START, REFERENCE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_RELIEF, RELIEF } from '../relief'
 import { TERRAIN_BLEND } from '../terrain-scale'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { GROUND_RELIEF_GLSL } from './groundRelief'
@@ -43,6 +46,15 @@ import type { MaterialPatch } from './eclipseShadow'
  * cap bites only lower down, or over the low tier's 2k map. */
 export const GROUND_DETAIL_OCTAVES = 5
 export const GROUND_DETAIL_OCTAVES_LOW = 3
+
+/** The relief the detail's tilt was sized at, and its displacementScale
+ * there (as cloud-layer.ts works TERRAIN_DISPLACEMENT out, so the same
+ * number at 12x). */
+export const DETAIL_TILT_RELIEF = 12
+export const DETAIL_TILT_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (DETAIL_TILT_RELIEF / REFERENCE_RELIEF)
+/** Whether this page's tilt follows the drawn relief: with the blend on, or
+ * at another relief than the one it was sized at. */
+export const DETAIL_FOLLOWS_RELIEF = TERRAIN_BLEND || RELIEF !== DETAIL_TILT_RELIEF
 
 const f = (x: number) => x.toFixed(6)
 
@@ -109,12 +121,11 @@ float groundDetailFine = 0.0;
 #endif
 `
 
-// The detail's tilt over the drawn relief's share of the full relief's
-// (with the live scale on; only where the relief's displacementScale is
-// declared).
+// The detail's tilt over the drawn relief's share of 12x's (only where the
+// relief's displacementScale is declared).
 const SCALED_TILT = /* glsl */ `
 #ifdef GROUND_RELIEF
-    slope *= displacementScale / ${TERRAIN_DISPLACEMENT.toExponential(9)};
+    slope *= displacementScale / ${DETAIL_TILT_DISPLACEMENT.toExponential(9)};
 #endif`
 
 // After the albedo lookup, the specular mask and the normal; before the
@@ -190,8 +201,8 @@ function inject(source: string, chunk: string, code: string): string {
 
 /** `low`: the low quality tier, which takes fewer octaves. The relief
  * comes with the material's displacement map. `followScale`: the tilt
- * follows the live terrain scale (the blend's on). */
-export function groundDetailPatch(low: boolean, followScale: boolean = TERRAIN_BLEND): MaterialPatch {
+ * follows the drawn relief (the blend's on, or the page isn't at 12x). */
+export function groundDetailPatch(low: boolean, followScale: boolean = DETAIL_FOLLOWS_RELIEF): MaterialPatch {
   const octaves = low ? GROUND_DETAIL_OCTAVES_LOW : GROUND_DETAIL_OCTAVES
   return {
     onBeforeCompile(shader) {

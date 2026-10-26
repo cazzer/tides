@@ -2,11 +2,19 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
-import { GROUND_DETAIL_OCTAVES, GROUND_DETAIL_OCTAVES_LOW, groundDetailPatch } from './groundDetail'
+import {
+  DETAIL_FOLLOWS_RELIEF,
+  DETAIL_TILT_DISPLACEMENT,
+  GROUND_DETAIL_OCTAVES,
+  GROUND_DETAIL_OCTAVES_LOW,
+  groundDetailPatch,
+} from './groundDetail'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { RELIEF_DETAIL, RELIEF_MAX_SLOPE } from './groundRelief'
-import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_RELIEF, RELIEF } from '../relief'
+import { TERRAIN_BLEND } from '../terrain-scale'
 import { LIMB_SEGMENTS } from '../ship/limb-detail'
 import { EARTH_RADIUS } from '../ship/ship-bodies'
 import { meshGrid, riseOverRun, shadedSlope, vertexSurface } from '../ship/ground-mesh-model'
@@ -152,18 +160,25 @@ describe('ground detail patch', () => {
     )
   })
 
-  it('scales its tilt with the drawn relief only when the live scale is on (tides-zmw.9.7)', () => {
+  it('scales its tilt with the drawn relief over 12x\'s, only with the live scale on or off 12x (tides-zmw.9.7, tides-zmw.21)', () => {
     const off = phongShader()
     const on = phongShader()
     off.displacementMap = on.displacementMap = true
     groundDetailPatch(false, false).onBeforeCompile(off, {} as THREE.WebGLRenderer)
     groundDetailPatch(false, true).onBeforeCompile(on, {} as THREE.WebGLRenderer)
-    const line = `slope *= displacementScale / ${TERRAIN_DISPLACEMENT.toExponential(9)};`
+    // Over a fixed 12x: 1/12 at true scale, whatever the page's relief.
+    expect(DETAIL_TILT_DISPLACEMENT / TRUE_TERRAIN_DISPLACEMENT).toBeCloseTo(12, 12)
+    // TERRAIN_DISPLACEMENT's sum at ?relief=12, to the bit: the blend's
+    // shader at 12x is as it was.
+    expect(DETAIL_TILT_DISPLACEMENT).toBe(REFERENCE_TERRAIN_DISPLACEMENT * (12 / REFERENCE_RELIEF))
+    const line = `slope *= displacementScale / ${DETAIL_TILT_DISPLACEMENT.toExponential(9)};`
     expect(off.fragmentShader).not.toContain(line)
     expect(on.fragmentShader).toContain(`#ifdef GROUND_RELIEF\n    ${line}\n#endif`)
     // Off, the production shader to the byte (the system view's hash pins it too).
     expect(on.fragmentShader.replace(/\n#ifdef GROUND_RELIEF\n {4}slope \*= displacementScale[^\n]*\n#endif/, '')).toBe(off.fragmentShader)
     expect(groundDetailPatch(false, true).customProgramCacheKey()).not.toBe(groundDetailPatch(false, false).customProgramCacheKey())
-    expect(groundDetailPatch(false).customProgramCacheKey()).toBe(groundDetailPatch(false, false).customProgramCacheKey())
+    // On by default with the blend or off 12x, so off at the 12x default.
+    expect(DETAIL_FOLLOWS_RELIEF).toBe(TERRAIN_BLEND || RELIEF !== 12)
+    expect(groundDetailPatch(false).customProgramCacheKey()).toBe(groundDetailPatch(false, DETAIL_FOLLOWS_RELIEF).customProgramCacheKey())
   })
 })

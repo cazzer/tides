@@ -83,8 +83,9 @@ describe('?relief=10', () => {
       expect(td * layer.TERRAIN_MAX_GREY + EARTH_GROUND_CLEARANCE).toBeLessThan(MORPH_FLOOR)
 
       // cloudShaders writes its constants into the GLSL at import: they
-      // follow too, the layer's thinner shell taking fewer march steps.
-      expect(MARCH_STEPS).toBeLessThan(DEFAULT_MARCH_STEPS)
+      // follow too, a thinner shell than the default's taking fewer march
+      // steps (a thicker one, under a default below 10x, more).
+      expect(Math.sign(MARCH_STEPS - DEFAULT_MARCH_STEPS)).toBe(Math.sign(td - defaults.TERRAIN_DISPLACEMENT))
       const clouds = createCloudLayer(createEclipseShadow('earth'), false)
       expect(clouds.shellAltitude).toBe(layer.CLOUD_LAYER_TOP)
       const source = clouds.material.vertexShader + clouds.material.fragmentShader
