@@ -8,8 +8,11 @@ import {
   DETAIL_GRAIN_PX,
   DETAIL_HOLE_PX,
   DETAIL_INTERIOR,
+  DETAIL_VIEW_PX,
   detailEdge,
   detailErosion,
+  detailFall,
+  detailPixelScale,
   MARCH_STEP,
   MARCH_STEPS,
 } from './cloudShaders'
@@ -361,7 +364,6 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
         'sidePrev',
         'sideDensity',
         'sideShade',
-        'edge',
       ]
       for (const name of names) {
         if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
@@ -786,17 +788,62 @@ describe('cloud detail eroding only edges and grain (tides-tvr.3)', () => {
     for (const k of [0, 1]) expect(detailErosion(texel / 53, wave(k), 0)).toBeCloseTo(DETAIL_INTERIOR, 9)
   })
 
-  it('finds a cloud\'s edge by how far on, in map texels, it stops showing', () => {
+  it('finds a cloud\'s edge by how many steps of its reads on it stops showing', () => {
     const fall = 0.1
     expect(detailEdge(CLOUD_MIN_ALPHA + DETAIL_EDGE_NEAR * fall, fall)).toBe(1)
     expect(detailEdge(CLOUD_MIN_ALPHA + 0.5 * fall, fall)).toBe(1)
     expect(detailEdge(CLOUD_MIN_ALPHA + DETAIL_EDGE_FAR * fall, fall)).toBe(0)
-    const mid = detailEdge(CLOUD_MIN_ALPHA + 2.5 * fall, fall)
+    const mid = detailEdge(CLOUD_MIN_ALPHA + 0.5 * (DETAIL_EDGE_NEAR + DETAIL_EDGE_FAR) * fall, fall)
     expect(mid).toBeGreaterThan(0)
     expect(mid).toBeLessThan(1)
     // Where the map is level, no edge; where it doesn't show, all edge.
     expect(detailEdge(0.3, 0)).toBe(0)
     expect(detailEdge(0, fall)).toBe(1)
+    // A crisp rim through the hit: the whole fall within the reads.
+    expect(detailEdge(0.3, detailFall(0, 0.6, 0.6, 0.6))).toBe(1)
+  })
+
+  it('reads a rim alike whichever way it faces', () => {
+    // A cloud of opacity 0.5 that thins to nothing over a texel, across a
+    // rim through the origin facing n; the edge at a point d texels inside,
+    // from the four reads a step (3 texels) east, west, north and south.
+    const step = 3
+    const edgeAt = (n: [number, number], d: number) => {
+      const map = (x: number, y: number) => 0.5 * THREE.MathUtils.clamp(0.5 - (x * n[0] + y * n[1]), 0, 1)
+      const [x, y] = [-d * n[0], -d * n[1]]
+      const at = (sx: number, sy: number) => map(x + sx * step, y + sy * step)
+      return detailEdge(map(x, y), detailFall(at(1, 0), at(-1, 0), at(0, 1), at(0, -1)))
+    }
+    for (const angle of [0, 30, 45, 60, 90, 135]) {
+      const a = (angle * Math.PI) / 180
+      const n: [number, number] = [Math.cos(a), Math.sin(a)]
+      for (const d of [0, 1, 2, 3, 4, 5]) {
+        // The mirrored rim (facing -n) at the same depth inside it.
+        expect(edgeAt(n, d)).toBeCloseTo(edgeAt([-n[0], -n[1]], d), 9)
+      }
+      // At the rim, edge; well inside, none.
+      expect(edgeAt(n, 0)).toBe(1)
+      expect(edgeAt(n, 6)).toBe(0)
+    }
+  })
+
+  it('sizes the detail on screen as a share of the view, in any window and at any pixel ratio', () => {
+    // A view 60 degrees tall, a scene unit from the deck: a reference pixel,
+    // and the coarsest wave under DETAIL_GRAIN_PX of them.
+    const angle = (cssHeight: number, dpr: number) => (2 * Math.tan(Math.PI / 6)) / (cssHeight * dpr)
+    const far = 1 * angle(DETAIL_VIEW_PX, 1)
+    const close = far / 40
+    for (const cssHeight of [DETAIL_VIEW_PX, 1100, 1440]) {
+      for (const dpr of [1, 2, 3]) {
+        const scale = detailPixelScale(cssHeight * dpr)
+        const pixel = (footprint: number) => (footprint / angle(DETAIL_VIEW_PX, 1)) * angle(cssHeight, dpr) * scale
+        for (let k = 0; k < DETAIL_OCTAVES; k++) {
+          expect(detailErosion(pixel(far), wave(k), 0)).toBeCloseTo(detailErosion(far, wave(k), 0), 12)
+          expect(detailErosion(pixel(close), wave(k), 0)).toBeCloseTo(detailErosion(close, wave(k), 0), 12)
+        }
+      }
+    }
+    expect(DETAIL_BASE_TEXELS * texel).toBeLessThan(DETAIL_GRAIN_PX * far * 2)
   })
 
   for (const variant of [[], ['CLOUD_FLAT'], ['FLIP_SIDED'], ['CLOUD_FLAT', 'FLIP_SIDED']]) {
@@ -809,28 +856,31 @@ describe('cloud detail eroding only edges and grain (tides-tvr.3)', () => {
       expect(call).toBeGreaterThan(edge)
       expect(src).toContain('vec4 cloudDetail(vec3 p, float footprint, float texel, float edge)')
       expect(src).toContain('float spare = (1.0 - DETAIL_INTERIOR) * (1.0 - edge);')
-      // Worked out only where the coarsest wave is large on screen, in CSS
-      // pixels, from the slope's reads.
-      expect(src).toContain('DETAIL_GRAIN_PX * topFootprint * uPixelRatio;')
-      expect(src).toContain('float cssRatio = footprint * uPixelRatio / wavelength;')
+      // Worked out only where the coarsest wave is large on screen, as a
+      // share of the view, from the slope's reads.
+      expect(src).toContain('DETAIL_GRAIN_PX * topFootprint * uPixelScale;')
+      expect(src).toContain('float screenRatio = footprint * uPixelScale / wavelength;')
       expect(src.slice(edge, call)).toContain('if (edgeNear) {')
-      expect(src.slice(edge, call)).toContain('vec3 fall3 = vec3(colC.x, colE.x, colN.x);')
+      expect(src.slice(edge, call)).toContain('vec2 fallEN = vec2(colE.x, colN.x);')
+      expect(src.slice(edge, call)).toContain('cloudColumn(uv - hitE, lodHit, terrain).x')
       // A side is all edge; shaded elsewhere, the hit reads its own.
       expect(src.includes('edgeNear = edgeNear && !side;')).toBe(variant.includes('FLIP_SIDED'))
       expect(src.includes('if (sideLight > 0.0) {')).toBe(variant.includes('FLIP_SIDED'))
       // The slope reads where the hit is shaded, as before.
-      expect(src).toContain('vec2 slope = RELIEF * vec2(colE.z - colC.z, colN.z - colC.z) / h;')
+      expect(src).toContain('vec2 slope = RELIEF * vec2(colE.z - topC, colN.z - topC) / h;')
       clouds.dispose()
     })
   }
 
-  it('takes the detail\'s sizes on screen in CSS pixels', () => {
+  it('takes the detail\'s sizes on screen from the view it draws', () => {
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
     const { material } = clouds
-    expect(material.uniforms.uPixelRatio.value).toBe(1)
-    const renderer = { getPixelRatio: () => 2 } as unknown as THREE.WebGLRenderer
+    expect(material.uniforms.uPixelScale.value).toBe(1)
+    const renderer = {
+      getCurrentViewport: (target: THREE.Vector4) => target.set(0, 0, 2880, 1600),
+    } as unknown as THREE.WebGLRenderer
     material.onBeforeRender(renderer, new THREE.Scene(), new THREE.PerspectiveCamera(), new THREE.BufferGeometry(), new THREE.Mesh(), null)
-    expect(material.uniforms.uPixelRatio.value).toBe(2)
+    expect(material.uniforms.uPixelScale.value).toBe(1600 / DETAIL_VIEW_PX)
     clouds.dispose()
   })
 })
