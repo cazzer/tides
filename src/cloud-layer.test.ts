@@ -100,7 +100,7 @@ describe('cloud tops', () => {
 
   it('stays inside the layer and above the ground', () => {
     for (const grey of [0, 0.4, TERRAIN_MAX_GREY]) {
-      const { base, top } = cloudColumn(1, maxTopKm(true), grey)
+      const { base, top } = cloudColumn(1, maxTopKm(true), grey, TERRAIN_DISPLACEMENT)
       expect(base).toBeCloseTo(grey * TERRAIN_DISPLACEMENT + CLOUD_CLEARANCE)
       expect(top).toBeLessThanOrEqual(CLOUD_LAYER_TOP + 1e-9)
       expect(base).toBeGreaterThan(grey * TERRAIN_DISPLACEMENT)

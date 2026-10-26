@@ -292,7 +292,11 @@ describe('ship bodies', () => {
     // tides-zmw.1 this took the 2 × 2 mean of the pooled maxima for that
     // ground, which overstated the share: 0.75 against 0.52 on the 8-bit
     // map at e27cb87. The 16-bit map gives 0.55, the proxy 0.78.)
-    function underBaseShare(earth: ReturnType<typeof byKey>[string], pooled: Float32Array) {
+    function underBaseShare(
+      earth: ReturnType<typeof byKey>[string],
+      pooled: Float32Array,
+      displacement: number = TERRAIN_DISPLACEMENT
+    ) {
       const [width, height] = TERRAIN_MAP_SIZE
       let land = 0
       let under = 0
@@ -306,7 +310,7 @@ describe('ship bodies', () => {
           const stop = floorRadius(earth, toWorld(latLonToLocal(lat, lon), T)) - EARTH_RADIUS
           land += weight
           const ground = marchGround.data[(y / 2) * marchGround.width + x / 2]
-          if (stop < cloudColumn(1, 1.5, ground).base) under += weight
+          if (stop < cloudColumn(1, 1.5, ground, displacement).base) under += weight
         }
       }
       return under / land
@@ -459,9 +463,10 @@ describe('ship bodies', () => {
           expect(ground - EARTH_RADIUS).toBeCloseTo(((full[k] - EARTH_RADIUS) * displacement) / TERRAIN_DISPLACEMENT, 14)
           expect(floorRadius(earth, direction)).toBeCloseTo(ground + EARTH_GROUND_CLEARANCE, 12)
         })
-        // A lower ground only lowers the stop, under the base (still on the
-        // full relief's ground until tides-zmw.9.6) over at least as much land.
-        expect(underBaseShare(earth, pooled)).toBeGreaterThanOrEqual(fullShare)
+        // tides-42p at every scale: the stop (the max-around floor) under the
+        // cloud base on the march's smoothed ground, both at the live scale
+        // (tides-zmw.9.6), over at least as much land as at the full relief.
+        expect(underBaseShare(earth, pooled, displacement)).toBeGreaterThanOrEqual(fullShare)
       },
       60_000
     )

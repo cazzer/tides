@@ -73,7 +73,7 @@ describe('?relief=10', () => {
       expect(groundHazeTop(false)).toBe(layer.CLOUD_LAYER_TOP)
       expect(groundHazeTop(true)).toBe(layer.CLOUD_FLAT_ALTITUDE)
       const grey = 0.6
-      expect(layer.cloudColumn(1, 5, grey).base).toBeCloseTo(td * grey + layer.CLOUD_CLEARANCE, 12)
+      expect(layer.cloudColumn(1, 5, grey, layer.TERRAIN_DISPLACEMENT).base).toBeCloseTo(td * grey + layer.CLOUD_CLEARANCE, 12)
       const up = new THREE.Vector3(0, 1, 0)
       expect(terrainFloorRadius(null, EARTH_RADIUS, up)).toBeCloseTo(
         EARTH_RADIUS + (td * TERRAIN_FALLBACK_GREY) / 255,
