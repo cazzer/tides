@@ -13,6 +13,7 @@ import {
   shellDepth,
   shellPositions,
   shellRadius,
+  shellPointVertex,
   shellScale,
 } from './starDepth'
 
@@ -157,5 +158,22 @@ describe('shellScale', () => {
     const seen = (depth: number) =>
       direction.clone().multiplyScalar(scale * shellRadius(depth, amount)).sub(eye).angleTo(direction)
     expect(Math.abs(seen(0) - seen(1))).toBeGreaterThan(0.05)
+  })
+})
+
+describe('shellPointVertex', () => {
+  // Window depth from clip z / w: 0.5 + 0.5 · NDC on the standard buffer,
+  // NDC itself under reversed-Z (tides-zmw.9.3), where nearer is bigger.
+  const depthOf = (branch: string) => Number(branch.match(/\? ([\d.]+) \* gl_Position\.w/)![1])
+
+  it('sets the stars at the same window depth under reversed-Z, behind every body', () => {
+    const [reversed, standard] = shellPointVertex
+      .split('#ifdef USE_REVERSED_DEPTH_BUFFER')[1]
+      .split('#endif')[0]
+      .split('#else')
+    expect(depthOf(standard)).toBe(0.99999)
+    expect(depthOf(reversed)).toBeCloseTo(1 - (0.5 + 0.5 * 0.99999), 12)
+    // Behind the eye they clip in both: z past w.
+    for (const branch of [reversed, standard]) expect(branch).toContain(': 2.0 * gl_Position.w;')
   })
 })

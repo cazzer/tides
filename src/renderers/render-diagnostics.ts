@@ -94,3 +94,22 @@ export function logContextLoss(canvas: HTMLCanvasElement): () => void {
     canvas.removeEventListener('webglcontextrestored', onRestored)
   }
 }
+
+/**
+ * Reversed-Z (tides-zmw.9.3): 'reversed' when `gl` draws with it (asked for
+ * and EXT_clip_control there), else 'standard'.
+ */
+export function depthMode(gl: THREE.WebGLRenderer): 'reversed' | 'standard' {
+  return gl.capabilities.reversedDepthBuffer ? 'reversed' : 'standard'
+}
+
+/**
+ * The depth buffer's live mode against the one the context was set up with,
+ * described for a log when they differ (gl.resetState() turns reversed-Z
+ * off, leaving programs and cameras built for it); null when they agree.
+ */
+export function depthModeDrift(gl: THREE.WebGLRenderer): string | null {
+  const live = gl.state.buffers.depth.getReversed()
+  if (live === gl.capabilities.reversedDepthBuffer) return null
+  return `depth buffer ${live ? 'reversed' : 'standard'}, set up ${depthMode(gl)}`
+}

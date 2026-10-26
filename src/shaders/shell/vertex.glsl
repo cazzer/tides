@@ -13,6 +13,7 @@ varying vec3 vRayOrigin;
 varying vec3 vRayDir;
 varying float vViewDepth;
 varying float vNear;
+#include ../depth.glsl
 #endif
 
 uniform float uOuter;
@@ -44,7 +45,7 @@ void main() {
   if (!ortho) vRayOrigin = -(viewToLocal * modelViewMatrix[3].xyz);
   vRayDir = ortho ? position - vRayOrigin : viewToLocal * view.xyz;
   vViewDepth = -view.z;
-  vNear = ortho ? 0.0 : projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+  vNear = ortho ? 0.0 : viewDepthNear(projectionMatrix);
   gl_Position = projectionMatrix * view;
   #else
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);

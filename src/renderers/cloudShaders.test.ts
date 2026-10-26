@@ -706,3 +706,31 @@ describe('cloud march from the eye, under and inside the deck (tides-tvr.1)', ()
     clouds.dispose()
   })
 })
+
+describe('cloud depth on either depth buffer (tides-zmw.9.3)', () => {
+  it("writes its depth through depth.glsl, so reversed-Z's mapping holds", () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const { vertexShader, fragmentShader } = clouds.material
+    for (const reversed of [false, true]) {
+      const defines = new Set(reversed ? ['FLIP_SIDED', 'USE_REVERSED_DEPTH_BUFFER'] : ['FLIP_SIDED'])
+      const vertex = preprocess(vertexShader, defines)
+      const fragment = preprocess(fragmentShader, defines)
+      expect(vertex).toContain('vNear = isOrthographic ? 0.0 : viewDepthNear(projectionMatrix);')
+      expect(vertex).toContain(`#define FRAG_DEPTH_NEAREST ${reversed ? '1.0' : '0.0'}`)
+      expect(fragment).toContain(`#define FRAG_DEPTH_NEAREST ${reversed ? '1.0' : '0.0'}`)
+      // The fog, at the eye, draws nearest at both sites (a miss and a hit).
+      expect(fragment.match(/fogLight, 1\.0 - fogClear\), FRAG_DEPTH_NEAREST,/g)).toHaveLength(1)
+      expect(fragment).toContain('fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),')
+      for (const source of [vertex, fragment]) {
+        expect(source).not.toContain('projectionMatrix[3][2]')
+        expect(source).not.toContain('0.5 + 0.5 * (projectionMatrix')
+      }
+      expect(fragment).not.toContain('#error')
+    }
+    // A log depth buffer would still be wrong.
+    expect(preprocess(fragmentShader, new Set(['FLIP_SIDED', 'USE_LOGARITHMIC_DEPTH_BUFFER']))).toContain(
+      '#error'
+    )
+    clouds.dispose()
+  })
+})
