@@ -31,7 +31,7 @@
 // average and up to 200 ms (headless, 3 spinning pages: 3450 calls, 29 s in
 // 40 s; long tasks > 50 ms 247 against 21 for the same writes made as
 // below). createRectWriter sets the state it needs instead of reading it.
-import type { DataTexture, Source, Texture, WebGLRenderer } from 'three'
+import { FloatType, LinearFilter, NearestFilter, RedFormat, type DataTexture, type Source, type Texture, type WebGLRenderer } from 'three'
 
 /** A rectangle of texels: x, y the first column and row (rows as the data's). */
 export interface TexelRect {
@@ -110,7 +110,7 @@ export type RectWriterRenderer = Pick<WebGLRenderer, 'getContext' | 'properties'
 
 /**
  * A RectWriter for single-channel float textures (the grids) with no
- * mipmaps: binds the texture's WebGL texture through three's state cache
+ * mipmaps (rectWritable; else null): binds the texture's WebGL texture through three's state cache
  * (renderer.properties' __webglTexture, which the texture's clones share)
  * and sends each rect with texSubImage2D from the texture's data, rows
  * UNPACK_ROW_LENGTH apart. Sets the unpack state it needs, as three does
@@ -118,8 +118,25 @@ export type RectWriterRenderer = Pick<WebGLRenderer, 'getContext' | 'properties'
  * uploads assume it). Reads nothing back from the GL. The texture's versions
  * are untouched.
  */
+/**
+ * Whether createRectWriter can write the texture's rects as they are: one
+ * float channel, unflipped, one level (the grids). Anything else goes up
+ * whole (its writer returns null).
+ */
+export function rectWritable(texture: Texture): boolean {
+  return (
+    texture.format === RedFormat &&
+    texture.type === FloatType &&
+    !texture.flipY &&
+    texture.mipmaps.length === 0 &&
+    !texture.generateMipmaps &&
+    (texture.minFilter === NearestFilter || texture.minFilter === LinearFilter)
+  )
+}
+
 export function createRectWriter(renderer: RectWriterRenderer): RectWriter {
   return (texture, rects) => {
+    if (!rectWritable(texture)) return null
     const glTexture = (renderer.properties.get(texture) as { __webglTexture?: WebGLTexture }).__webglTexture
     if (!glTexture) return null
     const gl = renderer.getContext() as WebGL2RenderingContext
@@ -129,6 +146,9 @@ export function createRectWriter(renderer: RectWriterRenderer): RectWriter {
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, texture.unpackAlignment)
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, image.width)
+    // the rect's start comes from texSubImage2D's source offset
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0)
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0)
     let bytes = 0
     try {
       for (const { x, y, width, height } of rects) {
@@ -149,15 +169,24 @@ export function createRectWriter(renderer: RectWriterRenderer): RectWriter {
  * up whole at the clone's first draw. The copy's own version still moves (its
  * first draw binds the shared WebGL texture), and a Source already changed
  * and not yet sent stays so.
+ *
+ * Assumes the copy keeps every parameter three keys its WebGL textures by
+ * (WebGLTextures getTextureCacheKey: wrap, filters, anisotropy, formats,
+ * type, mipmaps, premultiply, flipY, alignment, colour space; pinned by
+ * grid-upload.test.ts), so it shares the original's WebGL texture: with its
+ * own, the rects GridEdges writes into the original's would never reach it.
+ * Nothing changes those on the terrain plugin's clones.
  */
 export function keepSourceOnClone<T extends Texture>(texture: T): T {
   const clone = texture.clone.bind(texture)
   texture.clone = () => {
     const { source } = texture
     const version = source.version
-    const copy = clone()
-    source.version = version
-    return copy
+    try {
+      return clone()
+    } finally {
+      source.version = version
+    }
   }
   return texture
 }

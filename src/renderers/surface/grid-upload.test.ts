@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import * as THREE from 'three'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   createRectWriter,
+  rectWritable,
   FULL_UPLOAD_SHARE,
   GridEdges,
   keepSourceOnClone,
@@ -12,6 +13,9 @@ import {
   type TexelRect,
 } from './grid-upload'
 import { trackUploads } from './tile-upload'
+
+/** The texture fields three's getTextureCacheKey reads (r180; pinned below). */
+const CACHE_KEY_FIELDS = ['wrapS', 'wrapT', 'wrapR', 'magFilter', 'minFilter', 'anisotropy', 'internalFormat', 'format', 'type', 'generateMipmaps', 'premultiplyAlpha', 'flipY', 'unpackAlignment', 'colorSpace']
 
 const rect = (x: number, y: number, width: number, height: number): TexelRect => ({ x, y, width, height })
 
@@ -68,6 +72,8 @@ describe('createRectWriter (tides-zmw.9.27)', () => {
       UNPACK_PREMULTIPLY_ALPHA_WEBGL: 'PREMUL',
       UNPACK_ALIGNMENT: 'ALIGN',
       UNPACK_ROW_LENGTH: 'ROW',
+      UNPACK_SKIP_PIXELS: 'SKIPX',
+      UNPACK_SKIP_ROWS: 'SKIPY',
       pixelStorei: record('pixelStorei'),
       texSubImage2D: record('texSubImage2D'),
       getParameter: () => {
@@ -96,6 +102,8 @@ describe('createRectWriter (tides-zmw.9.27)', () => {
       ['pixelStorei', 'PREMUL', false],
       ['pixelStorei', 'ALIGN', 1],
       ['pixelStorei', 'ROW', 514],
+      ['pixelStorei', 'SKIPX', 0],
+      ['pixelStorei', 'SKIPY', 0],
       ['texSubImage2D', 'T2D', 0, 513, 1, 1, 512, 'RED', 'FLOAT', data, 1 * 514 + 513],
       ['texSubImage2D', 'T2D', 0, 0, 0, 1, 1, 'RED', 'FLOAT', data, 0],
       // three's uploads assume 0
@@ -103,6 +111,28 @@ describe('createRectWriter (tides-zmw.9.27)', () => {
     ])
     // not marked for upload
     expect({ version: target.version, source: target.source.version }).toEqual(before)
+  })
+
+  it('sends nothing for a texture it would write wrongly: not one float channel, flipped, or with mipmaps', () => {
+    const odd: THREE.DataTexture[] = []
+    const add = (change: (t: THREE.DataTexture) => void) => {
+      const t = grid(6)
+      change(t)
+      odd.push(t)
+    }
+    add((t) => (t.format = THREE.RGBAFormat))
+    add((t) => (t.type = THREE.HalfFloatType))
+    add((t) => (t.flipY = true))
+    add((t) => (t.generateMipmaps = true))
+    add((t) => (t.minFilter = THREE.LinearMipmapLinearFilter))
+    add((t) => (t.mipmaps = [{ data: new Float32Array(9), width: 3, height: 3 }] as unknown as THREE.DataTexture['mipmaps']))
+    const { renderer, calls } = fakeRenderer(odd)
+    const write = createRectWriter(renderer)
+    for (const t of odd) expect(write(t, [rect(0, 1, 1, 4)])).toBeNull()
+    expect(calls).toEqual([])
+    const linear = grid(6)
+    linear.minFilter = linear.magFilter = THREE.LinearFilter
+    expect(rectWritable(linear)).toBe(true)
   })
 
   it('sends nothing for a texture with no GPU copy', () => {
@@ -126,6 +156,29 @@ describe('keepSourceOnClone (tides-zmw.9.27)', () => {
     expect(clone.version).toBeGreaterThan(0) // its first draw still binds the shared texture
     expect(kept.source.version).toBe(version)
     expect(kept.clone()).not.toBe(clone)
+  })
+
+  // three keys its WebGL textures by these (WebGLTextures getTextureCacheKey,
+  // pinned below): a clone differing in any would get its own, which the
+  // rects GridEdges writes into the grid's would never reach
+  it("gives the clone every parameter three keys its WebGL textures by, so it shares the grid's", () => {
+    const g = grid(6)
+    g.minFilter = g.magFilter = THREE.LinearFilter // as makeGrid's 'linear'
+    const kept = keepSourceOnClone(g)
+    const clone = kept.clone()
+    for (const key of CACHE_KEY_FIELDS) expect([key, clone[key as keyof THREE.Texture]]).toEqual([key, kept[key as keyof THREE.Texture]])
+  })
+
+  it('puts the version back even if the clone throws', () => {
+    const kept = keepSourceOnClone(grid(6))
+    const version = kept.source.version
+    vi.spyOn(THREE.DataTexture.prototype, 'copy').mockImplementationOnce(function (this: THREE.DataTexture, from: THREE.Texture) {
+      from.source.needsUpdate = true
+      throw new Error('copy failed')
+    })
+    expect(() => kept.clone()).toThrow('copy failed')
+    expect(kept.source.version).toBe(version)
+    vi.restoreAllMocks()
   })
 
   it('keeps a change not yet sent', () => {
@@ -233,6 +286,8 @@ describe('three internals (pinned to r180)', () => {
 
   it('shares one WebGL texture per Source and parameters, uploading only when the Source version moves', () => {
     const textures = read('renderers/webgl/WebGLTextures.js')
+    const key = textures.slice(textures.indexOf('function getTextureCacheKey( texture ) {'), textures.indexOf("return array.join();"))
+    expect([...key.matchAll(/array\.push\( texture\.(\w+)/g)].map((m) => m[1])).toEqual(CACHE_KEY_FIELDS)
     expect(textures).toContain('const textureCacheKey = getTextureCacheKey( texture );')
     expect(textures).toContain('if ( source.version !== sourceProperties.__version || forceUpload === true ) {')
   })

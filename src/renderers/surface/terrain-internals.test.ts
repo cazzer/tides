@@ -978,6 +978,40 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       expect(shapes).toEqual(['1x1', '1x1', '1x1', '1x1', '1x4', '1x4', '4x1', '4x1'])
     })
 
+    it('stitches across the antimeridian as the library does (x 0 beside x tileCountX - 1)', async () => {
+      const { terrain } = await loadedPlugin()
+      const { tileCountX } = (terrain as unknown as TerrainPluginInternals)._source!.tiling.getLevel(4)
+      const ours = installSurfaceGridCache(terrain, options({ edges: edgesFor().edges }))
+      const { edges } = ours['options'] as SurfaceGridOptions & { edges: GridEdges }
+      const library = Object.create(GridCache.prototype) as GridCache
+      library.plugin = terrain
+      library.cache = {}
+      const mine = new Map<string, DataTexture>()
+      const theirs = new Map<string, DataTexture>()
+      let i = 0
+      for (const x of [tileCountX - 1, 1]) {
+        for (const y of [4, 5, 6]) {
+          const grid = fixture(++i)
+          mine.set(`${x}/${y}`, grid)
+          theirs.set(`${x}/${y}`, copy(grid))
+          ;(ours as unknown as { setData(...args: unknown[]): void }).setData(x, y, 4, grid)
+          library.cache[`${x}_${y}_4`] = { result: theirs.get(`${x}/${y}`), count: 1 }
+        }
+      }
+      const center = fixture(99)
+      const theirCenter = copy(center)
+      ours.stitchNeighbors(center, 0, 5, 4)
+      GridCache.prototype.stitchNeighbors.call(library, theirCenter, 0, 5, 4)
+      expect(dataOf(center)).toEqual(dataOf(theirCenter))
+      for (const [k, grid] of mine) expect([k, dataOf(grid)]).toEqual([k, dataOf(theirs.get(k)!)])
+      expect(edges.pending).toBe(6)
+      // the grid across the antimeridian, west of x 0: its east border column, from x 0's west edge
+      const west = mine.get(`${tileCountX - 1}/5`)!
+      expect((west.image.data as unknown as Float32Array)[2 * 6 + 5]).toBe(99000 + 2 * 6 + 1)
+      const marked = (edges as unknown as { dirty: Map<unknown, { texture: DataTexture; rects: TexelRect[] }> }).dirty
+      expect([...marked.values()].find((e) => e.texture === west)?.rects).toEqual([{ x: 5, y: 1, width: 1, height: 4 }])
+    })
+
     it('fillBorder writes what the library writes, and returns the rect', () => {
       const dst = fixture(1)
       const src = fixture(2)
