@@ -1070,8 +1070,8 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
     expect(checked).toBeGreaterThan(300)
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
     const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
-    expect(inside).toContain('uniform float uMarchPhase;')
-    expect(inside).toContain('float phase = uMarchPhase;')
+    expect(inside).toContain('flat varying float vMarchPhase;')
+    expect(inside).toContain('float phase = vMarchPhase;')
     expect(inside).toContain('ceil(span / ds + phase - 1e-3), 1.0, float(MARCH_STEPS + 1))')
     expect(inside).toContain('for (int i = max(iFirst, 1); i <= MARCH_STEPS + 1; i++)')
     // The ceiling's skips count the same steps.
@@ -1176,6 +1176,39 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
       expect(clouds.material.uniforms.uMarchPhase.value).toBe(0)
     } finally {
       clearLimbView()
+      clouds.dispose()
+    }
+  })
+
+  it('fades the phase out as the eye goes into a cloud, once a draw, in the vertex stage', () => {
+    for (const flat of [false, true]) {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      const defines = new Set(['FLIP_SIDED', ...(flat ? ['CLOUD_FLAT'] : [])])
+      const vertex = preprocess(clouds.material.vertexShader, defines)
+      expect(vertex).toContain('flat varying float vMarchPhase;')
+      if (flat) {
+        // The flat shell doesn't march: nothing read.
+        expect(vertex).toContain('vMarchPhase = 0.0;')
+        expect(vertex).not.toContain('cloudFogInside(vEye)')
+      } else {
+        // At the eye as the march's start reads it (cloudEyeLod()), with or
+        // without reduced motion's fog ease, over the depth the fog thickens over.
+        for (const v of [vertex, preprocess(clouds.material.vertexShader, new Set([...defines, 'FOG_EASE']))]) {
+          expect(v).toContain(
+            `vMarchPhase = uMarchPhase * (1.0 - smoothstep(0.0, ${FOG_SOFT.toFixed(6)}, cloudFogInside(vEye)));`
+          )
+          expect(v).toContain('cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv))')
+        }
+      }
+      // From outside the reach the vertex stage reads nothing.
+      const outside = preprocess(clouds.material.vertexShader, new Set(flat ? ['CLOUD_FLAT'] : []))
+      expect(outside).not.toContain('vMarchPhase')
+      expect(outside).not.toContain('uCloudMap')
+      // Nor does the ground's shadow, which shares the field.
+      const shader = phongShader()
+      clouds.groundPatch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+      expect(shader.vertexShader + shader.fragmentShader).not.toContain('MarchPhase')
+      expect(shader.fragmentShader).not.toContain('cloudFogInside')
       clouds.dispose()
     }
   })

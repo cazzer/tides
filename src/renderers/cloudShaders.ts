@@ -253,6 +253,18 @@ float cloudEyeLod() {
 }
 `
 
+// How far inside a cloud q is, in its column's thickness, and over showing:
+// at most 0 outside it. Read as the march reads the eye (cloudEyeLod()).
+const FOG_INSIDE_GLSL = /* glsl */ `
+float cloudFogInside(vec3 q) {
+  float r = length(q);
+  vec2 uv = cloudUv(q / r);
+  vec4 col = cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv));
+  float alt = r - uSeaLevel;
+  return min(min(alt - col.y, col.z - alt) / max(col.z - col.y, 1e-6), col.x - ${f(CLOUD_MIN_ALPHA)});
+}
+`
+
 // With reduced motion (FOG_EASE), fog thickens over the eye's first
 // FOG_EASE_SECONDS in a cloud (tides-01v.8.15) from the cloud as its side
 // looked from just outside, so that flying in neither flashes white nor
@@ -265,16 +277,6 @@ const FOG_EASE_GLSL = /* glsl */ `
 #define FOG_EASE_SAMPLES ${FOG_EASE_SAMPLES}
 uniform vec3 uFogPast[FOG_EASE_SAMPLES];
 varying float vFogEase;
-
-// How far inside a cloud q is, in its column's thickness, and over showing:
-// at most 0 outside it. Read as the march reads the eye (cloudEyeLod()).
-float cloudFogInside(vec3 q) {
-  float r = length(q);
-  vec2 uv = cloudUv(q / r);
-  vec4 col = cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv));
-  float alt = r - uSeaLevel;
-  return min(min(alt - col.y, col.z - alt) / max(col.z - col.y, 1e-6), col.x - ${f(CLOUD_MIN_ALPHA)});
-}
 
 // How far the fog of a march from q has eased in (fogEaseShare()): the
 // share of FOG_EASE_SECONDS since q, moved as the eye has, was last out of
@@ -295,6 +297,22 @@ float cloudFogEase(vec3 q) {
 }
 `
 
+// Where the march's steps fall along every ray, as a share of a step short
+// of whole steps from the eye (tides-ndh): moved on with the eye along the
+// view (marchPhaseAfter()), so that in flight the steps hold still over the
+// clouds ahead rather than sliding with the eye. Not in a cloud, though:
+// there the march's fog mostly goes opaque within a step or two of the eye,
+// so the short first step the phase makes would take a step more on many
+// rays (in the deck, a third more for the clouds), and the fog shows little
+// of the steps' sliding. The vertex stage fades it out as the eye goes into
+// a cloud, over the depth the fog thickens over (FOG_SOFT), rather than at
+// once, which would move every step at the cloud's edge; flat, the same at
+// every vertex.
+const MARCH_PHASE_GLSL = /* glsl */ `
+uniform float uMarchPhase;
+flat varying float vMarchPhase;
+`
+
 const VERTEX = /* glsl */ `
 #include <common>
 ${ECLIPSE_GLSL.vertexHead}
@@ -308,9 +326,11 @@ varying float vViewDepth;
 varying float vNear;
 varying vec3 vEclipseEye;
 ${depthGlsl}
-#ifdef FOG_EASE
 ${FIELD}
 ${EYE_LOD_GLSL}
+${FOG_INSIDE_GLSL}
+${MARCH_PHASE_GLSL}
+#ifdef FOG_EASE
 ${FOG_EASE_GLSL}
 #endif
 #endif
@@ -337,6 +357,13 @@ void main() {
   vEclipseEye = eclipsePoint(vEye);
   vViewDepth = -view.z;
   vNear = isOrthographic ? 0.0 : viewDepthNear(projectionMatrix);
+  #ifdef CLOUD_FLAT
+  vMarchPhase = 0.0;
+  #else
+  // Read at the eye as the march's start reads it, and so the same at
+  // every vertex, as the phase must be on every ray (tides-ndh).
+  vMarchPhase = uMarchPhase * (1.0 - smoothstep(0.0, ${f(FOG_SOFT)}, cloudFogInside(vEye)));
+  #endif
   #ifdef FOG_EASE
   // At the eye, where the march decides whether it starts in a cloud
   // (tides-tvr.1): the same at every vertex.
@@ -362,11 +389,7 @@ varying vec3 vRayDir;
 #ifdef FLIP_SIDED
 uniform mat4 projectionMatrix;
 ${depthGlsl}
-// Where the march's steps fall along every ray, as a share of a step short
-// of whole steps from the eye (tides-ndh): moved on with the eye along the
-// view (marchPhaseAfter()), so that in flight the steps hold still over the
-// clouds ahead rather than sliding with the eye.
-uniform float uMarchPhase;
+${MARCH_PHASE_GLSL}
 varying vec3 vEye;
 varying float vViewDepth;
 varying float vNear;
@@ -899,10 +922,10 @@ void main() {
   // along its ray in flight, and what the march found between two steps,
   // tops, walls, veils and fog alike, rolled with a period of a step's
   // travel (tides-ndh). So the steps after the first fall a share of a
-  // step short of whole steps from the eye (uMarchPhase), the same on every
-  // ray, which the eye's motion along the view moves on: in forward flight
-  // the steps along the view hold still over the clouds, and those off it
-  // nearly so (along its ray, a step slides by 1 - cos of the ray's angle
+  // step short of whole steps from the eye (vMarchPhase), the same on every
+  // ray, which the eye's motion along the view moves on (out of a cloud:
+  // MARCH_PHASE_GLSL): in forward flight the steps along the view hold
+  // still over the clouds, and those off it nearly so (along its ray, a step slides by 1 - cos of the ray's angle
   // off the view of the eye's travel). Turning moves no step, nor does a
   // sideways slip move the phase. The first step stays at the eye, and may
   // be short. The span is at most MARCH_STEPS steps, and the march takes
@@ -910,7 +933,7 @@ void main() {
   // cloud-layer.ts marchSteps.
   float span = sEnd - sOrigin;
   float ds = max(min(MARCH_STEP, span / 3.0), span / float(MARCH_STEPS));
-  float phase = uMarchPhase;
+  float phase = vMarchPhase;
   int steps = int(clamp(ceil(span / ds + phase - 1e-3), 1.0, float(MARCH_STEPS + 1)));
   // The march's steps at either end that lie above the ceiling would all
   // find clear air, so it leaves them out (tides-01v.8.10): from each end
