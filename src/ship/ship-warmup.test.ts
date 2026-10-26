@@ -148,5 +148,9 @@ describe('coldWork', () => {
     compileSide(renderer, mesh, undefined, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
     expect(compiled[2].defines).toEqual(['FOG_EASE'])
     expect(material.defines).toEqual({ FOG_EASE: '', CLOUD_TYPED: '' })
+    // In the order it had: three keys a program by its defines in order.
+    material.defines = { CLOUD_TYPED: '', FOG_EASE: '' }
+    compileSide(renderer, mesh, undefined, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
+    expect(Object.keys(material.defines)).toEqual(['CLOUD_TYPED', 'FOG_EASE'])
   })
 })

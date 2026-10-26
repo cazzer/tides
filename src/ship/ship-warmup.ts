@@ -130,24 +130,32 @@ export function compileSide(
 ): void {
   const materials = materialsOf(object)
   const sides = materials.map((material) => material.side)
-  const flip = (material: THREE.Material) => {
+  // Kept whole: three keys a program by its defines in their order, so
+  // turning one back by adding it again would key a program nothing compiled.
+  const owns = materials.map((material) => {
     const own = (material as THREE.ShaderMaterial).defines
-    if (!own) return
+    return own ? { ...own } : undefined
+  })
+  for (const material of materials) {
+    if (side !== undefined) material.side = side
+    const own = (material as THREE.ShaderMaterial).defines
+    if (!own) continue
     for (const define of defines) {
       if (define in own) delete own[define]
       else own[define] = ''
     }
-  }
-  for (const material of materials) {
-    if (side !== undefined) material.side = side
-    flip(material)
   }
   try {
     renderer.compile(object, camera, scene)
   } finally {
     materials.forEach((material, i) => {
       material.side = sides[i]
-      flip(material)
+      const own = (material as THREE.ShaderMaterial).defines
+      const was = owns[i]
+      if (own && was) {
+        for (const define of Object.keys(own)) delete own[define]
+        Object.assign(own, was)
+      }
       material.needsUpdate = true
       if (warmed.materials.has(materialKey(material))) {
         warmed.materials.set(materialKey(material), material.version)
