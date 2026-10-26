@@ -85,7 +85,9 @@ export function ShipTargeting() {
     }
     // This Earth's stop as the flight's: 30 m on reversed-Z float, so the
     // ranges read the gap to it (0 on arrival) and the ETA ends there,
-    // rather than at the standard buffer's 8.6 km (tides-zmw.9.18).
+    // rather than at the standard buffer's 8.6 km (tides-zmw.9.18). This copy
+    // never settles, so it lacks the flight floor's lift (at most ~20 m as
+    // tiles change under the ship): ranges near the stop can be that far out.
     if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     if (
       truth.current == null ||

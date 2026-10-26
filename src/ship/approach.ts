@@ -201,7 +201,8 @@ export function safeShare(factor: number, speedFloor = V_NORMAL): number {
   return result
 }
 
-// Seconds to close from gap `hi` down to `lo` at min(closing, share · cap),
+// approachEta's legs over a ground law. Seconds to close from gap `hi` down
+// to `lo` at min(closing, share · cap),
 // where the cap is k · gap (k > 0) or the constant c: holding `closing`
 // while the cap allows it, then e-folding the gap every 1 / (share · k).
 function leg(lo: number, hi: number, closing: number, share: number, k: number, c: number): number {
@@ -222,6 +223,9 @@ export interface EtaGround {
   law: Readonly<GroundSpeedLaw>
   stop: number
 }
+
+// updateApproach's, reused so a frame allocates nothing.
+const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0 }
 
 /**
  * Predicted seconds to reach the surface `gap` away, closing at `closing`,
@@ -251,7 +255,13 @@ export function approachEta(
   const s = THREE.MathUtils.clamp(share, 1e-3, 1)
   if (!ground) {
     const floorGap = speedFloor * wellTime
-    return leg(floorGap, g, closing, s, 1 / wellTime, 0) + leg(0, Math.min(g, floorGap), closing, s, 0, speedFloor)
+    const holdGap = Math.max(floorGap, (closing * wellTime) / s)
+    let eta = 0
+    if (g > holdGap) eta += (g - holdGap) / closing
+    const mid = Math.min(g, holdGap)
+    if (mid > floorGap) eta += (wellTime / s) * Math.log(mid / floorGap)
+    eta += Math.min(g, floorGap) / Math.min(closing, s * speedFloor)
+    return eta
   }
   const { law } = ground
   const at = (x: number) => Math.min(g, x)
@@ -464,12 +474,11 @@ export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApp
   const share = frame.flightAssist
     ? frame.throttle
     : frame.speed / Math.max(frame.cap, 1e-9)
-  out.eta = approachEta(
-    gap,
-    closing,
-    wellTimeOf(factor),
-    share,
-    floor,
-    body.groundSpeed && { law: body.groundSpeed, stop: body.groundClearance ?? 0 }
-  )
+  let ground: EtaGround | undefined
+  if (body.groundSpeed) {
+    etaGround.law = body.groundSpeed
+    etaGround.stop = body.groundClearance ?? 0
+    ground = etaGround
+  }
+  out.eta = approachEta(gap, closing, wellTimeOf(factor), share, floor, ground)
 }

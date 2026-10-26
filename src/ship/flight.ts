@@ -35,9 +35,10 @@
 //     down is unlimited, so speed / cap ≤ 1 holds whichever well takes over:
 //     crossing a moon system on the way to a locked planet, the ship drops
 //     hard as each moon's well takes over, as Elite's supercruise does,
-//     rather than grazing the moon at twice its cap (tides-2hv.8). Under
-//     a groundSpeed law (Earth over the tiles) the ride down is unlimited
-//     too, and the ride up limited to RIDE_UP_RATE (tides-zmw.9.18).
+//     rather than grazing the moon at twice its cap (tides-2hv.8). Where a
+//     groundSpeed law (Earth over the tiles) sets the cap, the ride runs
+//     between e^(−RIDE_DOWN_RATE·dt) and e^(RIDE_UP_RATE·dt), locked or not
+//     (tides-zmw.9.18).
 //   • With a target locked, the speed *toward* it is also capped at
 //     approachCap: the gap over the target's wellTime, which is the cap
 //     itself when the target sets d_eff. A locked approach therefore never
@@ -249,16 +250,22 @@ export const VELOCITY_TAU_WELL = 2
 // unlocked.
 export const WELL_BRAKE = 0.25
 
-// Fastest the velocity rides a rising cap up while a body with a groundSpeed
-// law sets it, 1/s: flying off a cliff the gap, and with it the cap, can
-// jump tenfold in a frame, which would throw the ship forward as hard.
-// Above the law's own rate (a steady climb's), so it never slows one. Down,
-// such a body's cap is ridden as a locked target's is, without WELL_BRAKE:
-// under the law the cap falls at rate · share (2/s at full throttle), which
-// WELL_BRAKE would turn into a dive at OVERSPEED_MAX × the cap all the way
-// down, and the ground there can't be hit hard anyway (approach.ts
-// canCrash). [TUNE] (tides-zmw.9.18)
+// How fast the velocity rides the cap while a groundSpeed law's floor sets
+// it (the cap is rate · gap there), 1/s (tides-zmw.9.18). [TUNE]
+//   • Up, RIDE_UP_RATE: flying off a cliff the gap, and with it the cap, can
+//     jump tenfold in a frame, which would throw the ship forward as hard.
+//     Above the law's own rate (a steady climb's, 2/s), so it never slows one.
+//   • Down, RIDE_DOWN_RATE in place of WELL_BRAKE: the cap falls at rate ·
+//     share in a steady descent (2/s at full throttle), which WELL_BRAKE's
+//     0.25/s would turn into a dive at OVERSPEED_MAX × the cap all the way
+//     to the ground. Three times that, so a descent rides its cap, while a
+//     ridge passing under the ship (the gap 100 m → 30 m in a frame) eases
+//     the speed down over a fraction of a second rather than braking it
+//     3.3× in one frame; OVERSPEED_MAX and the collision still bound it.
+// Off the law (Earth's well above the plateau, every other body) the ride
+// is as before: WELL_BRAKE unlocked, free locked.
 export const RIDE_UP_RATE = 3
+export const RIDE_DOWN_RATE = 6
 
 // Hard ceiling on speed as a multiple of the cap, applied before and after
 // the move. [TUNE] Bounds overshoot and, with K_WELL · MAX_DT, the step size.
@@ -377,7 +384,7 @@ interface Proximity {
   wellKey: string | null
   wellBodyFactor: number
   wellFloor: number
-  /** Whether that body has a groundSpeed law (rideWell, RIDE_UP_RATE). */
+  /** Whether that body has a groundSpeed law (wellCap: whether its floor sets the cap). */
   wellGround: boolean
 }
 
@@ -450,6 +457,13 @@ export function nearestBody(
 ): NearestBody | null {
   const { nearest, nearestGap } = measure(position, bodies, null)
   return nearest && { body: nearest, surfaceDistance: nearestGap }
+}
+
+// Whether a groundSpeed law's floor, not the well, sets the cap: under
+// Earth's plateau (rideWell). A supercruise arrival in Earth's well rides
+// it with WELL_BRAKE as before.
+function groundLawSets({ wellGround, wellFloor, wellDistance }: Proximity): boolean {
+  return wellGround && wellFloor > K_WELL * wellDistance
 }
 
 // wellDistance is Infinity with no bodies (or none with a usable gap).
@@ -636,9 +650,9 @@ function translate(
 // throttle (tides-2hv.4). Unlocked, riding down is rate-limited to
 // WELL_BRAKE, which is where overshoot comes from; locked, it follows the cap
 // all the way, so no well (the target's or one on the way) is overshot. FA
-// off doesn't ride: the pilot owns the speed. Under a groundSpeed law
-// (`groundLaw`) the ride down is free, locked or not, and the ride up
-// limited to RIDE_UP_RATE.
+// off doesn't ride: the pilot owns the speed. Where a groundSpeed law's
+// floor sets the cap (`groundLaw`) the ride is clamped to RIDE_DOWN_RATE
+// and RIDE_UP_RATE, locked or not.
 function rideWell(
   state: ShipState,
   input: Readonly<ShipInput>,
@@ -651,7 +665,7 @@ function rideWell(
   const v = state.velocity
   if (input.flightAssist) {
     const ratio = capAfter / capBefore
-    if (groundLaw) v.multiplyScalar(Math.min(ratio, Math.exp(RIDE_UP_RATE * dt)))
+    if (groundLaw) v.multiplyScalar(clamp(ratio, Math.exp(-RIDE_DOWN_RATE * dt), Math.exp(RIDE_UP_RATE * dt)))
     else v.multiplyScalar(locked ? ratio : Math.max(ratio, Math.exp(-WELL_BRAKE * dt)))
   }
   v.clampLength(0, OVERSPEED_MAX * capAfter)
@@ -763,7 +777,7 @@ export function stepShip(
   // now is.
   const there = measure(state.position, env.bodies, env.targetKey)
   const capAfter = wellCap(there)
-  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, there.wellGround)
+  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, groundLawSets(there))
   if (telemetry) fillTelemetry(telemetry, state, input, there, capAfter, colliding)
   return state
 }

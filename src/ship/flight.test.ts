@@ -8,6 +8,7 @@ import {
   MAX_DT,
   OVERSPEED_MAX,
   PITCH_RATE,
+  RIDE_DOWN_RATE,
   RIDE_UP_RATE,
   ROLL_RATE,
   TURN_RATE_MIN_FACTOR,
@@ -1391,6 +1392,58 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     // ln(21.6 km / 30 m) / (2 · 0.6) ≈ 5.5 s down the law.
     expect(seconds).toBeGreaterThan(6)
     expect(seconds).toBeLessThan(14)
+  })
+
+  test('a ridge passing under the ship eases the speed down at most e^(−RIDE_DOWN_RATE·dt) a step, not a 3.3× brake', () => {
+    // Flat ground 100 m under the ship for x < 0, 70 m higher past it.
+    const R = EARTH_RADIUS
+    const body: Body = {
+      key: 'earth',
+      position: new THREE.Vector3(),
+      radius: R,
+      collisionRadius: R + 10 * M,
+      mass: 5.972e24,
+      ground: (direction) => (direction.x < 0 ? R : R + 70 * M),
+      groundClearance: FINE_GROUND_CLEARANCE,
+      minSpeed: EARTH_SLOWEST,
+      groundSpeed: EARTH_GROUND_SPEED_LAW,
+    }
+    const state = shipAt(new THREE.Vector3(-0.0005, R + 100 * M, 0), new THREE.Vector3(1, R + 100 * M, 0))
+    let edge = NaN
+    let worst = Infinity
+    for (let i = 0; i < 20 * 60; i++) {
+      const before = Math.max(state.velocity.length(), 1e-12)
+      const wasOver = state.position.x > 0
+      stepShip(state, input({ throttle: 1 }), FRAME, env([body]))
+      state.position.setLength(R + 100 * M)
+      state.velocity.projectOnPlane(state.position.clone().normalize())
+      if (i > 4 * 60) worst = Math.min(worst, state.velocity.length() / before)
+      if (!wasOver && state.position.x > 0) edge = state.velocity.length() / before
+    }
+    // The cap fell 100 m → 30 m of gap (0.3×) in the edge's step.
+    expect(edge).toBeCloseTo(Math.exp(-RIDE_DOWN_RATE * FRAME), 3)
+    expect(worst).toBeGreaterThanOrEqual(Math.exp(-RIDE_DOWN_RATE * FRAME) * (1 - 1e-9))
+  })
+
+  test("a supercruise arrival in Earth's well still rides it with WELL_BRAKE over the tiles: the law only where its floor sets the cap", () => {
+    const run = (surfaceTiles: boolean) => {
+      const bodies = createShipBodies('high', surfaceTiles)
+      updateShipBodies(bodies, T)
+      const earth = bodies.find((b) => b.key === 'earth')!
+      const state = shipAt(earth.position.clone().add(new THREE.Vector3(0, 0, 9)), earth.position)
+      const telemetry = createShipTelemetry()
+      let peak = 0
+      for (let i = 0; i < 30 * 60; i++) {
+        stepShip(state, input({ throttle: 1 }), FRAME, env(bodies), telemetry)
+        // Above the plateau's top (0.074 u), where the well sets the cap.
+        if (telemetry.nearest.surfaceDistance < 0.1) break
+        peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
+      }
+      return peak
+    }
+    const over = run(true)
+    expect(over).toBe(run(false))
+    expect(over).toBeGreaterThan(1)
   })
 
   test("stepShip's telemetry reads the air speed as the frame speed and the rest 0, the carry's to fill", () => {

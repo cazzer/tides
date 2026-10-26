@@ -301,7 +301,59 @@ describe('the carry, degenerate (tides-zmw.9.18)', () => {
     expect(carry.primed).toBe(false)
   })
 
-  it('fills the air: the slip, the grip, the density and the dynamic pressure', () => {
+  it('reads no air speed for a gripless ship moving with the air (velocity = ω × r), twice it against', () => {
+    const { earth, moon } = carriers(T0)
+    const carry = createFrameCarry()
+    const state = shipOver(earth, 36, -112, 5000)
+    carryShip(carry, state, earth, moon, FRAME, earthSpinRate(1))
+    carry.kappa = 0
+    const omega = new THREE.Vector3(0, 1, 0).applyQuaternion(earth.spin!).multiplyScalar(earthSpinRate(1))
+    const withAir = omega.clone().cross(state.position.clone().sub(earth.position))
+    const telemetry = createShipTelemetry()
+    state.velocity.copy(withAir)
+    fillAir(carry, telemetry, state, earth, earthSpinRate(1))
+    expect(telemetry.air.speed / withAir.length()).toBeLessThan(1e-12)
+    state.velocity.copy(withAir).negate()
+    fillAir(carry, telemetry, state, earth, earthSpinRate(1))
+    expect(telemetry.air.speed / withAir.length()).toBeCloseTo(2, 12)
+  })
+
+  it('turns a part grip the right way past π a frame (1 month/s)', () => {
+    const { earth, moon } = carriers(T0)
+    const carry = createFrameCarry()
+    const scale = 2_592_000
+    const state = shipOver(earth, 0, 0, 0.3 / M)
+    carryShip(carry, state, earth, moon, FRAME, earthSpinRate(scale))
+    carry.kappa = 0.5
+    const before = toLocal(earth, state.position)
+    // One frame: the spin turns ~3.1 rad; half of it carried, the ship falls behind the ground by the other half.
+    updateShipBody(earth, T0 + FRAME * 1000 * scale)
+    updateShipBody(moon, T0 + FRAME * 1000 * scale)
+    carryShip(carry, state, earth, moon, FRAME, earthSpinRate(scale))
+    const after = toLocal(earth, state.position)
+    const lag = Math.atan2(after.clone().cross(before).y, after.dot(before) - after.y * before.y)
+    const turned = earthSpinRate(scale) * FRAME
+    expect(turned).toBeGreaterThan(Math.PI * 0.95)
+    expect(lag).toBeCloseTo((1 - carry.kappa) * turned, 2)
+  })
+
+  it('turns a part grip by the share of the turn Earth made, not of the turn dt says (a frame whose clock and dt disagree)', () => {
+    const { earth, moon } = carriers(T0)
+    const carry = createFrameCarry()
+    const state = shipOver(earth, 0, 0, 0.3 / M)
+    carryShip(carry, state, earth, moon, FRAME, earthSpinRate(3600))
+    carry.kappa = 0.999
+    const before = toLocal(earth, state.position)
+    // The sim moved a frame at 3600x; dt reads 30% long.
+    updateShipBody(earth, T0 + FRAME * 1000 * 3600)
+    updateShipBody(moon, T0 + FRAME * 1000 * 3600)
+    carryShip(carry, state, earth, moon, 1.3 * FRAME, earthSpinRate(3600))
+    const after = toLocal(earth, state.position)
+    const lag = Math.atan2(after.clone().cross(before).y, after.dot(before) - after.y * before.y)
+    expect(lag / ((1 - carry.kappa) * earthSpinRate(3600) * FRAME)).toBeCloseTo(1, 2)
+  })
+
+    it('fills the air: the slip, the grip, the density and the dynamic pressure', () => {
     const { earth, moon } = carriers(T0)
     const carry = createFrameCarry()
     const state = shipOver(earth, 0, 0, 10000)

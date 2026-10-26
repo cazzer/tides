@@ -15,8 +15,8 @@
 //     out, the heliocentric velocity changing by Earth's own across the band.
 //   • Spin: the ship carries `kappa` of Earth's spin, rotating its offset
 //     from Earth's centre, its velocity and its orientation by that share of
-//     the turn Earth's frame made this frame (slerp of the frame's own
-//     delta: at kappa = 1 the ground under the ship doesn't move at all).
+//     the turn Earth's frame made this frame (at kappa = 1 the frame's own
+//     delta, so the ground under the ship doesn't move at all).
 //     kappa is the air's grip. It relaxes toward λd / (λd + λr) each frame:
 //     λd, drag, is the air's density times how fast the ship moves through
 //     the air, so a descent is caught somewhere around 45-25 km, sooner the
@@ -174,7 +174,6 @@ const earthMove = new THREE.Vector3()
 const moonMove = new THREE.Vector3()
 const turn = new THREE.Quaternion()
 const share = new THREE.Quaternion()
-const IDENTITY = new THREE.Quaternion()
 const AXIS = new THREE.Vector3(0, 1, 0)
 
 /**
@@ -273,10 +272,26 @@ export function carryShip(
   if (Number.isFinite(move.x + move.y + move.z)) state.position.add(move)
 
   // The spin: kappa of the turn Earth's frame made, about its centre now.
+  // Whole, the frame's own delta (exact: a hover's ground doesn't move);
+  // in part, the delta less (1 − grip) of its turn about Earth's axis, unwrapped
+  // by the turn the spin rate makes over `dt`, so it goes the right way
+  // past π a frame (the speed menu's top scales), where a slerp of the
+  // delta would take the short way back.
   const grip = carry.kappa * weightEarth
   if (earth.spin && grip > 0) {
     turn.copy(carry.spinAt).invert().premultiply(earth.spin)
-    share.slerpQuaternions(IDENTITY, turn, grip)
+    if (grip >= 1) share.copy(turn)
+    else {
+      omega.copy(AXIS).applyQuaternion(earth.spin)
+      const sign = turn.w < 0 ? -1 : 1
+      const along = sign * (turn.x * omega.x + turn.y * omega.y + turn.z * omega.z)
+      let angle = 2 * Math.atan2(along, sign * turn.w)
+      const expected = spinRate * (Number.isFinite(dt) ? Math.max(0, dt) : 0)
+      if (Number.isFinite(expected)) angle += 2 * Math.PI * Math.round((expected - angle) / (2 * Math.PI))
+      // The whole delta less the share not carried, so a grip a hair under 1
+      // stays the frame's own (the axis's own drift included).
+      share.setFromAxisAngle(omega, (grip - 1) * angle).multiply(turn)
+    }
     offset.subVectors(state.position, earth.position).applyQuaternion(share)
     if (Number.isFinite(offset.x + offset.y + offset.z)) {
       state.position.copy(earth.position).add(offset)
