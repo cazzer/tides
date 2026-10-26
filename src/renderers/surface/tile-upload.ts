@@ -2,8 +2,11 @@
 // budget has time and bytes to spare (tides-zmw.9.25). A tile draws a clone
 // of its elevation grid, which shares the grid's upload; stitching
 // (terrain-internals.ts) writes edge texels into loaded neighbours' grids,
-// so the grid a new tile reads has often changed since its last upload, and
-// its first draw re-uploads it (1 MB of float texels), with its imagery.
+// so the grid a new tile reads had often changed since its last upload, and
+// its first draw re-uploaded it (1 MB of float texels), with its imagery.
+// Since tides-zmw.9.27 the stitched borders go up alone as they're written
+// and a clone leaves its grid current (grid-upload.ts): what's left here is
+// mostly the imagery (and any grid sent before its tile's clone was made).
 // Left to the render, a burst of tiles coming into view together (a dozen
 // or more once the stream keeps up, surface-queues.ts) uploaded them all in
 // one frame: 50-120 ms.

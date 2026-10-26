@@ -14,8 +14,12 @@ import {
 const FETCH_TIMEOUT_MS = 30_000
 const STORE = 'tides-forecast-v1'
 // The Cache API only stores GET requests, so the POST's response is kept
-// under a fixed URL of its own.
-const STORE_KEY = 'https://tides.invalid/open-meteo/cloud-cover-10deg'
+// under a fixed URL of its own. A new key whenever the request changes: the
+// layers (tides-tvr.4.1) aren't in a grid stored under the old one, which
+// would otherwise serve untyped for up to FORECAST_TTL_MS. Every write under
+// the new key also drops the old entries (a no-op once they're gone).
+const STORE_KEY = 'https://tides.invalid/open-meteo/cloud-layers-10deg'
+const OLD_STORE_KEYS = ['https://tides.invalid/open-meteo/cloud-cover-10deg']
 const BACKOFF_KEY = 'https://tides.invalid/open-meteo/backoff'
 const FETCHED_AT = 'x-fetched-at'
 const LOCK = 'tides-forecast'
@@ -57,6 +61,7 @@ async function writeStored(fetchedAt: number, body: unknown): Promise<void> {
       headers: { 'content-type': 'application/json', [FETCHED_AT]: String(fetchedAt) },
     })
   )
+  await Promise.all(OLD_STORE_KEYS.map((key) => store?.delete(key)))
 }
 
 async function readBackoff(): Promise<FetchBackoff | null> {

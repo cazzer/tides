@@ -11,12 +11,17 @@
 // cross-fading to an unrelated part of the same texture and back every two
 // days, so a long forecast neither sits still nor shears into streaks.
 //
-// The grid is one request for all 648 points, hourly from yesterday to
-// FORECAST_DAYS ahead, kept for FORECAST_TTL_MS and shared by every tab;
+// The grid is one request for all 648 points, hourly from COVER_PAST_DAYS
+// back to FORECAST_DAYS ahead, kept for FORECAST_TTL_MS and shared by every tab;
 // failures back off from FORECAST_RETRY_MS to FORECAST_RETRY_MAX_MS, while a
 // stale grid serves for up to a day. Without a grid that covers the frame the
 // latest observation is held, uncredited. Pure logic; the fetching is
 // renderers/forecastGrid.ts and the build renderers/cloudPipeline.ts.
+//
+// The same request carries the cover in three layers (tides-tvr.4.1), low
+// (below ~3 km), mid (3-8 km) and high (above 8 km): what kind of cloud the
+// cover is (./cloud-types.ts). A response without them still serves the
+// cover, untyped.
 import { boxBlur, FORECAST_DAYS, FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W, smoothstep } from './real-clouds'
 
 /** Grid point latitudes, north first, and longitudes, west first: one point
@@ -50,8 +55,18 @@ export const FORECAST_STALE_MAX_MS = 24 * HOUR_MS
 /** Bounds on scaling the model's cover to the satellite's cloud alpha. */
 export const CALIBRATION_RANGE = [0.4, 1.2] as const
 
-/** Every grid point at once, hourly, from yesterday (the latest observation
- * can be just before midnight) to FORECAST_DAYS ahead, in UTC epoch seconds. */
+/** Days of past hours the grid asks for: yesterday for the latest
+ * observation (it can be just before midnight), and the day before so the
+ * cloud types (tides-tvr.4.1) still cover yesterday's frames through a day of
+ * a stale grid. */
+export const COVER_PAST_DAYS = 2
+/** The hourly variables asked for: instantaneous total cover, then its low,
+ * mid and high layers. */
+export const COVER_VARIABLES = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'] as const
+const LAYER_VARIABLES = { low: 'cloud_cover_low', mid: 'cloud_cover_mid', high: 'cloud_cover_high' } as const
+
+/** Every grid point at once, hourly, from COVER_PAST_DAYS back to
+ * FORECAST_DAYS ahead, in UTC epoch seconds: total cover and its layers. */
 export function coverRequestBody(): URLSearchParams {
   const lats: number[] = []
   const lons: number[] = []
@@ -64,11 +79,18 @@ export function coverRequestBody(): URLSearchParams {
   return new URLSearchParams({
     latitude: lats.join(','),
     longitude: lons.join(','),
-    hourly: 'cloud_cover',
+    hourly: COVER_VARIABLES.join(','),
     forecast_days: String(FORECAST_DAYS),
-    past_days: '1',
+    past_days: String(COVER_PAST_DAYS),
     timeformat: 'unixtime',
   })
+}
+
+/** Cloud cover by layer, each laid out like CoverGrid.cover. */
+export interface CoverLayers {
+  low: Float32Array
+  mid: Float32Array
+  high: Float32Array
 }
 
 export interface CoverGrid {
@@ -76,6 +98,9 @@ export interface CoverGrid {
   hours: number
   /** Hour-major, [hour * GRID_POINTS + point], 0..1. */
   cover: Float32Array
+  /** The cover's low, mid and high layers; null when the response lacks any
+   * of them or has too many gaps in one (the grid is then untyped). */
+  layers: CoverLayers | null
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -89,7 +114,8 @@ function lonGap(a: number, b: number): number {
 
 /** Validates Open-Meteo's multi-location response into a grid. Missing or
  * out-of-range values are filled with their row's mean at that hour; throws
- * (with the reason) when the response isn't the grid asked for. */
+ * (with the reason) when the response isn't the grid asked for. The layers
+ * are optional: any trouble with them leaves the grid untyped instead. */
 export function parseCoverGrid(json: unknown): CoverGrid {
   if (isRecord(json) && json.error) {
     throw new Error(`Open-Meteo error: ${typeof json.reason === 'string' ? json.reason : 'unknown'}`)
@@ -98,6 +124,9 @@ export function parseCoverGrid(json: unknown): CoverGrid {
   if (json.length !== GRID_POINTS) throw new Error(`${json.length} locations, not ${GRID_POINTS}`)
   let times: number[] | null = null
   const rows: unknown[][] = []
+  // Per layer, every point's values while every point has them so far.
+  const layerRows: Record<keyof CoverLayers, unknown[][]> = { low: [], mid: [], high: [] }
+  let layersWhole = true
   json.forEach((point: unknown, i) => {
     if (!isRecord(point)) throw new Error(`location ${i} is not an object`)
     const lat = GRID_LATS[Math.floor(i / GRID_LONS.length)]
@@ -133,16 +162,39 @@ export function parseCoverGrid(json: unknown): CoverGrid {
       throw new Error(`location ${i} has ${hourly.cloud_cover.length} values for ${time.length} hours`)
     }
     rows.push(hourly.cloud_cover as unknown[])
+    if (!layersWhole) return
+    for (const key of Object.keys(LAYER_VARIABLES) as (keyof CoverLayers)[]) {
+      const values = hourly[LAYER_VARIABLES[key]]
+      if (!Array.isArray(values) || values.length !== time.length) layersWhole = false
+      else layerRows[key].push(values as unknown[])
+    }
   })
   const hours = times!.length
-  const cover = new Float32Array(hours * GRID_POINTS)
+  const cover = percentGrid(rows, hours)
+  if (typeof cover === 'string') throw new Error(cover)
+  let layers: CoverLayers | null = null
+  if (layersWhole) {
+    const [low, mid, high] = (['low', 'mid', 'high'] as const).map((key) => percentGrid(layerRows[key], hours))
+    if (typeof low !== 'string' && typeof mid !== 'string' && typeof high !== 'string') {
+      layers = { low, mid, high }
+    } else {
+      console.warn('[clouds] cloud cover layers unusable; untyped', [low, mid, high].find((v) => typeof v === 'string'))
+    }
+  }
+  return { startMs: times![0] * 1000, hours, cover, layers }
+}
+
+/** Percentages, one row per point, as an hour-major 0..1 grid with the gaps
+ * filled; the reason instead when there are too many gaps. */
+function percentGrid(rows: unknown[][], hours: number): Float32Array | string {
+  const grid = new Float32Array(hours * GRID_POINTS)
   const valid = new Uint8Array(hours * GRID_POINTS)
   let invalid = 0
   rows.forEach((values, i) => {
     for (let h = 0; h < hours; h++) {
       const v = values[h]
       if (typeof v === 'number' && v >= 0 && v <= 100) {
-        cover[h * GRID_POINTS + i] = v / 100
+        grid[h * GRID_POINTS + i] = v / 100
         valid[h * GRID_POINTS + i] = 1
       } else {
         invalid++
@@ -150,10 +202,10 @@ export function parseCoverGrid(json: unknown): CoverGrid {
     }
   })
   if (invalid > MAX_INVALID_FRACTION * hours * GRID_POINTS) {
-    throw new Error(`${invalid} of ${hours * GRID_POINTS} values missing or out of range`)
+    return `${invalid} of ${hours * GRID_POINTS} values missing or out of range`
   }
-  if (invalid > 0) fillInvalid(cover, valid, hours)
-  return { startMs: times![0] * 1000, hours, cover }
+  if (invalid > 0) fillInvalid(grid, valid, hours)
+  return grid
 }
 
 /** Each invalid value becomes its row's mean at that hour, or the hour's
@@ -184,18 +236,40 @@ function fillInvalid(cover: Float32Array, valid: Uint8Array, hours: number) {
   }
 }
 
-/** The grid at a time, linear between hours; null outside it. */
-export function coverAt(grid: CoverGrid, tMs: number): Float32Array | null {
+/** Whether a time is within the grid's hours. */
+export function gridCovers(grid: CoverGrid, tMs: number): boolean {
   const f = (tMs - grid.startMs) / HOUR_MS
-  if (!(f >= 0 && f <= grid.hours - 1)) return null
+  return f >= 0 && f <= grid.hours - 1
+}
+
+/** One of the grid's hour-major arrays at a time, linear between hours. */
+function valuesAt(grid: CoverGrid, values: Float32Array, tMs: number): Float32Array | null {
+  if (!gridCovers(grid, tMs)) return null
+  const f = (tMs - grid.startMs) / HOUR_MS
   const h0 = Math.floor(f)
   const h1 = Math.min(h0 + 1, grid.hours - 1)
   const w = f - h0
   const out = new Float32Array(GRID_POINTS)
   for (let i = 0; i < GRID_POINTS; i++) {
-    out[i] = (1 - w) * grid.cover[h0 * GRID_POINTS + i] + w * grid.cover[h1 * GRID_POINTS + i]
+    out[i] = (1 - w) * values[h0 * GRID_POINTS + i] + w * values[h1 * GRID_POINTS + i]
   }
   return out
+}
+
+/** The grid at a time, linear between hours; null outside it. */
+export function coverAt(grid: CoverGrid, tMs: number): Float32Array | null {
+  return valuesAt(grid, grid.cover, tMs)
+}
+
+/** The layers at a time, linear between hours; null outside the grid or
+ * without layers. */
+export function layersAt(grid: CoverGrid, tMs: number): CoverLayers | null {
+  if (!grid.layers || !gridCovers(grid, tMs)) return null
+  return {
+    low: valuesAt(grid, grid.layers.low, tMs)!,
+    mid: valuesAt(grid, grid.layers.mid, tMs)!,
+    high: valuesAt(grid, grid.layers.high, tMs)!,
+  }
 }
 
 /** How far a frame has handed over to synthetic cloud at a lead time. */
@@ -271,6 +345,15 @@ function bilinear(values: ArrayLike<number>, row: Lerp, col: Lerp): number {
 /** A grid's value at a point, bilinear between cell centres. */
 export function sampleCover(values: ArrayLike<number>, latDeg: number, lonDeg: number): number {
   return bilinear(values, rowLerp(latDeg), colLerp(lonDeg))
+}
+
+const smoothLerp = ({ i0, i1, w }: Lerp): Lerp => ({ i0, i1, w: smoothstep(0, 1, w) })
+
+/** sampleCover with smoothstep weights: still continuous and through the
+ * cell centres, but flat at them, so a 10° grid resampled finely shows no
+ * creases along its rows and columns (the cloud types, tides-tvr.4.1). */
+export function sampleCoverSmooth(values: ArrayLike<number>, latDeg: number, lonDeg: number): number {
+  return bilinear(values, smoothLerp(rowLerp(latDeg)), smoothLerp(colLerp(lonDeg)))
 }
 
 const pixelLat = (y: number) => 90 - ((y + 0.5) / OUT_H) * 180
@@ -498,7 +581,9 @@ export function retryDelayMs(failures: number): number {
  * shared by every tab right before fetching, so a grid another tab just
  * fetched is used instead. Failures back off exponentially (stored);
  * meanwhile a stale grid serves if it is under FORECAST_STALE_MAX_MS old. get
- * resolves null when no usable grid covers the times asked for.
+ * resolves null when no usable grid covers the times asked for. peek never
+ * waits on the network: whatever grid is to hand (in memory, else stored),
+ * with any refresh due started in the background.
  */
 export function createCoverGridSource(deps: CoverGridDeps) {
   const { fetchJson, readStored, writeStored, readBackoff, writeBackoff, exclusive, now } = deps
@@ -567,16 +652,30 @@ export function createCoverGridSource(deps: CoverGridDeps) {
     }
   }
 
+  /** The refresh under way, or a new one if one is due; null if neither. */
+  function startRefresh(): Promise<void> | null {
+    if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) {
+      refreshing ??= exclusive(refresh).finally(() => {
+        refreshing = null
+      })
+    }
+    return refreshing
+  }
+
+  const usable = (fromMs: number, toMs: number) =>
+    current && age() < FORECAST_STALE_MAX_MS && covers(current.grid, fromMs, toMs) ? current.grid : null
+
   return {
     async get(fromMs: number, toMs: number): Promise<CoverGrid | null> {
-      if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) {
-        refreshing ??= exclusive(refresh).finally(() => {
-          refreshing = null
-        })
-        await refreshing
-      }
-      if (!current || age() >= FORECAST_STALE_MAX_MS) return null
-      return covers(current.grid, fromMs, toMs) ? current.grid : null
+      if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) await startRefresh()
+      return usable(fromMs, toMs)
+    },
+    async peek(fromMs: number, toMs: number): Promise<CoverGrid | null> {
+      // Storage is local, so worth the wait when there's nothing in memory;
+      // the lock (another tab's fetch may hold it) and the network aren't.
+      if (!current) await adoptStored()
+      startRefresh()?.catch(() => {})
+      return usable(fromMs, toMs)
     },
   }
 }

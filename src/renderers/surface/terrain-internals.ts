@@ -51,6 +51,7 @@ import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rg
 import type { TerrariumMeshPlugin, XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
 import type { TilesRenderer } from '3d-tiles-renderer/three'
 import type { FrameBudget } from './frame-budget'
+import { keepSourceOnClone, type GridEdges, type TexelRect } from './grid-upload'
 import { eitherSignal, fetchWithRetry, RETRY_DELAYS_MS } from './fetch-retry'
 import { cancelBody } from './imagery'
 import {
@@ -98,8 +99,12 @@ interface SourceInternals {
   /** Set by the plugin to route through tiles.downloadQueue. */
   fetchData(url: string, options: RequestInit): Promise<Response>
   fetchOptions: RequestInit
-  /** Its tiling scheme: a tile's bounds, normalized (v north, as the grids' rows). */
-  tiling: { getTileBounds(x: number, y: number, level: number, normalized: boolean): number[] }
+  /** Its tiling scheme: a tile's bounds, normalized (v north, as the grids' rows); a level's tile count; whether tile y runs south. */
+  tiling: {
+    getTileBounds(x: number, y: number, level: number, normalized: boolean): number[]
+    getLevel(level: number): { tileCountX: number }
+    flipY: boolean
+  }
 }
 
 /** The terrain plugin's fields the cache reads. */
@@ -132,6 +137,13 @@ export interface SurfaceGridOptions {
   budget: Pick<FrameBudget, 'run'>
   /** Uploads a finished grid (and its horizon map) now (renderer.initTexture), not at first draw. */
   upload?: (texture: Texture) => void
+  /**
+   * Sends the borders stitched into loaded neighbours alone, into their GPU
+   * copies, and keeps the tiles' clones from marking a grid for upload
+   * (tides-zmw.9.27, grid-upload.ts). Without it, as the library: a
+   * stitched neighbour, and every clone, marks the grid for a full re-upload.
+   */
+  edges?: GridEdges
   /** Overrides RETRY_DELAYS_MS (tests). */
   retryDelays?: readonly number[]
 }
@@ -732,9 +744,34 @@ export class SurfaceGridCache extends GridCache {
     }
   }
 
+  /**
+   * The library's stitch (pinned by terrain-internals.test.ts against it),
+   * with `edges`: each loaded neighbour's border is noted as the rect it
+   * wrote, for edges.flush() to send alone, rather than marking the whole
+   * neighbour for upload. The new grid is marked already (made just now).
+   */
+  override stitchNeighbors(grid: DataTexture, x: number, y: number, level: number): void {
+    const { edges } = this.options
+    if (!edges) return super.stitchNeighbors(grid, x, y, level)
+    const { tiling } = (this.plugin as TerrainPluginInternals)._source!
+    const { tileCountX } = tiling.getLevel(level)
+    // grid rows run south to north, so the tile y step is flipped when the tiling's is
+    const yDir = tiling.flipY ? -1 : 1
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        if (dx === 0 && dy === 0) continue
+        // the neighbour x wraps, so seams close across the antimeridian
+        const neighbour = this.get((x + dx + tileCountX) % tileCountX, y + dy * yDir, level)
+        if (!neighbour || neighbour instanceof Promise) continue
+        fillBorder(grid, neighbour, dx, dy)
+        edges.mark(neighbour, fillBorder(neighbour, grid, -dx, -dy))
+      }
+    }
+  }
+
   /** fetchItem's main-thread end: the grid from what the source had, stitched, uploaded, its horizon begun. */
   private makeGrid(x: number, y: number, level: number, source: SourceGrid, above: LockedGrid | null, itemSignal: AbortSignal): DataTexture {
-    const { filter, upload } = this.options
+    const { filter, upload, edges } = this.options
     const tileDimension = (this.plugin as TerrainPluginInternals).tileDimension
     // A grid between the plugin's levels is only ever asked for by
     // dataAbove: never drawn, so never stitched or uploaded.
@@ -793,8 +830,11 @@ export class SurfaceGridCache extends GridCache {
     grid.minFilter = grid.magFilter = filter === 'linear' ? LinearFilter : NearestFilter
     grid.needsUpdate = true
     if (!between) {
+      if (edges) keepSourceOnClone(grid)
       this.stitchNeighbors(grid, x, y, level)
       upload?.(grid)
+      // the neighbours' new borders, after the grid itself: one GPU write each
+      edges?.flush()
       if (land) this.startHorizon(grid, x, y, level, first)
       this.neighbourMade(x, y, level)
     }
@@ -804,6 +844,30 @@ export class SurfaceGridCache extends GridCache {
     itemSignal.addEventListener('abort', () => grid.dispose(), { once: true })
     return grid
   }
+}
+
+/**
+ * The library's fillBorder (GridCache.js, 0.5.3): copies the edge texels of
+ * `src` into the border texels of `dst` facing the neighbour at tile offset
+ * (dx, dy) (y north, as the rows): a column or row along the shared edge's
+ * interior span, or a corner texel. Unlike the library's, leaves `dst`
+ * unmarked, and returns the rect it wrote.
+ */
+export function fillBorder(dst: DataTexture, src: DataTexture, dx: number, dy: number): TexelRect {
+  const { data, width, height } = dst.image as unknown as { data: Float32Array; width: number; height: number }
+  const from = (src.image as unknown as { data: Float32Array }).data
+  const w = width - 2
+  const h = height - 2
+  const minX = dx === -1 ? 0 : dx === 1 ? width - 1 : 1
+  const maxX = dx === 0 ? width - 2 : minX
+  const minY = dy === -1 ? 0 : dy === 1 ? height - 1 : 1
+  const maxY = dy === 0 ? height - 2 : minY
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      data[y * width + x] = from[(y - dy * h) * width + (x - dx * w)]
+    }
+  }
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }
 }
 
 /**

@@ -3,7 +3,7 @@
 // composites and the static masks) between builds. Protocol in
 // ./cloudWorkerClient.ts.
 import { buildCloudImage } from './cloudPipeline'
-import type { WorkerReply, WorkerRequest } from './cloudWorkerClient'
+import { imageTransfer, type WorkerReply, type WorkerRequest } from './cloudWorkerClient'
 
 const jobs = new Map<number, AbortController>()
 
@@ -26,7 +26,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       jobs.delete(id)
       if (abort.signal.aborted) return
       if (!image) return reply({ type: 'done', id, image: null })
-      reply({ type: 'done', id, image }, [image.rgba.buffer])
+      reply({ type: 'done', id, image }, imageTransfer(image))
     },
     (err: unknown) => {
       jobs.delete(id)

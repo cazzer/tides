@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import type { CloudImage } from './cloudPipeline'
-import { createCloudImageBuilder, type CloudWorker, type WorkerReply, type WorkerRequest } from './cloudWorkerClient'
+import { createCloudImageBuilder, imageTransfer, type CloudWorker, type WorkerReply, type WorkerRequest } from './cloudWorkerClient'
 import type { ImagerySource } from './realCloudController'
 
 const source: ImagerySource = {
@@ -108,5 +108,27 @@ describe('createCloudImageBuilder', () => {
     await expect(build(source, 'u', new AbortController().signal)).resolves.toBe(done)
     expect(inThread).toHaveBeenCalledTimes(2)
     warn.mockRestore()
+  })
+})
+
+describe('imageTransfer', () => {
+  test("moves the pixels, and the cloud-type grid where there is one (tides-tvr.4.1)", () => {
+    const plain = image()
+    expect(imageTransfer(plain)).toEqual([plain.rgba.buffer])
+    const typed: CloudImage = { ...image(), types: new Uint8Array(144 * 72 * 4) }
+    const transfer = imageTransfer(typed)
+    expect(transfer).toHaveLength(2)
+    expect(transfer[0]).toBe(typed.rgba.buffer)
+    expect(transfer[1]).toBe(typed.types!.buffer)
+  })
+
+  test('the buffers really move: structured cloning detaches them and the copy keeps the grid', () => {
+    const types = Uint8Array.from({ length: 144 * 72 * 4 }, (_, i) => i % 251)
+    const typed: CloudImage = { rgba: new Uint8ClampedArray(16), geo: null, types }
+    const copy = structuredClone(typed, { transfer: imageTransfer(typed) })
+    expect(typed.rgba.byteLength).toBe(0)
+    expect(types.byteLength).toBe(0)
+    expect(copy.types).toHaveLength(144 * 72 * 4)
+    expect(copy.types![1000]).toBe(1000 % 251)
   })
 })

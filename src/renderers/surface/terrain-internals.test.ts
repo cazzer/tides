@@ -22,6 +22,7 @@ import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rg
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import {
+  fillBorder,
   forEachCachedModel,
   gridHorizon,
   gridHorizonBytes,
@@ -44,6 +45,8 @@ import {
   type TerrainPluginInternals,
 } from './terrain-internals'
 import { decodeTerrariumPadded, type HorizonJob, type PaddedGrid } from './terrarium'
+import { GridEdges, type TexelRect } from './grid-upload'
+import { trackUploads } from './tile-upload'
 
 const LIB = path.resolve(process.cwd(), 'node_modules/3d-tiles-renderer')
 const read = (file: string) => readFileSync(path.join(LIB, file), 'utf8')
@@ -249,6 +252,13 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     const src = read('src/three/plugins/images/terrain-rgb/GridCache.js')
     expect(src).toContain('const tiling = this.plugin._source.tiling;')
     expect(src).toContain('fillBorder( neighbor, grid, - dx, - dy );')
+    // tides-zmw.9.27: SurfaceGridCache's stitch (with edges) repeats this
+    // one (the test 'stitches exactly as the library's GridCache does'),
+    // minus marking each neighbour whole; each tile draws a clone of its grid
+    // (grid-upload.ts keepSourceOnClone)
+    expect(src).toContain('function fillBorder( dst, src, dx, dy ) {')
+    expect(src).toContain('dst.needsUpdate = true;')
+    expect(read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')).toContain('const displacement = grid.clone();')
   })
 
   // tides-zmw.9.20 (retryFailedTiles): how a tile fails, stays failed in the
@@ -903,6 +913,143 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       abort.abort(new DOMException('gone', 'AbortError'))
       await expect(child).rejects.toMatchObject({ name: 'AbortError' })
       expect(locks()).toBe(before)
+    })
+  })
+
+  describe('stitched edges sent alone (tides-zmw.9.27)', () => {
+    /** A 6x6 padded grid (tileDimension 4) of distinct values. */
+    const fixture = (seed: number) => {
+      const data = new Float32Array(36).map((_, i) => seed * 1000 + i)
+      return new DataTexture(data, 6, 6, RedFormat, FloatType)
+    }
+    const copy = (grid: DataTexture) => new DataTexture((grid.image.data as unknown as Float32Array).slice(), 6, 6, RedFormat, FloatType)
+    const dataOf = (grid: DataTexture) => Array.from(grid.image.data as unknown as Float32Array)
+
+    function edgesFor() {
+      const uploaded: unknown[] = []
+      const tracked = trackUploads((texture) => uploaded.push(texture))
+      const writes: [DataTexture, TexelRect[]][] = []
+      const edges = new GridEdges((texture, rects) => {
+        writes.push([texture, [...rects]])
+        return 0
+      }, tracked)
+      return { uploaded, tracked, writes, edges }
+    }
+
+    it("stitches exactly as the library's GridCache does, the neighbours unmarked and their borders noted", async () => {
+      const { terrain } = await loadedPlugin()
+      const ours = installSurfaceGridCache(terrain, options({ edges: edgesFor().edges }))
+      const { edges } = ours['options'] as SurfaceGridOptions & { edges: GridEdges }
+      const library = Object.create(GridCache.prototype) as GridCache
+      library.plugin = terrain
+      library.cache = {}
+      // the eight neighbours of (5, 5, 4), and one past them that neither touches
+      const around: [number, number][] = []
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) if (dx || dy) around.push([5 + dx, 5 + dy])
+      around.push([7, 5])
+      const mine = new Map<string, DataTexture>()
+      const theirs = new Map<string, DataTexture>()
+      around.forEach(([x, y], i) => {
+        const grid = fixture(i + 1)
+        mine.set(`${x}/${y}`, grid)
+        theirs.set(`${x}/${y}`, copy(grid))
+        ;(ours as unknown as { setData(...args: unknown[]): void }).setData(x, y, 4, grid)
+        library.cache[`${x}_${y}_4`] = { result: theirs.get(`${x}/${y}`), count: 1 }
+      })
+      const versions = [...mine.values()].map((g) => [g.version, g.source.version])
+      const center = fixture(99)
+      const theirCenter = copy(center)
+      ours.stitchNeighbors(center, 5, 5, 4)
+      GridCache.prototype.stitchNeighbors.call(library, theirCenter, 5, 5, 4)
+      expect(dataOf(center)).toEqual(dataOf(theirCenter))
+      for (const [k, grid] of mine) expect([k, dataOf(grid)]).toEqual([k, dataOf(theirs.get(k)!)])
+      // the library marked each touched neighbour for a full upload; ours marks none
+      expect([...theirs.values()].filter((g) => g.version > 0)).toHaveLength(8)
+      expect([...mine.values()].map((g) => [g.version, g.source.version])).toEqual(versions)
+      // each touched neighbour's border noted: a column, a row or a corner of its padding
+      expect(edges.pending).toBe(8)
+      const marked = (edges as unknown as { dirty: Map<unknown, { texture: DataTexture; rects: TexelRect[] }> }).dirty
+      const rects = new Map([...marked.values()].map(({ texture, rects }) => [texture, rects]))
+      expect(rects.get(mine.get('4/5')!)).toEqual([{ x: 5, y: 1, width: 1, height: 4 }]) // west of it: its east column
+      expect(rects.get(mine.get('6/5')!)).toEqual([{ x: 0, y: 1, width: 1, height: 4 }])
+      expect(rects.has(mine.get('7/5')!)).toBe(false)
+      for (const r of rects.values()) expect(r).toHaveLength(1)
+      const shapes = [...rects.values()].map(([r]) => `${r.width}x${r.height}`).sort()
+      expect(shapes).toEqual(['1x1', '1x1', '1x1', '1x1', '1x4', '1x4', '4x1', '4x1'])
+    })
+
+    it('stitches across the antimeridian as the library does (x 0 beside x tileCountX - 1)', async () => {
+      const { terrain } = await loadedPlugin()
+      const { tileCountX } = (terrain as unknown as TerrainPluginInternals)._source!.tiling.getLevel(4)
+      const ours = installSurfaceGridCache(terrain, options({ edges: edgesFor().edges }))
+      const { edges } = ours['options'] as SurfaceGridOptions & { edges: GridEdges }
+      const library = Object.create(GridCache.prototype) as GridCache
+      library.plugin = terrain
+      library.cache = {}
+      const mine = new Map<string, DataTexture>()
+      const theirs = new Map<string, DataTexture>()
+      let i = 0
+      for (const x of [tileCountX - 1, 1]) {
+        for (const y of [4, 5, 6]) {
+          const grid = fixture(++i)
+          mine.set(`${x}/${y}`, grid)
+          theirs.set(`${x}/${y}`, copy(grid))
+          ;(ours as unknown as { setData(...args: unknown[]): void }).setData(x, y, 4, grid)
+          library.cache[`${x}_${y}_4`] = { result: theirs.get(`${x}/${y}`), count: 1 }
+        }
+      }
+      const center = fixture(99)
+      const theirCenter = copy(center)
+      ours.stitchNeighbors(center, 0, 5, 4)
+      GridCache.prototype.stitchNeighbors.call(library, theirCenter, 0, 5, 4)
+      expect(dataOf(center)).toEqual(dataOf(theirCenter))
+      for (const [k, grid] of mine) expect([k, dataOf(grid)]).toEqual([k, dataOf(theirs.get(k)!)])
+      expect(edges.pending).toBe(6)
+      // the grid across the antimeridian, west of x 0: its east border column, from x 0's west edge
+      const west = mine.get(`${tileCountX - 1}/5`)!
+      expect((west.image.data as unknown as Float32Array)[2 * 6 + 5]).toBe(99000 + 2 * 6 + 1)
+      const marked = (edges as unknown as { dirty: Map<unknown, { texture: DataTexture; rects: TexelRect[] }> }).dirty
+      expect([...marked.values()].find((e) => e.texture === west)?.rects).toEqual([{ x: 5, y: 1, width: 1, height: 4 }])
+    })
+
+    it('fillBorder writes what the library writes, and returns the rect', () => {
+      const dst = fixture(1)
+      const src = fixture(2)
+      expect(fillBorder(dst, src, 1, 0)).toEqual({ x: 5, y: 1, width: 1, height: 4 })
+      // dst's east border column holds src's westmost interior column
+      for (let y = 1; y <= 4; y++) expect((dst.image.data as unknown as Float32Array)[y * 6 + 5]).toBe(2000 + y * 6 + 1)
+      expect(fillBorder(dst, src, -1, -1)).toEqual({ x: 0, y: 0, width: 1, height: 1 })
+      expect((dst.image.data as unknown as Float32Array)[0]).toBe(2000 + 4 * 6 + 4)
+      expect(dst.version).toBe(0)
+    })
+
+    it('a made grid goes up whole once; a neighbour made later sends only the border it writes, and clones send nothing', async () => {
+      const { terrain } = await loadedPlugin()
+      const { uploaded, tracked, writes, edges } = edgesFor()
+      let n = 0
+      const opts = options({
+        upload: tracked.upload,
+        edges,
+        decode: async (): Promise<PaddedGrid> => ({ data: new Float32Array(36).fill(++n * 100), width: 6, height: 6 }),
+      })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = async () => new Response(new Uint8Array([1]), { status: 200 })
+      const a = cache.lock(2, 2, 4)
+      await release(opts.budget)
+      const left = (await a) as DataTexture
+      // the tiles' clones of it leave it current
+      left.clone()
+      left.clone()
+      expect(tracked.isCurrent(left)).toBe(true)
+      const b = cache.lock(3, 2, 4)
+      await release(opts.budget)
+      const right = (await b) as DataTexture
+      expect(uploaded).toEqual([left, right])
+      // left's east border, alone, after right went up
+      expect(writes).toEqual([[left, [{ x: 5, y: 1, width: 1, height: 4 }]]])
+      expect((left.image.data as unknown as Float32Array)[2 * 6 + 5]).toBe(200)
+      expect(tracked.isCurrent(left) && tracked.isCurrent(right)).toBe(true)
+      expect(edges.pending).toBe(0)
     })
   })
 

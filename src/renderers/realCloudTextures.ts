@@ -2,11 +2,14 @@
 // controller (./realCloudController.ts), whose builds run in the cloud worker
 // (tides-9jn.2, ./cloud.worker.ts via ./cloudWorkerClient.ts) where the browser
 // can draw there, and on the main thread otherwise. Either way the pipeline is
-// ./cloudPipeline.ts; this only uploads its pixels as a texture. The frames are
-// cross-faded by the shared blender (./cloudBlend.ts, tides-kzj.4.2).
+// ./cloudPipeline.ts; this only uploads its pixels as a texture, with the
+// frame's cloud-type grid (tides-tvr.4.1) as a tiny one of its own in
+// userData.types, freed with it. The frames are cross-faded by the shared
+// blender (./cloudBlend.ts, tides-kzj.4.2).
 import { useEffect, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { OUT_H, OUT_W } from '../real-clouds'
+import { TYPE_H, TYPE_W } from '../cloud-types'
 import { buildCloudImage, type CloudAssets, type CloudImage, type GeoTextureInfo } from './cloudPipeline'
 import { createCloudBlender } from './cloudBlend'
 import { createCloudImageBuilder, type CloudWorker } from './cloudWorkerClient'
@@ -53,7 +56,22 @@ const buildImage = createCloudImageBuilder({
   assets,
 })
 
-function textureOf({ rgba, geo, cold, held }: CloudImage): THREE.DataTexture {
+/** The type grid as a texture: bottom row first like the frame, linear
+ * between its 2.5° texels with no mipmaps (a far view's few texels are
+ * already blurry enough), wrapping across 180° but not over the poles. */
+function typeTextureOf(types: Uint8Array<ArrayBuffer>): THREE.DataTexture {
+  const texture = new THREE.DataTexture(types, TYPE_W, TYPE_H, THREE.RGBAFormat, THREE.UnsignedByteType)
+  texture.minFilter = THREE.LinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.generateMipmaps = false
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.colorSpace = THREE.NoColorSpace
+  texture.needsUpdate = true
+  return texture
+}
+
+function textureOf({ rgba, geo, cold, held, types }: CloudImage): THREE.DataTexture {
   // Bottom row first, so no flipY; filtered and mipmapped like an image.
   const texture = new THREE.DataTexture(rgba, OUT_W, OUT_H, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearMipmapLinearFilter
@@ -64,8 +82,16 @@ function textureOf({ rgba, geo, cold, held }: CloudImage): THREE.DataTexture {
   texture.userData.geo = geo
   texture.userData.cold = Boolean(cold)
   texture.userData.held = Boolean(held)
+  texture.userData.types = types ? typeTextureOf(types) : null
   texture.needsUpdate = true
   return texture
+}
+
+/** Frees a frame and its type grid. */
+function disposeFrame(texture: THREE.Texture) {
+  const types = texture.userData.types as THREE.Texture | null | undefined
+  types?.dispose()
+  texture.dispose()
 }
 
 async function buildCloudTexture(
@@ -82,7 +108,7 @@ export type RealCloudSnapshot = CloudSnapshot<THREE.Texture>
 
 export const realClouds = createRealCloudController<THREE.Texture>({
   build: buildCloudTexture,
-  dispose: (texture) => texture.dispose(),
+  dispose: disposeFrame,
   isCold: (texture) => Boolean(texture.userData.cold),
 })
 

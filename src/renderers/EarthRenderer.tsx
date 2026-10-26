@@ -18,7 +18,6 @@ import { poleSmoothingPatch } from './poleSmoothing'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
 import {
   driftOffset,
-  maxTopKm,
   STATIC_DRIFT_PER_FRAME,
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
@@ -209,7 +208,7 @@ export default function EarthRenderer({
   }, [])
   // The static clouds, and with Real weather until the frame loop has a blend
   // to show, so the first frame isn't missing its map.
-  if (!real || !clouds.uniforms.uCloudMap.value) setCloudMap(clouds, cloudsTexture, false)
+  if (!real || !clouds.uniforms.uCloudMap.value) clouds.setMap(cloudsTexture, false, null)
   // The march's ground is the drawn ground's texture: its lod 0 is the limb
   // sphere's vertices (cloudShaders.ts cloudGround()).
   clouds.uniforms.uTerrainMap.value = groundTexture
@@ -241,7 +240,7 @@ export default function EarthRenderer({
       cloudsTexture,
       wallMs
     )
-    setCloudMap(clouds, out?.texture ?? cloudsTexture, out?.measured ?? false)
+    clouds.setMap(out?.texture ?? cloudsTexture, out?.measured ?? false, out?.typed ? out.typeTexture : null)
   })
 
   return (
@@ -335,14 +334,6 @@ function sunInEarthFrame(earth: THREE.Object3D | null | undefined, target: THREE
   if (!earth) return
   earth.matrixWorld.decompose(_position, _quaternion, _scale)
   target.copy(_position).negate().normalize().applyQuaternion(_quaternion.invert())
-}
-
-/** Only geostationary imagery carries cloud-top heights (R) and their
- * confidence (B); the static and daily textures are grey. */
-function setCloudMap(clouds: CloudLayer, map: THREE.Texture, measured: boolean) {
-  clouds.uniforms.uCloudMap.value = map
-  clouds.uniforms.uCloudMeasured.value = measured ? 1 : 0
-  clouds.uniforms.uCloudMaxKm.value = maxTopKm(measured)
 }
 
 /**

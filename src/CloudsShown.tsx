@@ -90,5 +90,9 @@ function CloudSourceText({ source, status, texture }: Described) {
         : source.kind === 'geo'
           ? slotLabel(source.time)
           : `${instrument(daily)} ${daily.date}`
-  return <>{`NASA GIBS/ESDIS · ${what}${latest ? ' (latest)' : ''}`}</>
+  // The frame's cloud types (tides-tvr.4.1), which the clouds are drawn by
+  // (tides-tvr.4.2), come from Open-Meteo's layers, credited (with the link
+  // the licence asks for) a few lines up.
+  const typed = status === 'ready' && Boolean(texture?.userData.types)
+  return <>{`NASA GIBS/ESDIS · ${what}${latest ? ' (latest)' : ''}${typed ? ' · types: Open-Meteo' : ''}`}</>
 }
