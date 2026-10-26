@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
+
 import {
   createCloudLayer,
   DETAIL_EDGE_FAR,
@@ -16,6 +17,7 @@ import {
   MARCH_REFINE,
   MARCH_STEP,
   MARCH_STEPS,
+  marchPhaseAfter,
 } from './cloudShaders'
 import {
   CLOUD_CLEARANCE,
@@ -188,13 +190,14 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
         const span = marchSpanFromEye([0, sea + alt, 0], [Math.cos(a), Math.sin(a), 0], sea, outer)
         if (!span) continue
         longest = Math.max(longest, span.end - span.origin)
-        most = Math.max(most, marchSteps(span, MARCH_STEP, MARCH_STEPS).length)
+        most = Math.max(most, marchSteps(span, MARCH_STEP, MARCH_STEPS, 0.999).length)
       }
     }
     expect(longest / MARCH_STEPS).toBeLessThanOrEqual(MARCH_STEP * 1.02)
-    // The origin and MARCH_STEPS steps on: the eye's read and the shader's
-    // loop.
-    expect(most).toBeLessThanOrEqual(MARCH_STEPS + 1)
+    // The origin and MARCH_STEPS steps on, one more where the phase
+    // (tides-ndh) pushes the last past them: the eye's read and the
+    // shader's loop.
+    expect(most).toBeLessThanOrEqual(MARCH_STEPS + 2)
   })
 
   for (const flat of [false, true]) {
@@ -589,7 +592,7 @@ describe('cloud march holding still as the camera moves (tides-16z)', () => {
     // In the shader, each step from the eye on, none from the near plane.
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
     const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
-    expect(inside).toContain('float s = min(sOrigin + ds * float(i), sEnd);')
+    expect(inside).toContain('float s = min(sOrigin + ds * (float(i) - phase), sEnd);')
     expect(inside).not.toContain('max(sOuter, sNear)')
     clouds.dispose()
   })
@@ -709,7 +712,7 @@ describe('cloud march from the eye, under and inside the deck (tides-tvr.1)', ()
     const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
     // From the eye on, not from the near plane, which only bounds the depth.
     expect(inside).not.toContain('max(sOuter, sNear)')
-    expect(inside).toContain('float s = min(sOrigin + ds * float(i), sEnd);')
+    expect(inside).toContain('float s = min(sOrigin + ds * (float(i) - phase), sEnd);')
     expect(inside).toContain('vec3 q0 = eye + d * sOrigin;')
     expect(inside).toContain('vec4 col0 = cloudColumn(uv0, lod0,')
     // The same mip at the eye on every ray, a pixel's from outside the reach.
@@ -1040,5 +1043,140 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
     expect(refine).toBeLessThan(inside.indexOf('if (sHit < 0.0 && sVeil >= 0.0)'))
     expect(outside).not.toContain('MARCH_REFINE; k++')
     clouds.dispose()
+  })
+
+  const sea = sceneRadius(12742000)
+  const outer = sea + CLOUD_LAYER_TOP
+  const eye: Vec3 = [0, sea + 0.05, 0]
+  const along = (deg: number): Vec3 => {
+    const a = (deg * Math.PI) / 180
+    return [Math.cos(a), Math.sin(a), 0]
+  }
+  const plus = (a: Vec3, b: Vec3, k = 1): Vec3 => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]
+
+  it('steps a phase of a step short of whole steps from the eye, the same on every ray', () => {
+    let checked = 0
+    for (const phase of [0.25, 0.7]) {
+      for (let deg = -60; deg <= 60; deg += 0.5) {
+        const steps = marchSteps(marchSpanFromEye(eye, along(deg), sea, outer)!, MARCH_STEP, MARCH_STEPS, phase)
+        if (Math.abs(steps[3] - steps[2] - MARCH_STEP) > 1e-12) continue
+        // The first at the eye; the rest (but the last, cut short) a whole
+        // number of steps on from phase short of the eye's step.
+        expect(steps[0]).toBe(0)
+        for (const [i, s] of steps.slice(1, -1).entries()) expect(s).toBeCloseTo((i + 1 - phase) * MARCH_STEP, 12)
+        checked++
+      }
+    }
+    expect(checked).toBeGreaterThan(300)
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const inside = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+    expect(inside).toContain('uniform float uMarchPhase;')
+    expect(inside).toContain('float phase = uMarchPhase;')
+    expect(inside).toContain('ceil(span / ds + phase - 1e-3), 1.0, float(MARCH_STEPS + 1))')
+    expect(inside).toContain('for (int i = max(iFirst, 1); i <= MARCH_STEPS + 1; i++)')
+    // The ceiling's skips count the same steps.
+    expect(inside).toContain('int(floor((sFirst - sOrigin) / ds + phase)) - 1')
+    expect(inside).toContain('int(ceil((sLast - sOrigin) / ds + phase)) + 1')
+    expect(preprocess(clouds.material.fragmentShader, new Set())).not.toContain('uMarchPhase')
+    clouds.dispose()
+  })
+
+  it('keeps the steps along the view where they were over the clouds in forward flight', () => {
+    for (const deg of [-40, -8, 0, 12]) {
+      const d = along(deg)
+      let phase = 0.37
+      let from = eye
+      const before = marchSteps(marchSpanFromEye(from, d, sea, outer)!, MARCH_STEP, MARCH_STEPS, phase)
+        .slice(1, -1)
+        .map((s) => plus(from, d, s))
+      // A few frames' flight along the view, short of a step and past one.
+      for (const move of [0.0013, 0.004, 0.0091, 0.0007]) {
+        const to = plus(from, d, move)
+        phase = marchPhaseAfter(phase, from, to, d, MARCH_STEP)
+        expect(phase).toBeGreaterThanOrEqual(0)
+        expect(phase).toBeLessThan(1)
+        from = to
+      }
+      const after = marchSteps(marchSpanFromEye(from, d, sea, outer)!, MARCH_STEP, MARCH_STEPS, phase)
+        .slice(1, -1)
+        .map((s) => plus(from, d, s))
+      // Every step but those passed and the last is a step of before's.
+      let shared = 0
+      for (const p of after.slice(1, -1)) {
+        const gap = Math.min(...before.map((q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])))
+        expect(gap).toBeLessThan(1e-9)
+        shared++
+      }
+      expect(shared).toBeGreaterThanOrEqual(2)
+    }
+    // Sideways, the phase stays.
+    expect(marchPhaseAfter(0.4, eye, plus(eye, [0, 0, 1], 0.02), along(10), MARCH_STEP)).toBeCloseTo(0.4, 12)
+  })
+
+  it('moves the phase on with the ship camera along its view, and never as it turns', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    clouds.uniforms.uSeaLevel.value = sea
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+    const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
+    const phase = () => clouds.material.uniforms.uMarchPhase.value as number
+    const at = new THREE.Vector3(0, sea + clouds.shellAltitude - 0.01, 0)
+    const look = (yaw: number, pitch: number) => {
+      camera.position.copy(at)
+      camera.rotation.set(pitch, yaw, 0, 'YXZ')
+      camera.updateMatrixWorld()
+      clouds.faceCamera(mesh, camera)
+    }
+    try {
+      const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      look(0, 0)
+      expect(clouds.material.side).toBe(THREE.BackSide)
+      const start = phase()
+      // Turning in place: no step moves.
+      for (const [yaw, pitch] of [[0.4, 0], [0.4, -0.3], [-1.2, 0.2]]) {
+        look(yaw, pitch)
+        expect(phase()).toBe(start)
+      }
+      // Forward along the view, a fifth of a step.
+      look(0, 0)
+      const f = camera.getWorldDirection(new THREE.Vector3())
+      at.addScaledVector(f, 0.2 * MARCH_STEP)
+      look(0, 0)
+      expect(phase()).toBeCloseTo((start + 0.2) % 1, 9)
+      // Another camera, out of reach, renders between: the phase holds, and
+      // the ship camera's next frame moves it on from where it was.
+      const ortho = new THREE.OrthographicCamera()
+      ortho.position.set(0, sea + 5, 0)
+      ortho.updateMatrixWorld()
+      clouds.faceCamera(mesh, ortho)
+      expect(phase()).toBeCloseTo((start + 0.2) % 1, 9)
+      at.addScaledVector(f, 0.5 * MARCH_STEP)
+      look(0, 0)
+      expect(phase()).toBeCloseTo((start + 0.7) % 1, 9)
+    } finally {
+      clearLimbView()
+      clouds.dispose()
+    }
+  })
+
+  it('leaves the phase alone on the flat shell, which does not march', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), true)
+    clouds.uniforms.uSeaLevel.value = sea
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+    const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
+    try {
+      const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      for (const y of [0, 0.003, 0.006]) {
+        camera.position.set(0.001, sea + clouds.shellAltitude - 0.005 - y, 0)
+        camera.lookAt(1, sea, 0)
+        camera.updateMatrixWorld()
+        clouds.faceCamera(mesh, camera)
+      }
+      expect(clouds.material.uniforms.uMarchPhase.value).toBe(0)
+    } finally {
+      clearLimbView()
+      clouds.dispose()
+    }
   })
 })

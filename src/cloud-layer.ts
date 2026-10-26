@@ -473,17 +473,24 @@ export function marchSpanFromEye(
 /**
  * Where along the ray the march from inside reads (cloudShaders.ts'
  * FLIP_SIDED branch, without the steps the cloud ceiling lets it leave out):
- * its origin, then steps of `step` from there, the last cut short at its end
- * (tides-16z). At least three steps over the span, and no more than
- * `maxSteps`. From the eye, with no near plane in them (tides-tvr.1), a
+ * its origin, then steps of `step` from there, `phase` of a step short
+ * (uMarchPhase, tides-ndh: moved on with the eye in flight), the last cut
+ * short at its end (tides-16z). At least three steps over the span, and no
+ * more than `maxSteps`, but for one more where the phase pushes the last
+ * past them. From the eye, with no near plane in them (tides-tvr.1), a
  * ray's steps, the first too, hold still as the camera turns about it.
  */
-export function marchSteps({ origin, end }: MarchSpan, step: number, maxSteps: number): number[] {
+export function marchSteps(
+  { origin, end }: MarchSpan,
+  step: number,
+  maxSteps: number,
+  phase = 0
+): number[] {
   const span = end - origin
   const ds = Math.max(Math.min(step, span / 3), span / maxSteps)
-  const steps = Math.min(Math.max(Math.ceil(span / ds - 1e-3), 1), maxSteps)
+  const steps = Math.min(Math.max(Math.ceil(span / ds + phase - 1e-3), 1), maxSteps + 1)
   const at = [origin]
-  for (let i = 1; i <= steps; i++) at.push(Math.min(origin + ds * i, end))
+  for (let i = 1; i <= steps; i++) at.push(Math.min(origin + ds * (i - phase), end))
   return at
 }
 

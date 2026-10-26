@@ -18,6 +18,7 @@
 import * as THREE from 'three'
 import {
   type EyeSample,
+  type Vec3,
   airMass,
   ceilingReach,
   cloudFrame,
@@ -160,6 +161,21 @@ export const MARCH_STEPS = Math.ceil(
 // half left, so the top holds still to about 2^-MARCH_REFINE of a step
 // however the steps fall along the ray. 0 leaves the step's own crossing.
 export const MARCH_REFINE = 2
+
+/**
+ * The march's step phase (the shader's uMarchPhase, tides-ndh) once the eye
+ * has moved `from` to `to` (in the clouds' frame), the view along unit
+ * `forward`: the steps fall `phase` of a `step` short of whole steps from
+ * the eye, so moving on by the eye's motion along the view keeps those
+ * along it where they were over the clouds. Any phase will do to start
+ * from, and after a jump.
+ */
+export function marchPhaseAfter(phase: number, from: Vec3, to: Vec3, forward: Vec3, step: number): number {
+  const along =
+    (to[0] - from[0]) * forward[0] + (to[1] - from[1]) * forward[1] + (to[2] - from[2]) * forward[2]
+  const next = phase + along / step
+  return next - Math.floor(next)
+}
 
 // Height field shared by the cloud shell and the ground's shadow.
 const FIELD = /* glsl */ `
@@ -346,6 +362,11 @@ varying vec3 vRayDir;
 #ifdef FLIP_SIDED
 uniform mat4 projectionMatrix;
 ${depthGlsl}
+// Where the march's steps fall along every ray, as a share of a step short
+// of whole steps from the eye (tides-ndh): moved on with the eye along the
+// view (marchPhaseAfter()), so that in flight the steps hold still over the
+// clouds ahead rather than sliding with the eye.
+uniform float uMarchPhase;
 varying vec3 vEye;
 varying float vViewDepth;
 varying float vNear;
@@ -873,12 +894,24 @@ void main() {
   // that start at the near plane, as they did: the first, from the near
   // plane to the next, slid with it, and a first step from the eye to the
   // near plane, longer than a step when the near plane is far, read the
-  // cloud between coarser the further the near plane (tides-tvr.1). The
-  // span is at most MARCH_STEPS steps. Mirrored by cloud-layer.ts
-  // marchSteps.
+  // cloud between coarser the further the near plane (tides-tvr.1). From
+  // the eye, though, every step slid over the clouds by the eye's motion
+  // along its ray in flight, and what the march found between two steps,
+  // tops, walls, veils and fog alike, rolled with a period of a step's
+  // travel (tides-ndh). So the steps after the first fall a share of a
+  // step short of whole steps from the eye (uMarchPhase), the same on every
+  // ray, which the eye's motion along the view moves on: in forward flight
+  // the steps along the view hold still over the clouds, and those off it
+  // nearly so (along its ray, a step slides by 1 - cos of the ray's angle
+  // off the view of the eye's travel). Turning moves no step, nor does a
+  // sideways slip move the phase. The first step stays at the eye, and may
+  // be short. The span is at most MARCH_STEPS steps, and the march takes
+  // one more where the phase pushes the last past it. Mirrored by
+  // cloud-layer.ts marchSteps.
   float span = sEnd - sOrigin;
   float ds = max(min(MARCH_STEP, span / 3.0), span / float(MARCH_STEPS));
-  int steps = int(clamp(ceil(span / ds - 1e-3), 1.0, float(MARCH_STEPS)));
+  float phase = uMarchPhase;
+  int steps = int(clamp(ceil(span / ds + phase - 1e-3), 1.0, float(MARCH_STEPS + 1)));
   // The march's steps at either end that lie above the ceiling would all
   // find clear air, so it leaves them out (tides-01v.8.10): from each end
   // the ray is read against the ceiling, then moved on to where it comes
@@ -915,8 +948,8 @@ void main() {
     sLast -= CEILING_REACH;
   }
   // A step clear of each, for the first to stand above the cloud.
-  int iFirst = max(int(floor((sFirst - sOrigin) / ds)) - 1, 0);
-  int iLast = min(int(ceil((sLast - sOrigin) / ds)) + 1, steps);
+  int iFirst = max(int(floor((sFirst - sOrigin) / ds + phase)) - 1, 0);
+  int iLast = min(int(ceil((sLast - sOrigin) / ds + phase)) + 1, steps);
   // A column holds cloud from its base to its top, where it is at least
   // CLOUD_MIN_ALPHA. Over each step the march takes the ray's altitude and
   // its column (top, base and opacity) to change linearly, as the fog below
@@ -928,10 +961,11 @@ void main() {
   // So a ray that clips a cloud between two steps still meets it, and from
   // ray to ray at the same place (tides-01v.8.12). That place is still
   // where the field taken linear over the step crosses. The steps hold
-  // still as the camera turns (above), but in flight they slide along each
-  // ray by the eye's motion, and the crossing moves within its step with
-  // them: tops and walls rolled with a period of a step's travel. A top the
-  // march stops at is pinned to the field after the march (MARCH_REFINE,
+  // still as the camera turns (above), and in forward flight (uMarchPhase),
+  // but flying sideways, or off the view, they slide along each ray by the
+  // eye's motion, and the crossing moves within its step with them: tops
+  // and walls rolled with a period of a step's travel. A top the march
+  // stops at is pinned to the field after the march (MARCH_REFINE,
   // tides-ndh), from the step's two ends, which the march leaves as they
   // were when it stops: so nothing more is carried from step to step for it
   // (tides-16z's refinement, which stored every crossing's step through the
@@ -1019,9 +1053,9 @@ void main() {
       groundPrev = alt0 - cloudGround(uv0);
     }
   }
-  for (int i = max(iFirst, 1); i <= MARCH_STEPS; i++) {
+  for (int i = max(iFirst, 1); i <= MARCH_STEPS + 1; i++) {
     if (i > iLast) break;
-    float s = min(sOrigin + ds * float(i), sEnd);
+    float s = min(sOrigin + ds * (float(i) - phase), sEnd);
     if (s <= sSkip) continue;
     float stepLen = s - sPrev;
     vec3 q = eye + d * s;
@@ -1594,7 +1628,10 @@ export interface CloudLayer {
 }
 
 const eye = new THREE.Vector3()
+
 const viewport = new THREE.Vector4()
+const forward = new THREE.Vector3()
+const toLocal = new THREE.Matrix4()
 
 // The cloud ceiling's texture (cloudCeiling(), built by
 // scripts/build-cloud-ceiling.mjs); until it has loaded, a
@@ -1639,6 +1676,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
       uSunGain: { value: (SUNLIGHT_INTENSITY / Math.PI) * CLOUD_EXPOSURE },
       uAmbient: { value: CLOUD_AMBIENT },
       uFogPast: { value: Array.from({ length: FOG_EASE_SAMPLES }, () => new THREE.Vector3()) },
+      uMarchPhase: { value: 0 },
       uCloudCeiling: { value: ceilingTexture() },
       uPixelScale: { value: 1 },
     },
@@ -1658,6 +1696,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
   }
   // The eye's recent path, while the fog eases in (FOG_EASE_SECONDS).
   const track: EyeSample[] = []
+  // Where the eye was among the clouds when the march's phase last moved on.
+  let marchEye: Vec3 | null = null
   const shellAltitude = flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP
   // The back faces within the ship camera's reach of the shell (earth-shells.ts
   // withinShellReach), the front ones elsewhere. Unlike the atmosphere's
@@ -1707,6 +1747,19 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
       eyePastOffsets(track, FOG_EASE_SECONDS, FOG_EASE_SAMPLES).forEach((offset, k) =>
         material.uniforms.uFogPast.value[k].fromArray(cloudFrame(offset, -shift))
       )
+    }
+    // The march's steps move on with the eye along the view (tides-ndh), the
+    // eye and the view in the clouds' frame, as they drift. Only for the
+    // ship camera's march: the other cameras, which render between, leave
+    // it, so that coming back within reach only jumps the phase.
+    if (reach && !flat) {
+      const shift = uniforms.uCloudShift.value
+      const at = cloudFrame([eye.x, eye.y, eye.z], shift)
+      camera.getWorldDirection(forward).transformDirection(toLocal.copy(mesh.matrixWorld).invert())
+      const phase = material.uniforms.uMarchPhase
+      const view = cloudFrame([forward.x, forward.y, forward.z], shift)
+      if (marchEye) phase.value = marchPhaseAfter(phase.value, marchEye, at, view, MARCH_STEP)
+      marchEye = at
     }
     // The ceiling, once the ship is near Earth, ahead of the march from
     // inside (in a browser: elsewhere there is no asset server).
