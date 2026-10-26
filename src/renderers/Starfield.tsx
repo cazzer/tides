@@ -8,7 +8,7 @@ import starsDistanceUrl from '../assets/stars.distance.bin?url'
 import starsMeta from '../assets/stars.meta.json'
 import { eclipticToScene } from '../ephemeris'
 import { useStore } from '../store'
-import { depthAmount, shellDepth, shellPointVertex, shellPositions } from './starDepth'
+import { depthAmount, shellDepth, shellPointVertex, shellScale, shellVertex } from './starDepth'
 
 type StarfieldProps = {
   radius?: number
@@ -57,9 +57,17 @@ const cameraPosition = new THREE.Vector3()
 
 // The stars are infinitely far away: centred on whichever camera is drawing
 // them, every panel sees them in their true directions. Centred on the Sun,
-// parallax put them up to ~2.9° off as seen from the Earth.
-export function centreStarfieldOn(stars: THREE.Object3D, camera: THREE.Object3D) {
+// parallax put them up to ~2.9° off as seen from the Earth. The main view's
+// depth shell (starDepth.ts) moves its centre `share` of the way from the
+// camera to `towards`, so the eye sits off-centre and sees the parallax.
+export function centreStarfieldOn(
+  stars: THREE.Object3D,
+  camera: THREE.Object3D,
+  towards?: THREE.Vector3,
+  share = 0
+) {
   camera.getWorldPosition(cameraPosition)
+  if (towards && share > 0) cameraPosition.lerp(towards, share)
   stars.position.copy(stars.parent ? stars.parent.worldToLocal(cameraPosition) : cameraPosition)
   stars.updateMatrixWorld()
 }
@@ -110,23 +118,16 @@ if (uExtinction > 0.5) {
 }
 `
 
-type StarGeometry = {
-  geom: THREE.BufferGeometry
-  directions: Float32Array
-  depths: Float32Array
-  /** The shell amount the positions are spread to. */
+// Sets the shell's fade and size (starDepth.ts).
+// Module level, so the refs and memoised uniforms aren't mutated in a hook.
+function fadeShell(
+  stars: THREE.Object3D | null,
+  uDepth: { value: number },
+  scale: number,
   amount: number
-}
-
-// Moves the stars out to their places in the depth shell (starDepth.ts) when
-// the amount changes.
-function spreadIntoShell(stars: StarGeometry, uDepth: { value: number }, amount: number) {
+) {
   uDepth.value = amount
-  if (amount === stars.amount) return
-  stars.amount = amount
-  const position = stars.geom.getAttribute('position') as THREE.BufferAttribute
-  shellPositions(stars.directions, stars.depths, amount, position.array as Float32Array)
-  position.needsUpdate = true
+  stars?.scale.setScalar(scale)
 }
 
 // The surface camera's parent is the observer, whose +Y is the zenith.
@@ -182,7 +183,7 @@ export default function Starfield({
     geom.setAttribute('starDepth', new THREE.BufferAttribute(depths, 1))
     geom.computeBoundingSphere()
 
-    return { geom, directions, depths, amount: 0 } satisfies StarGeometry
+    return { geom }
   }, [buffer, distanceBuffer])
 
   useEffect(() => {
@@ -205,6 +206,7 @@ export default function Starfield({
           'void main() {',
           'uniform vec3 uZenith;\nuniform float uExtinction;\nuniform float uDepth;\nattribute float starDepth;\nvoid main() {'
         )
+        .replace('#include <begin_vertex>', shellVertex)
         .replace('#include <color_vertex>', extinctionVertex)
         .replace('gl_PointSize = size;', shellPointVertex)
     },
@@ -212,13 +214,17 @@ export default function Starfield({
   )
 
   const stars = useRef<THREE.Points>(null)
-  useFrame(({ camera }) => {
+  // The controls' own target, so the shell centres toward this frame's, not last's.
+  const shellTarget = useRef<THREE.Vector3 | undefined>(undefined)
+  useFrame(({ camera, controls }) => {
     if (stars.current) {
       orientStarfield(stars.current, useStore.getState().timestamp ?? Date.now())
     }
-    const ortho = camera as THREE.OrthographicCamera
-    const amount = depth && ortho.isOrthographicCamera ? depthAmount(ortho.zoom) : 0
-    spreadIntoShell(geometry, uniforms.uDepth, amount)
+    const target = (controls as { target?: THREE.Vector3 } | null)?.target
+    const distance = target ? camera.position.distanceTo(target) : 0
+    const amount = depth && target ? depthAmount(distance) : 0
+    shellTarget.current = target
+    fadeShell(stars.current, uniforms.uDepth, shellScale(radius, distance, amount), amount)
   })
 
   return (
@@ -226,11 +232,11 @@ export default function Starfield({
       ref={stars}
       onBeforeRender={(_renderer, _scene, camera) => {
         if (!stars.current) return
-        centreStarfieldOn(stars.current, camera)
+        centreStarfieldOn(stars.current, camera, shellTarget.current, uniforms.uDepth.value)
         if (fromSurface) zenithOf(camera, uniforms.uZenith.value)
       }}
       frustumCulled={false}
-      scale={[radius, radius, radius]}
+      scale={radius}
     >
       <primitive
         attach="geometry"

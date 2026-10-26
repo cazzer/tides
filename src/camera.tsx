@@ -8,13 +8,12 @@ import {
 } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import {
-  MathUtils,
   Vector3,
   Matrix4,
   type Camera,
   type InstancedMesh,
   type Object3D,
-  type OrthographicCamera,
+  type PerspectiveCamera,
 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import {
@@ -26,20 +25,26 @@ import {
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { leaveClock, rideWithClock, useClockRide } from './clock-view'
 import {
-  MAIN_ZOOM,
-  clearNear,
+  FOCUS_EASE,
+  MAIN_DISTANCE,
+  allowDistance,
   focusedRef,
-  planetFramingZoom,
-  planetsNear,
-  type BodyDepth,
+  followMotion,
+  framingDistance,
+  mainNearFar,
+  maxDistance,
+  minDistance,
+  nearReach,
+  nearestSurface,
+  stepFocusDistance,
+  turnTarget,
+  targetUnitsPerPixel,
+  type FollowAnchor,
+  type NearBody,
 } from './main-view'
-import {
-  LABEL_KEYS,
-  bodyReach,
-  systemExtent,
-} from './system-aids/label-visibility'
+import { LABEL_KEYS } from './system-aids/label-visibility'
+import { CLOCK_HALF_WIDTH } from './clock-size'
 import { mainCameraPose } from './main-camera-session'
-import { isMoonKey } from './moons/moon-keys'
 import {
   canPivot,
   clampTilt,
@@ -86,17 +91,13 @@ const inEarthFocus = () => useStore.getState().cameraFocus === 'earth'
 
 /**
  * Hands the right and middle buttons and the second finger's travel to the
- * pivot; pan has nothing to move in Earth focus since the target follows
- * Earth. Returns the undo.
+ * pivot. Returns the undo.
  */
 function takeEarthInputs(controls: OrbitControlsImpl): () => void {
-  const { enablePan } = controls
   const { MIDDLE: middle, RIGHT: right } = controls.mouseButtons
-  controls.enablePan = false
   controls.mouseButtons.MIDDLE = undefined
   controls.mouseButtons.RIGHT = undefined
   return () => {
-    controls.enablePan = enablePan
     controls.mouseButtons.MIDDLE = middle
     controls.mouseButtons.RIGHT = right
   }
@@ -227,7 +228,9 @@ function useEarthPivot(
   camera: Camera,
   controls: OrbitControlsImpl | null,
   cameraFocus: CameraFocus,
-  dom: HTMLElement | undefined
+  dom: HTMLElement | undefined,
+  carry: Vector3,
+  outsideMoveRef: { current: boolean }
 ) {
   const pivot = useRef<Pivot>({ tilt: 0, heading: 0, depth: 0 })
 
@@ -238,10 +241,14 @@ function useEarthPivot(
             controls,
             camera,
             pivot.current,
-            () => useStore.getState().earthRadius ?? 0
+            () => useStore.getState().earthRadius ?? 0,
+            carry,
+            () => {
+              outsideMoveRef.current = true
+            }
           )
         : undefined,
-    [camera, controls]
+    [camera, controls, carry, outsideMoveRef]
   )
 
   useEffect(
@@ -265,84 +272,82 @@ function useEarthPivot(
   })
 }
 
-// Covers Earth's atmosphere and aurora shells beyond its sphere.
-const NEAR_CLEARANCE = 1.1
-
-// How far each body reaches for the near plane: a planet with moons counts
-// its whole system, so the moons go with it (tides-2hv.16).
-const NEAR_REACH = LABEL_KEYS.map(
-  (key) =>
-    NEAR_CLEARANCE *
-    (key === 'moon' || isMoonKey(key)
-      ? bodyReach(key)
-      : Math.max(bodyReach(key), systemExtent(key)))
-)
+// useMainNearFar's per-frame scratch: LABEL_KEYS' bodies, then the clock.
+const nearBodies: NearBody[] = [...LABEL_KEYS, 'clock'].map(() => ({
+  centre: new Vector3(),
+  reach: 0,
+}))
+const nearPlanes = { near: 0, far: 0 }
+const sunCentre = new Vector3()
 
 /**
- * With planets on, moves the main view's near plane with the zoom
- * (planetsNear), stepping it clear of any body it would cut (clearNear);
- * off, it stays at 0 as it always was.
+ * Sets the main view's near plane short of the nearest body's reach (the
+ * clock's text included) and its far plane past the whole system, every
+ * frame (mainNearFar). Call it after CameraProvider's frame, which moves the
+ * eye.
  */
-function usePlanetsNear() {
-  const bodies = useMemo<BodyDepth[]>(
-    () => LABEL_KEYS.map(() => ({ depth: 0, reach: 0 })),
-    []
-  )
-  const forward = useMemo(() => new Vector3(), [])
-  const centre = useMemo(() => new Vector3(), [])
+function useMainNearFar() {
   useFrame(({ camera, controls }) => {
-    const ortho = camera as OrthographicCamera
-    if (!controls || !ortho.isOrthographicCamera) return
+    const perspective = camera as PerspectiveCamera
+    if (!controls || !perspective.isPerspectiveCamera) return
     const state = useStore.getState()
-    let near = 0
-    if (state.showPlanets) {
-      const eyeDistance = ortho.position.distanceTo(
-        (controls as OrbitControlsImpl).target
-      )
-      ortho.getWorldDirection(forward)
-      LABEL_KEYS.forEach((key, i) => {
-        const object = (state[key] as { current?: Object3D | null } | undefined)
-          ?.current
-        const body = bodies[i]
-        if (object) {
-          object.getWorldPosition(centre)
-          body.depth = centre.sub(ortho.position).dot(forward)
-          body.reach = NEAR_REACH[i]
-        } else {
-          body.reach = 0
-        }
-      })
-      near = clearNear(planetsNear(ortho.zoom, eyeDistance), bodies, eyeDistance)
+    for (let i = 0; i < LABEL_KEYS.length; i++) {
+      const key = LABEL_KEYS[i]
+      const object = (state[key] as { current?: Object3D | null } | undefined)
+        ?.current
+      nearBodies[i].reach = object ? nearReach(key) : 0
+      object?.getWorldPosition(nearBodies[i].centre)
     }
-    if (near !== ortho.near) {
-      ortho.near = near
-      ortho.updateProjectionMatrix()
+    const clock = nearBodies[LABEL_KEYS.length]
+    clock.reach = state.clock?.current ? CLOCK_HALF_WIDTH : 0
+    state.clock?.current?.getWorldPosition(clock.centre)
+    const eye = perspective.position
+    const surface = nearestSurface(
+      eye,
+      (controls as OrbitControlsImpl).target,
+      nearBodies
+    )
+    const sun = state.sun?.current
+    const eyeFromSun = sun
+      ? sun.getWorldPosition(sunCentre).distanceTo(eye)
+      : eye.length()
+    const { near, far } = mainNearFar(surface, eyeFromSun, nearPlanes)
+    if (near !== perspective.near || far !== perspective.far) {
+      perspective.near = near
+      perspective.far = far
+      perspective.updateProjectionMatrix()
     }
   })
 }
 
-const FRAMING_EASE = 0.05
-
-/** The zoom framing eases toward, or null while a planet or moon hasn't registered. */
+/** The distance framing eases toward, or null while a planet or moon hasn't registered. */
 function framingGoal(focus: CameraFocus): number | null {
-  if (!isSystemFocus(focus)) return MAIN_ZOOM
+  if (!isSystemFocus(focus)) return MAIN_DISTANCE
   const { earthRadius, [focus]: ref } = useStore.getState()
   const radius = ref?.current?.userData?.radius
   return radius > 0 && earthRadius != null
-    ? planetFramingZoom(radius, earthRadius)
+    ? framingDistance(radius, earthRadius)
     : null
 }
 
 /**
- * Choosing a planet eases the zoom to planetFramingZoom once the planet has
- * registered its mesh (with userData.radius); leaving a planet eases it back
- * to MAIN_ZOOM. Any other zoom change, i.e. the user scrolling or pinching,
- * ends the framing so it never fights them.
+ * Eases the eye distance (stepEyeDistance) into the focus's range
+ * (minDistance, maxDistance) and, on choosing a planet, to framingDistance
+ * once the planet has registered its mesh (with userData.radius); leaving a
+ * planet eases back to MAIN_DISTANCE, both from when the target reaches the
+ * focus (stepFocusDistance). The user scrolling, pinching or middle-dragging
+ * ends the framing, so it never fights them, as does anything else moving
+ * the camera itself (`outsideMoveRef`, from tiltControls: a restored pose, or
+ * the clock ride). Call it after CameraProvider's frame, which moves the
+ * target and the anchor.
  */
-function usePlanetFraming(cameraFocus: CameraFocus) {
-  // The zoom this hook last saw or wrote; null until the first frame after
-  // the focus changed.
-  const framing = useRef<{ written: number | null } | null>(null)
+function useEyeDistance(
+  cameraFocus: CameraFocus,
+  dom: HTMLElement | undefined,
+  anchor: FollowAnchor,
+  outsideMoveRef: { current: boolean }
+) {
+  const framing = useRef(false)
   const previousFocus = useRef<CameraFocus | null>(null)
 
   useEffect(() => {
@@ -351,28 +356,50 @@ function usePlanetFraming(cameraFocus: CameraFocus) {
     const restoring = previousFocus.current === null && mainCameraPose() !== null
     previousFocus.current = cameraFocus
     framing.current =
-      !restoring && (isSystemFocus(cameraFocus) || leftPlanet) ? { written: null } : null
+      !restoring && (isSystemFocus(cameraFocus) || leftPlanet)
   }, [cameraFocus])
 
-  // Only the main view has controls; the other panels' cameras stay put.
-  useFrame(({ camera, controls }) => {
-    const f = framing.current
-    const ortho = camera as OrthographicCamera
-    if (!f || !controls || !ortho.isOrthographicCamera) return
-    if (f.written === null) {
-      f.written = ortho.zoom
-    } else if (ortho.zoom !== f.written) {
-      framing.current = null
-      return
+  useEffect(() => {
+    if (!dom) return
+    const stop = () => {
+      framing.current = false
     }
-    const goal = framingGoal(cameraFocus)
-    if (goal === null) return
-    const next = MathUtils.lerp(ortho.zoom, goal, FRAMING_EASE)
-    const done = Math.abs(goal - next) < goal * 1e-3
-    ortho.zoom = done ? goal : next
-    ortho.updateProjectionMatrix()
-    if (done) framing.current = null
-    else f.written = ortho.zoom
+    const touches = new Set<number>()
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        if (event.isPrimary) touches.clear()
+        touches.add(event.pointerId)
+        if (touches.size > 1) stop()
+      } else if (event.button === 1) {
+        stop()
+      }
+    }
+    const onPointerUp = (event: PointerEvent) => touches.delete(event.pointerId)
+    dom.addEventListener('wheel', stop)
+    dom.addEventListener('pointerdown', onPointerDown)
+    dom.addEventListener('pointerup', onPointerUp)
+    dom.addEventListener('pointercancel', onPointerUp)
+    return () => {
+      dom.removeEventListener('wheel', stop)
+      dom.removeEventListener('pointerdown', onPointerDown)
+      dom.removeEventListener('pointerup', onPointerUp)
+      dom.removeEventListener('pointercancel', onPointerUp)
+    }
+  }, [dom])
+
+  // Only the main view has controls; the other panels' cameras stay put.
+  useFrame(({ camera, controls, size }) => {
+    if (!controls || !(camera as PerspectiveCamera).isPerspectiveCamera) return
+    if (outsideMoveRef.current) framing.current = false
+    outsideMoveRef.current = false
+    const landed = stepFocusDistance(
+      controls as OrbitControlsImpl,
+      anchor,
+      framing.current ? framingGoal(cameraFocus) : null,
+      minDistance(cameraFocus),
+      maxDistance(useStore.getState().showPlanets, size)
+    )
+    if (landed) framing.current = false
   })
 }
 
@@ -385,6 +412,13 @@ export const CameraProvider = ({ children }: { children: any }) => {
   useEffect(() => {
     if (controls) cameraTarget.current.copy((controls as OrbitControlsImpl).target)
   }, [controls])
+  const anchor = useRef<FollowAnchor>({
+    key: null,
+    position: new Vector3(),
+    speed: 0,
+  })
+  const carry = useMemo(() => new Vector3(), [])
+  const outsideMoveRef = useRef(false)
   const rideRef = useClockRide(controls)
   const focusedObject = useRef<{
     object: Object3D
@@ -406,14 +440,16 @@ export const CameraProvider = ({ children }: { children: any }) => {
     camera,
     controls as OrbitControlsImpl | null,
     cameraFocus,
-    connected || canvas
+    connected || canvas,
+    carry,
+    outsideMoveRef
   )
-  usePlanetFraming(cameraFocus)
-  usePlanetsNear()
 
   useFrame((state) => {
     const target = new Vector3()
     let hasTarget = false
+    // What the target is on, for followMotion.
+    let key: unknown = null
     let ref: { current?: Object3D | null } | undefined
 
     if (cameraFocus) {
@@ -421,6 +457,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
         if (locationPin?.current) {
           locationPin.current.getWorldPosition(target)
           hasTarget = true
+          key = cameraFocus
         } else if (location && earth?.current && earthRadius != null) {
           const { position } = calculateLocationAndRotationForLatLng(
             location.lat,
@@ -430,6 +467,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
           target.set(position.x, position.y, position.z)
           earth.current.localToWorld(target)
           hasTarget = true
+          key = cameraFocus
         }
       } else {
         ref = focusedRef(useStore.getState(), cameraFocus)
@@ -440,6 +478,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
             target.copy(ref.current.position)
           }
           hasTarget = true
+          key = ref.current
         }
       }
     }
@@ -455,10 +494,12 @@ export const CameraProvider = ({ children }: { children: any }) => {
         focused.object.getWorldPosition(target)
       }
       hasTarget = true
+      key = focused
     }
+    followMotion(anchor.current, key, target, carry)
 
     if (hasTarget && controls) {
-      const smoothness = 0.05
+      const smoothness = FOCUS_EASE
       if (cameraFocus === 'clock' && ref?.current) {
         rideWithClock(
           camera.position,
@@ -471,17 +512,20 @@ export const CameraProvider = ({ children }: { children: any }) => {
         )
       } else {
         leaveClock(rideRef.current)
-        cameraTarget.current.lerp(target, smoothness)
+        turnTarget(cameraTarget.current, camera.position, target, smoothness)
       }
       camera.lookAt(cameraTarget.current)
       // @ts-ignore
       controls.target.copy(cameraTarget.current)
-      const ortho = camera as OrthographicCamera
+      allowDistance(controls as OrbitControlsImpl)
       // @ts-ignore
       controls.rotateSpeed =
-        cameraFocus === 'earth' && earthRadius != null && ortho.isOrthographicCamera
+        cameraFocus === 'earth' && earthRadius != null
           ? surfaceGrabRotateSpeed(
-              (ortho.top - ortho.bottom) / (ortho.zoom * state.size.height),
+              targetUnitsPerPixel(
+                (controls as OrbitControlsImpl).getDistance() - earthRadius,
+                state.size.height
+              ),
               // @ts-ignore
               controls.domElement.clientHeight,
               earthRadius
@@ -491,6 +535,8 @@ export const CameraProvider = ({ children }: { children: any }) => {
       controls.update()
     }
   })
+  useEyeDistance(cameraFocus, connected || canvas, anchor.current, outsideMoveRef)
+  useMainNearFar()
 
   // Handle focus: update store (and thus dropdown) when a known body is clicked.
   const handleFocus = useCallback(

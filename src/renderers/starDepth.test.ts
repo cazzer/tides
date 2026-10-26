@@ -2,16 +2,18 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import starsMeta from '../assets/stars.meta.json'
-import { MAIN_ZOOM } from '../main-view'
+import { MAIN_DISTANCE, PLANETS_STAR_RADIUS, zoomDistance } from '../main-view'
 import { centreStarfieldOn, DEFAULT_RADIUS, orientStarfield, starDirectionsEQJ } from './Starfield'
 import {
-  FULL_DEPTH_ZOOM,
+  EYE_MARGIN,
+  FULL_DEPTH_DISTANCE,
   SHELL_FAR_RADIUS,
   SHELL_NEAR_RADIUS,
   depthAmount,
   shellDepth,
   shellPositions,
   shellRadius,
+  shellScale,
 } from './starDepth'
 
 const readFloats = (name: string) =>
@@ -48,19 +50,25 @@ describe('stars.distance.bin', () => {
 })
 
 describe('depthAmount', () => {
-  it('is off at the default zoom and anywhere closer in', () => {
-    expect(depthAmount(MAIN_ZOOM)).toBe(0)
-    expect(depthAmount(40)).toBe(0)
+  it('is off at the default distance and anywhere closer in', () => {
+    expect(depthAmount(MAIN_DISTANCE)).toBe(0)
+    expect(depthAmount(zoomDistance(40))).toBe(0)
   })
 
   it('fades in steadily to a full shell zoomed out', () => {
     let previous = 0
-    for (let zoom = MAIN_ZOOM; zoom >= FULL_DEPTH_ZOOM; zoom -= 0.25) {
-      expect(depthAmount(zoom)).toBeGreaterThanOrEqual(previous)
-      previous = depthAmount(zoom)
+    for (let distance = MAIN_DISTANCE; distance <= FULL_DEPTH_DISTANCE; distance += 20) {
+      expect(depthAmount(distance)).toBeGreaterThanOrEqual(previous)
+      previous = depthAmount(distance)
     }
-    expect(depthAmount(FULL_DEPTH_ZOOM)).toBe(1)
-    expect(depthAmount(0.1)).toBe(1)
+    expect(depthAmount(FULL_DEPTH_DISTANCE)).toBe(1)
+    expect(depthAmount(zoomDistance(0.1))).toBe(1)
+  })
+
+  it('matches the ortho view it replaced at its zooms', () => {
+    // log(MAIN_ZOOM / zoom) / log(MAIN_ZOOM / 2), smoothstepped, at zoom 5.
+    const t = Math.log(2) / Math.log(5)
+    expect(depthAmount(zoomDistance(5))).toBeCloseTo(t * t * (3 - 2 * t), 10)
   })
 })
 
@@ -111,5 +119,43 @@ describe('shellPositions', () => {
       shell.fromArray(positions, i * 3).applyMatrix4(stars.matrixWorld).sub(camera.position)
       expect(shell.angleTo(sphere)).toBeLessThan(1e-6)
     }
+  })
+})
+
+describe('shellScale', () => {
+  it('is the plain radius with no fade', () => {
+    expect(shellScale(PLANETS_STAR_RADIUS, 0, 0)).toBe(PLANETS_STAR_RADIUS)
+    expect(shellScale(PLANETS_STAR_RADIUS, MAIN_DISTANCE, 0)).toBe(PLANETS_STAR_RADIUS)
+  })
+
+  it('keeps the eye well inside the nearest stars at every distance the view allows', () => {
+    // The eye reaches ~2048 from its target on a desktop and ~4313 on a 390 px phone.
+    for (let distance = 0; distance <= 5000; distance += 10) {
+      const amount = depthAmount(distance)
+      // The shell's centre is `amount` of the way from the eye to the target.
+      const eyeFromCentre = amount * distance
+      const nearest = shellScale(PLANETS_STAR_RADIUS, distance, amount) * shellRadius(0, amount)
+      expect(eyeFromCentre * EYE_MARGIN).toBeLessThanOrEqual(nearest * (1 + 1e-9))
+    }
+  })
+
+  it('never shrinks the star sphere', () => {
+    for (let distance = 0; distance <= 5000; distance += 50) {
+      expect(shellScale(PLANETS_STAR_RADIUS, distance, depthAmount(distance))).toBeGreaterThanOrEqual(
+        PLANETS_STAR_RADIUS
+      )
+    }
+  })
+
+  it('gives near and far stars different parallax from an eye off the shell centre', () => {
+    // One direction, a near star and a far one; the eye 2000 from the target, shell centred on it.
+    const distance = 2000
+    const amount = depthAmount(distance)
+    const scale = shellScale(PLANETS_STAR_RADIUS, distance, amount)
+    const eye = new THREE.Vector3(distance, 0, 0)
+    const direction = new THREE.Vector3(0, 1, 0)
+    const seen = (depth: number) =>
+      direction.clone().multiplyScalar(scale * shellRadius(depth, amount)).sub(eye).angleTo(direction)
+    expect(Math.abs(seen(0) - seen(1))).toBeGreaterThan(0.05)
   })
 })

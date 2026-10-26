@@ -15,6 +15,9 @@ import {
   wrapAngle,
   type Pivot,
 } from './pivot'
+import { surfaceGrabRotateSpeed } from './camera'
+import { NEAR_CLEARANCE, minDistance, targetUnitsPerPixel } from './main-view'
+import { bodyRadius } from './system-aids/label-visibility'
 
 describe('pixelsToPivot', () => {
   it('turns half a turn per view height', () => {
@@ -194,11 +197,23 @@ describe('applyTilt', () => {
     expect(viewDirection(quaternion).dot(screenUp)).toBeGreaterThan(0)
   })
 
-  it('keeps the camera outside Earth at the closest distance', () => {
-    for (const depth of [0, 0.5, 1]) {
-      const { position, quaternion } = setup(5)
-      applyTilt(position, quaternion, centre, radius, depth, MAX_TILT)
-      expect(position.distanceTo(centre)).toBeGreaterThan(radius)
+  it("keeps the camera outside Earth's shells from the closest distance out", () => {
+    const earth = bodyRadius('earth')
+    for (let distance = minDistance('earth'); distance < 40; distance *= 1.05) {
+      // The pivot depth CameraProvider's surface grab gives at this distance.
+      const height = 800
+      const depth = pivotDepth(
+        surfaceGrabRotateSpeed(
+          targetUnitsPerPixel(distance - earth, height),
+          height,
+          earth
+        )
+      )
+      const { position, quaternion } = setup(distance)
+      applyTilt(position, quaternion, centre, earth, depth, MAX_TILT)
+      expect(position.distanceTo(centre), `${distance}`).toBeGreaterThan(
+        NEAR_CLEARANCE * earth
+      )
     }
   })
 })
@@ -210,8 +225,9 @@ describe('tiltControls', () => {
     camera.position.copy(start)
     const controls = new OrbitControls(camera)
     const original = controls.update
-    const undo = tiltControls(controls, camera, pivot, () => radius)
-    return { camera, controls, original, undo }
+    const carry = new Vector3()
+    const undo = tiltControls(controls, camera, pivot, () => radius, carry)
+    return { camera, controls, original, undo, carry }
   }
   const pose = (camera: OrthographicCamera) => ({
     position: camera.position.clone(),
@@ -265,6 +281,54 @@ describe('tiltControls', () => {
       12
     )
     expect(camera.up).toEqual(new Vector3(0, 1, 0))
+  })
+
+  it('moves the eye by the carry once, under the same tilt', () => {
+    const pivot = { tilt: 0.6, heading: 0.8, depth: 1 }
+    const start = new Vector3(30, 40, 50)
+    const { camera, controls, carry } = setup(pivot, start)
+    controls.update()
+    const move = new Vector3(5, -3, 2)
+    controls.target.add(move)
+    carry.copy(move)
+    controls.update()
+    controls.update()
+    expect(carry.length()).toBe(0)
+    expect(controls.getDistance()).toBeCloseTo(start.length(), 9)
+    const fresh = setup(pivot, start.clone().add(move))
+    fresh.controls.target.copy(move)
+    fresh.controls.update()
+    expect(camera.position.distanceTo(fresh.camera.position)).toBeLessThan(1e-9)
+  })
+
+  it('leaves the eye put when only the target moves', () => {
+    const { camera, controls } = setup({ tilt: 0, heading: 0, depth: 0 })
+    controls.update()
+    const eye = camera.position.clone()
+    controls.target.set(10, 0, 0)
+    controls.update()
+    expect(camera.position.distanceTo(eye)).toBeLessThan(1e-9)
+    expect(controls.getDistance()).toBeCloseTo(eye.distanceTo(controls.target), 9)
+  })
+
+  it('reports the untilted distance', () => {
+    const { controls } = setup({ tilt: 0.6, heading: 0, depth: 1 })
+    controls.update()
+    expect(controls.getDistance()).toBeCloseTo(new Vector3(30, 40, 50).length(), 9)
+  })
+
+  it('reports an outside move, but not the first update or its own', () => {
+    const camera = new OrthographicCamera()
+    camera.position.set(30, 40, 50)
+    const controls = new OrbitControls(camera)
+    let moves = 0
+    tiltControls(controls, camera, { tilt: 0.6, heading: 0, depth: 1 }, () => radius, undefined, () => moves++)
+    controls.update()
+    controls.update()
+    expect(moves).toBe(0)
+    camera.position.set(0, 0, 50)
+    controls.update()
+    expect(moves).toBe(1)
   })
 
   it('takes an outside move as the new untilted pose', () => {

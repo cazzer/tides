@@ -12,8 +12,12 @@
 // the first would run off screen or cover a name, a globe, the clock or an
 // AU ring's label; faded out if none fits).
 //
-// Off in ship mode: its perspective camera would need names sized by depth,
-// and the HUD's target marker already names what the ship is pointed at.
+// Laid out in screen px: each body is projected into the view, and its name
+// sized and set off by the scene units a pixel spans at the body's depth, so
+// near and far names read the same size.
+//
+// Off in ship mode: the HUD's target marker already names what the ship is
+// pointed at.
 //
 // One useFrame places and fades all of them through refs; React renders the
 // labels once (again only if the view crosses the phone width). Their
@@ -23,10 +27,13 @@ import { useRef, type FC } from 'react'
 import { Text } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore, type CameraFocus } from '../store'
 import { positionsFor, type ScalePositions } from '../flight-scale'
 import type { DistanceScale } from '../distance-scale'
-import { CLOCK_HALF_WIDTH, CLOCK_INNER_RADIUS, labelMaterial } from '../orbit-label'
+import { targetUnitsPerPixel, type ViewSize } from '../main-view'
+import { CLOCK_HALF_WIDTH } from '../clock-size'
+import { CLOCK_INNER_RADIUS, labelMaterial } from '../orbit-label'
 import { earthAngle } from '../ephemeris'
 import { MOONS, isMoonKey, moonOffsetInto } from '../moons/moons'
 import { bodyName } from '../ship/ship-distances'
@@ -47,6 +54,7 @@ import {
   bodyRadius,
   bodyReach,
   createLabelLayout,
+  discOnScreen,
   focusBody,
   isLabelMoon,
   labelDirection,
@@ -56,7 +64,7 @@ import {
   type LabelKey,
   type ScreenDirection,
 } from './label-visibility'
-import { orthoUnitsPerPixel } from './pixel-scale'
+import { screenPointInto, screenRateInto, type ScreenPoint } from './screen-point'
 import type { SystemAidProps } from './types'
 
 type TroikaText = THREE.Mesh & {
@@ -106,22 +114,28 @@ const noRaycast = () => {}
 const CLOCK_HALF_HEIGHT = 2.4
 const CLOCK_DISCS = 4
 const CLOCK_Y = 0.5
+// The most a disc covers, px. [TUNE] With the eye just over the clock its
+// letters fill the view and stand far apart; past this, names go between
+// them rather than all giving way. About seven times their default size.
+const CLOCK_DISC_MAX_PX = 160
 
 const layout = createLabelLayout(n, AU_RINGS.length, CLOCK_DISCS)
 // Each body's scene position this frame, xyz per name.
 const bodyAt = new Float64Array(n * 3)
+// Scene units per CSS px at each body's depth.
+const bodyUpp = new Float64Array(n)
 
 const position = new THREE.Vector3()
 const right = new THREE.Vector3()
 const up = new THREE.Vector3()
-const back = new THREE.Vector3()
-const eyeAt = new THREE.Vector3()
 const anchor = new THREE.Vector3()
+const across = new THREE.Vector3()
+const other = new THREE.Vector3()
+const screen: ScreenPoint = { x: 0, y: 0, depth: 0, upp: 1 }
+const rate = { x: 0, y: 0 }
 const direction: ScreenDirection = { x: 0, y: 1 }
 const pole = new THREE.Vector3()
 const along = new THREE.Vector3()
-
-let upp = 1
 
 // Cosine between the screen direction (x, y) and a ringed planet's pole (its
 // mesh's local +Y, axisOrientation), so the name clears the rings as they
@@ -143,7 +157,7 @@ const frame: LabelFrame = {
   top: 0,
   delta: 0,
   gapPx: LABEL_GAP_PX,
-  reach: (i, x, y) => bodyReach(LABEL_KEYS[i], ringPoleAlong(LABEL_KEYS[i], x, y)) / upp,
+  reach: (i, x, y) => bodyReach(LABEL_KEYS[i], ringPoleAlong(LABEL_KEYS[i], x, y)) / bodyUpp[i],
 }
 
 function bodyPositionInto(
@@ -161,94 +175,114 @@ function bodyPositionInto(
   return out
 }
 
-// Whether body i's globe reaches into the view at all.
-function onScreen(i: number): boolean {
-  const { discX, discY, discR } = layout
-  return (
-    discX[i] + discR[i] > frame.left &&
-    discX[i] - discR[i] < frame.right &&
-    discY[i] + discR[i] > frame.bottom &&
-    discY[i] - discR[i] < frame.top
-  )
+// Where `point` lands in the view (into `screen`), and whether the near and
+// far planes let it through.
+function project(camera: THREE.PerspectiveCamera, point: THREE.Vector3, size: ViewSize): boolean {
+  screenPointInto(camera, point, size.width, size.height, screen)
+  return screen.depth >= camera.near && screen.depth <= camera.far
 }
 
-function placeClock(t: number) {
+// Screen direction of a step from scene point bodyAt[i] along `along`,
+// normalised into `direction`.
+function directionAlong(camera: THREE.PerspectiveCamera, i: number, along: THREE.Vector3, size: ViewSize) {
+  position.fromArray(bodyAt, i * 3)
+  screenRateInto(camera, position, along, size.width, size.height, rate)
+  labelDirection(rate.x, rate.y, direction)
+}
+
+// The clock's discs, each as wide as the text's height across the Sun–Earth
+// line looks from here; one behind the eye or clipped by the near plane is
+// left out.
+function placeClock(camera: THREE.PerspectiveCamera, size: ViewSize, t: number) {
   const angle = earthAngle(t)
   const length = 2 * CLOCK_HALF_WIDTH - 2 * CLOCK_HALF_HEIGHT
-  for (let k = 0; k < CLOCK_DISCS; k++) {
-    const r = CLOCK_INNER_RADIUS + CLOCK_HALF_HEIGHT + (length * k) / (CLOCK_DISCS - 1)
+  across.set(Math.sin(angle), 0, Math.cos(angle))
+  layout.blockerCount = 0
+  for (let d = 0; d < CLOCK_DISCS; d++) {
+    const r = CLOCK_INNER_RADIUS + CLOCK_HALF_HEIGHT + (length * d) / (CLOCK_DISCS - 1)
     anchor.set(r * Math.cos(angle), CLOCK_Y, -r * Math.sin(angle))
-    layout.blockerX[k] = anchor.dot(right) / upp
-    layout.blockerY[k] = anchor.dot(up) / upp
-    layout.blockerR[k] = CLOCK_HALF_HEIGHT / upp
+    if (!project(camera, anchor, size)) continue
+    const k = layout.blockerCount++
+    layout.blockerX[k] = screen.x
+    layout.blockerY[k] = screen.y
+    screenRateInto(camera, anchor, across, size.width, size.height, rate)
+    layout.blockerR[k] = Math.min(CLOCK_HALF_HEIGHT * Math.hypot(rate.x, rate.y), CLOCK_DISC_MAX_PX)
   }
-  layout.blockerCount = CLOCK_DISCS
 }
 
 // The AU rings' labels, as EclipticGrid publishes them, as obstacles; one
-// clipped by the near or far plane (see inView) is left out.
-function placeRingLabels(eye: number, near: number, far: number) {
+// clipped by the near or far plane (see inView) is left out. EclipticGrid
+// sizes each to a fixed px em at its depth, so its box is in px as published.
+function placeRingLabels(camera: THREE.PerspectiveCamera, size: ViewSize) {
   const { count, emPx, anchors, bounds } = ringLabelLayout
   layout.obstacleCount = 0
   for (let r = 0; r < count; r++) {
     if (Number.isNaN(bounds[r * 4])) continue
     anchor.fromArray(anchors, r * 3)
-    const depth = eye - anchor.dot(back)
-    if (depth < near || depth > far) continue
+    if (!project(camera, anchor, size)) continue
     const k = layout.obstacleCount++
     const minX = bounds[r * 4]
     const minY = bounds[r * 4 + 1]
     const maxX = bounds[r * 4 + 2]
     const maxY = bounds[r * 4 + 3]
-    layout.obstacleX[k] = anchor.dot(right) / upp + ((minX + maxX) / 2) * emPx
-    layout.obstacleY[k] = anchor.dot(up) / upp + ((minY + maxY) / 2) * emPx
+    layout.obstacleX[k] = screen.x + ((minX + maxX) / 2) * emPx
+    layout.obstacleY[k] = screen.y + ((minY + maxY) / 2) * emPx
     layout.obstacleHalfW[k] = ((maxX - minX) / 2) * emPx
     layout.obstacleHalfH[k] = ((maxY - minY) / 2) * emPx
   }
 }
 
+// Body i's offset from body j, scene units (into `other`).
+function offsetFrom(i: number, j: number): THREE.Vector3 {
+  return other.set(
+    bodyAt[i * 3] - bodyAt[j * 3],
+    bodyAt[i * 3 + 1] - bodyAt[j * 3 + 1],
+    bodyAt[i * 3 + 2] - bodyAt[j * 3 + 2]
+  )
+}
+
 // Module level, so the troika meshes behind the refs aren't mutated in a hook.
 function placeLabels(
   texts: readonly (TroikaText | null)[],
-  camera: THREE.OrthographicCamera,
-  heightPx: number,
+  camera: THREE.PerspectiveCamera,
+  size: ViewSize,
   t: number,
   scale: DistanceScale,
   focus: CameraFocus,
   phone: boolean,
+  viewUpp: number,
   delta: number
 ) {
-  upp = orthoUnitsPerPixel(camera.top, camera.bottom, camera.zoom, heightPx)
   const { positionAt } = positionsFor(scale)
+  // The controls may have moved the camera since it last rendered.
+  camera.updateMatrixWorld()
   // The camera's screen axes in world space (the scene's root is unrotated).
   right.setFromMatrixColumn(camera.matrixWorld, 0)
   up.setFromMatrixColumn(camera.matrixWorld, 1)
-  back.setFromMatrixColumn(camera.matrixWorld, 2)
-  eyeAt.setFromMatrixPosition(camera.matrixWorld)
-  const eye = eyeAt.dot(back)
-  frame.left = eyeAt.dot(right) / upp + camera.left / camera.zoom / upp
-  frame.right = eyeAt.dot(right) / upp + camera.right / camera.zoom / upp
-  frame.bottom = eyeAt.dot(up) / upp + camera.bottom / camera.zoom / upp
-  frame.top = eyeAt.dot(up) / upp + camera.top / camera.zoom / upp
+  // Screen px from the view's centre (screenPointInto's).
+  frame.left = -size.width / 2
+  frame.right = size.width / 2
+  frame.bottom = -size.height / 2
+  frame.top = size.height / 2
   frame.focus = LABEL_KEYS.indexOf(focusBody(focus))
   frame.delta = delta
   const shrink = phone ? PHONE_LABEL_SHRINK_PX : 0
   const { discX, discY, discR, nearness, inView, wanted, halfW, halfH, dirX, dirY } = layout
 
-  // Every body: where it is on screen, and whether the near and far planes
-  // let it through. The main view's near plane moves with the zoom
-  // (main-view.ts' planetsNear), so close in, a body behind the eye (the Sun
-  // behind Saturn, say) is clipped: it has no name and hides none.
+  // Every body: where it is on screen, the scene units a pixel spans at its
+  // depth, and whether the near and far planes let it through. One behind
+  // the eye (the Sun, close in to Saturn on its far side) has no name and
+  // hides none.
   for (let i = 0; i < n; i++) {
     bodyPositionInto(LABEL_KEYS[i], t, positionAt, position)
     position.toArray(bodyAt, i * 3)
-    discX[i] = position.dot(right) / upp
-    discY[i] = position.dot(up) / upp
+    inView[i] = project(camera, position, size) ? 1 : 0
+    discX[i] = screen.x
+    discY[i] = screen.y
+    bodyUpp[i] = screen.upp
     // Globes only: a ring covers far less than its circle unless face-on.
-    discR[i] = bodyRadius(LABEL_KEYS[i]) / upp
-    nearness[i] = position.dot(back)
-    const depth = eye - nearness[i]
-    inView[i] = depth >= camera.near && depth <= camera.far ? 1 : 0
+    discR[i] = bodyRadius(LABEL_KEYS[i]) / screen.upp
+    nearness[i] = -screen.depth
   }
 
   // Each wanted name's size and default side. A moon is named only with its
@@ -258,17 +292,19 @@ function placeLabels(
     const text = texts[i]
     const bounds = text?.textRenderInfo?.blockBounds
     const parent = PARENT_INDEX[i]
-    const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && onScreen(parent))
-    wanted[i] = text && bounds && inView[i] && parentSeen ? labelOpacity(key, upp, focus) : 0
+    const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && discOnScreen(layout, frame, parent))
+    wanted[i] = text && bounds && inView[i] && parentSeen ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
     if (!text || !bounds || wanted[i] < MIN_NAME_OPACITY) continue
-    if (parent >= 0) labelDirection(discX[i] - discX[parent], discY[i] - discY[parent], direction)
+    // Sides from the bodies' 3D offsets: what it orbits may be behind the
+    // eye, where its projection is mirrored through the view's centre.
+    if (parent >= 0) directionAlong(camera, i, offsetFrom(i, parent), size)
     else labelDirection(0, 0, direction)
     dirX[i] = direction.x
     dirY[i] = direction.y
     if (key === 'moon') {
       // Away from the Sun at the Moon, so its name never heads for the clock.
       layout.steer[i] = 1
-      labelDirection(discX[i] - discX[SUN_INDEX], discY[i] - discY[SUN_INDEX], direction)
+      directionAlong(camera, i, offsetFrom(i, SUN_INDEX), size)
       layout.awayX[i] = direction.x
       layout.awayY[i] = direction.y
     }
@@ -276,11 +312,11 @@ function placeLabels(
     halfW[i] = ((bounds[2] - bounds[0]) / 2) * fontPx
     halfH[i] = ((bounds[3] - bounds[1]) / 2) * fontPx
     text.quaternion.copy(camera.quaternion)
-    text.scale.setScalar(fontPx * upp)
+    text.scale.setScalar(fontPx * bodyUpp[i])
   }
 
-  placeRingLabels(eye, camera.near, camera.far)
-  placeClock(t)
+  placeRingLabels(camera, size)
+  placeClock(camera, size, t)
   resolveLabels(layout, frame)
 
   for (let i = 0; i < n; i++) {
@@ -291,7 +327,7 @@ function placeLabels(
     if (!text.visible) continue
     text.fillOpacity = opacity
     text.outlineOpacity = opacity
-    const distance = layout.distance[i] * upp
+    const distance = layout.distance[i] * bodyUpp[i]
     text.position
       .fromArray(bodyAt, i * 3)
       .addScaledVector(right, layout.outX[i] * distance)
@@ -307,11 +343,15 @@ function Labels({ distanceScale }: { distanceScale: DistanceScale }) {
   // A boolean, so resizing re-renders only on crossing the phone width.
   const phone = useThree((state) => state.size.width <= PHONE_VIEW_PX)
 
-  useFrame(({ camera, size }, delta) => {
+  useFrame(({ camera, controls, size }, delta) => {
     const { timestamp, cameraFocus } = useStore.getState()
-    const ortho = camera as THREE.OrthographicCamera
-    if (timestamp == null || !ortho.isOrthographicCamera) return
-    placeLabels(texts.current, ortho, size.height, timestamp, distanceScale, cameraFocus, phone, delta)
+    const perspective = camera as THREE.PerspectiveCamera
+    const orbit = controls as OrbitControlsImpl | null
+    if (timestamp == null || !perspective.isPerspectiveCamera || !orbit) return
+    // How far in the view is: the scale at the orbit target, as the ortho
+    // view's zoom was.
+    const viewUpp = targetUnitsPerPixel(orbit.getDistance(), size.height)
+    placeLabels(texts.current, perspective, size, timestamp, distanceScale, cameraFocus, phone, viewUpp, delta)
   })
 
   return (

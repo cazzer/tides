@@ -1,7 +1,12 @@
 import * as THREE from 'three'
 import { forwardRef, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { View, OrbitControls, OrthographicCamera } from '@react-three/drei'
+import {
+  View,
+  OrbitControls,
+  OrthographicCamera,
+  PerspectiveCamera,
+} from '@react-three/drei'
 import useRefs from 'react-use-refs'
 import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing'
 import { ToneMappingMode, BlendFunction } from 'postprocessing'
@@ -20,7 +25,7 @@ import { advanceClock, type Jump } from './sim-clock'
 import ViewMenu from './ViewMenu'
 import CompassButton from './CompassButton'
 import { TONE_MAPPING_EXPOSURE } from './lighting'
-import { MAIN_ZOOM, mainViewRange } from './main-view'
+import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
@@ -361,30 +366,33 @@ function SceneReadySignal({ onReady }: { onReady: () => void }) {
   return null
 }
 
+const MAIN_EYE = new THREE.Vector3(100, 80, 80)
+  .setLength(MAIN_DISTANCE)
+  .toArray()
+
+// near and far are set every frame (camera.tsx useMainNearFar).
 function MainCamera() {
   const pose = mainCameraPose()
   return (
-    <OrthographicCamera
+    <PerspectiveCamera
       makeDefault
-      position={pose?.position ?? [100, 80, 80]}
+      fov={MAIN_FOV}
+      position={pose?.position ?? MAIN_EYE}
       quaternion={pose?.quaternion}
       up={pose?.up}
-      zoom={pose?.zoom ?? MAIN_ZOOM}
-      near={0}
+      near={1}
+      far={4000}
     />
   )
 }
 
-// Inside the main view, so its zoom floor fits that view's size.
+// camera.tsx useEyeDistance sets minDistance and maxDistance. The target
+// always follows the focus, so a pan would only be undone.
 function MainControls() {
-  const showPlanets = useStore((s) => s.showPlanets)
-  const size = useThree((s) => s.size)
   return (
     <OrbitControls
       target={mainCameraPose()?.target ?? [0, 0, 0]}
-      maxDistance={80}
-      minDistance={5}
-      minZoom={mainViewRange(showPlanets, size).minZoom}
+      enablePan={false}
       makeDefault
     />
   )

@@ -7,8 +7,15 @@ import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
+import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
+import { setActiveSurfaceSources } from './surface-credits'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
+
+// How often the visible tiles are read for the credits line; it only needs to
+// notice tiles arriving and leaving.
+const CREDIT_INTERVAL_MS = 250
+const creditEye = new THREE.Vector3()
 
 export default function SurfaceTiles() {
   const camera = useThree((s) => s.camera)
@@ -22,6 +29,7 @@ export default function SurfaceTiles() {
   const holder = useRef<THREE.Group>(null)
   const surface = useRef<Tiles | null>(null)
   const errorTarget = useRef(NaN)
+  const credits = useRef<{ sources: ActiveSources; at: number } | null>(null)
 
   // Created in an effect and hung under the holder by hand (no state, so no
   // extra render), so StrictMode's mount, unmount, mount disposes the first
@@ -44,8 +52,12 @@ export default function SurfaceTiles() {
     parent.add(created.tiles.group)
     surface.current = created
     errorTarget.current = NaN
+    const sources = new ActiveSources()
+    credits.current = { sources, at: -Infinity }
     return () => {
       surface.current = null
+      credits.current = null
+      setActiveSurfaceSources([])
       parent.remove(created.tiles.group)
       created.tiles.deleteCamera(camera)
       // The library's cache refcounts throw synchronously on a broken
@@ -82,6 +94,19 @@ export default function SurfaceTiles() {
     tiles.group.updateWorldMatrix(true, false)
     tiles.update()
     current.syncCounters()
+    const now = performance.now()
+    const credit = credits.current
+    if (credit && now - credit.at >= CREDIT_INTERVAL_MS) {
+      credit.at = now
+      const seen = new Set<SurfaceSource>()
+      // The camera in the tiles' own frame (ECEF metres), for the horizon.
+      const eye = tiles.group.worldToLocal(camera.getWorldPosition(creditEye))
+      for (const tile of tiles.visibleTiles) {
+        const bounds = tileRadianBounds(tile)
+        if (bounds && tileOnNearSide(bounds, eye)) sourcesForTile(bounds).forEach((s) => seen.add(s))
+      }
+      setActiveSurfaceSources(credit.sources.update(seen, now))
+    }
   }, SURFACE_FRAME_PRIORITY)
 
   return <group ref={holder} />

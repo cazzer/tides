@@ -193,6 +193,20 @@ describe('rideWithClock', () => {
     expect(offset.distanceTo(clockViewOffset(a))).toBeLessThan(0.25)
   })
 
+  it('eases the distance by ratio, so a close-up backs out smoothly', () => {
+    const ride = freshRide()
+    leaveClock(ride)
+    const a = 0.4
+    const clock = clockAt(a)
+    const target = clock.clone()
+    const position = clock.clone().add(clockViewOffset(a).setLength(16))
+    frame(position, target, clock, ride)
+    expect(position.distanceTo(target)).toBeCloseTo(
+      16 * (CLOCK_VIEW.distance / 16) ** CLOCK_FRAMING_EASE,
+      9
+    )
+  })
+
   it('eases on the first entry when another focus came first', () => {
     const ride = freshRide()
     leaveClock(ride)

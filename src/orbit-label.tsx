@@ -5,6 +5,7 @@ import { Text } from '@react-three/drei'
 import { useCamera } from './camera'
 import { useStore } from './store'
 import { earthAngle, monthStartAngles } from './ephemeris'
+import { CLOCK_HALF_WIDTH } from './clock-size'
 
 export const MONTHS = [
   'January',
@@ -30,9 +31,6 @@ export const MONTH_SCALE = 3.5
 // Solid grey reads like the old 25%-opaque white on black, but stays visible
 // over the Sun, where translucent white blends into its bright surface.
 const MONTH_COLOR = '#404040'
-// Roughly half the clock text's width (~16.4 units at scale 2), so the camera
-// centres on the text rather than its left-anchored inner end.
-export const CLOCK_HALF_WIDTH = 8
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
 

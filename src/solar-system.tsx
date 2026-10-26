@@ -146,6 +146,7 @@ export default function SolarSystem({
       >
         <SunRenderer
           diameter={sceneRadius(1392700000)}
+          interactive={interactive}
         />
       </OrbitingBody>
       <OrbitingBody

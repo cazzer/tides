@@ -8,7 +8,7 @@ import sunFragment from '../shaders/sun/fragment.frag'
 import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
 import { CubeCamera, meshBounds } from '@react-three/drei'
-import { CORONA_MAX_ANGLE } from './corona-geometry'
+import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE } from './corona-geometry'
 import { SunGlare } from './SunGlare'
 import { useStore } from '../store'
 import { useBodySphere } from '../ship/limb-detail'
@@ -20,9 +20,11 @@ const REFLECTION_LAYER = 1
 
 interface SunRendererProps {
   diameter: number
+  /** The main view (not a panel or ship mode), whose corona reaches further. */
+  interactive?: boolean
 }
 
-export default function SunRenderer({ diameter }: SunRendererProps) {
+export default function SunRenderer({ diameter, interactive = false }: SunRendererProps) {
   // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
   const shipMode = useStore((s) => s.shipMode)
   const sphere = useBodySphere('sun', diameter, [128, 128])
@@ -64,9 +66,10 @@ export default function SunRenderer({ diameter }: SunRendererProps) {
         time: { value: 0 },
         uRadius: { value: diameter },
         uMaxAngle: { value: CORONA_MAX_ANGLE },
+        uOuter: { value: interactive ? CORONA_OUTER_MAIN : CORONA_OUTER_PERSPECTIVE },
       },
     })
-  }, [diameter])
+  }, [diameter, interactive])
 
   useEffect(() => {
     return () => {
