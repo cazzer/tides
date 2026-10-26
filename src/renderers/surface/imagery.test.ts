@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ImageOverlay } from '3d-tiles-renderer/three/plugins'
+import { inflateSync } from 'node:zlib'
 import {
+  BLANK_BLACK_FRACTION,
+  edgeBlackFraction,
   EOX_URL,
+  fallbackImageryPng,
+  FALLBACK_IMAGERY_RGB,
   fetchFirstOk,
   imageryUrl,
   imageryUrlsFor,
@@ -22,7 +27,8 @@ function tileAt(lat: number, lon: number, z: number): ImageryTile {
   return { z, x, y }
 }
 
-const response = (status: number) => new Response(status === 200 ? 'img' : null, { status })
+/** A 200 carries a tile-sized body (a blank one is a few hundred bytes). */
+const response = (status: number) => new Response(status === 200 ? new Uint8Array(8000) : null, { status })
 
 describe('imagery source per tile (tides-zmw.9.1)', () => {
   it('takes USGS over the Grand Canyon (16/25721/12355, z/y/x)', () => {
@@ -144,5 +150,135 @@ describe('SurfaceImageryOverlay (tides-zmw.9.1)', () => {
     const alps = tileAt(46.5, 8, 12)
     await overlay.fetch(imageryUrl(EOX_URL, alps), {})
     expect(calls).toEqual([imageryUrl(EOX_URL, alps)])
+  })
+})
+
+describe('imagery fallback (tides-zmw.9.2)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('is a 1x1 PNG of the day map ocean colour', () => {
+    expect(FALLBACK_IMAGERY_RGB).toEqual([25, 75, 101])
+    const png = Buffer.from(fallbackImageryPng())
+    expect(png.subarray(1, 4).toString()).toBe('PNG')
+    // IHDR: 1x1, 8-bit truecolour
+    expect([png.readUInt32BE(16), png.readUInt32BE(20), png[24], png[25]]).toEqual([1, 1, 8, 2])
+    const idat = png.indexOf('IDAT')
+    const raw = inflateSync(png.subarray(idat + 4, idat + 4 + png.readUInt32BE(idat - 4)))
+    expect(Array.from(raw)).toEqual([0, ...FALLBACK_IMAGERY_RGB]) // filter byte, then RGB
+  })
+
+  it('skips a blank tile (USGS over open sea) for the next source, but takes a blank last answer', async () => {
+    const blank = () => new Response(new Uint8Array(872), { status: 200 })
+    const calls: string[] = []
+    const res = await fetchFirstOk(['usgs', 'eox'], async (u) => (calls.push(u), u === 'usgs' ? blank() : response(200)))
+    expect(calls).toEqual(['usgs', 'eox'])
+    expect((await res.arrayBuffer()).byteLength).toBe(8000)
+    const kept = await fetchFirstOk(['usgs', 'eox'], async (u) => (u === 'usgs' ? response(200) : blank()))
+    expect((await kept.arrayBuffer()).byteLength).toBe(8000)
+    expect((await (await fetchFirstOk(['eox'], async () => blank())).arrayBuffer()).byteLength).toBe(872)
+  })
+
+  it('skips a tile the probe finds part nodata black', async () => {
+    const calls: string[] = []
+    const blackish = async () => true
+    const res = await fetchFirstOk(['usgs', 'eox'], async (u) => (calls.push(u), response(200)), blackish)
+    expect(calls).toEqual(['usgs', 'eox'])
+    expect(res.status).toBe(200)
+    // the black count: pure black reaching the edge only
+    const img = (rows: string[]) =>
+      rows.flatMap((row) => [...row].flatMap((c) => (c === '#' ? [0, 0, 0, 255] : c === '.' ? [2, 1, 0, 255] : [90, 70, 50, 255])))
+    // a nodata strip down the left edge: 4 of 16
+    expect(edgeBlackFraction(img(['#ooo', '#ooo', '#ooo', '#ooo']), 4, 4)).toBe(0.25)
+    // a shadow inside the tile, pure black but enclosed: none
+    expect(edgeBlackFraction(img(['oooo', 'o##o', 'o##o', 'oooo']), 4, 4)).toBe(0)
+    // near-black (sum <= 3) counts, and a corner patch follows its connection inward
+    expect(edgeBlackFraction(img(['..oo', '.#oo', 'oo#o', 'oooo']), 4, 4)).toBe(4 / 16)
+    expect(BLANK_BLACK_FRACTION).toBe(0.002)
+  })
+
+  it('cancels the body of an answer it skips', async () => {
+    const skipped = new Response('Not Found', { status: 404 })
+    const cancel = vi.spyOn(skipped.body!, 'cancel')
+    await fetchFirstOk(['usgs', 'eox'], async (u) => (u === 'usgs' ? skipped : response(200)))
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers with the fallback when every source fails or the network does, and counts it', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    const canyon = imageryUrl(EOX_URL, { z: 16, y: 25721, x: 12355 })
+    const last = new Response('gone', { status: 500 })
+    const cancel = vi.spyOn(last.body!, 'cancel')
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async (url: string) =>
+      url.includes('nationalmap') ? response(404) : last
+    )
+    const res = await overlay.fetch(canyon, {})
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/png')
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual(Array.from(fallbackImageryPng()))
+    expect(cancel).toHaveBeenCalled()
+    expect(overlay.fallbacks).toBe(1)
+
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    expect((await overlay.fetch(canyon, {})).status).toBe(200)
+    expect(overlay.fallbacks).toBe(2)
+  })
+
+  it('still ends at an abort, and passes an ok answer through', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    const alps = imageryUrl(EOX_URL, tileAt(46.5, 8, 12))
+    const abort = new DOMException('gone', 'AbortError')
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockRejectedValue(abort)
+    await expect(overlay.fetch(alps, {})).rejects.toBe(abort)
+    const ok = response(200)
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockResolvedValue(ok)
+    expect(await overlay.fetch(alps, {})).toBe(ok)
+    expect(overlay.fallbacks).toBe(0)
+  })
+})
+
+describe('imagery retry (tides-zmw.9.2 review)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('retries a transient failure before falling back, so a blip recovers to real imagery', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    const alps = imageryUrl(EOX_URL, tileAt(46.5, 8, 12))
+    let n = 0
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async () => {
+      n++
+      if (n === 1) return new Response('busy', { status: 503 })
+      if (n === 2) throw new TypeError('Failed to fetch')
+      return response(200)
+    })
+    const res = await overlay.fetch(alps, {})
+    expect(n).toBe(3)
+    expect((await res.arrayBuffer()).byteLength).toBe(8000)
+    expect(overlay.fallbacks).toBe(0)
+  })
+})
+
+describe('which source served a US tile (tides-zmw.9.2)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('remembers a US tile EOX answered for, and forgets it once USGS answers', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    const sea = { z: 11, y: 801, x: 326 }
+    let usgs = 404
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async (url: string) =>
+      response(url.includes('nationalmap') ? usgs : 200)
+    )
+    expect(insideUsgsCoverage(sea)).toBe(true)
+    await overlay.fetch(imageryUrl(EOX_URL, sea), {})
+    expect(overlay.servedByEox(sea)).toBe(true)
+    usgs = 200
+    await overlay.fetch(imageryUrl(EOX_URL, sea), {})
+    expect(overlay.servedByEox(sea)).toBe(false)
+    // outside the boxes EOX is the only source, not a stand-in
+    const alps = tileAt(46.5, 8, 12)
+    await overlay.fetch(imageryUrl(EOX_URL, alps), {})
+    expect(overlay.servedByEox(alps)).toBe(false)
   })
 })

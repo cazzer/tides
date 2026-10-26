@@ -31,6 +31,17 @@ describe('coldWork', () => {
     expect(coldWork(scene, warmed, byMaterial)).toEqual([])
   })
 
+  test('skips an object marked warmup false, and everything under it (tides-zmw.9.2)', () => {
+    const tile = new THREE.Mesh(undefined, new THREE.MeshBasicMaterial({ map: loaded() }))
+    const tiles = new THREE.Group()
+    tiles.userData.warmup = false
+    tiles.add(new THREE.Group().add(tile))
+    const planet = new THREE.Mesh(undefined, new THREE.MeshBasicMaterial())
+    const scene = new THREE.Scene().add(tiles, planet)
+
+    expect(coldWork(scene, createWarmed(), byMaterial)).toEqual([{ object: planet }])
+  })
+
   test('lists an object once however many of its materials are cold', () => {
     const mesh = new THREE.Mesh(undefined, [new THREE.MeshBasicMaterial(), new THREE.MeshBasicMaterial()])
     const scene = new THREE.Scene().add(mesh)

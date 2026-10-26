@@ -10,9 +10,9 @@
 // (tides-zmw.9.7) hands the ground over from the globe and removes the flag.
 //
 // High tier only: the tiles stream tens of MB of textures and meshes a phone
-// budget can't spare, and iOS lacks the linear-filtered float textures the
-// terrain's elevation maps need (OES_texture_float_linear; SurfaceTiles also
-// checks the extension itself until tides-zmw.9.2 converts them).
+// budget can't spare. iPads report the high tier; there, without linear
+// filtering of float textures (OES_texture_float_linear), the elevation maps
+// are nearest-filtered (tides-zmw.9.2).
 import { isLowQuality } from './quality'
 
 export function parseSurface(search: string): boolean {
