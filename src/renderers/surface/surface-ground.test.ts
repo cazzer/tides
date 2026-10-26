@@ -264,8 +264,9 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     const t = await lib.tile(1205, 3232, 13, () => 100)
     const sampler = createSurfaceGround(tilesOf([t], []))
     const [, s, e, n] = t.tile.boundingVolume.region
-    // At the east edge, whose vertices read into the border.
-    const at = () => sampler.maxElevation((s + n) / 2, e - 1e-9, 1)!.metres
+    // At the east edge, whose vertices read into the border (a window past
+    // ANTICIPATE_MAX_M: the vertex heights alone, which are cached).
+    const at = () => sampler.maxElevation((s + n) / 2, e - 1e-9, 2 * ANTICIPATE_MAX_M)!.metres
     expect(at()).toBeCloseTo(100, 6)
     // GridCache.fillBorder: the neighbour's edge copied into the border column, then needsUpdate.
     const map = (t.mesh.material as THREE.MeshStandardMaterial).displacementMap!

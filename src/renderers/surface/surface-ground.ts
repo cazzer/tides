@@ -10,8 +10,12 @@
 // metres; its image keeps the Float32Array) read at the vertex's uv, times
 // the live terrain scale (surface-scale.ts). Between vertices the mesh is
 // flat triangles, which stand no higher than the cell's highest corner (and
-// their chords dip under the sphere), so the highest vertex of every cell a
+// their chords dip under the sphere), so the highest corner of every cell a
 // window touches bounds the mesh across it, whichever way the cell is split.
+// (Tighter, the triangles under the window alone, read lower over a coarse
+// tile's kilometre cells, but a finer tile fading in then rises further past
+// the clearance's give: headless arrival at the gorge snapped the ship 520 m
+// against 0.2 m with the corners.)
 //
 // Not sampleCartographicElevation or the library's raycast: a point read of
 // the finest grid (2.4-10 m texels) sits tens of metres under the mesh's
@@ -32,7 +36,7 @@
 // replaced by children whose finer meshes read the same grid (or a finer
 // one), and stand higher than its own mesh on narrow ridges. For windows up
 // to ANTICIPATE_MAX_M the floor also takes the highest grid texel under the
-// window's cells, which no finer mesh read from that grid can exceed: such
+// window, which no finer mesh read from that grid can exceed: such
 // a child fading in then no longer pushes the ship up past the clearance's
 // give (a snap), the floor lowering smoothly once it has instead.
 //
@@ -63,7 +67,7 @@ const EDGE_EPS = 1e-7
 const EXACT_COVER_MAX = 16
 const COVER_GRID = 16
 /** The widest window (metres) that also takes the grid's texels under it (see the header). */
-export const ANTICIPATE_MAX_M = 200
+export const ANTICIPATE_MAX_M = 50
 /** The terrain tree's deepest level (createSurfaceTiles: Mapterhorn's z16 grids, a level past them). */
 export const SURFACE_TREE_DEEPEST = 17
 const NEAREST_FILTER = 1003 // THREE.NearestFilter
@@ -89,8 +93,6 @@ export interface TileGround {
   /** Each column's and row's texture coordinate into the grid. */
   colU: Float64Array
   rowV: Float64Array
-  /** Each cell's highest grid texel, filled as queries need them (NaN until then). */
-  texels: Float32Array
 }
 
 /** The mesh in a tile's scene carrying the elevation grid. */
@@ -206,8 +208,7 @@ export function buildTileGround(scene: THREE.Object3D): TileGround | null {
       blocks[bi * BLOCKS + bj] = top
     }
   }
-  const texels = new Float32Array(SEGMENTS * SEGMENTS).fill(NaN)
-  return { rowLat, colLon, heights, blocks, max, image, version: sourceVersion(map), colU, rowV, texels }
+  return { rowLat, colLon, heights, blocks, max, image, version: sourceVersion(map), colU, rowV }
 }
 
 /** Whether `scene`'s grid has changed since `ground` read it (stitching). */
@@ -245,40 +246,75 @@ function vertexRange(a: Float64Array, shift: number, lo: number, hi: number, out
 const _rows: [number, number] = [0, 0]
 const _cols: [number, number] = [0, 0]
 
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
+
 /**
- * The highest vertex of `ground`'s cells that meet `win`, whose longitudes
- * are `ground`'s plus `shift`; -Infinity when none does.
+ * The highest corner of `ground`'s cells that meet `win` (its longitudes
+ * plus `shift`; blocks of cells inside it by the block maxima), which bounds
+ * the mesh there whichever way the cells are split. With `anticipate`, also
+ * the highest grid texel under the window (see the header). -Infinity when
+ * no cell meets it.
  */
 export function tileGroundMax(ground: TileGround, win: Window, shift = 0, anticipate = false): number {
   const [r0, r1] = vertexRange(ground.rowLat, 0, win.south, win.north, _rows)
   if (r0 > r1) return -Infinity
   const [c0, c1] = vertexRange(ground.colLon, shift, win.west, win.east, _cols)
   if (c0 > c1) return -Infinity
-  const { heights, blocks } = ground
-  let top = -Infinity
-  if (anticipate) {
-    const { texels, image, colU, rowV } = ground
-    for (let r = r0; r < r1; r++) {
-      for (let c = c0; c < c1; c++) {
-        const k = r * SEGMENTS + c
-        if (Number.isNaN(texels[k])) texels[k] = gridSpanMax(image, colU[c], colU[c + 1], rowV[r], rowV[r + 1])
-        top = Math.max(top, texels[k])
-      }
-    }
+  if (r0 === 0 && c0 === 0 && r1 === SEGMENTS && c1 === SEGMENTS && !anticipate) {
+    // The window may still cut the edge cells; their corners bound them.
+    const { rowLat, colLon } = ground
+    const inside =
+      Math.min(rowLat[0], rowLat[SEGMENTS]) >= win.south &&
+      Math.max(rowLat[0], rowLat[SEGMENTS]) <= win.north &&
+      colLon[0] + shift >= win.west &&
+      colLon[SEGMENTS] + shift <= win.east
+    if (inside) return ground.max
   }
-  if (r0 === 0 && c0 === 0 && r1 === SEGMENTS && c1 === SEGMENTS) return Math.max(top, ground.max)
-  for (let bi = Math.floor(r0 / BLOCK); bi < BLOCKS && bi * BLOCK <= r1; bi++) {
+  const { heights, blocks, rowLat, colLon, image, colU, rowV } = ground
+  let top = -Infinity
+  const rowIn = (r: number) => Math.min(rowLat[r], rowLat[r + 1]) >= win.south && Math.max(rowLat[r], rowLat[r + 1]) <= win.north
+  const colIn = (c: number) => colLon[c] + shift >= win.west && colLon[c + 1] + shift <= win.east
+  for (let bi = Math.floor(r0 / BLOCK); bi < BLOCKS && bi * BLOCK < r1; bi++) {
     const br0 = Math.max(r0, bi * BLOCK)
-    const br1 = Math.min(r1, (bi + 1) * BLOCK)
-    for (let bj = Math.floor(c0 / BLOCK); bj < BLOCKS && bj * BLOCK <= c1; bj++) {
+    const br1 = Math.min(r1, (bi + 1) * BLOCK) // cells br0 .. br1 - 1
+    for (let bj = Math.floor(c0 / BLOCK); bj < BLOCKS && bj * BLOCK < c1; bj++) {
       const bc0 = Math.max(c0, bj * BLOCK)
       const bc1 = Math.min(c1, (bj + 1) * BLOCK)
-      if (br0 === bi * BLOCK && br1 === (bi + 1) * BLOCK && bc0 === bj * BLOCK && bc1 === (bj + 1) * BLOCK) {
+      // A whole block inside the window: its maximum.
+      if (
+        !anticipate &&
+        br0 === bi * BLOCK &&
+        br1 === (bi + 1) * BLOCK &&
+        bc0 === bj * BLOCK &&
+        bc1 === (bj + 1) * BLOCK &&
+        rowIn(br0) &&
+        rowIn(br1 - 1) &&
+        colIn(bc0) &&
+        colIn(bc1 - 1)
+      ) {
         top = Math.max(top, blocks[bi * BLOCKS + bj])
         continue
       }
-      for (let r = br0; r <= br1; r++) {
-        for (let c = bc0; c <= bc1; c++) top = Math.max(top, heights[r * TILE_VERTICES + c])
+      for (let r = br0; r < br1; r++) {
+        const ya = clamp01((win.south - rowLat[r]) / (rowLat[r + 1] - rowLat[r]))
+        const yb = clamp01((win.north - rowLat[r]) / (rowLat[r + 1] - rowLat[r]))
+        const y0 = Math.min(ya, yb)
+        const y1 = Math.max(ya, yb)
+        for (let c = bc0; c < bc1; c++) {
+          const span = colLon[c + 1] - colLon[c]
+          const x0 = clamp01((win.west - (colLon[c] + shift)) / span)
+          const x1 = clamp01((win.east - (colLon[c] + shift)) / span)
+          const h00 = heights[r * TILE_VERTICES + c]
+          const h01 = heights[r * TILE_VERTICES + c + 1]
+          const h10 = heights[(r + 1) * TILE_VERTICES + c]
+          const h11 = heights[(r + 1) * TILE_VERTICES + c + 1]
+          top = Math.max(top, h00, h01, h10, h11)
+          if (anticipate) {
+            const du = colU[c + 1] - colU[c]
+            const dv = rowV[r + 1] - rowV[r]
+            top = Math.max(top, gridSpanMax(image, colU[c] + x0 * du, colU[c] + x1 * du, rowV[r] + y0 * dv, rowV[r] + y1 * dv))
+          }
+        }
       }
     }
   }
