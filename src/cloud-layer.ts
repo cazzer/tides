@@ -368,6 +368,44 @@ export function marchCrossing(
   return { at, until, side, depth: side ? null : 0 }
 }
 
+/**
+ * Where within a step the march from inside meets a top it went down
+ * through (marchCrossing() with side false; cloudShaders.ts, after the
+ * march, tides-ndh), pinned to the field rather than to the field taken
+ * linear over the step, which lands wherever the steps fall: from `prev`
+ * (over the top) to `next` (at or under it), each of `iterations` reads
+ * (`sampleAt`, of a share of the step) halves the stretch where the ray's
+ * height over the top changes sign, and the crossing is solved linearly on
+ * the last; within 2^-iterations of a step of where the ray meets the top.
+ * No further than `until`, where the step has the ray leave the cloud. As a
+ * share of the step.
+ */
+export function refineTopCrossing(
+  prev: MarchSample,
+  next: MarchSample,
+  sampleAt: (w: number) => MarchSample,
+  iterations: number,
+  until = 1
+): number {
+  let lo = 0
+  let hi = 1
+  let gLo = prev.alt - prev.top
+  let gHi = next.alt - next.top
+  for (let k = 0; k < iterations; k++) {
+    const mid = (lo + hi) / 2
+    const m = sampleAt(mid)
+    const g = m.alt - m.top
+    if (g <= 0) {
+      hi = mid
+      gHi = g
+    } else {
+      lo = mid
+      gLo = g
+    }
+  }
+  return Math.min(lo + ((hi - lo) * gLo) / (gLo - gHi), until)
+}
+
 export type Vec3 = [number, number, number]
 
 /**
@@ -435,17 +473,25 @@ export function marchSpanFromEye(
 /**
  * Where along the ray the march from inside reads (cloudShaders.ts'
  * FLIP_SIDED branch, without the steps the cloud ceiling lets it leave out):
- * its origin, then steps of `step` from there, the last cut short at its end
- * (tides-16z). At least three steps over the span, and no more than
- * `maxSteps`. From the eye, with no near plane in them (tides-tvr.1), a
+ * its origin, then steps of `step` from there, `phase` of a step short
+ * (vMarchPhase, tides-ndh: uMarchPhase, moved on with the eye in flight,
+ * times marchPhaseShare() of the fog at the eye), the last cut
+ * short at its end (tides-16z). At least three steps over the span, and no
+ * more than `maxSteps`, but for one more where the phase pushes the last
+ * past them. From the eye, with no near plane in them (tides-tvr.1), a
  * ray's steps, the first too, hold still as the camera turns about it.
  */
-export function marchSteps({ origin, end }: MarchSpan, step: number, maxSteps: number): number[] {
+export function marchSteps(
+  { origin, end }: MarchSpan,
+  step: number,
+  maxSteps: number,
+  phase = 0
+): number[] {
   const span = end - origin
   const ds = Math.max(Math.min(step, span / 3), span / maxSteps)
-  const steps = Math.min(Math.max(Math.ceil(span / ds - 1e-3), 1), maxSteps)
+  const steps = Math.min(Math.max(Math.ceil(span / ds + phase - 1e-3), 1), maxSteps + 1)
   const at = [origin]
-  for (let i = 1; i <= steps; i++) at.push(Math.min(origin + ds * i, end))
+  for (let i = 1; i <= steps; i++) at.push(Math.min(origin + ds * (i - phase), end))
   return at
 }
 
