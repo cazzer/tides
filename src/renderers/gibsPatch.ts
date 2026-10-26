@@ -232,6 +232,11 @@ groundDetailFineTexel = groundDetailTexel * float(textureSize(map, 0).x) / ${f(G
 
 // Before the chunk by default: the pole smoothing replaces map_fragment
 // outright, and the ground detail's texel follows specularmap_fragment.
+/** The patch's GLSL for the streamed tiles to reuse by text (tides-zmw.9.16):
+ * fragmentHead(side) after common, albedoBody before color_fragment,
+ * detailBody before normal_fragment_begin. */
+export const GIBS_GLSL = { fragmentHead, albedoBody: ALBEDO_BODY, detailBody: DETAIL_BODY }
+
 function inject(source: string, chunk: string, code: string, where: 'before' | 'after' = 'before'): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
@@ -262,6 +267,8 @@ export function createGibsPatch(side: number): GibsPatch {
       material: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
       update() {},
       release() {},
+      uniforms: {},
+      side: 0,
     }
   }
   const stream = createGibsStream({
@@ -294,6 +301,8 @@ export function createGibsPatch(side: number): GibsPatch {
       },
       customProgramCacheKey: () => `gibs-patch-${side}`,
     },
+    uniforms,
+    side,
     update: stream.update,
     release() {
       stream.dispose()

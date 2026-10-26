@@ -29,18 +29,20 @@ const WHAT = 'tile eclipse'
 // The globe's heads without its varying: eclipsePoint() on the ground's
 // world rotation, then the shading's uniforms and functions.
 const FRAGMENT_HEAD = `${renameInSnippet(
-  renameInSnippet(ECLIPSE_GLSL.vertexHead, 'varying vec3 vEclipsePoint;', '', WHAT),
+  renameInSnippet(ECLIPSE_GLSL.vertexHead, 'varying vec3 vEclipsePoint;', '', WHAT, 1),
   'mat3(modelMatrix) * eclipseP / length(modelMatrix[0].xyz)',
   'surfaceWorldFromGround() * eclipseP',
-  WHAT
+  WHAT,
+  1
 )}
-${renameInSnippet(ECLIPSE_GLSL.fragmentHead, 'varying vec3 vEclipsePoint;', '', WHAT)}`
+${renameInSnippet(ECLIPSE_GLSL.fragmentHead, 'varying vec3 vEclipsePoint;', '', WHAT, 1)}`
 
 const FRAGMENT_LIGHT = renameInSnippet(
   ECLIPSE_GLSL.fragmentLight,
   'eclipseSunlight(vEclipsePoint)',
   'eclipseSunlight(eclipsePoint(surfaceUp))',
-  WHAT
+  WHAT,
+  1
 )
 
 /** The adapter's GLSL (the test checks it against the globe's). */

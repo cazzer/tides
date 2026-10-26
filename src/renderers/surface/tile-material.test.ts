@@ -1,77 +1,32 @@
 // The streamed tiles' material composer (tides-zmw.9.16), checked on the
-// library's own tile material and geometry and the globe's own patches.
+// library's own tile material and geometry. Structural only: each feature
+// pins its own GLSL in tile-<feature>.test.ts, so the beads that fill the
+// stubs don't meet here.
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
-import { TerrainLambertMaterial } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/TerrainLambertMaterial.js'
 import { SkirtedPlaneGeometry } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/SkirtedPlaneGeometry.js'
 import { wrapFadeMaterial } from '3d-tiles-renderer/src/three/plugins/fade/wrapFadeMaterial.js'
 import { RELIEF } from '../../relief'
 import { terrainScaleUniform } from '../../terrain-scale'
-import { createEclipseShadow, ECLIPSE_GLSL } from '../eclipseShadow'
-import { createGroundHaze } from '../groundHaze'
-import { applySurfaceFrame, ecefToEarthLocal, SURFACE_SCALE, surfaceEcef } from './surface-frame'
+import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS, SURFACE_SCALE } from './surface-frame'
 import type { GlobeLink } from './surface-link'
 import { SURFACE_STENCIL_REF, SURFACE_VERTEX_COUNT } from './surface-scale'
-import { TILE_ECLIPSE_GLSL } from './tile-eclipse'
 import { TILE_FEATURES } from './tile-features'
 import {
   createTileComposer,
   createTileMaterialPlugin,
   GLOBE_SHININESS,
   GLOBE_SPECULAR,
+  renameInSnippet,
   SURFACE_ANCHORS,
   SURFACE_GROUND_FROM_ECEF,
   surfaceGlobeUv,
+  surfaceGlobeUvDelta,
   surfaceInject,
   TerrainPhongMaterial,
   type TileAdapter,
 } from './tile-material'
-
-/** What three hands onBeforeCompile for a Phong material (chunks unresolved). */
-function phongShader(): THREE.WebGLProgramParametersWithUniforms {
-  return {
-    vertexShader: THREE.ShaderLib.phong.vertexShader,
-    fragmentShader: THREE.ShaderLib.phong.fragmentShader,
-    uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.phong.uniforms),
-  } as unknown as THREE.WebGLProgramParametersWithUniforms
-}
-
-const renderer = {} as THREE.WebGLRenderer
-
-function compiled(material: THREE.Material) {
-  const shader = phongShader()
-  material.onBeforeCompile(shader, renderer)
-  return shader
-}
-
-/** A link with the globe's real haze and eclipse; the rest placeholders. */
-function fakeLink(): GlobeLink {
-  const sunDir = { value: new THREE.Vector3(1, 0, 0) }
-  const texture = new THREE.Texture()
-  return {
-    haze: createGroundHaze(sunDir, 2.95, false),
-    sunDir,
-    clouds: { uniforms: {} as GlobeLink['clouds']['uniforms'], flat: false },
-    eclipse: createEclipseShadow('earth').uniforms,
-    nightFlight: null,
-    gibs: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
-    gibsNight: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
-    maps: { day: texture, specular: texture, night: texture },
-    horizon: { map: { value: new THREE.DataArrayTexture() }, code: { value: new THREE.Vector2() } },
-    seaLevel: 2.95,
-  }
-}
-
-function tileMesh(geometry: THREE.BufferGeometry = new THREE.BufferGeometry()) {
-  const lambert = new TerrainLambertMaterial()
-  const grid = new THREE.DataTexture(new Float32Array(4), 2, 2, THREE.RedFormat, THREE.FloatType)
-  lambert.map = new THREE.Texture()
-  lambert.displacementMap = grid
-  lambert.bumpMap = grid
-  lambert.displacementScale = RELIEF
-  lambert.bumpScale = RELIEF
-  return new THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>(geometry, lambert)
-}
+import { compiled, fakeLink, phongShader, tileMesh } from './tile-test-fixtures'
 
 describe('the tiles\' frame (tides-zmw.9.16)', () => {
   it('turns ECEF into the ground mesh\'s frame as the tiles\' group does', () => {
@@ -108,11 +63,44 @@ describe('the tiles\' frame (tides-zmw.9.16)', () => {
       'return vec2(0.5 + atan(-up.z, up.x) * RECIPROCAL_PI2, 0.5 + asin(clamp(up.y, -1.0, 1.0)) * RECIPROCAL_PI);'
     )
   })
+
+  it('takes the map\'s derivatives from a change of direction, smooth across the antimeridian', () => {
+    const d = new THREE.Vector2()
+    for (const [lat, lon] of [[36.1, -112.1], [-60, 179.9999], [10, -179.9999], [0, 0], [85, 40]]) {
+      const la = THREE.MathUtils.degToRad(lat)
+      const lo = THREE.MathUtils.degToRad(lon)
+      // Lon 0 at +X, east towards -Z (SphereGeometry's frame).
+      const up = new THREE.Vector3(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo))
+      const step = new THREE.Vector3(3e-7, -2e-7, 5e-7)
+      step.addScaledVector(up, -step.dot(up)) // along the sphere
+      const a = surfaceGlobeUv(up)
+      const b = surfaceGlobeUv(up.clone().add(step))
+      const du = b.x - a.x
+      surfaceGlobeUvDelta(up, step, d)
+      expect(d.x).toBeCloseTo(du - Math.round(du), 9) // no jump at the seam
+      expect(d.y).toBeCloseTo(b.y - a.y, 9)
+    }
+  })
+
+  it('warns that surfaceGround is quantised: float32 steps ~0.5 m at Earth\'s radius', () => {
+    const radius = SURFACE_ELLIPSOID_RADIUS * SURFACE_SCALE // scene units
+    const f32 = new Float32Array([radius])
+    const bits = new Uint32Array(f32.buffer)
+    bits[0] += 1
+    const step = (f32[0] - Math.fround(radius)) / SURFACE_SCALE // metres
+    expect(step).toBeGreaterThan(0.4)
+    expect(step).toBeLessThan(0.6)
+    // So the base takes the map's derivatives from the ray's, never the ground's.
+    const f = compiled(composerMaterial(fakeLink(), [])).fragmentShader
+    expect(f).toContain('vec3 surfaceRayDx = dFdx(surfaceRay);')
+    expect(f).not.toContain('dFdx(surfaceGround)')
+    expect(f).not.toContain('dFdx(surfaceGlobeUv)')
+  })
 })
 
-function composerMaterial(link: GlobeLink | null = fakeLink()) {
+function composerMaterial(link: GlobeLink | null = fakeLink(), slots = TILE_FEATURES) {
   const mesh = tileMesh()
-  createTileComposer(link, TILE_FEATURES).prepare(mesh, {})
+  createTileComposer(link, slots).prepare(mesh, {})
   return mesh.material as TerrainPhongMaterial
 }
 
@@ -146,6 +134,42 @@ describe('the Phong swap (tides-zmw.9.16)', () => {
     // No specular after three's chunk sets its strength.
     expect(shader.fragmentShader).toContain('#include <specularmap_fragment>\n\nspecularStrength = 0.0;\n' + SURFACE_ANCHORS.specular)
     expect(shader.uniforms.uTerrainScale).toBe(terrainScaleUniform)
+  })
+})
+
+describe('the Phong swap\'s edges (tides-zmw.9.16)', () => {
+  it('clones (three makes the copy with no constructor argument)', () => {
+    const phong = composerMaterial(null, [])
+    const copy = phong.clone()
+    expect(copy).toBeInstanceOf(TerrainPhongMaterial)
+    expect(copy.map).toBe(phong.map)
+    expect(copy.specular.getHex()).toBe(GLOBE_SPECULAR)
+  })
+
+  it('leaves a tile material that isn\'t the plugin\'s Lambert as it came', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const basic = new THREE.MeshBasicMaterial()
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), basic)
+    createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
+    expect(mesh.material).toBe(basic)
+    expect(basic.stencilWrite).toBe(false)
+    warn.mockRestore()
+  })
+})
+
+describe('renameInSnippet (tides-zmw.9.16)', () => {
+  const snippet = 'vec2 a = vMapUv; vec2 b = vMapUv * 2.0; float c = vMapUvX; d = fract(vMapUv.x);'
+  it('renames every whole-word match, literally', () => {
+    expect(renameInSnippet(snippet, 'vMapUv', 'surfaceGlobeUv')).toBe(
+      'vec2 a = surfaceGlobeUv; vec2 b = surfaceGlobeUv * 2.0; float c = vMapUvX; d = fract(surfaceGlobeUv.x);'
+    )
+    expect(renameInSnippet('x = vMapUv;', 'vMapUv', '$&$1')).toBe('x = $&$1;')
+    expect(renameInSnippet('m(a) * (b) + m(a)', 'm(a)', 'n')).toBe('n * (b) + n')
+  })
+  it('throws on none, or on a count other than expected', () => {
+    expect(() => renameInSnippet(snippet, 'vNope', 'x')).toThrow(/no vNope/)
+    expect(() => renameInSnippet(snippet, 'vMapUv', 'x', 'test', 2)).toThrow(/3 of vMapUv, expected 2/)
+    expect(renameInSnippet(snippet, 'vMapUv', 'x', 'test', 3)).toContain('vMapUvX')
   })
 })
 
@@ -186,15 +210,36 @@ describe('the composer (tides-zmw.9.16)', () => {
     expect(f.indexOf('// feature c')).toBeLessThan(f.indexOf('// feature a'))
   })
 
-  it('lays the eclipse and the haze on the real link, the rest stubs', () => {
-    const composer = createTileComposer(fakeLink(), TILE_FEATURES)
-    expect(composer.features).toEqual(['eclipse', 'haze'])
-    expect(composer.key).toBe('surface-tile:surface-base+eclipse-surface+ground-haze-surface')
+  it('lays each slot that returns a patch, in order, under the composed key', () => {
+    const link = fakeLink()
+    const composer = createTileComposer(link, TILE_FEATURES)
+    const laid = TILE_FEATURES.flatMap(({ name, adapter }) => {
+      const feature = adapter(link)
+      return feature ? [{ name, key: feature.patch.customProgramCacheKey() }] : []
+    })
+    expect(composer.features).toEqual(laid.map(({ name }) => name))
+    expect(composer.key).toBe(['surface-tile:surface-base', ...laid.map(({ key }) => key)].join('+'))
+    for (const { key } of laid) expect(key, 'a feature needs a cache key of its own').not.toBe('')
     expect(createTileComposer(null, TILE_FEATURES).key).toBe('surface-tile:surface-base')
+    // Every slot's patch compiles together on a tile.
+    expect(() => compiled(composerMaterial(link))).not.toThrow()
+  })
+
+  it('keeps the globe\'s textures out of the tiles\' material slots (TilesRenderer disposes those with the tile)', () => {
+    const mesh = tileMesh()
+    const lambert = mesh.material as THREE.MeshLambertMaterial
+    const own = new Set([lambert.map, lambert.displacementMap, lambert.bumpMap])
+    createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
+    const material = mesh.material as unknown as Record<string, unknown>
+    compiled(mesh.material as THREE.Material)
+    for (const key in material) {
+      const value = material[key] as { isTexture?: boolean } | null
+      if (value?.isTexture) expect(own.has(value as THREE.Texture), key).toBe(true)
+    }
   })
 
   it('declares each base anchor once and every name before its first use', () => {
-    const shader = compiled(composerMaterial())
+    const shader = compiled(composerMaterial(fakeLink(), []))
     for (const [stage, anchors] of [
       [shader.vertexShader, ['vertexHead', 'vertexBody']],
       [shader.fragmentShader, ['fragmentHead', 'fragmentBody', 'specular']],
@@ -203,23 +248,24 @@ describe('the composer (tides-zmw.9.16)', () => {
     }
     const v = shader.vertexShader
     expect(v.indexOf('#include <project_vertex>')).toBeLessThan(v.indexOf('surfaceUp = SURFACE_GROUND_FROM_ECEF * objectNormal;'))
+    expect(v.indexOf('surfaceUp = SURFACE_GROUND_FROM_ECEF * objectNormal;')).toBeLessThan(v.indexOf(SURFACE_ANCHORS.vertexBody))
     // The base adds no varyings (each costs a write per vertex).
-    expect(v.replace(THREE.ShaderLib.phong.vertexShader, '')).not.toMatch(/varying vec[234] (vSurface|vEclipse)/)
+    expect(v.split('varying ').length).toBe(THREE.ShaderLib.phong.vertexShader.split('varying ').length)
     const f = shader.fragmentShader
-    expect(f).not.toContain('vEclipsePoint')
     expect(f.indexOf('surfaceRay = uSurfaceViewToGround * -vViewPosition;')).toBeLessThan(f.indexOf('surfaceUp = normalize(surfaceGround);'))
-    expect(f.indexOf('mat3 surfaceWorldFromGround()')).toBeLessThan(f.indexOf('surfaceWorldFromGround() * eclipseP'))
-    expect(f.indexOf('vec2 eclipseSunlight(vec3 point)')).toBeLessThan(f.indexOf('void main'))
-    expect(f.indexOf('uniform float uEclipseActive;')).toBeLessThan(f.indexOf('void main'))
-    expect(f.indexOf('surfaceUp = normalize(surfaceGround);')).toBeLessThan(f.indexOf('eclipseSunlight(eclipsePoint(surfaceUp))'))
-    expect(f.indexOf('#include <lights_fragment_end>')).toBeLessThan(f.indexOf('reflectedLight.directSpecular *= eclipse.x;'))
+    expect(f.indexOf('surfaceGlobeDy = surfaceGlobeUvDelta(')).toBeLessThan(f.indexOf(SURFACE_ANCHORS.fragmentBody))
+    expect(f.indexOf('mat3 surfaceWorldFromGround()')).toBeLessThan(f.indexOf(SURFACE_ANCHORS.fragmentHead))
+    expect(f.indexOf(SURFACE_ANCHORS.fragmentHead)).toBeLessThan(f.indexOf('void main'))
     expect(f.indexOf('#include <normal_fragment_begin>\n\nsurfaceGeomNormal = normal;')).toBeGreaterThan(0)
-    // The haze's text as tides-zmw.9.7 laid it, on the same frame uniforms.
-    expect(f).toContain('vec4 haze = groundHaze(vGroundHazeEye, vGroundHazeRay, cover);')
-    expect(v).toContain('vGroundHazeRay = uGroundHazeViewToLocal * mvPosition.xyz;')
-    expect(shader.uniforms.uSurfaceViewToGround).toBe(shader.uniforms.uGroundHazeViewToLocal)
-    expect(shader.uniforms.uEclipseActive).toBeDefined()
-    expect(shader.uniforms.uSurfaceEyeGround).toBe(shader.uniforms.uGroundHazeEyeLocal)
+    expect(shader.uniforms.uSurfaceViewToGround).toBeDefined()
+    expect(shader.uniforms.uSurfaceEyeGround).toBeDefined()
+  })
+
+  it('reads its frame from the haze\'s uniform objects', () => {
+    const link = fakeLink()
+    const shader = compiled(composerMaterial(link, []))
+    expect(shader.uniforms.uSurfaceViewToGround).toBe(link.haze.frame.uGroundHazeViewToLocal)
+    expect(shader.uniforms.uSurfaceEyeGround).toBe(link.haze.frame.uGroundHazeEyeLocal)
   })
 
   it('binds per-tile uniforms through onTile, the shared ones for every tile', () => {
@@ -250,6 +296,44 @@ describe('the composer (tides-zmw.9.16)', () => {
     expect(sa.uniforms.uSkirtRange).not.toBe(sb.uniforms.uSkirtRange)
   })
 
+  it('frees what onTile made once, when the tile unloads or its parse aborts', () => {
+    const made: THREE.Texture[] = []
+    const freed: string[] = []
+    const composer = createTileComposer(fakeLink(), [
+      {
+        name: 'grid',
+        adapter: () => ({
+          patch: { onBeforeCompile() {}, customProgramCacheKey: () => 'grid' },
+          onTile: () => {
+            const texture = new THREE.Texture()
+            made.push(texture)
+            return { uGridMap: { value: texture } }
+          },
+          onDispose: (material, uniforms) => {
+            freed.push(material.uuid)
+            ;(uniforms.uGridMap.value as THREE.Texture).dispose()
+          },
+        }),
+      },
+    ])
+    const [unloaded, aborted] = [tileMesh(), tileMesh()]
+    composer.prepare(unloaded, {})
+    composer.prepare(aborted, {})
+    const [a, b] = [unloaded.material as TerrainPhongMaterial, aborted.material as TerrainPhongMaterial]
+    const disposedA = vi.fn()
+    made[0].addEventListener('dispose', disposedA)
+    // Unload: TilesRenderer disposes the material and its slots' textures.
+    a.dispose()
+    a.displacementMap!.dispose()
+    expect(freed).toEqual([a.uuid])
+    expect(disposedA).toHaveBeenCalledTimes(1)
+    // A parse aborted after processTileModel: the slots' textures alone.
+    b.displacementMap!.dispose()
+    expect(freed).toEqual([a.uuid, b.uuid])
+    b.dispose()
+    expect(freed).toHaveLength(2)
+  })
+
   it('survives the fade wrapper (unbound, no renderer), keeping its key', () => {
     const material = composerMaterial()
     const params = wrapFadeMaterial(material, material.onBeforeCompile)
@@ -258,7 +342,7 @@ describe('the composer (tides-zmw.9.16)', () => {
     expect(() => run(shader, undefined as unknown as THREE.WebGLRenderer)).not.toThrow()
     expect(shader.uniforms.fadeIn).toBe(params.fadeIn)
     expect(shader.fragmentShader).toContain('if ( dither >= fadeIn )')
-    expect(shader.fragmentShader).toContain('reflectedLight.directDiffuse *= vec3(eclipse.x) + glow;')
+    expect(shader.fragmentShader).toContain('surfaceUp = normalize(surfaceGround);')
     expect(material.customProgramCacheKey()).toMatch(/^surface-tile:/)
   })
 })
@@ -300,66 +384,3 @@ describe('the tile material plugin (tides-zmw.9.16)', () => {
   })
 })
 
-describe('the eclipse on the tiles (tides-zmw.9.16)', () => {
-  it('takes the globe\'s GLSL, renaming only the point\'s rotation and direction, and its varying out', () => {
-    const point = ECLIPSE_GLSL.vertexHead
-      .replace('varying vec3 vEclipsePoint;', '')
-      .replace('mat3(modelMatrix) * eclipseP / length(modelMatrix[0].xyz)', 'surfaceWorldFromGround() * eclipseP')
-    const shading = ECLIPSE_GLSL.fragmentHead.replace('varying vec3 vEclipsePoint;', '')
-    expect(TILE_ECLIPSE_GLSL.fragmentHead).toBe(`${point}\n${shading}`)
-    expect(TILE_ECLIPSE_GLSL.fragmentLight).toBe(
-      ECLIPSE_GLSL.fragmentLight.replace('eclipseSunlight(vEclipsePoint)', 'eclipseSunlight(eclipsePoint(surfaceUp))')
-    )
-  })
-
-  it('finds the point and the rotation the globe finds for the same ground', () => {
-    // eclipsePoint()'s ellipsoid point of a direction in the ground's frame (km).
-    const a = 6378.137
-    const e2 = 0.00669438
-    const ellipsoid = (d: THREE.Vector3) => {
-      const n = d.clone().normalize()
-      const N = a / Math.sqrt(1 - e2 * n.y * n.y)
-      return new THREE.Vector3(n.x, n.y * (1 - e2), n.z).multiplyScalar(N)
-    }
-    // Earth's group somewhere in the scene, tilted and spun; a camera near
-    // the ground; the haze's frame filled as EarthRenderer fills it.
-    const earth = new THREE.Object3D()
-    earth.position.set(812.4, -3.2, 455.9)
-    earth.quaternion.setFromEuler(new THREE.Euler(0.41, 2.3, -0.2))
-    const ground = new THREE.Mesh()
-    const tiles = new THREE.Group()
-    applySurfaceFrame(tiles)
-    const tile = new THREE.Mesh()
-    const centre = surfaceEcef(36.1, -112.1, 0)
-    tile.position.copy(centre) // its bounding-sphere centre, ECEF metres
-    earth.add(ground, tiles)
-    tiles.add(tile)
-    const camera = new THREE.PerspectiveCamera()
-    earth.add(camera)
-    camera.position.copy(ecefToEarthLocal(surfaceEcef(36.0, -112.0, 9000)))
-    camera.lookAt(new THREE.Vector3(5, 2, -1))
-    earth.updateMatrixWorld(true)
-    camera.matrixWorldInverse.copy(camera.matrixWorld).invert()
-    const link = fakeLink()
-    link.haze.update(ground, camera)
-    const { uGroundHazeViewToLocal: viewToGround, uGroundHazeEyeLocal: eye } = link.haze.frame
-    // surfaceWorldFromGround(): transpose(mat3(viewMatrix)) * transpose(uSurfaceViewToGround).
-    const worldFromGround = new THREE.Matrix3().setFromMatrix4(camera.matrixWorldInverse).transpose().multiply(viewToGround.value.clone().transpose())
-    const groundRotation = new THREE.Matrix3().setFromMatrix4(ground.matrixWorld)
-    for (let i = 0; i < 9; i++) expect(worldFromGround.elements[i]).toBeCloseTo(groundRotation.elements[i], 9)
-    for (const [lat, lon, h] of [[36.1, -112.1, 2100], [36.2, -112.3, 800], [35.9, -111.8, 0]]) {
-      // A displaced vertex in the tile's frame, and Phong's vViewPosition of it.
-      const local = surfaceEcef(lat, lon, h).sub(centre)
-      const view = local.clone().applyMatrix4(tile.matrixWorld).applyMatrix4(camera.matrixWorldInverse)
-      const surfaceGround = eye.value.clone().add(view.clone().applyMatrix3(viewToGround.value))
-      const truth = ecefToEarthLocal(surfaceEcef(lat, lon, h))
-      expect(surfaceGround.distanceTo(truth) / SURFACE_SCALE).toBeLessThan(0.01) // metres
-      const up = surfaceGround.clone().normalize()
-      expect(up.angleTo(ecefToEarthLocal(surfaceEcef(lat, lon, 0)))).toBeLessThan(1e-7) // acos's floor
-      // The globe's point for the same ground: its direction through the ground's rotation.
-      const globe = ellipsoid(truth).applyMatrix3(groundRotation)
-      const onTiles = ellipsoid(up).applyMatrix3(worldFromGround)
-      expect(onTiles.distanceTo(globe)).toBeLessThan(1e-3) // km
-    }
-  })
-})

@@ -7,6 +7,11 @@
 // shared anchor lands as on the globe. Each slot is its own module, owned by
 // one bead: tides-zmw.9.16 eclipse, 9.12 clouds, 9.13 night, 9.11 colour,
 // 9.15 shadow, 9.14 glint; the haze is tides-zmw.9.7's.
+//
+// Within a slot, keep the globe's order too: the night slot applies
+// nightLightsPatch's code before the GIBS night patch's (both inject after
+// emissivemap_fragment, so the later lands first in the text, as on the
+// globe, where gibsNightPatch comes after nightLightsPatch).
 import type { TileFeatureSlot } from './tile-material'
 import { tileClouds } from './tile-clouds'
 import { tileColour } from './tile-colour'

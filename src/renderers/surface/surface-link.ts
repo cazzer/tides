@@ -17,6 +17,15 @@ import type { MaterialPatch } from '../eclipseShadow'
 import type { GroundHaze } from '../groundHaze'
 import type { NightFlightUniforms } from '../nightLights'
 
+/** A streamed globe patch (gibsStream.ts StreamedPatch) as the link hands it. */
+export interface GlobeStream {
+  patch: MaterialPatch
+  /** By GLSL name; empty where the device takes no patch. */
+  uniforms: Record<string, THREE.IUniform>
+  /** Tiles a side; 0 for none. */
+  side: number
+}
+
 /** The globe's side of the tiles' patches, published by EarthRenderer. */
 export interface GlobeLink {
   /** The ground haze (its surfacePatch) and its frame (`haze.frame`, view
@@ -33,11 +42,17 @@ export interface GlobeLink {
   /** The night fill and moonlight (nightLights.ts), updated per camera
    * before anything draws while the tiles are on; null outside ship mode. */
   nightFlight: NightFlightUniforms | null
-  /** The streamed GIBS patches as composed onto the globe (day and night). */
-  gibs: MaterialPatch
-  gibsNight: MaterialPatch
-  /** The globe's maps: day colour, specular (water) mask, city lights. */
-  maps: { day: THREE.Texture; specular: THREE.Texture; night: THREE.Texture }
+  /** The streamed GIBS patches (day imagery and night lights): each as
+   * composed onto the globe, and its uniforms by GLSL name (the stream's
+   * texture, mask, origin, active; the day's warp field) and side, for the
+   * tiles to reuse its exported GLSL (GIBS_GLSL, GIBS_NIGHT_GLSL) by text. */
+  gibs: GlobeStream
+  gibsNight: GlobeStream
+  /** The globe's maps as uniforms (day colour, specular (water) mask, city
+   * lights): bind them to the GLSL, never to a material slot, which
+   * TilesRenderer disposes with each tile (tile-material.ts). EarthRenderer
+   * keeps their values current, so the link stays the same object. */
+  maps: { day: THREE.IUniform<THREE.Texture>; specular: THREE.IUniform<THREE.Texture>; night: THREE.IUniform<THREE.Texture> }
   /** The globe's horizon map for its terrain shadows (groundShadow.ts). */
   horizon: EarthHorizonUniforms
   /** The ground sphere's radius, scene units. */

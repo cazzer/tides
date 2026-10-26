@@ -28,14 +28,22 @@
 //                            frame's rotation
 //             surfaceGround  the point from the ground's centre, scene
 //                            units (the eye from the CPU in double, plus
-//                            the ray: ~0.5 m)
+//                            the ray). QUANTISED: float32 at Earth's radius
+//                            steps 2^-22 units, ~0.5 m (the test pins it),
+//                            so never difference it (dFdx, fwidth) or
+//                            compare it at the metre scale: take
+//                            derivatives from surfaceRay, which is small
+//                            near the eye and smooth
 //             surfaceUp      its direction (the displacement is radial)
 //             surfaceGlobeUv the globe's map coordinate, per fragment, so no
 //                            interpolation across the antimeridian
 //                            (surfaceGlobeUv() mirrors it; the test pins it
-//                            to SphereGeometry's uvs), and
-//                            surfaceGlobeTex(map, uv), textureGrad with the
-//                            wrapped derivatives, as gibsPatch.ts
+//                            to SphereGeometry's uvs), its screen
+//                            derivatives surfaceGlobeDx/Dy (analytic, from
+//                            surfaceRay's: smooth, and no jump at the
+//                            antimeridian; surfaceGlobeUvDelta() mirrors
+//                            them), and surfaceGlobeTex(map, uv), textureGrad
+//                            with them
 //             surfaceWorldFromGround()  the ground mesh's world rotation
 //             surfaceGeomNormal  view space, before the bump
 //             specularStrength 0, and the dissolve's uSurfaceOpacity
@@ -54,12 +62,26 @@
 //    of a tileset compiles one program (the fade plugin's FEATURE_FADE 0/1
 //    the only variant), under the composer's cache key.
 //
-// Rules for a feature: reuse the globe's exported GLSL, renaming its
-// identifiers in the snippet text only (vMapUv -> surfaceGlobeUv,
-// vCloudGround -> surfaceGround, ...), so globe shaders and production stay
-// as they are. No gl_FragDepth and no discard (the dissolve's aside): early
-// depth and stencil keep the globe from shading tile pixels. Anything that
-// ever reconstructs depth takes depth.glsl (reversed-Z).
+// Rules for a feature:
+// - Reuse the globe's exported GLSL, renaming its identifiers in the
+//   snippet text only (renameInSnippet: every whole-word match, vMapUv ->
+//   surfaceGlobeUv, vCloudGround -> surfaceGround, ...), so globe shaders
+//   and production stay as they are. The tiles' own Phong declares vMapUv
+//   (the imagery's), so a missed rename compiles and samples the wrong map:
+//   pass the expected count.
+// - No gl_FragDepth and no discard (the dissolve's aside): early depth and
+//   stencil keep the globe from shading tile pixels. Anything that ever
+//   reconstructs depth takes depth.glsl (reversed-Z).
+// - Textures. The globe's (the link's maps, the GIBS targets, the horizon,
+//   the cloud map) go to the GLSL through uniforms only, never a material
+//   slot (material.specularMap, .emissiveMap, ...): TilesRenderer disposes
+//   every texture in a tile material's slots when the tile unloads, which
+//   would free and re-upload a shared 16k map each time. A texture of the
+//   tile's own (a per-grid map) is returned from onTile as a uniform, which
+//   the library never frees: free it in onDispose (refcounted if tiles share
+//   it). The test checks that a tile's slots hold only the library's own.
+// - Defaults: a uniform a tile's onTile doesn't bind falls back to what
+//   the patch assigned (a placeholder), so declare it in the patch.
 //
 // Injection: a feature injects after the base's anchors (surfaceInject) or
 // after three's chunks (injectAfterChunk). Like three's includes on the
@@ -83,6 +105,12 @@ export interface TileFeature {
    * objects to change their values later.
    */
   onTile?(material: TerrainPhongMaterial, mesh: THREE.Mesh, tile: object): Record<string, THREE.IUniform> | void
+  /**
+   * When the tile goes (unloaded, or its parse aborted after the material
+   * was built): free what onTile made, given the uniforms it returned.
+   * Runs once per material.
+   */
+  onDispose?(material: TerrainPhongMaterial, uniforms: Record<string, THREE.IUniform>): void
 }
 
 /** A feature's adapter: its patch on the tiles from the globe's link, or
@@ -142,11 +170,26 @@ export function injectAfterChunk(source: string, chunk: string, code: string, wh
   return source.replace(include, `${include}\n${code}`)
 }
 
-/** Replaces `from` (once) in a globe snippet, throwing when it's gone (the
- * globe's GLSL changed under the adapter). */
-export function renameInSnippet(snippet: string, from: string, to: string, what = 'tile material'): string {
-  if (!snippet.includes(from)) throw new Error(`${what}: snippet has no ${from}`)
-  return snippet.replace(from, to)
+const WORD = /[A-Za-z0-9_]/
+
+/**
+ * Replaces every whole-word match of `from` in a globe snippet with `to`
+ * (taken literally): `from`'s ends that are identifier characters must not
+ * touch another one, so vMapUv leaves vMapUvX alone. Throws when there is
+ * none (the globe's GLSL changed under the adapter), or not `count` of them.
+ */
+export function renameInSnippet(snippet: string, from: string, to: string, what = 'tile material', count?: number): string {
+  const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const head = WORD.test(from[0] ?? '') ? '(?<![A-Za-z0-9_])' : ''
+  const tail = WORD.test(from[from.length - 1] ?? '') ? '(?![A-Za-z0-9_])' : ''
+  let n = 0
+  const out = snippet.replace(new RegExp(head + escaped + tail, 'g'), () => {
+    n++
+    return to
+  })
+  if (n === 0) throw new Error(`${what}: snippet has no ${from}`)
+  if (count !== undefined && n !== count) throw new Error(`${what}: snippet has ${n} of ${from}, expected ${count}`)
+  return out
 }
 
 /**
@@ -159,6 +202,16 @@ export function surfaceGlobeUv(up: THREE.Vector3, target = new THREE.Vector2()):
     0.5 + Math.atan2(-n.z, n.x) / (2 * Math.PI),
     0.5 + Math.asin(THREE.MathUtils.clamp(n.y, -1, 1)) / Math.PI
   )
+}
+
+/**
+ * The change of surfaceGlobeUv for a change `d` of the unit direction `up`
+ * (both in the ground's frame), as the base GLSL's surfaceGlobeUvDelta()
+ * takes it: no wrap at the antimeridian.
+ */
+export function surfaceGlobeUvDelta(up: THREE.Vector3, d: THREE.Vector3, target = new THREE.Vector2()): THREE.Vector2 {
+  const h = Math.max(up.x * up.x + up.z * up.z, 1e-12)
+  return target.set(((up.z * d.x - up.x * d.z) / h) / (2 * Math.PI), d.y / Math.sqrt(h) / Math.PI)
 }
 
 const BASE_VERTEX_HEAD = /* glsl */ `
@@ -197,6 +250,12 @@ mat3 surfaceWorldFromGround() {
 vec2 surfaceGlobeUvAt(vec3 up) {
   return vec2(0.5 + atan(-up.z, up.x) * RECIPROCAL_PI2, 0.5 + asin(clamp(up.y, -1.0, 1.0)) * RECIPROCAL_PI);
 }
+// The change of the coordinate for a change d of the unit direction up
+// (surfaceGlobeUvDelta() mirrors it).
+vec2 surfaceGlobeUvDelta(vec3 up, vec3 d) {
+  float h = max(up.x * up.x + up.z * up.z, 1e-12);
+  return vec2((up.z * d.x - up.x * d.z) / h * RECIPROCAL_PI2, d.y * inversesqrt(h) * RECIPROCAL_PI);
+}
 // A globe map at uv (surfaceGlobeUv, or anything with its derivatives),
 // filtered for the pixel's footprint without the antimeridian's jump.
 vec4 surfaceGlobeTex(sampler2D map, vec2 uv) {
@@ -206,16 +265,21 @@ ${SURFACE_ANCHORS.fragmentHead}
 `
 
 // Early in main (after clipping), in uniform control flow for the
-// derivatives; unread values compile away.
+// derivatives; unread values compile away. The uv's derivatives come from
+// the ray's (the direction's change is the ray's across the up, over the
+// radius), not from differencing the quantised ground.
 const BASE_FRAGMENT_BODY = /* glsl */ `
 surfaceRay = uSurfaceViewToGround * -vViewPosition;
 surfaceGround = uSurfaceEyeGround + surfaceRay;
 surfaceUp = normalize(surfaceGround);
 surfaceGlobeUv = surfaceGlobeUvAt(surfaceUp);
-surfaceGlobeDx = dFdx(surfaceGlobeUv);
-surfaceGlobeDy = dFdy(surfaceGlobeUv);
-surfaceGlobeDx.x -= floor(surfaceGlobeDx.x + 0.5);
-surfaceGlobeDy.x -= floor(surfaceGlobeDy.x + 0.5);
+{
+  float surfaceInvRadius = inversesqrt(dot(surfaceGround, surfaceGround));
+  vec3 surfaceRayDx = dFdx(surfaceRay);
+  vec3 surfaceRayDy = dFdy(surfaceRay);
+  surfaceGlobeDx = surfaceGlobeUvDelta(surfaceUp, (surfaceRayDx - surfaceUp * dot(surfaceUp, surfaceRayDx)) * surfaceInvRadius);
+  surfaceGlobeDy = surfaceGlobeUvDelta(surfaceUp, (surfaceRayDy - surfaceUp * dot(surfaceUp, surfaceRayDy)) * surfaceInvRadius);
+}
 ${SURFACE_ANCHORS.fragmentBody}
 `
 
@@ -260,9 +324,14 @@ export function basePatch(frame: GlobeLink['haze']['frame'] | null): MaterialPat
 export class TerrainPhongMaterial extends THREE.MeshPhongMaterial {
   readonly isTerrainPhongMaterial = true
 
-  constructor(terrain: THREE.MeshLambertMaterial) {
+  /** `terrain` optional for three's clone() (new this.constructor().copy()). */
+  constructor(terrain?: THREE.MeshLambertMaterial) {
     // type stays MeshPhongMaterial: three picks the shader by it.
     super()
+    this.emissive.setScalar(0)
+    this.specular.setHex(GLOBE_SPECULAR)
+    this.shininess = GLOBE_SHININESS
+    if (!terrain) return
     this.color.copy(terrain.color)
     this.map = terrain.map
     this.displacementMap = terrain.displacementMap
@@ -271,9 +340,6 @@ export class TerrainPhongMaterial extends THREE.MeshPhongMaterial {
     this.bumpMap = terrain.bumpMap
     this.bumpScale = terrain.bumpScale
     this.side = terrain.side
-    this.emissive.setScalar(0)
-    this.specular.setHex(GLOBE_SPECULAR)
-    this.shininess = GLOBE_SHININESS
     // The library's bump chunk (TerrainLambertMaterial's onBeforeCompile, a
     // string replace that reads nothing of its material).
     const bumpChunk = terrain.onBeforeCompile
@@ -295,6 +361,34 @@ export interface TileComposer {
   prepare(mesh: THREE.Mesh, tile: object, skirtRangeMetres?: number): void
 }
 
+let warnedNotLambert = false
+function warnNotLambert(material: THREE.Material) {
+  if (warnedNotLambert) return
+  warnedNotLambert = true
+  console.warn(`tile material: a ${material.type} tile is left as it came (the composer builds on the terrain plugin's Lambert)`)
+}
+
+/**
+ * Calls `gone` once, when the tile that draws `material` goes: TilesRenderer
+ * disposes the material when it unloads the tile, but when a parse aborts
+ * after processTileModel it disposes only the slots' textures, among them
+ * the tile's own clone of its elevation grid (displacementMap), so either
+ * event ends the tile.
+ */
+function onTileGone(material: THREE.Material, gone: () => void) {
+  const grid = (material as THREE.MeshPhongMaterial).displacementMap
+  let done = false
+  const once = () => {
+    if (done) return
+    done = true
+    material.removeEventListener('dispose', once)
+    grid?.removeEventListener('dispose', once)
+    gone()
+  }
+  material.addEventListener('dispose', once)
+  grid?.addEventListener('dispose', once)
+}
+
 /** The tiles' composer on `link` with the features in `slots` (tile-features.ts
  * TILE_FEATURES); with no link, the base alone. */
 export function createTileComposer(link: GlobeLink | null, slots: readonly TileFeatureSlot[] = []): TileComposer {
@@ -308,6 +402,7 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
   const patch = composePatches(basePatch(link?.haze.frame ?? null), ...active.map(({ feature }) => feature.patch))
   const key = `surface-tile:${patch.customProgramCacheKey()}`
   const hooks = active.flatMap(({ feature }) => (feature.onTile ? [feature] : []))
+  const disposers = active.flatMap(({ feature }) => (feature.onDispose ? [feature] : []))
   return {
     key,
     features: active.map(({ name }) => name),
@@ -315,6 +410,12 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
     prepare(mesh, tile, skirtRangeMetres = 0) {
       const built: { material: TerrainPhongMaterial; own: Record<string, THREE.IUniform> }[] = []
       const swap = (old: THREE.Material) => {
+        // The library's lit tile material (not its unlit one): anything
+        // else is left as it came.
+        if (!(old as THREE.MeshLambertMaterial).isMeshLambertMaterial) {
+          warnNotLambert(old)
+          return old
+        }
         const material = new TerrainPhongMaterial(old as THREE.MeshLambertMaterial)
         old.dispose()
         // Filled by the hooks below; read when three compiles the tile.
@@ -333,7 +434,15 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material)
       // With the mesh drawing its new material.
       for (const { material, own } of built) {
-        for (const feature of hooks) Object.assign(own, feature.onTile!(material, mesh, tile) ?? {})
+        const returned = new Map<TileFeature, Record<string, THREE.IUniform>>()
+        for (const feature of hooks) {
+          const uniforms: Record<string, THREE.IUniform> = feature.onTile?.(material, mesh, tile) || {}
+          returned.set(feature, uniforms)
+          Object.assign(own, uniforms)
+        }
+        if (disposers.length) onTileGone(material, () => {
+          for (const feature of disposers) feature.onDispose!(material, returned.get(feature) ?? {})
+        })
       }
     },
   }
