@@ -1,12 +1,20 @@
-// Earth's relief exaggeration (tides-zmw.6), chosen at load: ?relief=<factor>
-// in the URL, the multiple of true scale the ground is drawn at (12 if absent
-// or unreadable, chosen by eye over orbit and low-flight shots). It scales
+// Earth's relief exaggeration (tides-zmw.6, tides-zmw.21), chosen at load:
+// ?relief=<factor> in the URL, the multiple of true scale the ground is
+// drawn at, 1 (true scale) if absent or unreadable. It scales
 // TERRAIN_DISPLACEMENT (./cloud-layer.ts), from which everything that follows
 // the ground derives (the mesh, its slopes and shadows, the cloud layer and
 // its ceiling, the shells, the ship's floor), so a reload moves them together.
+// True scale since tides-zmw.21: nothing requires the relief exaggerated
+// from orbit or in the system view, and with the altitude blend (below) a
+// relief change was plain to see on every descent through the clouds. Earth
+// was drawn at 12x from tides-zmw.6 until then; ?relief=12 still shows that
+// look (the horizon map exact there ships too, ../earth-horizon.ts), and
+// any factor between compares. The clouds stay at their own ~9x
+// (CLOUD_UNITS_PER_KM), over true-scale ground.
 // With ?blend=1 (./terrain-scale.ts, tides-zmw.9.5) this is the scale at
-// altitude, eased to true scale near the ground, and TERRAIN_DISPLACEMENT the
-// maximum bound the shells and the cloud layer stay sized for.
+// altitude, eased to true scale near the ground (at 1x, true scale
+// throughout), and TERRAIN_DISPLACEMENT the maximum bound the shells and the
+// cloud layer stay sized for.
 // Clamped to [1, 25]: above 25 the highest stop outgrows the limb sphere's
 // MORPH_FLOOR (renderers/groundDisplacement.ts). 25 is also the reference the
 // displacement is given at (REFERENCE_RELIEF), the exaggeration the scene was
@@ -14,7 +22,7 @@
 // and takes the default: the cloud worker uses only the DEM's units, which
 // don't depend on it, so pass the relief along if it ever needs more.
 
-export const DEFAULT_RELIEF = 12
+export const DEFAULT_RELIEF = 1
 export const MIN_RELIEF = 1
 export const MAX_RELIEF = 25
 /** The relief REFERENCE_TERRAIN_DISPLACEMENT (./cloud-layer.ts) is given at. */

@@ -19,12 +19,14 @@ describe('parseRelief', () => {
     for (const search of ['', '?ship=1', '?relief=', '?relief=%20', '?relief=abc', '?relief=NaN', '?relief=Infinity']) {
       expect(parseRelief(search), search).toBe(DEFAULT_RELIEF)
     }
-    expect(DEFAULT_RELIEF).toBe(12)
+    // True scale since tides-zmw.21 (12x from tides-zmw.6 until then).
+    expect(DEFAULT_RELIEF).toBe(1)
   })
 
   it('is the default outside a browser, at the default displacement', () => {
-    expect(RELIEF).toBe(12)
-    expect(defaults.TERRAIN_DISPLACEMENT).toBeCloseTo(0.036, 15)
+    expect(RELIEF).toBe(1)
+    expect(defaults.TERRAIN_DISPLACEMENT).toBeCloseTo(0.003, 15)
+    expect(defaults.TERRAIN_DISPLACEMENT).toBe(defaults.TRUE_TERRAIN_DISPLACEMENT)
     expect(defaults.TERRAIN_DISPLACEMENT).toBe(defaults.DEFAULT_TERRAIN_DISPLACEMENT)
   })
 
@@ -83,8 +85,9 @@ describe('?relief=10', () => {
       expect(td * layer.TERRAIN_MAX_GREY + EARTH_GROUND_CLEARANCE).toBeLessThan(MORPH_FLOOR)
 
       // cloudShaders writes its constants into the GLSL at import: they
-      // follow too, the layer's thinner shell taking fewer march steps.
-      expect(MARCH_STEPS).toBeLessThan(DEFAULT_MARCH_STEPS)
+      // follow too, a thinner shell than the default's taking fewer march
+      // steps (a thicker one, under a default below 10x, more).
+      expect(Math.sign(MARCH_STEPS - DEFAULT_MARCH_STEPS)).toBe(Math.sign(td - defaults.TERRAIN_DISPLACEMENT))
       const clouds = createCloudLayer(createEclipseShadow('earth'), false)
       expect(clouds.shellAltitude).toBe(layer.CLOUD_LAYER_TOP)
       const source = clouds.material.vertexShader + clouds.material.fragmentShader

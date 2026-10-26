@@ -2,7 +2,8 @@
 // (../earth-horizon.ts, ./earthHorizonTexture.ts):
 //
 // - The Sun: where the horizon toward it stands above the Sun, the ground is
-//   in the range's shadow, with a soft edge HORIZON_SOFTNESS either side.
+//   in the range's shadow, with a soft edge HORIZON_SOFTNESS either side
+//   (the page relief's: 2° at 12x, 0.5° at true scale, horizonSoftness()).
 //   Flat ground and the open sea have no horizon, nor (to the shader) has
 //   ground rising less than the map's step, so the terminator and the glint
 //   are as they were.
@@ -13,7 +14,9 @@
 //   occlusion, so their product would count a tilted slope's twice.
 //
 // Both follow the ground's exaggeration: the map's tangents are scaled from
-// the exaggeration it was baked at to the material's displacementScale. Both
+// the exaggeration it was baked at to the material's displacementScale (the
+// map's curvature exact at 12x or at true scale, whichever is nearer the
+// page's relief: ../earth-horizon.ts). Both
 // fade out where a pixel spans about one of the map's texels (the system
 // view, where they would smudge the terminator) and toward the poles, as the
 // relief does (./groundRelief.ts), and through the twilight into the night.

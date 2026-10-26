@@ -53,7 +53,6 @@ import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from 
 import { TERRAIN_READ_TEXELS } from '../cloud-layer'
 import { boxMips, decodeEarthDem, demLevel } from '../earth-dem'
 import { groundLevels, meshGrid, meshRadius, displace, vertexGrey } from './ground-mesh-model'
-import { RELIEF } from '../relief'
 import { setTerrainEye, terrainBlendTop, terrainDisplacement, terrainScale, terrainScaleUniform } from '../terrain-scale'
 
 const shippedDem = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
@@ -428,19 +427,22 @@ describe('ship bodies', () => {
       expect(floorRadius(byKey(T, 'low').earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
     })
 
+    // The blend at the relief it was built for, passed explicitly (at the
+    // 1x default, tides-zmw.21, it is 1x throughout).
+    const BLEND_RELIEF = 12
     // The eye altitude at which the blend draws `scale` (tides-zmw.9.5).
     function eyeFor(scale: number): number {
-      let [lo, hi] = [0, terrainBlendTop(RELIEF)]
+      let [lo, hi] = [0, terrainBlendTop(BLEND_RELIEF)]
       for (let k = 0; k < 200; k++) {
         const mid = (lo + hi) / 2
-        if (terrainScale(mid, RELIEF, true) < scale) lo = mid
+        if (terrainScale(mid, BLEND_RELIEF, true) < scale) lo = mid
         else hi = mid
       }
       return hi
     }
 
-    it.each([1, 4, RELIEF])(
-      'follows the live terrain scale at %dx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
+    it.each([1, 4, BLEND_RELIEF])(
+      'follows the live terrain scale at %sx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
       (scale) => {
         setEarthTerrain(baseFloor())
         onTestFinished(() => setTerrainEye(Infinity))
@@ -459,7 +461,7 @@ describe('ship bodies', () => {
         for (const local of locals) directions.push(toWorld(local, T))
         const full = directions.map((d) => earth.ground!(d))
 
-        setTerrainEye(eyeFor(scale), true)
+        setTerrainEye(eyeFor(scale), true, BLEND_RELIEF)
         expect(terrainScaleUniform.value).toBeCloseTo(scale, 9)
         const displacement = terrainDisplacement(terrainScaleUniform.value)
         const grid = meshGrid(EARTH_BASE_SEGMENTS)

@@ -309,9 +309,10 @@ export interface SurfaceBounds {
  * scale from surfaceFitFloor(fit) to fit (the plugin's region written at
  * both ends, merged), every region the plugin writes is written that way,
  * and a tile written at an older fit is refitted when the traversal next
- * reaches it, before its view error, which also culls it.
+ * reaches it, before its view error, which also culls it. `relief`: the
+ * most the fit goes up to (the page's).
  */
-export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => number): SurfaceBounds {
+export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => number, relief: number = RELIEF): SurfaceBounds {
   const plugin = terrain as BoundsPluginInternals
   const renderer = tiles as ViewErrorInternals
   const write = plugin._updateBoundingVolume
@@ -319,7 +320,7 @@ export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => nu
   if (typeof write !== 'function' || typeof view !== 'function') {
     throw new Error('surface scale: not the 0.5.3 terrain plugin and renderer')
   }
-  let fit = surfaceFitScale(scale())
+  let fit = surfaceFitScale(scale(), relief)
   let refits = 0
   const writeAt = (tile: object, at: number) => {
     const full = plugin._heightScale
@@ -359,7 +360,7 @@ export function fitSurfaceBounds(tiles: object, terrain: object, scale: () => nu
   }
   return {
     update() {
-      fit = nextSurfaceFit(fit, scale())
+      fit = nextSurfaceFit(fit, scale(), relief)
     },
     get fit() {
       return fit

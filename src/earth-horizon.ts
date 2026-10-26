@@ -22,6 +22,19 @@
 // (k − 1)·γ/2 and its steepest sightline may be another. Exact at the
 // exaggeration the ground is drawn at (k = 1).
 //
+// Two maps ship, both encoded at HORIZON_BAKE_RELIEF (their eRef, the gain
+// that spends the bits), which differ only in the exaggeration their
+// curvature is exact at (eCurve): earth-horizon-1k.bin at 12x and
+// earth-horizon-1k-true.bin at true scale (tides-zmw.21). The 12x map read
+// at 1x stood far horizons too high by up to (1 − 1/12)·γ/2, 1.24° at
+// 300 km (p50 0.12°, p99 0.49°, max 1.09° over the map), where true-scale
+// horizons are themselves ~0.5° (p90): twice as many shadowing texels as
+// there should be. The format holds each direction's steepest angle but not
+// how far off it stood, so the shader can't take the curvature out again,
+// and the steepest sightline moves with the exaggeration besides (nearer
+// ridges win at 1x). A page takes the map nearer its relief
+// (horizonCurveRelief()); only that one is fetched.
+//
 // A file is gzip over: the magic "EHZ1", width and height (uint16, little
 // endian), the number of directions and bits per angle (uint8), eRef
 // (float32), then one plane per direction of one byte per texel (rows north
@@ -31,6 +44,7 @@
 
 import { EARTH_RADIUS_KM, type Vec3 } from './cloud-layer'
 import { gunzip, type DemLevel } from './earth-dem'
+import { RELIEF } from './relief'
 
 const MAGIC = 'EHZ1'
 const HEADER_BYTES = 14
@@ -44,8 +58,50 @@ export const HORIZON_RADIUS_KM = 300
 export const HORIZON_FIRST_KM = 19.5
 export const HORIZON_STEPS = 16
 
-/** Half the width of the Sun's soft shadow edge, in elevation (radians): 2°. */
-export const HORIZON_SOFTNESS = (2 * Math.PI) / 180
+/** The relief (./relief.ts) the shipped maps' angles are encoded at: eRef
+ * is this relief's displacement over the sea-level radius (6 bits over 0 to
+ * 90° at 12x is ~0.12° at 1x). Decoupled from DEFAULT_RELIEF, so a new
+ * default needs no new encoding. */
+export const HORIZON_BAKE_RELIEF = 12
+/** The reliefs the shipped maps' curvature is exact at (their eCurve):
+ * earth-horizon-1k.bin's and earth-horizon-1k-true.bin's. */
+export const HORIZON_CURVE_RELIEF = 12
+export const HORIZON_TRUE_CURVE_RELIEF = 1
+
+/**
+ * The relief whose map (HORIZON_CURVE_RELIEF's or HORIZON_TRUE_CURVE_RELIEF's)
+ * a ground drawn at `relief` reads. Read at relief d, a map exact at c
+ * misplaces a far horizon by γ/2 · |d/c − 1|: the two are even at their
+ * harmonic mean (~1.85x), true scale's map below it.
+ */
+export function horizonCurveRelief(relief: number): number {
+  const even = 2 / (1 / HORIZON_CURVE_RELIEF + 1 / HORIZON_TRUE_CURVE_RELIEF)
+  return relief < even ? HORIZON_TRUE_CURVE_RELIEF : HORIZON_CURVE_RELIEF
+}
+
+/** The relief the 2° edge was tuned at, and its value there and at 1x. */
+const SOFTNESS_RELIEF = 12
+const SOFTNESS_12 = (2 * Math.PI) / 180
+const SOFTNESS_1 = (0.5 * Math.PI) / 180
+
+/**
+ * Half the width of the Sun's soft shadow edge, in elevation (radians), for
+ * ground drawn at `relief`: 2° at 12x and above, as tuned there (tides-zmw.4),
+ * down to 0.5° at true scale (tides-zmw.21), linear in the relief between.
+ * Most true-scale horizons are under 2°, so the 12x edge (which also ramps
+ * a horizon's shadow in over its own width) left them weak and mushy. The
+ * map's blur, in angle, scales with the tangents; the Sun's half-width
+ * (0.27°) doesn't, so the edge narrows by less than the relief does (the
+ * line meets 0.36° at zero relief, which the relief's clamp to [1, 25],
+ * ./relief.ts, keeps well away from).
+ */
+export function horizonSoftness(relief: number): number {
+  const r = Math.min(relief, SOFTNESS_RELIEF)
+  return SOFTNESS_12 + ((SOFTNESS_12 - SOFTNESS_1) * (r - SOFTNESS_RELIEF)) / (SOFTNESS_RELIEF - 1)
+}
+
+/** This page's soft edge: horizonSoftness(RELIEF), 2° at the default. */
+export const HORIZON_SOFTNESS = horizonSoftness(RELIEF)
 /** The steepest horizon the shader will take a tangent of (just under 90°). */
 export const HORIZON_MAX_ANGLE = 1.56
 
@@ -69,6 +125,11 @@ export interface HorizonBakeOptions {
   eRef: number
   /** False bakes over a flat Earth (the tangent transform is then exact). */
   curvature?: boolean
+  /** The exaggeration the curvature drop is exact at (eRef if absent): the
+   * drop is baked as γ/2 · eRef / eCurve, so the shader's tangent scale
+   * (horizonTangentScale(), eDrawn / eRef) takes it to γ/2 exactly where the
+   * ground is drawn at eCurve. */
+  eCurve?: number
 }
 
 /**
@@ -90,6 +151,7 @@ export function bakeHorizon(level: DemLevel, options: HorizonBakeOptions): Earth
     steps = HORIZON_STEPS,
     eRef,
     curvature = true,
+    eCurve = eRef,
   } = options
   const { width: W, height: H, data } = level
   const top = (1 << bits) - 1
@@ -121,7 +183,7 @@ export function bakeHorizon(level: DemLevel, options: HorizonBakeOptions): Earth
         const r0 = data.subarray(y0 * W, (y0 + 1) * W)
         const r1 = data.subarray(y1 * W, (y1 + 1) * W)
         const scale = eRef / arc
-        const drop = curvature ? arc / 2 : 0
+        const drop = curvature ? (arc / 2) * (eRef / eCurve) : 0
         const w00 = (1 - tx) * (1 - ty)
         const w01 = tx * (1 - ty)
         const w10 = (1 - tx) * ty

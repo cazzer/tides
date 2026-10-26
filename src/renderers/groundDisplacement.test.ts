@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_RELIEF } from '../relief'
 import { latLonToLocal } from '../aurora'
 import { DEM_METRES_PER_UNIT, boxMips, decodeEarthDem, demLevel, toHalfBits } from '../earth-dem'
 import {
@@ -155,11 +156,14 @@ describe('ground displacement (tides-zmw.2)', () => {
   describe("the ground's slope at its vertices (tides-zmw.3)", () => {
     const toDegrees = THREE.MathUtils.radToDeg
     // A vertex's shading normal: the sphere's at unit, tilted by its slope.
+    // At a fixed 12x, the relief the faces tilt over 1° at (at ?relief=1
+    // none would: the property is geometric, not the page's).
+    const D12 = REFERENCE_TERRAIN_DISPLACEMENT * (12 / REFERENCE_RELIEF)
     const shadingNormal = (unit: THREE.Vector3, slope: ArrayLike<number>) =>
       unit
         .clone()
         .normalize()
-        .sub(new THREE.Vector3(...riseOverRun(slope, EARTH_RADIUS)))
+        .sub(new THREE.Vector3(...riseOverRun(slope, EARTH_RADIUS, D12)))
         .normalize()
     const unitAt = (grid: MeshGrid, k: number) => new THREE.Vector3().fromArray(grid.unit, 3 * k)
     const slopeAt = (surface: Float64Array, k: number) => surface.subarray(4 * k + 1, 4 * k + 4)
@@ -193,7 +197,7 @@ describe('ground displacement (tides-zmw.2)', () => {
     ])('tilts each vertex of the %s sphere as the drawn faces around it', (_, grid) => {
       const surface = vertexSurface(ground4k, grid)
       const grey = Float64Array.from({ length: surface.length / 4 }, (_, k) => surface[4 * k])
-      const faces = faceNormals(grid, displace(grid, grey, EARTH_RADIUS))
+      const faces = faceNormals(grid, displace(grid, grey, EARTH_RADIUS, D12))
       const [width, height] = grid.segments
       const all: number[] = []
       const relief: number[] = []

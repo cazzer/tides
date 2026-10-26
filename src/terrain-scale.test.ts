@@ -215,13 +215,17 @@ describe('the live scale (tides-zmw.9.5)', () => {
     expect(material.displacementScale).toBe(TERRAIN_DISPLACEMENT)
   })
 
+  // The blend at the relief it was built for, passed explicitly: at the 1x
+  // default (tides-zmw.21) it is 1x throughout.
+  const BLEND_RELIEF = 12
+
   // The stop's fixed point over ground of `floorGrey` levels (the floor's,
   // margin included): from `from`, the step that writes the scale before it
   // clamps, repeated.
   function settle(floorGrey: number, from: number): number {
     let a = from
     for (let k = 0; k < 400; k++) {
-      setTerrainEye(a, true)
+      setTerrainEye(a, true, BLEND_RELIEF)
       a = (liveTerrainDisplacement() * floorGrey) / 255 + c
     }
     return a
@@ -232,20 +236,20 @@ describe('the live scale (tides-zmw.9.5)', () => {
   it('converges to one stop from above or below, continuous across the ground', () => {
     let prev: number | null = null
     const dGrey = 0.25
-    // The stop moves at most RELIEF × the ground's move, over (1 - gain).
-    const bound = (TRUE_TERRAIN_DISPLACEMENT * RELIEF * dGrey) / 255 / (1 - TERRAIN_BLEND_MAX_GAIN)
+    // The stop moves at most the relief × the ground's move, over (1 - gain).
+    const bound = (TRUE_TERRAIN_DISPLACEMENT * BLEND_RELIEF * dGrey) / 255 / (1 - TERRAIN_BLEND_MAX_GAIN)
     for (let grey = 0; grey <= MAX_FLOOR_GREY; grey += dGrey) {
       const fromAbove = settle(grey, 1)
       const fromBelow = settle(grey, c)
       expect(Math.abs(fromAbove - fromBelow)).toBeLessThan(1e-12)
-      const s = terrainScale(fromAbove, RELIEF, true)
+      const s = terrainScale(fromAbove, BLEND_RELIEF, true)
       expect(Math.abs(fromAbove - ((terrainDisplacement(s) * grey) / 255 + c))).toBeLessThan(1e-12)
       if (prev !== null) expect(Math.abs(fromAbove - prev)).toBeLessThanOrEqual(bound)
       prev = fromAbove
     }
     // Over the sea near 1.15x; over the highest ground, a little over 2x.
-    expect(terrainScale(settle(0, 1), RELIEF, true)).toBeCloseTo(1.15, 1)
-    const highest = terrainScale(settle(MAX_FLOOR_GREY, 1), RELIEF, true)
+    expect(terrainScale(settle(0, 1), BLEND_RELIEF, true)).toBeCloseTo(1.15, 1)
+    const highest = terrainScale(settle(MAX_FLOOR_GREY, 1), BLEND_RELIEF, true)
     expect(highest).toBeGreaterThan(1.8)
     expect(highest).toBeLessThan(2.6)
   })
@@ -267,7 +271,7 @@ describe('the live scale (tides-zmw.9.5)', () => {
     let a = 0.15
     let minGap = Infinity
     let maxStep = 0
-    let prevScale = terrainScaleUniform.value
+    let prevScale = terrainScale(a, BLEND_RELIEF, true)
     let stopped = 0
     for (let k = 0; k < frames; k++) {
       // Descend first, then fly the pass at the stop.
@@ -275,7 +279,7 @@ describe('the live scale (tides-zmw.9.5)', () => {
       const grey = ground(x)
       // ShipController's order: write the scale from where the ship is, then
       // step against the floor at it.
-      setTerrainEye(a, true)
+      setTerrainEye(a, true, BLEND_RELIEF)
       const floor = (liveTerrainDisplacement() * (grey + TERRAIN_GREY_MARGIN)) / 255 + c
       a = Math.max(a - OVERSPEED_MAX * EARTH_GROUND_SPEED * dt, floor)
       // The frame then draws at the scale just written.
@@ -295,7 +299,7 @@ describe('the live scale (tides-zmw.9.5)', () => {
     expect(stopped).toBeGreaterThan(frames / 2)
     // No frame moves the scale by more than 5% of the relief, diving at the
     // fastest the cap allows down there (its overspeed, at 60 fps).
-    expect(maxStep).toBeLessThanOrEqual(0.05 * RELIEF)
+    expect(maxStep).toBeLessThanOrEqual(0.05 * BLEND_RELIEF)
   })
 })
 

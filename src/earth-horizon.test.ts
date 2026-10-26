@@ -1,17 +1,23 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { DEFAULT_TERRAIN_DISPLACEMENT, EARTH_RADIUS_KM, REFERENCE_TERRAIN_DISPLACEMENT, type Vec3 } from './cloud-layer'
+import { EARTH_RADIUS_KM, REFERENCE_TERRAIN_DISPLACEMENT, type Vec3 } from './cloud-layer'
 import type { DemLevel } from './earth-dem'
 import {
+  HORIZON_BAKE_RELIEF,
   HORIZON_BITS,
+  HORIZON_CURVE_RELIEF,
   HORIZON_DIRECTIONS,
   HORIZON_RADIUS_KM,
+  HORIZON_SOFTNESS,
+  HORIZON_TRUE_CURVE_RELIEF,
   HORIZON_WIDTH,
   bakeHorizon,
   decodeEarthHorizon,
   horizonAngle,
   horizonAt,
+  horizonCurveRelief,
+  horizonSoftness,
   horizonTangentScale,
   packEarthHorizon,
   skyVisibility,
@@ -22,6 +28,7 @@ import {
   type HorizonBakeOptions,
 } from './earth-horizon'
 import { sceneRadius } from './planets'
+import { REFERENCE_RELIEF, RELIEF } from './relief'
 import { earthHorizonTexture } from './renderers/earthHorizonTexture'
 
 const D = Math.PI / 180
@@ -29,8 +36,10 @@ const N = 0
 const E = 2
 const S = 4
 const W = 6
-// The shipped map's exaggeration: the default relief's, 12x.
-const E_REF = DEFAULT_TERRAIN_DISPLACEMENT / sceneRadius(12742000)
+// The shipped maps' exaggeration: HORIZON_BAKE_RELIEF's, 12x (as the build
+// works it out), whatever the default relief.
+const exaggeration = (relief: number) => (REFERENCE_TERRAIN_DISPLACEMENT * (relief / REFERENCE_RELIEF)) / sceneRadius(12742000)
+const E_REF = exaggeration(HORIZON_BAKE_RELIEF)
 // The reference relief's, 25x, which the synthetic bakes' ridges and angles
 // were drawn for: they test the bake, not the shipped exaggeration.
 const E_25 = REFERENCE_TERRAIN_DISPLACEMENT / sceneRadius(12742000)
@@ -38,6 +47,8 @@ const E_25 = REFERENCE_TERRAIN_DISPLACEMENT / sceneRadius(12742000)
 const ASSET = new URL('./assets/earth-horizon-1k.bin', import.meta.url)
 const shippedFile = readFileSync(ASSET)
 const shipped = await decodeEarthHorizon(shippedFile)
+const trueFile = readFileSync(new URL('./assets/earth-horizon-1k-true.bin', import.meta.url))
+const shippedTrue = await decodeEarthHorizon(trueFile)
 
 /** A flat level of width × height with `raise(x, y)` added. */
 function level(width: number, height: number, raise: (x: number, y: number) => number = () => 0): DemLevel {
@@ -155,6 +166,65 @@ describe('horizon bake', () => {
     expect(horizonTangentScale(REFERENCE_TERRAIN_DISPLACEMENT * 0.4, sceneRadius(12742000), E_25)).toBeCloseTo(0.4, 6)
     expect(horizonTangentScale(REFERENCE_TERRAIN_DISPLACEMENT, sceneRadius(12742000), E_REF)).toBeCloseTo(25 / 12, 6)
   })
+
+  it('takes the curvature exact at another exaggeration with eCurve (tides-zmw.21)', () => {
+    const hills = level(256, 128, (x, y) => 0.15 * (1 + Math.sin(x * 0.37) * Math.cos(y * 0.53 + x * 0.11)))
+    const step = horizonAngle(1, HORIZON_BITS)
+    // A 25x map scaled to 10x against a 10x bake, over the wide search
+    // (γ/2 up to 4.5° at 1000 km), with and without its curvature exact at 10x.
+    const at10 = bakeHorizon(hills, { ...WIDE, eRef: (E_25 * 10) / 25 })
+    const errors = (options: HorizonBakeOptions) => {
+      const at25 = bakeHorizon(hills, options)
+      let worst = 0
+      let total = 0
+      for (let k = 0; k < at25.angles.length; k++) {
+        const scaled = Math.atan(0.4 * Math.tan(horizonAngle(at25.angles[k], HORIZON_BITS)))
+        const error = Math.abs(scaled - horizonAngle(at10.angles[k], HORIZON_BITS))
+        worst = Math.max(worst, error)
+        total += error
+      }
+      return { worst, mean: total / at25.angles.length }
+    }
+    // With eCurve, as exact as over a flat Earth, but for the steps.
+    const exact = errors({ ...WIDE, eCurve: (E_25 * 10) / 25 })
+    expect(exact.worst).toBeLessThanOrEqual(step)
+    expect(exact.mean).toBeLessThan(step / 2)
+    // Without it, more error, which a far ridge shows plainly: 1.0 units
+    // four texels (625 km) east, where γ/2 is 2.8°. Read at 10x it stands
+    // ~(1 − 0.4)·2.8° too high from the plain 25x map; with eCurve it is
+    // the 10x bake's but for a step.
+    expect(errors(WIDE).mean).toBeGreaterThan(exact.mean)
+    const far = level(256, 128, (x) => (x === 132 ? 1 : 0))
+    const reach = { radiusKm: 700, firstKm: (4 * 2 * Math.PI * EARTH_RADIUS_KM) / 256, steps: 2 }
+    const ridge = (options: HorizonBakeOptions) => at(bakeHorizon(far, { ...reach, ...options }), 128, 64)[E]
+    const truth = ridge({ eRef: (E_25 * 10) / 25 })
+    const read10 = (angle: number) => Math.atan(0.4 * Math.tan(angle))
+    expect(truth).toBeGreaterThan(2 * D)
+    expect(Math.abs(read10(ridge({ eRef: E_25, eCurve: (E_25 * 10) / 25 })) - truth)).toBeLessThanOrEqual(step)
+    expect(read10(ridge({ eRef: E_25 })) - truth).toBeGreaterThan(1.2 * D)
+    // eCurve = eRef is the plain bake, to the byte.
+    expect(bakeHorizon(hills, { ...WIDE, eCurve: E_25 }).angles).toEqual(bakeHorizon(hills, WIDE).angles)
+  })
+})
+
+describe('which map, and how soft (tides-zmw.21)', () => {
+  it('reads the true-scale map below ~1.85x, the 12x map above', () => {
+    expect(HORIZON_CURVE_RELIEF).toBe(12)
+    expect(HORIZON_TRUE_CURVE_RELIEF).toBe(1)
+    expect(horizonCurveRelief(1)).toBe(1)
+    expect(horizonCurveRelief(1.8)).toBe(1)
+    expect(horizonCurveRelief(1.9)).toBe(12)
+    expect(horizonCurveRelief(12)).toBe(12)
+    expect(horizonCurveRelief(25)).toBe(12)
+  })
+
+  it('softens the edge 2° at 12x (as tuned, and above), 0.5° at true scale, linear between', () => {
+    expect(horizonSoftness(12)).toBe((2 * Math.PI) / 180)
+    expect(horizonSoftness(25)).toBe(horizonSoftness(12))
+    expect(horizonSoftness(1) / D).toBeCloseTo(0.5, 12)
+    expect(horizonSoftness(6.5) / D).toBeCloseTo(1.25, 12)
+    expect(HORIZON_SOFTNESS).toBe(horizonSoftness(RELIEF))
+  })
 })
 
 describe('shading from the horizon', () => {
@@ -193,10 +263,40 @@ describe('shipped horizon map', () => {
       Math.floor(((90 - lat) / 180) * shipped.height)
     )
 
-  it('is the size the renderer expects, at the ground exaggeration, within its budget', () => {
-    expect(shipped).toMatchObject({ width: HORIZON_WIDTH, height: HORIZON_WIDTH / 2, directions: 8, bits: 6 })
-    expect(shipped.eRef).toBeCloseTo(E_REF, 6)
+  it('is the size the renderer expects, at the bake exaggeration, within its budget', () => {
+    expect(HORIZON_BAKE_RELIEF).toBe(12)
+    for (const map of [shipped, shippedTrue]) {
+      expect(map).toMatchObject({ width: HORIZON_WIDTH, height: HORIZON_WIDTH / 2, directions: 8, bits: 6 })
+      expect(map.eRef).toBeCloseTo(E_REF, 6)
+    }
     expect(shippedFile.length).toBeLessThanOrEqual(500_000)
+    expect(trueFile.length).toBeLessThanOrEqual(500_000)
+  })
+
+  it('stands true-scale horizons at true scale: under the 12x map taken to 1x, the Andes a degree or two (tides-zmw.21)', () => {
+    // The true map's curvature drop is the 12x map's times 12, so it never
+    // stands higher, and holds about half as many horizons.
+    let higher = 0
+    let held = 0
+    let held12 = 0
+    for (let k = 0; k < shipped.angles.length; k++) {
+      if (shippedTrue.angles[k] > shipped.angles[k]) higher++
+      if (shippedTrue.angles[k]) held++
+      if (shipped.angles[k]) held12++
+    }
+    expect(higher).toBe(0)
+    expect(held / held12).toBeGreaterThan(0.35)
+    expect(held / held12).toBeLessThan(0.65)
+    const k = 1 / HORIZON_BAKE_RELIEF
+    const at1 = (lat: number, lon: number) =>
+      horizonAt(shippedTrue, Math.floor(((lon + 180) / 360) * shippedTrue.width), Math.floor(((90 - lat) / 180) * shippedTrue.height)).map(
+        (a) => Math.atan(k * Math.tan(a)) / D
+      )
+    const mendoza = at1(-32.89, -68.83)
+    expect(Math.max(mendoza[W], mendoza[W + 1])).toBeGreaterThan(1)
+    expect(Math.max(mendoza[W], mendoza[W + 1])).toBeLessThan(4)
+    expect(mendoza[E]).toBe(0)
+    expect(at1(0, -150).every((a) => a === 0)).toBe(true)
   })
 
   it('stands the Andes over Mendoza to the west and Santiago to the east', () => {

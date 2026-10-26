@@ -262,45 +262,49 @@ describe('createSurfaceTiles on the live scale (tides-zmw.9.7)', () => {
 })
 
 describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
+  // The blend's relief, passed explicitly: at ?relief=1 the live scale is 1x
+  // throughout and there is no band to fit.
+  const BLEND_RELIEF = 12
+
   it('fits to the next step up, never under the drawn scale, between 1 and the relief', () => {
-    expect(surfaceFitScale(1)).toBe(1)
-    expect(surfaceFitScale(0.5)).toBe(1)
-    expect(surfaceFitScale(RELIEF)).toBe(RELIEF)
-    expect(surfaceFitScale(RELIEF * 2)).toBe(RELIEF)
+    expect(surfaceFitScale(1, BLEND_RELIEF)).toBe(1)
+    expect(surfaceFitScale(0.5, BLEND_RELIEF)).toBe(1)
+    expect(surfaceFitScale(BLEND_RELIEF, BLEND_RELIEF)).toBe(BLEND_RELIEF)
+    expect(surfaceFitScale(BLEND_RELIEF * 2, BLEND_RELIEF)).toBe(BLEND_RELIEF)
     const fits = new Set<number>()
     for (let k = 0; k <= 2000; k++) {
-      const s = 1 + ((RELIEF - 1) * k) / 2000
-      const fit = surfaceFitScale(s)
+      const s = 1 + ((BLEND_RELIEF - 1) * k) / 2000
+      const fit = surfaceFitScale(s, BLEND_RELIEF)
       expect(fit).toBeGreaterThanOrEqual(s)
-      expect(fit).toBeLessThanOrEqual(Math.min(RELIEF, s * SURFACE_FIT_STEP) + 1e-9)
+      expect(fit).toBeLessThanOrEqual(Math.min(BLEND_RELIEF, s * SURFACE_FIT_STEP) + 1e-9)
       fits.add(fit)
     }
     // A descent from the relief to 1x refits a dozen times or so, not per frame.
-    expect(fits.size).toBeLessThanOrEqual(Math.ceil(Math.log(RELIEF) / Math.log(SURFACE_FIT_STEP)) + 1)
+    expect(fits.size).toBeLessThanOrEqual(Math.ceil(Math.log(BLEND_RELIEF) / Math.log(SURFACE_FIT_STEP)) + 1)
   })
 
   it('steps the fit up at once, and down only two steps under, so level flight across a step refits nothing', () => {
     expect(SURFACE_FIT_SLACK).toBe(2)
-    let fit = surfaceFitScale(3)
-    expect(nextSurfaceFit(fit, fit * 1.01)).toBeGreaterThan(fit)
-    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP)).toBe(fit)
-    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP ** 2 + 1e-9)).toBe(fit)
-    expect(nextSurfaceFit(fit, (fit / SURFACE_FIT_STEP ** 2) * 0.99)).toBeLessThan(fit)
+    let fit = surfaceFitScale(3, BLEND_RELIEF)
+    expect(nextSurfaceFit(fit, fit * 1.01, BLEND_RELIEF)).toBeGreaterThan(fit)
+    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP, BLEND_RELIEF)).toBe(fit)
+    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP ** 2 + 1e-9, BLEND_RELIEF)).toBe(fit)
+    expect(nextSurfaceFit(fit, (fit / SURFACE_FIT_STEP ** 2) * 0.99, BLEND_RELIEF)).toBeLessThan(fit)
     // Level flight wobbling across a step boundary: one fit.
     const boundary = SURFACE_FIT_STEP ** 5
-    fit = surfaceFitScale(boundary * 1.001)
+    fit = surfaceFitScale(boundary * 1.001, BLEND_RELIEF)
     const seen = new Set<number>()
     for (let k = 0; k < 1000; k++) {
-      fit = nextSurfaceFit(fit, boundary * (1 + 0.001 * Math.sin(k)))
+      fit = nextSurfaceFit(fit, boundary * (1 + 0.001 * Math.sin(k)), BLEND_RELIEF)
       seen.add(fit)
     }
     expect(seen.size).toBe(1)
     // Any descent and climb: the live scale always within the fitted band.
-    fit = surfaceFitScale(RELIEF)
+    fit = surfaceFitScale(BLEND_RELIEF, BLEND_RELIEF)
     let changes = 0
     for (let k = 0; k <= 4000; k++) {
-      const s = k <= 2000 ? RELIEF - ((RELIEF - 1) * k) / 2000 : 1 + ((RELIEF - 1) * (k - 2000)) / 2000
-      const next = nextSurfaceFit(fit, s)
+      const s = k <= 2000 ? BLEND_RELIEF - ((BLEND_RELIEF - 1) * k) / 2000 : 1 + ((BLEND_RELIEF - 1) * (k - 2000)) / 2000
+      const next = nextSurfaceFit(fit, s, BLEND_RELIEF)
       if (next !== fit) changes++
       fit = next
       expect(s).toBeLessThanOrEqual(fit + 1e-12)
@@ -311,10 +315,10 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
   })
 
   it('steps down near the ground too, where two steps under would be under 1x', () => {
-    let fit = surfaceFitScale(1)
-    for (const s of [1.1, 1.2, 1.3, 1.4]) fit = nextSurfaceFit(fit, s)
+    let fit = surfaceFitScale(1, BLEND_RELIEF)
+    for (const s of [1.1, 1.2, 1.3, 1.4]) fit = nextSurfaceFit(fit, s, BLEND_RELIEF)
     expect(fit).toBe(SURFACE_FIT_STEP ** 2)
-    for (const s of [1.3, 1.2, 1.1, 1.05]) fit = nextSurfaceFit(fit, s)
+    for (const s of [1.3, 1.2, 1.1, 1.05]) fit = nextSurfaceFit(fit, s, BLEND_RELIEF)
     expect(fit).toBe(SURFACE_FIT_STEP)
     expect(surfaceFitFloor(fit)).toBe(1)
   })
@@ -324,7 +328,7 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
     // [-400k - 300k - pad, -100k + pad], its top highest at the band's floor.
     const pad = 20
     const terrain = {
-      _heightScale: RELIEF,
+      _heightScale: BLEND_RELIEF,
       tiles: { ellipsoid: 'E' },
       _updateBoundingVolume(this: { _heightScale: number }, tile: { boundingVolume: { region: number[] } }) {
         const k = this._heightScale
@@ -333,7 +337,7 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
       },
     }
     const tiles = { calculateTileViewError() {} }
-    const bounds = fitSurfaceBounds(tiles, terrain, () => 3)
+    const bounds = fitSurfaceBounds(tiles, terrain, () => 3, BLEND_RELIEF)
     const floor = surfaceFitFloor(bounds.fit)
     const data: number[][] = []
     const tile = {
@@ -358,7 +362,7 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
     const written: number[] = []
     const regionData: number[][] = []
     const terrain = {
-      _heightScale: RELIEF,
+      _heightScale: BLEND_RELIEF,
       tiles: { ellipsoid: 'E' },
       _updateBoundingVolume(this: { _heightScale: number }, tile: { boundingVolume: { region: number[] } }) {
         const k = this._heightScale
@@ -374,10 +378,10 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
       },
     }
     let scale = 1.9
-    const bounds = fitSurfaceBounds(tiles, terrain, () => scale)
+    const bounds = fitSurfaceBounds(tiles, terrain, () => scale, BLEND_RELIEF)
     const fit = bounds.fit
     const floor = surfaceFitFloor(fit)
-    expect(fit).toBe(surfaceFitScale(1.9))
+    expect(fit).toBe(surfaceFitScale(1.9, BLEND_RELIEF))
     const tile = {
       boundingVolume: { region: [0, 0, 1, 1, 0, 0] },
       engineData: { boundingVolume: { setRegionData: (...a: unknown[]) => regionData.push(a.slice(1) as number[]) } },
@@ -385,7 +389,7 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
     // The plugin writing a region (a parse) writes it across the band.
     terrain._updateBoundingVolume(tile)
     expect(written).toEqual([floor, fit])
-    expect(terrain._heightScale).toBe(RELIEF)
+    expect(terrain._heightScale).toBe(BLEND_RELIEF)
     // It holds the drawn ground at every scale in the band.
     const [min, max] = tile.boundingVolume.region.slice(4)
     for (const k of [floor, (floor + fit) / 2, fit]) {
@@ -407,14 +411,14 @@ describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
     tiles.calculateTileViewError(tile)
     expect(written).toHaveLength(4)
     expect(bounds.refits).toBe(2)
-    expect(terrain._heightScale).toBe(RELIEF)
+    expect(terrain._heightScale).toBe(BLEND_RELIEF)
   })
 
   it('held RELIEF regions over the ground drawn lower, the culling the band fixes', () => {
     // The 31 km canyon hole (headless): a depth-11 tile's region at 12x
     // floated 7.5-25 km up over ground drawn at ~3 km.
     const at = (k: number) => [1500 * k - 1000 * k, 2500 * k]
-    expect(at(RELIEF)[0]).toBeGreaterThan(2500 * 1.9)
+    expect(at(BLEND_RELIEF)[0]).toBeGreaterThan(2500 * 1.9)
   })
 
   it('refuses objects that are not the 0.5.3 plugin and renderer', () => {

@@ -39,7 +39,7 @@ export const MORPH_END_PX = 2
  * page's relief), and the morph runs over the altitudes up to MORPH_TOP. That
  * stop is the highest ground plus the ship's clearance, TERRAIN_DISPLACEMENT
  * × TERRAIN_MAX_GREY + EARTH_GROUND_CLEARANCE (0.0618 + 0.004 at 25x, 0.0297
- * + 0.004 at the default 12x), rounded up. A fixed number, not that sum, so
+ * + 0.004 at 12x, 0.0025 + 0.004 at the true-scale default), rounded up. A fixed number, not that sum, so
  * the swap and the morph stay where they were tuned at any ?relief=: a lower
  * relief only lowers the stop under it. A higher one would outgrow it past
  * relief 26.7, hence ../relief.ts's clamp at 25.
