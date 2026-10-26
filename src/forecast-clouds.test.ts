@@ -8,6 +8,7 @@ import {
   createCoverGridSource,
   FORECAST_RETRY_MAX_MS,
   FORECAST_RETRY_MS,
+  FORECAST_STALE_MAX_MS,
   FORECAST_TAU_MS,
   forecastAlpha,
   GRID_LATS,
@@ -428,12 +429,18 @@ describe('createCoverGridSource', () => {
     return { stored, backoff: null as FetchBackoff | null }
   }
 
-  function setup({ store = storage(), fails = false, startAt = NOW } = {}) {
-    let now = startAt
-    const fetchJson = vi.fn(async () => {
+  function setup({
+    store = storage(),
+    fails = false,
+    startAt = NOW,
+    fetch = async (): Promise<unknown> => {
       if (fails) throw new Error('offline')
       return response()
-    })
+    },
+    exclusive = <T,>(fn: () => Promise<T>) => fn(),
+  } = {}) {
+    let now = startAt
+    const fetchJson = vi.fn(fetch)
     const source = createCoverGridSource({
       fetchJson,
       readStored: async () => store.stored,
@@ -444,15 +451,17 @@ describe('createCoverGridSource', () => {
       writeBackoff: async (backoff) => {
         store.backoff = backoff
       },
-      exclusive: (fn) => fn(),
+      exclusive,
       now: () => now,
     })
     const get = () => source.get(START + HOUR_MS, START + 40 * HOUR_MS)
+    const peek = () => source.peek(START + HOUR_MS, START + 40 * HOUR_MS)
     return {
       source,
       store,
       fetchJson,
       get,
+      peek,
       advance: (ms: number) => {
         now += ms
       },
@@ -563,5 +572,69 @@ describe('createCoverGridSource', () => {
     expect(await offline.get()).toBeNull()
     const { source } = setup()
     expect(await source.get(START, START + 60 * HOUR_MS)).toBeNull()
+  })
+
+  // The cloud types' way in (tides-tvr.4.1): never waits on the network.
+  describe('peek', () => {
+    /** A fetch that hangs until released. */
+    function hung() {
+      let release: (body: unknown) => void = () => {}
+      const fetch = () => new Promise<unknown>((resolve) => (release = resolve))
+      return { fetch, release: (body: unknown) => release(body) }
+    }
+
+    test('with no grid anywhere: null at once, the fetch started for next time', async () => {
+      const h = hung()
+      const { fetchJson, peek } = setup({ fetch: h.fetch })
+      expect(await peek()).toBeNull()
+      // In the background, after the storage and backoff reads.
+      await vi.waitFor(() => expect(fetchJson).toHaveBeenCalledTimes(1))
+      h.release(response())
+      await vi.waitFor(async () => expect(await peek()).not.toBeNull())
+      expect(fetchJson).toHaveBeenCalledTimes(1)
+    })
+
+    test('a stale stored grid serves while its refresh hangs', async () => {
+      const h = hung()
+      const { fetchJson, peek } = setup({
+        store: storage({ fetchedAt: NOW - FORECAST_TTL_MS - HOUR_MS, body: response() }),
+        fetch: h.fetch,
+      })
+      const grid = await peek()
+      expect(grid).not.toBeNull()
+      await vi.waitFor(() => expect(fetchJson).toHaveBeenCalledTimes(1))
+      expect(await peek()).toBe(grid)
+      expect(fetchJson).toHaveBeenCalledTimes(1)
+    })
+
+    test("another tab's lock held by a hung fetch doesn't hold it up", async () => {
+      const { fetchJson, peek } = setup({
+        store: storage({ fetchedAt: NOW - FORECAST_TTL_MS - HOUR_MS, body: response() }),
+        exclusive: () => new Promise<never>(() => {}),
+      })
+      expect(await peek()).not.toBeNull()
+      expect(fetchJson).not.toHaveBeenCalled()
+    })
+
+    test('a fresh grid in memory: no storage read, no fetch', async () => {
+      const { fetchJson, get, peek, store } = setup()
+      const grid = await get()
+      store.stored = null
+      expect(await peek()).toBe(grid)
+      expect(fetchJson).toHaveBeenCalledTimes(1)
+    })
+
+    test('nothing past FORECAST_STALE_MAX_MS, nor a grid not covering the times', async () => {
+      const old = setup({
+        store: storage({ fetchedAt: NOW - FORECAST_STALE_MAX_MS, body: response() }),
+        fails: true,
+      })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(await old.peek()).toBeNull()
+      const fresh = setup({ store: storage({ fetchedAt: NOW - HOUR_MS, body: response() }) })
+      expect(await fresh.source.peek(START - HOUR_MS, START)).toBeNull()
+      expect(await fresh.source.peek(START, START + 47 * HOUR_MS)).not.toBeNull()
+      vi.restoreAllMocks()
+    })
   })
 })

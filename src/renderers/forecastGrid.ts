@@ -16,8 +16,8 @@ const STORE = 'tides-forecast-v1'
 // The Cache API only stores GET requests, so the POST's response is kept
 // under a fixed URL of its own. A new key whenever the request changes: the
 // layers (tides-tvr.4.1) aren't in a grid stored under the old one, which
-// would otherwise serve untyped for up to FORECAST_TTL_MS. The old entry is
-// dropped with the first write under the new key.
+// would otherwise serve untyped for up to FORECAST_TTL_MS. Every write under
+// the new key also drops the old entries (a no-op once they're gone).
 const STORE_KEY = 'https://tides.invalid/open-meteo/cloud-layers-10deg'
 const OLD_STORE_KEYS = ['https://tides.invalid/open-meteo/cloud-cover-10deg']
 const BACKOFF_KEY = 'https://tides.invalid/open-meteo/backoff'

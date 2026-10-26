@@ -35,7 +35,6 @@ import {
   TILE_TIMEOUT_MS,
   tilesToFill,
   tileUrls,
-  utcDay,
   type ForecastSource,
   type GeoSource,
   type GibsSource,
@@ -46,8 +45,6 @@ import {
   coverCalibration,
   structureRank,
   synthesiseForecast,
-  COVER_PAST_DAYS,
-  FORECAST_STALE_MAX_MS,
   type CoverGrid,
 } from '../forecast-clouds'
 import { dailyTimeOfLon, typeGridImage } from '../cloud-types'
@@ -67,6 +64,7 @@ import {
   type Terrain,
 } from '../geo-clouds'
 import { coverGrids } from './forecastGrid'
+import { typeGridLoad, typesWithin } from './cloudTypeGrid'
 import { decodeEarthDem, halveDem, resampleDem, type EarthDem } from '../earth-dem'
 import type { ImagerySource } from './realCloudController'
 
@@ -545,43 +543,9 @@ function imageOf(rgba: Uint8ClampedArray<ArrayBuffer>, geo: GeoTextureInfo | nul
   return { rgba, geo }
 }
 
-// The cloud types come from the cover grid, which a geostationary or daily
-// build fetches alongside its tiles. Once the tiles are done the build waits
-// at most this long more for it, then goes untyped rather than late (the
-// fetch itself can take up to forecastGrid.ts's 30 s timeout).
-export const TYPE_GRID_WAIT_MS = 5_000
-
-/** The cover grid for a frame's types, or null where no grid could cover
- * fromMs..toMs: anything older than COVER_PAST_DAYS before the oldest grid
- * still served (FORECAST_STALE_MAX_MS) isn't worth a fetch. Never rejects. */
-function typeGridLoad(fromMs: number, toMs: number): Promise<CoverGrid | null> {
-  if (fromMs < utcDay(Date.now() - FORECAST_STALE_MAX_MS) - COVER_PAST_DAYS * DAY_MS) {
-    return Promise.resolve(null)
-  }
-  return coverGrids.get(fromMs, toMs).catch((err: unknown) => {
-    console.warn('[clouds] no cloud cover grid for the cloud types', err)
-    return null
-  })
-}
-
-/** The type grid from a grid load, waiting at most TYPE_GRID_WAIT_MS. Throws
- * when aborted. */
-async function typesWithin(
-  load: Promise<CoverGrid | null>,
-  timeOfLon: (grid: CoverGrid) => (lonDeg: number) => number,
-  signal: AbortSignal
-): Promise<Uint8Array<ArrayBuffer> | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const late = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), TYPE_GRID_WAIT_MS)
-  })
-  try {
-    const grid = await untilAborted(Promise.race([load, late]), signal)
-    return grid && typeGridImage(grid, timeOfLon(grid))
-  } finally {
-    clearTimeout(timer)
-  }
-}
+// The cloud types of geostationary and daily frames (./cloudTypeGrid.ts):
+// from the grid to hand, without waiting on the network.
+const typeGrids = { peek: coverGrids.peek, now: () => Date.now() }
 
 async function buildDailyImage(
   source: GibsSource,
@@ -589,7 +553,7 @@ async function buildDailyImage(
   signal: AbortSignal
 ): Promise<CloudImage | null> {
   const dayMs = Date.parse(source.date)
-  const grid = typeGridLoad(dayMs, dayMs + DAY_MS)
+  const grid = typeGridLoad(typeGrids, dayMs, dayMs + DAY_MS)
   const data = await acquireDaily(source, staticUrl, signal)
   signal.throwIfAborted()
   if (!data) return null
@@ -654,7 +618,7 @@ async function buildGeoImage(
 ): Promise<CloudImage | null> {
   // The slot's time everywhere, the daily composite under it included.
   const slotMs = Date.parse(source.time)
-  const grid = typeGridLoad(slotMs, slotMs)
+  const grid = typeGridLoad(typeGrids, slotMs, slotMs)
   const built = await buildGeoRgba(source, staticUrl, signal)
   if (!built) return null
   const image = imageOf(built.rgba, built.geo)
@@ -882,8 +846,9 @@ async function buildForecastImage(
   )
   await yieldToFrame()
   signal.throwIfAborted()
-  // Types at the frame's hour. A held frame (above) stays untyped: it shows
-  // the observation, at an hour the grid doesn't cover or with no grid.
+  // Types at the frame's hour. A held frame (above) stays untyped, whatever
+  // held it: no grid, a grid not covering the observation or the hour, or no
+  // cloud structure (rank) even though the grid covers the hour.
   const types = typeGridImage(grid, () => toMs)
   return types ? { ...imageOf(out, null), types } : imageOf(out, null)
 }

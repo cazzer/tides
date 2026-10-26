@@ -1,5 +1,5 @@
 // What kind of cloud the real-weather clouds are (tides-tvr.4.1): Open-Meteo's
-// low, mid and high cloud cover (../forecast-clouds.ts) as a small per-frame
+// low, mid and high cloud cover (./forecast-clouds.ts) as a small per-frame
 // "type grid" the GPU blends alongside the frames (renderers/cloudBlend.ts).
 // The satellites' map stays the where-cloud; this only says what it is.
 //

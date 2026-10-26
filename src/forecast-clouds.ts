@@ -20,7 +20,7 @@
 //
 // The same request carries the cover in three layers (tides-tvr.4.1), low
 // (below ~3 km), mid (3-8 km) and high (above 8 km): what kind of cloud the
-// cover is (../cloud-types.ts). A response without them still serves the
+// cover is (./cloud-types.ts). A response without them still serves the
 // cover, untyped.
 import { boxBlur, FORECAST_DAYS, FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W, smoothstep } from './real-clouds'
 
@@ -581,7 +581,9 @@ export function retryDelayMs(failures: number): number {
  * shared by every tab right before fetching, so a grid another tab just
  * fetched is used instead. Failures back off exponentially (stored);
  * meanwhile a stale grid serves if it is under FORECAST_STALE_MAX_MS old. get
- * resolves null when no usable grid covers the times asked for.
+ * resolves null when no usable grid covers the times asked for. peek never
+ * waits on the network: whatever grid is to hand (in memory, else stored),
+ * with any refresh due started in the background.
  */
 export function createCoverGridSource(deps: CoverGridDeps) {
   const { fetchJson, readStored, writeStored, readBackoff, writeBackoff, exclusive, now } = deps
@@ -650,16 +652,30 @@ export function createCoverGridSource(deps: CoverGridDeps) {
     }
   }
 
+  /** The refresh under way, or a new one if one is due; null if neither. */
+  function startRefresh(): Promise<void> | null {
+    if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) {
+      refreshing ??= exclusive(refresh).finally(() => {
+        refreshing = null
+      })
+    }
+    return refreshing
+  }
+
+  const usable = (fromMs: number, toMs: number) =>
+    current && age() < FORECAST_STALE_MAX_MS && covers(current.grid, fromMs, toMs) ? current.grid : null
+
   return {
     async get(fromMs: number, toMs: number): Promise<CoverGrid | null> {
-      if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) {
-        refreshing ??= exclusive(refresh).finally(() => {
-          refreshing = null
-        })
-        await refreshing
-      }
-      if (!current || age() >= FORECAST_STALE_MAX_MS) return null
-      return covers(current.grid, fromMs, toMs) ? current.grid : null
+      if (age() >= FORECAST_TTL_MS && now() >= nextCheckAt) await startRefresh()
+      return usable(fromMs, toMs)
+    },
+    async peek(fromMs: number, toMs: number): Promise<CoverGrid | null> {
+      // Storage is local, so worth the wait when there's nothing in memory;
+      // the lock (another tab's fetch may hold it) and the network aren't.
+      if (!current) await adoptStored()
+      startRefresh()?.catch(() => {})
+      return usable(fromMs, toMs)
     },
   }
 }
