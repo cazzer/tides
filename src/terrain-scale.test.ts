@@ -210,12 +210,12 @@ describe('the live scale (tides-zmw.9.5)', () => {
       const drawn = (liveTerrainDisplacement() * grey) / 255
       minGap = Math.min(minGap, a - drawn)
       expect(a - drawn).toBeGreaterThanOrEqual(c - 1e-12)
-      // At the stop, under the cloud base, which stands on full-relief
-      // ground until tides-zmw.9.6.
+      // At the stop, under the cloud base, which stands on the drawn ground
+      // at the live scale (tides-zmw.9.6), so drops with it.
       if (a === floor) {
         stopped++
-        expect(a).toBeLessThan(cloudColumn(1, 1.5, grey / 255).base)
-        expect(a).toBeLessThan((grey / 255) * TERRAIN_DISPLACEMENT + CLOUD_CLEARANCE)
+        expect(a).toBeLessThan(cloudColumn(1, 1.5, grey / 255, liveTerrainDisplacement()).base)
+        expect(a).toBeLessThan((grey / 255) * liveTerrainDisplacement() + CLOUD_CLEARANCE)
       }
       maxStep = Math.max(maxStep, Math.abs(terrainScaleUniform.value - prevScale))
       prevScale = terrainScaleUniform.value

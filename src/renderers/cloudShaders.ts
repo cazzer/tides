@@ -66,6 +66,8 @@ import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './p
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
+import { TERRAIN_BLEND, terrainScaleUniform } from '../terrain-scale'
+import { liveTerrain } from './cloudTerrainScale'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 
@@ -1398,6 +1400,8 @@ export interface CloudLayer {
     uCloudMaxKm: THREE.IUniform<number>
     uSunDir: THREE.IUniform<THREE.Vector3>
     uSeaLevel: THREE.IUniform<number>
+    /** The live terrain scale (../terrain-scale.ts), when `live`. */
+    uTerrainScale: THREE.IUniform<number>
   }
   /** Altitude of the shell mesh above sea level. */
   shellAltitude: number
@@ -1432,7 +1436,7 @@ async function fetchCeiling(): Promise<THREE.DataTexture> {
   return ceilingTexture(grey, TERRAIN_MAP_SIZE)
 }
 
-export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLayer {
+export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: boolean = TERRAIN_BLEND): CloudLayer {
   const uniforms: CloudLayer['uniforms'] = {
     uCloudMap: { value: null },
     uTerrainMap: { value: null },
@@ -1441,6 +1445,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uCloudMaxKm: { value: MAX_CLOUD_TOP_KM },
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
+    uTerrainScale: terrainScaleUniform,
   }
   const defines: Record<string, string> = flat ? { CLOUD_FLAT: '' } : {}
   const material = new THREE.ShaderMaterial({
@@ -1454,8 +1459,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uCloudCeiling: { value: ceilingTexture() },
     },
     defines,
-    vertexShader: VERTEX,
-    fragmentShader: FRAGMENT,
+    vertexShader: liveTerrain(VERTEX, live),
+    fragmentShader: liveTerrain(FRAGMENT, live),
     transparent: true,
     depthWrite: false,
     // The shader premultiplies, so that within reach the haze it adds over a
@@ -1537,12 +1542,12 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         GROUND_VERTEX_BODY
       )
       shader.fragmentShader = inject(
-        inject(shader.fragmentShader, 'common', flag + GROUND_FRAGMENT_HEAD),
+        inject(shader.fragmentShader, 'common', flag + liveTerrain(GROUND_FRAGMENT_HEAD, live)),
         'lights_fragment_end',
         GROUND_FRAGMENT_LIGHT
       )
     },
-    customProgramCacheKey: () => (flat ? 'cloud-shadow-flat' : 'cloud-shadow'),
+    customProgramCacheKey: () => (flat ? 'cloud-shadow-flat' : 'cloud-shadow') + (live ? '-live' : ''),
   }
   return {
     material,
