@@ -26,7 +26,10 @@ import {
   protectOverlayBitmaps,
   shareGridBytes,
   quietTilesetVersion,
+  FailedTileBackoff,
+  RETRY_BACKOFF_MAX_MS,
   retryFailedTiles,
+  startFailedTileRetry,
   SurfaceGridCache,
   type SurfaceGridOptions,
   type TerrainPluginInternals,
@@ -178,6 +181,8 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     const evict = base.slice(base.indexOf('const addedSuccessfully = lruCache.add( tile, t => {'), base.indexOf('if ( ! addedSuccessfully ) {'))
     expect(evict).toContain('t.internal.loadingState = UNLOADED;')
     expect(evict).not.toContain('failed')
+    expect(built(/if \(\w\.add\(\w, \(\w\) => \{\s*\w\.abort\(\), \w \? \w\.children\.length = 0 : this\.invokeAllPlugins\(/)).toHaveLength(1)
+    expect(built(/\w\.internal\.loadingState === 4 && \w\.loaded--, \w\.internal\.loadingState = 0, \w\.remove\(\w\), \w\.remove\(\w\), \w\.delete\(\w\);\s*\}\)\) return/)).toHaveLength(1)
     // a root that failed loads again once UNLOADED
     expect(base).toContain('if ( this.rootLoadingState === UNLOADED ) {')
     const lru = read('src/core/renderer/utilities/LRUCache.js')
@@ -613,6 +618,102 @@ describe('retryFailedTiles (tides-zmw.9.20)', () => {
     expect(retryFailedTiles(tiles as unknown as TilesRenderer)).toBe(1)
     expect(remove.mock.calls).toEqual([[failed]])
     expect(tiles.stats.failed).toBe(0)
+  })
+})
+
+/** Tiles that fail again as soon as they're retried: remove() logs when, and the caller counts them failed again. */
+function failingTiles(count: number) {
+  const FAILED = -1
+  const items: object[] = Array.from({ length: count }, () => ({ internal: { loadingState: FAILED } }))
+  const removed: { tile: object; at: number }[] = []
+  const tiles = {
+    rootLoadingState: 4,
+    stats: { failed: count },
+    lruCache: { itemList: items, remove: (tile: object) => removed.push({ tile, at: Date.now() }) },
+    group: { userData: {} as Record<string, unknown> },
+  }
+  return { tiles, items, removed, asTiles: tiles as unknown as TilesRenderer }
+}
+
+describe('failed tile backoff (tides-zmw.9.20)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('retries a tile that keeps failing at once, then 10 s, 20 s, 40 s on, up to 5 min apart', () => {
+    const { asTiles, tiles, removed } = failingTiles(1)
+    const backoff = new FailedTileBackoff(10_000)
+    const retriedAt: number[] = []
+    for (let s = 0; s <= 1000; s += 10) {
+      const reset = retryFailedTiles(asTiles, backoff, s * 1000)
+      if (reset) retriedAt.push(s)
+      tiles.stats.failed += reset // failed again
+    }
+    expect(retriedAt).toEqual([0, 10, 30, 70, 150, 310, 610, 910])
+    expect(RETRY_BACKOFF_MAX_MS).toBe(300_000)
+    expect(removed).toHaveLength(retriedAt.length)
+  })
+
+  it('leaves stats.failed at the tiles still waiting, and starts over for a tile failing long after', () => {
+    const { asTiles, tiles, items } = failingTiles(1)
+    const backoff = new FailedTileBackoff(10_000)
+    expect(retryFailedTiles(asTiles, backoff, 0)).toBe(1)
+    tiles.stats.failed = 1 // it failed again
+    items.push({ internal: { loadingState: -1 } }) // and a new one failed
+    tiles.stats.failed = 2
+    expect(retryFailedTiles(asTiles, backoff, 5000)).toBe(1) // only the new one
+    expect(tiles.stats.failed).toBe(1)
+    // the first tile loaded, then failed again an hour on: due at once, the next 10 s later
+    items.length = 1
+    tiles.stats.failed = 1
+    expect(retryFailedTiles(asTiles, backoff, 3_600_000)).toBe(1)
+    tiles.stats.failed = 1
+    expect(retryFailedTiles(asTiles, backoff, 3_605_000)).toBe(0)
+    expect(retryFailedTiles(asTiles, backoff, 3_610_000)).toBe(1)
+  })
+
+  it('retries on its interval by backoff, every tile at once on online, and stops', () => {
+    vi.useFakeTimers({ now: 0 })
+    const { asTiles, tiles, removed } = failingTiles(1)
+    const target = new EventTarget()
+    const stop = startFailedTileRetry(asTiles, 10_000, target)
+    const run = (ms: number) => {
+      for (let t = 0; t < ms; t += 10_000) {
+        const before = removed.length
+        vi.advanceTimersByTime(10_000)
+        tiles.stats.failed += removed.length - before // failed again
+      }
+    }
+    run(100_000)
+    expect(removed.map((r) => r.at / 1000)).toEqual([10, 20, 40, 80])
+    target.dispatchEvent(new Event('online'))
+    tiles.stats.failed += 1
+    run(40_000)
+    // at once, then the schedule from the start
+    expect(removed.map((r) => r.at / 1000)).toEqual([10, 20, 40, 80, 100, 110, 130])
+    expect(tiles.group.userData.retriedTiles).toBe(7)
+    stop()
+    target.dispatchEvent(new Event('online'))
+    run(600_000)
+    expect(removed).toHaveLength(7)
+  })
+
+  it('says a throw once and keeps the page clear of it', () => {
+    vi.useFakeTimers({ now: 0 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const tiles = {
+      rootLoadingState: 4,
+      stats: {
+        get failed(): number {
+          throw new TypeError('broken')
+        },
+      },
+    }
+    const stop = startFailedTileRetry(tiles as unknown as TilesRenderer, 10_000, null)
+    expect(() => vi.advanceTimersByTime(30_000)).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+    stop()
   })
 })
 

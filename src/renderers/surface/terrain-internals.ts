@@ -233,9 +233,52 @@ interface FailedTileInternals {
   }
 }
 
+/** The longest a failed tile waits between retries. */
+export const RETRY_BACKOFF_MAX_MS = 300_000
+/** A retry this much early is on time (the timer's ticks drift). */
+const RETRY_SLACK_MS = 1000
+
 /**
- * Has every tile that failed to load (tides-zmw.9.20) load again on the
- * renderer's next update, and returns how many it reset. Not the library's
+ * When each failed tile may next be retried: the first retry at once, the
+ * next firstMs later, then twice as long each time, up to maxMs. A tile
+ * that fails for good (a 403, a corrupt image) is otherwise asked for every
+ * tick for the rest of the session, three requests a time for a 5xx
+ * (fetchWithRetry), with the library's two console errors each.
+ */
+export class FailedTileBackoff {
+  private entries = new WeakMap<object, { n: number; nextAt: number }>()
+  readonly firstMs: number
+  readonly maxMs: number
+
+  constructor(firstMs: number, maxMs = RETRY_BACKOFF_MAX_MS) {
+    this.firstMs = firstMs
+    this.maxMs = maxMs
+  }
+
+  /** Whether the tile may be retried at now (ms). */
+  due(tile: object, now: number): boolean {
+    const entry = this.entries.get(tile)
+    return !entry || now + RETRY_SLACK_MS >= entry.nextAt
+  }
+
+  /** Records a retry at now: the next one waits twice as long as the last. */
+  retried(tile: object, now: number): void {
+    const entry = this.entries.get(tile)
+    // Long past due, it loaded since and has failed afresh: start over.
+    const n = entry && now - entry.nextAt <= this.maxMs ? entry.n + 1 : 1
+    this.entries.set(tile, { n, nextAt: now + Math.min(this.firstMs * 2 ** (n - 1), this.maxMs) })
+  }
+
+  /** Forgets every tile's schedule (the network is back). */
+  clear(): void {
+    this.entries = new WeakMap()
+  }
+}
+
+/**
+ * Has every tile that failed to load (tides-zmw.9.20), and is due a retry
+ * by backoff (all of them without one), load again on the renderer's next
+ * update, and returns how many it reset. Not the library's
  * resetFailedTiles: that walks the whole tree reading each tile's .internal,
  * which the terrain plugin's lazily expanded children lack until a traversal
  * preprocesses them (so it throws), and it leaves a reset tile in the LRU
@@ -243,17 +286,60 @@ interface FailedTileInternals {
  * A failed tile stays in the cache (marked loaded) until evicted, and an
  * eviction puts it back to UNLOADED: so evict each failed one, as the cache
  * itself would, and the next traversal requests it afresh (its grid too:
- * SurfaceGridCache forgot the failed one). stats.failed is zeroed as the
- * library's reset does (an evicted failed tile never decrements it).
+ * SurfaceGridCache forgot the failed one). stats.failed is left at the
+ * tiles still failing (the library zeroes it; an evicted failed tile never
+ * decrements it).
  */
-export function retryFailedTiles(tiles: TilesRenderer): number {
+export function retryFailedTiles(tiles: TilesRenderer, backoff?: FailedTileBackoff, now = Date.now()): number {
   const t = tiles as unknown as FailedTileInternals
   if (t.rootLoadingState === TILE_FAILED) t.rootLoadingState = TILE_UNLOADED
   if (t.stats.failed === 0) return 0
   const failed = t.lruCache.itemList.filter((tile) => tile?.internal?.loadingState === TILE_FAILED)
-  for (const tile of failed) t.lruCache.remove(tile)
-  t.stats.failed = 0
-  return failed.length
+  let reset = 0
+  for (const tile of failed) {
+    if (backoff && !backoff.due(tile, now)) continue
+    backoff?.retried(tile, now)
+    t.lruCache.remove(tile)
+    reset++
+  }
+  t.stats.failed = failed.length - reset
+  return reset
+}
+
+/**
+ * Retries failed tiles every intervalMs, each on its own backoff, and all
+ * of them at once when the network comes back ('online' on target, which
+ * clears the backoff). Counts the tiles reset in group.userData.retriedTiles.
+ * A throw here would be a page error each tick, so it's said once and
+ * dropped. Returns the stop.
+ */
+export function startFailedTileRetry(
+  tiles: TilesRenderer,
+  intervalMs: number,
+  target: EventTarget | null = typeof window !== 'undefined' ? window : null
+): () => void {
+  const backoff = new FailedTileBackoff(intervalMs)
+  let retried = 0
+  let warned = false
+  const retry = () => {
+    try {
+      const reset = retryFailedTiles(tiles, backoff)
+      if (reset > 0) tiles.group.userData.retriedTiles = retried += reset
+    } catch (error) {
+      if (!warned) console.warn('surface tiles: retrying failed tiles threw (said once)', error)
+      warned = true
+    }
+  }
+  const online = () => {
+    backoff.clear()
+    retry()
+  }
+  const timer = setInterval(retry, intervalMs)
+  target?.addEventListener('online', online)
+  return () => {
+    clearInterval(timer)
+    target?.removeEventListener('online', online)
+  }
 }
 
 /** overlay.imageSource (an XYZImageSource) as protectOverlayBitmaps patches it. */

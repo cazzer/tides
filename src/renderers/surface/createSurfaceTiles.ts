@@ -31,8 +31,8 @@ import {
   installSurfaceGridCache,
   protectOverlayBitmaps,
   quietTilesetVersion,
-  retryFailedTiles,
   shareGridBytes,
+  startFailedTileRetry,
   type SurfaceGridCache,
 } from './terrain-internals'
 import { decodeTerrariumImage } from './terrarium'
@@ -51,7 +51,7 @@ const GIGABYTE = 2 ** 30
  * is charged half the elevation grid it shares (shareGridBytes).
  */
 export const SURFACE_CACHE_BYTES = { min: 0.15 * GIGABYTE, max: 0.25 * GIGABYTE }
-/** How often failed tiles are retried. */
+/** How often failed tiles are retried, and the first wait of each one's backoff. */
 export const RETRY_FAILED_MS = 10_000
 /** Downloads in flight per server (the library's shared queue allows 25). */
 export const SURFACE_JOBS_PER_ORIGIN = 8
@@ -186,24 +186,11 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
   })
 
   // A failed tile stays failed until it's reset; the grid cache forgets
-  // failed grids (terrain-internals.ts), so retry them when the network
-  // comes back and every RETRY_FAILED_MS (it returns at once while
-  // stats.failed is 0). Not the library's resetFailedTiles, which throws on
-  // the plugin's tree and wouldn't reload them (retryFailedTiles); a throw
-  // here would be a page error each time, so it's said once and dropped.
-  let retriedTiles = 0
-  let retryWarned = false
-  const retryFailed = () => {
-    try {
-      const reset = retryFailedTiles(tiles)
-      if (reset > 0) tiles.group.userData.retriedTiles = retriedTiles += reset
-    } catch (error) {
-      if (!retryWarned) console.warn('surface tiles: retrying failed tiles threw (said once)', error)
-      retryWarned = true
-    }
-  }
-  const retryTimer = setInterval(retryFailed, RETRY_FAILED_MS)
-  if (typeof window !== 'undefined') window.addEventListener('online', retryFailed)
+  // failed grids (terrain-internals.ts), so retry them every RETRY_FAILED_MS,
+  // each backing off while it keeps failing, and all at once when the
+  // network comes back. Not the library's resetFailedTiles, which throws on
+  // the plugin's tree and wouldn't reload them (retryFailedTiles).
+  const stopRetry = startFailedTileRetry(tiles, RETRY_FAILED_MS)
 
   const syncCounters = () => {
     const data = tiles.group.userData
@@ -233,8 +220,7 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     // and grids waiting their turn reject as aborted, which the plugin takes
     // as a cancelled load.
     dispose() {
-      clearInterval(retryTimer)
-      if (typeof window !== 'undefined') window.removeEventListener('online', retryFailed)
+      stopRetry()
       grids.shutDown()
       budget.dispose()
       decoder.dispose()
