@@ -13,7 +13,9 @@
 // would otherwise leave a hole in the ground. A transient failure (network,
 // 429, 5xx) is retried first (fetch-retry.ts), so one blip doesn't paint a
 // land tile in the ocean colour for as long as it stays cached. An abort
-// still ends the chain.
+// still ends the chain. Tiles in the US boxes that EOX answered for (USGS
+// had nothing, or a blank) are remembered, so the credits line names EOX
+// for them (servedByEox, credit-sources.ts).
 import { XYZTilesOverlay } from '3d-tiles-renderer/three/plugins'
 import { fetchWithRetry, RETRY_DELAYS_MS } from './fetch-retry'
 import {
@@ -25,13 +27,18 @@ import {
   IMAGERY_TILE_SIZE,
   imageryUrlsFor,
   parseImageryUrl,
+  type ImageryTile,
 } from './imagery'
+
+const tileKey = ({ z, x, y }: ImageryTile) => `${z}/${x}/${y}`
 
 export class SurfaceImageryOverlay extends XYZTilesOverlay {
   /** Tiles drawn in the fallback colour because no source answered. */
   fallbacks = 0
   /** Waits before each retry of a transient failure (tests shorten them). */
   retryDelays: readonly number[] = RETRY_DELAYS_MS
+  /** USGS-first tiles whose last answer came from EOX, as z/x/y. */
+  private readonly eoxServed = new Set<string>()
 
   constructor() {
     super({ url: EOX_URL, levels: IMAGERY_LEVELS, tileDimension: IMAGERY_TILE_SIZE })
@@ -40,18 +47,34 @@ export class SurfaceImageryOverlay extends XYZTilesOverlay {
   override async fetch(url: string, options: RequestInit = {}): Promise<Response> {
     const tile = parseImageryUrl(url)
     const urls = tile ? imageryUrlsFor(tile) : [url]
+    let asked = ''
     try {
       const res = await fetchWithRetry(
-        () => fetchFirstOk(urls, (u) => super.fetch(u, options)),
+        () =>
+          fetchFirstOk(urls, (u) => {
+            asked = u
+            return super.fetch(u, options)
+          }),
         options.signal,
         this.retryDelays
       )
-      if (res.ok) return res
+      if (res.ok) {
+        if (tile && urls.length > 1) {
+          if (asked === urls[urls.length - 1]) this.eoxServed.add(tileKey(tile))
+          else this.eoxServed.delete(tileKey(tile))
+        }
+        return res
+      }
       cancelBody(res)
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') throw error
     }
     this.fallbacks++
     return fallbackImageryResponse()
+  }
+
+  /** Whether EOX drew this imagery tile though it lies in a US box. */
+  servedByEox(tile: ImageryTile): boolean {
+    return this.eoxServed.has(tileKey(tile))
   }
 }

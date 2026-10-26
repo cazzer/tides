@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest'
-import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type RadianBounds } from './credit-sources'
+import {
+  ActiveSources,
+  imageryTileFor,
+  sourcesForTile,
+  tileOnNearSide,
+  tileRadianBounds,
+  type RadianBounds,
+} from './credit-sources'
 import * as THREE from 'three'
 import { applySurfaceFrame, surfaceEcef } from './surface-frame'
 import { tileBounds } from './imagery'
@@ -90,5 +97,23 @@ describe('ActiveSources', () => {
     const a = new ActiveSources()
     const first = a.update(['mapterhorn'], 0)
     expect(a.update(['mapterhorn'], 100)).toBe(first)
+  })
+})
+
+describe('EOX standing in for USGS (tides-zmw.9.2)', () => {
+  test('finds the imagery tile a terrain tile drapes, clamped to the deepest imagery level', () => {
+    expect(imageryTileFor(rad(10, 192, 405))).toEqual({ z: 10, x: 192, y: 405 })
+    expect(imageryTileFor(rad(16, 12355, 25721))).toEqual({ z: 16, x: 12355, y: 25721 })
+    expect(imageryTileFor(rad(17, 24711, 51443))).toEqual({ z: 16, x: 12355, y: 25721 })
+  })
+  test('credits EOX, not USGS, for a tile in a US box whose imagery EOX served', () => {
+    const offBigSur = rad(11, 326, 801) // inside CONUS west, over the Pacific
+    expect(sourcesForTile(offBigSur)).toEqual(['mapterhorn', 'usgs'])
+    const served = new Set(['11/326/801'])
+    const byEox = ({ z, x, y }: { z: number; x: number; y: number }) => served.has(`${z}/${x}/${y}`)
+    expect(sourcesForTile(offBigSur, byEox)).toEqual(['mapterhorn', 'eox'])
+    // its land neighbour keeps USGS; outside the boxes nothing changes
+    expect(sourcesForTile(rad(11, 327, 801), byEox)).toEqual(['mapterhorn', 'usgs'])
+    expect(sourcesForTile(rad(10, 541, 361), byEox)).toEqual(['mapterhorn', 'eox'])
   })
 })

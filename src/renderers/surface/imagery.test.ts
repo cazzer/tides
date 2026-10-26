@@ -258,3 +258,27 @@ describe('imagery retry (tides-zmw.9.2 review)', () => {
     expect(overlay.fallbacks).toBe(0)
   })
 })
+
+describe('which source served a US tile (tides-zmw.9.2)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('remembers a US tile EOX answered for, and forgets it once USGS answers', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    const sea = { z: 11, y: 801, x: 326 }
+    let usgs = 404
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async (url: string) =>
+      response(url.includes('nationalmap') ? usgs : 200)
+    )
+    expect(insideUsgsCoverage(sea)).toBe(true)
+    await overlay.fetch(imageryUrl(EOX_URL, sea), {})
+    expect(overlay.servedByEox(sea)).toBe(true)
+    usgs = 200
+    await overlay.fetch(imageryUrl(EOX_URL, sea), {})
+    expect(overlay.servedByEox(sea)).toBe(false)
+    // outside the boxes EOX is the only source, not a stand-in
+    const alps = tileAt(46.5, 8, 12)
+    await overlay.fetch(imageryUrl(EOX_URL, alps), {})
+    expect(overlay.servedByEox(alps)).toBe(false)
+  })
+})

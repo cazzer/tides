@@ -8,6 +8,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
 import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
+import type { ImageryTile } from './imagery'
 import { setActiveSurfaceSources } from './surface-credits'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
@@ -99,11 +100,12 @@ export default function SurfaceTiles() {
     if (credit && now - credit.at >= CREDIT_INTERVAL_MS) {
       credit.at = now
       const seen = new Set<SurfaceSource>()
+      const servedByEox = (tile: ImageryTile) => current.overlay.servedByEox(tile)
       // The camera in the tiles' own frame (ECEF metres), for the horizon.
       const eye = tiles.group.worldToLocal(camera.getWorldPosition(creditEye))
       for (const tile of tiles.visibleTiles) {
         const bounds = tileRadianBounds(tile)
-        if (bounds && tileOnNearSide(bounds, eye)) sourcesForTile(bounds).forEach((s) => seen.add(s))
+        if (bounds && tileOnNearSide(bounds, eye)) sourcesForTile(bounds, servedByEox).forEach((s) => seen.add(s))
       }
       setActiveSurfaceSources(credit.sources.update(seen, now))
     }

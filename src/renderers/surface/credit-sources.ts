@@ -3,7 +3,7 @@
 // under every tile, USGS imagery on tiles wholly inside the US boxes, EOX's
 // Sentinel-2 cloudless elsewhere (imagery.ts picks the same way). Pure: the
 // scene feeds in what is visible, the line reads what comes out.
-import { boundsInsideUsgs, boundsTouchUsgs } from './imagery'
+import { boundsInsideUsgs, boundsTouchUsgs, IMAGERY_LEVELS, type ImageryTile } from './imagery'
 
 export type SurfaceSource = 'mapterhorn' | 'usgs' | 'eox'
 
@@ -37,17 +37,40 @@ export interface RadianBounds {
 const DEG = 180 / Math.PI
 
 /**
+ * The imagery tile draped whole over a terrain tile with this footprint: the
+ * terrain tiles and the imagery share the Web Mercator XYZ grid, so the
+ * footprint's width gives its level, clamped to the imagery's deepest
+ * (deeper terrain tiles drape a part of that level's tile).
+ */
+export function imageryTileFor(b: RadianBounds): ImageryTile {
+  const level = Math.max(0, Math.round(Math.log2((2 * Math.PI) / (b.east - b.west))))
+  const z = Math.min(level, IMAGERY_LEVELS - 1)
+  const n = 2 ** z
+  const cx = (b.west + b.east) / 2
+  const cy = (b.south + b.north) / 2
+  const x = Math.floor(((cx + Math.PI) / (2 * Math.PI)) * n)
+  const y = Math.floor(((1 - Math.log(Math.tan(cy) + 1 / Math.cos(cy)) / Math.PI) / 2) * n)
+  return { z, x: Math.min(n - 1, Math.max(0, x)), y: Math.min(n - 1, Math.max(0, y)) }
+}
+
+/**
  * The sources for a terrain tile with this footprint: its terrain, and the
  * imagery draped over it. The imagery is chosen per overlay tile, which can
  * be finer than the terrain tile, so a footprint that straddles a US box
  * names both: USGS where it touches a box, EOX unless it sits wholly inside
- * one. (Open water inside a box falls back to EOX by status, uncredited.)
+ * one. Inside a box, `servedByEox` says whether EOX answered for the tile's
+ * imagery instead (USGS had nothing there, or a blank: open water, mostly),
+ * which then takes the credit.
  */
-export function sourcesForTile(b: RadianBounds): SurfaceSource[] {
+export function sourcesForTile(b: RadianBounds, servedByEox?: (tile: ImageryTile) => boolean): SurfaceSource[] {
   const deg = { west: b.west * DEG, south: b.south * DEG, east: b.east * DEG, north: b.north * DEG }
   const sources: SurfaceSource[] = ['mapterhorn']
+  if (boundsInsideUsgs(deg)) {
+    sources.push(servedByEox?.(imageryTileFor(b)) ? 'eox' : 'usgs')
+    return sources
+  }
   if (boundsTouchUsgs(deg)) sources.push('usgs')
-  if (!boundsInsideUsgs(deg)) sources.push('eox')
+  sources.push('eox')
   return sources
 }
 
