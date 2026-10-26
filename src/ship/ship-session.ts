@@ -118,14 +118,14 @@ const NEAR_SHARE = 0.4
 export const NEAR_MIN = 0.001
 /**
  * The floor under reversed-Z on a float depth buffer, for canyon-scale
- * clearance (tides-zmw.9.8 applies it, once tides-zmw.9.4 says the buffer is
- * float: on a 24-bit one, so short a near plane would leave everything past
- * ~16 units at one depth).
+ * clearance (tides-zmw.9.8 applies it where renderers/depth-precision.ts
+ * `reversedFloatDepth(gl)` says the buffer is float: on a 24-bit one, so
+ * short a near plane would leave everything past ~16 units at one depth).
  */
 export const NEAR_MIN_REVERSED = 1e-6
 const NEAR_MAX = 0.1
 
-/** The near plane's floor: NEAR_MIN_REVERSED where `reversedFloatDepth`, else NEAR_MIN. */
+/** The near plane's floor: NEAR_MIN_REVERSED where `reversedFloatDepth` (depth-precision.ts), else NEAR_MIN. */
 export function shipNearFloor(reversedFloatDepth: boolean): number {
   return reversedFloatDepth ? NEAR_MIN_REVERSED : NEAR_MIN
 }
