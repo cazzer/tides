@@ -4,13 +4,16 @@ import {
   EARTH_KM_PER_UNIT,
   SURFACE_FADE_START,
   SURFACE_MAX_METRES,
+  SURFACE_MIN_TOP_KM,
   SURFACE_TOP,
   SURFACE_TOP_KM,
   setSurfaceEye,
   surfaceOpacity,
   surfaceOpacityUniform,
+  surfaceTopKm,
 } from './surface-handover'
-import { EARTH_COLLISION_RADIUS, EARTH_RADIUS } from './ship/ship-bodies'
+import { MAX_RELIEF, RELIEF } from './relief'
+import { EARTH_COLLISION_RADIUS, EARTH_GROUND_CLEARANCE, EARTH_RADIUS, EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
 
 afterEach(() => setSurfaceEye(Infinity))
 
@@ -24,10 +27,21 @@ describe('true units (tides-zmw.9.5)', () => {
 })
 
 describe('the surface handover (tides-zmw.9.7)', () => {
-  it('tops out at ~100 km true, dissolving from 60 km', () => {
-    expect(SURFACE_TOP_KM).toBe(100)
-    expect(SURFACE_TOP * EARTH_KM_PER_UNIT).toBeCloseTo(100, 9)
+  it('tops out at 100 km true at 1x, dissolving from 60 km, and higher with the relief', () => {
+    expect(SURFACE_MIN_TOP_KM).toBe(100)
+    expect(surfaceTopKm(1)).toBe(100)
+    expect(SURFACE_TOP_KM).toBe(surfaceTopKm(RELIEF))
+    expect(SURFACE_TOP * EARTH_KM_PER_UNIT).toBeCloseTo(SURFACE_TOP_KM, 9)
     expect(SURFACE_FADE_START).toBe(0.6)
+    expect(surfaceTopKm(12)).toBeGreaterThan(180)
+    expect(surfaceTopKm(12)).toBeLessThan(200)
+  })
+
+  it.each([1, 12, MAX_RELIEF])('at relief %d, gives the tiles all the ground at the stop over their highest drawn peak', (relief) => {
+    // The standard depth buffer's stop (the higher one) over SURFACE_MAX, drawn at the relief.
+    const stop = (SURFACE_MAX_METRES + SURFACE_GROUND_MARGIN_METRES) * relief * EARTH_UNITS_PER_METRE + EARTH_GROUND_CLEARANCE
+    expect(surfaceOpacity(stop, relief)).toBe(1)
+    expect(surfaceOpacity(surfaceTopKm(relief) / EARTH_KM_PER_UNIT, relief)).toBe(0)
   })
 
   it('gives the tiles all the ground up to 0.6 of the top and none from the top, monotonic', () => {
@@ -52,7 +66,8 @@ describe('the surface handover (tides-zmw.9.7)', () => {
     expect(surfaceOpacityUniform.value).toBe(0)
   })
 
-  it("keeps the low tier's stop above it: that tier never draws the tiles", () => {
+  it("keeps the low tier's stop above it at any relief: that tier never draws the tiles", () => {
     expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(SURFACE_TOP)
+    expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(surfaceTopKm(MAX_RELIEF) / EARTH_KM_PER_UNIT)
   })
 })

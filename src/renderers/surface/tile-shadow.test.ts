@@ -107,7 +107,7 @@ describe('terrain shadows on the tiles (tides-zmw.9.15)', () => {
     expect(nnw.layers.toArray()).toEqual([1, 0])
     expect(nnw.a.w).toBeCloseTo(0.25, 9)
     expect(nnw.b.x).toBeCloseTo(0.75, 9)
-    // off: the Sun over the highest horizon (at the scale), at night, or no tiles drawn
+    // off: the Sun over the highest horizon (at the relief), at night, or no tiles drawn
     expect(tileSun(tileFrame(up, 1e-4), 0.5, sunAt(90, 40).normalize(), 1, 1, target()).on).toBe(0)
     expect(tileSun(tileFrame(up, 1e-4), 0.5, sunAt(90, 40).normalize(), 2, 1, target()).on).toBe(1) // atan(2 * 0.5) = 45°
     expect(tileSun(tileFrame(up, 1e-4), 0.5, sunAt(90, -10).normalize(), 1, 1, target()).on).toBe(0)

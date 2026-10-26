@@ -4,10 +4,10 @@
 // scene as it was. The tiles stand at the globe's relief (./relief.ts), and
 // take the ground over from the globe below the handover's top
 // (./surface-handover.ts) by stencil, the globe filling wherever no tile has
-// loaded (tides-zmw.9.7, renderers/surface/surface-scale.ts). Still a preview: the tiles lack the globe's cloud
-// shadows, night lights, sun glint and terrain shadows (beads under
-// tides-zmw.9), which must land before the flag becomes the default
-// (tides-zmw.9.10).
+// loaded (tides-zmw.9.7, renderers/surface/surface-scale.ts). Still a
+// preview: the tiles lack the globe's cloud shadows, night lights, sun glint
+// and terrain shadows (beads under tides-zmw.9), which must land before the
+// flag becomes the default (tides-zmw.9.10).
 //
 // High tier only: the tiles stream tens of MB of textures and meshes a phone
 // budget can't spare. iPads report the high tier; there, without linear
