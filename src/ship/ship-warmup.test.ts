@@ -114,4 +114,43 @@ describe('coldWork', () => {
     expect(material.version).toBeGreaterThan(version)
     expect(coldWork(scene, warmed, byMaterial)).toEqual([])
   })
+
+  test('warms the programs a material turns its defines to, on each side (tides-tvr.4.2)', () => {
+    const material = new THREE.ShaderMaterial({ defines: { FOG_EASE: '' } })
+    material.userData.warmSides = [THREE.BackSide]
+    material.userData.warmDefines = ['CLOUD_TYPED']
+    const mesh = new THREE.Mesh(undefined, material)
+    const scene = new THREE.Scene().add(mesh)
+    const camera = new THREE.PerspectiveCamera()
+    const warmed = createWarmed()
+
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([
+      { object: mesh },
+      { object: mesh, side: THREE.BackSide },
+      { object: mesh, defines: ['CLOUD_TYPED'] },
+      { object: mesh, side: THREE.BackSide, defines: ['CLOUD_TYPED'] },
+    ])
+    const compiled: { side: THREE.Side; defines: string[] }[] = []
+    const renderer = {
+      compile: () => compiled.push({ side: material.side, defines: Object.keys(material.defines).sort() }),
+    } as unknown as THREE.WebGLRenderer
+    compileSide(renderer, mesh, undefined, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
+    compileSide(renderer, mesh, THREE.BackSide, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
+    expect(compiled).toEqual([
+      { side: THREE.FrontSide, defines: ['CLOUD_TYPED', 'FOG_EASE'] },
+      { side: THREE.BackSide, defines: ['CLOUD_TYPED', 'FOG_EASE'] },
+    ])
+    // Turned back, for three to pick the program the draw wants again.
+    expect(material.defines).toEqual({ FOG_EASE: '' })
+    expect(material.side).toBe(THREE.FrontSide)
+    // A material already typed warms its untyped program.
+    material.defines.CLOUD_TYPED = ''
+    compileSide(renderer, mesh, undefined, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
+    expect(compiled[2].defines).toEqual(['FOG_EASE'])
+    expect(material.defines).toEqual({ FOG_EASE: '', CLOUD_TYPED: '' })
+    // In the order it had: three keys a program by its defines in order.
+    material.defines = { CLOUD_TYPED: '', FOG_EASE: '' }
+    compileSide(renderer, mesh, undefined, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
+    expect(Object.keys(material.defines)).toEqual(['CLOUD_TYPED', 'FOG_EASE'])
+  })
 })
