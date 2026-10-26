@@ -1373,6 +1373,26 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     expect(growth(false)).toBeLessThan(1.02)
   })
 
+  test('an unlocked dive under the law rides the cap down: speed / cap stays at the throttle to the stop', () => {
+    const { bodies, earth } = earthOverTiles()
+    const start = earth.position.clone().addScaledVector(UP, earth.ground!(UP) + 30000 * M)
+    const state = shipAt(start, earth.position)
+    const telemetry = createShipTelemetry()
+    let peak = 0
+    let seconds = 0
+    for (; seconds < 60; seconds += FRAME) {
+      stepShip(state, input({ throttle: 0.6 }), FRAME, env(bodies), telemetry)
+      // After the spool-up (2 s τ deep in the well).
+      if (seconds > 8) peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
+      if (gapOf(earth, state) < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+    }
+    expect(peak).toBeLessThan(0.62)
+    // ~4 s down the plateau (30 km at 0.6 · 43 km/s, less the spool-up), then
+    // ln(21.6 km / 30 m) / (2 · 0.6) ≈ 5.5 s down the law.
+    expect(seconds).toBeGreaterThan(6)
+    expect(seconds).toBeLessThan(14)
+  })
+
   test("stepShip's telemetry reads the air speed as the frame speed and the rest 0, the carry's to fill", () => {
     const telemetry = createShipTelemetry()
     const state = shipAt(new THREE.Vector3(20, 0, 0), new THREE.Vector3(50, 0, 0))

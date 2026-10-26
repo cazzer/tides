@@ -4,6 +4,8 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useStore } from '../store'
 import { createShipBodies, updateShipBodies, updateShipBody } from './ship-bodies'
 import { SURFACE_TILES_ON } from '../surface'
+import { fineGroundDepth } from './ship-session'
+import { reversedFloatDepth } from '../renderers/depth-precision'
 import { createShipRanges, measureRanges, trueBodies, type TrueBodies } from './ship-distances'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
 import { resetShipApproach, updateApproach } from './approach'
@@ -69,7 +71,7 @@ export function ShipTargeting() {
   const truth = useRef<TrueBodies | null>(null)
   const truthAt = useRef<number | null>(null)
 
-  useFrame(() => {
+  useFrame(({ gl }) => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return
     const t = useStore.getState().timestamp ?? Date.now()
     if (bodiesAt.current == null || Math.abs(t - bodiesAt.current) >= BODY_REFRESH_MS) {
@@ -81,6 +83,10 @@ export function ShipTargeting() {
       if (earth) updateShipBody(earth, t)
       if (moon) updateShipBody(moon, t)
     }
+    // This Earth's stop as the flight's: 30 m on reversed-Z float, so the
+    // ranges read the gap to it (0 on arrival) and the ETA ends there,
+    // rather than at the standard buffer's 8.6 km (tides-zmw.9.18).
+    if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     if (
       truth.current == null ||
       truthAt.current == null ||
