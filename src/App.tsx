@@ -28,6 +28,8 @@ import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
+import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
+import { DepthInfo } from './renderers/DepthInfo'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { mainCameraPose, rememberMainCameraPose } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
@@ -166,6 +168,7 @@ export default function App() {
   return (
     <div className="container">
       <LoadingOverlay sceneReady={sceneReady} />
+      <DepthInfo />
       {!shipMode && <Controls />}
       <div className={single || shipMode ? 'viewports viewports--single' : 'viewports'}>
         <Canvas
@@ -185,6 +188,7 @@ export default function App() {
         >
           <SimClock running={sceneReady} />
           <RenderDiagnostics />
+          <DepthPrecisionProbe />
           <View.Port />
         </Canvas>
         {shipMode && (
