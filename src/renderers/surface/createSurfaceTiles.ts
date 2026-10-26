@@ -31,6 +31,7 @@ import {
   installSurfaceGridCache,
   protectOverlayBitmaps,
   quietTilesetVersion,
+  retryFailedTiles,
   shareGridBytes,
   type SurfaceGridCache,
 } from './terrain-internals'
@@ -184,11 +185,23 @@ export function createSurfaceTiles({ floatLinear, upload, haze = null }: Surface
     if (loadErrors === 1) console.warn('surface tiles: a tile failed to load (more are counted in userData.loadErrors)', event.url)
   })
 
-  // A failed tile stays failed in the library until resetFailedTiles; the
-  // grid cache forgets failed grids (terrain-internals.ts), so retry them
-  // when the network comes back and every RETRY_FAILED_MS (the library's
-  // reset returns at once while stats.failed is 0).
-  const retryFailed = () => tiles.resetFailedTiles()
+  // A failed tile stays failed until it's reset; the grid cache forgets
+  // failed grids (terrain-internals.ts), so retry them when the network
+  // comes back and every RETRY_FAILED_MS (it returns at once while
+  // stats.failed is 0). Not the library's resetFailedTiles, which throws on
+  // the plugin's tree and wouldn't reload them (retryFailedTiles); a throw
+  // here would be a page error each time, so it's said once and dropped.
+  let retriedTiles = 0
+  let retryWarned = false
+  const retryFailed = () => {
+    try {
+      const reset = retryFailedTiles(tiles)
+      if (reset > 0) tiles.group.userData.retriedTiles = retriedTiles += reset
+    } catch (error) {
+      if (!retryWarned) console.warn('surface tiles: retrying failed tiles threw (said once)', error)
+      retryWarned = true
+    }
+  }
   const retryTimer = setInterval(retryFailed, RETRY_FAILED_MS)
   if (typeof window !== 'undefined') window.addEventListener('online', retryFailed)
 

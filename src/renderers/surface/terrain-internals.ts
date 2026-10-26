@@ -217,6 +217,45 @@ export function quietTilesetVersion(tiles: TilesRenderer): void {
   }
 }
 
+/** TilesRendererBase's loading states (core/renderer/constants.js). */
+const TILE_UNLOADED = 0
+const TILE_FAILED = -1
+
+/** The renderer's fields retryFailedTiles reads and writes. */
+interface FailedTileInternals {
+  rootLoadingState: number
+  stats: { failed: number }
+  lruCache: {
+    /** Every tile the cache holds: queued, loading, loaded or failed. */
+    itemList: readonly { internal?: { loadingState?: number } }[]
+    /** Evicts the tile: its dispose runs and its state goes back to UNLOADED. */
+    remove(tile: unknown): boolean
+  }
+}
+
+/**
+ * Has every tile that failed to load (tides-zmw.9.20) load again on the
+ * renderer's next update, and returns how many it reset. Not the library's
+ * resetFailedTiles: that walks the whole tree reading each tile's .internal,
+ * which the terrain plugin's lazily expanded children lack until a traversal
+ * preprocesses them (so it throws), and it leaves a reset tile in the LRU
+ * cache, whose add then refuses it, so the tile is never requested again.
+ * A failed tile stays in the cache (marked loaded) until evicted, and an
+ * eviction puts it back to UNLOADED: so evict each failed one, as the cache
+ * itself would, and the next traversal requests it afresh (its grid too:
+ * SurfaceGridCache forgot the failed one). stats.failed is zeroed as the
+ * library's reset does (an evicted failed tile never decrements it).
+ */
+export function retryFailedTiles(tiles: TilesRenderer): number {
+  const t = tiles as unknown as FailedTileInternals
+  if (t.rootLoadingState === TILE_FAILED) t.rootLoadingState = TILE_UNLOADED
+  if (t.stats.failed === 0) return 0
+  const failed = t.lruCache.itemList.filter((tile) => tile?.internal?.loadingState === TILE_FAILED)
+  for (const tile of failed) t.lruCache.remove(tile)
+  t.stats.failed = 0
+  return failed.length
+}
+
 /** overlay.imageSource (an XYZImageSource) as protectOverlayBitmaps patches it. */
 interface TiledImageSourceInternals {
   processBufferToTexture(buffer: ArrayBuffer): Promise<Texture>

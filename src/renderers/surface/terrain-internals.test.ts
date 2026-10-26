@@ -26,6 +26,7 @@ import {
   protectOverlayBitmaps,
   shareGridBytes,
   quietTilesetVersion,
+  retryFailedTiles,
   SurfaceGridCache,
   type SurfaceGridOptions,
   type TerrainPluginInternals,
@@ -156,6 +157,45 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     const src = read('src/three/plugins/images/terrain-rgb/GridCache.js')
     expect(src).toContain('const tiling = this.plugin._source.tiling;')
     expect(src).toContain('fillBorder( neighbor, grid, - dx, - dy );')
+  })
+
+  // tides-zmw.9.20 (retryFailedTiles): how a tile fails, stays failed in the
+  // LRU cache, is evicted back to UNLOADED and requested again, and why the
+  // library's own reset can't be used on the terrain plugin's tree.
+  it('keeps a failed tile in the LRU cache at FAILED (-1) until evicted back to UNLOADED (0), and requests only what the cache admits', () => {
+    const constants = read('src/core/renderer/constants.js')
+    expect(constants).toContain('export const FAILED = - 1;')
+    expect(constants).toContain('export const UNLOADED = 0;')
+    const base = read('src/core/renderer/tiles/TilesRendererBase.js')
+    expect(base).toContain('stats.failed ++;')
+    expect(base).toContain('tile.internal.loadingState = FAILED;\n\t\t\t\t\tloadingTiles.delete( tile );\n\t\t\t\t\tlruCache.setLoaded( tile, true );')
+    expect(built(/\.internal\.loadingState = -1, \w\.delete\(\w\), \w\.setLoaded\(\w, !0\)/)).toHaveLength(1)
+    // requestTileContents: only from UNLOADED, and only once the cache takes the tile
+    expect(base).toContain('if ( tile.internal.loadingState !== UNLOADED ) {\n\n\t\t\treturn;')
+    expect(base).toContain('const addedSuccessfully = lruCache.add( tile, t => {')
+    expect(base).toContain('if ( ! addedSuccessfully ) {\n\n\t\t\treturn;')
+    // the eviction callback puts any state back to UNLOADED, leaving stats.failed alone
+    const evict = base.slice(base.indexOf('const addedSuccessfully = lruCache.add( tile, t => {'), base.indexOf('if ( ! addedSuccessfully ) {'))
+    expect(evict).toContain('t.internal.loadingState = UNLOADED;')
+    expect(evict).not.toContain('failed')
+    // a root that failed loads again once UNLOADED
+    expect(base).toContain('if ( this.rootLoadingState === UNLOADED ) {')
+    const lru = read('src/core/renderer/utilities/LRUCache.js')
+    expect(lru).toContain('if ( itemSet.has( item ) ) {\n\n\t\t\treturn false;')
+    expect(lru).toContain('this.itemList = [];')
+    expect(lru).toContain('callbacks.get( item )( item );\n\n\t\t\tconst index = itemList.indexOf( item );\n\t\t\titemList.splice( index, 1 );')
+  })
+
+  it("resets failed tiles over the whole tree by tile.internal, which the terrain plugin's unprocessed children lack, and leaves them in the cache", () => {
+    const base = read('src/core/renderer/tiles/TilesRendererBase.js')
+    const reset = base.slice(base.indexOf('\tresetFailedTiles() {'), base.indexOf('calculateTileViewErrorWithPlugin( tile, target ) {'))
+    expect(reset).toContain('this.traverse( tile => {\n\n\t\t\tif ( tile.internal.loadingState === FAILED ) {')
+    expect(reset).toContain('}, null, false );')
+    expect(reset).not.toContain('lruCache')
+    expect(base).toContain('\t\t\tif ( ensureFullyProcessed ) {\n\n\t\t\t\tthis.ensureChildrenArePreprocessed( tile, true );')
+    const plugin = read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')
+    expect(plugin).toContain('if ( level < maxLevel && tile.parent !== null ) {\n\n\t\t\tthis.expandChildren( tile );')
+    expect(plugin).toContain('tile.children.push( child );')
   })
 
   it('decodes as the library does: rows south first, edge texels copied into the border', async () => {
@@ -471,6 +511,108 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     expect(() => installSurfaceGridCache({ name: 'X' } as unknown as TerrariumMeshPlugin, options())).toThrow()
     expect(new SurfaceGridCache({ name: 'TERRARIUM_MESH_PLUGIN', _gridCache: null, _source: null, tileDimension: 4 }, options()))
       .toBeInstanceOf(GridCache)
+  })
+})
+
+interface TestTile {
+  internal?: { loadingState: number }
+  children: TestTile[]
+  engineData?: { scene: unknown }
+}
+
+interface TilesInternals {
+  rootTileset: { root: TestTile } | null
+  rootLoadingState: number
+  stats: { failed: number; loaded: number; inCache: number }
+  lruCache: { has(tile: unknown): boolean }
+  ensureChildrenArePreprocessed(tile: TestTile, forceImmediate: boolean): void
+  requestTileContents(tile: TestTile): unknown
+}
+
+describe('retryFailedTiles (tides-zmw.9.20)', () => {
+  const FAILED = -1
+  const UNLOADED = 0
+  const LOADED = 4
+  let answer: () => Promise<Response>
+
+  beforeEach(() => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas)
+    vi.stubGlobal('window', { location: { href: 'http://localhost/tides/' } })
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => setTimeout(cb, 0))
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id))
+    vi.stubGlobal('fetch', () => answer())
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  /** The plugin's tree as a first traversal leaves it: root, its z0 tile preprocessed, the z0's children not. */
+  async function failedTile() {
+    const { terrain, tiles } = await loadedPlugin()
+    const opts = options()
+    installSurfaceGridCache(terrain, opts)
+    const t = tiles as unknown as TilesInternals
+    t.rootTileset = (terrain as unknown as { getTileset(): { root: TestTile } }).getTileset()
+    t.rootLoadingState = LOADED
+    t.ensureChildrenArePreprocessed(t.rootTileset.root, true)
+    const tile = t.rootTileset.root.children[0]
+    expect(tile.internal).toBeDefined()
+    expect(tile.children.length).toBeGreaterThan(0)
+    expect(tile.children.every((child) => child.internal === undefined)).toBe(true)
+    // The real load, through the queues and the plugin's parse, failing on a 503.
+    answer = async () => new Response('down', { status: 503 })
+    t.requestTileContents(tile)
+    await vi.waitFor(() => expect(tile.internal!.loadingState).toBe(FAILED))
+    expect(t.stats.failed).toBe(1)
+    expect(t.lruCache.has(tile)).toBe(true)
+    return { tiles, t, tile, opts }
+  }
+
+  it("throws in the library's reset on this tree (the bug), and the reset tile can't be requested again", async () => {
+    const { tiles, t, tile } = await failedTile()
+    expect(() => tiles.resetFailedTiles()).toThrow(TypeError)
+    // even where it gets through: UNLOADED but still cached, so a request is refused
+    tile.internal!.loadingState = UNLOADED
+    t.requestTileContents(tile)
+    expect(tile.internal!.loadingState).toBe(UNLOADED)
+  })
+
+  it('evicts each failed tile, so the next request loads it once the network is back', async () => {
+    const { tiles, t, tile, opts } = await failedTile()
+    const inCache = t.stats.inCache
+    expect(retryFailedTiles(tiles)).toBe(1)
+    expect(tile.internal!.loadingState).toBe(UNLOADED)
+    expect(t.lruCache.has(tile)).toBe(false)
+    expect(t.stats.failed).toBe(0)
+    expect(t.stats.inCache).toBe(inCache - 1)
+    // nothing left to do
+    expect(retryFailedTiles(tiles)).toBe(0)
+    // the network back (an ocean 404: a flat grid), the traversal's next request
+    answer = async () => new Response(null, { status: 404 })
+    t.requestTileContents(tile)
+    await release(opts.budget)
+    await vi.waitFor(() => expect(tile.internal!.loadingState).toBe(LOADED))
+    expect(tile.engineData!.scene).toBeTruthy()
+    expect(t.stats.loaded).toBe(1)
+  })
+
+  it('resets a failed root, skips cached entries without internal, and does nothing while none failed', () => {
+    const remove = vi.fn(() => true)
+    const failed = { internal: { loadingState: FAILED } }
+    const tiles = {
+      rootLoadingState: FAILED,
+      stats: { failed: 0 },
+      lruCache: { itemList: [{}, { internal: { loadingState: LOADED } }, failed], remove },
+    }
+    expect(retryFailedTiles(tiles as unknown as TilesRenderer)).toBe(0)
+    expect(tiles.rootLoadingState).toBe(UNLOADED)
+    expect(remove).not.toHaveBeenCalled()
+    tiles.stats.failed = 3 // counted, then evicted by the cache before the retry
+    expect(retryFailedTiles(tiles as unknown as TilesRenderer)).toBe(1)
+    expect(remove.mock.calls).toEqual([[failed]])
+    expect(tiles.stats.failed).toBe(0)
   })
 })
 
