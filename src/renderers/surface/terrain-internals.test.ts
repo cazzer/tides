@@ -23,6 +23,11 @@ import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import {
   forEachCachedModel,
+  gridHorizon,
+  gridHorizonBytes,
+  horizonBytes,
+  horizonTexture,
+  setGridHorizon,
   GRID_LEVEL_STEP,
   HELD_BETWEEN_GRIDS,
   installSurfaceGridCache,
@@ -38,7 +43,7 @@ import {
   type SurfaceGridOptions,
   type TerrainPluginInternals,
 } from './terrain-internals'
-import { decodeTerrariumPadded, type PaddedGrid } from './terrarium'
+import { decodeTerrariumPadded, type HorizonJob, type PaddedGrid } from './terrarium'
 
 const LIB = path.resolve(process.cwd(), 'node_modules/3d-tiles-renderer')
 const read = (file: string) => readFileSync(path.join(LIB, file), 'utf8')
@@ -451,6 +456,203 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     // the plugin's levels made flat; the levels between answered, never drawn
     expect(cache.flatTiles).toBe(3)
     expect(cache.coverageEnd.size).toBe(0)
+  })
+
+  describe('horizon maps (tides-zmw.9.15)', () => {
+    const plane = (i: number, j: number, level: number) => 100000 * level + 100 * i + 10 * j
+    // each grid a plane with its level (and x) in it
+    const byLevel = async (url: string) => {
+      const [, , , z, x] = url.split('/')
+      return new Response(new Uint8Array([Number(z), Number(x)]), { status: 200 })
+    }
+    const planes = async (buffer: ArrayBuffer): Promise<PaddedGrid> => {
+      const [level, x] = new Uint8Array(buffer)
+      const data = new Float32Array(36)
+      for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++) data[j * 6 + i] = plane(i + 4 * x, j, level)
+      return { data, width: 6, height: 6 }
+    }
+    type Bake = { job: HorizonJob; grid: PaddedGrid | null }
+    // a map of the bake's number (tileDimension 4: 1x1x2 RGBA8)
+    const baker = (bakes: Bake[]) => async (job: HorizonJob, grid: PaddedGrid | null) => {
+      bakes.push({ job, grid })
+      return { horizon: new Uint8Array(8).fill(bakes.length), ms: 2, max: bakes.length }
+    }
+    const bounds = (terrain: TerrariumMeshPlugin, x: number, y: number, level: number) =>
+      (terrain as unknown as { _tiling: { getTileBounds(x: number, y: number, l: number, n?: boolean): number[] } })._tiling.getTileBounds(x, y, level, true)
+    /** Lets the budget's waiters through until `done()`. */
+    async function until(budget: FrameBudget, done: () => boolean, ms = 4000) {
+      const end = Date.now() + ms
+      while (!done() && Date.now() < end) {
+        budget.tick()
+        await new Promise((resolve) => setTimeout(resolve, 2))
+      }
+      expect(done()).toBe(true)
+    }
+
+    it("makes the grid first, then bakes a copy of it with its ancestors' windows, keeps the map by the grid's source and frees it with the grid", async () => {
+      const { terrain } = await loadedPlugin()
+      const bakes: Bake[] = []
+      const uploaded: unknown[] = []
+      const opts = options({ decode: planes, bake: baker(bakes), upload: (t) => uploaded.push(t) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = byLevel
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      await until(opts.budget, () => bakes.length === 1)
+      // no ancestor loaded, no neighbour: the grid alone
+      expect(bakes[0].job.context).toHaveLength(0)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      const grid = (await child) as DataTexture
+      await until(opts.budget, () => bakes.length === 2)
+      const { job, grid: copy } = bakes[1]
+      const [, south, , north] = bounds(terrain, 9, 9, 6)
+      expect([job.tileSize, job.south, job.north]).toEqual([4, south, north])
+      // a copy of the grid as it stands, stitched
+      expect(copy!.data).not.toBe(grid.image.data)
+      expect(Array.from(copy!.data)).toEqual(Array.from(grid.image.data as unknown as Float32Array))
+      expect(job.context).toHaveLength(1)
+      const w = job.context[0]
+      expect(w.scale).toBe(4)
+      // its texels are the parent's (a plane of its padded texels), where the child's rectangle in it puts them
+      const [pu0, pv0, pu1, pv1] = bounds(terrain, 2, 2, 4)
+      const X0 = ((bounds(terrain, 9, 9, 6)[0] - pu0) / (pu1 - pu0)) * 4 + 0.5 - w.offsetX
+      const Y0 = ((job.south - pv0) / (pv1 - pv0)) * 4 + 0.5 - w.offsetY
+      for (let yy = 0; yy < w.height; yy++) for (let xx = 0; xx < w.width; xx++) expect(w.data[yy * w.width + xx]).toBeCloseTo(plane(xx + X0 + 4 * 2, yy + Y0, 4), 3)
+      // the map: by the grid's source (the tiles' clones find it), uploaded, counted
+      const horizon = gridHorizon(grid)!
+      expect(horizon.isDataArrayTexture).toBe(true)
+      expect(gridHorizon(grid.clone())).toBe(horizon)
+      expect([horizon.image.width, horizon.image.height, horizon.image.depth]).toEqual([1, 1, 2])
+      expect(Array.from(horizon.image.data as Uint8Array)).toEqual(new Array(8).fill(2))
+      expect(horizon.userData.maxCode).toBe(2)
+      expect(uploaded).toContain(horizon)
+      expect(cache.horizonStats).toMatchObject({ baked: 2, empty: 0, rebakes: 0, bakeMs: 4, bakeMaxMs: 2 })
+      expect(horizonBytes(4)).toBe(8)
+      // freed with the grid, once nothing holds it
+      let freed = 0
+      horizon.addEventListener('dispose', () => freed++)
+      cache.release(9, 9, 6)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(freed).toBe(1)
+      expect(gridHorizon(grid)).toBeNull()
+    })
+
+    it('never holds a grid for its context: the bake waits for an ancestor still loading, the grid does not', async () => {
+      const { terrain } = await loadedPlugin()
+      const bakes: Bake[] = []
+      const opts = options({ decode: planes, bake: baker(bakes) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      let freeParent!: () => void
+      const parentHeld = new Promise<void>((resolve) => (freeParent = resolve))
+      answer = async (url) => {
+        if (url.includes('/4/')) await parentHeld
+        return byLevel(url)
+      }
+      const parent = cache.lock(2, 2, 4)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      expect(((await child) as DataTexture).image.width).toBe(6)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(bakes).toHaveLength(0) // the child's bake waits on the parent
+      freeParent()
+      await drain(opts.budget, parent)
+      await until(opts.budget, () => bakes.length === 2)
+      const childBake = bakes.find((b) => b.job.context.length === 1)!
+      expect(childBake.job.context[0].scale).toBe(4)
+    })
+
+    it('reads loaded same-level neighbours at their own texels ahead of ancestors, and bakes a grid again when a neighbour turns up after it', async () => {
+      const { terrain } = await loadedPlugin()
+      const bakes: Bake[] = []
+      const opts = options({ decode: planes, bake: baker(bakes) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = byLevel
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      await until(opts.budget, () => bakes.length === 1)
+      const west = cache.lock(8, 9, 6)
+      await drain(opts.budget, west)
+      await until(opts.budget, () => bakes.length === 2)
+      expect(bakes[1].job.context.map((w) => w.scale)).toEqual([4]) // no neighbour yet
+      const east = cache.lock(9, 9, 6)
+      await drain(opts.budget, east)
+      await until(opts.budget, () => bakes.length === 3)
+      // the east grid: its west neighbour first, at scale 1, then the parent
+      const ctx = bakes[2].job.context
+      expect(ctx.map((w) => w.scale)).toEqual([1, 4])
+      // the neighbour's texels sit one grid west: lx = gx + offsetX, so its last inner texel (padded 4) is at gx = -0.5
+      const n = ctx[0]
+      expect(-0.5 + n.offsetX).toBeCloseTo(4, 9)
+      expect(n.data[2 * n.width + 4]).toBe(plane(4 + 4 * 8, 2, 6))
+      // the west grid, baked without it, is baked again with it (its east neighbour, scale 1)
+      await until(opts.budget, () => bakes.length === 4)
+      expect(bakes[3].job.context.map((w) => w.scale)).toEqual([1, 4])
+      expect(cache.horizonStats.rebakes).toBe(1)
+      expect(Array.from(gridHorizon((await west) as DataTexture)!.image.data as Uint8Array)).toEqual(new Array(8).fill(4))
+      // nothing else waits on it
+      await new Promise((resolve) => setTimeout(resolve, 1300))
+      expect(bakes).toHaveLength(4)
+    })
+
+    it('leads a capped grid\'s context with the data grid it was resampled from, an odd level among them', async () => {
+      const { terrain } = await loadedPlugin()
+      const bakes: Bake[] = []
+      const opts = options({ decode: planes, bake: baker(bakes) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      // data down to z5 (between the plugin's levels), none at z6
+      answer = async (url) => (Number(url.split('/')[3]) > 5 ? new Response(null, { status: 404 }) : byLevel(url))
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      await until(opts.budget, () => bakes.length === 1)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      expect(cache.cappedTiles).toBe(1)
+      await until(opts.budget, () => bakes.length === 2)
+      // z5's window (2 grid texels a texel) first, then the z4 parent's
+      expect(bakes[1].job.context.map((w) => w.scale)).toEqual([2, 4])
+      expect(bakes[1].job.context[0].data.every((v) => Math.floor(v / 100000) === 5)).toBe(true)
+      // the grid's own copy: the resampled z5 ground
+      expect(Array.from(bakes[1].grid!.data)).toEqual(Array.from(((await child) as DataTexture).image.data as unknown as Float32Array))
+    })
+
+    it('makes no map for open water, or a bake that found none, failed, or when nothing bakes', async () => {
+      const { terrain } = await loadedPlugin()
+      let calls = 0
+      let result: 'none' | 'fail' = 'none'
+      const bake = async () => {
+        calls++
+        if (result === 'fail') throw new Error('worker gone')
+        return { horizon: null, ms: 1 }
+      }
+      let canBake = true
+      const opts = options({ decode: planes, bake, canBake: () => canBake })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = async (url) => (url.includes('/2/') ? byLevel(url) : new Response(null, { status: 404 }))
+      const land = cache.lock(1, 1, 2)
+      await drain(opts.budget, land)
+      await until(opts.budget, () => calls === 1)
+      expect(gridHorizon((await land) as DataTexture)).toBeNull()
+      expect(cache.horizonStats).toMatchObject({ baked: 0, empty: 1 })
+      // open water: never baked
+      const sea = cache.lock(0, 0, 0)
+      await drain(opts.budget, sea)
+      result = 'fail'
+      const other = cache.lock(2, 1, 2)
+      await drain(opts.budget, other)
+      await until(opts.budget, () => calls === 2)
+      expect(gridHorizon((await other) as DataTexture)).toBeNull()
+      // no worker: no bake, and nothing gathered for one
+      canBake = false
+      const third = cache.lock(3, 1, 2)
+      await drain(opts.budget, third)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls).toBe(2)
+      // not even under way (charged nothing)
+      expect(gridHorizonBytes((await third) as DataTexture)).toBe(0)
+      expect(gridHorizonBytes((await land) as DataTexture)).toBe(8)
+    })
   })
 
   describe('past the coverage end (tides-zmw.9.21)', () => {
@@ -1149,5 +1351,20 @@ describe('shareGridBytes (tides-zmw.9.2)', () => {
     const getBytesUsed = (tiles as unknown as { getBytesUsed(tile: unknown): number }).getBytesUsed
     // three counts the grid once per scene (400 bytes); the hook takes back half
     expect(getBytesUsed.call(tiles, { engineData: { scene } })).toBeCloseTo(400 / 2, 6)
+  })
+
+  it("charges half the grid's horizon map too, which three's estimate doesn't see (tides-zmw.9.15)", () => {
+    const tiles = new TilesRenderer()
+    shareGridBytes(tiles)
+    const grid = new DataTexture(new Float32Array(10 * 10), 10, 10, RedFormat, FloatType)
+    setGridHorizon(grid, horizonTexture(new Uint8Array(horizonBytes(8)), 8))
+    const material = new MeshLambertMaterial()
+    material.displacementMap = grid.clone()
+    material.bumpMap = material.displacementMap
+    const scene = new Group().add(new Mesh(new BufferGeometry(), material))
+    const getBytesUsed = (tiles as unknown as { getBytesUsed(tile: unknown): number }).getBytesUsed
+    // 2x2x2 RGBA8 = 32 bytes, half of it
+    expect(horizonBytes(8)).toBe(32)
+    expect(getBytesUsed.call(tiles, { engineData: { scene } })).toBeCloseTo(400 / 2 + 32 / 2, 6)
   })
 })

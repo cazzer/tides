@@ -157,6 +157,8 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
     // cost: per-texel facets in the bump shading below a few km.
     filter: floatLinear ? 'linear' : 'nearest',
     decode: decoder.decode,
+    bake: decoder.bake,
+    canBake: () => decoder.bakes,
     budget,
     upload,
   })

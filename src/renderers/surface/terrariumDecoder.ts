@@ -6,13 +6,34 @@
 // a usable worker (no module workers or no OffscreenCanvas 2D: Safari before
 // 16.4), or if one dies, decodes run on the main thread instead. No DOM
 // here, so it is testable with a fake worker.
-import type { PaddedGrid } from './terrarium'
+//
+// tides-zmw.9.15: bake() makes a grid's horizon map (terrarium.ts
+// bakeTileHorizon) in a worker from a copy of the grid and its job (where
+// the grid is, and windows of its neighbours' and ancestors' grids), all
+// transferred. It is separate from the decode, so a grid never waits on its
+// context. On the main thread (no worker) nothing is baked (bakes is false
+// and bake() answers null): a bake is ~10 ms, and the horizon only adds
+// detail (tile-shadow.ts).
+import type { HorizonJob, PaddedGrid } from './terrarium'
 
-export type DecodeRequest = { type: 'decode'; id: number; buffer: ArrayBuffer } | { type: 'cancel'; id: number }
+export type DecodeRequest =
+  | { type: 'decode'; id: number; buffer: ArrayBuffer }
+  | { type: 'bake'; id: number; horizon: HorizonJob; grid: PaddedGrid | null }
+  | { type: 'cancel'; id: number }
+
+/** What a bake hands back: the map (null: no horizon anywhere), its worker time, and its highest byte. */
+export interface BakedHorizon {
+  horizon: Uint8Array<ArrayBuffer> | null
+  ms: number
+  /** The map's highest byte (none: take 255). */
+  max?: number
+}
 
 export type DecodeReply =
   | { type: 'done'; id: number; grid: PaddedGrid }
+  | { type: 'baked'; id: number; baked: BakedHorizon }
   | { type: 'error'; id: number; message: string; name?: string }
+
 
 /** The part of Worker the client uses. */
 export interface DecodeWorker {
@@ -23,19 +44,25 @@ export interface DecodeWorker {
 }
 
 export type TerrariumDecode = (buffer: ArrayBuffer, signal: AbortSignal) => Promise<PaddedGrid>
+/** A horizon map for `grid` (a copy: transferred, as the job's windows are), or null where no worker bakes. */
+export type TerrariumBake = (horizon: HorizonJob, grid: PaddedGrid | null, signal: AbortSignal) => Promise<BakedHorizon | null>
 
 export interface TerrariumDecoder {
   decode: TerrariumDecode
+  bake: TerrariumBake
+  /** Whether a bake would run (a worker is up or can be made, not disposed): false, and nothing need be gathered for one. */
+  readonly bakes: boolean
   /** Terminates the workers; decodes still pending reject with an AbortError. */
   dispose(): void
 }
 
 interface Job {
-  buffer: ArrayBuffer
+  /** The job on the main thread (a dead worker's orphans): its closure holds the buffer. */
+  inThread: () => Promise<unknown>
   signal: AbortSignal
-  /** Removed once the job settles: its closure holds the buffer. */
+  /** Removed once the job settles. */
   onAbort: () => void
-  resolve: (grid: PaddedGrid) => void
+  resolve: (result: PaddedGrid | BakedHorizon | null) => void
   reject: (err: unknown) => void
 }
 
@@ -75,7 +102,7 @@ export function createTerrariumDecoder({
 
   function runInThread(job: Job) {
     job.signal.throwIfAborted()
-    inThread(job.buffer).then(job.resolve, job.reject)
+    job.inThread().then((result) => job.resolve(result as PaddedGrid | BakedHorizon | null), job.reject)
   }
 
   function fallBack(err: unknown) {
@@ -108,6 +135,7 @@ export function createTerrariumDecoder({
         slot.jobs.delete(data.id)
         detach(job)
         if (data.type === 'done') job.resolve(data.grid)
+        else if (data.type === 'baked') job.resolve(data.baked)
         else job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
       })
       worker.addEventListener('error', fallBack)
@@ -133,26 +161,45 @@ export function createTerrariumDecoder({
     return best
   }
 
+  /** Posts a job to the idlest worker, or runs `fallback` here. */
+  function post<T extends PaddedGrid | BakedHorizon | null>(
+    signal: AbortSignal,
+    request: (id: number) => DecodeRequest,
+    transfer: Transferable[],
+    fallback: () => Promise<T>
+  ): Promise<T> {
+    // After dispose, nothing decodes (least of all on the main thread).
+    if (disposed) return Promise.reject(disposedError())
+    signal.throwIfAborted()
+    const slot = workersOk ? pick() : null
+    if (!slot) return fallback()
+    const id = nextId++
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => {
+        if (!slot.jobs.delete(id)) return
+        slot.worker.postMessage({ type: 'cancel', id })
+        reject(signal.reason)
+      }
+      slot.jobs.set(id, { inThread: fallback, signal, onAbort, resolve: resolve as Job['resolve'], reject })
+      signal.addEventListener('abort', onAbort, { once: true })
+      slot.worker.postMessage(request(id), transfer)
+    })
+  }
+
   return {
     decode(buffer, signal) {
-      // After dispose, nothing decodes (least of all on the main thread).
-      if (disposed) return Promise.reject(disposedError())
-      signal.throwIfAborted()
-      const slot = workersOk ? pick() : null
-      if (!slot) return inThread(buffer)
-      const id = nextId++
-      return new Promise<PaddedGrid>((resolve, reject) => {
-        const onAbort = () => {
-          if (!slot.jobs.delete(id)) return
-          slot.worker.postMessage({ type: 'cancel', id })
-          reject(signal.reason)
-        }
-        slot.jobs.set(id, { buffer, signal, onAbort, resolve, reject })
-        signal.addEventListener('abort', onAbort, { once: true })
-        // Copied, not transferred (a WebP tile is ~10-300 kB): if the worker
-        // dies, its jobs are decoded here from the same buffer.
-        slot.worker.postMessage({ type: 'decode', id, buffer })
-      })
+      // The buffer is copied, not transferred (a WebP tile is ~10-300 kB):
+      // if the worker dies, its jobs are decoded here from the same buffer.
+      return post<PaddedGrid>(signal, (id) => ({ type: 'decode', id, buffer }), [], () => inThread(buffer))
+    },
+    bake(horizon, grid, signal) {
+      // the job's own copies, transferred (a dead worker's bake answers null)
+      const transfer: Transferable[] = horizon.context.map((w) => w.data.buffer)
+      if (grid) transfer.push(grid.data.buffer)
+      return post<BakedHorizon | null>(signal, (id) => ({ type: 'bake', id, horizon, grid }), transfer, async () => null)
+    },
+    get bakes() {
+      return workersOk && !disposed
     },
     dispose() {
       disposed = true
