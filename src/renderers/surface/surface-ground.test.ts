@@ -18,6 +18,8 @@ import {
 } from './surface-ground'
 import { SURFACE_ELLIPSOID_RADIUS, ecefToEarthLocal, surfaceEcef } from './surface-frame'
 import { MAPTERHORN_MAX_ZOOM } from './createSurfaceTiles'
+import { FrameBudget } from './frame-budget'
+import { installSurfaceGridCache } from './terrain-internals'
 
 // The library's GridCache constructor makes an OffscreenCanvas (node has none).
 class FakeOffscreenCanvas {
@@ -318,6 +320,11 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     // Wider windows read the vertices only; at the deepest level nothing finer comes.
     expect(sampler.maxElevation(lat, lon, ANTICIPATE_MAX_M + 1)!.metres).toBe(100)
     expect(createSurfaceGround(tilesOf([t], []), { deepest: 12 }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(100)
+    // per tile: a leaf at the source's coverage end (tides-zmw.9.21) anticipates nothing
+    const leafAt = vi.fn((tile: unknown) => (tile === t.tile ? 12 : SURFACE_TREE_DEEPEST))
+    expect(createSurfaceGround(tilesOf([t], []), { deepest: leafAt }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(100)
+    expect(leafAt).toHaveBeenCalledWith(t.tile)
+    expect(createSurfaceGround(tilesOf([t], []), { deepest: () => SURFACE_TREE_DEEPEST }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(2000)
   })
 
   it('raises a parent towards its child from the same grid, but bounds it only mostly (a heuristic)', async () => {
@@ -393,5 +400,75 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
       expect(THREE.MathUtils.radToDeg(la)).toBeCloseTo(lat, 9)
       expect(THREE.MathUtils.radToDeg(lo)).toBeCloseTo(lon, 9)
     }
+  })
+})
+
+describe('the floor past the source coverage (tides-zmw.9.21)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas)
+    vi.stubGlobal('window', { location: { href: 'http://localhost/tides/' } })
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => setTimeout(cb, 0))
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id))
+    // Mapterhorn over Everest: z12 grids, 404 below.
+    vi.stubGlobal('fetch', async (url: string) =>
+      url.includes('/12/') ? new Response(new Uint8Array([1]), { status: 200 }) : new Response(null, { status: 404 })
+    )
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("never reads a 404'd child under a data grid lower than that grid's ground", async () => {
+    const tiles = new TilesRenderer()
+    tiles.ellipsoid.radius.setScalar(SURFACE_ELLIPSOID_RADIUS)
+    const plugin = new TerrariumMeshPlugin({ url: 'https://example.test/{z}/{x}/{y}.webp', tileDimension: DIM, maxZoom: MAPTERHORN_MAX_ZOOM })
+    tiles.registerPlugin(plugin)
+    ;(tiles as unknown as { preprocessTileset: () => void }).preprocessTileset = () => {}
+    const internals = plugin as unknown as {
+      loadRootTileset(): Promise<unknown>
+      createChild(x: number, y: number, level: number): LibraryTile['tile'] & Record<string, unknown>
+      parseToMesh(buffer: ArrayBuffer, tile: unknown, ext: string, url: string, signal: AbortSignal): Promise<THREE.Mesh>
+    }
+    await internals.loadRootTileset()
+    // a tilted plane of high ground at z12
+    const plane = async () => {
+      const data = new Float32Array(PADDED * PADDED)
+      for (let j = 0; j < PADDED; j++) for (let i = 0; i < PADDED; i++) data[j * PADDED + i] = 7000 + 60 * i + 35 * j
+      return { data, width: PADDED, height: PADDED }
+    }
+    const budget = new FrameBudget(Infinity)
+    installSurfaceGridCache(plugin, { filter: 'linear', decode: plane, budget, retryDelays: [0] })
+    const mesh = async (x: number, y: number, level: number) => {
+      const tile = internals.createChild(x, y, level)
+      const [w, s, e, n] = tile.boundingVolume.region
+      const centre = tiles.ellipsoid.getCartographicToPosition((s + n) / 2, (w + e) / 2, 0, new THREE.Vector3())
+      tile.engineData = {
+        boundingVolume: {
+          getSphere: (sphere: THREE.Sphere) => (sphere.center.copy(centre), (sphere.radius = 1e7), sphere),
+          setRegionData() {},
+        },
+      }
+      const parsing = internals.parseToMesh(new ArrayBuffer(0), tile, 'terrain', 'u', new AbortController().signal)
+      let done = false
+      parsing.finally(() => (done = true))
+      for (let k = 0; !done && k < 1000; k++) {
+        budget.tick()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      return { tile, mesh: await parsing, grid: null as unknown as THREE.DataTexture }
+    }
+    // the z13 tile under the eye (reading the z12 grid), and its z14 child (whose grid 404s)
+    const parent = await mesh(6074, 3432, 13)
+    const [w, s, e, n] = (await internals.createChild(12148, 6864, 14)).boundingVolume.region
+    const points = [0.2, 0.5, 0.8].flatMap((a) => [0.25, 0.7].map((b) => [s + (n - s) * a, w + (e - w) * b]))
+    const ground = points.map(([lat, lon]) => plugin.sampleCartographicElevation(lat, lon)!)
+    expect(Math.min(...ground)).toBeGreaterThan(7000)
+    const child = await mesh(12148, 6864, 14)
+    points.forEach(([lat, lon], k) => {
+      // the child drawn alone, or loaded at the deepest level with the parent hidden (the hole 9.21 left)
+      for (const tilesNow of [tilesOf([child], [parent]), tilesOf([], [parent, child])]) {
+        const floor = createSurfaceGround(tilesNow).maxElevation(lat, lon, 100)!
+        expect(floor.covered).toBe(true)
+        expect(floor.metres).toBeGreaterThanOrEqual(ground[k] - 1e-3)
+      }
+    })
   })
 })
