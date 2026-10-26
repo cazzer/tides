@@ -14,6 +14,12 @@
 // A march that starts in a cloud (tides-01v.8.6) first crosses its fog,
 // from the same field, then goes on to whatever lies past it.
 //
+// Real weather's clouds are drawn by kind at the hit (tides-tvr.4.2): the
+// blended cloud-type grid sets the tops' relief, the detail's erosion and
+// grain (drawn out east-west for cirrus), the self-shadow and the underside
+// (./cloudTypeGlsl.ts). The march, and so which top is hit and where, never
+// sees the types.
+//
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
 import {
@@ -50,6 +56,8 @@ import {
 } from '../cloud-layer'
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { sceneRadius } from '../planets'
+import { neutralTypeTexture } from './cloudBlend'
+import { CLOUD_LOOK_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
 import {
@@ -121,12 +129,18 @@ export function detailPixelScale(viewHeight: number): number {
 
 /** How much of an octave of `wavelength` erodes the opacity at a pixel
  * `footprint` wide (both scene units; a pixel of a view DETAIL_VIEW_PX
- * tall), 0..1, `edge` (detailEdge()) of the way to a cloud's edge:
+ * tall), 0..1, `edge` (detailEdge()) of the way to a cloud's edge, for a
+ * cloud whose inside erodes `interior` (its look's, tides-tvr.4.2):
  * cloudDetail()'s. */
-export function detailErosion(footprint: number, wavelength: number, edge: number): number {
+export function detailErosion(
+  footprint: number,
+  wavelength: number,
+  edge: number,
+  interior: number = DETAIL_INTERIOR
+): number {
   const grain = THREE.MathUtils.smoothstep(footprint / wavelength, 1 / DETAIL_HOLE_PX, 1 / DETAIL_GRAIN_PX)
-  // mix(mix(DETAIL_INTERIOR, 1, grain), 1, edge), as the shader folds it.
-  return 1 - (1 - DETAIL_INTERIOR) * (1 - edge) * (1 - grain)
+  // mix(mix(interior, 1, grain), 1, edge), as the shader folds it.
+  return 1 - (1 - interior) * (1 - edge) * (1 - grain)
 }
 
 /** How near a cloud of opacity `alpha` is to its edge, 1 there to 0 inside,
@@ -702,15 +716,16 @@ uniform float uPixelScale;
 // (detailEdge()) of the way to the cloud's edge: x in about -1..1, the
 // opacity's erosion, yzw its gradient per scene unit. Octaves stop where
 // they would shrink under a few pixels; one large on screen erodes less
-// inside a cloud (detailErosion()), but roughens the tops as ever.
-vec4 cloudDetail(vec3 p, float footprint, float texel, float edge) {
+// inside a cloud, interior of the way (its look's DETAIL_INTERIOR,
+// detailErosion()), but roughens the tops as ever.
+vec4 cloudDetail(vec3 p, float footprint, float texel, float edge, float interior) {
   float wavelength = ${f(DETAIL_BASE_TEXELS)} * texel;
   float amp = 0.5;
   float rough = 0.5;
   vec4 sum = vec4(0.0);
   // What an octave large on screen spares of the erosion inside a cloud
   // (detailErosion()), and a pixel (uPixelScale) over its wave.
-  float spare = (1.0 - DETAIL_INTERIOR) * (1.0 - edge);
+  float spare = (1.0 - interior) * (1.0 - edge);
   float screenRatio = footprint * uPixelScale / wavelength;
   for (int k = 0; k < DETAIL_OCTAVES; k++) {
     float weight = 1.0 - smoothstep(${f(DETAIL_FADE_START)}, ${f(DETAIL_FADE_END)}, footprint / wavelength);
@@ -726,6 +741,8 @@ vec4 cloudDetail(vec3 p, float footprint, float texel, float edge) {
   }
   return sum;
 }
+
+${CLOUD_LOOK_GLSL}
 
 // Into and out of the clouds' frame: turned about the pole by the drift, so
 // cloudUv() of the result is the texture coordinate the cloud was painted at.
@@ -1424,6 +1441,11 @@ void main() {
     col.x = 0.0;
   }
   float texel = 2.0 * CLOUD_PI * uSeaLevel / float(textureSize(uCloudMap, 0).x);
+  // How this kind of cloud looks (tides-tvr.4.2): read once the march has
+  // stopped and the hit shows, at the hit's own place on the map.
+  vec4 lookD;
+  vec4 lookL;
+  cloudLook(vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0)), lod, lookD, lookL);
   // Seen edge-on, a cloud is a longer path.
   float slant = 1.0 / max(abs(dot(d, up)), 0.3);
 #ifdef FLIP_SIDED
@@ -1500,7 +1522,7 @@ void main() {
   float topC = cloudColumn(uvShade, lodN, terrainShade).z;
   vec4 colE = cloudColumn(uvShade + stepE, lodN, terrainShade);
   vec4 colN = cloudColumn(uvShade + stepN, lodN, terrainShade);
-  vec2 slope = RELIEF * vec2(colE.z - topC, colN.z - topC) / h;
+  vec2 slope = lookD.x * vec2(colE.z - topC, colN.z - topC) / h;
 
   // How near the hit is to the cloud's edge, for the detail (tides-tvr.3;
   // detailEdge()): how many steps of the reads on it stops showing, by the
@@ -1543,8 +1565,28 @@ void main() {
   // The detail at the hit itself: where it is shaded can sweep far along the
   // ray from one pixel to the next where a cloud past a veil starts to show,
   // and noise read there would streak along every such edge.
-  vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel, edge);
+  vec3 pDetail = cloudFrame(p, uCloudShift);
+  // Cirrus's is drawn out east-west (tides-tvr.4.2): the same noise with its
+  // scale across the pole axis stretched, mixed in by how much of the cloud
+  // is cirrus, toward the poles less. A stretch varying over the map would
+  // swirl the noise's domain, so the two are drawn and mixed, only where
+  // there is some of each. Only the hit's detail: the march never sees it.
+  float wStretch = smoothstep(STRETCH_FROM, STRETCH_TO, lookL.x)
+    * (1.0 - smoothstep(STRETCH_POLE_FROM, STRETCH_POLE_TO, abs(up.y)));
+  vec4 detail = vec4(0.0);
+  if (wStretch < 1.0) detail = cloudDetail(pDetail, topFootprint, texel, edge, lookD.y);
+  if (wStretch > 0.0) {
+    vec4 streaks = cloudDetail(pDetail * CLOUD_STRETCH, topFootprint, texel, edge, lookD.y);
+    // Its gradient, back from the stretched noise's to p's.
+    streaks.yzw *= CLOUD_STRETCH;
+    detail = mix(detail, streaks, wStretch);
+  }
+  // The erosion as tides-tvr.3 has it, then the look's past it, as a share
+  // of the erosion made: nothing untyped. The look's own in the product
+  // would round an untyped hit's opacity a hair off tides-tvr.3's (a pixel
+  // or two a frame, checked headless), which untyped clouds must not be.
   float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);
+  alpha = clamp(alpha + (lookD.z - DETAIL_EDGE) / DETAIL_EDGE * (alpha - col.x), 0.0, 1.0) * lookL.w;
   if (alpha < CLOUD_MIN_ALPHA) {
     if (!CLOUD_VEILED) CLOUD_MISS;
     alpha = 0.0;
@@ -1555,7 +1597,7 @@ void main() {
   // The detail's own slope, along the top.
   vec3 east = normalize(vec3(upShade.z, 0.0, -upShade.x) + vec3(1e-5, 0.0, 0.0));
   vec3 north = cross(upShade, east);
-  vec3 grain = cloudFrame(detail.yzw, -uCloudShift) * DETAIL_RELIEF * ${f(DETAIL_BASE_TEXELS)} * texel;
+  vec3 grain = cloudFrame(detail.yzw, -uCloudShift) * lookD.w * ${f(DETAIL_BASE_TEXELS)} * texel;
   vec2 grainSlope = vec2(dot(grain, east), dot(grain, north));
   slope += grainSlope * min(1.0, DETAIL_MAX_SLOPE / max(length(grainSlope), 1e-6));
   slope *= min(1.0, MAX_SLOPE / max(length(slope), 1e-6));
@@ -1574,9 +1616,11 @@ void main() {
     vec4 cq = cloudColumn(cloudUv(q / rq), max(lodShade + 1.0, 2.0), terrainShade);
     occ = max(occ, cloudShade(cq.x) * smoothstep(0.0, SHADOW_SOFT, cq.z - aq));
   }
+  // Thin cirrus hardly shades itself, nor darkens down its column.
+  occ *= lookL.y;
 
-  vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth, cloudKm(colShade.z, colShade.y), occ,
-    CLOUD_ECLIPSE_HIT);
+  vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth * lookL.z, cloudKm(colShade.z, colShade.y),
+    occ, CLOUD_ECLIPSE_HIT);
 
   float opacity = hitShow * uOpacity;
 #ifdef FLIP_SIDED
@@ -1685,6 +1729,12 @@ export interface CloudLayer {
     uCloudMeasured: THREE.IUniform<number>
     /** The tallest top the texture can give (km). */
     uCloudMaxKm: THREE.IUniform<number>
+    /** 1 where the map shown has a cloud-type grid (tides-tvr.4.2), else 0;
+     * this and the grid are the shell's alone, which the ground's shadow
+     * never reads. */
+    uCloudTyped: THREE.IUniform<number>
+    /** Its blended type grid (./cloudBlend.ts), or the neutral one. */
+    uCloudType: THREE.IUniform<THREE.Texture>
     uSunDir: THREE.IUniform<THREE.Vector3>
     uSeaLevel: THREE.IUniform<number>
     /** The live terrain scale (../terrain-scale.ts), when `live`. */
@@ -1733,6 +1783,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
     uCloudShift: { value: 0 },
     uCloudMeasured: { value: 0 },
     uCloudMaxKm: { value: MAX_CLOUD_TOP_KM },
+    uCloudTyped: { value: 0 },
+    uCloudType: { value: neutralTypeTexture() },
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
     uTerrainScale: terrainScaleUniform,

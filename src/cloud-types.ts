@@ -119,3 +119,135 @@ export function dailyTimeOfLon(grid: CoverGrid, dayMs: number): (lonDeg: number)
     return gridCovers(grid, t) ? t : noon
   }
 }
+
+// How each kind looks up close (tides-tvr.4.2), drawn by the cloud shell at
+// the hit (renderers/cloudTypeGlsl.ts, renderers/cloudShaders.ts) from the
+// blended type grid. Every number here is the shader's.
+
+/** Shares of cirrus, cumulus, alto and stratus, in the grid's order (R, G,
+ * B, and the rest). */
+export type TypeShares = readonly [cirrus: number, cumulus: number, alto: number, stratus: number]
+
+// The satellites' infrared says what the model can't: how cold and how
+// opaque the top over a point is now. A cold top that lets light through is
+// cirrus; a deep, opaque one is towering cumulus (opaque tops of 6-9 km are
+// as often frontal nimbostratus or altostratus, so they are left to the
+// model); a warm one is low cloud, cumulus or stratus as the model has it.
+// Where the satellites see (trust), the refinement takes IR_WEIGHT of the
+// shares that far.
+export const IR_WEIGHT = 0.7
+/** Top height (km) from which a top reads as cold enough for cirrus. */
+export const IR_COLD_KM = [5.5, 8] as const
+/** Top height (km) from which an opaque top reads as a towering cumulus. */
+export const IR_DEEP_KM = [9, 12] as const
+/** Top height (km) under which a top reads as low cloud (as 1 minus). */
+export const IR_WARM_KM = [3, 4.5] as const
+/** Opacity under which a top lets enough light through to be thin. */
+export const IR_THIN_OPACITY = [0.5, 0.75] as const
+
+/**
+ * The shares s refined by the infrared over a point: its top's height
+ * (topKm), opacity (0..1) and how far the satellites see it (trust, 0..1).
+ * Still sums to 1; only moves shares between kinds, so it never raises the
+ * confidence, and with no trust it leaves them as they are.
+ */
+export function refineWithIr(s: TypeShares, topKm: number, opacity: number, trust: number): TypeShares {
+  const w = IR_WEIGHT * trust
+  const cold = smoothstep(IR_COLD_KM[0], IR_COLD_KM[1], topKm)
+  const deep = smoothstep(IR_DEEP_KM[0], IR_DEEP_KM[1], topKm)
+  const warm = 1 - smoothstep(IR_WARM_KM[0], IR_WARM_KM[1], topKm)
+  const thin = 1 - smoothstep(IR_THIN_OPACITY[0], IR_THIN_OPACITY[1], opacity)
+  // Low cloud keeps the model's split between cumulus and stratus; with no
+  // low share at all, a warm top is a deck.
+  const low = s[1] + s[3]
+  const [lowCumulus, lowStratus] = low > 1e-3 ? [s[1] / low, s[3] / low] : [0, 1]
+  const toCirrus = cold * thin
+  const toCumulus = deep * (1 - thin)
+  // What the IR takes from every share, toward what it says: at most w, as
+  // warm tops are never cold or deep.
+  const keep = 1 - w * (toCirrus + toCumulus + warm)
+  return [
+    s[0] * keep + w * toCirrus,
+    s[1] * keep + w * (toCumulus + warm * lowCumulus),
+    s[2] * keep,
+    s[3] * keep + w * warm * lowStratus,
+  ]
+}
+
+/** The knobs of a cloud's look at the hit. */
+export interface CloudLook {
+  /** The tops' tilt per unit of their slope over the map (RELIEF). */
+  relief: number
+  /** How much an octave large on screen erodes inside a cloud
+   * (DETAIL_INTERIOR). */
+  interior: number
+  /** How much the detail erodes the opacity (DETAIL_EDGE). */
+  edge: number
+  /** The detail's tilt of the tops (DETAIL_RELIEF). */
+  grain: number
+  /** How far the detail is stretched east-west (0..1 of CIRRUS_STRETCH). */
+  stretch: number
+  /** How much taller cloud toward the Sun shades the top. */
+  occ: number
+  /** How much of the darkening down its column the underside keeps. */
+  under: number
+  /** The opacity's scale. */
+  alpha: number
+}
+
+/** The look of tides-tvr.3, untyped clouds' and stratus's: the shader's own
+ * defines. */
+export const NEUTRAL_LOOK: Readonly<CloudLook> = {
+  relief: 1.2,
+  interior: 0.15,
+  edge: 0.8,
+  grain: 0.35,
+  stretch: 0,
+  occ: 1,
+  under: 1,
+  alpha: 1,
+}
+
+/**
+ * Each kind's look. Cumulus: steeper, lumpier tops whose inside erodes more,
+ * at heaps and towers' scale: mostly from the grain (the detail's tilt) and
+ * the erosion, which up close are what shows, rather than holes in the
+ * inside (an interior of 0.45 pitted it as tides-tvr.3 set out to stop).
+ * Stratus: the smooth deck of tides-tvr.3. Alto: a little flatter and
+ * smoother. Cirrus: thin streaks drawn out east-west along the jet, barely
+ * tilted, hardly shading itself or its underside, and a little more
+ * see-through.
+ */
+export const TYPE_LOOKS: Readonly<Record<'cirrus' | 'cumulus' | 'alto' | 'stratus', Readonly<CloudLook>>> = {
+  cirrus: { relief: 0.3, interior: 0.35, edge: 0.9, grain: 0.1, stretch: 1, occ: 0.25, under: 0.3, alpha: 0.85 },
+  cumulus: { relief: 1.8, interior: 0.3, edge: 1.2, grain: 0.8, stretch: 0, occ: 1, under: 1, alpha: 1 },
+  alto: { relief: 0.9, interior: 0.2, edge: 0.7, grain: 0.25, stretch: 0, occ: 1, under: 1, alpha: 1 },
+  stratus: NEUTRAL_LOOK,
+}
+
+/** How far cirrus's detail is drawn out east-west, as the scale of its noise
+ * across the pole axis, in the clouds' frame: east-west at the equator, less
+ * so toward the poles, where the stretch lies along the ground every way
+ * alike. */
+export const CIRRUS_STRETCH = 4
+/** The stretch share over which the detail goes from round to stretched: the
+ * two are drawn and mixed between, which costs a second evaluation. */
+export const STRETCH_EDGES = [0.35, 0.65] as const
+/** |sin latitude| over which the stretch fades out toward the poles, where
+ * it no longer reads as east-west (about 55° to 75°). */
+export const STRETCH_POLE_EDGES = [0.82, 0.97] as const
+
+const LOOK_KEYS = ['relief', 'interior', 'edge', 'grain', 'stretch', 'occ', 'under', 'alpha'] as const
+
+/** The look of cloud with these shares, trusted confidence (0..1) of the
+ * way from the untyped look: exactly NEUTRAL_LOOK with no confidence. */
+export function lookOf(shares: TypeShares, confidence: number): CloudLook {
+  const looks = [TYPE_LOOKS.cirrus, TYPE_LOOKS.cumulus, TYPE_LOOKS.alto, TYPE_LOOKS.stratus]
+  const out = { ...NEUTRAL_LOOK }
+  if (!(confidence > 0)) return out
+  for (const key of LOOK_KEYS) {
+    const typed = looks.reduce((sum, look, i) => sum + shares[i] * look[key], 0)
+    out[key] = NEUTRAL_LOOK[key] + confidence * (typed - NEUTRAL_LOOK[key])
+  }
+  return out
+}

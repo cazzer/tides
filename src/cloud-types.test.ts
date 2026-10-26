@@ -1,13 +1,21 @@
 import { describe, expect, test } from 'vitest'
 import {
+  type CloudLook,
   dailyTimeOfLon,
+  IR_WEIGHT,
+  lookOf,
+  NEUTRAL_LOOK,
+  refineWithIr,
   TYPE_H,
+  TYPE_LOOKS,
   TYPE_W,
+  type TypeShares,
   typeGridImage,
   typeTexelLat,
   typeTexelLon,
   visibleShares,
 } from './cloud-types'
+import { DETAIL_INTERIOR } from './renderers/cloudShaders'
 import { GRID_LATS, GRID_LONS, GRID_POINTS, type CoverGrid } from './forecast-clouds'
 import { DAY_MS, HOUR_MS, smoothstep } from './real-clouds'
 
@@ -178,5 +186,110 @@ describe('dailyTimeOfLon', () => {
     const at = dailyTimeOfLon({ ...g, startMs: day + 6 * HOUR_MS, hours: 13 }, day)
     expect(at(0)).toBe(day + 13.5 * HOUR_MS)
     expect(at(180)).toBe(day + DAY_MS / 2)
+  })
+})
+
+describe('refineWithIr', () => {
+  const sum = (s: TypeShares) => s[0] + s[1] + s[2] + s[3]
+  // A mixed cell: some of every kind, cumulus and stratus 1:2.
+  const mixed: TypeShares = [0.3, 0.1, 0.4, 0.2]
+
+  test('leaves the shares as they are where the satellites don\'t see', () => {
+    for (const km of [1, 7, 11]) expect(refineWithIr(mixed, km, 0.3, 0)).toEqual(mixed)
+  })
+
+  test('takes a cold top that lets light through for cirrus', () => {
+    const s = refineWithIr(mixed, 9, 0.3, 1)
+    expect(s[0]).toBeCloseTo(mixed[0] + IR_WEIGHT * (1 - mixed[0]), 9)
+    // Opaque at the same height, it isn't.
+    expect(refineWithIr(mixed, 9, 0.9, 1)[0]).toBeCloseTo(mixed[0], 9)
+  })
+
+  test('takes a deep, opaque top for towering cumulus', () => {
+    const s = refineWithIr(mixed, 13, 0.95, 1)
+    expect(s[1]).toBeCloseTo(mixed[1] + IR_WEIGHT * (1 - mixed[1]), 9)
+  })
+
+  test('leaves an opaque mid-height top (frontal cloud as often) to the model', () => {
+    expect(refineWithIr(mixed, 7, 0.95, 1)).toEqual(mixed.map((x) => expect.closeTo(x, 9)))
+  })
+
+  test('moves a warm top\'s mid and high cloud to low, split as the model splits it', () => {
+    const s = refineWithIr(mixed, 1.5, 0.8, 1)
+    expect(s[0]).toBeCloseTo(mixed[0] * (1 - IR_WEIGHT), 9)
+    expect(s[2]).toBeCloseTo(mixed[2] * (1 - IR_WEIGHT), 9)
+    expect(s[3] / s[1]).toBeCloseTo(mixed[3] / mixed[1], 9)
+    // With no low cloud in the model, a warm top is a deck.
+    const high = refineWithIr([1, 0, 0, 0], 1.5, 0.8, 1)
+    expect(high[1]).toBe(0)
+    expect(high[3]).toBeCloseTo(IR_WEIGHT, 9)
+  })
+
+  test('keeps the shares summing to 1, each between 0 and 1, pulled at most IR_WEIGHT', () => {
+    for (const km of [0, 2, 3.5, 5, 6.5, 8, 9.5, 11, 14, 16]) {
+      for (const opacity of [0, 0.4, 0.6, 0.8, 1]) {
+        for (const trust of [0, 0.5, 1]) {
+          for (const s of [mixed, [1, 0, 0, 0], [0, 0, 0, 1], [0, 0.5, 0.5, 0]] as TypeShares[]) {
+            const r = refineWithIr(s, km, opacity, trust)
+            expect(sum(r)).toBeCloseTo(1, 9)
+            for (let i = 0; i < 4; i++) {
+              expect(r[i]).toBeGreaterThanOrEqual(-1e-12)
+              expect(r[i]).toBeLessThanOrEqual(1 + 1e-12)
+              // What a share loses is at most the pull's.
+              expect(r[i]).toBeGreaterThanOrEqual(s[i] * (1 - IR_WEIGHT * trust) - 1e-12)
+            }
+          }
+        }
+      }
+    }
+  })
+})
+
+describe('lookOf', () => {
+  const keys = Object.keys(NEUTRAL_LOOK) as (keyof CloudLook)[]
+
+  test('is exactly the untyped look with no confidence, whatever the shares', () => {
+    for (const s of [[1, 0, 0, 0], [0, 1, 0, 0], [0.2, 0.3, 0.1, 0.4], [0, 0, 0, 0]] as TypeShares[]) {
+      expect(lookOf(s, 0)).toEqual(NEUTRAL_LOOK)
+    }
+  })
+
+  test('draws stratus as tides-tvr.3 drew every cloud', () => {
+    expect(lookOf([0, 0, 0, 1], 1)).toEqual(NEUTRAL_LOOK)
+    expect(TYPE_LOOKS.stratus).toEqual(NEUTRAL_LOOK)
+    expect(NEUTRAL_LOOK.interior).toBe(DETAIL_INTERIOR)
+  })
+
+  test('gives cumulus steeper, lumpier tops than the deck', () => {
+    const cu = lookOf([0, 1, 0, 0], 1)
+    for (const key of ['relief', 'interior', 'edge', 'grain'] as const) {
+      expect(cu[key]).toBeGreaterThan(NEUTRAL_LOOK[key])
+    }
+    expect(cu.stretch).toBe(0)
+  })
+
+  test('streaks cirrus, thin, hardly shading itself or its underside', () => {
+    const ci = lookOf([1, 0, 0, 0], 1)
+    expect(ci.stretch).toBe(1)
+    expect(ci.occ).toBeCloseTo(0.25, 12)
+    expect(ci.under).toBeCloseTo(0.3, 12)
+    expect(ci.alpha).toBeCloseTo(0.85, 12)
+    expect(ci.relief).toBeLessThan(NEUTRAL_LOOK.relief)
+  })
+
+  test('moves each knob from the untyped look steadily with confidence', () => {
+    for (const s of [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0.3, 0.3, 0.2, 0.2]] as TypeShares[]) {
+      const full = lookOf(s, 1)
+      let last = lookOf(s, 0)
+      for (let c = 0.1; c <= 1.0001; c += 0.1) {
+        const look = lookOf(s, c)
+        for (const key of keys) {
+          const way = Math.sign(full[key] - NEUTRAL_LOOK[key])
+          expect(way * (look[key] - last[key])).toBeGreaterThanOrEqual(-1e-12)
+          expect(look[key]).toBeCloseTo(NEUTRAL_LOOK[key] + c * (full[key] - NEUTRAL_LOOK[key]), 12)
+        }
+        last = look
+      }
+    }
   })
 })
