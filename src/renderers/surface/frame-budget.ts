@@ -4,9 +4,10 @@
 // the windows a horizon bake reads. Each step is a few ms; a fast descent
 // finishes dozens of tiles at once, which in one frame was the 870 ms stall
 // the spike measured. Work queues here and SurfaceTiles' frame loop runs it,
-// in the frame, until `msPerFrame` of it has run. Not budgeted: stitching
-// marks up to eight loaded neighbours dirty, and three re-uploads each (1 MB)
-// at its next draw.
+// in the frame, until `msPerFrame` of it has run. (Stitching used to mark up
+// to eight loaded neighbours dirty, each re-uploaded whole, 1 MB, at a
+// draw; since tides-zmw.9.27 their new borders go up alone in the grid's
+// job, 2 KB each, grid-upload.ts.)
 //
 // tides-zmw.9.25: by time, not count. Two grids a frame, first come first
 // served with the bakes (which outnumber the grids two to one), held grids

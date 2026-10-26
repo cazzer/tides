@@ -22,6 +22,7 @@ import type { ImageryTile } from './imagery'
 import { setActiveSurfaceSources } from './surface-credits'
 import { createSurfaceGround, type SurfaceGround } from './surface-ground'
 import { forEachCachedModel } from './terrain-internals'
+import { createRectWriter } from './grid-upload'
 import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { subscribeSurfaceLink, surfaceLink } from './surface-link'
@@ -61,7 +62,7 @@ export default function SurfaceTiles() {
     if (!parent || !link) return
     let created: Tiles
     try {
-      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture), link })
+      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture), writeRects: createRectWriter(gl), link })
     } catch (error) {
       // e.g. no OffscreenCanvas (Safari before 16.4), which the library's
       // terrain plugin needs to construct: fly over the globe alone.
