@@ -3,11 +3,13 @@
 // page's relief (./relief.ts, 12x by default) at the top of the blend down to
 // true scale (1x) at the sea. Reload-time ?blend=1 turns it on; without it
 // the scale is the relief at every altitude and every reader below gets
-// TERRAIN_DISPLACEMENT to the bit, so production draws as it did. It stays
-// behind the flag until the cloud march follows it (tides-zmw.9.6: until
-// then its GLSL stands the columns on full-relief ground, so the shadows
-// drift and over mountains the march's ground can stand above the eye); the
-// last of tides-zmw.9.7 / 9.10 to land turns it on and drops ?blend.
+// TERRAIN_DISPLACEMENT to the bit, so production draws as it did. The cloud
+// GLSL follows it too (renderers/cloudTerrainScale.ts, tides-zmw.9.6: the
+// columns, their shadows and the march's ground stand on the drawn ground);
+// the last of tides-zmw.9.7 / 9.10 to land turns it on and drops ?blend.
+// That one turns the clouds' live programs on in the system views as well,
+// so it passes createCloudLayer live = shipMode or re-pins nightLights.test's
+// system-view hash.
 //
 // One writer, one value a frame: ShipController calls setTerrainEye() with
 // the ship's altitude before it steps the flight model, so the floor the
@@ -22,13 +24,16 @@
 // (renderers/groundDisplacement.ts), the relief's shading
 // (renderers/groundRelief.ts) and the horizon shadows
 // (renderers/groundShadow.ts, the same uniform object, its tangents scaled
-// linearly, so right down to 1x) all read, so they follow it for free.
+// linearly, so right down to 1x) all read, so they follow it for free. The
+// cloud shell and the ground's cloud shadows read terrainScaleUniform itself
+// (uTerrainScale), so they take the same value in the same frame.
 //
 // What stays at the full relief, a maximum bound for any scale this gives:
 // TERRAIN_DISPLACEMENT itself, CLOUD_LAYER_TOP and CLOUD_FLAT_ALTITUDE, the
-// shells and the haze's top, the cloud GLSL's TERRAIN_TOP, and the low
-// tier's EARTH_COLLISION_RADIUS (which is above the blend's top, so that
-// tier always sees the full relief).
+// shells and the haze's top, the cloud GLSL's TERRAIN_TOP and march steps,
+// the cloud tops (CLOUD_UNITS_PER_KM), and the low tier's
+// EARTH_COLLISION_RADIUS (which is above the blend's top, so that tier
+// always sees the full relief).
 //
 // The altitude is the eye's over the sea-level sphere, not over the ground:
 // over the ground it would depend on the scale it sets. The scale is linear
@@ -108,11 +113,20 @@ export function terrainScale(altitude: number, relief: number = RELIEF, blend: b
 /**
  * The live scale: one uniform object every reader shares (the ground's
  * displacement through applyTerrainScale(), the CPU floor through
- * liveTerrainDisplacement(); next the cloud march, tides-zmw.9.6, and the
- * streamed tiles' height, tides-zmw.9.7). The page's relief until a ship
+ * liveTerrainDisplacement(), the cloud shell and the ground's cloud shadows
+ * as uTerrainScale, tides-zmw.9.6; next the streamed tiles' height,
+ * tides-zmw.9.7). The page's relief until a ship
  * sets it, and again once it leaves.
  */
 export const terrainScaleUniform: THREE.IUniform<number> = { value: RELIEF }
+
+/**
+ * terrainScaleUniform's GLSL declaration (uTerrainScale), guarded, so that
+ * patches composed onto one program (the cloud shadow and the streamed
+ * tiles' height, tides-zmw.9.12) can each declare it without redefining it.
+ */
+export const TERRAIN_SCALE_UNIFORM_GLSL =
+  '#ifndef TERRAIN_SCALE_DECLARED\n#define TERRAIN_SCALE_DECLARED\nuniform float uTerrainScale;\n#endif\n'
 
 /**
  * Sets the live scale for an eye `altitude` over the sea-level sphere

@@ -104,14 +104,15 @@ export function cloudShape(alpha: number): number {
 }
 
 /** A cloud column: base and top altitudes over ground of the given grey,
- * drawn at `displacement` (the ground's displacementScale: the full relief's
- * maximum bound, as the cloud GLSL holds it until it follows the live
- * terrain scale, tides-zmw.9.6). */
+ * drawn at `displacement` (the ground's displacementScale: TERRAIN_DISPLACEMENT
+ * at the full relief; with the live terrain scale on, ../terrain-scale.ts
+ * liveTerrainDisplacement(), which the cloud GLSL follows, tides-zmw.9.6).
+ * The base follows the ground; the top stands CLOUD_UNITS_PER_KM over it. */
 export function cloudColumn(
   alpha: number,
   topKm: number,
   terrainGrey: number,
-  displacement: number = TERRAIN_DISPLACEMENT
+  displacement: number
 ): { base: number; top: number } {
   const base = terrainGrey * displacement + CLOUD_CLEARANCE
   return { base, top: base + CLOUD_UNITS_PER_KM * topKm * cloudShape(alpha) }
