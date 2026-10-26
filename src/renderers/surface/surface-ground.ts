@@ -27,18 +27,29 @@
 // filtered grid, and on a nearest-filtered one (iOS, createSurfaceTiles) the
 // highest of the 2 x 2 texels its uv falls between (a vertex lands on texel
 // boundaries, where the GPU may pick either). Heights are true metres: the
-// caller scales them. A tile's grid can change after it is read: the grid
-// cache stitches a neighbour's edge into its border (GridCache.stitchNeighbors,
-// needsUpdate on the shared source), which the edge vertices read, so a
-// tile's heights are rebuilt when its grid's source version moves.
+// caller scales them.
 //
-// Anticipating finer tiles: a tile above the tree's deepest level will be
-// replaced by children whose finer meshes read the same grid (or a finer
-// one), and stand higher than its own mesh on narrow ridges. For windows up
-// to ANTICIPATE_MAX_M the floor also takes the highest grid texel under the
-// window, which no finer mesh read from that grid can exceed: such
-// a child fading in then no longer pushes the ship up past the clearance's
-// give (a snap), the floor lowering smoothly once it has instead.
+// The edge rows and columns take the 2 x 2 maximum on any grid: their uvs
+// sit half a texel in, halfway between the edge texel and the border texel
+// the grid cache stitches a neighbour's edge into after the tile is built
+// (GridCache.stitchNeighbors: needsUpdate on the cached grid, which bumps
+// the source version the tile's clone shares, but three re-uploads a clone
+// only when its own version moves). So the GPU may draw the edge from the
+// border before or after the stitch, the CPU holds only the after, and the
+// maximum bounds both: before it, the border held a copy of the edge texel,
+// which the maximum includes. Heights are also rebuilt when the source
+// version moves, which tightens them to the CPU's current grid.
+//
+// Anticipating finer tiles, a heuristic: a tile above the tree's deepest
+// level will be replaced by children whose finer meshes stand higher than
+// its own on narrow ridges, and a child fading in under the ship pushes it
+// up, past the clearance's give a snap. For windows up to ANTICIPATE_MAX_M
+// the floor also takes the highest grid texel under the window, which raises
+// it towards where the children will stand, so they mostly arrive under it
+// and the floor lowers smoothly instead (headless arrival at the gorge: the
+// largest one-frame lift 108-268 m before, 4.4 m after). Not a bound: a
+// child's cells that meet the window have corners outside it, and children
+// at odd levels read a finer grid. It only ever raises the floor.
 //
 // Which tiles count: those drawn (the group's children: visible, and fading
 // out, which the fade plugin keeps until it ends) and the loaded ones at the
@@ -87,7 +98,8 @@ export interface TileGround {
   /** The highest vertex in each BLOCK x BLOCK block of cells, row-major. */
   blocks: Float32Array
   max: number
-  /** The grid, and its source's version when read (stitching bumps it). */
+  /** The grid (the tile's displacement map and its image), and its source's version when read (stitching bumps it). */
+  map: THREE.Texture
   image: GridImage
   version: number
   /** Each column's and row's texture coordinate into the grid. */
@@ -173,7 +185,10 @@ export function buildTileGround(scene: THREE.Object3D): TileGround | null {
   for (let i = 0; i < count; i++) {
     const tu = uv.getX(i)
     const tv = uv.getY(i)
-    const h = nearest ? gridFootprintMax(image, tu, tv) : gridLinear(image, tu, tv)
+    const row = Math.floor(i / TILE_VERTICES)
+    const col = i % TILE_VERTICES
+    const edge = row === 0 || row === SEGMENTS || col === 0 || col === SEGMENTS
+    const h = nearest || edge ? gridFootprintMax(image, tu, tv) : gridLinear(image, tu, tv)
     heights[i] = h
     if (heights[i] > max) max = heights[i]
   }
@@ -208,13 +223,12 @@ export function buildTileGround(scene: THREE.Object3D): TileGround | null {
       blocks[bi * BLOCKS + bj] = top
     }
   }
-  return { rowLat, colLon, heights, blocks, max, image, version: sourceVersion(map), colU, rowV }
+  return { rowLat, colLon, heights, blocks, max, map, image, version: sourceVersion(map), colU, rowV }
 }
 
-/** Whether `scene`'s grid has changed since `ground` read it (stitching). */
-function stale(ground: TileGround, scene: THREE.Object3D): boolean {
-  const map = (terrainMesh(scene)?.material as THREE.MeshStandardMaterial | undefined)?.displacementMap
-  return !map || sourceVersion(map) !== ground.version
+/** Whether `ground`'s grid has changed since it was read (stitching). */
+function stale(ground: TileGround): boolean {
+  return sourceVersion(ground.map) !== ground.version
 }
 
 /** The window a query reads, latitude and (unwrapped) longitude, radians. */
@@ -252,6 +266,7 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
  * The highest corner of `ground`'s cells that meet `win` (its longitudes
  * plus `shift`; blocks of cells inside it by the block maxima), which bounds
  * the mesh there whichever way the cells are split. With `anticipate`, also
+ * (a heuristic)
  * the highest grid texel under the window (see the header). -Infinity when
  * no cell meets it.
  */
@@ -438,7 +453,7 @@ export function createSurfaceGround(tiles: SurfaceGroundTiles, { deepest = SURFA
 
   const groundOf = (scene: THREE.Object3D) => {
     let ground = grounds.get(scene)
-    if (ground === undefined || (ground && stale(ground, scene))) {
+    if (ground === undefined || (ground && stale(ground))) {
       ground = buildTileGround(scene)
       grounds.set(scene, ground)
     }

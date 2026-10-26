@@ -37,6 +37,8 @@ const PADDED = DIM + 2
 interface LibraryTile {
   tile: { boundingVolume: { region: number[] } }
   mesh: THREE.Mesh
+  /** The cached grid (the mesh's displacementMap is a clone of it, sharing its source). */
+  grid: THREE.DataTexture
 }
 
 interface Library {
@@ -45,10 +47,11 @@ interface Library {
 
 // Tiles meshed by the real 0.5.3 terrain plugin (its parseToMesh), each
 // reading a padded grid of `height(column, row)` metres.
-async function library(): Promise<Library> {
+async function library(dim = DIM): Promise<Library> {
+  const padded = dim + 2
   const tiles = new TilesRenderer()
   tiles.ellipsoid.radius.setScalar(SURFACE_ELLIPSOID_RADIUS)
-  const plugin = new TerrariumMeshPlugin({ url: 'https://example.test/{z}/{x}/{y}.webp', tileDimension: DIM, maxZoom: 16 })
+  const plugin = new TerrariumMeshPlugin({ url: 'https://example.test/{z}/{x}/{y}.webp', tileDimension: dim, maxZoom: 16 })
   tiles.registerPlugin(plugin)
   // The synthetic tileset's preprocess wants a browser; nothing here needs it.
   ;(tiles as unknown as { preprocessTileset: () => void }).preprocessTileset = () => {}
@@ -61,9 +64,9 @@ async function library(): Promise<Library> {
   await internals.loadRootTileset()
   return {
     async tile(x, y, level, height, filter = 'linear') {
-      const data = new Float32Array(PADDED * PADDED)
-      for (let j = 0; j < PADDED; j++) for (let i = 0; i < PADDED; i++) data[j * PADDED + i] = height(i, j)
-      const grid = new THREE.DataTexture(data, PADDED, PADDED, THREE.RedFormat, THREE.FloatType)
+      const data = new Float32Array(padded * padded)
+      for (let j = 0; j < padded; j++) for (let i = 0; i < padded; i++) data[j * padded + i] = height(i, j)
+      const grid = new THREE.DataTexture(data, padded, padded, THREE.RedFormat, THREE.FloatType)
       // As SurfaceGridCache makes them.
       grid.minFilter = grid.magFilter = filter === 'linear' ? THREE.LinearFilter : THREE.NearestFilter
       internals._gridCache = { lock: () => grid, release() {} }
@@ -77,7 +80,7 @@ async function library(): Promise<Library> {
         },
       }
       const mesh = await internals.parseToMesh(new ArrayBuffer(0), tile, 'terrain', 'u', new AbortController().signal)
-      return { tile, mesh }
+      return { tile, mesh, grid }
     },
   }
 }
@@ -124,7 +127,9 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     const { uv } = mesh.geometry.attributes
     for (let i = 0; i < TILE_VERTICES * TILE_VERTICES; i++) {
       const [tu, tv] = [uv.getX(i), uv.getY(i)]
-      expect(ground.heights[i]).toBeCloseTo(gridLinear(image, tu, tv), 3)
+      // Edge rows and columns: the 2 x 2 maximum (the border a stitch rewrites).
+      const edge = [0, TILE_VERTICES - 1].includes(Math.floor(i / TILE_VERTICES)) || [0, TILE_VERTICES - 1].includes(i % TILE_VERTICES)
+      expect(ground.heights[i]).toBeCloseTo(edge ? gridFootprintMax(image, tu, tv) : gridLinear(image, tu, tv), 3)
       // Nearest: whichever texel either side of the boundary the GPU takes.
       for (const [du, dv] of [[-1e-6, -1e-6], [1e-6, 1e-6], [0, 0], [-1e-6, 1e-6]]) {
         expect(nearGround.heights[i]).toBeGreaterThanOrEqual(gridNearest(image, tu + du, tv + dv) - 1e-3)
@@ -260,7 +265,7 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     expect(cover(many.filter((_, k) => k !== 12))).toBe(false)
   })
 
-  it("rebuilds a tile's heights when a neighbour is stitched into its grid's border", async () => {
+  it("bounds a tile's edge before and after a neighbour is stitched into its grid's border, and rebuilds after", async () => {
     const t = await lib.tile(1205, 3232, 13, () => 100)
     const sampler = createSurfaceGround(tilesOf([t], []))
     const [, s, e, n] = t.tile.boundingVolume.region
@@ -273,8 +278,11 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     const { data, width, height } = map.image as { data: Float32Array; width: number; height: number }
     for (let y = 0; y < height; y++) data[y * width + width - 1] = 900
     expect(at()).toBeCloseTo(100, 6) // the source hasn't said it changed
-    map.needsUpdate = true
-    expect(at()).toBeGreaterThan(400)
+    // As fillBorder does: needsUpdate on the cached grid, whose source the clone shares.
+    t.grid.needsUpdate = true
+    expect(map.source).toBe(t.grid.source)
+    // The edge vertices sit halfway to the border: bilinear would read 500, the bound reads the border.
+    expect(at()).toBeCloseTo(900, 6)
   })
 
   it('reads tiles on either side of the antimeridian, whichever way float32 puts their edges', async () => {
@@ -294,28 +302,60 @@ describe('the surface ground sampler (tides-zmw.9.8)', () => {
     expect(createSurfaceGround(tilesOf([west, east], [])).maxElevation(lat, -Math.PI + 0.0005, 10)).toEqual({ metres: 300, covered: true })
   })
 
-  it('takes the grid texels under a small window for a tile above the deepest level, which its children cannot exceed', async () => {
-    // A one-texel spire between vertices: the tile's own mesh misses it.
-    const spire = (i: number, j: number) => (i === 9 && j === 9 ? 2000 : 100)
-    const t = await lib.tile(1205, 3232, 13, spire)
+  it('anticipates (a heuristic) the grid texels under a small window for a tile above the deepest level', async () => {
+    // A z12 tile reading its whole 256-texel grid: 8 texels to a cell, its
+    // vertices reading texels 8k and 8k + 1 (the border is texel 0).
+    const fine = await library(256)
+    // A spire on texels 130-135, between the vertices at 128.5 and 136.5.
+    const spire = (i: number, j: number) => (i >= 130 && i <= 135 && j >= 130 && j <= 135 ? 2000 : 100)
+    const t = await fine.tile(602, 1616, 12, spire)
     const ground = buildTileGround(t.mesh)!
-    expect(ground.max).toBeLessThan(2000)
+    expect(ground.max).toBe(100) // the mesh misses it
     const [w, s, e, n] = t.tile.boundingVolume.region
+    const [lat, lon] = [(s + n) / 2, (w + e) / 2] // at texel ~128.5, 1.5 texels (~45 m) off the spire
     const sampler = createSurfaceGround(tilesOf([t], []))
-    const ANY = 10_000 // a window over the whole tile (wider than ANTICIPATE_MAX_M: vertices only)
-    expect(sampler.maxElevation((s + n) / 2, (w + e) / 2, ANY)!.metres).toBe(ground.max)
-    // Small windows anywhere over the spire's texel take it.
-    let saw = 0
-    for (let k = 0; k <= 20; k++) {
-      const q = sampler.maxElevation(s + ((n - s) * k) / 20, w + ((e - w) * k) / 20, ANTICIPATE_MAX_M)!
-      if (q.metres === 2000) saw++
+    expect(sampler.maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(2000)
+    // Wider windows read the vertices only; at the deepest level nothing finer comes.
+    expect(sampler.maxElevation(lat, lon, ANTICIPATE_MAX_M + 1)!.metres).toBe(100)
+    expect(createSurfaceGround(tilesOf([t], []), { deepest: 12 }).maxElevation(lat, lon, ANTICIPATE_MAX_M)!.metres).toBe(100)
+  })
+
+  it('raises a parent towards its child from the same grid, but bounds it only mostly (a heuristic)', async () => {
+    // z12 and its z13 child both read the z12 grid (the plugin fetches every other level).
+    const fine = await library(256)
+    const rand = random(5)
+    const field = Array.from({ length: 258 * 258 }, () => 1000 + 800 * rand() ** 4)
+    const height = (i: number, j: number) => field[j * 258 + i]
+    const parent = await fine.tile(602, 1616, 12, height)
+    const child = await fine.tile(1205, 3232, 13, height)
+    const anticipated = createSurfaceGround(tilesOf([parent], []))
+    const meshOnly = createSurfaceGround(tilesOf([parent], []), { deepest: 12 })
+    const childFloor = createSurfaceGround(tilesOf([child], []), { deepest: 13 })
+    const [w, s, e, n] = child.tile.boundingVolume.region
+    let raised = 0
+    let held = 0
+    let worst = 0
+    const N = 400
+    for (let k = 0; k < N; k++) {
+      const lat = s + (n - s) * (0.05 + 0.9 * rand())
+      const lon = w + (e - w) * (0.05 + 0.9 * rand())
+      const a = anticipated.maxElevation(lat, lon, 28)!.metres
+      const m = meshOnly.maxElevation(lat, lon, 28)!.metres
+      const c = childFloor.maxElevation(lat, lon, 28)!.metres
+      expect(a).toBeGreaterThanOrEqual(m) // it only ever raises the floor
+      if (a > m) raised++
+      if (a >= c) held++
+      worst = Math.max(worst, c - a)
     }
-    expect(saw).toBeGreaterThan(0)
-    // At the deepest level nothing finer comes: the mesh alone.
-    const deepest = createSurfaceGround(tilesOf([t], []), { deepest: 13 })
-    for (let k = 0; k <= 20; k++) {
-      expect(deepest.maxElevation(s + ((n - s) * k) / 20, w + ((e - w) * k) / 20, ANTICIPATE_MAX_M)!.metres).toBeLessThan(2000)
-    }
+    // What holds (measured on this rough field: raised 0.96, held 0.98, the
+    // worst shortfall 132 m of an 800 m range): the texels under the window
+    // raise the parent's floor in nearly every window and cover the child's
+    // in nearly every one, not all: a child cell meeting the window reaches
+    // texels outside it. The rest arrives as a rise the floor takes in.
+    expect(raised / N).toBeGreaterThan(0.9)
+    expect(held / N).toBeGreaterThan(0.95)
+    expect(worst).toBeGreaterThan(0)
+    expect(worst).toBeLessThan(200)
   })
 
   it("anticipates up to the terrain tree's deepest level, a level past Mapterhorn's grids", () => {
