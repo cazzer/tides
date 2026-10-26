@@ -31,6 +31,8 @@ import {
   EARTH_RADIUS,
   EARTH_SHELL_RADIUS,
   MOON_COLLISION_CLEARANCE,
+  EARTH_GROUND_SPEED_LAW,
+  EARTH_SLOWEST,
   createShipBodies,
   updateShipBodies,
 } from './ship-bodies'
@@ -481,5 +483,32 @@ describe('ship bodies', () => {
         if (body.key !== 'earth') expect(body.ground).toBeUndefined()
       }
     })
+  })
+})
+
+describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
+  it('turns its spin with the drawn Earth: local → world, the inverse of the ground reads', () => {
+    const bodies = createShipBodies('high', true)
+    updateShipBodies(bodies, T)
+    const earth = bodies.find((b) => b.key === 'earth')!
+    const frame = new THREE.Object3D()
+    applyBodyTransform(frame, { tiltAt: earthTilt, spinAt: earthSpin }, T)
+    expect(Math.abs(earth.spin!.dot(frame.quaternion))).toBeCloseTo(1, 14)
+    // Its +Y is the spin axis, the frame's own.
+    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(earth.spin!)
+    expect(axis.distanceTo(new THREE.Vector3(0, 1, 0).applyQuaternion(frame.quaternion))).toBeLessThan(1e-14)
+  })
+
+  it('follows the gap over the tiles only; without them, the 0.02 floor as before', () => {
+    const over = createShipBodies('high', true).find((b) => b.key === 'earth')!
+    expect(over.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
+    expect(over.minSpeed).toBe(EARTH_SLOWEST)
+    expect(EARTH_SLOWEST * 6371000 / EARTH_RADIUS).toBeCloseTo(50, 6)
+    const without = createShipBodies('high', false).find((b) => b.key === 'earth')!
+    expect(without.groundSpeed).toBeUndefined()
+    expect(without.minSpeed).toBe(EARTH_GROUND_SPEED)
+    const low = createShipBodies('low', false).find((b) => b.key === 'earth')!
+    expect(low.groundSpeed).toBeUndefined()
+    expect(low.minSpeed).toBeUndefined()
   })
 })

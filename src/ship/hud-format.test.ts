@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { V_TOP } from './flight'
-import { formatSpeed } from './ship-distances'
+import { formatDistance, formatSpeed } from './ship-distances'
 import { approachAnnouncement, approachTail, speedParts, wellSuffix } from './hud-format'
 
 describe('speedParts', () => {
@@ -33,5 +33,22 @@ describe('approachTail', () => {
     expect(approachAnnouncement('fast', 'moon')).toBe('Too fast to stop at Moon')
     expect(approachAnnouncement('over', 'moon')).toBe('Overshooting Moon')
     expect(approachAnnouncement('closing', 'moon')).toBeNull()
+  })
+})
+
+describe('fine units (tides-zmw.9.18)', () => {
+  test('km/h under 1 km/s and metres under 1 km with fine; the same text as before without', () => {
+    expect(formatSpeed(0.15, true)).toBe('540 km/h')
+    expect(formatSpeed(0.2, true)).toBe('720 km/h')
+    expect(speedParts(formatSpeed(0.15, true))).toEqual(['540', 'km/h'])
+    expect(formatSpeed(43, true)).toBe(formatSpeed(43))
+    expect(formatSpeed(0.15)).toBe(formatSpeed(0.15, false))
+    expect(formatSpeed(0.15)).toMatch(/km\/s$/)
+    expect(formatDistance(0.03, true)).toBe('30 m')
+    expect(formatDistance(0.0304, true)).toBe('30 m')
+    expect(formatDistance(-0.001, true)).toBe('0 m')
+    expect(formatDistance(0.03)).toBe('0 km')
+    expect(formatDistance(12, true)).toBe(formatDistance(12))
+    expect(formatDistance(NaN, true)).toBe('—')
   })
 })

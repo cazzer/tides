@@ -10,7 +10,15 @@ import {
   wellFactor,
   type Body,
 } from './flight'
-import { BODY_MASS_KG, EARTH_GROUND_SPEED } from './ship-bodies'
+import {
+  BODY_MASS_KG,
+  EARTH_GROUND_SPEED,
+  EARTH_GROUND_SPEED_LAW,
+  EARTH_RADIUS,
+  EARTH_SLOWEST,
+  EARTH_UNITS_PER_METRE,
+  FINE_GROUND_CLEARANCE,
+} from './ship-bodies'
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry } from './ship-telemetry'
 import { isImpact } from './impact'
@@ -387,5 +395,53 @@ describe('approachSubject', () => {
     const mercuryFirst = approachSubject(bodies, ship, forward, null, null)
     const other = bodies[1 - mercuryFirst].key
     expect(approachSubject(bodies, ship, forward, null, other)).toBe(1 - mercuryFirst)
+  })
+})
+
+describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
+  const M = EARTH_UNITS_PER_METRE
+  const law = EARTH_GROUND_SPEED_LAW
+  const ground = { law, stop: FINE_GROUND_CLEARANCE }
+  const wellTime = wellFactor(BODY_MASS_KG.earth) / K_WELL
+
+  test('the plateau, then the gap e-folding every 1 / (rate · share), then to the stop', () => {
+    // On the plateau, closing at it: linear.
+    const plateauGap = law.max / law.rate
+    expect(approachEta(0.05, law.max, wellTime, 1, EARTH_SLOWEST, ground) - approachEta(plateauGap, law.max, wellTime, 1, EARTH_SLOWEST, ground)).toBeCloseTo((0.05 - plateauGap) / law.max, 9)
+    // From the plateau's foot down to the stop at full share: ln(foot / stop) / rate.
+    expect(approachEta(plateauGap, law.max, wellTime, 1, EARTH_SLOWEST, ground)).toBeCloseTo(Math.log(plateauGap / FINE_GROUND_CLEARANCE) / law.rate, 9)
+    // Half throttle: twice as long.
+    expect(approachEta(1000 * M, 0.5 * law.rate * 1000 * M, wellTime, 0.5, EARTH_SLOWEST, ground)).toBeCloseTo(Math.log(1000 / 30) / (0.5 * law.rate), 9)
+    expect(approachEta(FINE_GROUND_CLEARANCE, 1e-4, wellTime, 1, EARTH_SLOWEST, ground)).toBe(0)
+    expect(approachEta(1, 0, wellTime, 1, EARTH_SLOWEST, ground)).toBe(Infinity)
+  })
+
+  test.each([0.5, 1])('a locked descent at throttle %s from 5 km arrives within 15%% of the ETA it starts with', (throttle) => {
+    const earth: Body = {
+      key: 'earth',
+      position: new THREE.Vector3(),
+      radius: EARTH_RADIUS,
+      collisionRadius: EARTH_RADIUS + 10 * M,
+      mass: BODY_MASS_KG.earth,
+      ground: () => EARTH_RADIUS,
+      groundClearance: FINE_GROUND_CLEARANCE,
+      minSpeed: EARTH_SLOWEST,
+      groundSpeed: law,
+    }
+    const state = createShipState()
+    state.position.set(0, EARTH_RADIUS + 5000 * M, 0)
+    // Nose down, already at its steady speed.
+    state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    state.velocity.set(0, -throttle * law.rate * 5000 * M, 0)
+    const eta = approachEta(5000 * M, -state.velocity.y, wellTime, throttle, EARTH_SLOWEST, ground)
+    const input: ShipInput = { throttle, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true }
+    const telemetry = createShipTelemetry()
+    let t = 0
+    for (; t < 60; t += 1 / 60) {
+      stepShip(state, input, 1 / 60, { bodies: [earth], targetKey: 'earth' }, telemetry)
+      // Arrived: within a metre of the stop.
+      if (telemetry.nearest.surfaceDistance < FINE_GROUND_CLEARANCE + 1 * M) break
+    }
+    expect(Math.abs(t / eta - 1)).toBeLessThan(0.15)
   })
 })

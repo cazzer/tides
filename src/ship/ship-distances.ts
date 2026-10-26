@@ -464,9 +464,14 @@ const AU_FROM = 0.1 * KM_PER_AU
 const threeFigures = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 3 })
 const twoFigures = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 2 })
 
-/** "766,000 km", "2.03 million km" from a million km, "1.52 AU" from 0.1 AU. */
-export function formatDistance(km: number): string {
+/**
+ * "766,000 km", "2.03 million km" from a million km, "1.52 AU" from 0.1 AU;
+ * with `fine`, "30 m" under 1 km.
+ */
+export function formatDistance(km: number, fine = false): string {
   if (!Number.isFinite(km)) return '—'
+  // Over the streamed tiles the ship flies 30 m up (tides-zmw.9.18).
+  if (fine && km < 1) return `${threeFigures.format(Math.round(Math.max(0, km) * 1000))} m`
   // Whole km below 1000, so a ship at rest on a surface reads "0 km".
   if (km < 1000) return `${threeFigures.format(Math.round(km))} km`
   if (km < MILLION) return `${threeFigures.format(km)} km`
@@ -477,9 +482,13 @@ export function formatDistance(km: number): string {
 // Below a tenth of light speed km/s reads better; above it, Elite's c.
 const C_FROM = 0.1 * C_KM_PER_S
 
-/** "15,500 km/s" under 0.1 c, else "1.3c". */
-export function formatSpeed(kmPerSecond: number): string {
+/**
+ * "15,500 km/s" under 0.1 c, else "1.3c"; with `fine` (true to scale near
+ * the ground, tides-zmw.9.18), "540 km/h" under 1 km/s.
+ */
+export function formatSpeed(kmPerSecond: number, fine = false): string {
   if (!Number.isFinite(kmPerSecond)) return '—'
+  if (fine && kmPerSecond < 1) return `${threeFigures.format(Math.round(kmPerSecond * 3600))} km/h`
   if (kmPerSecond < C_FROM) return `${threeFigures.format(kmPerSecond)} km/s`
   return `${twoFigures.format(kmPerSecond / C_KM_PER_S)}c`
 }

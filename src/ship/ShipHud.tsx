@@ -16,6 +16,7 @@ import {
   shipImpacts,
 } from './impact'
 import { prefersReducedMotion } from './reduced-motion'
+import { SURFACE_TILES_ON } from '../surface'
 import { BodyMarkers } from './BodyMarkers'
 import { ShipControlsDialog } from './ShipControlsDialog'
 
@@ -213,7 +214,9 @@ export function ShipHud() {
       if (now - textAt < TEXT_INTERVAL_MS) return
       textAt = now
 
-      const [speed, unit] = speedParts(formatSpeed(shipTelemetry.speed * shipNav.kmPerUnit))
+      // Through the air below it, true to scale near the ground over the
+      // tiles (tides-zmw.9.18); the frame speed without them.
+      const [speed, unit] = speedParts(formatSpeed(shipTelemetry.air.speed * shipNav.kmPerUnit, SURFACE_TILES_ON))
       set(r.speed, speed)
       set(r.speedUnit, unit && ` ${unit}`)
       const well = wellSuffix(shipTelemetry.well.key, shipTelemetry.speedCap)
@@ -241,7 +244,7 @@ export function ShipHud() {
         set(r.assistValue, assist ? 'On' : 'Off')
       }
       const nearest = shipNav.nearestKey
-      set(r.nearest, nearest ? `${bodyName(nearest)} · ${formatDistance(shipNav.nearestKm)}` : '—')
+      set(r.nearest, nearest ? `${bodyName(nearest)} · ${formatDistance(shipNav.nearestKm, SURFACE_TILES_ON)}` : '—')
 
       const target = getShipTarget()
       if (target !== targetShown) {
@@ -271,7 +274,7 @@ export function ShipHud() {
       // Nearest says the same thing when it is the approach subject.
       if (r.nearestCell) r.nearestCell.hidden = a.key != null && a.key === nearest
       if (a.key != null) {
-        set(r.subjectRange, `${bodyName(a.key)} · ${formatDistance(a.km)}`)
+        set(r.subjectRange, `${bodyName(a.key)} · ${formatDistance(a.km, SURFACE_TILES_ON)}`)
         const tail = approachTail(a.status, a.eta)
         set(r.subjectTail, tail && ` · ${tail}`)
       }

@@ -111,7 +111,7 @@ export default function SurfaceTiles() {
     bounds.update()
     // Less detail the faster the ground sweeps past (surface-lod.ts), set
     // before update() picks this frame's tiles.
-    const target = surfaceErrorTarget(sweepRate(shipTelemetry.speed, shipTelemetry.nearest), touch)
+    const target = surfaceErrorTarget(sweepRate(shipTelemetry.air.speed, shipTelemetry.nearest), touch)
     errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
     tiles.errorTarget = errorTarget.current
     // ShipController has moved the camera and OrbitingBody turned Earth this

@@ -29,6 +29,7 @@ import {
   streakLength,
   wrapCoord,
   wrapOffset,
+  dustAnchor,
 } from './dust'
 
 // The world position of the mote `seed` that sits nearest `camera`, by brute
@@ -279,5 +280,18 @@ describe('speed FOV', () => {
       x = next
     }
     expect(x).toBeGreaterThan(0.98)
+  })
+})
+
+describe('dustAnchor (tides-zmw.9.18)', () => {
+  test('wraps on the camera less what the frame carry moved: zero carried is the camera', () => {
+    const camera = { x: 1000.25, y: -3.5, z: 7 }
+    expect(dustAnchor(camera, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })).toEqual(camera)
+    expect(dustAnchor(camera, { x: 0.25, y: 0.5, z: -1 }, { x: 0, y: 0, z: 0 })).toEqual({ x: 1000, y: -4, z: 8 })
+    // A ship carried with Earth, still in the carried frame: the motes keep their wrap.
+    const h = 0.01
+    const start = dustAnchor(camera, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
+    const later = dustAnchor({ x: camera.x + 0.3, y: camera.y, z: camera.z }, { x: 0.3, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
+    expect(wrapOffset(later.x, h)).toBeCloseTo(wrapOffset(start.x, h), 9)
   })
 })

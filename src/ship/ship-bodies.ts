@@ -22,7 +22,7 @@ import {
 import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
 import { SURFACE_TILES_ON } from '../surface'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
-import type { Body as FlightBody } from './flight'
+import type { Body as FlightBody, GroundSpeedLaw } from './flight'
 import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE, shipNear } from './ship-session'
 import {
   earthLimbTerrain,
@@ -156,6 +156,22 @@ export const NEAR_SAMPLE_MAX = 20 / EARTH_KM_PER_UNIT
 export const EARTH_GROUND_SPEED = 0.02
 
 /**
+ * Over the streamed tiles (tides-zmw.9.18), the floor follows the gap to
+ * the ground: EARTH_GAP_RATE · gap, never under EARTH_SLOWEST nor over
+ * EARTH_GROUND_SPEED, today's plateau (flight.ts speedFloorAt). Flying at
+ * a share of it the gap e-folds every 1 / (rate · share) s: 720 km/h at
+ * full throttle 100 m up, 216 at the 30 m stop. [TUNE]
+ */
+export const EARTH_GAP_RATE = 2
+/** 50 m/s: the least Earth's floor falls to over the tiles. [TUNE] */
+export const EARTH_SLOWEST = 50 * EARTH_UNITS_PER_METRE
+export const EARTH_GROUND_SPEED_LAW: Readonly<GroundSpeedLaw> = {
+  rate: EARTH_GAP_RATE,
+  min: EARTH_SLOWEST,
+  max: EARTH_GROUND_SPEED,
+}
+
+/**
  * Masses, kg, for the flight model's gravity wells (flight.ts wellFactor).
  * The other planets' moons (tides-2hv.8) take theirs from moons.ts' MOONS.
  */
@@ -202,6 +218,8 @@ export interface ShipBody extends FlightBody {
   positionAt: ((t: number) => Vec3) | null
   /** Turns a body whose ground is sampled in its own frame (Earth) to `t`. */
   turnTo?: (t: number) => void
+  /** Its local → world rotation at the last turnTo (Earth's; frame-carry.ts). */
+  spin?: THREE.Quaternion
   /** Earth's. */
   floor?: GroundFloor
 }
@@ -237,6 +255,7 @@ const DEG = Math.PI / 180
 // the ship over GROUND_RISE_TAU. Ground the ship flies onto (a cliff ahead)
 // clamps at once, as before.
 function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolean): void {
+  const spin = new THREE.Quaternion()
   const toLocal = new THREE.Quaternion()
   const euler = new THREE.Euler()
   const local = new THREE.Vector3()
@@ -298,10 +317,13 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
     ? EARTH_COLLISION_RADIUS
     : EARTH_RADIUS + (surfaceTiles ? clearance.hard : EARTH_GROUND_CLEARANCE)
   body.groundClearance = EARTH_GROUND_CLEARANCE
-  body.minSpeed = low ? undefined : EARTH_GROUND_SPEED
+  body.minSpeed = low ? undefined : fixed ? EARTH_GROUND_SPEED : EARTH_SLOWEST
+  if (!fixed) body.groundSpeed = EARTH_GROUND_SPEED_LAW
+  body.spin = spin
   body.ground = (direction, reach = clearance.reach) => drawn(toEarth(direction), reach) + Math.max(lift, 0)
   body.turnTo = (t) => {
-    toLocal.setFromEuler(euler.set(earthTilt(t) * DEG, earthSpin(t), 0, 'XYZ')).invert()
+    spin.setFromEuler(euler.set(earthTilt(t) * DEG, earthSpin(t), 0, 'XYZ'))
+    toLocal.copy(spin).invert()
   }
   // Unit, Earth's frame, from the centre to `position`; null at the centre.
   const up = (position: THREE.Vector3) => {

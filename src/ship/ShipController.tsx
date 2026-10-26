@@ -22,12 +22,13 @@ import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail
 import { setTerrainEye } from '../terrain-scale'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 import { SURFACE_TILES_ON } from '../surface'
+import { carryShip, earthSpinRate, fillAir, resetFrameCarry, shipCarry } from './frame-carry'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
-// time to pass. Not Earth's over the streamed tiles: the ship can stand 30 m
-// over their ground, which Earth's orbit and spin move ~0.2 m a frame
-// (tides-zmw.9.8).
+// time to pass. Not Earth's (nor the Moon's) over the streamed tiles: the
+// ship can stand 30 m over their ground, and Earth carries the ship by
+// exactly how far it moved each frame (tides-zmw.9.8, tides-zmw.9.18).
 const BODY_REFRESH_MS = 250
 
 /**
@@ -39,6 +40,7 @@ const BODY_REFRESH_MS = 250
 export function ShipController() {
   const bodies = useMemo(createShipBodies, [])
   const earth = useMemo(() => bodies.find((body) => body.key === 'earth'), [bodies])
+  const moon = useMemo(() => bodies.find((body) => body.key === 'moon'), [bodies])
   const bodiesAt = useRef<number | null>(null)
   const ship = useRef<ShipState | null>(null)
 
@@ -47,6 +49,7 @@ export function ShipController() {
       clearLimbView()
       disposeLimbSpheres()
       setTerrainEye(Infinity)
+      resetFrameCarry(shipCarry)
     },
     []
   )
@@ -80,6 +83,7 @@ export function ShipController() {
       bodiesAt.current = t
     } else if (SURFACE_TILES_ON && earth) {
       updateShipBody(earth, t)
+      if (moon) updateShipBody(moon, t)
     }
     // On the first frame rather than on mount: a ?ship=1 link mounts this
     // before the clock has ticked, and the view's size is known by now.
@@ -89,10 +93,16 @@ export function ShipController() {
       bodies
     ) ?? spawnPose(bodies, size.width / size.height)
     const state = ship.current
+    // Over the tiles, Earth (or the Moon) carries the ship over the frame
+    // before it steps, so the step, the floor's marks and the settle see the
+    // ship where the ground left it (frame-carry.ts, tides-zmw.9.18).
+    const spinRate = earthSpinRate(useStore.getState().timeScale)
+    if (SURFACE_TILES_ON && earth) carryShip(shipCarry, state, earth, moon ?? null, delta, spinRate)
     setTerrainEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
     // Read each frame: the depth probe may answer after the first ones.
     if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
+    if (SURFACE_TILES_ON && earth) fillAir(shipCarry, shipTelemetry, state, earth, spinRate)
     if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
 

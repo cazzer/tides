@@ -95,6 +95,21 @@ export function wrapOffset(cameraCoord: number, halfSize: number): number {
   return positiveMod(cameraCoord - halfSize, 2 * halfSize)
 }
 
+type Xyz = { x: number; y: number; z: number }
+
+/**
+ * Where the dust wraps around: the camera less everything the frame carry
+ * has moved the ship by (frame-carry.ts `carried`, tides-zmw.9.18), so the
+ * motes ride with Earth as the ship does rather than streaming past a hover
+ * at Earth's speed. Zero carried (no ?surface=1) leaves the camera's.
+ */
+export function dustAnchor<T extends Xyz>(camera: Xyz, carried: Xyz, out: T): T {
+  out.x = camera.x - carried.x
+  out.y = camera.y - carried.y
+  out.z = camera.z - carried.z
+  return out
+}
+
 /**
  * A mote's coordinate relative to the camera, in [−halfSize, halfSize): the
  * nearest copy of `seed` (0..1, its place in the box) in the world-fixed

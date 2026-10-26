@@ -48,6 +48,13 @@ export interface ShipTelemetry {
    * a hit.
    */
   colliding: boolean
+  /**
+   * The ship through Earth's air (frame-carry.ts fillAir, tides-zmw.9.18):
+   * speed, scene units/s (what the HUD reads); coupling, the share of
+   * Earth's spin carried; density over sea level's; dynamic pressure, Pa.
+   * Without the carry (no ?surface=1) speed is `speed` and the rest 0.
+   */
+  air: { speed: number; coupling: number; density: number; dynamicPressure: number }
 }
 
 export function createShipTelemetry(): ShipTelemetry {
@@ -61,12 +68,13 @@ export function createShipTelemetry(): ShipTelemetry {
     well: { key: null, factor: 1, floor: V_NORMAL },
     target: null,
     colliding: false,
+    air: { speed: 0, coupling: 0, density: 0, dynamicPressure: 0 },
   }
 }
 
 export const shipTelemetry: ShipTelemetry = createShipTelemetry()
 
-/** Zero the singleton in place, keeping its velocity, nearest and well objects. */
+/** Zero the singleton in place, keeping its velocity, nearest, well and air objects. */
 export function resetShipTelemetry(): void {
   shipTelemetry.speed = 0
   shipTelemetry.speedCap = 0
@@ -80,6 +88,10 @@ export function resetShipTelemetry(): void {
   shipTelemetry.well.floor = V_NORMAL
   shipTelemetry.target = null
   shipTelemetry.colliding = false
+  shipTelemetry.air.speed = 0
+  shipTelemetry.air.coupling = 0
+  shipTelemetry.air.density = 0
+  shipTelemetry.air.dynamicPressure = 0
 }
 
 let shipTarget: string | null = null

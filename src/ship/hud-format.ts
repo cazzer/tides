@@ -7,11 +7,11 @@ import { V_TOP } from './flight'
 
 /**
  * formatSpeed's output split into number and unit, so the HUD can dim the
- * unit as it does "km/s": "15,500 km/s" → ["15,500", "km/s"], "16c" →
- * ["16", "c"], "—" → ["—", ""].
+ * unit as it does "km/s": "15,500 km/s" → ["15,500", "km/s"], "540 km/h"
+ * → ["540", "km/h"], "16c" → ["16", "c"], "—" → ["—", ""].
  */
 export function speedParts(text: string): [string, string] {
-  const match = /^(.*?)\s*(km\/s|c)$/.exec(text)
+  const match = /^(.*?)\s*(km\/s|km\/h|c)$/.exec(text)
   return match ? [match[1], match[2]] : [text, '']
 }
 

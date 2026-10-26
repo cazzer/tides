@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useStore } from '../store'
-import { createShipBodies, updateShipBodies } from './ship-bodies'
+import { createShipBodies, updateShipBodies, updateShipBody } from './ship-bodies'
+import { SURFACE_TILES_ON } from '../surface'
+import { fineGroundDepth } from './ship-session'
+import { reversedFloatDepth } from '../renderers/depth-precision'
 import { createShipRanges, measureRanges, trueBodies, type TrueBodies } from './ship-distances'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
 import { resetShipApproach, updateApproach } from './approach'
@@ -59,6 +62,8 @@ export function ShipTargeting() {
   // surface, under every overlay. Taps that land on an overlay never reach it.
   const surface = useThree((s) => s.events.connected) as HTMLElement | undefined
   const bodies = useMemo(() => createShipBodies(), [])
+  const earth = useMemo(() => bodies.find((b) => b.key === 'earth'), [bodies])
+  const moon = useMemo(() => bodies.find((b) => b.key === 'moon'), [bodies])
   const screen = useMemo(() => bodies.map(() => createScreenBody()), [bodies])
   const ranges = useMemo(() => createShipRanges(bodies.length), [bodies])
   const placement = useMemo(() => createMarkerPlacement(), [])
@@ -66,13 +71,24 @@ export function ShipTargeting() {
   const truth = useRef<TrueBodies | null>(null)
   const truthAt = useRef<number | null>(null)
 
-  useFrame(() => {
+  useFrame(({ gl }) => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return
     const t = useStore.getState().timestamp ?? Date.now()
     if (bodiesAt.current == null || Math.abs(t - bodiesAt.current) >= BODY_REFRESH_MS) {
       updateShipBodies(bodies, t)
       bodiesAt.current = t
+    } else if (SURFACE_TILES_ON) {
+      // As ShipController: 30 m up, a quarter second of Earth's orbit and
+      // spin is ~100 m of approach gap (tides-zmw.9.18).
+      if (earth) updateShipBody(earth, t)
+      if (moon) updateShipBody(moon, t)
     }
+    // This Earth's stop as the flight's: 30 m on reversed-Z float, so the
+    // ranges read the gap to it (0 on arrival) and the ETA ends there,
+    // rather than at the standard buffer's 8.6 km (tides-zmw.9.18). This copy
+    // never settles, so it lacks the flight floor's lift (at most ~20 m as
+    // tiles change under the ship): ranges near the stop can be that far out.
+    if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     if (
       truth.current == null ||
       truthAt.current == null ||
