@@ -27,11 +27,18 @@
 // (Death Valley, the Qattara) never glints, and the open sea (mask 1, 0 m)
 // glints exactly as on the globe.
 //
+// The known limit: land at sea level (within ~0.5 m: tidal flats, deltas,
+// salt marsh, a beach the DEM flattens to 0) under the coarse mask's spill
+// glints as water, since at 0 m the DEM can't tell it from the sea.
+//
 // No varyings, no feature defines: one tap of the mask (filtered for the
 // pixel, no implicit derivatives) and one of the grid, after the base's
 // anchor (below three's specularmap_fragment and the base's
-// specularStrength = 0); and Phong's direct light with its specular term
-// skipped on the land (below).
+// specularStrength = 0), skipped with the Sun under the level ground's
+// horizon (GLINT_SUN) and on tiles with no water under them (uTileWet);
+// and Phong's direct light with its specular term skipped where the
+// strength is 0 (below).
+import type * as THREE from 'three'
 import { injectAfterChunk, surfaceInject, type TileAdapter } from './tile-material'
 
 const WHAT = 'tile glint'
@@ -58,17 +65,26 @@ export function glintStrength(mask: number, elevation: number): number {
 
 const f = (x: number) => x.toFixed(6)
 
+/** sin of the Sun's elevation under which the glint is skipped: Phong's
+ * specular is 0 there anyway (dotNL saturates to 0 on level water), so the
+ * night side and the terminator's dark side skip both taps. */
+export const GLINT_SUN = -0.02
+
 const HEAD = /* glsl */ `
 uniform sampler2D uTileSpecularMap;
+uniform vec3 uTileGlintSun;
+uniform float uTileWet;
 `
 
 // The library's tiles always bind the grid as the bump map; without one
-// (never on a lit tile) the mask decides alone, as inland.
+// (never on a lit tile) the mask decides alone, as inland. Inside the
+// branch no implicit derivatives: the grid's tap at level 0 (it has no
+// mips, so the same texel texture2D read).
 const SPECULAR = /* glsl */ `
-{
+if (uTileWet > 0.5 && dot(surfaceUp, uTileGlintSun) > ${f(GLINT_SUN)}) {
   float glintMask = surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r;
   #ifdef USE_BUMPMAP
-    float glintSea = 1.0 - smoothstep(${f(GLINT_SEA_LEVEL[0])}, ${f(GLINT_SEA_LEVEL[1])}, abs(texture2D(bumpMap, vBumpMapUv).x));
+    float glintSea = 1.0 - smoothstep(${f(GLINT_SEA_LEVEL[0])}, ${f(GLINT_SEA_LEVEL[1])}, abs(textureLod(bumpMap, vBumpMapUv, 0.0).x));
   #else
     float glintSea = 0.0;
   #endif
@@ -98,11 +114,52 @@ const GATED_DIRECT = `${BLINN_PHONG_DIRECT.replace('RE_Direct_BlinnPhong(', 'RE_
 #define RE_Direct RE_Direct_TileGlint
 `
 
+// Which tiles hold any water: the mask on the CPU, averaged down to
+// WATER_GRID cells (equirectangular from 180 W and the north, as the
+// globe's maps), a tile wet if any cell over its region, one cell wider
+// round it, holds any. A dry tile (uTileWet 0) skips the glint's taps and
+// its specular term; the margin covers the mask's filtering and its coarse
+// mips' reach onto the land. Until the mask has loaded every tile is wet.
+export const WATER_GRID = [1024, 512] as const
+const WATER_MIN = 2 // /255: JPEG noise on the land stays under it
+const grids = new WeakMap<THREE.Texture, Uint8Array | null>()
+
+function waterGrid(mask: THREE.Texture): Uint8Array | null {
+  if (grids.has(mask)) return grids.get(mask)!
+  const image = mask.image as CanvasImageSource | undefined
+  if (!image || !(image as { width?: number }).width || typeof document === 'undefined') return null
+  const [w, h] = WATER_GRID
+  const ctx = Object.assign(document.createElement('canvas'), { width: w, height: h }).getContext('2d', { willReadFrequently: true })
+  let grid: Uint8Array | null = null
+  if (ctx) {
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(image, 0, 0, w, h)
+    const rgba = ctx.getImageData(0, 0, w, h).data
+    grid = new Uint8Array(w * h).map((_, i) => rgba[4 * i])
+  }
+  grids.set(mask, grid)
+  return grid
+}
+
+/** Whether `grid` (WATER_GRID, row 0 the north) holds water over the
+ * region [west, south, east, north] (radians), one cell wider round it. */
+export function regionHasWater(grid: Uint8Array, region: readonly number[]): boolean {
+  const [w, h] = WATER_GRID
+  const [west, south, east, north] = region
+  const x0 = Math.floor(((west + Math.PI) / (2 * Math.PI)) * w) - 1
+  const x1 = Math.floor(((east + (east < west ? 2 * Math.PI : 0) + Math.PI) / (2 * Math.PI)) * w) + 1
+  const y0 = Math.max(Math.floor(((Math.PI / 2 - north) / Math.PI) * h) - 1, 0)
+  const y1 = Math.min(Math.floor(((Math.PI / 2 - south) / Math.PI) * h) + 1, h - 1)
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++) if (grid[y * w + (((x % w) + w) % w)] >= WATER_MIN) return true
+  return false
+}
+
 /** The adapter's GLSL (the test checks it). */
 export const TILE_GLINT_GLSL = { head: HEAD, specular: SPECULAR, direct: GATED_DIRECT }
 
 export const tileGlint: TileAdapter = (link) => {
-  const uniforms = { uTileSpecularMap: link.maps.specular }
+  const uniforms = { uTileSpecularMap: link.maps.specular, uTileGlintSun: link.sunDir }
   return {
     patch: {
       onBeforeCompile(shader) {
@@ -112,6 +169,11 @@ export const tileGlint: TileAdapter = (link) => {
         shader.fragmentShader = fragment
       },
       customProgramCacheKey: () => 'glint-surface',
+    },
+    onTile(_material, _mesh, tile) {
+      const region = (tile as { boundingVolume?: { region?: readonly number[] } }).boundingVolume?.region
+      const grid = region ? waterGrid(link.maps.specular.value) : null
+      return { uTileWet: { value: grid && !regionHasWater(grid, region!) ? 0 : 1 } }
     },
   }
 }
