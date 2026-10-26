@@ -27,6 +27,14 @@ describe('Credits', () => {
     )
   })
 
+  test('credits Open-Meteo as CC BY 4.0, adapted, next to its link', () => {
+    const line = html.match(/<li>Cloud forecasts and cloud types:.*?<\/li>/)?.[0] ?? ''
+    expect(line).toContain(`href="${OPEN_METEO_SITE}"`)
+    expect(line).toContain('Weather data by Open-Meteo.com')
+    expect(line).toContain('href="https://creativecommons.org/licenses/by/4.0/"')
+    expect(line).toMatch(/CC BY 4.0<\/a>, adapted\)/)
+  })
+
   test("credits Mapterhorn's terrain with the Copernicus notice and its per-source attribution", () => {
     expect(hrefs).toEqual(expect.arrayContaining(['https://mapterhorn.com/', 'https://mapterhorn.com/attribution/']))
     expect(html).toContain('Copernicus GLO-30')

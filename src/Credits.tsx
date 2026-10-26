@@ -75,7 +75,17 @@ export function Credits({ children }: { children?: ReactNode }) {
         )
       </li>
       <li>
-        Cloud forecasts: <Link href={OPEN_METEO_SITE}>Weather data by Open-Meteo.com</Link>
+        {/* CC BY 4.0 asks for the licence and whether the data was changed:
+            it is, resampled into forecast frames and cloud types
+            (tides-tvr.4.1). */}
+        Cloud forecasts and cloud types: <Link href={OPEN_METEO_SITE}>Weather data by Open-Meteo.com</Link> (
+        <Link
+          href={CC_BY_URL}
+          title="Creative Commons Attribution 4.0 International"
+        >
+          CC BY 4.0
+        </Link>
+        , adapted)
       </li>
       <li>
         Planet textures: <Link href={SOLAR_SYSTEM_SCOPE_URL}>Solar System Scope</Link> (

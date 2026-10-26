@@ -1,5 +1,6 @@
+import * as THREE from 'three'
 import { describe, expect, test } from 'vitest'
-import { FADE_MS, planBlendPass, type BlendPassState } from './cloudBlend'
+import { FADE_MS, neutralTypeTexture, outputFlags, planBlendPass, typesOf, type BlendPassState } from './cloudBlend'
 
 /** State after a first output whose fade had finished by wall 0. */
 function settled(a: string, b: string, mix: number): BlendPassState {
@@ -65,5 +66,43 @@ describe('planBlendPass', () => {
     expect(step.pass).toEqual({ swap: true, fade: 0 })
     const halfway = planBlendPass(step.state, { a: '1', b: '2', mix: 0.6 }, 1000 + FADE_MS / 2)
     expect(halfway.pass).toEqual({ swap: false, fade: 0.5 })
+  })
+})
+
+// The cloud-type grids (tides-tvr.4.1) blended alongside the frames.
+describe('type grids', () => {
+  const frame = (geo: boolean, typed: boolean) => ({ geo, typed })
+  const none = { measured: false, typed: false }
+
+  test('typed where either frame carries types', () => {
+    expect(outputFlags(frame(true, true), frame(true, false), none, 1)).toEqual({ measured: true, typed: true })
+    expect(outputFlags(frame(false, false), frame(false, true), none, 1)).toEqual({ measured: false, typed: true })
+    // The static clouds and untyped frames: neither.
+    expect(outputFlags(frame(false, false), frame(false, false), none, 1)).toEqual(none)
+  })
+
+  test('the frozen output counts until its fade ends', () => {
+    const prev = { measured: true, typed: true }
+    expect(outputFlags(frame(false, false), frame(false, false), prev, 0.5)).toEqual(prev)
+    expect(outputFlags(frame(false, false), frame(false, false), prev, 1)).toEqual(none)
+  })
+
+  test("a frame's types are in userData.types; the static clouds have none", () => {
+    const types = new THREE.DataTexture(new Uint8Array(4), 1, 1)
+    const typed = new THREE.Texture()
+    typed.userData.types = types
+    expect(typesOf(typed)).toBe(types)
+    expect(typesOf(new THREE.Texture())).toBeNull()
+    const untyped = new THREE.Texture()
+    untyped.userData.types = null
+    expect(typesOf(untyped)).toBeNull()
+  })
+
+  test('the neutral grid is one texel of confidence 0, shared', () => {
+    const neutral = neutralTypeTexture()
+    expect([neutral.image.width, neutral.image.height]).toEqual([1, 1])
+    expect([...(neutral.image.data as Uint8Array)]).toEqual([0, 0, 0, 0])
+    expect(neutral.colorSpace).toBe(THREE.NoColorSpace)
+    expect(neutralTypeTexture()).toBe(neutral)
   })
 })

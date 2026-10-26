@@ -3,6 +3,7 @@ import {
   CALIBRATION_RANGE,
   coverAt,
   coverCalibration,
+  COVER_PAST_DAYS,
   coverRequestBody,
   createCoverGridSource,
   FORECAST_RETRY_MAX_MS,
@@ -24,6 +25,8 @@ import {
   driftPx,
   mixUniform,
   resampleWeight,
+  layersAt,
+  sampleCoverSmooth,
   type FetchBackoff,
 } from './forecast-clouds'
 import { FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W } from './real-clouds'
@@ -47,8 +50,24 @@ function response(
   }))
 }
 
+/** response() with the low, mid and high layers too, in percent. */
+function layeredResponse(
+  layer: (key: 'low' | 'mid' | 'high', i: number, h: number) => number | null,
+  hours = 48
+) {
+  return response(undefined, hours).map((point, i) => ({
+    ...point,
+    hourly: {
+      ...point.hourly,
+      cloud_cover_low: Array.from({ length: hours }, (_, h) => layer('low', i, h)),
+      cloud_cover_mid: Array.from({ length: hours }, (_, h) => layer('mid', i, h)),
+      cloud_cover_high: Array.from({ length: hours }, (_, h) => layer('high', i, h)),
+    },
+  }))
+}
+
 describe('coverRequestBody', () => {
-  test('every grid point, hourly cover from yesterday for a week, in unix time', () => {
+  test('every grid point, hourly cover and its layers from two days back for a week, in unix time', () => {
     const body = coverRequestBody()
     const lats = body.get('latitude')!.split(',').map(Number)
     const lons = body.get('longitude')!.split(',').map(Number)
@@ -57,9 +76,10 @@ describe('coverRequestBody', () => {
     expect([lats[0], lons[0], lats[1], lons[1], lats[36]]).toEqual([85, -180, 85, -170, 75])
     expect(lats[GRID_POINTS - 1]).toBe(-85)
     expect(lons[GRID_POINTS - 1]).toBe(170)
-    expect(body.get('hourly')).toBe('cloud_cover')
+    expect(body.get('hourly')).toBe('cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high')
     expect(body.get('forecast_days')).toBe('7')
-    expect(body.get('past_days')).toBe('1')
+    expect(body.get('past_days')).toBe('2')
+    expect(COVER_PAST_DAYS).toBe(2)
     expect(body.get('timeformat')).toBe('unixtime')
   })
 })
@@ -70,6 +90,38 @@ describe('parseCoverGrid', () => {
     expect(grid.startMs).toBe(START)
     expect(grid.hours).toBe(48)
     expect(grid.cover[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
+    // Without layers (a grid stored before tides-tvr.4.1): untyped.
+    expect(grid.layers).toBeNull()
+  })
+
+  test('a response with layers', () => {
+    const grid = parseCoverGrid(
+      layeredResponse((key, i, h) => (key === 'low' ? 10 : key === 'mid' ? 20 : (i + h) % 101))
+    )
+    expect(grid.cover[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
+    expect(grid.layers!.low[5 * GRID_POINTS + 7]).toBeCloseTo(0.1)
+    expect(grid.layers!.mid[5 * GRID_POINTS + 7]).toBeCloseTo(0.2)
+    expect(grid.layers!.high[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
+  })
+
+  test('layers missing at one point, the wrong length or full of gaps leave the cover, untyped', () => {
+    const missing = layeredResponse(() => 50)
+    delete (missing[100].hourly as Partial<(typeof missing)[0]['hourly']>).cloud_cover_mid
+    const short = layeredResponse(() => 50)
+    short[3].hourly.cloud_cover_high.pop()
+    const gappy = layeredResponse((key, i) => (key === 'low' && i < 70 ? null : 50))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const json of [missing, short, gappy]) {
+      const grid = parseCoverGrid(json)
+      expect(grid.layers).toBeNull()
+      expect(grid.cover[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
+    }
+    warn.mockRestore()
+  })
+
+  test("fills a layer's odd missing value with its row mean at that hour", () => {
+    const grid = parseCoverGrid(layeredResponse((key, i, h) => (key === 'high' && h === 2 && i === 80 ? null : 30)))
+    expect(grid.layers!.high[2 * GRID_POINTS + 80]).toBeCloseTo(0.3)
   })
 
   test.each([
@@ -135,6 +187,28 @@ test('coverAt: linear between hours, null outside the grid', () => {
   expect(coverAt(grid, START - 1)).toBeNull()
   expect(coverAt(grid, START + 47 * HOUR_MS)).not.toBeNull()
   expect(coverAt(grid, START + 47 * HOUR_MS + 1)).toBeNull()
+})
+
+test('layersAt: linear between hours, null outside the grid or without layers', () => {
+  const grid = parseCoverGrid(layeredResponse((key, i, h) => (key === 'low' ? (h % 2 ? 60 : 20) : key === 'mid' ? 5 : 70)))
+  const at = layersAt(grid, START + 2.5 * HOUR_MS)!
+  expect(at.low[0]).toBeCloseTo(0.4)
+  expect(at.mid[GRID_POINTS - 1]).toBeCloseTo(0.05)
+  expect(at.high[300]).toBeCloseTo(0.7)
+  expect(layersAt(grid, START - 1)).toBeNull()
+  expect(layersAt(grid, START + 47 * HOUR_MS + 1)).toBeNull()
+  expect(layersAt(parseCoverGrid(response()), START + HOUR_MS)).toBeNull()
+})
+
+test('sampleCoverSmooth: through the cell centres, flat at them, continuous across 180°', () => {
+  const values = Float32Array.from({ length: GRID_POINTS }, (_, i) => (i % 36) + Math.floor(i / 36) * 100)
+  expect(sampleCoverSmooth(values, 85, -180)).toBeCloseTo(0)
+  expect(sampleCoverSmooth(values, 75, -170)).toBeCloseTo(101)
+  // Half way the same as linear; a quarter of the way less far.
+  expect(sampleCoverSmooth(values, 80, -175)).toBeCloseTo(sampleCover(values, 80, -175))
+  expect(sampleCoverSmooth(values, 85, -177.5)).toBeCloseTo(0.15625)
+  expect(Math.abs(sampleCoverSmooth(values, 0, 179.999) - sampleCoverSmooth(values, 0, -179.999))).toBeLessThan(0.01)
+  expect(sampleCoverSmooth(values, -89, 0)).toBeCloseTo(sampleCoverSmooth(values, -85, 0))
 })
 
 test('sampleCover: continuous across 180°, clamped beyond the outer rows', () => {

@@ -16,6 +16,12 @@ export type WorkerReply =
   | { type: 'done'; id: number; image: CloudImage | null }
   | { type: 'error'; id: number; message: string; name?: string }
 
+/** The buffers a finished image moves (not copies) out of the worker with:
+ * its pixels, and its cloud-type grid where it has one (tides-tvr.4.1). */
+export function imageTransfer(image: CloudImage): ArrayBuffer[] {
+  return image.types ? [image.rgba.buffer, image.types.buffer] : [image.rgba.buffer]
+}
+
 /** The part of Worker the client uses. */
 export interface CloudWorker {
   postMessage(message: WorkerRequest): void

@@ -6,9 +6,15 @@
 // output is frozen and faded out over FADE_MS instead of cut. The result is
 // one texture laid out like a cloud build's (R height, G alpha, B height
 // confidence) for the cloud layer (./cloudShaders.ts).
+//
+// The frames' cloud-type grids (tides-tvr.4.1, ../cloud-types.ts) are blended
+// the same way in a second, tiny pass of their own, so the output also has a
+// type grid that keeps step with the clouds. A frame without one (the static
+// clouds, a frame the cover grid didn't type) counts as confidence 0.
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import { OUT_H, OUT_W, smoothstep } from '../real-clouds'
+import { TYPE_H, TYPE_W } from '../cloud-types'
 
 export const FADE_MS = 500
 /** A bigger step in mix than this (between two frames) is a discontinuity. */
@@ -95,10 +101,99 @@ void main() {
 }
 `
 
+// The type grids, texel for texel (inputs and output are all TYPE_W x
+// TYPE_H, or the neutral 1x1). The shares are weighted by confidence, as the
+// heights are by trust above, so a frame without types lowers the confidence
+// without pulling the shares towards nothing.
+const typeFragmentShader = /* glsl */ `
+uniform sampler2D uPrev;
+uniform sampler2D uA;
+uniform sampler2D uB;
+uniform float uPrevTyped;
+uniform float uATyped;
+uniform float uBTyped;
+uniform float uMix;
+uniform float uFade;
+varying vec2 vUv;
+
+vec4 typeTexel(sampler2D t, float typed) {
+  vec4 c = textureLod(t, vUv, 0.0);
+  return vec4(c.rgb, c.a * typed);
+}
+
+vec4 blendTypes(vec4 x, vec4 y, float t) {
+  float a = mix(x.a, y.a, t);
+  vec3 rgb = a > 0.0 ? ((1.0 - t) * x.a * x.rgb + t * y.a * y.rgb) / a : vec3(0.0);
+  return vec4(rgb, a);
+}
+
+void main() {
+  vec4 frames = blendTypes(typeTexel(uA, uATyped), typeTexel(uB, uBTyped), uMix);
+  gl_FragColor = blendTypes(typeTexel(uPrev, uPrevTyped), frames, uFade);
+}
+`
+
+let neutral: THREE.DataTexture | null = null
+
+/** The type grid of a frame without one: a single texel of confidence 0.
+ * Shared and never freed (4 bytes). */
+export function neutralTypeTexture(): THREE.DataTexture {
+  if (!neutral) {
+    neutral = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType)
+    neutral.colorSpace = THREE.NoColorSpace
+    neutral.needsUpdate = true
+  }
+  return neutral
+}
+
+/** A frame's type grid (realCloudTextures.ts keeps it in userData.types), or
+ * null without one. */
+export function typesOf(texture: THREE.Texture): THREE.Texture | null {
+  return (texture.userData.types as THREE.Texture | null | undefined) ?? null
+}
+
+/**
+ * What an output carries: measured heights where any of its inputs did, and
+ * types likewise; the frozen output it fades from counts until the fade
+ * ends, when the pass drops it.
+ */
+export function outputFlags(
+  a: { geo: boolean; typed: boolean },
+  b: { geo: boolean; typed: boolean },
+  prev: { measured: boolean; typed: boolean },
+  fade: number
+): { measured: boolean; typed: boolean } {
+  return {
+    measured: a.geo || b.geo || (fade < 1 && prev.measured),
+    typed: a.typed || b.typed || (fade < 1 && prev.typed),
+  }
+}
+
 interface Output {
   target: THREE.WebGLRenderTarget
+  /** The blended type grid, TYPE_W x TYPE_H. */
+  types: THREE.WebGLRenderTarget
   /** Whether any of its inputs carried measured heights. */
   measured: boolean
+  /** Whether any of its inputs carried a type grid. */
+  typed: boolean
+}
+
+function createTypeTarget(): THREE.WebGLRenderTarget {
+  const target = new THREE.WebGLRenderTarget(TYPE_W, TYPE_H, {
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: false,
+    stencilBuffer: false,
+    generateMipmaps: false,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    colorSpace: THREE.NoColorSpace,
+  })
+  // Across 180° but not over the poles, like the frames' own grids.
+  target.texture.wrapS = THREE.RepeatWrapping
+  target.texture.wrapT = THREE.ClampToEdgeWrapping
+  return target
 }
 
 function createTarget(): Output {
@@ -115,7 +210,7 @@ function createTarget(): Output {
     magFilter: THREE.LinearFilter,
     colorSpace: THREE.NoColorSpace,
   })
-  return { target, measured: false }
+  return { target, types: createTypeTarget(), measured: false, typed: false }
 }
 
 const isGeo = (texture: THREE.Texture) => Boolean(texture.userData.geo)
@@ -126,9 +221,17 @@ export function createCloudBlender() {
   let outputs: [Output, Output] | null = null
   let current = 0
   let hasOutput = false
-  let prev: { texture: THREE.Texture; geo: boolean; measured: boolean } | null = null
+  let prev: {
+    texture: THREE.Texture
+    types: THREE.Texture
+    geo: boolean
+    measured: boolean
+    typed: boolean
+  } | null = null
   let quad: FullScreenQuad | null = null
   let material: THREE.ShaderMaterial | null = null
+  let typeQuad: FullScreenQuad | null = null
+  let typeMaterial: THREE.ShaderMaterial | null = null
 
   function draw(
     gl: THREE.WebGLRenderer,
@@ -156,13 +259,38 @@ export function createCloudBlender() {
       toneMapped: false,
     })
     quad ??= new FullScreenQuad(material)
+    typeMaterial ??= new THREE.ShaderMaterial({
+      uniforms: {
+        uPrev: { value: null },
+        uA: { value: null },
+        uB: { value: null },
+        uPrevTyped: { value: 0 },
+        uATyped: { value: 0 },
+        uBTyped: { value: 0 },
+        uMix: { value: 0 },
+        uFade: { value: 0 },
+      },
+      vertexShader,
+      fragmentShader: typeFragmentShader,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending,
+      toneMapped: false,
+    })
+    typeQuad ??= new FullScreenQuad(typeMaterial)
     if (swap || !prev) {
       if (hasOutput) {
         const frozen = outputs[current]
-        prev = { texture: frozen.target.texture, geo: true, measured: frozen.measured }
+        prev = {
+          texture: frozen.target.texture,
+          types: frozen.types.texture,
+          geo: true,
+          measured: frozen.measured,
+          typed: frozen.typed,
+        }
         current = 1 - current
       } else {
-        prev = { texture: staticTexture, geo: false, measured: false }
+        prev = { texture: staticTexture, types: neutralTypeTexture(), geo: false, measured: false, typed: false }
       }
     }
     const out = outputs[current]
@@ -175,11 +303,31 @@ export function createCloudBlender() {
     u.uBGeo.value = isGeo(pick.b) ? 1 : 0
     u.uMix.value = pick.mix
     u.uFade.value = fade
-    out.measured = isGeo(pick.a) || isGeo(pick.b) || (fade < 1 && prev.measured)
+    const aTypes = typesOf(pick.a)
+    const bTypes = typesOf(pick.b)
+    const t = typeMaterial.uniforms
+    t.uPrev.value = prev.types
+    t.uPrevTyped.value = prev.typed ? 1 : 0
+    t.uA.value = aTypes ?? neutralTypeTexture()
+    t.uATyped.value = aTypes ? 1 : 0
+    t.uB.value = bTypes ?? neutralTypeTexture()
+    t.uBTyped.value = bTypes ? 1 : 0
+    t.uMix.value = pick.mix
+    t.uFade.value = fade
+    const flags = outputFlags(
+      { geo: isGeo(pick.a), typed: aTypes !== null },
+      { geo: isGeo(pick.b), typed: bTypes !== null },
+      prev,
+      fade
+    )
+    out.measured = flags.measured
+    out.typed = flags.typed
 
     const restore = gl.getRenderTarget()
     gl.setRenderTarget(out.target)
     quad.render(gl)
+    gl.setRenderTarget(out.types)
+    typeQuad.render(gl)
     gl.setRenderTarget(restore)
     hasOutput = true
   }
@@ -188,14 +336,15 @@ export function createCloudBlender() {
     /**
      * Blends `pick` (null: keep the last output) and returns the texture to
      * show, or null before the first output. Idempotent within a frame for the
-     * same wallMs, so every View can call it.
+     * same wallMs, so every View can call it. typeTexture is the blended
+     * cloud-type grid, which only counts where typed.
      */
     update(
       gl: THREE.WebGLRenderer,
       pick: { a: THREE.Texture; b: THREE.Texture; mix: number } | null,
       staticTexture: THREE.Texture,
       wallMs: number
-    ): { texture: THREE.Texture; measured: boolean } | null {
+    ): { texture: THREE.Texture; measured: boolean; typed: boolean; typeTexture: THREE.Texture } | null {
       if (pick) {
         const step = planBlendPass(
           state,
@@ -207,16 +356,23 @@ export function createCloudBlender() {
       }
       if (!hasOutput || !outputs) return null
       const out = outputs[current]
-      return { texture: out.target.texture, measured: out.measured }
+      return { texture: out.target.texture, measured: out.measured, typed: out.typed, typeTexture: out.types.texture }
     },
     /** Frees the GPU resources; the next update starts afresh. */
     release() {
-      outputs?.forEach((o) => o.target.dispose())
+      outputs?.forEach((o) => {
+        o.target.dispose()
+        o.types.dispose()
+      })
       material?.dispose()
       quad?.dispose()
+      typeMaterial?.dispose()
+      typeQuad?.dispose()
       outputs = null
       material = null
       quad = null
+      typeMaterial = null
+      typeQuad = null
       state = null
       prev = null
       current = 0
