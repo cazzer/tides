@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { PaddedGrid } from './terrarium'
+import type { HorizonJob, PaddedGrid } from './terrarium'
 import { createTerrariumDecoder, type DecodeReply, type DecodeRequest, type DecodeWorker } from './terrariumDecoder'
 
 class FakeWorker implements DecodeWorker {
   posted: DecodeRequest[] = []
+  transfers: (Transferable[] | undefined)[] = []
   terminated = false
   private onMessage: ((event: { data: DecodeReply }) => void)[] = []
   private onError: ((event: unknown) => void)[] = []
-  postMessage(message: DecodeRequest) {
+  postMessage(message: DecodeRequest, transfer?: Transferable[]) {
     this.posted.push(message)
+    this.transfers.push(transfer)
   }
   addEventListener(type: 'message' | 'error', listener: (event: never) => void) {
     if (type === 'message') this.onMessage.push(listener)
@@ -122,5 +124,58 @@ describe('terrain decoder listeners (tides-zmw.9.2 review)', () => {
     decoder.dispose()
     await expect(decoder.decode(buffer(), new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' })
     expect(inThread).not.toHaveBeenCalled()
+  })
+})
+
+describe('horizon bakes in the decode workers (tides-zmw.9.15)', () => {
+  const job = (): HorizonJob => ({
+    tileSize: 2,
+    south: 0.5,
+    north: 0.75,
+    context: [{ data: new Float32Array(4), width: 2, height: 2, scale: 4, offsetX: 0, offsetY: 0, minX: 0, maxX: 1, minY: 0, maxY: 1 }],
+  })
+
+  it('carries a horizon job with the decode, its windows transferred, and hands the map back with the grid', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const horizon = job()
+    const pending = decoder.decode(buffer(), new AbortController().signal, horizon)
+    const [posted] = worker.decodes()
+    expect(posted.horizon).toBe(horizon)
+    expect(worker.transfers[0]).toEqual([horizon.context[0].data.buffer])
+    const map = new Uint8Array(8).fill(3)
+    worker.reply({ type: 'done', id: posted.id, grid: grid(1), baked: { horizon: map, ms: 4.5 } })
+    const done = await pending
+    expect(done.data[0]).toBe(1)
+    expect(done.baked).toEqual({ horizon: map, ms: 4.5 })
+  })
+
+  it('bakes from a job alone (a resampled grid), and bakes nothing on the main thread', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const pending = decoder.bake(job(), new AbortController().signal)
+    const posted = worker.posted[0] as Extract<DecodeRequest, { type: 'bake' }>
+    expect(posted.type).toBe('bake')
+    worker.reply({ type: 'baked', id: posted.id, baked: { horizon: null, ms: 1 } })
+    expect(await pending).toEqual({ horizon: null, ms: 1 })
+
+    const inThread = vi.fn(async () => grid(9))
+    const none = createTerrariumDecoder({ createWorker: () => null, inThread })
+    expect(await none.bake(job(), new AbortController().signal)).toBeNull()
+    const decoded = await none.decode(buffer(), new AbortController().signal, job())
+    expect(decoded.data[0]).toBe(9)
+    expect(decoded.baked).toBeUndefined()
+  })
+
+  it("decodes a dead worker's horizon job on the main thread without its map", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(9), size: 1 })
+    const decode = decoder.decode(buffer(), new AbortController().signal, job())
+    const bake = decoder.bake(job(), new AbortController().signal)
+    worker.fail(new Error('worker crashed'))
+    expect((await decode).data[0]).toBe(9)
+    expect(await bake).toBeNull()
+    vi.restoreAllMocks()
   })
 })

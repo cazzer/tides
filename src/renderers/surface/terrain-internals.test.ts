@@ -23,6 +23,10 @@ import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import {
   forEachCachedModel,
+  gridHorizon,
+  horizonBytes,
+  horizonTexture,
+  setGridHorizon,
   GRID_LEVEL_STEP,
   HELD_BETWEEN_GRIDS,
   installSurfaceGridCache,
@@ -38,7 +42,8 @@ import {
   type SurfaceGridOptions,
   type TerrainPluginInternals,
 } from './terrain-internals'
-import { decodeTerrariumPadded, type PaddedGrid } from './terrarium'
+import { decodeTerrariumPadded, type HorizonJob, type PaddedGrid } from './terrarium'
+import type { DecodedGrid } from './terrariumDecoder'
 
 const LIB = path.resolve(process.cwd(), 'node_modules/3d-tiles-renderer')
 const read = (file: string) => readFileSync(path.join(LIB, file), 'utf8')
@@ -451,6 +456,154 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     // the plugin's levels made flat; the levels between answered, never drawn
     expect(cache.flatTiles).toBe(3)
     expect(cache.coverageEnd.size).toBe(0)
+  })
+
+  describe('horizon maps (tides-zmw.9.15)', () => {
+    const plane = (i: number, j: number, level: number) => 1000 * level + 100 * i + 10 * j
+    // each grid a plane with its level in it, and a horizon map of the level (tileDimension 4: 1x1x2 RGBA8)
+    const baking = (jobs: { level: number; horizon?: HorizonJob }[]) => async (buffer: ArrayBuffer, _signal: AbortSignal, horizon?: HorizonJob): Promise<DecodedGrid> => {
+      const level = new Uint8Array(buffer)[0]
+      jobs.push({ level, horizon })
+      const data = new Float32Array(36)
+      for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++) data[j * 6 + i] = plane(i, j, level)
+      return { data, width: 6, height: 6, baked: { horizon: new Uint8Array(8).fill(level), ms: 2 } }
+    }
+    const byLevel = async (url: string) => new Response(new Uint8Array([Number(url.split('/')[3])]), { status: 200 })
+    const bounds = (terrain: TerrariumMeshPlugin, x: number, y: number, level: number) =>
+      (terrain as unknown as { _tiling: { getTileBounds(x: number, y: number, l: number, n?: boolean): number[] } })._tiling.getTileBounds(x, y, level, true)
+
+    it("bakes each grid with its ancestors' windows, keeps the map by the grid's source and frees it with the grid", async () => {
+      const { terrain } = await loadedPlugin()
+      const jobs: { level: number; horizon?: HorizonJob }[] = []
+      const uploaded: unknown[] = []
+      const opts = options({ decode: baking(jobs), upload: (t) => uploaded.push(t) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = byLevel
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      const grid = (await child) as DataTexture
+      expect(jobs.map((j) => j.level)).toEqual([4, 6])
+      // the parent had no ancestor loaded; the child reads the parent's window
+      expect(jobs[0].horizon!.context).toHaveLength(0)
+      const job = jobs[1].horizon!
+      const [, south, , north] = bounds(terrain, 9, 9, 6)
+      expect([job.tileSize, job.south, job.north]).toEqual([4, south, north])
+      expect(job.context).toHaveLength(1)
+      const w = job.context[0]
+      expect(w.scale).toBe(4)
+      // its texels are the parent's (a plane of its padded texels), where
+      // the child's rectangle in it puts them
+      const [pu0, pv0, pu1, pv1] = bounds(terrain, 2, 2, 4)
+      const sub0 = ((job.south - pv0) / (pv1 - pv0)) * 4
+      const subU = ((bounds(terrain, 9, 9, 6)[0] - pu0) / (pu1 - pu0)) * 4
+      const X0 = subU + 0.5 - w.offsetX
+      const Y0 = sub0 + 0.5 - w.offsetY
+      for (let y = 0; y < w.height; y++) for (let x = 0; x < w.width; x++) expect(w.data[y * w.width + x]).toBeCloseTo(plane(x + X0, y + Y0, 4), 3)
+      // the map: by the grid's source (the tiles' clones find it), uploaded, counted
+      const horizon = gridHorizon(grid)!
+      expect(horizon.isDataArrayTexture).toBe(true)
+      expect(gridHorizon(grid.clone())).toBe(horizon)
+      expect([horizon.image.width, horizon.image.height, horizon.image.depth]).toEqual([1, 1, 2])
+      expect(Array.from(horizon.image.data as Uint8Array)).toEqual(new Array(8).fill(6))
+      expect(uploaded).toContain(horizon)
+      expect(cache.horizonStats).toMatchObject({ baked: 2, empty: 0, bakeMs: 4, bakeMaxMs: 2 })
+      expect(horizonBytes(4)).toBe(8)
+      // freed with the grid, once nothing holds it
+      let freed = 0
+      horizon.addEventListener('dispose', () => freed++)
+      cache.release(9, 9, 6)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(freed).toBe(1)
+    })
+
+    it('waits for an ancestor still loading before it bakes', async () => {
+      const { terrain } = await loadedPlugin()
+      const jobs: { level: number; horizon?: HorizonJob }[] = []
+      const opts = options({ decode: baking(jobs) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      let freeParent!: () => void
+      const parentHeld = new Promise<void>((resolve) => (freeParent = resolve))
+      answer = async (url) => {
+        if (url.includes('/4/')) await parentHeld
+        return byLevel(url)
+      }
+      const parent = cache.lock(2, 2, 4)
+      const child = cache.lock(9, 9, 6)
+      await vi.waitFor(() => expect(fetches).toHaveLength(2))
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(jobs).toHaveLength(0) // the child's body is in, its bake waits on the parent
+      freeParent()
+      await drain(opts.budget, Promise.all([parent, child]))
+      expect(jobs.map((j) => [j.level, j.horizon!.context.length])).toEqual([
+        [4, 0],
+        [6, 1],
+      ])
+    })
+
+    it("bakes a grid past the coverage end from its ancestors' windows alone, in a worker", async () => {
+      const { terrain } = await loadedPlugin()
+      const jobs: { level: number; horizon?: HorizonJob }[] = []
+      const bakes: HorizonJob[] = []
+      const opts = options({
+        decode: baking(jobs),
+        bake: async (job) => (bakes.push(job), { horizon: new Uint8Array(8).fill(66), ms: 3 }),
+      })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = async (url) => (Number(url.split('/')[3]) > 4 ? new Response(null, { status: 404 }) : byLevel(url))
+      const parent = cache.lock(2, 2, 4)
+      await drain(opts.budget, parent)
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      expect(cache.cappedTiles).toBe(1)
+      expect(bakes).toHaveLength(1)
+      expect(bakes[0].context).toHaveLength(1)
+      expect(bakes[0].context[0].scale).toBe(4)
+      expect(Array.from(gridHorizon((await child) as DataTexture)!.image.data as Uint8Array)).toEqual(new Array(8).fill(66))
+      expect(cache.horizonStats).toMatchObject({ baked: 2, bakeMs: 5, bakeMaxMs: 3 })
+    })
+
+    it('reads the data grid a capped grid was resampled from, though no tile holds it', async () => {
+      const { terrain } = await loadedPlugin()
+      const bakes: HorizonJob[] = []
+      const opts = options({ decode: baking([]), bake: async (job) => (bakes.push(job), { horizon: null, ms: 1 }) })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = async (url) => (Number(url.split('/')[3]) > 4 ? new Response(null, { status: 404 }) : byLevel(url))
+      const child = cache.lock(9, 9, 6)
+      await drain(opts.budget, child)
+      expect(cache.cappedTiles).toBe(1)
+      // the z4 grid was locked only while the child read it
+      expect(bakes).toHaveLength(1)
+      expect(bakes[0].context.map((w) => w.scale)).toEqual([4])
+      expect(cache.horizonStats).toMatchObject({ baked: 1, empty: 1 })
+    })
+
+    it('makes no map for open water, a bake that found none, or no bake', async () => {
+      const { terrain } = await loadedPlugin()
+      const bake = vi.fn(async () => null)
+      const opts = options({
+        decode: async () => ({ data: new Float32Array(36).fill(5), width: 6, height: 6, baked: { horizon: null, ms: 1 } }),
+        bake,
+      })
+      const cache = installSurfaceGridCache(terrain, opts)
+      answer = async (url) => (url.includes('/2/') ? byLevel(url) : new Response(null, { status: 404 }))
+      const land = cache.lock(1, 1, 2)
+      await drain(opts.budget, land)
+      expect(gridHorizon((await land) as DataTexture)).toBeNull()
+      expect(cache.horizonStats).toMatchObject({ baked: 0, empty: 1 })
+      // under the flat land, a capped grid whose bake (no worker) gives nothing
+      const under = cache.lock(4, 4, 4)
+      await drain(opts.budget, under)
+      expect(bake).toHaveBeenCalledTimes(1)
+      expect(gridHorizon((await under) as DataTexture)).toBeNull()
+      // open water: never baked
+      const sea = cache.lock(0, 0, 0)
+      await drain(opts.budget, sea)
+      expect(gridHorizon((await sea) as DataTexture)).toBeNull()
+      expect(bake).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('past the coverage end (tides-zmw.9.21)', () => {
@@ -1149,5 +1302,20 @@ describe('shareGridBytes (tides-zmw.9.2)', () => {
     const getBytesUsed = (tiles as unknown as { getBytesUsed(tile: unknown): number }).getBytesUsed
     // three counts the grid once per scene (400 bytes); the hook takes back half
     expect(getBytesUsed.call(tiles, { engineData: { scene } })).toBeCloseTo(400 / 2, 6)
+  })
+
+  it("charges half the grid's horizon map too, which three's estimate doesn't see (tides-zmw.9.15)", () => {
+    const tiles = new TilesRenderer()
+    shareGridBytes(tiles)
+    const grid = new DataTexture(new Float32Array(10 * 10), 10, 10, RedFormat, FloatType)
+    setGridHorizon(grid, horizonTexture(new Uint8Array(horizonBytes(8)), 8))
+    const material = new MeshLambertMaterial()
+    material.displacementMap = grid.clone()
+    material.bumpMap = material.displacementMap
+    const scene = new Group().add(new Mesh(new BufferGeometry(), material))
+    const getBytesUsed = (tiles as unknown as { getBytesUsed(tile: unknown): number }).getBytesUsed
+    // 2x2x2 RGBA8 = 32 bytes, half of it
+    expect(horizonBytes(8)).toBe(32)
+    expect(getBytesUsed.call(tiles, { engineData: { scene } })).toBeCloseTo(400 / 2 + 32 / 2, 6)
   })
 })

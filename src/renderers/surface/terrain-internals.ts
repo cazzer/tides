@@ -12,15 +12,29 @@
 // linear-filtered 32-bit float texture (which needs OES_texture_float_linear:
 // no iOS). SurfaceGridCache replaces it, keeping the library's neighbour
 // stitching and disposal and changing only how a grid is made.
+//
+// tides-zmw.9.15: each grid also gets its horizon map for the tiles' cast
+// shadows (terrarium.ts bakeTileHorizon, tile-shadow.ts), baked in the
+// decode worker from the grid and windows of its ancestors' grids (the
+// search reaches past the grid's edge), kept by the grid's texture source
+// (gridHorizon(): the tiles' displacement maps are clones of the grid,
+// sharing its source, and Texture.clone() drops userData) and freed with
+// the grid.
 import {
+  ClampToEdgeWrapping,
+  DataArrayTexture,
   DataTexture,
   FloatType,
   LinearFilter,
   NearestFilter,
+  NoColorSpace,
   RedFormat,
+  RGBAFormat,
+  UnsignedByteType,
   type Mesh,
   type MeshStandardMaterial,
   type Object3D,
+  type Source,
   type Texture,
 } from 'three'
 import { GridCache } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/GridCache.js'
@@ -29,8 +43,22 @@ import type { TilesRenderer } from '3d-tiles-renderer/three'
 import type { FrameBudget } from './frame-budget'
 import { eitherSignal, fetchWithRetry, RETRY_DELAYS_MS } from './fetch-retry'
 import { cancelBody } from './imagery'
-import { flatGrid, gridRangeWithin, resampleGrid, type PaddedGrid } from './terrarium'
-import type { TerrariumDecode } from './terrariumDecoder'
+import {
+  flatGrid,
+  gridRangeWithin,
+  horizonWindow,
+  resampleGrid,
+  TILE_HORIZON_LAYERS,
+  TILE_HORIZON_MARGIN_TEXELS,
+  TILE_HORIZON_RADIUS,
+  TILE_HORIZON_REACH_METRES,
+  tileHorizonSize,
+  mercatorLatitude,
+  type HorizonJob,
+  type HorizonSource,
+  type PaddedGrid,
+} from './terrarium'
+import type { BakedHorizon, TerrariumBake, TerrariumDecode } from './terrariumDecoder'
 
 /** The library version everything here was read from. */
 export const PINNED_TILES_VERSION = '0.5.3'
@@ -67,10 +95,13 @@ export interface SurfaceGridOptions {
   /** 'linear' needs OES_texture_float_linear; 'nearest' is core WebGL2. */
   filter: 'linear' | 'nearest'
   decode: TerrariumDecode
+  /** Bakes a horizon map for a grid that wasn't decoded (tides-zmw.9.15);
+   * without it, such grids have none. */
+  bake?: TerrariumBake
   /** Paces the main-thread end of each grid (texture, stitch, upload). */
   budget: Pick<FrameBudget, 'wait'>
-  /** Uploads a finished grid now (renderer.initTexture), not at first draw. */
-  upload?: (texture: DataTexture) => void
+  /** Uploads a finished grid (and its horizon map) now (renderer.initTexture), not at first draw. */
+  upload?: (texture: Texture) => void
   /** Overrides RETRY_DELAYS_MS (tests). */
   retryDelays?: readonly number[]
 }
@@ -112,7 +143,7 @@ interface LockedGrid {
  * grid itself answered "no data" just now; else an ancestor did, and `from`
  * is what that answer was recorded as (a data level, or OCEAN).
  */
-type SourceGrid = { padded: PaddedGrid } | { from: number; fresh: boolean }
+type SourceGrid = { padded: PaddedGrid; baked?: BakedHorizon } | { from: number; fresh: boolean }
 
 /** No ancestor grid holds ground here: open water. */
 const OCEAN = -1
@@ -128,6 +159,66 @@ const isPlaceholder = (grid: DataTexture) => (grid.image as { width: number }).w
  * read, which the grid under it reads next.
  */
 export const HELD_BETWEEN_GRIDS = 8
+
+/** Each grid's horizon map (tides-zmw.9.15), by the grid's texture source. */
+const horizons = new WeakMap<Source, DataArrayTexture>()
+
+/**
+ * The horizon map of the grid `texture` is (or is a clone of: the tiles'
+ * displacement maps), or null: none baked (open water, flat ground, no
+ * worker), or not a grid.
+ */
+export function gridHorizon(texture: Texture | null | undefined): DataArrayTexture | null {
+  return (texture?.source && horizons.get(texture.source)) || null
+}
+
+/** Gives `grid` its horizon map, freed when the grid is disposed. */
+export function setGridHorizon(grid: Texture, horizon: DataArrayTexture): void {
+  horizons.set(grid.source, horizon)
+  const gone = () => {
+    grid.removeEventListener('dispose', gone)
+    horizon.dispose()
+  }
+  grid.addEventListener('dispose', gone)
+}
+
+/** The bytes of a horizon map for a source tile size (two RGBA8 layers). */
+export function horizonBytes(tileSize: number): number {
+  const side = tileHorizonSize(tileSize)
+  return side * side * TILE_HORIZON_LAYERS * 4
+}
+
+/** A baked horizon map as the texture the tiles read (tile-shadow.ts). */
+export function horizonTexture(bytes: Uint8Array<ArrayBuffer>, tileSize: number): DataArrayTexture {
+  const side = tileHorizonSize(tileSize)
+  const texture = new DataArrayTexture(bytes, side, side, TILE_HORIZON_LAYERS)
+  texture.format = RGBAFormat
+  texture.type = UnsignedByteType
+  // Magnified wherever a tile draws (a quarter of the grid's texels): no mips.
+  texture.generateMipmaps = false
+  texture.minFilter = texture.magFilter = LinearFilter
+  texture.wrapS = texture.wrapT = ClampToEdgeWrapping
+  texture.colorSpace = NoColorSpace
+  texture.unpackAlignment = 1
+  texture.needsUpdate = true
+  return texture
+}
+
+/** How long a grid waits for an ancestor still loading before its bake goes without it, ms. */
+export const HORIZON_ANCESTOR_WAIT_MS = 1500
+
+/** What the horizon bakes cost (the headless checks read it). */
+export interface HorizonStats {
+  /** Maps baked, and bakes that found no horizon (left without one). */
+  baked: number
+  empty: number
+  /** Worker time, ms: total and longest. */
+  bakeMs: number
+  bakeMaxMs: number
+  /** Main thread: gathering the ancestor windows, and the map's upload, longest, ms. */
+  contextMaxMs: number
+  uploadMaxMs: number
+}
 
 export class SurfaceGridCache extends GridCache {
   /** Grids made flat because the source had no data for them (open water). */
@@ -151,6 +242,7 @@ export class SurfaceGridCache extends GridCache {
   private readonly held: LockedGrid[] = []
   private readonly options: SurfaceGridOptions
   private readonly lifetime = new AbortController()
+  readonly horizonStats: HorizonStats = { baked: 0, empty: 0, bakeMs: 0, bakeMaxMs: 0, contextMaxMs: 0, uploadMaxMs: 0 }
 
   constructor(plugin: TerrainPluginInternals, options: SurfaceGridOptions) {
     super(plugin)
@@ -219,7 +311,87 @@ export class SurfaceGridCache extends GridCache {
       cancelBody(res)
       throw new Error(`surface tiles: terrain tile ${key(x, y, level)} answered ${res.status}`)
     }
-    return { padded: await this.options.decode(await res.arrayBuffer(), signal) }
+    const between = level % GRID_LEVEL_STEP !== 0
+    const [buffer, horizon] = await Promise.all([res.arrayBuffer(), between ? undefined : this.horizonJob(x, y, level, signal)])
+    const padded = await this.options.decode(buffer, signal, horizon)
+    return { padded, baked: padded.baked }
+  }
+
+  /**
+   * The grid's horizon job (terrarium.ts HorizonJob): its bounds, and a
+   * window of each ancestor grid up the chain (every GRID_LEVEL_STEP levels)
+   * until one's margin covers TILE_HORIZON_REACH_METRES. An ancestor still
+   * loading is waited for (up to HORIZON_ANCESTOR_WAIT_MS: the traversal
+   * loads parents first, so it is usually close behind); one not asked for
+   * at all is not fetched for this, and the chain goes on past it.
+   */
+  private async horizonJob(x: number, y: number, level: number, signal: AbortSignal): Promise<HorizonJob | undefined> {
+    const source = (this.plugin as TerrainPluginInternals)._source
+    if (!source) return undefined
+    const tileSize = (this.plugin as TerrainPluginInternals).tileDimension
+    const [, south, , north] = source.tiling.getTileBounds(x, y, level, true)
+    const chain: { grid: DataTexture; x: number; y: number; level: number }[] = []
+    const pending: Promise<unknown>[] = []
+    // Ancestors' metres per texel, at the grid's middle.
+    const metres = (at: number) =>
+      (2 * Math.PI * TILE_HORIZON_RADIUS * Math.cos(mercatorLatitude((south + north) / 2)) * (north - south) * 2 ** (level - at)) / tileSize
+    for (let up = GRID_LEVEL_STEP; up <= level; up += GRID_LEVEL_STEP) {
+      const at = level - up
+      const ax = x >> up
+      const ay = y >> up
+      const entry = this.get(ax, ay, at) as DataTexture | Promise<DataTexture> | null
+      if (entry instanceof Promise) {
+        const slot = chain.length
+        chain.push(null as unknown as (typeof chain)[number])
+        pending.push(
+          entry.then((grid) => {
+            chain[slot] = { grid, x: ax, y: ay, level: at }
+          }, () => {})
+        )
+      } else if (entry) {
+        chain.push({ grid: entry, x: ax, y: ay, level: at })
+      }
+      // that far, once one is there to read
+      if (entry && TILE_HORIZON_MARGIN_TEXELS * metres(at) >= TILE_HORIZON_REACH_METRES) break
+    }
+    if (pending.length) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await untilAborted(
+        Promise.race([Promise.all(pending), new Promise((resolve) => (timer = setTimeout(resolve, HORIZON_ANCESTOR_WAIT_MS)))]),
+        signal
+      ).finally(() => clearTimeout(timer))
+    }
+    const t0 = performance.now()
+    const context: HorizonSource[] = []
+    for (const link of chain) {
+      if (!link || isPlaceholder(link.grid)) continue
+      const image = link.grid.image as unknown as PaddedGrid
+      if (!image?.data || image.width < 3) continue
+      context.push(horizonWindow(image, this.subview(x, y, level, link)))
+    }
+    const ms = performance.now() - t0
+    if (ms > this.horizonStats.contextMaxMs) this.horizonStats.contextMaxMs = ms
+    return { tileSize, south, north, context }
+  }
+
+  /** Records a bake's cost and makes its texture for `grid` (null: none). */
+  private attachHorizon(grid: DataTexture, baked: BakedHorizon | null | undefined, tileSize: number): void {
+    const stats = this.horizonStats
+    if (!baked) return
+    stats.bakeMs += baked.ms
+    if (baked.ms > stats.bakeMaxMs) stats.bakeMaxMs = baked.ms
+    if (!baked.horizon) {
+      stats.empty++
+      return
+    }
+    stats.baked++
+    const texture = horizonTexture(baked.horizon, tileSize)
+    texture.userData.maxCode = baked.max ?? 255
+    setGridHorizon(grid, texture)
+    const t0 = performance.now()
+    this.options.upload?.(texture)
+    const ms = performance.now() - t0
+    if (ms > stats.uploadMaxMs) stats.uploadMaxMs = ms
   }
 
   /**
@@ -341,8 +513,7 @@ export class SurfaceGridCache extends GridCache {
   }
 
   override async fetchItem([x, y, level]: [number, number, number], itemSignal: AbortSignal): Promise<DataTexture> {
-    const { filter, budget, upload } = this.options
-    const tileDimension = (this.plugin as TerrainPluginInternals).tileDimension
+    const { budget } = this.options
     const { signal, release } = eitherSignal(itemSignal, this.lifetime.signal)
     let source: SourceGrid
     let above: LockedGrid | null = null
@@ -353,14 +524,34 @@ export class SurfaceGridCache extends GridCache {
       signal.throwIfAborted()
     } catch (error) {
       if (above) this.release(above.x, above.y, above.level)
+      release()
       throw error
+    }
+    // The signal's listeners go once the grid is made (a capped grid's bake waits on it).
+    try {
+      return await this.makeGrid(x, y, level, source, above, signal, itemSignal)
     } finally {
       release()
     }
+  }
+
+  /** fetchItem's main-thread end: the grid from what the source had, stitched, uploaded, with its horizon. */
+  private async makeGrid(
+    x: number,
+    y: number,
+    level: number,
+    source: SourceGrid,
+    above: LockedGrid | null,
+    signal: AbortSignal,
+    itemSignal: AbortSignal
+  ): Promise<DataTexture> {
+    const { filter, budget, upload } = this.options
+    const tileDimension = (this.plugin as TerrainPluginInternals).tileDimension
     // A grid between the plugin's levels is only ever asked for by
     // dataAbove: never drawn, so never stitched or uploaded.
     const between = level % GRID_LEVEL_STEP !== 0
     let padded = 'padded' in source ? source.padded : null
+    let baked = 'padded' in source ? source.baked : undefined
     if (!('padded' in source)) {
       // No data here (tides-zmw.9.21): past the source's coverage, the data
       // grid above resampled, so the tile draws (and its region bounds, and
@@ -371,6 +562,7 @@ export class SurfaceGridCache extends GridCache {
       // assumes every grid is the same size). Land below the sea (the Dead
       // Sea, the Caspian) resamples like any other.
       let sea = true
+      let horizon: Promise<HorizonJob | undefined> | null = null
       if (above) {
         try {
           const image = above.grid.image as unknown as PaddedGrid
@@ -379,6 +571,12 @@ export class SurfaceGridCache extends GridCache {
           sea = min === 0 && max === 0
           if (!sea && !between) padded = resampleGrid(image, sub, tileDimension)
           if (!sea && (between || above.level % GRID_LEVEL_STEP !== 0)) this.hold(above)
+          // Its horizon's job, begun while the data grid above is locked, so
+          // the chain holds the grid it was resampled from.
+          if (padded && this.options.bake) {
+            horizon = this.horizonJob(x, y, level, signal)
+            horizon.catch(() => {})
+          }
         } finally {
           this.release(above.x, above.y, above.level)
         }
@@ -396,6 +594,15 @@ export class SurfaceGridCache extends GridCache {
         padded = { data: new Float32Array(1), width: 1, height: 1 }
       } else if (padded) {
         this.cappedTiles++
+        // Its horizon from its ancestors' grids (the data it was resampled
+        // from among them), in a worker.
+        if (horizon && this.options.bake) {
+          const job = await horizon
+          baked = job ? ((await this.options.bake(job, signal)) ?? undefined) : undefined
+          // the main-thread end paced again, after the wait
+          await budget.wait(signal)
+          signal.throwIfAborted()
+        }
       } else {
         padded = flatGrid(tileDimension)
         this.flatTiles++
@@ -407,6 +614,7 @@ export class SurfaceGridCache extends GridCache {
     if (!between) {
       this.stitchNeighbors(grid, x, y, level)
       upload?.(grid)
+      this.attachHorizon(grid, baked, tileDimension)
     }
     // If the cache drops the item before taking this result, it never
     // disposes it; the abort is the only word of that. (A normal release
@@ -636,6 +844,10 @@ export function shareGridBytes(tiles: TilesRenderer): void {
         const map = ((object as Mesh).material as MeshStandardMaterial | undefined)?.displacementMap
         const image = map?.image as { width?: number; height?: number } | undefined
         if (image?.width && image.height) bytes -= image.width * image.height * 4 * (1 - 1 / GRID_READERS)
+        // The grid's horizon map (tides-zmw.9.15), which three's estimate
+        // doesn't see (the tiles read it through a uniform), shared alike.
+        const horizon = gridHorizon(map)?.image as { width?: number; height?: number; depth?: number } | undefined
+        if (horizon?.width && horizon.height) bytes += (horizon.width * horizon.height * (horizon.depth ?? 1) * 4) / GRID_READERS
       })
       return bytes
     },

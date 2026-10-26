@@ -1,16 +1,26 @@
 // The terrain decode worker (tides-zmw.9.2): turns a fetched Terrarium tile
 // into a padded elevation grid (./terrarium.ts) off the main thread and hands
-// the floats back as a transferred buffer. Protocol in ./terrariumDecoder.ts.
+// the floats back as a transferred buffer, with the grid's horizon map when
+// the job asks (tides-zmw.9.15, ./terrarium.ts bakeTileHorizon). Protocol in
+// ./terrariumDecoder.ts.
 // A cancelled job still finishes its decode (the image decoder can't be
 // interrupted) but its result is dropped here rather than posted.
-import { decodeTerrariumImage } from './terrarium'
-import type { DecodeReply, DecodeRequest } from './terrariumDecoder'
+import { bakeTileHorizon, decodeTerrariumImage, type HorizonJob, type PaddedGrid } from './terrarium'
+import type { BakedHorizon, DecodeReply, DecodeRequest } from './terrariumDecoder'
 
 const active = new Set<number>()
 const cancelled = new Set<number>()
 
 function reply(message: DecodeReply, transfer: Transferable[] = []) {
   self.postMessage(message, { transfer })
+}
+
+function bake(job: HorizonJob, grid: PaddedGrid | null): BakedHorizon {
+  const t0 = performance.now()
+  const horizon = bakeTileHorizon(job, grid)
+  let max = 0
+  if (horizon) for (let i = 0; i < horizon.length; i++) if (horizon[i] > max) max = horizon[i]
+  return { horizon, ms: performance.now() - t0, max }
 }
 
 self.onmessage = (event: MessageEvent<DecodeRequest>) => {
@@ -20,13 +30,22 @@ self.onmessage = (event: MessageEvent<DecodeRequest>) => {
     if (active.has(message.id)) cancelled.add(message.id)
     return
   }
-  const { id, buffer } = message
+  const { id } = message
   active.add(id)
-  decodeTerrariumImage(buffer).then(
-    (grid) => {
+  const job =
+    message.type === 'bake'
+      ? Promise.resolve().then((): DecodeReply => ({ type: 'baked', id, baked: bake(message.horizon, null) }))
+      : decodeTerrariumImage(message.buffer).then(
+          (grid): DecodeReply => ({ type: 'done', id, grid, baked: message.horizon && !cancelled.has(id) ? bake(message.horizon, grid) : undefined })
+        )
+  job.then(
+    (done) => {
       active.delete(id)
       if (cancelled.delete(id)) return
-      reply({ type: 'done', id, grid }, [grid.data.buffer])
+      const transfer: Transferable[] = []
+      if (done.type === 'done') transfer.push(done.grid.data.buffer)
+      if (done.type !== 'error' && done.baked?.horizon) transfer.push(done.baked.horizon.buffer)
+      reply(done, transfer)
     },
     (err: unknown) => {
       active.delete(id)

@@ -159,3 +159,300 @@ export async function decodeTerrariumImage(buffer: ArrayBuffer): Promise<PaddedG
     bitmap.close()
   }
 }
+
+// ---------------------------------------------------------------------------
+// Per-grid horizon maps (tides-zmw.9.15): how high the ground stands around
+// each point of a grid, in eight compass directions, for the tiles' cast
+// shadows (tile-shadow.ts). Baked in the decode worker with the grid, at a
+// quarter of its resolution, at true scale: each value is the steepest
+// rise's tangent (metres per metre) over the curved Earth, so the shader
+// takes it to the live terrain scale by multiplying (exact without the
+// curvature term, which is ~1e-3 at the reach and stays unscaled-small).
+//
+// Reach. A grid spans 0.5 km (z16) to hundreds of km, but a shadow's length
+// doesn't depend on which grid draws it: a search that stopped at the
+// grid's edge would cut shadows at every seam, and at a different length
+// on each level of detail. So every grid searches the same distance in
+// metres (TILE_HORIZON_REACH_METRES), on geometric steps from
+// TILE_HORIZON_FIRST_TEXELS of its own texels; past its own data a step
+// reads its ancestors' grids (the context: each a window around the grid,
+// coarser and wider up the chain), the finest that holds the point.
+// Ancestors that weren't loaded when the grid was are missing from the
+// chain, and that grid's reach is shorter (the caller's choice).
+//
+// Layout: two layers of RGBA8, TILE_HORIZON_DIVISOR times smaller than the
+// padded grid each way and spanning the same uv square (texel a's centre at
+// uv (a + 0.5) / size), layer 0 holding N, NE, E, SE and layer 1 S, SW, W,
+// NW, as the globe's (../earthHorizonTexture.ts); rows south first, as the
+// grid's. Each byte codes the tangent t as t / (t + 1/GAIN) in 255 steps,
+// rounded down (flat ground reads 0): fine near flat (1/255 is 0.028° at
+// 1x), still near vertical at the top, and the shader decodes it with one
+// division (no tan, no atan: tile-shadow.ts).
+// ---------------------------------------------------------------------------
+
+/** Directions: 360° · d / 8 clockwise from north. */
+export const TILE_HORIZON_DIRECTIONS = 8
+/** Grid texels per horizon texel, each way. */
+export const TILE_HORIZON_DIVISOR = 4
+/** The code's gain: byte = floor(255 · t / (t + 1 / GAIN)). */
+export const TILE_HORIZON_GAIN = 8
+/** How far every grid's search looks, metres. */
+export const TILE_HORIZON_REACH_METRES = 12000
+/** The nearest step, at least this many of the grid's own texels (half a horizon texel; nearer is the slope's own shading). */
+export const TILE_HORIZON_FIRST_TEXELS = 2
+/** Each step this much longer than the last (worst miss ~1.4° against a 0.05-texel march, mean 0.1°: the test). */
+export const TILE_HORIZON_STEP_RATIO = 1.45
+/** The tiles' sphere (surface-frame.ts SURFACE_ELLIPSOID_RADIUS, mirrored to keep three out of the worker). */
+export const TILE_HORIZON_RADIUS = 6371000
+/** An ancestor window's margin around the grid, in the ancestor's texels. */
+export const TILE_HORIZON_MARGIN_TEXELS = 64
+/** Layers of the texture (four directions each). */
+export const TILE_HORIZON_LAYERS = 2
+
+/**
+ * Heights a bake reads, in grid coordinates g (texels from the grid's
+ * south-west corner, the padded grid's texel i at g = i - 0.5): read
+ * bilinearly at array coordinates g / scale + offset, within [min, max].
+ */
+export interface HorizonSource {
+  data: Float32Array<ArrayBuffer>
+  width: number
+  height: number
+  /** Grid texels per source texel (4^k for the k-th ancestor grid up). */
+  scale: number
+  offsetX: number
+  offsetY: number
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
+
+/** What a bake needs besides the grid: where it is, and its context. */
+export interface HorizonJob {
+  /** The grid's source tile size (the padded grid's minus 2). */
+  tileSize: number
+  /** Its south and north edges, normalized Mercator v (the tiling's getTileBounds). */
+  south: number
+  north: number
+  /** Ancestor windows (horizonWindow()), finest first. */
+  context: HorizonSource[]
+}
+
+/** The horizon map's side for a source tile size. */
+export function tileHorizonSize(tileSize: number): number {
+  return Math.max(1, Math.round(tileSize / TILE_HORIZON_DIVISOR))
+}
+
+/** The byte for a tangent (true scale, metres per metre). */
+export function tileHorizonCode(tangent: number): number {
+  if (!(tangent > 0)) return 0
+  const g = TILE_HORIZON_GAIN * tangent
+  return Math.min(255, Math.floor((255 * g) / (g + 1)))
+}
+
+/** The highest code the shader decodes (the next is vertical). */
+export const TILE_HORIZON_CODE_MAX = 0.998
+
+/** The tangent a code in [0, 1] (a byte over 255, as the texture reads it) stands for: the shader's decode. */
+export function tileHorizonTangent01(c: number): number {
+  const k = Math.min(c, TILE_HORIZON_CODE_MAX)
+  return k / (1 - k) / TILE_HORIZON_GAIN
+}
+
+/** The tangent a byte stands for. */
+export function tileHorizonTangent(code: number): number {
+  return tileHorizonTangent01(code / 255)
+}
+
+/** The grid itself as a source: its inner texels (the border is the neighbours' or a copy). */
+export function gridSource(grid: PaddedGrid): HorizonSource {
+  return {
+    data: grid.data,
+    width: grid.width,
+    height: grid.height,
+    scale: 1,
+    offsetX: 0.5,
+    offsetY: 0.5,
+    minX: 1,
+    maxX: grid.width - 2,
+    minY: 1,
+    maxY: grid.height - 2,
+  }
+}
+
+/**
+ * A window of an ancestor grid around the grid it contains, `sub` its
+ * rectangle in the ancestor's (normalized, v north, as resampleGrid()'s),
+ * with `margin` of the ancestor's texels each side, clipped to its padded
+ * texels (the border, its neighbours' edge or a copy of its own, covers a
+ * grid at its edge out to the edge); copied, so the window can be
+ * transferred.
+ */
+export function horizonWindow(ancestor: PaddedGrid, sub: readonly number[], margin = TILE_HORIZON_MARGIN_TEXELS): HorizonSource {
+  const { data, width, height } = ancestor
+  const iw = width - 2
+  const ih = height - 2
+  // the grid's corners in the ancestor's padded texels (a + 0.5, a inner)
+  const x0 = Math.max(0, Math.floor(sub[0] * iw + 0.5 - margin))
+  const x1 = Math.min(width - 1, Math.ceil(sub[2] * iw + 0.5 + margin))
+  const y0 = Math.max(0, Math.floor(sub[1] * ih + 0.5 - margin))
+  const y1 = Math.min(height - 1, Math.ceil(sub[3] * ih + 0.5 + margin))
+  const w = x1 - x0 + 1
+  const h = y1 - y0 + 1
+  const out = new Float32Array(w * h)
+  for (let y = 0; y < h; y++) out.set(data.subarray((y0 + y) * width + x0, (y0 + y) * width + x0 + w), y * w)
+  return {
+    data: out,
+    width: w,
+    height: h,
+    scale: 1 / (sub[2] - sub[0]),
+    offsetX: sub[0] * iw + 0.5 - x0,
+    offsetY: sub[1] * ih + 0.5 - y0,
+    minX: 0,
+    maxX: w - 1,
+    minY: 0,
+    maxY: h - 1,
+  }
+}
+
+/** Latitude (radians) of normalized Mercator v (the library's EPSG:3857). */
+export function mercatorLatitude(v: number): number {
+  return 2 * Math.atan(Math.exp((2 * v - 1) * Math.PI)) - Math.PI / 2
+}
+
+/**
+ * The step distances (grid texels, nearest first) a row with
+ * `metresPerTexel` searches: geometric down from the reach to the first
+ * step, so every grid's steps but its first fall at the same distances in
+ * metres (the same ridge is found, or missed, alike on every level of
+ * detail), then the first step itself. At least the reach.
+ */
+export function tileHorizonSteps(metresPerTexel: number): number[] {
+  const steps: number[] = []
+  for (let d = TILE_HORIZON_REACH_METRES / metresPerTexel; d >= TILE_HORIZON_FIRST_TEXELS || !steps.length; d /= TILE_HORIZON_STEP_RATIO) steps.push(d)
+  if (steps[steps.length - 1] > TILE_HORIZON_FIRST_TEXELS * 1.05) steps.push(TILE_HORIZON_FIRST_TEXELS)
+  return steps.reverse()
+}
+
+const isFlat = (data: Float32Array) => {
+  const v = data[0]
+  for (let i = 1; i < data.length; i++) if (data[i] !== v) return false
+  return true
+}
+
+/**
+ * Heights along a row of grid coordinates (x0 + a * dx, y) for a = 0 ..
+ * out.length - 1, each from the finest source holding it (bilinear), NaN
+ * where none does. Per source, the row's points inside it are one run of
+ * a, so each source fills what the finer ones left in a tight loop.
+ */
+function sampleRow(sources: readonly HorizonSource[], x0: number, dx: number, y: number, out: Float64Array): void {
+  const count = out.length
+  out.fill(NaN)
+  // the runs [lo, hi) still to fill
+  let runs: number[] = [0, count]
+  for (const s of sources) {
+    if (!runs.length) break
+    const inv = 1 / s.scale
+    const ly = y * inv + s.offsetY
+    if (ly < s.minY || ly > s.maxY) continue
+    // a's whose lx = (x0 + a dx) inv + offsetX lies in [minX, maxX]
+    const lx0 = x0 * inv + s.offsetX
+    const ldx = dx * inv
+    const lo = Math.max(0, Math.ceil((s.minX - lx0) / ldx - 1e-9))
+    const hi = Math.min(count, Math.floor((s.maxX - lx0) / ldx + 1e-9) + 1)
+    if (lo >= hi) continue
+    let y0 = Math.floor(ly)
+    if (y0 > s.maxY - 1) y0 = s.maxY - 1
+    if (y0 < s.minY) y0 = s.minY
+    const ty = ly - y0
+    const w = s.width
+    const d = s.data
+    const row0 = y0 * w
+    const row1 = s.maxY > s.minY ? row0 + w : row0
+    const xMax = s.maxX - 1
+    const step = s.maxX > s.minX ? 1 : 0
+    const next: number[] = []
+    for (let r = 0; r < runs.length; r += 2) {
+      const a0 = Math.max(runs[r], lo)
+      const a1 = Math.min(runs[r + 1], hi)
+      if (a0 >= a1) {
+        next.push(runs[r], runs[r + 1])
+        continue
+      }
+      if (runs[r] < a0) next.push(runs[r], a0)
+      if (a1 < runs[r + 1]) next.push(a1, runs[r + 1])
+      for (let a = a0; a < a1; a++) {
+        const lx = lx0 + a * ldx
+        let x = Math.floor(lx)
+        if (x > xMax) x = xMax
+        if (x < s.minX) x = s.minX
+        const tx = lx - x
+        const h0 = d[row0 + x] + (d[row0 + x + step] - d[row0 + x]) * tx
+        const h1 = d[row1 + x] + (d[row1 + x + step] - d[row1 + x]) * tx
+        out[a] = h0 + (h1 - h0) * ty
+      }
+    }
+    runs = next
+  }
+}
+
+/**
+ * The grid's horizon map (the header above): `grid` the decoded grid, or
+ * null to read the context alone (a grid resampled from its ancestor, which
+ * is then the context's first window). Null when it would hold no horizon
+ * at all: a grid all at sea level (open water), or everywhere flat.
+ */
+export function bakeTileHorizon(job: HorizonJob, grid: PaddedGrid | null): Uint8Array<ArrayBuffer> | null {
+  if (grid && grid.data.length > 1 && isFlat(grid.data) && grid.data[0] === 0) return null
+  const sources = grid ? [gridSource(grid), ...job.context] : job.context
+  if (!sources.length) return null
+  const n = job.tileSize
+  const padded = n + 2
+  const size = tileHorizonSize(n)
+  const out = new Uint8Array(size * size * TILE_HORIZON_DIRECTIONS)
+  const dirX = new Float64Array(TILE_HORIZON_DIRECTIONS)
+  const dirY = new Float64Array(TILE_HORIZON_DIRECTIONS)
+  for (let d = 0; d < TILE_HORIZON_DIRECTIONS; d++) {
+    const az = (2 * Math.PI * d) / TILE_HORIZON_DIRECTIONS
+    dirX[d] = Math.sin(az)
+    dirY[d] = Math.cos(az)
+  }
+  // Horizon texel a's centre in grid coordinates: gx = a * span + first.
+  const span = padded / size
+  const first = 0.5 * span - 1
+  const base = new Float64Array(size)
+  const heights = new Float64Array(size)
+  const best = new Float64Array(size)
+  const layerBytes = size * size * 4
+  let any = false
+  for (let b = 0; b < size; b++) {
+    const gy = (b + 0.5) * span - 1
+    const lat = mercatorLatitude(job.south + (gy / n) * (job.north - job.south))
+    const metres = (2 * Math.PI * TILE_HORIZON_RADIUS * Math.cos(lat) * (job.north - job.south)) / n
+    const steps = tileHorizonSteps(metres)
+    sampleRow(sources, first, span, gy, base)
+    for (let d = 0; d < TILE_HORIZON_DIRECTIONS; d++) {
+      best.fill(0)
+      for (const step of steps) {
+        const dist = step * metres
+        const drop = dist / (2 * TILE_HORIZON_RADIUS)
+        const invDist = 1 / dist
+        sampleRow(sources, first + dirX[d] * step, span, gy + dirY[d] * step, heights)
+        for (let a = 0; a < size; a++) {
+          // NaN (no data there, or none here) never wins
+          const t = (heights[a] - base[a]) * invDist - drop
+          if (t > best[a]) best[a] = t
+        }
+      }
+      const at = Math.floor(d / 4) * layerBytes + b * size * 4 + (d % 4)
+      for (let a = 0; a < size; a++) {
+        const code = tileHorizonCode(best[a])
+        out[at + a * 4] = code
+        if (code) any = true
+      }
+    }
+  }
+  return any ? out : null
+}

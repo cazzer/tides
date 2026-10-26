@@ -110,6 +110,10 @@ float groundHorizonSky = 1.0;
 #endif
 `
 
+/** The patch's GLSL, for the streamed tiles to reuse by text
+ * (surface/tile-shadow.ts, tides-zmw.9.15). */
+export const GROUND_SHADOW_GLSL = { fragmentHead: FRAGMENT_HEAD, lightBody: LIGHT_BODY }
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
