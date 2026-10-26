@@ -4,7 +4,8 @@
 // (tides-zmw.9.15, ./terrarium.ts bakeTileHorizon). Protocol in
 // ./terrariumDecoder.ts.
 // A cancelled job still finishes its decode (the image decoder can't be
-// interrupted) but its result is dropped here rather than posted.
+// interrupted) but its result is dropped here: only a 'cancelled' reply is
+// posted, so every job gets one reply (the client frees a bake's worker on it).
 import { bakeTileHorizon, decodeTerrariumImage, type HorizonJob, type PaddedGrid } from './terrarium'
 import type { BakedHorizon, DecodeReply, DecodeRequest } from './terrariumDecoder'
 
@@ -39,7 +40,7 @@ self.onmessage = (event: MessageEvent<DecodeRequest>) => {
   job.then(
     (done) => {
       active.delete(id)
-      if (cancelled.delete(id)) return
+      if (cancelled.delete(id)) return reply({ type: 'cancelled', id })
       const transfer: Transferable[] = []
       if (done.type === 'done') transfer.push(done.grid.data.buffer)
       if (done.type === 'baked' && done.baked.horizon) transfer.push(done.baked.horizon.buffer)
@@ -47,7 +48,7 @@ self.onmessage = (event: MessageEvent<DecodeRequest>) => {
     },
     (err: unknown) => {
       active.delete(id)
-      if (cancelled.delete(id)) return
+      if (cancelled.delete(id)) return reply({ type: 'cancelled', id })
       reply({
         type: 'error',
         id,
