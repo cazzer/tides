@@ -109,10 +109,12 @@ export const BLANK_TILE_BYTES = 2048
 /**
  * Above this fraction of pure-black pixels reaching the edge, a tile is
  * blank too: along the coasts USGS's tiles are part imagery, part nodata
- * black (9/200/82 off Big Sur is 64% black, 11/801/330 25%). Real imagery
- * has next to no pure black (0.02% in a shadowed 8/100/40).
+ * black (9/200/82 off Big Sur is 64% black, 11/801/330 25%, and some only a
+ * corner, ~0.6%). Over 2 of the probe's 1024 pixels: real imagery has next
+ * to no pure black (0.02% in a shadowed 8/100/40), and what it has (deep
+ * shadow) rarely reaches the edge, which is all that counts.
  */
-export const BLANK_BLACK_FRACTION = 0.02
+export const BLANK_BLACK_FRACTION = 0.002
 /** The probe a tile is decoded to for the black count: every 8th pixel. */
 const PROBE_SIZE = 32
 

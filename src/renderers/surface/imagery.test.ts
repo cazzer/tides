@@ -193,7 +193,7 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
     expect(edgeBlackFraction(img(['oooo', 'o##o', 'o##o', 'oooo']), 4, 4)).toBe(0)
     // near-black (sum <= 3) counts, and a corner patch follows its connection inward
     expect(edgeBlackFraction(img(['..oo', '.#oo', 'oo#o', 'oooo']), 4, 4)).toBe(4 / 16)
-    expect(BLANK_BLACK_FRACTION).toBe(0.02)
+    expect(BLANK_BLACK_FRACTION).toBe(0.002)
   })
 
   it('cancels the body of an answer it skips', async () => {
