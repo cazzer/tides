@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest'
 import {
   type CloudLook,
   dailyTimeOfLon,
+  IR_DECK_OPACITY,
+  IR_THIN_OPACITY,
   IR_WEIGHT,
   lookOf,
   NEUTRAL_LOOK,
@@ -214,15 +216,40 @@ describe('refineWithIr', () => {
     expect(refineWithIr(mixed, 7, 0.95, 1)).toEqual(mixed.map((x) => expect.closeTo(x, 9)))
   })
 
-  test('moves a warm top\'s mid and high cloud to low, split as the model splits it', () => {
-    const s = refineWithIr(mixed, 1.5, 0.8, 1)
+  test('moves a warm, opaque top\'s mid and high cloud to low, split as the model splits it', () => {
+    // Opaque, short of a deck's opacity.
+    const opacity = IR_THIN_OPACITY[1]
+    const deck = smoothstep(IR_DECK_OPACITY[0], IR_DECK_OPACITY[1], opacity)
+    const s = refineWithIr(mixed, 1.5, opacity, 1)
     expect(s[0]).toBeCloseTo(mixed[0] * (1 - IR_WEIGHT), 9)
     expect(s[2]).toBeCloseTo(mixed[2] * (1 - IR_WEIGHT), 9)
-    expect(s[3] / s[1]).toBeCloseTo(mixed[3] / mixed[1], 9)
+    // The low cloud it takes, split as the model splits it, but for what
+    // the opacity says is a deck.
+    const low = mixed[1] + mixed[3]
+    expect(s[1]).toBeCloseTo(mixed[1] * (1 - IR_WEIGHT) + IR_WEIGHT * (1 - deck) * (mixed[1] / low), 9)
+    expect(s[3]).toBeCloseTo(mixed[3] * (1 - IR_WEIGHT) + IR_WEIGHT * ((1 - deck) * (mixed[3] / low) + deck), 9)
     // With no low cloud in the model, a warm top is a deck.
-    const high = refineWithIr([1, 0, 0, 0], 1.5, 0.8, 1)
+    const high = refineWithIr([1, 0, 0, 0], 1.5, opacity, 1)
     expect(high[1]).toBe(0)
     expect(high[3]).toBeCloseTo(IR_WEIGHT, 9)
+  })
+
+  test('leaves a warm top that lets light through to the model (thin cirrus reads warm)', () => {
+    for (const opacity of [0.1, 0.3, 0.5]) expect(refineWithIr(mixed, 1.5, opacity, 1)).toEqual(mixed)
+    expect(refineWithIr([1, 0, 0, 0], 2, 0.3, 1)).toEqual([1, 0, 0, 0])
+  })
+
+  test('takes a warm, near-opaque top for a deck, whatever the model splits its low cloud as', () => {
+    // A model's cirrus over a few broken cumulus: the NE Pacific's
+    // stratocumulus as the model has it.
+    const model: TypeShares = [0.85, 0.15, 0, 0]
+    const deck = refineWithIr(model, 2, IR_DECK_OPACITY[1], 1)
+    expect(deck[3]).toBeCloseTo(IR_WEIGHT, 9)
+    expect(deck[1]).toBeCloseTo(model[1] * (1 - IR_WEIGHT), 9)
+    // Short of near opaque, the model's split, as for broken trade cumulus.
+    const broken = refineWithIr(model, 2, IR_DECK_OPACITY[0], 1)
+    expect(broken[1]).toBeGreaterThan(0.6)
+    expect(broken[3]).toBeCloseTo(0, 9)
   })
 
   test('keeps the shares summing to 1, each between 0 and 1, pulled at most IR_WEIGHT', () => {

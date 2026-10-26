@@ -17,7 +17,7 @@ const RESCAN_S = 0.5
  * must not run mid-render, as it replaces the renderer's render state.
  */
 export function ShipWarmup() {
-  const warmed = useMemo(createWarmed, [])
+  const warmed = useMemo(() => createWarmed(), [])
   const queue = useRef<Warmup[]>([])
   const scannedAt = useRef(-Infinity)
 
@@ -28,8 +28,8 @@ export function ShipWarmup() {
       if ('texture' in next) gl.initTexture(next.texture)
       // Skip what unmounted while it waited.
       else if (next.object.parent) {
-        if (next.side === undefined) gl.compile(next.object, camera, scene)
-        else compileSide(gl, next.object, next.side, camera, scene, warmed, materialKey)
+        if (next.side === undefined && !next.defines) gl.compile(next.object, camera, scene)
+        else compileSide(gl, next.object, next.side, camera, scene, warmed, materialKey, next.defines)
       }
     }
     if (queue.current.length > 0 || clock.elapsedTime - scannedAt.current < RESCAN_S) return

@@ -132,9 +132,11 @@ export type TypeShares = readonly [cirrus: number, cumulus: number, alto: number
 // opaque the top over a point is now. A cold top that lets light through is
 // cirrus; a deep, opaque one is towering cumulus (opaque tops of 6-9 km are
 // as often frontal nimbostratus or altostratus, so they are left to the
-// model); a warm one is low cloud, cumulus or stratus as the model has it.
-// Where the satellites see (trust), the refinement takes IR_WEIGHT of the
-// shares that far.
+// model); a warm, opaque one is low cloud: a deck (stratocumulus) where it
+// is near opaque, else cumulus or stratus as the model has it. A warm top
+// that lets light through is left to the model too: thin cirrus reads warm,
+// the ground's warmth showing through it. Where the satellites see (trust),
+// the refinement takes IR_WEIGHT of the shares that far.
 export const IR_WEIGHT = 0.7
 /** Top height (km) from which a top reads as cold enough for cirrus. */
 export const IR_COLD_KM = [5.5, 8] as const
@@ -144,6 +146,10 @@ export const IR_DEEP_KM = [9, 12] as const
 export const IR_WARM_KM = [3, 4.5] as const
 /** Opacity under which a top lets enough light through to be thin. */
 export const IR_THIN_OPACITY = [0.5, 0.75] as const
+/** Opacity from which a warm top reads as a deck, whatever the model's split
+ * of its low cloud (the NE Pacific's stratocumulus, under a model's cirrus,
+ * would otherwise go to its few broken cumulus). */
+export const IR_DECK_OPACITY = [0.7, 0.9] as const
 
 /**
  * The shares s refined by the infrared over a point: its top's height
@@ -157,20 +163,24 @@ export function refineWithIr(s: TypeShares, topKm: number, opacity: number, trus
   const deep = smoothstep(IR_DEEP_KM[0], IR_DEEP_KM[1], topKm)
   const warm = 1 - smoothstep(IR_WARM_KM[0], IR_WARM_KM[1], topKm)
   const thin = 1 - smoothstep(IR_THIN_OPACITY[0], IR_THIN_OPACITY[1], opacity)
-  // Low cloud keeps the model's split between cumulus and stratus; with no
-  // low share at all, a warm top is a deck.
+  const deck = smoothstep(IR_DECK_OPACITY[0], IR_DECK_OPACITY[1], opacity)
+  // Low cloud keeps the model's split between cumulus and stratus (with no
+  // low share at all, a deck), but for a near-opaque top, which is a deck.
   const low = s[1] + s[3]
-  const [lowCumulus, lowStratus] = low > 1e-3 ? [s[1] / low, s[3] / low] : [0, 1]
+  const [modelCumulus, modelStratus] = low > 1e-3 ? [s[1] / low, s[3] / low] : [0, 1]
+  const lowCumulus = modelCumulus * (1 - deck)
+  const lowStratus = modelStratus * (1 - deck) + deck
   const toCirrus = cold * thin
   const toCumulus = deep * (1 - thin)
+  const toLow = warm * (1 - thin)
   // What the IR takes from every share, toward what it says: at most w, as
   // warm tops are never cold or deep.
-  const keep = 1 - w * (toCirrus + toCumulus + warm)
+  const keep = 1 - w * (toCirrus + toCumulus + toLow)
   return [
     s[0] * keep + w * toCirrus,
-    s[1] * keep + w * (toCumulus + warm * lowCumulus),
+    s[1] * keep + w * (toCumulus + toLow * lowCumulus),
     s[2] * keep,
-    s[3] * keep + w * warm * lowStratus,
+    s[3] * keep + w * toLow * lowStratus,
   ]
 }
 
@@ -232,7 +242,7 @@ export const TYPE_LOOKS: Readonly<Record<'cirrus' | 'cumulus' | 'alto' | 'stratu
 export const CIRRUS_STRETCH = 4
 /** The stretch share over which the detail goes from round to stretched: the
  * two are drawn and mixed between, which costs a second evaluation. */
-export const STRETCH_EDGES = [0.35, 0.65] as const
+export const STRETCH_EDGES = [0.25, 0.4] as const
 /** |sin latitude| over which the stretch fades out toward the poles, where
  * it no longer reads as east-west (about 55° to 75°). */
 export const STRETCH_POLE_EDGES = [0.82, 0.97] as const

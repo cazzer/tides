@@ -22,6 +22,7 @@ import {
   marchPhaseShare,
 } from './cloudShaders'
 import {
+  MAX_CLOUD_TOP_KM,
   CLOUD_CLEARANCE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
@@ -48,7 +49,18 @@ import {
   shadePlace,
   type Vec3,
 } from '../cloud-layer'
-import { CIRRUS_STRETCH, NEUTRAL_LOOK, TYPE_LOOKS } from '../cloud-types'
+import {
+  CIRRUS_STRETCH,
+  IR_COLD_KM,
+  IR_DECK_OPACITY,
+  IR_DEEP_KM,
+  IR_THIN_OPACITY,
+  IR_WARM_KM,
+  IR_WEIGHT,
+  NEUTRAL_LOOK,
+  STRETCH_EDGES,
+  TYPE_LOOKS,
+} from '../cloud-types'
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
@@ -353,7 +365,7 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
     ['FLIP_SIDED'],
     ['CLOUD_FLAT', 'FLIP_SIDED'],
     ['FLIP_SIDED', 'FOG_EASE'],
-  ]) {
+  ].flatMap((v) => [v, [...v, 'CLOUD_TYPED']])) {
     it(`declares what the program reads (${variant.join('+') || 'relief'})`, () => {
       // Without a WebGL context, a guard against names one branch defines
       // and the shared code reads.
@@ -379,7 +391,9 @@ describe('cloud undersides and gaps from below the deck (tides-01v.8.5)', () => 
         'lookL',
         'pDetail',
         'wStretch',
-        'streaks',
+        'dz',
+        'pDetail',
+        'pass',
       ]
       for (const name of names) {
         if (new RegExp(`\\b${name}\\b`).test(src.replace(/\/\/.*$/gm, ''))) {
@@ -867,13 +881,11 @@ describe('cloud detail eroding only edges and grain (tides-tvr.3)', () => {
       const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
       const src = preprocess(clouds.material.fragmentShader, new Set(variant))
       const edge = src.indexOf('float edge = 1.0;')
-      const call = src.indexOf('detail = cloudDetail(pDetail, topFootprint, texel, edge, lookD.y);')
+      const call = src.indexOf('vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel, edge);')
       expect(edge).toBeGreaterThan(0)
       expect(call).toBeGreaterThan(edge)
-      // How much an octave large on screen erodes inside is the look's
-      // (tides-tvr.4.2), DETAIL_INTERIOR untyped.
-      expect(src).toContain('vec4 cloudDetail(vec3 p, float footprint, float texel, float edge, float interior)')
-      expect(src).toContain('float spare = (1.0 - interior) * (1.0 - edge);')
+      expect(src).toContain('vec4 cloudDetail(vec3 p, float footprint, float texel, float edge)')
+      expect(src).toContain('float spare = (1.0 - DETAIL_INTERIOR) * (1.0 - edge);')
       // Worked out only where the coarsest wave is large on screen, as a
       // share of the view, from the slope's reads.
       expect(src).toContain('DETAIL_GRAIN_PX * topFootprint * uPixelScale;')
@@ -884,9 +896,8 @@ describe('cloud detail eroding only edges and grain (tides-tvr.3)', () => {
       // A side is all edge; shaded elsewhere, the hit reads its own.
       expect(src.includes('edgeNear = edgeNear && !side;')).toBe(variant.includes('FLIP_SIDED'))
       expect(src.includes('if (sideLight > 0.0) {')).toBe(variant.includes('FLIP_SIDED'))
-      // The slope reads where the hit is shaded, as before, tilted by the
-      // look's relief (RELIEF untyped).
-      expect(src).toContain('vec2 slope = lookD.x * vec2(colE.z - topC, colN.z - topC) / h;')
+      // The slope reads where the hit is shaded, as before.
+      expect(src).toContain('vec2 slope = RELIEF * vec2(colE.z - topC, colN.z - topC) / h;')
       clouds.dispose()
     })
   }
@@ -1329,68 +1340,87 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     ['CLOUD_FLAT', 'FLIP_SIDED'],
     ['FLIP_SIDED', 'FOG_EASE'],
   ]
+  const LOOK_WORDS = ['uCloudType', 'cloudLook', 'lookD', 'lookL', 'wStretch', 'CLOUD_STRETCH', 'cloudTypeShares']
+
   for (const variant of variants) {
     const name = variant.join('+') || 'relief'
-    it(`reads the look once, after the march and its refinement, where the hit shows (${name})`, () => {
+    it(`draws untyped clouds with tides-tvr.3's program itself (${name})`, () => {
       const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
-      const src = preprocess(clouds.material.fragmentShader, new Set(variant))
+      const src = preprocess(clouds.material.fragmentShader, new Set(variant)).replace(/\/\/.*$/gm, '')
+      for (const word of LOOK_WORDS) expect(src).not.toContain(word)
+      expect(src).toContain('vec4 cloudDetail(vec3 p, float footprint, float texel, float edge) {')
+      expect(src).toContain('float spare = (1.0 - DETAIL_INTERIOR) * (1.0 - edge);')
+      expect(src).toContain('vec2 slope = RELIEF * vec2(colE.z - topC, colN.z - topC) / h;')
+      expect(src).toContain('vec4 detail = cloudDetail(cloudFrame(p, uCloudShift), topFootprint, texel, edge);')
+      expect(src).toContain('float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);\n  if (alpha < CLOUD_MIN_ALPHA) {')
+      expect(src).toContain('* DETAIL_RELIEF * ')
+      expect(src).toContain('vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth, cloudKm(colShade.z, colShade.y), occ,')
+      clouds.dispose()
+    })
+
+    it(`reads the look once, after the march, its refinement and the edge (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const typed = new Set([...variant, 'CLOUD_TYPED'])
+      const src = preprocess(clouds.material.fragmentShader, typed)
       const main = src.slice(src.indexOf('void main()'))
       const look = main.indexOf('cloudLook(')
       expect(look).toBeGreaterThan(0)
       expect(main.indexOf('cloudLook(', look + 1)).toBe(-1)
       // Past the march (and from inside, the top's refinement, so the look
-      // is the pinned top's) and the miss of a hit that doesn't show; ahead
-      // of everything it sets.
+      // is the pinned top's), the miss of a hit that doesn't show and the
+      // edge, whose reads it would hold registers across; ahead of all it sets.
       if (variant.includes('FLIP_SIDED') && !variant.includes('CLOUD_FLAT')) {
         expect(look).toBeGreaterThan(main.indexOf('if (depthHit == 0.0) {'))
       }
       expect(look).toBeGreaterThan(main.indexOf('if (col.x < CLOUD_MIN_ALPHA) {'))
-      expect(look).toBeLessThan(main.indexOf('vec2 slope = lookD.x'))
+      expect(look).toBeGreaterThan(main.indexOf('if (edgeNear) {'))
+      // The tops' rise is read where the slope was, tilted once the look is.
+      const dz = main.indexOf('vec2 dz = vec2(colE.z - topC, colN.z - topC);')
+      expect(dz).toBeGreaterThan(0)
+      expect(dz).toBeLessThan(main.indexOf('if (edgeNear) {'))
+      expect(main.indexOf('vec2 slope = lookD.x * dz / h;')).toBeGreaterThan(look)
       // The march, the refinement and the fog never see the types.
       const before = main.slice(0, main.indexOf('vec4 lookD;')).replace(/\/\/.*$/gm, '')
-      for (const word of ['lookD', 'lookL', 'uCloudType', 'wStretch', 'CLOUD_STRETCH']) {
-        expect(before).not.toContain(word)
-      }
+      for (const word of LOOK_WORDS) expect(before).not.toContain(word)
       // The grid is read in cloudLook() only, at its own texel, and only
-      // when the map is typed and the texel confident.
+      // when the map is typed and the texel confident; the map's heights a
+      // mip down at most, so the type doesn't change with the zoom.
       expect(src.match(/\buCloudType\b/g)).toHaveLength(2)
-      expect(src).toContain('vec4 t = textureLod(uCloudType, st, 0.0);')
       const fn = src.slice(src.indexOf('void cloudLook('))
       expect(fn.indexOf('if (uCloudTyped < 0.5) return;')).toBeLessThan(fn.indexOf('textureLod(uCloudType'))
       expect(fn.indexOf('if (t.a <= 0.0) return;')).toBeLessThan(fn.indexOf('textureLod(uCloudMap'))
-      expect(fn).toContain('uCloudMeasured > 0.5 ? textureLod(uCloudMap, st, lod).rgb : vec3(0.0)')
+      expect(fn).toContain('uCloudMeasured > 0.5 ? textureLod(uCloudMap, st, min(lod, 1.0)).rgb : vec3(0.0)')
       // Never in the vertex stage, where the march's phase must be the same
       // at every vertex.
-      const vertex = preprocess(clouds.material.vertexShader, new Set(variant))
+      const vertex = preprocess(clouds.material.vertexShader, typed)
       expect(vertex).not.toMatch(/uCloudType|cloudLook|lookD|lookL/)
-      // Every knob in its place.
-      expect(main).toContain('vec2 slope = lookD.x * vec2(colE.z - topC, colN.z - topC) / h;')
-      expect(main).toContain('detail = cloudDetail(pDetail, topFootprint, texel, edge, lookD.y);')
-      expect(main).toContain('vec4 streaks = cloudDetail(pDetail * CLOUD_STRETCH, topFootprint, texel, edge, lookD.y);')
-      expect(main).toContain('streaks.yzw *= CLOUD_STRETCH;')
-      // tides-tvr.3's erosion as it was, then the look's past it, and the
-      // opacity's scale, all before a hit too faint to show is dropped.
-      const erosion = main.indexOf(
-        'float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);'
-      )
-      const typed = main.indexOf(
-        'alpha = clamp(alpha + (lookD.z - DETAIL_EDGE) / DETAIL_EDGE * (alpha - col.x), 0.0, 1.0) * lookL.w;'
-      )
-      expect(erosion).toBeGreaterThan(look)
-      expect(typed).toBeGreaterThan(erosion)
-      expect(typed).toBeLessThan(main.indexOf('if (alpha < CLOUD_MIN_ALPHA) {'))
-      expect(main).toContain('* lookD.w * ')
-      expect(main.indexOf('occ *= lookL.y;')).toBeGreaterThan(main.indexOf('for (int j = 1; j <= SHADOW_STEPS; j++) {'))
-      expect(main).toContain('cloudRadiance(upShade, n, d, alpha, depth * lookL.z,')
-      // The stretch fades out toward the poles.
+      // Every knob in its place: one call of the detail, a pass for each noise.
+      expect(src).toContain('vec4 cloudDetail(vec3 p, float footprint, float texel, float edge, float interior) {')
+      expect(src.replace(/\/\/.*$/gm, '').match(/cloudDetail\(/g)).toHaveLength(2)
+      expect(src).toContain('float spare = (1.0 - interior) * (1.0 - edge);')
+      expect(main).toContain('vec4 pass = cloudDetail(pDetail * scale, topFootprint, texel, edge, lookD.y);')
+      expect(main).toContain('vec3 scale = i == 0 ? vec3(1.0) : CLOUD_STRETCH;')
+      expect(main).toContain('pass.yzw *= scale;')
+      expect(main.includes('wStretch = step(0.5, wStretch);')).toBe(variant.includes('CLOUD_FLAT'))
       expect(main).toMatch(/smoothstep\(STRETCH_FROM, STRETCH_TO, lookL\.x\)\s+\* \(1\.0 - smoothstep\(STRETCH_POLE_FROM, STRETCH_POLE_TO, abs\(up\.y\)\)\)/)
+      // tides-tvr.3's erosion as it was, then the look's past it (a hole
+      // stays one), and the opacity's scale, before a faint hit is dropped.
+      const erosion = main.indexOf('float alpha = clamp(col.x + DETAIL_EDGE * detail.x * 4.0 * col.x * (1.0 - col.x), 0.0, 1.0);')
+      const own = main.indexOf('alpha = (alpha > 0.0 ? clamp(alpha + (lookD.z - DETAIL_EDGE) / DETAIL_EDGE * (alpha - col.x), 0.0, 1.0) : 0.0)\n    * lookL.w;')
+      expect(erosion).toBeGreaterThan(look)
+      expect(own).toBeGreaterThan(erosion)
+      expect(own).toBeLessThan(main.indexOf('if (alpha < CLOUD_MIN_ALPHA) {'))
+      expect(main).toContain('* lookD.w * ')
+      const occ = main.indexOf('occ *= lookL.y;\n  depth *= lookL.z;')
+      expect(occ).toBeGreaterThan(main.indexOf('for (int j = 1; j <= SHADOW_STEPS; j++) {'))
+      expect(occ).toBeLessThan(main.indexOf('vec3 radiance = cloudRadiance('))
       clouds.dispose()
     })
   }
 
   it('draws untyped clouds with tides-tvr.3\'s own numbers', () => {
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
-    const src = clouds.material.fragmentShader
+    const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
     const define = (name: string) => Number(src.match(new RegExp(`#define ${name} (\\S+)`))![1])
     expect(define('RELIEF')).toBe(NEUTRAL_LOOK.relief)
     expect(define('DETAIL_INTERIOR')).toBe(NEUTRAL_LOOK.interior)
@@ -1406,16 +1436,77 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     expect(matrix('LOOK_D')).toEqual(kinds.flatMap((k) => [k.relief, k.interior, k.edge, k.grain]))
     expect(matrix('LOOK_L')).toEqual(kinds.flatMap((k) => [k.stretch, k.occ, k.under, k.alpha]))
     expect(src).toContain(`#define CLOUD_STRETCH vec3(${(1 / CIRRUS_STRETCH).toFixed(6)}, 1.0, ${(1 / CIRRUS_STRETCH).toFixed(6)})`)
+    expect(define('STRETCH_FROM')).toBe(STRETCH_EDGES[0])
+    expect(define('STRETCH_TO')).toBe(STRETCH_EDGES[1])
     clouds.dispose()
   })
 
-  it('starts untyped, with the neutral grid, shared with the shell', () => {
+  it('refines the shares by the infrared as refineWithIr() does', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
+    const fn = src.slice(src.indexOf('vec4 cloudTypeShares('), src.indexOf('void cloudLook('))
+    const f = (x: number) => x.toFixed(6)
+    // Each rule's edges, from ../cloud-types.ts, and the rule itself.
+    for (const line of [
+      `float w = ${f(IR_WEIGHT)} * raw.b;`,
+      `float km = raw.r * ${f(MAX_CLOUD_TOP_KM)};`,
+      `float cold = smoothstep(${f(IR_COLD_KM[0])}, ${f(IR_COLD_KM[1])}, km);`,
+      `float deep = smoothstep(${f(IR_DEEP_KM[0])}, ${f(IR_DEEP_KM[1])}, km);`,
+      `float warm = 1.0 - smoothstep(${f(IR_WARM_KM[0])}, ${f(IR_WARM_KM[1])}, km);`,
+      `float thin = 1.0 - smoothstep(${f(IR_THIN_OPACITY[0])}, ${f(IR_THIN_OPACITY[1])}, raw.g);`,
+      'float toLow = warm * (1.0 - thin);',
+      `float deck = smoothstep(${f(IR_DECK_OPACITY[0])}, ${f(IR_DECK_OPACITY[1])}, raw.g);`,
+      'vec4 lowSplit = mix(low > 1e-3 ? vec4(0.0, s.y, 0.0, s.w) / low : vec4(0.0, 0.0, 0.0, 1.0),\n    vec4(0.0, 0.0, 0.0, 1.0), deck);',
+      'vec4 target = cold * thin * vec4(1.0, 0.0, 0.0, 0.0) + deep * (1.0 - thin) * vec4(0.0, 1.0, 0.0, 0.0)\n    + toLow * lowSplit;',
+      'return s * (1.0 - w * (cold * thin + deep * (1.0 - thin) + toLow)) + w * target;',
+    ]) {
+      expect(fn).toContain(line)
+    }
+    clouds.dispose()
+  })
+
+  it('shows a map with its type grid, and draws typed maps with their own program', () => {
     for (const flat of [false, true]) {
       const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
-      expect(clouds.uniforms.uCloudTyped.value).toBe(0)
-      expect(clouds.uniforms.uCloudType.value).toBe(neutralTypeTexture())
-      expect(clouds.material.uniforms.uCloudTyped).toBe(clouds.uniforms.uCloudTyped)
-      expect(clouds.material.uniforms.uCloudType).toBe(clouds.uniforms.uCloudType)
+      const { uniforms, material } = clouds
+      // Untyped to start, with the neutral grid, shared with the shell.
+      expect(uniforms.uCloudTyped.value).toBe(0)
+      expect(uniforms.uCloudType.value).toBe(neutralTypeTexture())
+      expect(material.uniforms.uCloudTyped).toBe(uniforms.uCloudTyped)
+      expect(material.uniforms.uCloudType).toBe(uniforms.uCloudType)
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material)
+      const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
+      camera.position.set(0, 10, 0)
+      camera.updateMatrixWorld()
+      clouds.faceCamera(mesh, camera)
+      expect(material.defines).not.toHaveProperty('CLOUD_TYPED')
+
+      const map = new THREE.Texture()
+      const types = new THREE.Texture()
+      clouds.setMap(map, true, types)
+      expect(uniforms.uCloudMap.value).toBe(map)
+      expect(uniforms.uCloudMeasured.value).toBe(1)
+      expect(uniforms.uCloudMaxKm.value).toBe(MAX_CLOUD_TOP_KM)
+      expect(uniforms.uCloudType.value).toBe(types)
+      expect(uniforms.uCloudTyped.value).toBe(1)
+      let version = material.version
+      clouds.faceCamera(mesh, camera)
+      expect(material.defines).toHaveProperty('CLOUD_TYPED')
+      expect(material.version).toBeGreaterThan(version)
+      // Once a frame: no new program while the map stays typed.
+      version = material.version
+      clouds.faceCamera(mesh, camera)
+      expect(material.version).toBe(version)
+
+      clouds.setMap(map, false, null)
+      expect(uniforms.uCloudMeasured.value).toBe(0)
+      expect(uniforms.uCloudType.value).toBe(neutralTypeTexture())
+      expect(uniforms.uCloudTyped.value).toBe(0)
+      clouds.faceCamera(mesh, camera)
+      expect(material.defines).not.toHaveProperty('CLOUD_TYPED')
+      expect(material.version).toBeGreaterThan(version)
+      // The ship's warm-up links the typed program ahead.
+      expect(material.userData.warmDefines).toEqual(['CLOUD_TYPED'])
       clouds.dispose()
     }
   })
