@@ -31,7 +31,7 @@
 // the tiles' synthetic downloads, the tiles' own parse queue
 // (surface-queues.ts), the grids' main-thread end paced by time, ahead of
 // the horizon bakes (frame-budget.ts), and each tile's first uploads in the
-// same budget (tile-upload.ts).
+// budget's spare time (tile-upload.ts).
 //
 // tides-zmw.9.16 built each tile's material in one composer (tile-material.ts):
 // Phong, the live scale and handover, and the globe's features from its link
@@ -202,7 +202,8 @@ export function createSurfaceTiles({ floatLinear, upload, link = null }: Surface
   // tiles fade in too, over the globe they replace.
   const composer = createTileComposer(link, TILE_FEATURES)
   tiles.registerPlugin(createTileMaterialPlugin(composer))
-  // Then its textures uploaded in a budget turn, not by a crowded first draw (tile-upload.ts).
+  // Then its textures queued for upload when the budget has time and bytes
+  // to spare, ahead of a crowded first draw; the tile doesn't wait (tile-upload.ts).
   if (upload) tiles.registerPlugin(createTileUploadPlugin(budget, upload))
   tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
   // The bounding regions on the live scale, stepwise (surface-scale.ts).

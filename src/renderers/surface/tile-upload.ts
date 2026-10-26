@@ -1,22 +1,32 @@
-// Each finished tile's textures uploaded in the frame budget, before the
-// tile shows (tides-zmw.9.25). A tile draws a clone of its elevation grid,
-// which shares the grid's upload; stitching (terrain-internals.ts) writes
-// edge texels into loaded neighbours' grids, so the grid a new tile reads
-// is often changed since its last upload, and its first draw re-uploads it
-// (1 MB of float texels), with the tile's imagery. Left to the render, a
-// burst of tiles coming into view together (a dozen or more once the
-// stream keeps up, surface-queues.ts) uploaded them all in one frame:
-// 50-120 ms. Here each tile's uploads are a budget job in the grids' lane,
-// so they're timed with the rest of the main-thread work and spread over
-// frames, and its first draw finds them done. Nothing is uploaded that the
-// first draw wouldn't have.
+// Each new tile's textures uploaded ahead of its first draw, when the frame
+// budget has time and bytes to spare (tides-zmw.9.25). A tile draws a clone
+// of its elevation grid, which shares the grid's upload; stitching
+// (terrain-internals.ts) writes edge texels into loaded neighbours' grids,
+// so the grid a new tile reads has often changed since its last upload, and
+// its first draw re-uploads it (1 MB of float texels), with its imagery.
+// Left to the render, a burst of tiles coming into view together (a dozen
+// or more once the stream keeps up, surface-queues.ts) uploaded them all in
+// one frame: 50-120 ms.
+//
+// Never in the tile's way: processTileModel returns at once (the tile loads
+// and its parse slot frees as before), and the upload waits in the budget's
+// last lane (after grids and bakes, only with time left, at most
+// UPLOAD_BYTES_PER_FRAME a frame, frame-budget.ts). A tile its draw got to
+// first (visible), or that isn't wanted (not used by the last traversal), or
+// that is no longer this load's (evicted, maybe loaded again since) uploads
+// nothing: its draw, if it ever comes, does what's left.
 import type * as THREE from 'three'
 import type { FrameBudget } from './frame-budget'
 
-/** The library's loadingState once a tile is evicted (3d-tiles-renderer's UNLOADED). */
-const UNLOADED = 0
+interface TileLike {
+  traversal?: { used?: boolean; lastFrameVisited?: number }
+  engineData?: { scene?: THREE.Object3D | null }
+}
 
-type TileLike = { internal?: { loadingState?: number } }
+interface TilesLike {
+  visibleTiles: Set<unknown>
+  frameCount: number
+}
 
 /** The textures a tile's first draw would upload: each mesh's elevation clone and imagery. */
 function tileTextures(scene: THREE.Object3D): THREE.Texture[] {
@@ -30,20 +40,43 @@ function tileTextures(scene: THREE.Object3D): THREE.Texture[] {
   return textures
 }
 
+/** What uploading the texture would send, at most (it may already be up to date). */
+export function textureBytes(texture: THREE.Texture): number {
+  const image = texture.image as { data?: ArrayBufferView; width?: number; height?: number } | null
+  if (!image) return 0
+  if (image.data) return image.data.byteLength
+  return (image.width ?? 0) * (image.height ?? 0) * 4
+}
+
 /**
- * A 3d-tiles-renderer plugin: processTileModel (awaited before the tile
- * loads) waits for a budget turn and uploads the tile's textures in it.
- * Register after the material plugin; a tile evicted while it waits
- * uploads nothing.
+ * A 3d-tiles-renderer plugin: each loaded tile's textures are queued as an
+ * upload job in the budget's upload lane; processTileModel doesn't wait.
  */
 export function createTileUploadPlugin(budget: Pick<FrameBudget, 'run'>, upload: (texture: THREE.Texture) => void) {
+  let tiles: TilesLike | null = null
   return {
     name: 'SURFACE_TILE_UPLOAD',
-    processTileModel(scene: THREE.Object3D, tile: TileLike): Promise<void> {
-      return budget.run(() => {
-        if (tile?.internal?.loadingState === UNLOADED) return
-        for (const texture of tileTextures(scene)) upload(texture)
-      })
+    init(renderer: TilesLike) {
+      tiles = renderer
+    },
+    processTileModel(scene: THREE.Object3D, tile: TileLike): void {
+      budget
+        .run(
+          () => {
+            // this load's model, used by the last traversal and not drawn yet
+            const wanted = !!tile?.traversal?.used && tile.traversal.lastFrameVisited === tiles?.frameCount
+            if (tile?.engineData?.scene !== scene || !wanted || tiles?.visibleTiles.has(tile)) return 0
+            let bytes = 0
+            for (const texture of tileTextures(scene)) {
+              bytes += textureBytes(texture)
+              upload(texture)
+            }
+            return bytes
+          },
+          undefined,
+          'upload'
+        )
+        .catch(() => {})
     },
   }
 }

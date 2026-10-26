@@ -14,6 +14,12 @@
 // context. On the main thread (no worker) nothing is baked (bakes is false
 // and bake() answers null): a bake is ~10 ms, and the horizon only adds
 // detail (tile-shadow.ts).
+//
+// tides-zmw.9.25: each worker runs its messages in order, so a decode
+// posted behind a run of bakes waited for all of them (bakes outnumber
+// decodes two to one). A worker now holds at most one bake at a time; the
+// rest wait here and go out as bakes finish, so a decode waits behind one
+// bake at most.
 import type { HorizonJob, PaddedGrid } from './terrarium'
 
 export type DecodeRequest =
@@ -64,6 +70,19 @@ interface Job {
   onAbort: () => void
   resolve: (result: PaddedGrid | BakedHorizon | null) => void
   reject: (err: unknown) => void
+  /** A bake (counted against its worker's one). */
+  bake?: boolean
+}
+
+/** A bake waiting for a worker with none in hand. */
+interface WaitingBake {
+  signal: AbortSignal
+  request: (id: number) => DecodeRequest
+  transfer: Transferable[]
+  fallback: () => Promise<BakedHorizon | null>
+  resolve: (result: BakedHorizon | null) => void
+  reject: (err: unknown) => void
+  onAbort: () => void
 }
 
 const disposedError = () => new DOMException('terrain decoder disposed', 'AbortError')
@@ -71,6 +90,8 @@ const disposedError = () => new DOMException('terrain decoder disposed', 'AbortE
 interface Slot {
   worker: DecodeWorker
   jobs: Map<number, Job>
+  /** Bakes posted and not yet answered (at most one). */
+  bakes: number
 }
 
 /** Two workers: decodes overlap with downloads without crowding the page's cores. */
@@ -94,6 +115,7 @@ export function createTerrariumDecoder({
   let workersOk = true
   let disposed = false
   let nextId = 1
+  const waitingBakes: WaitingBake[] = []
 
   /** Drops the job's abort listener (and with it the buffer). */
   function detach(job: Job) {
@@ -121,13 +143,18 @@ export function createTerrariumDecoder({
         job.reject(abort)
       }
     }
+    // no worker bakes now: the waiting bakes answer as a dead worker's do
+    for (const waiting of waitingBakes.splice(0)) {
+      waiting.signal.removeEventListener('abort', waiting.onAbort)
+      waiting.fallback().then(waiting.resolve, waiting.reject)
+    }
   }
 
   function start(): Slot | null {
     try {
       const worker = createWorker()
       if (!worker) return null
-      const slot: Slot = { worker, jobs: new Map() }
+      const slot: Slot = { worker, jobs: new Map(), bakes: 0 }
       worker.addEventListener('message', ({ data }) => {
         const job = slot.jobs.get(data.id)
         // Cancelled: the reply (and its buffer) is dropped.
@@ -137,6 +164,7 @@ export function createTerrariumDecoder({
         if (data.type === 'done') job.resolve(data.grid)
         else if (data.type === 'baked') job.resolve(data.baked)
         else job.reject(Object.assign(new Error(data.message), { name: data.name ?? 'Error' }))
+        if (job.bake) bakeDone(slot)
       })
       worker.addEventListener('error', fallBack)
       return slot
@@ -161,29 +189,87 @@ export function createTerrariumDecoder({
     return best
   }
 
-  /** Posts a job to the idlest worker, or runs `fallback` here. */
+  /** A worker with no bake in hand (the idlest), starting another while the pool has room; null: none free. */
+  function pickForBake(): Slot | null {
+    let best: Slot | null = null
+    for (const slot of slots) if (slot.bakes === 0 && (!best || slot.jobs.size < best.jobs.size)) best = slot
+    if (best || slots.length >= size) return best
+    const slot = start()
+    if (slot) slots.push(slot)
+    else if (slots.length === 0) workersOk = false
+    return slot
+  }
+
+  /** Sends a job to `slot`; settles through resolve/reject. */
+  function send(
+    slot: Slot,
+    signal: AbortSignal,
+    request: (id: number) => DecodeRequest,
+    transfer: Transferable[],
+    fallback: () => Promise<unknown>,
+    resolve: Job['resolve'],
+    reject: Job['reject'],
+    bake: boolean
+  ): void {
+    const id = nextId++
+    const onAbort = () => {
+      if (!slot.jobs.delete(id)) return
+      slot.worker.postMessage({ type: 'cancel', id })
+      reject(signal.reason)
+      if (bake) bakeDone(slot)
+    }
+    slot.jobs.set(id, { inThread: fallback, signal, onAbort, resolve, reject, bake })
+    if (bake) slot.bakes++
+    signal.addEventListener('abort', onAbort, { once: true })
+    slot.worker.postMessage(request(id), transfer)
+  }
+
+  /** A worker's bake is answered (or cancelled): the next waiting bake goes out. */
+  function bakeDone(slot: Slot): void {
+    slot.bakes--
+    while (waitingBakes.length && workersOk && !disposed) {
+      const free = pickForBake()
+      if (!free) return
+      const waiting = waitingBakes.shift()!
+      waiting.signal.removeEventListener('abort', waiting.onAbort)
+      send(free, waiting.signal, waiting.request, waiting.transfer, waiting.fallback, waiting.resolve as Job['resolve'], waiting.reject, true)
+    }
+  }
+
+  /** Posts a job to the idlest worker (a bake: one with none in hand, else it waits), or runs `fallback` here. */
   function post<T extends PaddedGrid | BakedHorizon | null>(
     signal: AbortSignal,
     request: (id: number) => DecodeRequest,
     transfer: Transferable[],
-    fallback: () => Promise<T>
+    fallback: () => Promise<T>,
+    bake = false
   ): Promise<T> {
     // After dispose, nothing decodes (least of all on the main thread).
     if (disposed) return Promise.reject(disposedError())
     signal.throwIfAborted()
-    const slot = workersOk ? pick() : null
-    if (!slot) return fallback()
-    const id = nextId++
-    return new Promise<T>((resolve, reject) => {
-      const onAbort = () => {
-        if (!slot.jobs.delete(id)) return
-        slot.worker.postMessage({ type: 'cancel', id })
-        reject(signal.reason)
-      }
-      slot.jobs.set(id, { inThread: fallback, signal, onAbort, resolve: resolve as Job['resolve'], reject })
-      signal.addEventListener('abort', onAbort, { once: true })
-      slot.worker.postMessage(request(id), transfer)
-    })
+    const slot = !workersOk ? null : bake ? pickForBake() : pick()
+    if (!slot) {
+      if (!bake || !workersOk || slots.length === 0) return fallback()
+      // every worker has a bake in hand: wait for one
+      return new Promise<T>((resolve, reject) => {
+        const waiting: WaitingBake = {
+          signal,
+          request,
+          transfer,
+          fallback: fallback as () => Promise<BakedHorizon | null>,
+          resolve: resolve as WaitingBake['resolve'],
+          reject,
+          onAbort: () => {
+            const i = waitingBakes.indexOf(waiting)
+            if (i >= 0) waitingBakes.splice(i, 1)
+            reject(signal.reason)
+          },
+        }
+        signal.addEventListener('abort', waiting.onAbort, { once: true })
+        waitingBakes.push(waiting)
+      })
+    }
+    return new Promise<T>((resolve, reject) => send(slot, signal, request, transfer, fallback, resolve as Job['resolve'], reject, bake))
   }
 
   return {
@@ -196,7 +282,7 @@ export function createTerrariumDecoder({
       // the job's own copies, transferred (a dead worker's bake answers null)
       const transfer: Transferable[] = horizon.context.map((w) => w.data.buffer)
       if (grid) transfer.push(grid.data.buffer)
-      return post<BakedHorizon | null>(signal, (id) => ({ type: 'bake', id, horizon, grid }), transfer, async () => null)
+      return post<BakedHorizon | null>(signal, (id) => ({ type: 'bake', id, horizon, grid }), transfer, async () => null, true)
     },
     get bakes() {
       return workersOk && !disposed
@@ -211,6 +297,10 @@ export function createTerrariumDecoder({
           job.reject(disposedError())
         }
         slot.jobs.clear()
+      }
+      for (const waiting of waitingBakes.splice(0)) {
+        waiting.signal.removeEventListener('abort', waiting.onAbort)
+        waiting.reject(disposedError())
       }
     },
   }

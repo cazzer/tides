@@ -14,16 +14,34 @@
 // tile can't draw until the grid is made, and a bake only sharpens a tile
 // already drawn, so grids go first and bakes take the time left (or one a
 // frame once one has waited BAKE_MAX_WAIT_MS, so a long run of grids never
-// shuts them out).
+// shuts them out). Last and least, tile uploads (tile-upload.ts): only
+// with time left after both, at most UPLOAD_BYTES_PER_FRAME a frame, never
+// forced (a tile's first draw uploads whatever is still waiting here),
+// and none while frames take longer than UPLOAD_MAX_FRAME_MS: a GPU that
+// far behind makes each upload wait for it (20-130 ms each under a loaded
+// GPU), where the draw's own upload costs no more.
 
-/** Main-thread ms of budgeted work run per frame (a frame always runs at least one job). */
+/** Main-thread ms of budgeted work run per frame (a frame always runs at least one grid or bake). */
 export const FRAME_BUDGET_MS = 4
 
 /** How long a bake waits behind grids before one a frame goes through regardless, ms. */
 export const BAKE_MAX_WAIT_MS = 500
 
-/** A grid's end (its tile draws once it's done) or a horizon bake's copying (it only sharpens). */
-export type BudgetLane = 'grid' | 'bake'
+/** Bytes of tile uploads a frame lets through (two elevation grids' worth). */
+export const UPLOAD_BYTES_PER_FRAME = 2 * 1024 * 1024
+
+/** The longest frame (ms since the last tick) after which uploads still run: slower, and the GPU is the bottleneck. */
+export const UPLOAD_MAX_FRAME_MS = 34
+
+/** Tile uploads kept waiting; past this the oldest is dropped (its tile's draw uploads it). */
+export const UPLOAD_MAX_PENDING = 64
+
+/**
+ * A grid's end (its tile draws once it's done), a horizon bake's copying
+ * (it only sharpens) or a tile's upload ahead of its first draw (the work
+ * returns the bytes it uploaded).
+ */
+export type BudgetLane = 'grid' | 'bake' | 'upload'
 
 interface Job {
   work: () => unknown
@@ -35,7 +53,7 @@ interface Job {
   onAbort?: () => void
 }
 
-/** The budget's running totals (for the counters and the harnesses). */
+/** The budget's running totals since it was made (for the counters and the harnesses; never reset). */
 export interface FrameBudgetStats {
   /** Jobs run. */
   jobs: number
@@ -47,12 +65,20 @@ export interface FrameBudgetStats {
   maxJobMs: number
   /** Bakes let through ahead of grids for having waited BAKE_MAX_WAIT_MS. */
   agedBakes: number
+  /** Bytes the upload lane's jobs said they uploaded. */
+  uploadBytes: number
+  /** Upload jobs dropped for UPLOAD_MAX_PENDING. */
+  droppedUploads: number
+  /** Ticks that ran no uploads for a frame longer than UPLOAD_MAX_FRAME_MS. */
+  slowFrames: number
 }
 
 export class FrameBudget {
-  private readonly lanes: Record<BudgetLane, Job[]> = { grid: [], bake: [] }
+  private readonly lanes: Record<BudgetLane, Job[]> = { grid: [], bake: [], upload: [] }
   private disposed = false
-  readonly stats: FrameBudgetStats = { jobs: 0, ms: 0, maxTickMs: 0, maxJobMs: 0, agedBakes: 0 }
+  /** The clock at the last tick (none yet: NaN). */
+  private lastTick = NaN
+  readonly stats: FrameBudgetStats = { jobs: 0, ms: 0, maxTickMs: 0, maxJobMs: 0, agedBakes: 0, uploadBytes: 0, droppedUploads: 0, slowFrames: 0 }
 
   constructor(
     readonly msPerFrame = FRAME_BUDGET_MS,
@@ -61,15 +87,16 @@ export class FrameBudget {
 
   /** How many are waiting for a turn. */
   get pending(): number {
-    return this.lanes.grid.length + this.lanes.bake.length
+    return this.lanes.grid.length + this.lanes.bake.length + this.lanes.upload.length
   }
 
   /**
-   * Runs `work` synchronously in a later tick, once its turn comes (grids
-   * before bakes, each lane in arrival order), and resolves with what it
-   * returns (rejects with what it throws). Rejects with the signal's reason
-   * if it aborts first (the work never runs), or an AbortError once the
-   * budget is disposed.
+   * Runs `work` synchronously in a later tick, once its turn comes (grids,
+   * then bakes, then uploads, each lane in arrival order), and resolves
+   * with what it returns (rejects with what it throws). Rejects with the
+   * signal's reason if it aborts first (the work never runs), or an
+   * AbortError once the budget is disposed or (uploads) it is dropped for
+   * UPLOAD_MAX_PENDING.
    */
   run<T>(work: () => T, signal?: AbortSignal, lane: BudgetLane = 'grid'): Promise<T> {
     if (this.disposed) return Promise.reject(new DOMException('frame budget disposed', 'AbortError'))
@@ -86,13 +113,25 @@ export class FrameBudget {
         signal.addEventListener('abort', job.onAbort, { once: true })
       }
       queue.push(job)
+      if (lane === 'upload' && queue.length > UPLOAD_MAX_PENDING) {
+        const dropped = queue.shift()!
+        if (dropped.onAbort) dropped.signal!.removeEventListener('abort', dropped.onAbort)
+        this.stats.droppedUploads++
+        dropped.reject(new DOMException('frame budget: upload dropped', 'AbortError'))
+      }
     })
   }
 
-  /** Runs queued jobs until msPerFrame of them has run (at least one). Call once per frame. */
+  /**
+   * Runs queued grids and bakes until msPerFrame of them has run (at least
+   * one), then uploads while time is left, up to UPLOAD_BYTES_PER_FRAME,
+   * unless the frame took longer than UPLOAD_MAX_FRAME_MS. Call once per frame.
+   */
   tick(): void {
-    const { grid, bake } = this.lanes
+    const { grid, bake, upload } = this.lanes
     const start = this.clock()
+    const slow = start - this.lastTick > UPLOAD_MAX_FRAME_MS
+    this.lastTick = start
     let ran = 0
     // a bake that has waited long enough goes first, one a frame
     if (grid.length && bake.length && start - bake[0].at >= BAKE_MAX_WAIT_MS) {
@@ -105,15 +144,25 @@ export class FrameBudget {
       this.runJob((grid.length ? grid : bake).shift()!)
       ran++
     }
+    let bytes = 0
+    if (slow && upload.length) this.stats.slowFrames++
+    while (!slow && upload.length && bytes < UPLOAD_BYTES_PER_FRAME && this.clock() - start < this.msPerFrame) {
+      const done = this.runJob(upload.shift()!)
+      if (typeof done === 'number' && done > 0) bytes += done
+    }
+    this.stats.uploadBytes += bytes
     const ms = this.clock() - start
     if (ms > this.stats.maxTickMs) this.stats.maxTickMs = ms
   }
 
-  private runJob(job: Job): void {
+  /** Runs `job`, settling its promise; returns what the work returned (undefined if it threw). */
+  private runJob(job: Job): unknown {
     if (job.onAbort) job.signal!.removeEventListener('abort', job.onAbort)
     const t0 = this.clock()
+    let result: unknown
     try {
-      job.resolve(job.work())
+      result = job.work()
+      job.resolve(result)
     } catch (error) {
       job.reject(error)
     }
@@ -121,12 +170,13 @@ export class FrameBudget {
     this.stats.jobs++
     this.stats.ms += ms
     if (ms > this.stats.maxJobMs) this.stats.maxJobMs = ms
+    return result
   }
 
   /** Rejects everything waiting and every later run. */
   dispose(): void {
     this.disposed = true
-    for (const job of [...this.lanes.grid.splice(0), ...this.lanes.bake.splice(0)]) {
+    for (const job of [...this.lanes.grid.splice(0), ...this.lanes.bake.splice(0), ...this.lanes.upload.splice(0)]) {
       if (job.onAbort) job.signal!.removeEventListener('abort', job.onAbort)
       job.reject(new DOMException('frame budget disposed', 'AbortError'))
     }
