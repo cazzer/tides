@@ -34,7 +34,7 @@ const MONTH_COLOR = '#404040'
 const FADE_START = (6 * Math.PI) / 180
 const FADE_END = (12 * Math.PI) / 180
 
-// Depth-tested so the Sun, Earth and Moon hide labels behind them, but not
+// Depth-tested so the Sun, Earth, Moon and planets hide labels behind them, but not
 // depth-written so overlapping glyphs and later transparents still blend.
 export const labelMaterial = new THREE.MeshBasicMaterial({
   color: 0xffffff,
@@ -42,11 +42,6 @@ export const labelMaterial = new THREE.MeshBasicMaterial({
   transparent: true,
   depthWrite: false,
 })
-
-// Mercury and Venus orbit through the clock's band (planets.ts), so with
-// planets on the clock is drawn over them rather than cut by their globes.
-const clockOverPlanetsMaterial = labelMaterial.clone()
-clockOverPlanetsMaterial.depthTest = false
 
 type TroikaText = THREE.Mesh & {
   text: string
@@ -96,7 +91,6 @@ export function OrbitLabel({
   const monthRefs = useRef<(TroikaText | null)[]>([])
   const { handleFocus } = useCamera()
   const setPlanet = useStore((s) => s.setPlanet)
-  const showPlanets = useStore((s) => s.showPlanets)
 
   useEffect(() => {
     if (calendar) setPlanet('clock', clockRef)
@@ -187,8 +181,7 @@ export function OrbitLabel({
             ref={clockTextRef}
             userData-focus="clock"
             onClick={handleFocus}
-            material={showPlanets ? clockOverPlanetsMaterial : labelMaterial}
-            renderOrder={showPlanets ? 3 : 0}
+            material={labelMaterial}
             scale={[2, 2, 2]}
             color="white" // default
             // Thin white strokes wash out over the Sun without a dark edge.
