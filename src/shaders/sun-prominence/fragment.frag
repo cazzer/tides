@@ -38,8 +38,8 @@ void main() {
     // Threads along the strand, clumped into knots that drift slowly
     // along it, as prominence material drains and refills.
     float soft = exp(-2.2 * side * side) * (1.0 - smoothstep(0.75, 1.0, abs(side)));
-    float threads = snoise3(vec3(side * 2.4 + seed, t * 9.0, seed - time * 0.015));
-    float knots = snoise3(vec3(t * (kind < 0.5 ? 3.5 : 1.6) - time * 0.03, seed * 1.7, side * 0.6));
+    float threads = snoise3(vec3(side * 2.4 + seed, t * 9.0, seed - time * 0.04));
+    float knots = snoise3(vec3(t * (kind < 0.5 ? 3.5 : 1.6) - time * 0.08, seed * 1.7, side * 0.6));
     density = soft * smoothstep(-0.2, 0.9, 0.6 * threads + 0.6 * knots);
     // Feet sink into the chromosphere; hedgerow tips thin out.
     float ends = kind < 0.5
@@ -47,20 +47,24 @@ void main() {
       : smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.55, 1.0, t));
     density *= ends * gain;
     // Strands overlap and add, so each is dim: a dense knot reaches pink-white.
-    glow = vec3(1.0, 0.26, 0.22) * 0.3;
+    glow = vec3(1.0, 0.5, 0.18) * 0.32;
   } else {
-    // Coronal loops: fine, faint, smooth arcs with a little beading.
-    float core = exp(-2.5 * side * side) * (1.0 - smoothstep(0.7, 1.0, abs(side)));
-    float beads = 0.75 + 0.25 * snoise3(vec3(t * 7.0 - time * 0.05, seed, 0.0));
-    density = core * beads * gain * smoothstep(0.0, 0.1, t) * smoothstep(0.0, 0.1, 1.0 - t);
-    glow = vec3(1.0, 0.84, 0.64) * 0.045;
+    // Coronal loops: soft, threaded and uneven, brightest in their legs and
+    // fading toward the top, each one brightening and dimming on its own
+    // over ~25 s while plasma runs along it.
+    float core = exp(-4.0 * side * side) * (1.0 - smoothstep(0.5, 1.0, abs(side)));
+    float threads = 0.5 + 0.5 * snoise3(vec3(side * 2.0 + seed, t * 5.0 - time * 0.12, seed));
+    float legs = 0.45 + 0.55 * (1.0 - sin(3.14159265 * t));
+    float pulse = 0.35 + 0.65 * smoothstep(-0.6, 0.8, sin(time * 0.25 + seed * 3.7));
+    density = core * threads * legs * pulse * gain * smoothstep(0.0, 0.1, t) * smoothstep(0.0, 0.1, 1.0 - t);
+    glow = vec3(1.0, 0.62, 0.28) * 0.05;
   }
   density *= vFade * (0.25 + 0.75 * vSlant);
 
   // In white light both vanish against the disc, but for the faintest
   // shadow of a filament (strands overlap, so this adds up several times).
   float filament = kind < 1.5 ? 0.012 : 0.0;
-  vec3 emission = glow * density * (1.0 - onDisc);
+  vec3 emission = glow * density * (1.0 - (kind < 1.5 ? 1.0 : 0.65) * onDisc);
   float cover = density * filament * onDisc;
   if (cover + dot(emission, vec3(1.0)) < 0.002) discard;
   gl_FragColor = vec4(emission, cover);

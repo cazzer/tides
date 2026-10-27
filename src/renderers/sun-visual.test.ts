@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { activeRegions, allSunspots } from './sun-activity'
-import { SUN_SPOT_CAPACITY, surfaceBakeUniforms } from './sun-surface'
+import { activeRegions } from './sun-activity'
+import { surfaceBakeUniforms } from './sun-surface'
 import {
   createProminenceGeometry,
   PROMINENCE_BUDGET,
@@ -30,11 +30,16 @@ describe('the Sun\'s activity layout', () => {
     }
   })
 
-  it('fits the bake\'s spot array', () => {
-    expect(allSunspots().length).toBeLessThanOrEqual(SUN_SPOT_CAPACITY)
+  it('gives the bake each region\'s two poles, for its loops to join', () => {
+    const regions = activeRegions()
     const uniforms = surfaceBakeUniforms()
-    expect(uniforms.uSpots.value).toHaveLength(SUN_SPOT_CAPACITY)
-    expect(uniforms.regionCount).toBe(activeRegions().length)
+    expect(uniforms.regionCount).toBe(regions.length)
+    expect(uniforms.uLead.value).toHaveLength(regions.length)
+    expect(uniforms.uFollow.value).toHaveLength(regions.length)
+    regions.forEach((r, i) => {
+      expect(uniforms.uLead.value[i].toArray().slice(0, 3)).toEqual(r.spots[0].dir)
+      expect(uniforms.uFollow.value[i].w).toBe(r.span)
+    })
   })
 })
 
