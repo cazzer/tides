@@ -160,9 +160,10 @@ export default function EarthRenderer({
   // The tiles draw before the ground, so with them on the night flight is
   // set per camera before anything draws too (the ground's own call stays).
   const tileNightFlight = SURFACE_TILES_ON ? nightFlight : null
-  // The cloud shell's faces, then the haze's camera and frame and the Sun in
-  // the Earth's frame, for each camera before anything draws (the tiles draw
-  // before the ground); one wrapper, so its cleanup restores the scene's.
+  // The Sun in the Earth's frame and the cloud shell's faces, then the
+  // haze's camera and frame, for each camera before anything draws (the
+  // tiles draw before the ground); one wrapper, so its cleanup restores the
+  // scene's.
   useEffect(
     () =>
       cloudsFaceEachCamera(scene, clouds, cloudRef, (renderer, camera) => {
@@ -170,7 +171,6 @@ export default function EarthRenderer({
         // View's scissor.
         if (SURFACE_TILES_ON) renderer.clearStencil()
         if (groundRef.current) groundHaze.update(groundRef.current, camera)
-        sunInEarthFrame(cloudRef.current?.parent, clouds.uniforms.uSunDir.value)
         // After the Sun, which it reads; as the ground's onBeforeRender.
         if (tileNightFlight && groundRef.current && cloudRef.current?.parent) {
           tileNightFlight.update(groundRef.current, camera, diameter)
@@ -306,8 +306,10 @@ function globeStream(patch: MaterialPatch): GlobeStream {
 }
 
 // The cloud shell picks its faces and draw order for each camera before
-// three sorts the scene (CloudLayer.faceCamera); `each` runs after it, with
-// the world matrices updated and nothing drawn yet. Outside the component:
+// three sorts the scene (CloudLayer.faceCamera), after the Sun's direction
+// in the Earth's frame, which it reads for the ground's shadow (tides-l0z);
+// `each` runs after it, with the world matrices updated and nothing drawn
+// yet. Outside the component:
 // the react-hooks lint rejects mutating the scene from useThree in place.
 // Returns the cleanup.
 function cloudsFaceEachCamera(
@@ -319,7 +321,10 @@ function cloudsFaceEachCamera(
   const previous = scene.onBeforeRender
   scene.onBeforeRender = function (renderer, renderScene, camera, target) {
     previous.call(this, renderer, renderScene, camera, target)
-    if (cloudRef.current) clouds.faceCamera(cloudRef.current, camera)
+    if (cloudRef.current) {
+      sunInEarthFrame(cloudRef.current.parent, clouds.uniforms.uSunDir.value)
+      clouds.faceCamera(cloudRef.current, camera)
+    }
     each?.(renderer, camera)
   }
   return () => {

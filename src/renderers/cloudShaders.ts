@@ -80,7 +80,7 @@ import {
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
-import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
+import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import depthGlsl from '../shaders/depth.glsl'
@@ -1811,12 +1811,14 @@ export const GROUND_SHADOW = 0.5
  * brightness (at 0.5 the ground under a deck read 0.6 of the sunlit's on
  * screen, the clouds above it light grey); patchy shadows still show. */
 export const GROUND_SHADOW_UNDER = 0.15
-/** Eye heights over sea level (scene units) over which the adaptation goes:
- * full under the lowest base, none over the thickest untyped top. */
-export const GROUND_SHADOW_ADAPT_ALTITUDE: readonly [number, number] = [
-  CLOUD_CLEARANCE,
-  CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * defaultTopKm(1),
-]
+/** The eye's height over the ground (scene units) from which the adaptation
+ * goes out: the lowest base. It is gone at the layer's top over the ground
+ * (groundShadowStrength()). */
+export const GROUND_SHADOW_ADAPT_FROM = CLOUD_CLEARANCE
+/** The relief layer's top over the ground for the adaptation: the thickest
+ * untyped top. Over a lower deck but under that, the eye is partly adapted:
+ * the CPU doesn't know the deck under it, and the band is the layer's. */
+export const GROUND_SHADOW_ADAPT_TOP = CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * defaultTopKm(1)
 /** sin(elevation) of the Sun at the eye's sub-point over which it comes in:
  * none at dusk, 6 deg and under, all of it from 15 deg up. */
 export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
@@ -1824,11 +1826,13 @@ export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
   Math.sin((15 * Math.PI) / 180),
 ]
 
-/** The ground shadow's strength (uGroundShadow) for an eye `altitude` over
- * sea level with the Sun at `sunSin` at its sub-point. */
-export function groundShadowStrength(altitude: number, sunSin: number): number {
+/** The ground shadow's strength (uGroundShadow) for an eye `height` over
+ * the ground under it, the layer's top `top` over that ground
+ * (GROUND_SHADOW_ADAPT_TOP, or the flat deck's), and the Sun at `sunSin` at
+ * the eye's sub-point. */
+export function groundShadowStrength(height: number, top: number, sunSin: number): number {
   const under =
-    (1 - smoothstep(GROUND_SHADOW_ADAPT_ALTITUDE[0], GROUND_SHADOW_ADAPT_ALTITUDE[1], altitude)) *
+    (1 - smoothstep(GROUND_SHADOW_ADAPT_FROM, Math.max(top, GROUND_SHADOW_ADAPT_FROM + 1e-6), height)) *
     smoothstep(GROUND_SHADOW_ADAPT_SUN[0], GROUND_SHADOW_ADAPT_SUN[1], sunSin)
   return GROUND_SHADOW + (GROUND_SHADOW_UNDER - GROUND_SHADOW) * under
 }
@@ -1947,6 +1951,7 @@ export interface CloudLayer {
 }
 
 const eye = new THREE.Vector3()
+const eyeDir = new THREE.Vector3()
 const viewport = new THREE.Vector4()
 const forward = new THREE.Vector3()
 const toLocal = new THREE.Matrix4()
@@ -2045,10 +2050,16 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     mesh.worldToLocal(camera.getWorldPosition(eye))
     // The ground (globe and tiles) is drawn with this camera next, on the
     // shared uniform: each view sets it for itself.
+    // Over the ground under the eye (the clouds' bases stand on it), sea
+    // level until the floor has loaded.
     const eyeRadius = eye.length()
+    const up = eyeRadius > 0 ? eyeDir.copy(eye).divideScalar(eyeRadius) : eyeDir.set(0, 1, 0)
+    const floor = earthTerrain()
+    const ground = floor ? terrainFloorRadius(floor, seaLevel, up) : seaLevel
     uniforms.uGroundShadow.value = groundShadowStrength(
-      eyeRadius - seaLevel,
-      eyeRadius > 0 ? eye.dot(uniforms.uSunDir.value) / eyeRadius : 0
+      eyeRadius - ground,
+      flat ? seaLevel + CLOUD_FLAT_ALTITUDE - ground : GROUND_SHADOW_ADAPT_TOP,
+      up.dot(uniforms.uSunDir.value)
     )
     const underAurora = eyeRadius < seaLevel * AURORA_SHELL_INNER
     mesh.renderOrder = !reach

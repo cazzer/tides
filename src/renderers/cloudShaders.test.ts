@@ -18,8 +18,9 @@ import {
   detailFall,
   detailPixelScale,
   GROUND_SHADOW,
-  GROUND_SHADOW_ADAPT_ALTITUDE,
+  GROUND_SHADOW_ADAPT_FROM,
   GROUND_SHADOW_ADAPT_SUN,
+  GROUND_SHADOW_ADAPT_TOP,
   GROUND_SHADOW_UNDER,
   groundShadowStrength,
   MARCH_PHASE_FADE,
@@ -32,6 +33,7 @@ import {
 import {
   MAX_CLOUD_TOP_KM,
   CLOUD_CLEARANCE,
+  CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
   CLOUD_UNITS_PER_KM,
@@ -57,6 +59,7 @@ import {
   type ShadeSum,
   shadeAdd,
   shadePlace,
+  TERRAIN_DISPLACEMENT,
   type Vec3,
 } from '../cloud-layer'
 import {
@@ -75,6 +78,12 @@ import {
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
+import {
+  setEarthTerrain,
+  TERRAIN_GREY_MARGIN,
+  TERRAIN_MAP_SIZE,
+  type TerrainFloor,
+} from '../ship/terrain-floor'
 import {
   AURORA_SHELL_INNER,
   CLOUD_REACH_RENDER_ORDER,
@@ -1691,34 +1700,39 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
 
 describe('the ground shadow under the deck (tides-l0z)', () => {
   const sea = sceneRadius(12742000)
-  const [low, high] = GROUND_SHADOW_ADAPT_ALTITUDE
+  const low = GROUND_SHADOW_ADAPT_FROM
+  const high = GROUND_SHADOW_ADAPT_TOP
   const [dusk, day] = GROUND_SHADOW_ADAPT_SUN
+  const strength = (height: number, sunSin: number) => groundShadowStrength(height, high, sunSin)
 
   it('eases to GROUND_SHADOW_UNDER only under the clouds by day', () => {
     // Under the lowest base, the Sun well up: all of the adaptation.
-    expect(groundShadowStrength(low, day)).toBeCloseTo(GROUND_SHADOW_UNDER, 12)
-    expect(groundShadowStrength(0, 1)).toBeCloseTo(GROUND_SHADOW_UNDER, 12)
-    // Over the thickest untyped top, and from far off: as before.
-    expect(groundShadowStrength(high, 1)).toBe(GROUND_SHADOW)
-    expect(groundShadowStrength(10, 1)).toBe(GROUND_SHADOW)
+    expect(strength(low, day)).toBeCloseTo(GROUND_SHADOW_UNDER, 12)
+    expect(strength(0, 1)).toBeCloseTo(GROUND_SHADOW_UNDER, 12)
+    // Over the layer's top, and from far off: as before.
+    expect(strength(high, 1)).toBe(GROUND_SHADOW)
+    expect(strength(10, 1)).toBe(GROUND_SHADOW)
     // Dusk and night, at any height: as before.
-    for (const sunSin of [dusk, 0, -0.5]) expect(groundShadowStrength(0, sunSin)).toBe(GROUND_SHADOW)
+    for (const sunSin of [dusk, 0, -0.5]) expect(strength(0, sunSin)).toBe(GROUND_SHADOW)
     // Between, weaker the lower the eye and the higher the Sun.
     let last = GROUND_SHADOW_UNDER
     for (let k = 1; k <= 10; k++) {
-      const s = groundShadowStrength(low + ((high - low) * k) / 10, day)
+      const s = strength(low + ((high - low) * k) / 10, day)
       expect(s).toBeGreaterThanOrEqual(last)
       last = s
     }
-    expect(groundShadowStrength(0, (dusk + day) / 2)).toBeGreaterThan(GROUND_SHADOW_UNDER)
-    expect(groundShadowStrength(0, (dusk + day) / 2)).toBeLessThan(GROUND_SHADOW)
-    // The adaptation spans the cloud layer's bases to its untyped tops.
+    expect(strength(0, (dusk + day) / 2)).toBeGreaterThan(GROUND_SHADOW_UNDER)
+    expect(strength(0, (dusk + day) / 2)).toBeLessThan(GROUND_SHADOW)
+    // The relief layer's band spans its lowest base to its thickest untyped
+    // top; over a lower top (the flat deck's) it is gone by that top.
     expect(low).toBe(CLOUD_CLEARANCE)
     expect(high).toBeCloseTo(CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * defaultTopKm(1), 12)
+    expect(groundShadowStrength(0.02, 0.02, 1)).toBe(GROUND_SHADOW)
+    expect(groundShadowStrength(0.02, 0.01, 1)).toBe(GROUND_SHADOW)
     expect(GROUND_SHADOW_UNDER).toBeLessThan(GROUND_SHADOW)
   })
 
-  it('sets the strength for each camera before it draws, shared with the ground', () => {
+  it('sets the strength for each camera before it draws, over the ground under the eye', () => {
     for (const flat of [false, true]) {
       const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
       clouds.uniforms.uSeaLevel.value = sea
@@ -1731,17 +1745,34 @@ describe('the ground shadow under the deck (tides-l0z)', () => {
         clouds.faceCamera(mesh, camera)
         return clouds.uniforms.uGroundShadow.value
       }
+      // A flat floor of grey g everywhere (terrain-floor.ts), for the ground
+      // under the eye.
+      const floorOf = (g: number): TerrainFloor => {
+        const [w, h] = TERRAIN_MAP_SIZE
+        return { segments: [w, h], grey: new Float32Array((w + 1) * (h + 1)).fill(g), poles: [g, g], slope: new Float32Array(w * h) }
+      }
       try {
         // Under the deck at noon, then the system view, then under it at night.
         expect(at(new THREE.Vector3(0, sea + low * 0.5, 0))).toBeCloseTo(GROUND_SHADOW_UNDER, 12)
         expect(at(new THREE.Vector3(0, sea * 5, 0))).toBe(GROUND_SHADOW)
         expect(at(new THREE.Vector3(0, -(sea + low * 0.5), 0))).toBe(GROUND_SHADOW)
+        // Over the flat deck, which is the low tier's only cloud: as before.
+        if (flat) expect(at(new THREE.Vector3(0, sea + CLOUD_FLAT_ALTITUDE + 0.001, 0))).toBe(GROUND_SHADOW)
+        // Over high ground (here 0.03 up), under its clouds' base: adapted,
+        // though well over the sea's.
+        if (!flat) {
+          const grey = (0.03 * 255) / TERRAIN_DISPLACEMENT
+          setEarthTerrain(floorOf(grey - TERRAIN_GREY_MARGIN))
+          expect(at(new THREE.Vector3(0, sea + 0.03 + low * 0.5, 0))).toBeCloseTo(GROUND_SHADOW_UNDER, 9)
+          expect(at(new THREE.Vector3(0, sea + 0.03 + high, 0))).toBe(GROUND_SHADOW)
+        }
         // The ground's patch reads the same uniform object.
         const shader = phongShader()
         clouds.groundPatch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
         expect(shader.uniforms.uGroundShadow).toBe(clouds.uniforms.uGroundShadow)
         expect(shader.fragmentShader).toContain('return 1.0 - uGroundShadow * occ;')
       } finally {
+        setEarthTerrain(null)
         clouds.dispose()
       }
     }
