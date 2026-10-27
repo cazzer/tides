@@ -3,7 +3,6 @@
 // phases, the body's floor) and where the GLSL lands on the globe's Phong.
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
 import { createCloudLayer } from './cloudShaders'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { earthHorizon } from './earthHorizonTexture'
@@ -20,6 +19,8 @@ import {
   WATER_GLSL,
   WATER_MSS,
   WATER_MSS_BASE,
+  WATER_FADE_END,
+  WATER_FADE_START,
   WATER_PRELUDE,
   WATER_WAVE_TABLE,
   WATER_WAVES,
@@ -110,10 +111,10 @@ describe('the waves (tides-07z)', () => {
     }
   })
 
-  it('fades a wave out from DETAIL_FADE_START to DETAIL_FADE_END of its wavelength', () => {
+  it('fades a wave out from WATER_FADE_START to WATER_FADE_END of its wavelength', () => {
     expect(waveWeight(0, 1)).toBe(1)
-    expect(waveWeight(DETAIL_FADE_START, 1)).toBe(1)
-    expect(waveWeight(DETAIL_FADE_END, 1)).toBe(0)
+    expect(waveWeight(WATER_FADE_START, 1)).toBe(1)
+    expect(waveWeight(WATER_FADE_END, 1)).toBe(0)
     let last = 1
     for (let x = 0; x <= 0.5; x += 0.01) {
       const w = waveWeight(x, 1)
@@ -130,8 +131,9 @@ describe('the waves (tides-07z)', () => {
         expect(waterLostVariance(1e9, up, waves) + waterBaseMss(waves)).toBeCloseTo(WATER_MSS, 12)
         expect(waterMss(1e9, up, waves)).toBeCloseTo(WATER_MSS, 12)
         // With every wave drawn, the tier's base, give or take how the
-        // waves' directions lie against this up.
-        expect(Math.abs(waterLostVariance(0, up, waves))).toBeLessThan(low ? 0.008 : 0.002)
+        // waves' directions lie against this up (the long waves, carrying
+        // more of the slope, swing it most).
+        expect(Math.abs(waterLostVariance(0, up, waves))).toBeLessThan(low ? 0.008 : 0.003)
       }
     }
     expect(waterBaseMss(waterWaves(false))).toBeCloseTo(WATER_MSS_BASE, 12)

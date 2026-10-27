@@ -25,8 +25,11 @@
 //   as the map has them;
 // - the waves (normal): WATER_WAVES fixed sinusoids in the Earth's frame
 //   (Earth-fixed, so the swell stays put under a moving eye), deep-water
-//   dispersion for their speeds, each faded out (as the ground detail's
-//   octaves, groundDetail.ts) before it shrinks to a few pixels; the slope
+//   dispersion for their speeds, the longer ones carrying more of the
+//   slope (WATER_SLOPE_TILT) and bending the shorter ones' crests
+//   (WATER_WARP), each faded out (as the ground detail's octaves,
+//   groundDetail.ts, only sooner: WATER_FADE_START) before it shrinks to a
+//   dozen pixels; the slope
 //   variance a faded wave takes with it goes into the glint's roughness, so
 //   far off the sea glitters as one rough surface instead of aliasing.
 //   Still under prefers-reduced-motion (advance()).
@@ -44,7 +47,6 @@
 // stays the unbent normal), the glint after lights_phong_pars_fragment
 // (RE_Direct redefined), the sky after lights_fragment_end.
 import * as THREE from 'three'
-import { DETAIL_FADE_END, DETAIL_FADE_START } from '../cloud-layer'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
@@ -56,6 +58,11 @@ export const WATER_WAVES_LOW = 6
 /** The longest wave (m), each next WATER_WAVE_RATIO of it. */
 export const WATER_WAVE_LONGEST = 120
 export const WATER_WAVE_RATIO = 0.715
+/** How far (radians) each wave's crests are pushed along by the longer
+ * waves' (their sines, summed as they are drawn, longest first): a handful
+ * of straight sinusoids crossing read as a woven grid; bent by the swell
+ * under them they read as a sea. It moves the crests, not their slopes. */
+export const WATER_WARP = 0.9
 /** The sea's total slope variance (Cox-Munk's for a breeze of about 6 m/s),
  * and the part finer than the waves, always in the glint's roughness. */
 export const WATER_MSS = 0.034
@@ -93,6 +100,19 @@ export interface WaterWave {
  * times 2/3 (a random direction's level share). */
 export const WATER_WAVE_SLOPE = Math.sqrt((2 * (WATER_MSS - WATER_MSS_BASE)) / WATER_WAVES / (2 / 3))
 
+/** How the slope is shared out: each wave's goes as its wavelength to this
+ * power (the set's variance unchanged), so the longer waves shape the sea
+ * and the shortest, next to the pixel, don't weave it into a fine grid. */
+export const WATER_SLOPE_TILT = 0.35
+const tiltOf = (i: number) => WATER_WAVE_RATIO ** (WATER_SLOPE_TILT * ((i * 5) % WATER_WAVES))
+const TILT_NORM = Math.sqrt(WATER_WAVES / Array.from({ length: WATER_WAVES }, (_, i) => tiltOf(i) ** 2).reduce((a, b) => a + b))
+
+/** A wave's fade, in pixels' widths over its level wavelength: wider than
+ * the ground detail's (DETAIL_FADE_START, 1/6): a sinusoid's glint aliases
+ * into speckle well before noise does. */
+export const WATER_FADE_START = 1 / 12
+export const WATER_FADE_END = 1 / 6
+
 /** The waves: directions on a golden spiral over the northern hemisphere
  * (a plane wave and its opposite are the same pattern, so this covers every
  * direction), wavelengths shuffled across them (i 5 mod 12) so the long
@@ -110,7 +130,7 @@ export const WATER_WAVE_TABLE: readonly WaterWave[] = Array.from({ length: WATER
     lambda,
     k: TAU / lambda,
     omega: Math.sqrt((G * TAU) / metres),
-    slope: WATER_WAVE_SLOPE,
+    slope: WATER_WAVE_SLOPE * TILT_NORM * tiltOf(index),
   }
 })
 
@@ -130,7 +150,7 @@ const smoothstep = (a: number, b: number, x: number) => {
  * for its level wavelength `lambdaEff` (its wavelength over its level
  * share): the ground detail's fade. */
 export function waveWeight(footprint: number, lambdaEff: number): number {
-  return 1 - smoothstep(DETAIL_FADE_START, DETAIL_FADE_END, footprint / lambdaEff)
+  return 1 - smoothstep(WATER_FADE_START, WATER_FADE_END, footprint / lambdaEff)
 }
 
 type Vec3 = readonly [number, number, number]
@@ -278,8 +298,10 @@ const wave = (w: WaterWave) => /* glsl */ `
   waterD = ${v3(w.dir)};
   waterDt = waterD - waterUpGround * dot(waterD, waterUpGround);
   waterDt2 = dot(waterDt, waterDt);
-  waterW = 1.0 - smoothstep(${f(DETAIL_FADE_START)}, ${f(DETAIL_FADE_END)}, waterFootprint * sqrt(waterDt2) * ${e(1 / w.lambda)});
-  waterGrad -= (waterW * ${f(w.slope)} * sin(uWavePhase[${w.index}] + ${e(w.k)} * dot(waterD, waterRay))) * waterDt;
+  waterW = 1.0 - smoothstep(${f(WATER_FADE_START)}, ${f(WATER_FADE_END)}, waterFootprint * sqrt(waterDt2) * ${e(1 / w.lambda)});
+  waterS = sin(uWavePhase[${w.index}] + ${e(w.k)} * dot(waterD, waterRay) + waterWarp);
+  waterGrad -= (waterW * ${f(w.slope)} * waterS) * waterDt;
+  waterWarp += waterW * ${f(WATER_WARP)} * waterS;
   waterSeen += waterW * ${e(0.5 * w.slope * w.slope)} * waterDt2;`
 
 // After the prelude (waterRay, waterUpGround, waterUpView and
@@ -301,7 +323,9 @@ waterMss = ${f(WATER_MSS)};
     vec3 waterD;
     vec3 waterDt;
     float waterDt2;
-    float waterW;${waves.map(wave).join('')}
+    float waterW;
+    float waterS;
+    float waterWarp = 0.0;${[...waves].sort((a, b) => b.lambda - a.lambda).map(wave).join('')}
     waterMss = max(${f(WATER_MSS)} - waterSeen, ${f(WATER_MSS_FLOOR)});
     normal = normalize(normal - specularStrength * (waterGrad * waterViewToGround));
   }
