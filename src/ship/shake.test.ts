@@ -13,6 +13,7 @@ import {
   SHAKE_RISE_TAU,
   SHAKE_ROLL_SHARE,
   SHAKE_WEIGHTS,
+  SHAKE_YAW_SHARE,
   airShakeShare,
   easeShake,
   shakeAngles,
@@ -105,7 +106,7 @@ describe('shake signal', () => {
       shakeAngles(t, SHAKE_MAX_INTENSITY, DESKTOP, out)
       const peak = SHAKE_PX * DESKTOP * SHAKE_MAX_INTENSITY
       expect(Math.abs(out.pitch)).toBeLessThanOrEqual(peak)
-      expect(Math.abs(out.yaw)).toBeLessThanOrEqual(peak)
+      expect(Math.abs(out.yaw)).toBeLessThanOrEqual(SHAKE_YAW_SHARE * peak)
       expect(Math.abs(out.roll)).toBeLessThanOrEqual(SHAKE_ROLL_SHARE * peak)
       shakeAngles(t, 0, DESKTOP, out)
       expect(out).toEqual({ pitch: 0, yaw: 0, roll: 0 })
@@ -133,9 +134,11 @@ describe('shake signal', () => {
   })
 
   test('smooth from frame to frame, and it moves', () => {
+    // A band turns at most 3 × its rate a second: smoothstep's steepest is
+    // 1.5 × a lattice step, and the values are at most 2 apart.
     const weightSum = SHAKE_WEIGHTS.reduce((a, b) => a + b, 0)
+    const rate = SHAKE_HZ.reduce((sum, hz, i) => sum + SHAKE_WEIGHTS[i] * 3 * hz, 0) / weightSum
     for (const axis of AXES) {
-      const rate = (2 * Math.PI * SHAKE_HZ[axis].reduce((sum, hz, i) => sum + SHAKE_WEIGHTS[i] * hz, 0)) / weightSum
       let min = Infinity
       let max = -Infinity
       for (let t = 0; t < 2; t += FRAME) {
@@ -146,6 +149,27 @@ describe('shake signal', () => {
       }
       expect(max - min).toBeGreaterThan(0.5)
     }
+  })
+
+  test('a buffet, not a sway: each axis crosses zero many times a second', () => {
+    for (const axis of AXES) {
+      let crossings = 0
+      let last = shakeNoise(0, axis)
+      for (let t = 1 / 600; t < 10; t += 1 / 600) {
+        const value = shakeNoise(t, axis)
+        if (Math.sign(value) !== Math.sign(last)) crossings++
+        last = value
+      }
+      expect(crossings / 10).toBeGreaterThan(8)
+    }
+  })
+
+  test('the axes run apart, and pitch leads', () => {
+    const a = shakeAngles(4.56, 1, DESKTOP, angles())
+    expect(new Set([shakeNoise(4.56, 0), shakeNoise(4.56, 1), shakeNoise(4.56, 2)]).size).toBe(3)
+    expect(SHAKE_YAW_SHARE).toBeLessThan(1)
+    expect(SHAKE_ROLL_SHARE).toBeLessThan(SHAKE_YAW_SHARE)
+    expect(a.roll).not.toBe(0)
   })
 })
 
