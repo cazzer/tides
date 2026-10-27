@@ -15,8 +15,8 @@ export const PROMINENCE_KIND = { arch: 0, hedgerow: 1, loop: 2 } as const
 
 /** [TUNE] Strand and segment budgets per quality tier. */
 export const PROMINENCE_BUDGET = {
-  high: { archStrands: 12, hedgeStrands: 20, loopStrands: 7, segments: 24 },
-  low: { archStrands: 6, hedgeStrands: 10, loopStrands: 3, segments: 12 },
+  high: { archStrands: 12, hedgeStrands: 20, loopStrands: 12, segments: 24 },
+  low: { archStrands: 6, hedgeStrands: 10, loopStrands: 5, segments: 12 },
 } as const
 
 /**
@@ -27,7 +27,7 @@ export const PROMINENCE_BUDGET = {
 export const PROMINENCE_FADE_PX = [22, 48] as const
 
 /** [TUNE] The same for the much finer coronal loops. */
-export const PROMINENCE_LOOP_FADE_PX = [110, 220] as const
+export const PROMINENCE_LOOP_FADE_PX = [60, 140] as const
 
 /** The highest any strand reaches, in solar radii from the centre. */
 export const PROMINENCE_TOP = 1.3
@@ -155,16 +155,21 @@ function loopStrands(region: ActiveRegion, count: number, random: () => number):
   return Array.from({ length: strands }, (_, i) => {
     // Nested: the outer loops wider and taller, spreading sideways a little.
     const k = (i + 1) / strands
-    const span = region.span * (0.7 + 0.8 * k) * (0.9 + 0.2 * random())
-    const height = span * (0.55 + 0.25 * random())
-    const offset = (random() - 0.5) * region.span * 0.25
+    const span = region.span * (0.9 + 1.8 * k) * (0.85 + 0.3 * random())
+    // Capped, so the tallest of a big region's arcade stays under PROMINENCE_TOP.
+    const height = Math.min(span * (0.5 + 0.3 * random()), 0.24)
+    const offset = (random() - 0.5) * region.span * 0.6
+    // Each loop leans its own way, so a bundle frays rather than nesting.
+    const lean = (random() - 0.5) * 1.2
+    const bulge = (random() - 0.5) * 0.3
     return {
       point: (t: number) => {
         const base = along(centre, axis, (t - 0.5) * span)
-        const lift = height * Math.sin(Math.PI * t)
-        return add(scale(base, 0.996 + lift), side, offset)
+        const s = Math.sin(Math.PI * t)
+        const lift = height * s * (1 + bulge * Math.sin(2 * Math.PI * t))
+        return add(scale(base, 0.996 + lift), side, offset + lean * lift)
       },
-      width: 0.012 + 0.008 * random(),
+      width: 0.012 + 0.01 * random(),
       kind: PROMINENCE_KIND.loop,
       gain: 0.5 + 0.5 * random(),
     }

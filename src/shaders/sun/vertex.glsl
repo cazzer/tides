@@ -17,7 +17,7 @@ mat2 rotate(float a) {
 
 void main() {
   vSolar = normal;
-  float t = time * 0.006;
+  float t = time * 0.015;
   vLayer0 = normal;
   vLayer0.yz = rotate(t) * vLayer0.yz;
   vLayer1 = normal;

@@ -3,15 +3,15 @@ import bakeVertex from '../shaders/sun-bake/vertex.glsl'
 import bakeFragment from '../shaders/sun-bake/fragment.frag'
 import coronaBakeFragment from '../shaders/sun-bake/corona.frag'
 import plasmaBakeFragment from '../shaders/sun-bake/plasma.frag'
-import { activeRegions, allSunspots, type ActiveRegion } from './sun-activity'
+import { activeRegions, type ActiveRegion } from './sun-activity'
 
 /*
- * The photosphere's detail and churn and the corona's pattern, baked once
+ * The disc's EUV detail and churn and the corona's pattern, baked once
  * into three cube maps in the Sun's frame (sun-bake/fragment.frag,
  * plasma.frag and corona.frag say what each channel holds). Before
  * tides-d9x a CubeCamera re-rendered six 256 px faces of 4D noise every
  * frame; this bakes one face per frame for the first eighteen frames after
- * load, and then the photosphere costs three cube lookups per pixel and the
+ * load, and then the disc costs three cube lookups per pixel and the
  * corona one. One bake per renderer, shared by every view that draws the
  * Sun, kept for the renderer's life (~13 MB on the low tier): views mount and unmount as panels change, and rebaking each
  * time would cost more than holding it.
@@ -19,14 +19,6 @@ import { activeRegions, allSunspots, type ActiveRegion } from './sun-activity'
 
 /** [TUNE] Cube face size per quality tier, texels. */
 export const SUN_SURFACE_SIZE = { high: 1024, low: 512 } as const
-
-/**
- * [TUNE] Granulation cells per unit of solar radius. Real granules are
- * ~1/700 R; at that size they would vanish below a texel at any view the
- * app has, so they are drawn ~8x larger, where a close Sun still shows
- * them as cells and a whole-disc view averages them to a fine mottle.
- */
-export const SUN_GRANULES = 90
 
 /**
  * [TUNE] The corona pattern's face size. Its finest feature, the spicule
@@ -40,9 +32,6 @@ export const SUN_CORONA_SIZE = 256
  */
 export const SUN_PLASMA_SIZE = { high: 512, low: 256 } as const
 
-/** The bake's spot array size: every spot of activeRegions() must fit. */
-export const SUN_SPOT_CAPACITY = 64
-
 interface CubeBake {
   target: THREE.WebGLCubeRenderTarget
   scene: THREE.Scene
@@ -53,28 +42,20 @@ interface CubeBake {
 
 const bakes = new WeakMap<THREE.WebGLRenderer, CubeBake[]>()
 
-/** The bake's uniforms: the spots and plage regions of activeRegions(). */
+/**
+ * The bake's uniforms: each region of activeRegions() as its centre and
+ * reach, and its leading and following poles, which the loops join.
+ */
 export function surfaceBakeUniforms(regions: ActiveRegion[] = activeRegions()) {
-  const spots = allSunspots(regions)
-  if (spots.length > SUN_SPOT_CAPACITY) {
-    throw new Error(`sun-surface: ${spots.length} spots, room for ${SUN_SPOT_CAPACITY}`)
-  }
-  // An unused slot's zero direction and zero radius never pass the
-  // shader's reach test (acos(0) > 0), so it costs only that test.
-  const uSpots = Array.from({ length: SUN_SPOT_CAPACITY }, () => new THREE.Vector4(0, 0, 0, 0))
-  const uSpotShape = Array.from({ length: SUN_SPOT_CAPACITY }, () => new THREE.Vector4(1, 1, 0, 0))
-  spots.forEach((spot, i) => {
-    uSpots[i].set(...spot.dir, spot.umbra)
-    uSpotShape[i].set(spot.penumbra, spot.stretch, spot.seed, 0)
-  })
   const uRegions = regions.map(
     (r) => new THREE.Vector4(...r.dir, r.span * 1.1 + (3 + 4 * r.strength) * (Math.PI / 180))
   )
+  const uLead = regions.map((r) => new THREE.Vector4(...r.spots[0].dir, r.strength))
+  const uFollow = regions.map((r) => new THREE.Vector4(...r.spots[1].dir, r.span))
   return {
-    uSpots: { value: uSpots },
-    uSpotShape: { value: uSpotShape },
     uRegions: { value: uRegions },
-    uGranules: { value: SUN_GRANULES },
+    uLead: { value: uLead },
+    uFollow: { value: uFollow },
     regionCount: regions.length,
   }
 }
@@ -131,12 +112,12 @@ function bakeMaterial(fragmentShader: string, extra: Partial<THREE.ShaderMateria
 function createBakes(renderer: THREE.WebGLRenderer, low: boolean): CubeBake[] {
   const { regionCount, ...uniforms } = surfaceBakeUniforms()
   const surface = bakeMaterial(bakeFragment, {
-    defines: { SUN_SPOTS: SUN_SPOT_CAPACITY, SUN_REGIONS: regionCount },
+    defines: { SUN_REGIONS: regionCount },
     uniforms,
   })
   return [
-    // Unbaked, the photosphere reads as plain, spotless granulation...
-    createCubeBake(renderer, SUN_SURFACE_SIZE[low ? 'low' : 'high'], surface, new THREE.Color(0.6, 0.6, 1)),
+    // Unbaked, the disc reads as plain quiet Sun...
+    createCubeBake(renderer, SUN_SURFACE_SIZE[low ? 'low' : 'high'], surface, new THREE.Color(0, 0, 1)),
     // ...and the corona as even, middling streamers.
     createCubeBake(renderer, SUN_CORONA_SIZE, bakeMaterial(coronaBakeFragment), new THREE.Color(0.5, 0.5, 0.5)),
     // ...and the plasma as even, featureless.

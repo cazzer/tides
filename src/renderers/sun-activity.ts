@@ -3,7 +3,7 @@
  * structures sit, in the Sun's own frame (local +Y is the pole, +X the prime
  * meridian; see ephemeris.ts sunOrientation). Illustrative, not observed:
  * one fixed, seeded layout that turns with the Sun, so scrubbing the date
- * always shows the same Sun, and nothing evolves or erupts. The photosphere
+ * always shows the same Sun, and nothing evolves or erupts. The disc's EUV
  * bake (sun-surface.ts) and the prominences (sun-prominences.ts) both read
  * it, so loops stand over the spots they belong to.
  */
@@ -66,6 +66,15 @@ const REGIONS: readonly [number, number, number][] = [
   [-27, 250, 0.6],
   [17, 300, 0.8],
   [-8, 335, 0.4],
+  // Small and decaying, so the disc between the big groups isn't bare.
+  [21, 75, 0.2],
+  [-15, 100, 0.25],
+  [6, 150, 0.15],
+  [-24, 205, 0.3],
+  [12, 255, 0.2],
+  [-6, 285, 0.2],
+  [28, 350, 0.25],
+  [-30, 5, 0.15],
 ]
 
 /** The fixed active-region layout. */

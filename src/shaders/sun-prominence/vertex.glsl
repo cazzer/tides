@@ -1,6 +1,7 @@
 // Widens each strand's spine (sun-prominences.ts) into a ribbon facing the
 // eye, in view space so it holds in the ortho main view and the perspective
 // panels and ship alike.
+uniform float time;
 uniform float uViewHeight; // the view's height, CSS px
 uniform vec2 uFadePx;      // PROMINENCE_FADE_PX
 uniform vec2 uLoopFadePx;  // PROMINENCE_LOOP_FADE_PX
@@ -52,6 +53,8 @@ void main() {
     ? 1.0 - 0.5 * t
     : 0.55 + 0.45 * sqrt(sin(3.14159265 * t));
   view.xyz += side * aStrand.y * aStrand.z * radius * taper;
+  // A slow sway along each strand, so the plasma seems to move in its field.
+  view.xyz += side * radius * 0.004 * sin(time * 0.3 + aStrand.w + t * 5.0) * sin(3.14159265 * t);
 
   vView = view.xyz;
   vCentre = centre;
