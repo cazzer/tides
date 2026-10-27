@@ -276,7 +276,7 @@ export function spawnPoseFromCamera(
   const body = bodies.find((candidate) => candidate.key === key)
   if (!body) return null
   // The main view drew the body at its system radius; flight's is the same
-  // number unless ?truescale grows it (flight-scale.ts), so the ship keeps
+  // number only at ?truescale=0, else true scale grows it (flight-scale.ts), so the ship keeps
   // the view's framing of the body either way.
   const systemRadius = isMoonKey(key) ? moonRadius(key, 'system') : positionsFor('system').radius[key]
   const mappedDistance = cameraToShipDistance(pose, systemRadius, body.radius)

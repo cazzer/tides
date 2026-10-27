@@ -55,6 +55,32 @@ describe('?truescale=0.5', () => {
   })
 })
 
+describe('the default (tides-krh)', () => {
+  async function radiiAt(search: string) {
+    const { bodies } = await loadAt(search)
+    const ship = bodies.createShipBodies('high', false)
+    bodies.updateShipBodies(ship, T)
+    return Object.fromEntries(ship.map((b) => [b.key, b.radius]))
+  }
+
+  it('flies at MAX_TRUESCALE without a flag, and at the scene sizes under ?truescale=0', async () => {
+    const { scale, moons, truescale } = await loadAt('?ship=1')
+    expect(truescale.TRUESCALE).toBe(MAX_TRUESCALE)
+    const atDefault = await radiiAt('?ship=1')
+    const off = await radiiAt('?ship=1&truescale=0')
+    const system = scale.positionsFor('system').radius
+    for (const key of ['sun', 'moon', 'mercury', 'jupiter', 'saturn'] as const) {
+      expect(atDefault[key]).toBe(scale.flightRadii(MAX_TRUESCALE)[key])
+      expect(off[key]).toBe(scale.flightRadii(0)[key])
+    }
+    expect(atDefault.titan).toBe(moons.moonRadiiAt(MAX_TRUESCALE).titan)
+    expect(off.titan).toBe(moons.moonRadiiAt(0).titan)
+    // The system view keeps its sizes either way.
+    expect(system.sun).toBeCloseTo(10, 9)
+    expect(moons.moonRadius('titan', 'system')).not.toBe(atDefault.titan)
+  })
+})
+
 // At the cap. Past it the Sun's anchor reads on its pair scale with Mercury
 // all the way out (~4× the flight scale at 0.9), so a run in to Venus or
 // Mars that passes the Sun at a few hundred units read the range backwards,

@@ -140,7 +140,7 @@ const MIN_GAP = 1e-3
 // scale; between, a smooth blend. Earth's Moon orbits ~10 units out; the
 // spawn is ~12 out on a wide screen and ~28 on a portrait phone (Earth
 // framed across the short side), hence 30 to 60. The other systems can
-// reach further (moonSystemExtent: Saturn's ~31 without ?truescale), so
+// reach further (moonSystemExtent: Saturn's ~31 at ?truescale=0), so
 // theirs start at MOON_SYSTEM_EXTENT_FACTOR × that if it is more. The boost has to be large
 // because another body's guess is tens of millions of km off (its scale is
 // the planets'): 1e4 is a gap 10× smaller, so with a planet as near as Earth

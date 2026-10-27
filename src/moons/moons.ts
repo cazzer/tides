@@ -27,12 +27,12 @@
 // is relative to the parent, and at 1000 units/AU true scale would put
 // Triton inside Neptune and Oberon inside Uranus' rings anyway.
 //
-// Both distance scales share the map and the moons' sizes unless
-// ?truescale=<a> (../truescale.ts, tides-o39) slides flight's radii toward
-// true. Then, in flight only, each moon's radius slides the same way (true
-// radii, floored at MOON_RADIUS_FLOOR: the user's call), and each parent's
-// whole map is scaled by its planet's flight radius over its scene radius
-// (moonOrbitRadiiAt), so the moons keep their spacing in planet radii and
+// Both distance scales share the map and the moons' sizes only at
+// ?truescale=0; otherwise (../truescale.ts, tides-o39, on by default) flight's
+// radii slide toward true. Then, in flight only, each moon's radius slides
+// the same way (true radii, floored at MOON_RADIUS_FLOOR: the user's call),
+// and each parent's whole map is scaled by its planet's flight radius over
+// its scene radius (moonOrbitRadiiAt), so the moons keep their spacing in planet radii and
 // clear the grown rings as they did. So a size or an orbit radius is per
 // scale (moonRadius, moonOrbitRadius, moonSystemExtent, and the offsets and
 // orbit lines built from them), and the scale is a required argument, so

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { BARE_TRUESCALE, MAX_TRUESCALE, TRUESCALE, parseTrueScale, towardTrue } from './truescale'
+import { BARE_TRUESCALE, DEFAULT_TRUESCALE, MAX_TRUESCALE, TRUESCALE, parseTrueScale, towardTrue } from './truescale'
 
 describe('parseTrueScale', () => {
-  it('is 0 when absent, so the default is today', () => {
-    expect(parseTrueScale('')).toBe(0)
-    expect(parseTrueScale('?ship=1&relief=12')).toBe(0)
+  it('is the cap when absent, so true scale is on by default', () => {
+    expect(DEFAULT_TRUESCALE).toBe(MAX_TRUESCALE)
+    expect(parseTrueScale('')).toBe(MAX_TRUESCALE)
+    expect(parseTrueScale('?ship=1&relief=12')).toBe(MAX_TRUESCALE)
   })
 
   it('reads a bare or empty flag as halfway', () => {
@@ -23,9 +24,9 @@ describe('parseTrueScale', () => {
     expect(MAX_TRUESCALE).toBe(0.7)
   })
 
-  it('falls back to 0 when unreadable', () => {
+  it('falls back to the default when unreadable', () => {
     for (const search of ['?truescale=abc', '?truescale=NaN', '?truescale=Infinity', '?truescale=-Infinity']) {
-      expect(parseTrueScale(search), search).toBe(0)
+      expect(parseTrueScale(search), search).toBe(DEFAULT_TRUESCALE)
     }
   })
 
