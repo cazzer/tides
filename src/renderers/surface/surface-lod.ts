@@ -20,6 +20,12 @@
 // and around the eye never coarsen with it (surface-coverage.ts: the ship's
 // floor reads them), out to eyeMarginMetres.
 //
+// Under boost (tides-5lj) the sweep over terrain is no longer held to the
+// gap law's 2/s: the boosted guard reads the clearance over the held ground
+// at EARTH_BOOST_GUARD_RATE (ship-bodies.ts), so it can reach 5 x the
+// throttle, past RATE_HIGH, where the tiles sit at their coarsest. The
+// speed blur (ship/speed-blur.ts) follows this same sweep and covers that.
+//
 // tides-zmw.9.24 sized the tile cache to the view: the tiles a view needs
 // grow with the square root of its pixels (its height, at one aspect), so
 // the cache's marks scale with it, and past DETAIL_PIXELS_MAX the tiles pick

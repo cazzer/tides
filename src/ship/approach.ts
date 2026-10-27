@@ -248,7 +248,8 @@ const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0, base: 
  * to gap max / rate), then the gap e-folding every 1 / (rate · share), then
  * law.min, to the stop. A law with air (tides-zmw.9.29) is summed instead
  * (airEta), its altitude the gap over the ground's `base`, its air boosted
- * by the ground's `boost` spool (tides-zmw.25).
+ * by the ground's `boost` spool (tides-zmw.25) with the boosted guard on
+ * the held ground (tides-5lj) read over flat ground, as flight.ts flies it.
  */
 export function approachEta(
   gap: number,
@@ -294,9 +295,12 @@ const AIR_ETA_STEPS = 64
 // `gap` to `stop` at min(closing, share · cap), the cap as flight.ts
 // wellCap has it (the well's gap / wellTime under the law's ceiling, over
 // its floor), straight down onto ground `base` over the sea (altitude =
-// gap + base), not climbing. The air's leg has no closed form worth its
-// kinks against the gap law's, so this sums it in log gap, each step at the
-// cap at its geometric middle.
+// gap + base), not climbing. Boosted, flight.ts's guard reads the clearance
+// over the held ground (tides-5lj), which over flat ground straight down is
+// the gap, so the ETA reads its hold as the gap too and agrees with the
+// flight. The air's leg has no closed form worth its kinks against the gap
+// law's, so this sums it in log gap, each step at the cap at its geometric
+// middle.
 function airEta(
   gap: number,
   stop: number,
@@ -316,8 +320,8 @@ function airEta(
     const x1 = i === AIR_ETA_STEPS ? gap : lo * Math.exp(i * step)
     const x = Math.sqrt(x0 * x1)
     const cap = Math.max(
-      Math.min(x / wellTime, lawCeiling(law, x, x + base, 0, boost)),
-      lawFloor(law, x, x + base, 0, boost)
+      Math.min(x / wellTime, lawCeiling(law, x, x + base, 0, boost, x)),
+      lawFloor(law, x, x + base, 0, boost, x)
     )
     eta += (x1 - x0) / Math.min(closing, share * cap)
     x0 = x1

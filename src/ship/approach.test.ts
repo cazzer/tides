@@ -435,10 +435,13 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
     expect(approachEta(FINE_GROUND_CLEARANCE, 1e-4, wellTime, 1, EARTH_SLOWEST, ground)).toBe(0)
   })
 
-  test('boosted (tides-zmw.25): from 100 km at the cap in ~7 s, against ~85 s without', () => {
+  test('boosted (tides-zmw.25): from 100 km at the cap in ~6.4 s, against ~85 s without', () => {
     const eta = (boost?: number) =>
       approachEta(100000 * M, 1e9, wellTime, 1, EARTH_SLOWEST, { law, stop: FINE_GROUND_CLEARANCE, base: 0, boost })
-    expect(eta(1)).toBeCloseTo(6.9, 0)
+    // 6.9 s before the boosted guard read the held ground (tides-5lj): flat
+    // ground, so the hold is the gap, and the guard's 5 · (gap − 120 m) lifts
+    // the cap over 2 · gap from 200 m to where the boosted air meets it (~1 km).
+    expect(eta(1)).toBeCloseTo(6.4, 1)
     expect(eta(0)).toBeGreaterThan(80)
     expect(eta()).toBe(eta(0))
     expect(eta(0.5)).toBeLessThan(eta(0))

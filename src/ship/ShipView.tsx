@@ -9,6 +9,7 @@ import { DesktopShipControls } from './DesktopShipControls'
 import { SpaceDust } from './SpaceDust'
 import { SpeedFov } from './useSpeedFov'
 import { ShipShake } from './useShipShake'
+import { SpeedBlur } from './SpeedBlur'
 import { ShipHud } from './ShipHud'
 import { ShipTargeting } from './ShipTargeting'
 import { ShipWarmup } from './ShipWarmup'
@@ -112,6 +113,10 @@ export function ShipView({ children }: { children: ReactNode }) {
         <ShipSound />
         <ShipCues />
       </View>
+      {/* The speed blur (tides-5lj) right over the View, before every other
+          overlay: no z-index, so the controls, HUD, exit button, credit,
+          markers and impact flash stack above it and keep the pointer. */}
+      <SpeedBlur />
       <ExitButton
         ref={exitButton}
         type="button"
@@ -127,6 +132,7 @@ export function ShipView({ children }: { children: ReactNode }) {
       <VisuallyHidden role="status">{announcement}</VisuallyHidden>
       {/* SHIP OVERLAY MOUNT POINT: DOM overlays over the view go here, after
           the View so they stack above it:
+          - the speed blur under boost, first, just after the View (tides-5lj)
           - desktop keyboard + virtual-joystick mouse input (tides-3bl.3)
           - touch steer stick and throttle/roll stick (tides-3bl.4, tides-2hv.3)
           - HUD, target lock and controls modal (tides-3bl.5) */}

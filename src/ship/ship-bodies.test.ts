@@ -13,6 +13,7 @@ import {
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
   OVERSPEED_MAX,
+  RIDE_DOWN_RATE,
   RIDE_UP_RATE,
   V_NORMAL,
   collisionRadius,
@@ -28,7 +29,11 @@ import { MOONS, MOON_KEYS, isMoonKey, moonPosition, moonRadius } from '../moons/
 import {
   BODY_MASS_KG,
   EARTH_AIR_BOOST,
+  EARTH_BOOST_GUARD_FROM,
+  EARTH_BOOST_GUARD_OFFSET,
+  EARTH_BOOST_GUARD_RATE,
   EARTH_COLLISION_RADIUS,
+  EARTH_GAP_RATE,
   EARTH_GROUND_CLEARANCE,
   EARTH_GROUND_SPEED,
   EARTH_HARD_CLEARANCE,
@@ -37,6 +42,7 @@ import {
   MOON_COLLISION_CLEARANCE,
   EARTH_GROUND_SPEED_LAW,
   EARTH_SLOWEST,
+  EARTH_UNITS_PER_METRE,
   createShipBodies,
   updateShipBodies,
 } from './ship-bodies'
@@ -474,5 +480,19 @@ describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
     // the air's rise stacks on the spool's (headroom ln 20 = 2.996 against
     // 3), the ride clamps at RIDE_UP_RATE and FA's share briefly lags.
     expect(Math.log(EARTH_AIR_BOOST) / BOOST_SPOOL_SECONDS).toBeLessThanOrEqual(RIDE_UP_RATE)
+  })
+
+  it('guards the boosted cap on the held ground at a rate Flight Assist rides down, meeting the gap law at 200 m (tides-5lj)', () => {
+    const air = EARTH_GROUND_SPEED_LAW.air!
+    expect(air.guardRate).toBe(EARTH_BOOST_GUARD_RATE)
+    expect(air.guardOffset).toBe(EARTH_BOOST_GUARD_OFFSET)
+    // A boosted dive at the cap sheds it at the guard's rate: under the ride's.
+    expect(EARTH_BOOST_GUARD_RATE).toBeLessThan(RIDE_DOWN_RATE)
+    // The full boosted floor is never more than EARTH_AIR_BOOST × the
+    // unboosted one, so the spool stays within RIDE_UP_RATE (above).
+    expect(EARTH_BOOST_GUARD_RATE / EARTH_GAP_RATE).toBeLessThanOrEqual(EARTH_AIR_BOOST)
+    // The two terms meet at EARTH_BOOST_GUARD_FROM: under it the gap law's own.
+    expect(EARTH_BOOST_GUARD_RATE * (EARTH_BOOST_GUARD_FROM - EARTH_BOOST_GUARD_OFFSET)).toBeCloseTo(EARTH_GAP_RATE * EARTH_BOOST_GUARD_FROM, 15)
+    expect(EARTH_BOOST_GUARD_OFFSET / EARTH_UNITS_PER_METRE).toBeCloseTo(120, 9)
   })
 })
