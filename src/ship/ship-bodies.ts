@@ -171,7 +171,9 @@ export const EARTH_GROUND_SPEED = 0.02
  * EARTH_BOOST_GUARD_RATE instead, meeting this rate's over the last 200 m
  * (EARTH_BOOST_GUARD_FROM, tides-5lj). Climbing past 30° hands the floor
  * back to the gap law by 60°, Elite's escape vector: a climb from the sea
- * to space takes seconds, not the minute and a half the air alone would.
+ * to space takes seconds, not the minute and a half the air alone would
+ * (boosted over a held ground, back to the boosted guard, 5 · (c − 120 m),
+ * rather than 2 · gap).
  */
 export const EARTH_GAP_RATE = 2
 /** 50 m/s: the least Earth's floor falls to near the ground. [TUNE] */

@@ -4,6 +4,7 @@ import {
   BLUR_EPSILON,
   BLUR_FALL_TAU,
   BLUR_MAX_PX,
+  BLUR_RELEASE_TAU,
   BLUR_RISE_TAU,
   BLUR_SWEEP_HIGH,
   BLUR_SWEEP_LOW,
@@ -56,36 +57,46 @@ describe('speed blur target', () => {
     expect(blurSweepShare(NaN)).toBe(0)
     expect(blurTarget(NaN, 1, true)).toBe(0)
     expect(blurTarget(RATE_HIGH, NaN, true)).toBe(0)
-    expect(easeBlur(NaN, 3, FRAME)).toBe(3)
-    expect(easeBlur(Infinity, 0, FRAME)).toBe(0)
-    expect(easeBlur(2, 4, NaN)).toBe(2)
+    expect(easeBlur(NaN, 3, FRAME, true)).toBe(3)
+    expect(easeBlur(Infinity, 0, FRAME, false)).toBe(0)
+    expect(easeBlur(2, 4, NaN, true)).toBe(2)
     expect(blurFilter(NaN)).toBe('none')
     expect(blurFilter(Infinity)).toBe('none')
   })
 })
 
 describe('speed blur easing', () => {
-  test("follows the tiles' own coarsening: their rise and fall time constants", () => {
+  test("follows the tiles' own coarsening while boosted: their rise and fall time constants", () => {
     expect(BLUR_RISE_TAU).toBe(RISE_SECONDS)
     expect(BLUR_FALL_TAU).toBe(FALL_SECONDS)
-    expect(easeBlur(0, BLUR_MAX_PX, BLUR_RISE_TAU)).toBeCloseTo(BLUR_MAX_PX * (1 - Math.exp(-1)), 12)
-    expect(easeBlur(BLUR_MAX_PX, 1, BLUR_FALL_TAU)).toBeCloseTo(1 + (BLUR_MAX_PX - 1) * Math.exp(-1), 12)
+    expect(easeBlur(0, BLUR_MAX_PX, BLUR_RISE_TAU, true)).toBeCloseTo(BLUR_MAX_PX * (1 - Math.exp(-1)), 12)
+    expect(easeBlur(BLUR_MAX_PX, 1, BLUR_FALL_TAU, true)).toBeCloseTo(1 + (BLUR_MAX_PX - 1) * Math.exp(-1), 12)
     // A zero or negative step holds it.
-    expect(easeBlur(2, 4, 0)).toBe(2)
-    expect(easeBlur(2, 4, -1)).toBe(2)
+    expect(easeBlur(2, 4, 0, true)).toBe(2)
+    expect(easeBlur(2, 4, -1, true)).toBe(2)
   })
 
-  test('snaps to 0 under BLUR_EPSILON easing out, and only toward 0', () => {
+  test('falls over BLUR_RELEASE_TAU once the boost no longer raises the cap', () => {
+    expect(BLUR_RELEASE_TAU).toBeLessThan(BLUR_FALL_TAU)
+    expect(easeBlur(BLUR_MAX_PX, 0, BLUR_RELEASE_TAU, false)).toBeCloseTo(BLUR_MAX_PX * Math.exp(-1), 12)
+    // Rising is the same either way.
+    expect(easeBlur(0, BLUR_MAX_PX, FRAME, false)).toBe(easeBlur(0, BLUR_MAX_PX, FRAME, true))
+  })
+
+  test.each([
+    [true, BLUR_FALL_TAU],
+    [false, BLUR_RELEASE_TAU],
+  ])('snaps to 0 under BLUR_EPSILON easing out (boosted %s), and only toward 0', (boosted, tau) => {
     let px = BLUR_MAX_PX
     let steps = 0
     while (px > 0 && steps < 60 * 60) {
-      px = easeBlur(px, 0, FRAME)
+      px = easeBlur(px, 0, FRAME, boosted)
       steps++
     }
     expect(px).toBe(0)
-    // ~ln(6 / 0.05) fall time constants.
-    expect(steps * FRAME).toBeCloseTo(BLUR_FALL_TAU * Math.log(BLUR_MAX_PX / BLUR_EPSILON), 0)
-    expect(easeBlur(0.5 * BLUR_EPSILON, 0.01, FRAME)).toBeGreaterThan(0)
+    // ~ln(6 / 0.05) falling time constants: ~10 s boosted, ~2.4 s released.
+    expect(steps * FRAME).toBeCloseTo(tau * Math.log(BLUR_MAX_PX / BLUR_EPSILON), 0)
+    expect(easeBlur(0.5 * BLUR_EPSILON, 0.01, FRAME, boosted)).toBeGreaterThan(0)
   })
 })
 

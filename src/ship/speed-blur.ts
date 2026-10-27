@@ -11,8 +11,9 @@
 // sweepRate: speed over height, 1/s) and its easing, so it comes in as the
 // tiles coarsen and goes as they refine; scaled by the boost's spool, and
 // only while the boost raises the cap (telemetry.boosted, as the shake:
-// shake.ts), so never unboosted, nor in space or on the Moon. Off under
-// reduced motion.
+// shake.ts), so never unboosted, nor in space or on the Moon. Once the
+// boost stops raising the cap it clears quickly (BLUR_RELEASE_TAU) rather
+// than over the tiles' slow fall. Off under reduced motion.
 
 import { clamp01, easeToward } from './dust'
 import { FALL_SECONDS, RATE_HIGH, RISE_SECONDS } from '../renderers/surface/surface-lod'
@@ -28,6 +29,12 @@ export const BLUR_SWEEP_HIGH = RATE_HIGH
 /** Time constants of the ease toward the target, seconds: the tiles' own (surface-lod.ts), rising, falling. */
 export const BLUR_RISE_TAU = RISE_SECONDS
 export const BLUR_FALL_TAU = FALL_SECONDS
+/**
+ * [TUNE] The falling time constant, seconds, once the boost no longer
+ * raises the cap (released, or out of the air): the tiles' 2 s left the
+ * blur up for ~10 s after letting go.
+ */
+export const BLUR_RELEASE_TAU = 0.5
 /** Easing toward 0, under this many px the blur is 0. */
 export const BLUR_EPSILON = 0.05
 
@@ -51,14 +58,16 @@ export function blurTarget(sweep: number, boost: number, boosted: boolean, reduc
 
 /**
  * `current` eased `dt` seconds toward `target`: over BLUR_RISE_TAU rising,
- * BLUR_FALL_TAU falling, and exactly 0 once it is within BLUR_EPSILON of a
- * 0 target. A non-finite `current` starts over at `target`; a non-finite
- * `dt` is no time.
+ * falling over BLUR_FALL_TAU while `boosted` (the boost raises the cap;
+ * telemetry.boosted) and BLUR_RELEASE_TAU once not, and exactly 0 once it
+ * is within BLUR_EPSILON of a 0 target. A non-finite `current` starts over
+ * at `target`; a non-finite `dt` is no time.
  */
-export function easeBlur(current: number, target: number, dt: number): number {
+export function easeBlur(current: number, target: number, dt: number, boosted: boolean): number {
   if (!Number.isFinite(current)) return target
   const step = Number.isFinite(dt) ? dt : 0
-  const next = easeToward(current, target, step, target > current ? BLUR_RISE_TAU : BLUR_FALL_TAU)
+  const tau = target > current ? BLUR_RISE_TAU : boosted ? BLUR_FALL_TAU : BLUR_RELEASE_TAU
+  const next = easeToward(current, target, step, tau)
   return target === 0 && Math.abs(next) < BLUR_EPSILON ? 0 : next
 }
 

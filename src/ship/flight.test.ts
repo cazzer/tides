@@ -36,6 +36,7 @@ import {
   speedFraction,
   stepShip,
   turnRateMultiplier,
+  holdSpeed,
   updateGroundHold,
   velocityTau,
   wellFactor,
@@ -2071,34 +2072,83 @@ describe('boosted guard on the held ground (tides-5lj)', () => {
     expect(checked).toBeGreaterThan(10)
   })
 
+  test('flying level beside a ridge parallel to the track, boosted, the cap holds steady and the speed rides under it (review 1: no sawtooth)', () => {
+    // 3 km up over the sea, a 2.5 km ridge 5 km to the side along the whole track.
+    const D = 5 * KM
+    const H = 2.5 * KM
+    const ALT = 3 * KM
+    const beside: Body = {
+      ...flat,
+      ground: (direction, reach = 0) => RF + (Math.abs(RF * Math.atan2(direction.z, direction.y) - D) <= reach ? H : 0),
+    }
+    const { state, keep } = level(3, speedCap(new THREE.Vector3(0, RF + ALT, 0), [beside]))
+    const telemetry = createShipTelemetry()
+    let lo = Infinity
+    let hi = 0
+    for (let i = 0; i < 18 * 60; i++) {
+      stepShip(state, input({ throttle: 1, boost: true }), FRAME, env([beside]), telemetry)
+      keep()
+      if (i < 8 * 60) continue
+      lo = Math.min(lo, telemetry.speedCap)
+      hi = Math.max(hi, telemetry.speedCap)
+      expect(telemetry.speed / telemetry.speedCap).toBeLessThanOrEqual(1 + 1e-6)
+    }
+    expect(hi / lo).toBeLessThan(1.03)
+    // The ridge held: 5 · (500 m − 120 m).
+    expect(lo / (EARTH_BOOST_GUARD_RATE * (ALT - H - EARTH_BOOST_GUARD_OFFSET))).toBeCloseTo(1, 6)
+    expect(telemetry.speed / telemetry.speedCap).toBeGreaterThan(0.99)
+  })
+
   describe('updateGroundHold', () => {
     const V = 4 * KM
     const ALT = 5 * KM
     const P = 3 * KM
+    // The windows' speed there: the full boost's air floor, 5 km up ~5.4 km/s.
+    const W = holdSpeed(law, ALT)
     // A narrow bump P over the sea centred on arc `at`.
     const bumpAt = (at: number) => earthOver((lo, hi) => (hi >= at - 10 * M && lo <= at + 10 * M ? P : 0))
     const position = new THREE.Vector3(0, RF + ALT, 0)
     const velocity = new THREE.Vector3(V, 0, 0)
 
-    test('takes a peak in the corridor at once, from 1.5 s behind to 3.5 s ahead, and none outside it', () => {
+    test('holdSpeed is the full boost air floor flying level, never over the plateau, whatever the ship does', () => {
+      expect(W / M).toBeCloseTo(5368, -1)
+      expect(W).toBeCloseTo(EARTH_AIR_BOOST * law.air!.sea * Math.exp(ALT / law.air!.scale), 15)
+      expect(holdSpeed(law, 80 * KM)).toBe(law.max)
+      expect(holdSpeed({ ...law, air: undefined }, ALT)).toBeNaN()
+    })
+
+    test('takes a peak in the corridor at once, from 1.5 s behind to 3.5 s ahead at holdSpeed, and none outside it, at any speed of its own', () => {
+      for (const speed of [V, 0.1 * V, 10 * V]) {
+        for (const [seconds, seen] of [
+          [0, true],
+          [1.5, true],
+          [3.4, true],
+          [-1.4, true],
+          [3.7, false],
+          [4, false],
+          [-1.7, false],
+          [-2, false],
+        ] as const) {
+          const h = hold(NaN, null)
+          updateGroundHold(h, bumpAt(seconds * W), position, new THREE.Vector3(speed, 0, 0), 1, FRAME)
+          expect(h.key).toBe('earth')
+          expect(h.radius).toBe(RF + (seen ? P : 0))
+        }
+      }
+      // Still, the windows all sit on the ship.
       for (const [seconds, seen] of [
-        [0, true],
-        [1.5, true],
-        [3.4, true],
+        [1.4, true],
         [-1.4, true],
-        [3.7, false],
-        [4, false],
-        [-1.7, false],
-        [-2, false],
+        [1.6, false],
+        [2, false],
       ] as const) {
         const h = hold(NaN, null)
-        updateGroundHold(h, bumpAt(seconds * V), position, velocity, 1, FRAME)
-        expect(h.key).toBe('earth')
+        updateGroundHold(h, bumpAt(seconds * W), position, new THREE.Vector3(), 1, FRAME)
         expect(h.radius).toBe(RF + (seen ? P : 0))
       }
       // Rising is instant from a lower hold too.
       const h = hold(RF)
-      updateGroundHold(h, bumpAt(1.5 * V), position, velocity, 1, FRAME)
+      updateGroundHold(h, bumpAt(1.5 * W), position, velocity, 1, FRAME)
       expect(h.radius).toBe(RF + P)
     })
 
@@ -2133,15 +2183,38 @@ describe('boosted guard on the held ground (tides-5lj)', () => {
       expect(h).toEqual({ key: 'earth', radius: RF })
     })
 
-    test('reads windows of HOLD_REACH_SECONDS of travel, never over HOLD_REACH_ALTITUDES × the altitude', () => {
+    test('reads windows of HOLD_REACH_SECONDS at holdSpeed, never over HOLD_REACH_ALTITUDES × the altitude, and nothing where the boost changes nothing', () => {
       const reaches: number[] = []
       const spy: Body = { ...flat, ground: (direction, reach = 0) => (reaches.push(reach), flat.ground!(direction, reach)) }
-      updateGroundHold(hold(NaN, null), spy, position, new THREE.Vector3(1 * KM, 0, 0), 1, FRAME)
-      expect(reaches.length).toBe(3)
-      for (const reach of reaches) expect(reach / KM).toBeCloseTo(HOLD_REACH_SECONDS, 9)
-      reaches.length = 0
-      updateGroundHold(hold(NaN, null), spy, new THREE.Vector3(0, RF + 1 * KM, 0), velocity, 1, FRAME)
+      const at = (km: number) => new THREE.Vector3(0, RF + km * KM, 0)
+      const reads = (km: number, speed = V) => {
+        reaches.length = 0
+        const h = hold(NaN, null)
+        updateGroundHold(h, spy, at(km), new THREE.Vector3(speed, 0, 0), 1, FRAME)
+        return h
+      }
+      for (const speed of [1 * KM, V, 50 * KM]) {
+        reads(5, speed)
+        expect(reaches.length).toBe(3)
+        for (const reach of reaches) expect(reach / (HOLD_REACH_SECONDS * W)).toBeCloseTo(1, 9)
+      }
+      reads(1)
       for (const reach of reaches) expect(reach / KM).toBeCloseTo(HOLD_REACH_ALTITUDES, 9)
+      // High in the air, at most 1.5 s of the plateau speed (~64 km).
+      reads(80)
+      for (const reach of reaches) expect(reach / (HOLD_REACH_SECONDS * law.max)).toBeCloseTo(1, 9)
+      // From where the unboosted air meets the plateau (~91 km) the boost
+      // changes nothing: no scan, no hold. Nor without an air law.
+      for (const km of [92, 150, 400000]) {
+        const h = reads(km)
+        expect(reaches.length).toBe(0)
+        expect(h.radius).toBeNaN()
+      }
+      reaches.length = 0
+      const h = hold(RF)
+      updateGroundHold(h, { ...spy, groundSpeed: { ...law, air: undefined } }, position, velocity, 1, FRAME)
+      expect(reaches.length).toBe(0)
+      expect(h).toEqual({ key: null, radius: NaN })
     })
 
     test('a NaN window never wins, and with no ground read at all it holds none', () => {

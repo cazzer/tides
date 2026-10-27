@@ -373,9 +373,11 @@ export interface FlightEnv {
 // most guardRate · gap (5 · gap over Earth): 0.5 of the gap a step at the
 // cap with Flight Assist, up to OVERSPEED_MAX · 5 · MAX_DT = 1.5 of it at
 // 3× overspeed on a 10 fps frame. Still no step ends under the ground: it
-// is a radial heightfield and collide pushes radially, and the hold's
-// window (at least HOLD_REACH_SECONDS of travel) covers the whole step, so
-// the ground it crosses already slowed the cap. What remains is a 10 fps
+// is a radial heightfield and collide pushes radially. The hold's windows
+// (up to HOLD_REACH_SECONDS of travel at the boosted air's speed, never
+// over HOLD_REACH_ALTITUDES × the altitude) mostly cover the step, so the
+// ground it crosses has usually slowed the cap already; where they fall
+// short low down, the guard reads the gap anyway. What remains is a 10 fps
 // dive with Flight Assist off at 3× overspeed cutting a ridge's flank for
 // one frame, visually, never ending inside it.
 export const MAX_DT = 0.1
@@ -520,23 +522,33 @@ export const TURN_RATE_MIN_FACTOR = 0.4
 // the same bound holds. Climbing, the air's rise stacks on the spool's and
 // the ride clamps at RIDE_UP_RATE (the headroom is ln 20 = 2.996 against
 // 3), so FA's share lags the throttle briefly until the spool is full. A
-// boolean boost would drop the cap 20× in a frame.
+// boolean boost would drop the cap 20× in a frame on every release; the
+// held ground can still do that, but only as terrain comes into its window
+// (HOLD_AHEAD_SECONDS).
 export const BOOST_SPOOL_SECONDS = 1
 
 // The boosted guard's ground hold (ShipState.groundHold, updateGroundHold;
 // tides-5lj). [TUNE] While the boost spools it reads the highest ground in
 // windows of radius HOLD_REACH_SECONDS of travel centred on where the ship
-// is and will be HOLD_AHEAD_SECONDS on: a corridor from 1.5 s behind to
-// 3.5 s ahead, ~22 km at 4.4 km/s, so ridges every 16 km always have a peak
-// in it and the held clearance holds steady over peak and valley. Ahead so
-// the cap is down before a peak arrives (rising at once, the ride down at
-// RIDE_DOWN_RATE has seconds to follow); behind so a ridge just passed
-// keeps it down while the next comes into the window.
+// is and will be HOLD_AHEAD_SECONDS on along its velocity: a corridor from
+// 1.5 s behind to 3.5 s ahead, ~27 km 5 km up, so ridges every 16 km always
+// have a peak in it and the held clearance holds steady over peak and
+// valley. Ahead so the cap is down before a peak arrives; behind so a ridge
+// just passed keeps it down while the next comes into the window. Seconds
+// of travel at holdSpeed, the full boost's air floor where the ship is, not
+// at its own speed: a window that grew with the speed fed back on it (a
+// ridge beside the track came into the window, the cap fell, the speed
+// with it, the window shrank, the ridge dropped out, the cap rose: a
+// sawtooth at ~13 Hz; review 1). A peak coming into the window at once can
+// cut the cap many times over in a frame (up to the boost's 20×), and
+// rideWell's OVERSPEED_MAX clamp then brakes the speed to 3× the new cap at
+// once: a hard brake, accepted, which now comes seconds before the peak
+// rather than over it.
 export const HOLD_AHEAD_SECONDS: readonly number[] = [0, 1, 2]
 export const HOLD_REACH_SECONDS = 1.5
 // The windows' radius never exceeds this many times the altitude over the
-// sea, which bounds the ground's scan (tiles, the globe's floor) climbing
-// fast high up, where peaks that far off can't come near the ship anyway.
+// sea, which bounds the ground's scan (tiles, the globe's floor), with
+// holdSpeed's own bound at the law's max (1.5 · 43 km/s ≈ 64 km over Earth).
 export const HOLD_REACH_ALTITUDES = 2
 // Seconds per e-fold the held ground falls toward lower ground in the
 // windows, once the peak has passed out of them: past the last ridge of a
@@ -1123,18 +1135,35 @@ function headingOf(state: ShipState): THREE.Vector3 | null {
 }
 
 const holdAt = new THREE.Vector3()
+const holdAlong = new THREE.Vector3()
+
+/**
+ * The speed the ground hold sizes its windows by `altitude` over the sea
+ * under `law` (HOLD_AHEAD_SECONDS): the full boost's air floor flying
+ * level, with no guard under it, never over law.max. It depends on neither
+ * the hold nor the ship's speed, so the window can't feed back on the cap
+ * it sets. NaN without air.
+ */
+export function holdSpeed(law: Readonly<GroundSpeedLaw>, altitude: number): number {
+  const air = law.air
+  if (!air) return NaN
+  return Math.min(airFloor(air, Infinity, altitude, 0, 1), law.max)
+}
 
 /**
  * Updates `hold` (ShipState.groundHold) over `body` for a step of `dt` s
  * ending at `position` with `velocity` and boost `spool` (tides-5lj): the
- * highest of body.ground in windows of radius HOLD_REACH_SECONDS · speed
- * (never over HOLD_REACH_ALTITUDES × the altitude over the body's sphere)
- * centred on the points the ship reaches HOLD_AHEAD_SECONDS on, as a
- * distance from the body's centre. Higher ground than held is taken at
- * once; lower, the hold falls toward it over HOLD_FALL_TAU. A new body, or
- * no hold yet, starts at the peak. None (key null, radius NaN) without a
- * body or ground, with the spool at 0, or where no window reads a ground (a
- * NaN window never wins). Allocates nothing.
+ * highest of body.ground in windows of radius HOLD_REACH_SECONDS ·
+ * holdSpeed (never over HOLD_REACH_ALTITUDES × the altitude over the
+ * body's sphere) centred on the points HOLD_AHEAD_SECONDS of holdSpeed on
+ * along the velocity (all on the ship when still), as a distance from the
+ * body's centre. Higher ground than held is taken at once; lower, the hold
+ * falls toward it over HOLD_FALL_TAU. A new body, or no hold yet, starts at
+ * the peak. None (key null, radius NaN) with the spool at 0, without a body,
+ * ground or air law, where the boost changes nothing (the unboosted air
+ * already at law.max, ~91 km up over Earth: no scan all the way to the
+ * Moon), or where no window reads a ground (a NaN window never wins).
+ * Allocates nothing.
  */
 export function updateGroundHold(
   hold: GroundHold,
@@ -1145,16 +1174,21 @@ export function updateGroundHold(
   dt: number
 ): void {
   const ground = body?.ground
-  if (!body || !ground || !(spool > 0)) {
+  const law = body?.groundSpeed
+  const altitude = body ? position.distanceTo(body.position) - body.radius : NaN
+  if (!body || !ground || !law?.air || !(spool > 0) || !(airFloor(law.air, Infinity, altitude, 0) < law.max)) {
     hold.key = null
     hold.radius = NaN
     return
   }
-  const altitude = position.distanceTo(body.position) - body.radius
-  const reach = Math.min(velocity.length() * HOLD_REACH_SECONDS, HOLD_REACH_ALTITUDES * Math.max(0, altitude))
+  const speed = holdSpeed(law, altitude)
+  const reach = Math.min(speed * HOLD_REACH_SECONDS, HOLD_REACH_ALTITUDES * Math.max(0, altitude))
+  const moving = velocity.length()
+  if (moving > 1e-12) holdAlong.copy(velocity).multiplyScalar(speed / moving)
+  else holdAlong.set(0, 0, 0)
   let peak = -Infinity
   for (let i = 0; i < HOLD_AHEAD_SECONDS.length; i++) {
-    holdAt.copy(position).addScaledVector(velocity, HOLD_AHEAD_SECONDS[i]).sub(body.position)
+    holdAt.copy(position).addScaledVector(holdAlong, HOLD_AHEAD_SECONDS[i]).sub(body.position)
     const d = holdAt.length()
     if (!(d > 0)) continue
     const top = ground(holdAt.divideScalar(d), reach)

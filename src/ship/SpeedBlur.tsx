@@ -31,8 +31,11 @@ export function SpeedBlur() {
       last = now
       // The sweep the tiles coarsen with (SurfaceTiles), through the air.
       const sweep = sweepRate(shipTelemetry.air.speed, shipTelemetry.nearest)
-      // Reduced motion cuts it at once rather than easing it out.
-      px = prefersReducedMotion() ? 0 : easeBlur(px, blurTarget(sweep, shipTelemetry.boost, shipTelemetry.boosted), dt)
+      const { boost, boosted } = shipTelemetry
+      const reduced = prefersReducedMotion()
+      const target = blurTarget(sweep, boost, boosted, reduced)
+      // Reduced motion cuts it at once (its target is 0) rather than easing it out.
+      px = reduced ? target : easeBlur(px, target, dt, boosted)
       const filter = blurFilter(px)
       if (filter === shown) return
       shown = filter
