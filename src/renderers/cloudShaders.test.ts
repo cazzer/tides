@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
+import { TYPED_CODE_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
+  CLOUD_GROUND_GLSL,
   createCloudLayer,
   DETAIL_EDGE_FAR,
   DETAIL_EDGE_NEAR,
@@ -60,6 +63,7 @@ import {
   NEUTRAL_LOOK,
   STRETCH_EDGES,
   TYPE_LOOKS,
+  TYPED_ZERO_CODE,
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
@@ -1510,4 +1514,154 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       clouds.dispose()
     }
   })
+})
+
+describe('typed tops in the march (tides-tvr.4.3)', () => {
+  // SHA-256 of each untyped program as three builds it (vertex, a newline,
+  // fragment, after the shader's own conditionals), and of the ground's and
+  // the tiles' cloud shadow as injected, at tides-tvr.4.2 (404f3eb), and
+  // unchanged by tides-zmw.21, which took the live-relief programs away: the
+  // typed tops are the typed program's alone.
+  const UNTYPED_SHELL_SHA256: Record<string, string> = {
+    'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
+    'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
+    'relief-full-back-noease': '33a8fa08be9db6e184b0d604dc66e92130fa519318a7568233256e48b3cb204f',
+    'relief-full-back-ease': '284fd6ba44b57ec22265dd5034a540954fb94bff5cacbbb13050f35ecdb0a11a',
+    'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
+    'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
+    'flat-full-back-noease': '134fda5cafc9c83446987adc34e10e8493f91addf4a4916e7e7da2afe6959285',
+    'flat-full-back-ease': '0a83b945871ad6257844a8c833a762b33a353bed9cf618debfa7ea31a97db503',
+  }
+  const GROUND_SHADOW_SHA256: Record<string, string> = {
+    'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
+    'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
+  }
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+  const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED/
+
+  for (const flat of [false, true]) {
+    const name = `${flat ? 'flat' : 'relief'}-full`
+    it(`leaves the untyped programs exactly as tides-tvr.4.2 left them (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      const { vertexShader, fragmentShader } = clouds.material
+      for (const side of ['front', 'back']) {
+        for (const ease of ['noease', 'ease']) {
+          const defines = new Set([
+            ...(flat ? ['CLOUD_FLAT'] : []),
+            ...(side === 'back' ? ['FLIP_SIDED'] : []),
+            ...(ease === 'ease' ? ['FOG_EASE'] : []),
+          ])
+          const vertex = preprocess(vertexShader, defines)
+          const fragment = preprocess(fragmentShader, defines)
+          expect(vertex + fragment).not.toMatch(TYPED_WORDS)
+          expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
+            UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]
+          )
+        }
+      }
+      // The ground's shadow, the globe's and the tiles', is untyped
+      // whatever the map, and its text is as it was.
+      const head = CLOUD_GROUND_GLSL.head(flat)
+      expect(head).not.toMatch(TYPED_WORDS)
+      expect(sha256(head + '\n' + CLOUD_GROUND_GLSL.light)).toBe(GROUND_SHADOW_SHA256[name])
+      clouds.dispose()
+    })
+  }
+
+  const variants = [
+    [],
+    ['CLOUD_FLAT'],
+    ['FLIP_SIDED'],
+    ['CLOUD_FLAT', 'FLIP_SIDED'],
+    ['FLIP_SIDED', 'FOG_EASE'],
+  ]
+  const columnOf = (src: string) => src.slice(src.indexOf('vec4 cloudColumn('), src.indexOf('float cloudShade('))
+  for (const variant of variants) {
+    const name = variant.join('+') || 'relief'
+    it(`reads the typed top from the column's own read (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const untyped = new Set(variant)
+      const typed = new Set([...variant, 'CLOUD_TYPED'])
+      for (const stage of ['vertexShader', 'fragmentShader'] as const) {
+        const src = preprocess(clouds.material[stage], typed)
+        if (!src.includes('vec4 cloudColumn(')) continue
+        const column = columnOf(src)
+        const before = columnOf(preprocess(clouds.material[stage], untyped))
+        // No more reads than untyped: the alpha comes with the rgb.
+        const reads = (text: string) => text.match(/\btexture(Lod)?\(|cloudPoleSmoothed\(/g)?.length
+        expect(reads(column)).toBe(reads(before))
+        expect(column).toMatch(/vec4 c = cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\);/)
+        // Lowered by a share on the ground, or lifted as a layer under the
+        // map's tallest; within the slack, the untyped column exactly.
+        for (const line of [
+          'float code = c.a * 255.0 - TYPED_ZERO_CODE;',
+          'if (code < TYPED_ZERO_SLACK) {',
+          'float keep = code > -TYPED_ZERO_SLACK ? 1.0\n      : max((code + TYPED_ZERO_CODE) / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE);',
+          'return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape * keep, base);',
+          'float lift = code * TYPED_LIFT_KM_PER_CODE;',
+          'float layer = mix(km * shape, min(km * shape, LIFTED_THICKNESS(c.g)),\n    smoothstep(0.0, TYPED_LIFT_EASE_KM, lift));',
+          'float lifted = base + CLOUD_UNITS_PER_KM * min(lift, uCloudMaxKm - layer);',
+          'return vec4(c.g, lifted, lifted + CLOUD_UNITS_PER_KM * layer, base);',
+        ]) {
+          expect(column).toContain(line)
+        }
+        expect(src).toContain(TYPED_CODE_GLSL)
+        expect(src).toContain(`#define TYPED_ZERO_CODE ${TYPED_ZERO_CODE.toFixed(6)}`)
+      }
+      // The vertex stage reads the tops, never the grid.
+      expect(preprocess(clouds.material.vertexShader, typed)).not.toMatch(/uCloudType\b|cloudLook/)
+      clouds.dispose()
+    })
+
+    it(`meets a lifted layer from outside only between its base and its top (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const outside = !variant.includes('FLIP_SIDED') && !variant.includes('CLOUD_FLAT')
+      const src = preprocess(clouds.material.fragmentShader, new Set([...variant, 'CLOUD_TYPED']))
+      const main = src.replace(/\/\/.*$/gm, '').slice(src.replace(/\/\/.*$/gm, '').indexOf('void main()'))
+      if (outside) {
+        // From the column it already reads, its height over the top and
+        // under the base, each taken linear over the step; at the first
+        // step, whether it is in between.
+        for (const line of [
+          'vec4 colq = cloudColumn(cloudUv(q / r), lodq, terrain);',
+          'float gap = r - uSeaLevel - colq.z;',
+          'float under = colq.y - (r - uSeaLevel);',
+          'vec2 underTop = i > 0 ? cloudSpan(gapPrev, gap) : gap <= 0.0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);',
+          'vec2 overBase = i > 0 ? cloudSpan(underPrev, under) : under <= 0.0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);',
+          'if (from <= min(underTop.y, overBase.y)) {',
+          'tHit = i == 0 ? t : mix(tPrev, t, from);',
+          'underPrev = under;',
+        ]) {
+          expect(main).toContain(line)
+        }
+        expect(main).not.toContain('if (gap <= 0.0) {')
+        // Untyped, the tops alone, as ever.
+        expect(preprocess(clouds.material.fragmentShader, new Set(variant))).toContain(
+          'float gap = r - uSeaLevel - cloudColumn(cloudUv(q / r), lodq, terrain).z;\n    if (gap <= 0.0) {'
+        )
+      }
+      clouds.dispose()
+    })
+
+    it(`reckons from the ground under a lifted base where the untyped program took the base for it (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const src = preprocess(clouds.material.fragmentShader, new Set([...variant, 'CLOUD_TYPED']))
+      const code = src.replace(/\/\/.*$/gm, '')
+      const main = code.slice(code.indexOf('void main()'))
+      expect(main).toContain('cloudKm(colShade.z, colShade.w)')
+      expect(main).not.toMatch(/colShade\.y\b|colShade\.zy\b/)
+      if (variant.includes('FLIP_SIDED')) {
+        expect(code).toContain('shade += w * vec4(depth, mix(s0, s1, t), c.z, c.w);')
+      }
+      if (variant.includes('FLIP_SIDED') && !variant.includes('CLOUD_FLAT')) {
+        expect(main).toContain('cloudKm(length(eye) - uSeaLevel, colFog.w)')
+        expect(main).toContain('vec4 place = (sideShade + hitLight * vec4(depth, eyeDist, col.z, col.w)) / shadeW;')
+        expect(main).toContain('colShade.zw = place.zw;')
+        expect(main).toContain('terrainShade = place.w - CLOUD_CLEARANCE;')
+        expect(main).toContain('float ground = mix(colPrev.w, colIn.w, (sm - sPrev) / len) - CLOUD_CLEARANCE;')
+        expect(main).not.toMatch(/colFog\.y\b|colPrev\.y\b/)
+      }
+      clouds.dispose()
+    })
+  }
 })

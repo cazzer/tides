@@ -17,6 +17,15 @@
 // Pure; the build is renderers/cloudPipeline.ts.
 import { gridCovers, layersAt, sampleCoverSmooth, type CoverGrid, type CoverLayers } from './forecast-clouds'
 import { DAY_MS, HOUR_MS, smoothstep } from './real-clouds'
+import {
+  cloudColumn,
+  cloudShape,
+  cloudTopKm,
+  CLOUD_UNITS_PER_KM,
+  MAX_CLOUD_TOP_KM,
+  maxTopKm,
+  MIN_MEASURED_TOP_KM,
+} from './cloud-layer'
 
 /** The type grid: 2.5° texels, equirectangular like the cloud map. */
 export const TYPE_W = 144
@@ -260,4 +269,194 @@ export function lookOf(shares: TypeShares, confidence: number): CloudLook {
     out[key] = NEUTRAL_LOOK[key] + confidence * (typed - NEUTRAL_LOOK[key])
   }
   return out
+}
+
+// How high each kind stands (tides-tvr.4.3). Untyped, a top's height comes
+// from its opacity where no satellite measured it (../cloud-layer.ts
+// defaultTopKm(), up to 8.5 km for opaque cloud): a forecast frame's
+// stratocumulus deck stood about 6 km tall. Typed, each kind has a top of
+// its own where unmeasured, and where the satellites measured one, theirs,
+// as untyped; and a shape of its own over its opacity, as cloudShape() is
+// the untyped one: cumulus domes from thin edges, stratus and alto decks
+// keep most of their height to their edges, cirrus nearly all of it.
+//
+// The blend (renderers/cloudBlend.ts) writes the typed column into the
+// blended map's alpha, which nothing else reads, so the march
+// (renderers/cloudShaders.ts cloudColumn()) gets it in the read it already
+// makes. One byte, two ways, either side of TYPED_ZERO_CODE (no change, the
+// untyped column exactly):
+// - under it, lowered: the share of the untyped top's height the column
+//   keeps, on the ground (a forecast frame's deck, 1.8 km rather than 6);
+// - over it, lifted: how far the column's base stands off the ground, the
+//   column then a layer of cirrus or alto as deep as liftedThicknessKm()
+//   (cirrus high up, rather than a veil from the ground to 8 km), whether
+//   the satellites measured its top or not.
+// Both hold up where the texels are filtered (bilinear, mips), which mixes
+// their codes and their opacities alike: a share of a top is never under
+// the ground, a lift is never under it nor a layer's top under its base, and
+// neither goes over the map's tallest top, wherever the mix falls. (A
+// difference of tops, as first written, wasn't: the untyped top is convex in
+// the opacity, so a deck's lowered edge mixed with clear air beside it stood
+// its top under the ground.) Only cirrus and alto lift a column, where they
+// are most of it; cumulus, however tall, and stratus stand on the ground.
+// One layer to a column: cirrus over a deck is one slab between them.
+
+/** The kinds, in the type grid's order (TypeShares). */
+export const CLOUD_KINDS = ['cirrus', 'cumulus', 'alto', 'stratus'] as const
+export type CloudKind = (typeof CLOUD_KINDS)[number]
+
+/** Each kind's top (km above the ground) where unmeasured, but cumulus's,
+ * which rises with its opacity (CUMULUS_TOP_KM). All under maxTopKm(false),
+ * so a typed top is never taller than the untyped tallest. */
+export const TYPE_TOP_KM: Readonly<Record<Exclude<CloudKind, 'cumulus'>, number>> = {
+  cirrus: 8,
+  alto: 5,
+  stratus: 1.8,
+}
+/** Cumulus's top where unmeasured: [0] + [1] alpha², heaps to towers. */
+export const CUMULUS_TOP_KM = [1.2, 2.3] as const
+/** Each kind's shape over its opacity: the share of its top's height it
+ * keeps at no opacity, rising to all of it from [1] to [2]. */
+export const TYPE_SHAPES: Readonly<Record<CloudKind, readonly [floor: number, from: number, to: number]>> = {
+  cirrus: [0.85, 0, 0.3],
+  cumulus: [0.15, 0.05, 0.9],
+  alto: [0.6, 0, 0.35],
+  stratus: [0.6, 0, 0.35],
+}
+
+/** A kind's top (km) where unmeasured, at opacity alpha. */
+export function typeTopKm(kind: CloudKind, alpha: number): number {
+  return kind === 'cumulus' ? CUMULUS_TOP_KM[0] + CUMULUS_TOP_KM[1] * alpha * alpha : TYPE_TOP_KM[kind]
+}
+
+/** How much of its top's height a kind keeps at opacity alpha. */
+export function typeShape(kind: CloudKind, alpha: number): number {
+  const [floor, from, to] = TYPE_SHAPES[kind]
+  return floor + (1 - floor) * smoothstep(from, to, alpha)
+}
+
+/**
+ * The shaped top (km above the ground) of cloud with these shares (refined
+ * by the infrared, refineWithIr()) at opacity alpha, over a map texel's
+ * measured height r (0..1 of MAX_CLOUD_TOP_KM) trusted trust (0..1, its
+ * confidence where the map is measured, else 0): each kind's own top where
+ * unmeasured, the measured one as far as it is trusted, as cloudTopKm().
+ */
+export function typedTopKm(shares: TypeShares, alpha: number, r: number, trust: number): number {
+  const measured = Math.max(r * MAX_CLOUD_TOP_KM, MIN_MEASURED_TOP_KM)
+  return CLOUD_KINDS.reduce((sum, kind, i) => {
+    const km = typeTopKm(kind, alpha) * (1 - trust) + measured * trust
+    return sum + shares[i] * km * typeShape(kind, alpha)
+  }, 0)
+}
+
+/** How deep (km) a lifted layer is at opacity alpha: [0] + [1] alpha, thin
+ * cirrus to an alto deck; never deeper than the untyped column. */
+export const LIFTED_THICKNESS_KM = [1, 2.5] as const
+export function liftedThicknessKm(alpha: number): number {
+  return LIFTED_THICKNESS_KM[0] + LIFTED_THICKNESS_KM[1] * alpha
+}
+
+/** The share of cirrus and alto from which a column is lifted ([0]), and
+ * over which ([0] to [1]) a typed top taller than the untyped one rises to
+ * it: on the ground it could stand no taller, so from [0] on the top is
+ * the same either side, and only the base steps up. Lifted by the share
+ * itself, a mixed column was a slab hung half way (an opaque 12 km top the
+ * infrared reads as mostly towering cumulus, refineWithIr(), 2.7 to 5.9
+ * km), and at the onset its top spiked and dipped by 2 km. */
+export const TYPED_LIFT_SHARES = [0.5, 1] as const
+
+/** The alpha's code for no change. */
+export const TYPED_ZERO_CODE = 128
+/** The least share of its height a lowered top keeps. */
+export const TYPED_LOWEST_SHARE = 0.1
+/** The highest a lift can stand a base (km), over TYPED_LIFT_STEPS codes
+ * (about 94 m each): measured cirrus tops reach 14 km. */
+export const TYPED_LIFT_KM = 12
+export const TYPED_LIFT_STEPS = 127
+export const TYPED_LIFT_KM_PER_CODE = TYPED_LIFT_KM / TYPED_LIFT_STEPS
+/** The lift (km) over which a layer thins from the untyped column's depth
+ * to its own, so a lift of next to nothing is next to no change. */
+export const TYPED_LIFT_EASE_KM = 0.5
+/** How far a code read back may land off TYPED_ZERO_CODE and still be no
+ * change (the byte, as a float, lands a hair off it). */
+export const TYPED_ZERO_SLACK = 0.25
+
+/** The depth (km) of a column lifted `liftKm`, as the march reads it
+ * (typedColumn()): the untyped column's, easing to a lifted layer's over
+ * TYPED_LIFT_EASE_KM. */
+function liftedLayerKm(untyped: number, alpha: number, liftKm: number): number {
+  const ease = smoothstep(0, TYPED_LIFT_EASE_KM, liftKm)
+  return untyped + ease * (Math.min(untyped, liftedThicknessKm(alpha)) - untyped)
+}
+
+/**
+ * The alpha byte the blend writes for cloud with these shares (refined by
+ * the infrared, refineWithIr()) and confidence, at opacity alpha, over a
+ * map texel's measured height r trusted trust (as typedTopKm()), as its
+ * 8-bit target rounds it. Its top is the typed one, confidence of the way
+ * from the untyped one. Where it is mostly cirrus and alto
+ * (TYPED_LIFT_SHARES), the column is lifted so that a layer reaches that
+ * top: a forecast frame's thin cirrus from 6.8 km to 8, a measured opaque
+ * one to its measured top. Else, and where a lift would be too short for
+ * the march to read its layer as the depth it is lifted for (to within a
+ * code), on the ground, its top that share of the untyped one's, and no
+ * higher. Either way the top is continuous over the shares; only the base
+ * steps. TYPED_ZERO_CODE exactly with no confidence.
+ */
+export function typedTopCode(
+  shares: TypeShares,
+  confidence: number,
+  alpha: number,
+  r: number,
+  trust: number
+): number {
+  if (!(confidence > 0)) return TYPED_ZERO_CODE
+  const untyped = cloudTopKm(r, trust, alpha, 1) * cloudShape(alpha)
+  const typed = untyped + confidence * (typedTopKm(shares, alpha, r, trust) - untyped)
+  const share = shares[0] + shares[2]
+  if (share >= TYPED_LIFT_SHARES[0]) {
+    const rise = smoothstep(TYPED_LIFT_SHARES[0], TYPED_LIFT_SHARES[1], share)
+    const top = Math.min(typed, untyped) + rise * Math.max(typed - untyped, 0)
+    const layer = Math.min(untyped, liftedThicknessKm(alpha))
+    const lift = top - layer
+    const misread = liftedLayerKm(untyped, alpha, lift) - layer
+    if (lift >= TYPED_LIFT_KM_PER_CODE && misread <= TYPED_LIFT_KM_PER_CODE) {
+      return Math.round(TYPED_ZERO_CODE + Math.min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS))
+    }
+  }
+  const keep = Math.min(Math.max(typed / Math.max(untyped, 1e-6), TYPED_LOWEST_SHARE), 1)
+  return Math.round(TYPED_ZERO_CODE * keep)
+}
+
+/**
+ * The typed march's column (renderers/cloudShaders.ts cloudColumn() under
+ * CLOUD_TYPED) for a texel whose alpha byte reads `code` (typedTopCode(),
+ * or a mix of codes, filtered): cloudColumn() of the untyped top, lowered
+ * by its share or lifted as a layer no taller than the map's tallest
+ * (maxTopKm()). ground is where the untyped base stands, the clearance
+ * over the ground. Within TYPED_ZERO_SLACK of TYPED_ZERO_CODE,
+ * cloudColumn() exactly.
+ */
+export function typedColumn(
+  alpha: number,
+  r: number,
+  coverage: number,
+  measured: boolean,
+  code: number,
+  terrainGrey: number,
+  displacement: number
+): { ground: number; base: number; top: number } {
+  const topKm = cloudTopKm(r, coverage, alpha, measured ? 1 : 0)
+  const ground = cloudColumn(alpha, topKm, terrainGrey, displacement).base
+  const shape = cloudShape(alpha)
+  const steps = code - TYPED_ZERO_CODE
+  if (steps < TYPED_ZERO_SLACK) {
+    const keep = steps > -TYPED_ZERO_SLACK ? 1 : Math.max(code / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE)
+    return { ground, base: ground, top: ground + CLOUD_UNITS_PER_KM * topKm * shape * keep }
+  }
+  const layer = liftedLayerKm(topKm * shape, alpha, steps * TYPED_LIFT_KM_PER_CODE)
+  const lift = Math.min(steps * TYPED_LIFT_KM_PER_CODE, maxTopKm(measured) - layer)
+  const base = ground + CLOUD_UNITS_PER_KM * lift
+  return { ground, base, top: base + CLOUD_UNITS_PER_KM * layer }
 }
