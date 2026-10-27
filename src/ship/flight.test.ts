@@ -5,6 +5,7 @@ import {
   BLUE_ZONE,
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
+  HOLD_DRIFT_SHARE,
   HOLD_FALL_TAU,
   HOLD_REACH_ALTITUDES,
   HOLD_REACH_SECONDS,
@@ -2099,6 +2100,42 @@ describe('boosted guard on the held ground (tides-5lj)', () => {
     expect(telemetry.speed / telemetry.speedCap).toBeGreaterThan(0.99)
   })
 
+  test('500 m up toward a 300 m hill 30 km ahead, boosted, the cap drops once and holds until the ship is over it, the speed under it (review 2: no gaps between the windows)', () => {
+    const ALT = 0.5 * KM
+    const AT = 30 * KM
+    const hill = earthOver((lo, hi) => (hi >= AT - 50 * M && lo <= AT + 50 * M ? 300 * M : 0))
+    const { state, keep } = level(0.5, speedCap(new THREE.Vector3(0, RF + ALT, 0), [hill]))
+    const telemetry = createShipTelemetry()
+    let previous = NaN
+    let dropped = false
+    let rises = 0
+    let over = false
+    for (let i = 0; i < 60 * 60; i++) {
+      stepShip(state, input({ throttle: 1, boost: true }), FRAME, env([hill]), telemetry)
+      keep()
+      const cap = telemetry.speedCap
+      if (cap < 0.8 * previous) dropped = true
+      else if (dropped && cap > 1.01 * previous) rises++
+      previous = cap
+      if (arcOf(state.position) >= AT - 50 * M) {
+        over = true
+        break
+      }
+    }
+    expect(over).toBe(true)
+    expect(dropped).toBe(true)
+    expect(rises).toBeLessThanOrEqual(1)
+    // Over the hill: the guard on its 200 m clearance, 5 · (200 m − 120 m).
+    expect(telemetry.speedCap / (EARTH_BOOST_GUARD_RATE * (200 * M - EARTH_BOOST_GUARD_OFFSET))).toBeCloseTo(1, 6)
+    // The speed nearly down to it: the hill comes into the windows 5 km out
+    // (10 altitudes), where the cap drops 1900 → 400 m/s, the ride's
+    // OVERSPEED_MAX clamp brakes to 1200 and Flight Assist eases the rest
+    // off over velocityTau (~2 s there), ~1.03× by the hill. With gaps
+    // between the windows the cap sawtoothed back up and the ship crossed
+    // at 2.2× it.
+    expect(telemetry.speed / telemetry.speedCap).toBeLessThan(1.05)
+  })
+
   describe('updateGroundHold', () => {
     const V = 4 * KM
     const ALT = 5 * KM
@@ -2150,6 +2187,45 @@ describe('boosted guard on the held ground (tides-5lj)', () => {
       const h = hold(RF)
       updateGroundHold(h, bumpAt(1.5 * W), position, velocity, 1, FRAME)
       expect(h.radius).toBe(RF + P)
+    })
+
+    test.each([0.3, 0.8, 5])('%s km up the windows touch or overlap along the track: a corridor with no gaps', (km) => {
+      const windows: [number, number][] = []
+      const spy: Body = {
+        ...flat,
+        ground: (direction, reach = 0) => {
+          const s = arcOf(direction)
+          windows.push([s - reach, s + reach])
+          return RF
+        },
+      }
+      updateGroundHold(hold(NaN, null), spy, new THREE.Vector3(0, RF + km * KM, 0), velocity, 1, FRAME)
+      expect(windows.length).toBe(3)
+      windows.sort((a, b) => a[0] - b[0])
+      for (let i = 1; i < windows.length; i++) expect(windows[i][0]).toBeLessThanOrEqual(windows[i - 1][1] * (1 + 1e-9) + 1e-12)
+      // Low down, from 2 altitudes behind to 10 ahead.
+      if (km < 1) {
+        expect(windows[0][0] / (-2 * km * KM)).toBeCloseTo(1, 6)
+        expect(windows[2][1] / (10 * km * KM)).toBeCloseTo(1, 6)
+      }
+    })
+
+    test('the ahead offset fades in from rest over HOLD_DRIFT_SHARE of the least speed, so a drift barely moves the windows', () => {
+      const centres = (speed: number) => {
+        const at: number[] = []
+        const spy: Body = { ...flat, ground: (direction, reach = 0) => (at.push(arcOf(direction)), flat.ground!(direction, reach)) }
+        updateGroundHold(hold(NaN, null), spy, position, new THREE.Vector3(speed, 0, 0), 1, FRAME)
+        return at
+      }
+      const drift = HOLD_DRIFT_SHARE * law.min
+      expect(centres(0)).toEqual([0, 0, 0])
+      // A hundredth of the fade: a hundredth of the offset.
+      const slow = centres(0.01 * drift)
+      const full = centres(drift)
+      expect(slow[2] / full[2]).toBeCloseTo(0.01, 6)
+      expect(full[2] / (2 * W)).toBeCloseTo(1, 5)
+      // Above it, fixed whatever the speed.
+      expect(centres(100 * drift)).toEqual(full)
     })
 
     test('falls toward lower ground over HOLD_FALL_TAU', () => {

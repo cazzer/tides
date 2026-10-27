@@ -543,13 +543,28 @@ export const BOOST_SPOOL_SECONDS = 1
 // cut the cap many times over in a frame (up to the boost's 20×), and
 // rideWell's OVERSPEED_MAX clamp then brakes the speed to 3× the new cap at
 // once: a hard brake, accepted, which now comes seconds before the peak
-// rather than over it.
+// rather than over it. Ascending, and the windows overlap at full reach.
 export const HOLD_AHEAD_SECONDS: readonly number[] = [0, 1, 2]
 export const HOLD_REACH_SECONDS = 1.5
 // The windows' radius never exceeds this many times the altitude over the
 // sea, which bounds the ground's scan (tiles, the globe's floor), with
 // holdSpeed's own bound at the law's max (1.5 · 43 km/s ≈ 64 km over Earth).
+// Low down, where that leaves the windows narrower than holdSpeed's stride
+// (under ~1 km over Earth), the centres close up to a window's diameter
+// apart (HOLD_AHEAD_STEP), so the windows still touch and the corridor has
+// no gaps for a hill to slip through: from 2 altitudes behind to 10 ahead,
+// 1 to 5 km at 500 m up, still seconds of warning at the cap there
+// (review 2).
 export const HOLD_REACH_ALTITUDES = 2
+// The widest step between HOLD_AHEAD_SECONDS, seconds: the centres are
+// never more than a window's diameter apart over it.
+const HOLD_AHEAD_STEP = HOLD_AHEAD_SECONDS.reduce((step, t, i, all) => (i > 0 ? Math.max(step, t - all[i - 1]) : step), 0)
+// The share of the law's least speed (GroundSpeedLaw.min; 5 m/s over Earth)
+// over which the ahead offset fades in from rest, so a drift (what collide
+// leaves while hovering) doesn't swing the windows 2 strides out in any
+// direction. It reads the ship's speed only for that fade: above it the
+// offset is fixed, so it cannot feed back on the cap (review 1).
+export const HOLD_DRIFT_SHARE = 0.1
 // Seconds per e-fold the held ground falls toward lower ground in the
 // windows, once the peak has passed out of them: past the last ridge of a
 // range the cap rises back over a few seconds rather than at once.
@@ -1156,8 +1171,9 @@ export function holdSpeed(law: Readonly<GroundSpeedLaw>, altitude: number): numb
  * highest of body.ground in windows of radius HOLD_REACH_SECONDS ·
  * holdSpeed (never over HOLD_REACH_ALTITUDES × the altitude over the
  * body's sphere) centred on the points HOLD_AHEAD_SECONDS of holdSpeed on
- * along the velocity (all on the ship when still), as a distance from the
- * body's centre. Higher ground than held is taken at once; lower, the hold
+ * along the velocity, closed up so the windows touch where the reach is
+ * clamped, and faded in from on the ship over the first HOLD_DRIFT_SHARE of
+ * the law's least speed, as a distance from the body's centre. Higher ground than held is taken at once; lower, the hold
  * falls toward it over HOLD_FALL_TAU. A new body, or no hold yet, starts at
  * the peak. None (key null, radius NaN) with the spool at 0, without a body,
  * ground or air law, where the boost changes nothing (the unboosted air
@@ -1183,8 +1199,10 @@ export function updateGroundHold(
   }
   const speed = holdSpeed(law, altitude)
   const reach = Math.min(speed * HOLD_REACH_SECONDS, HOLD_REACH_ALTITUDES * Math.max(0, altitude))
+  const stride = HOLD_AHEAD_STEP > 0 ? Math.min(speed, (2 * reach) / HOLD_AHEAD_STEP) : speed
   const moving = velocity.length()
-  if (moving > 1e-12) holdAlong.copy(velocity).multiplyScalar(speed / moving)
+  const fade = Math.min(1, moving / (HOLD_DRIFT_SHARE * law.min))
+  if (moving > 0 && fade > 0) holdAlong.copy(velocity).multiplyScalar((stride * fade) / moving)
   else holdAlong.set(0, 0, 0)
   let peak = -Infinity
   for (let i = 0; i < HOLD_AHEAD_SECONDS.length; i++) {

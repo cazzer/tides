@@ -12,8 +12,10 @@
 // tiles coarsen and goes as they refine; scaled by the boost's spool, and
 // only while the boost raises the cap (telemetry.boosted, as the shake:
 // shake.ts), so never unboosted, nor in space or on the Moon. Once the
-// boost stops raising the cap it clears quickly (BLUR_RELEASE_TAU) rather
-// than over the tiles' slow fall. Off under reduced motion.
+// boost is let go (the spool falling, blurReleased) it clears quickly
+// (BLUR_RELEASE_TAU) rather than over the tiles' slow fall; held, a peak
+// that briefly stops the boost raising the cap lets it down slowly, so it
+// doesn't flick off and back. Off under reduced motion.
 
 import { clamp01, easeToward } from './dust'
 import { FALL_SECONDS, RATE_HIGH, RISE_SECONDS } from '../renderers/surface/surface-lod'
@@ -30,9 +32,10 @@ export const BLUR_SWEEP_HIGH = RATE_HIGH
 export const BLUR_RISE_TAU = RISE_SECONDS
 export const BLUR_FALL_TAU = FALL_SECONDS
 /**
- * [TUNE] The falling time constant, seconds, once the boost no longer
- * raises the cap (released, or out of the air): the tiles' 2 s left the
- * blur up for ~10 s after letting go.
+ * [TUNE] The falling time constant, seconds, once the boost is let go
+ * (blurReleased): the tiles' 2 s left the blur up for ~10 s after letting
+ * go, and keying it on telemetry.boosted still left the spool-down's
+ * second at 2 s.
  */
 export const BLUR_RELEASE_TAU = 0.5
 /** Easing toward 0, under this many px the blur is 0. */
@@ -57,18 +60,30 @@ export function blurTarget(sweep: number, boost: number, boosted: boolean, reduc
 }
 
 /**
- * `current` eased `dt` seconds toward `target`: over BLUR_RISE_TAU rising,
- * falling over BLUR_FALL_TAU while `boosted` (the boost raises the cap;
- * telemetry.boosted) and BLUR_RELEASE_TAU once not, and exactly 0 once it
- * is within BLUR_EPSILON of a 0 target. A non-finite `current` starts over
- * at `target`; a non-finite `dt` is no time.
+ * Whether the boost is let go, from its spool `boost` this frame and
+ * `previous` last frame (telemetry.boost): falling, or at 0 (or NaN). A
+ * held spool, rising or full, is not, whatever telemetry.boosted says.
  */
-export function easeBlur(current: number, target: number, dt: number, boosted: boolean): number {
-  if (!Number.isFinite(current)) return target
+export function blurReleased(boost: number, previous: number): boolean {
+  return !(boost > 0) || boost < previous
+}
+
+/**
+ * `current` eased `dt` seconds toward `target` while the boost is held:
+ * over BLUR_RISE_TAU rising, BLUR_FALL_TAU falling. Once `released`
+ * (blurReleased) toward 0 over BLUR_RELEASE_TAU whatever the target, which
+ * the spool only lowers as it runs down: the blur goes when the boost is
+ * let go, not a spool-down later. Exactly 0 once within BLUR_EPSILON of a 0
+ * goal. A non-finite `current` starts over at `target`; a non-finite `dt`
+ * is no time.
+ */
+export function easeBlur(current: number, target: number, dt: number, released: boolean): number {
+  if (!Number.isFinite(current)) return released ? 0 : target
   const step = Number.isFinite(dt) ? dt : 0
-  const tau = target > current ? BLUR_RISE_TAU : boosted ? BLUR_FALL_TAU : BLUR_RELEASE_TAU
-  const next = easeToward(current, target, step, tau)
-  return target === 0 && Math.abs(next) < BLUR_EPSILON ? 0 : next
+  const goal = released ? 0 : target
+  const tau = released ? BLUR_RELEASE_TAU : goal > current ? BLUR_RISE_TAU : BLUR_FALL_TAU
+  const next = easeToward(current, goal, step, tau)
+  return goal === 0 && Math.abs(next) < BLUR_EPSILON ? 0 : next
 }
 
 /**

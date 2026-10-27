@@ -4,7 +4,7 @@ import { MAX_DT } from './flight'
 import { shipTelemetry } from './ship-telemetry'
 import { prefersReducedMotion } from './reduced-motion'
 import { sweepRate } from '../renderers/surface/surface-lod'
-import { blurFilter, blurTarget, easeBlur } from './speed-blur'
+import { blurFilter, blurReleased, blurTarget, easeBlur } from './speed-blur'
 
 /**
  * The speed blur (tides-5lj, speed-blur.ts): a soft blur round the edges of
@@ -24,6 +24,7 @@ export function SpeedBlur() {
     let frame = 0
     let last = NaN
     let px = 0
+    let spool = 0
     let shown = 'none'
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick)
@@ -32,10 +33,12 @@ export function SpeedBlur() {
       // The sweep the tiles coarsen with (SurfaceTiles), through the air.
       const sweep = sweepRate(shipTelemetry.air.speed, shipTelemetry.nearest)
       const { boost, boosted } = shipTelemetry
+      const released = blurReleased(boost, spool)
+      spool = boost
       const reduced = prefersReducedMotion()
       const target = blurTarget(sweep, boost, boosted, reduced)
       // Reduced motion cuts it at once (its target is 0) rather than easing it out.
-      px = reduced ? target : easeBlur(px, target, dt, boosted)
+      px = reduced ? target : easeBlur(px, target, dt, released)
       const filter = blurFilter(px)
       if (filter === shown) return
       shown = filter
