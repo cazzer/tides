@@ -167,15 +167,11 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
   it("fades the lights by the globe's function, never differencing", () => {
     expect(TILE_NIGHT_GLSL.fadeHead).toBe(NIGHT_LIGHTS_GLSL.fadeHead)
     expect(TILE_NIGHT_GLSL.fadeBody).toBe(
-      `{${NIGHT_LIGHTS_GLSL.fadeCall
-        .replace('nightFadeDx', 'surfaceGlobeDx')
-        .replace('nightFadeDy', 'surfaceGlobeDy')
-        .replace('vEmissiveMapUv', 'surfaceGlobeUv')
-        .replace('textureSize(emissiveMap, 0)', 'textureSize(uTileNightMap, 0)')}}\n`
+      `{${NIGHT_LIGHTS_GLSL.fadeWidth.replace('textureSize(emissiveMap, 0)', 'textureSize(uTileNightMap, 0)')}` +
+        '  float nightFadePixel = nightLightsUvPixel(surfaceGlobeDx, surfaceGlobeDy, surfaceGlobeUv.y, nightFadeWidth);\n' +
+        `${NIGHT_LIGHTS_GLSL.fadeCall}}\n`
     )
-    expect(TILE_NIGHT_GLSL.fadeBody).toContain(
-      'nightLightsFade(surfaceGlobeDx, surfaceGlobeDy, surfaceGlobeUv.y,\n    float(textureSize(uTileNightMap, 0).x), nightFadeFine)'
-    )
+    expect(TILE_NIGHT_GLSL.fadeBody).toContain('float nightFadeWidth = float(textureSize(uTileNightMap, 0).x);')
     // No derivative in any of the tiles' night code.
     for (const code of Object.values(TILE_NIGHT_GLSL)) {
       const text = typeof code === 'function' ? code(8) : code

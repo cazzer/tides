@@ -22,9 +22,15 @@ import {
   NIGHT_FADE_TEXEL_PX_END,
   NIGHT_FADE_TEXEL_PX_START,
   NIGHT_LIGHTS_GLSL,
-  nightLightsFade,
+  nightLightsFade as nightLightsFadeAt,
   nightLightsPatch,
+  nightLightsUvPixel,
 } from './nightLights'
+
+// The fade from the map uv's screen derivatives, as the tiles take it (the
+// globe measures the same footprint from its view position).
+const nightLightsFade = (dx: readonly number[], dy: readonly number[], v: number, width: number, fine: number) =>
+  nightLightsFadeAt(nightLightsUvPixel(dx, dy, v, width), width, fine)
 import { GIBS_GROUND_WIDTH } from '../gibs-patch'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
@@ -108,15 +114,16 @@ describe('night lights in flight', () => {
     const body = NIGHT_LIGHTS_GLSL.fadeBody
     expect(body.trim().startsWith('#ifdef USE_EMISSIVEMAP')).toBe(true)
     expect(body.trim().endsWith('#endif')).toBe(true)
-    expect(body.match(/dFd[xy]\([^)]*\)/g)).toEqual(['dFdx(vEmissiveMapUv)', 'dFdy(vEmissiveMapUv)'])
+    expect(body.match(/dFd[xy]\([^)]*\)/g)).toEqual(['dFdx(vViewPosition)', 'dFdy(vViewPosition)'])
     expect(body).not.toContain('if (')
     expect(NIGHT_LIGHTS_GLSL.fadeHead).not.toMatch(/dFd[xy]|fwidth|if \(/)
-    // Wrapped at the antimeridian.
-    expect(body).toContain('nightFadeDx.x -= floor(nightFadeDx.x + 0.5);')
-    expect(body).toContain('nightFadeDy.x -= floor(nightFadeDy.x + 0.5);')
+    // The footprint across the sphere's up, over its radius, in map texels.
+    expect(body).toContain('vec3 nightFadeUp = normalize(vNormal);')
+    expect(body).toContain('nightFadeWidth / (PI2 * length(vNightLightsDir))')
+    expect(body).toContain(NIGHT_LIGHTS_GLSL.fadeWidth)
     expect(body).toContain(NIGHT_LIGHTS_GLSL.fadeCall)
     expect(NIGHT_LIGHTS_GLSL.fadeCall).toContain('float nightFadeFine = gibsNightCover;')
-    expect(NIGHT_LIGHTS_GLSL.fadeCall).toContain('totalEmissiveRadiance *= nightLightsFade(nightFadeDx, nightFadeDy, vEmissiveMapUv.y,')
+    expect(NIGHT_LIGHTS_GLSL.fadeCall).toContain('totalEmissiveRadiance *= nightLightsFade(nightFadePixel, nightFadeWidth, nightFadeFine);')
     // The mirror's constants, as the GLSL has them.
     const head = NIGHT_LIGHTS_GLSL.fadeHead
     expect(head).toContain(`smoothstep(${Math.log2(NIGHT_FADE_TEXEL_PX_START).toFixed(6)}, ${Math.log2(NIGHT_FADE_TEXEL_PX_END).toFixed(6)}, texelPx)`)
@@ -128,7 +135,7 @@ describe('night lights in flight', () => {
 
   it('adds no fade outside flight', () => {
     const { fragment, key } = compiled(nightLightsPatch({ value: new THREE.Vector3(1, 0, 0) }))
-    expect(fragment).not.toMatch(/nightLightsFade|nightFade|dFd[xy]\(vEmissiveMapUv/)
+    expect(fragment).not.toMatch(/nightLightsFade|nightFade|dFd[xy]\(vViewPosition/)
     expect(key).toBe('night-lights')
   })
 

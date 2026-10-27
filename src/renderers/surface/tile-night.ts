@@ -41,11 +41,13 @@
 //
 // Fade. In flight the globe fades its lights as their finest source's
 // texel is magnified past a few pixels (../nightLights.ts, tides-zmw.24),
-// after VIIRS and with the mask; the tiles take its function by text and
-// its call renamed to the map's uv, size and the base's analytic
-// derivatives (surfaceGlobeDx/Dy, no antimeridian jump, so no wrap), inside
-// the gate after VIIRS: where the mask is 0 the light is dark anyway. Its
-// VIIRS cover is the patch's gibsNightCover, as on the globe.
+// after VIIRS and with the mask; the tiles take its functions and call by
+// text, the map's width renamed to theirs, and measure the footprint from
+// the base's analytic derivatives of the map's uv (surfaceGlobeDx/Dy, no
+// antimeridian jump, so no wrap) where the globe differences its view
+// position, inside the gate after VIIRS: where the mask is 0 the light is
+// dark anyway. Its VIIRS cover is the patch's gibsNightCover, as on the
+// globe.
 //
 // No varyings, no defines: one program per tileset, keyed by whether the
 // flight and the stream are on (fixed for a link).
@@ -114,12 +116,10 @@ body = renameInSnippet(body, 'dFdy(nightAt)', nightDerivative('surfaceGlobeDy'),
 body = renameInSnippet(body, 'emissive * emissiveColor.rgb', 'uTileCityLights * emissiveColor.rgb', WHAT, 1)
 const GIBS_BODY = body
 
-let fade = NIGHT_LIGHTS_GLSL.fadeCall
-fade = renameInSnippet(fade, 'nightFadeDx', 'surfaceGlobeDx', WHAT, 1)
-fade = renameInSnippet(fade, 'nightFadeDy', 'surfaceGlobeDy', WHAT, 1)
-fade = renameInSnippet(fade, 'vEmissiveMapUv', 'surfaceGlobeUv', WHAT, 1)
-fade = renameInSnippet(fade, 'textureSize(emissiveMap, 0)', 'textureSize(uTileNightMap, 0)', WHAT, 1)
-const FADE_BODY = `{${fade}}
+const FADE_WIDTH = renameInSnippet(NIGHT_LIGHTS_GLSL.fadeWidth, 'textureSize(emissiveMap, 0)', 'textureSize(uTileNightMap, 0)', WHAT, 1)
+const FADE_PIXEL = `  float nightFadePixel = nightLightsUvPixel(surfaceGlobeDx, surfaceGlobeDy, surfaceGlobeUv.y, nightFadeWidth);
+`
+const FADE_BODY = `{${FADE_WIDTH}${FADE_PIXEL}${NIGHT_LIGHTS_GLSL.fadeCall}}
 `
 
 /** The adapter's GLSL (the test checks it against the globe's). */

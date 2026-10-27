@@ -105,19 +105,23 @@ const FLIGHT_LIGHT_BODY = /* glsl */ `
 // axis to shrink from NIGHT_FADE_PIXEL_M_OFF to NIGHT_FADE_PIXEL_M_FULL on
 // the ground: from 1500 km up the factor is exactly 1 on every screen.
 //
-// Precision. On the globe the derivatives are of the interpolated map uv,
-// whose float32 step is up to 2^-24 (u and v from 0.5 up): 2.4 m east-west
-// at the equator, 1.2 m north-south. The step's error matters only once it
-// is some of the narrow axis, which by then is tens of metres or less: past
-// END at the map's texel alone (116 m), and near END with VIIRS's (15 m),
-// where with FLOOR 0 the lights are ~0.12 of themselves at a 24 m axis (a
-// step a tenth of it), and one step's error moves them by at most ~0.045
-// of their full light anywhere (at ~29 m, where they are ~0.22): a faint
-// shimmer at worst, on lights mostly gone (nightLights.test.ts holds the
-// numbers). The tiles take the base's analytic surfaceGlobeDx/Dy instead,
-// never differenced. The narrow axis is taken in map texels, so its squares
-// stay normal float32 down to a millimetre's footprint; a zero footprint
-// (the uv's float32 step the same across a pixel) is fully faded.
+// Precision. The magnification is read from screen derivatives, which on
+// the globe are not those of the map's uv: near the ground its float32 step
+// (2^-24 from 0.5 up: ~2.1 m east-west over Cairo, 1.2 m north-south) is a
+// tenth of a pixel's footprint around 5 km over the ground on a 720-row
+// screen, and each 2x2 quad's difference took a different share of a step,
+// so where the lights were mid-fade, magnified by the night's exposure, they
+// fizzed as quad-sized grain (seen headless; nightLights.test.ts holds the
+// numbers). The globe instead differences the eye-relative view position,
+// whose float32 step is the distance's (a millimetre at 15 km), projected
+// across the sphere's up (vNormal, unperturbed by the relief) and over the
+// sphere's radius (vNightLightsDir's length: the mesh carries no scale, as
+// the tiles' base assumes): the drawn point's turn round Earth's centre,
+// what the tiles' analytic surfaceGlobeDx/Dy measure through the map's uv.
+// The vertex's own rounding (~1 m at Earth's radius) is constant across a
+// triangle tens of kilometres wide, so it barely tilts the derivative. The
+// narrow axis is taken in map texels, so its squares stay normal float32
+// down to a millimetre's footprint; a zero footprint is fully faded.
 
 /** Pixels a texel of the finest source in play from which the night lights
  * fade in flight, and by which they are at NIGHT_FADE_FLOOR. */
@@ -133,52 +137,64 @@ export const NIGHT_FADE_PIXEL_M_FULL = 300
 export const NIGHT_FADE_EQUATOR_M = 2 * Math.PI * 6371000
 
 // Declarations after common (PI is three's). nightLightsNarrow is the
-// smaller singular value of the footprint [a b]. nightLightsFade is the
-// emissive's factor: dx and dy are the night map's uv's screen derivatives
-// (no jump at the antimeridian), v its v, mapWidth the map's width in
-// texels and fine VIIRS's cover (0 to 1).
+// smaller singular value of the footprint [a b]. nightLightsUvPixel is the
+// footprint's narrow axis in map texels (a texel's north-south size, its
+// width at the equator) from the night map uv's screen derivatives dx and dy
+// (no jump at the antimeridian), at its v, for a map mapWidth texels wide.
+// nightLightsFade is the emissive's factor for a narrow axis of pixel map
+// texels, fine VIIRS's cover (0 to 1).
 const FADE_HEAD = /* glsl */ `
-float nightLightsNarrow(vec2 a, vec2 b) {
+float nightLightsNarrow(vec3 a, vec3 b) {
   float frobenius = dot(a, a) + dot(b, b);
-  float det = abs(a.x * b.y - a.y * b.x);
+  float det = length(cross(a, b));
   return det / max(sqrt(0.5 * (frobenius + sqrt(max(frobenius * frobenius - 4.0 * det * det, 0.0)))), 1e-12);
 }
-float nightLightsFade(vec2 dx, vec2 dy, float v, float mapWidth, float fine) {
-  // In map texels at the equator (a texel's north-south size anywhere): a
-  // turn of u is the equator, narrowed east-west by cos(lat); of v, half.
+float nightLightsUvPixel(vec2 dx, vec2 dy, float v, float mapWidth) {
+  // A turn of u is the equator, narrowed east-west by cos(lat); of v, half.
   vec2 m = vec2(sin(v * PI), 0.5) * mapWidth;
+  return nightLightsNarrow(vec3(dx * m, 0.0), vec3(dy * m, 0.0));
+}
+float nightLightsFade(float pixel, float mapWidth, float fine) {
   float logWidth = log2(max(mapWidth, 1e-6));
-  float pixel = log2(max(nightLightsNarrow(dx * m, dy * m), 1e-6));
-  float texelPx = fine * (logWidth - ${f(Math.log2(GIBS_GROUND_WIDTH))}) - pixel;
-  float pixelM = pixel + ${f(Math.log2(NIGHT_FADE_EQUATOR_M))} - logWidth;
+  float logPixel = log2(max(pixel, 1e-6));
+  float texelPx = fine * (logWidth - ${f(Math.log2(GIBS_GROUND_WIDTH))}) - logPixel;
+  float pixelM = logPixel + ${f(Math.log2(NIGHT_FADE_EQUATOR_M))} - logWidth;
   float near = 1.0 - smoothstep(${f(Math.log2(NIGHT_FADE_PIXEL_M_FULL))}, ${f(Math.log2(NIGHT_FADE_PIXEL_M_OFF))}, pixelM);
   return mix(1.0, ${f(NIGHT_FADE_FLOOR)},
     smoothstep(${f(Math.log2(NIGHT_FADE_TEXEL_PX_START))}, ${f(Math.log2(NIGHT_FADE_TEXEL_PX_END))}, texelPx) * near);
 }
 `
 
-// The fade's call, which the tiles take by rename: the derivatives are
-// nightFadeDx/Dy, VIIRS's cover the patch's where it is on.
+// The map's width, which the tiles take by rename.
+const FADE_WIDTH = /* glsl */ `
+  float nightFadeWidth = float(textureSize(emissiveMap, 0).x);
+`
+
+// The fade's call, which the tiles take as it is: the narrow axis is
+// nightFadePixel, VIIRS's cover the patch's where it is on.
 const FADE_CALL = /* glsl */ `
 #ifdef GIBS_NIGHT_SIDE
   float nightFadeFine = gibsNightCover;
 #else
   float nightFadeFine = 0.0;
 #endif
-  totalEmissiveRadiance *= nightLightsFade(nightFadeDx, nightFadeDy, vEmissiveMapUv.y,
-    float(textureSize(emissiveMap, 0).x), nightFadeFine);
+  totalEmissiveRadiance *= nightLightsFade(nightFadePixel, nightFadeWidth, nightFadeFine);
 `
 
 // In flight, after the map and VIIRS (whose code lands first), with the
-// mask: the uv's derivatives in main's top level, before any branch,
-// wrapped at the antimeridian, where u jumps by a turn.
+// mask: the view position's derivatives in main's top level, before any
+// branch, the footprint across the up in map texels (the precision note,
+// above). PI2 is three's.
 const FADE_BODY = /* glsl */ `
 #ifdef USE_EMISSIVEMAP
 {
-  vec2 nightFadeDx = dFdx(vEmissiveMapUv);
-  vec2 nightFadeDy = dFdy(vEmissiveMapUv);
-  nightFadeDx.x -= floor(nightFadeDx.x + 0.5);
-  nightFadeDy.x -= floor(nightFadeDy.x + 0.5);
+  vec3 nightFadeDx = dFdx(vViewPosition);
+  vec3 nightFadeDy = dFdy(vViewPosition);
+  vec3 nightFadeUp = normalize(vNormal);
+${FADE_WIDTH}  float nightFadeScale = nightFadeWidth / (PI2 * length(vNightLightsDir));
+  float nightFadePixel = nightLightsNarrow(
+    (nightFadeDx - nightFadeUp * dot(nightFadeUp, nightFadeDx)) * nightFadeScale,
+    (nightFadeDy - nightFadeUp * dot(nightFadeUp, nightFadeDy)) * nightFadeScale);
 ${FADE_CALL}}
 #endif
 `
@@ -188,26 +204,31 @@ const smoothstep = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t)
 }
 
-/** nightLightsFade() in double, for the tests: `dx` and `dy` the map uv's
- * screen derivatives, `v` its v, `mapWidth` the night map's width, `fine`
- * VIIRS's cover. */
-export function nightLightsFade(
-  dx: readonly [number, number],
-  dy: readonly [number, number],
-  v: number,
-  mapWidth: number,
-  fine: number
-): number {
-  const mx = Math.sin(v * Math.PI) * mapWidth
-  const my = 0.5 * mapWidth
-  const [ax, ay, bx, by] = [dx[0] * mx, dx[1] * my, dy[0] * mx, dy[1] * my]
-  const frobenius = ax * ax + ay * ay + bx * bx + by * by
-  const det = Math.abs(ax * by - ay * bx)
-  const wide = Math.sqrt(0.5 * (frobenius + Math.sqrt(Math.max(frobenius * frobenius - 4 * det * det, 0))))
+type Vec = readonly number[]
+
+/** nightLightsNarrow() in double: the smaller singular value of [a b]
+ * (2 or 3 components each). */
+export function nightLightsNarrow(a: Vec, b: Vec): number {
+  const [ax, ay, az = 0] = a
+  const [bx, by, bz = 0] = b
+  const frobenius = ax * ax + ay * ay + az * az + bx * bx + by * by + bz * bz
+  const det = Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+  return det / Math.max(Math.sqrt(0.5 * (frobenius + Math.sqrt(Math.max(frobenius * frobenius - 4 * det * det, 0)))), 1e-12)
+}
+
+/** nightLightsUvPixel() in double. */
+export function nightLightsUvPixel(dx: Vec, dy: Vec, v: number, mapWidth: number): number {
+  const m = [Math.sin(v * Math.PI) * mapWidth, 0.5 * mapWidth]
+  return nightLightsNarrow([dx[0] * m[0], dx[1] * m[1]], [dy[0] * m[0], dy[1] * m[1]])
+}
+
+/** nightLightsFade() in double: `pixel` the footprint's narrow axis in map
+ * texels, `mapWidth` the night map's width, `fine` VIIRS's cover. */
+export function nightLightsFade(pixel: number, mapWidth: number, fine: number): number {
   const logWidth = Math.log2(Math.max(mapWidth, 1e-6))
-  const pixel = Math.log2(Math.max(det / Math.max(wide, 1e-12), 1e-6))
-  const texelPx = fine * (logWidth - Math.log2(GIBS_GROUND_WIDTH)) - pixel
-  const pixelM = pixel + Math.log2(NIGHT_FADE_EQUATOR_M) - logWidth
+  const logPixel = Math.log2(Math.max(pixel, 1e-6))
+  const texelPx = fine * (logWidth - Math.log2(GIBS_GROUND_WIDTH)) - logPixel
+  const pixelM = logPixel + Math.log2(NIGHT_FADE_EQUATOR_M) - logWidth
   const near = 1 - smoothstep(Math.log2(NIGHT_FADE_PIXEL_M_FULL), Math.log2(NIGHT_FADE_PIXEL_M_OFF), pixelM)
   const t = smoothstep(Math.log2(NIGHT_FADE_TEXEL_PX_START), Math.log2(NIGHT_FADE_TEXEL_PX_END), texelPx) * near
   return 1 + (NIGHT_FADE_FLOOR - 1) * t
@@ -216,13 +237,14 @@ export function nightLightsFade(
 /** The patch's GLSL for the streamed tiles to reuse by text (tides-zmw.9.13):
  * the heads after common, the mask after emissivemap_fragment, the flight's
  * light after lights_fragment_end; in flight the fade's head after common
- * and its call (fadeCall, inside the globe's fadeBody) before the mask. */
+ * and, within the globe's fadeBody before the mask, its map width and call. */
 export const NIGHT_LIGHTS_GLSL = {
   fragmentHead: FRAGMENT_HEAD,
   fragmentBody: FRAGMENT_BODY,
   flightFragmentHead: FLIGHT_FRAGMENT_HEAD,
   flightLightBody: FLIGHT_LIGHT_BODY,
   fadeHead: FADE_HEAD,
+  fadeWidth: FADE_WIDTH,
   fadeCall: FADE_CALL,
   fadeBody: FADE_BODY,
 }
