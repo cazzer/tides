@@ -568,7 +568,8 @@ function wellCap({ wellDistance, wellFloor, wellCeiling }: Proximity): number {
  * floor, V_TOP), with d_eff the smallest gap / wellFactor over `bodies` and
  * floor the speedFloor of the body that sets it (speedFloorAt, with the
  * ship's `heading`, its direction of travel, world frame, unit, for an air
- * law's escape; none reads as level). With no bodies there is nothing to scale against, so V_NORMAL.
+ * law's escape; none reads as level). With no bodies there is nothing to
+ * scale against, so V_NORMAL.
  */
 export function speedCap(
   position: THREE.Vector3,
@@ -612,7 +613,10 @@ function airApproachCap(
 
 // wellCap with the target setting d_eff, for airApproachCap.
 function airCapAt(law: Readonly<GroundSpeedLaw>, gap: number, altitude: number, climb: number, eta: number): number {
-  return Math.max(lawFloor(law, gap, altitude, climb), Math.min(Math.max(0, gap) / eta, lawCeiling(law, gap, altitude, climb)))
+  return Math.max(
+    lawFloor(law, gap, altitude, climb),
+    Math.min(Math.max(0, gap) / eta, lawCeiling(law, gap, altitude, climb))
+  )
 }
 
 // Inputs come from pointer maths; NaN would poison the state for good.

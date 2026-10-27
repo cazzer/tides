@@ -291,9 +291,9 @@ const AIR_ETA_STEPS = 64
 // `gap` to `stop` at min(closing, share · cap), the cap as flight.ts
 // wellCap has it (the well's gap / wellTime under the law's ceiling, over
 // its floor), straight down onto ground `base` over the sea (altitude =
-// gap + base), not climbing. The air's leg has no closed form
-// worth its kinks against the gap law's, so this sums it in log gap, each
-// step at the cap at its geometric middle.
+// gap + base), not climbing. The air's leg has no closed form worth its
+// kinks against the gap law's, so this sums it in log gap, each step at the
+// cap at its geometric middle.
 function airEta(
   gap: number,
   stop: number,
