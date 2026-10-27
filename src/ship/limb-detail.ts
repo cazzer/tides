@@ -280,7 +280,8 @@ const BUILD_TIMEOUT_MS = 500
 const buildQueue = new Map<number, number>()
 let buildHandle: (() => void) | null = null
 
-function whenIdle(callback: () => void): () => void {
+/** Calls `callback` in an idle period with BUILD_BUDGET_MS to spare (or after BUILD_TIMEOUT_MS); returns a cancel. */
+export function whenIdle(callback: () => void): () => void {
   if (typeof requestIdleCallback === 'function') {
     let handle = 0
     const wait = () => {

@@ -37,6 +37,14 @@ void main() {
   if (!isOrthographic) px /= max(-foot.z, 1e-6);
   float fade = smoothstep(uFadePx.x, uFadePx.y, px);
 
+  vec3 axis = normalize(mat3(modelViewMatrix) * normalize(normalize(aSpicule.xyz) + aLean));
+  vec3 eye = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-foot);
+  vec3 side = cross(axis, eye);
+  float sideLength = length(side);
+  // Seen end-on, a blade piles its length onto a speck that only
+  // flickers: fade it as it turns to the eye.
+  fade *= smoothstep(0.05, 0.6, sideLength);
+
   // Past the far limb by more than its height, a blade can't peek over it.
   vec3 up = normalize(foot - centre);
   vec3 toEye = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-centre);
@@ -46,22 +54,15 @@ void main() {
     collapse();
     return;
   }
-
-  // Each blade rises and falls on its own, over ~16 s.
-  float life = 0.5 + 0.5 * sin(time * 0.4 + aSpicule.w * 6.283);
-  float h = aSize.x * (0.6 + 0.4 * life);
-  vec3 axis = normalize(mat3(modelViewMatrix) * normalize(normalize(aSpicule.xyz) + aLean));
-  vec3 p = foot + axis * radius * h * position.y;
-  vec3 eye = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-p);
-  vec3 side = cross(axis, eye);
-  float sideLength = length(side);
-  // Seen end-on, a blade piles its length onto a speck that only
-  // flickers: fade it as it turns to the eye.
-  fade *= smoothstep(0.05, 0.6, sideLength);
   // Against the disc, only blades seen side-on and wide, close in, where
   // they stand in parallax: looked down on, or from further out, the tufts
   // would pepper the disc like dirt.
   vDisc = smoothstep(0.55, 0.9, sideLength) * smoothstep(2.0, 5.0, px);
+
+  // Each blade rises and falls on its own, over ~16 s.
+  float life = 0.5 + 0.5 * sin(time * 0.4 + aSpicule.w * 6.283);
+  float h = aSize.x * (0.6 + 0.4 * life);
+  vec3 p = foot + axis * radius * h * position.y;
   side = sideLength > 1e-4 ? side / sideLength : normalize(cross(axis, vec3(0.0, 1.0, 0.0)));
   // Tapering to the tip.
   p += side * position.x * aSize.y * radius * (1.0 - 0.7 * position.y);

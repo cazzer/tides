@@ -13,8 +13,13 @@ import { seededRandom } from './sun-activity'
  * radius), so the layout turns with the Sun and is the same on every date.
  */
 
-/** [TUNE] The fringe's tallest jets above the limb, solar radii. */
-export const SUN_FRINGE = 0.012
+/**
+ * [TUNE] The fringe's tallest jets above the limb, solar radii. The shell
+ * round them (SUN_SHELL) must stay under the ship's stop (COLLISION_MARGIN)
+ * by more than the near plane's distance there (NEAR_SHARE of the gap), or
+ * the near plane cuts a hole in the Sun under the ship.
+ */
+export const SUN_FRINGE = 0.01
 
 /**
  * [TUNE] The fringe's height on screen, CSS px, over which it rises from
@@ -35,6 +40,15 @@ export function sunShellScale([width, height]: SphereSegments): number {
   const sag = Math.max(halfDiagonal, Math.PI / Math.min(width, height))
   return (1 + SUN_FRINGE) / Math.cos(sag)
 }
+
+/**
+ * The Sun's sphere. The trace makes its silhouette exact, so it needs no
+ * finer limb sphere close in (limb-detail.ts).
+ */
+export const SUN_SEGMENTS = [128, 128] as const
+
+/** The shell SunRenderer draws the Sun's sphere scaled out to. */
+export const SUN_SHELL = sunShellScale(SUN_SEGMENTS)
 
 /**
  * [TUNE] The 3D blades (high tier only): tufts, and blades per tuft (from,
@@ -172,15 +186,12 @@ export interface SpiculeTuft {
   blades: SpiculeBlade[]
 }
 
-let tufts: SpiculeTuft[] | null = null
-
 /**
  * The tufts, on the network's lanes. A tuft's blades lean out from its
  * centre in proportion to how far out they stand, so it opens as a sheaf;
  * the middle ones are the tallest.
  */
 export function spiculeTufts(): SpiculeTuft[] {
-  if (tufts) return tufts
   const { tufts: count, blades: [fewest, most] } = SPICULE_BUDGET.high
   const random = seededRandom(0x5b1c0de5)
   const out: SpiculeTuft[] = []
@@ -224,23 +235,25 @@ export function spiculeTufts(): SpiculeTuft[] {
     }
     out.push({ axis, blades })
   }
-  tufts = out
   return out
 }
 
+export interface SpiculeArrays {
+  /** Per blade: foot (xyz), seed. */
+  spicule: Float32Array
+  /** Per blade: lean (xyz). */
+  lean: Float32Array
+  /** Per blade: height, width. */
+  size: Float32Array
+  count: number
+}
+
 /**
- * The blades as one instanced quad (SunSpicules; sun-spicule/vertex.glsl
- * stands each one up and turns it to the eye): aSpicule (foot xyz, seed),
- * aLean (xyz), aSize (height, width).
+ * The blades packed for the GPU. The tufts' objects (~100k) are garbage
+ * once this returns: only the typed arrays live on.
  */
-export function createSpiculeGeometry(): THREE.InstancedBufferGeometry {
+export function spiculeArrays(): SpiculeArrays {
   const blades = spiculeTufts().flatMap((t) => t.blades)
-  const geometry = new THREE.InstancedBufferGeometry()
-  geometry.setAttribute(
-    'position',
-    new THREE.BufferAttribute(new Float32Array([-1, 0, 0, 1, 0, 0, -1, 1, 0, 1, 1, 0]), 3)
-  )
-  geometry.setIndex([0, 1, 2, 1, 3, 2])
   const spicule = new Float32Array(blades.length * 4)
   const lean = new Float32Array(blades.length * 3)
   const size = new Float32Array(blades.length * 2)
@@ -249,10 +262,64 @@ export function createSpiculeGeometry(): THREE.InstancedBufferGeometry {
     lean.set(b.lean, i * 3)
     size.set([b.height, b.width], i * 2)
   })
+  return { spicule, lean, size, count: blades.length }
+}
+
+/**
+ * The blades as one instanced quad (SunSpicules; sun-spicule/vertex.glsl
+ * stands each one up and turns it to the eye): aSpicule (foot xyz, seed),
+ * aLean (xyz), aSize (height, width).
+ */
+export function createSpiculeGeometry(): THREE.InstancedBufferGeometry {
+  const { spicule, lean, size, count } = spiculeArrays()
+  const geometry = new THREE.InstancedBufferGeometry()
+  geometry.setAttribute(
+    'position',
+    new THREE.BufferAttribute(new Float32Array([-1, 0, 0, 1, 0, 0, -1, 1, 0, 1, 1, 0]), 3)
+  )
+  geometry.setIndex([0, 1, 2, 1, 3, 2])
   geometry.setAttribute('aSpicule', new THREE.InstancedBufferAttribute(spicule, 4))
   geometry.setAttribute('aLean', new THREE.InstancedBufferAttribute(lean, 3))
   geometry.setAttribute('aSize', new THREE.InstancedBufferAttribute(size, 2))
-  geometry.instanceCount = blades.length
+  geometry.instanceCount = count
   geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1 + 2 * SUN_FRINGE)
   return geometry
+}
+
+const toObject = new THREE.Matrix4()
+
+/**
+ * The eye (perspective) and the view direction (orthographic) in `mesh`'s
+ * own frame, into `eye` and `dir`: the photosphere traces its sphere there
+ * (sun/fragment.frag), so any parent's turn, scale or squash is undone.
+ */
+export function eyeInObject(camera: THREE.Camera, mesh: THREE.Object3D, eye: THREE.Vector3, dir: THREE.Vector3) {
+  toObject.multiplyMatrices(camera.matrixWorldInverse, mesh.matrixWorld).invert()
+  eye.set(0, 0, 0).applyMatrix4(toObject)
+  dir.set(0, 0, -1).transformDirection(toObject)
+}
+
+const centre = new THREE.Vector3()
+const eyeWorld = new THREE.Vector3()
+
+/**
+ * How many of `blades` to draw for `camera` and a blade mesh (`mesh`,
+ * scaled to the Sun's radius) in a view `viewHeight` CSS px tall: all, or
+ * none while even the widest blade, at the nearest the surface comes to
+ * the eye, would be under SPICULE_FADE_PX.
+ */
+export function spiculeInstanceCount(
+  camera: THREE.Camera,
+  mesh: THREE.Object3D,
+  viewHeight: number,
+  blades: number
+): number {
+  const radius = mesh.matrixWorld.getMaxScaleOnAxis()
+  let px = SPICULE_WIDTH[1] * radius * camera.projectionMatrix.elements[5] * 0.5 * viewHeight
+  if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) {
+    centre.setFromMatrixPosition(mesh.matrixWorld)
+    eyeWorld.setFromMatrixPosition(camera.matrixWorld)
+    px /= Math.max(centre.distanceTo(eyeWorld) - radius, 1e-9)
+  }
+  return px < SPICULE_FADE_PX[0] ? 0 : blades
 }

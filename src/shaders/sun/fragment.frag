@@ -63,8 +63,9 @@ void main() {
     height *= 0.25 + 0.75 * smoothstep(-0.3, 0.8, jets);
   }
   // Coverage, a pixel soft: alpha-to-coverage turns it into a smooth edge.
+  // Discarded only after the lookups below, which take their mip level
+  // from their neighbours' coordinates.
   float solid = 1.0 - smoothstep(1.0 + height - edge, 1.0 + height + edge, miss);
-  if (solid <= 0.0) discard;
 
   // The sphere along this ray, or its limb (the ray's nearest approach) for
   // a fringe pixel.
@@ -73,7 +74,6 @@ void main() {
   vec3 s = normalize(hit);
   float mu = clamp(dot(s, -d), 0.0, 1.0);
   float limbward = 1.0 - mu;
-  gl_FragDepth = fragDepthOfClip(projectionMatrix * modelViewMatrix * vec4(hit, 1.0));
 
   // The plasma's two reading frames, each turning slowly on its own axis,
   // so their sum churns instead of sliding.
@@ -93,6 +93,18 @@ void main() {
   float w = 0.5 + 0.5 * sin(phase);
   float churn = mix(p0, p1, w);
   float flicker = mix(p1, p0, w);
+  if (solid <= 0.0) discard;
+
+#ifdef SUN_TRACED_DEPTH
+  float depth = fragDepthOfClip(projectionMatrix * modelViewMatrix * vec4(hit, 1.0));
+  #ifndef USE_REVERSED_DEPTH_BUFFER
+  // On a standard buffer far out, the trace's rounding could leave the
+  // Sun a step behind the corona's quad, which must lose that tie
+  // (tides-01v.8.1): lean a few steps of a 24-bit buffer toward the eye.
+  depth = max(depth - 4.0 / 16777216.0, 0.0);
+  #endif
+  gl_FragDepth = depth;
+#endif
 
   // The quiet Sun: churning, mottled with the network.
   float I = 0.42 + 0.22 * face.a + 0.4 * (churn - 0.5);

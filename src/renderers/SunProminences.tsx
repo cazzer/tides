@@ -5,6 +5,7 @@ import vertexShader from '../shaders/sun-prominence/vertex.glsl'
 import fragmentShader from '../shaders/sun-prominence/fragment.frag'
 import { isLowQuality } from '../quality'
 import { createProminenceGeometry, PROMINENCE_FADE_PX, PROMINENCE_LOOP_FADE_PX } from './sun-prominences'
+import { SUN_FRINGE } from './sun-spicules'
 
 const viewport = new THREE.Vector4()
 
@@ -28,6 +29,7 @@ function createProminences(low: boolean) {
     uniforms: {
       time: { value: 0 },
       uViewHeight: { value: 1 },
+      uFringe: { value: SUN_FRINGE },
       uFadePx: { value: new THREE.Vector2(...PROMINENCE_FADE_PX) },
       uLoopFadePx: { value: new THREE.Vector2(...PROMINENCE_LOOP_FADE_PX) },
     },

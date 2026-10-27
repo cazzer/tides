@@ -1,17 +1,50 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import vertexShader from '../shaders/sun-spicule/vertex.glsl'
 import fragmentShader from '../shaders/sun-spicule/fragment.frag'
-import { createSpiculeGeometry, SPICULE_FADE_PX, SPICULE_WIDTH, SUN_FRINGE } from './sun-spicules'
+import { whenIdle } from '../ship/limb-detail'
+import { createSpiculeGeometry, SPICULE_FADE_PX, spiculeInstanceCount, SUN_FRINGE } from './sun-spicules'
 
 const viewport = new THREE.Vector4()
-const centre = new THREE.Vector3()
-const eye = new THREE.Vector3()
 
-function createSpicules() {
-  const geometry = createSpiculeGeometry()
-  const material = new THREE.ShaderMaterial({
+// One blade geometry (~4 MB) for every view that draws the Sun, built in an
+// idle period rather than during a render (its layout takes ~50 ms) and
+// dropped when the last view lets it go.
+let shared: { geometry: THREE.InstancedBufferGeometry; blades: number } | null = null
+let users = 0
+let cancelBuild: (() => void) | null = null
+const listeners = new Set<() => void>()
+
+function retainSpicules(): () => void {
+  users++
+  if (!shared && !cancelBuild) {
+    cancelBuild = whenIdle(() => {
+      cancelBuild = null
+      const geometry = createSpiculeGeometry()
+      shared = { geometry, blades: geometry.instanceCount }
+      listeners.forEach((listener) => listener())
+    })
+  }
+  return () => {
+    users--
+    if (users > 0) return
+    cancelBuild?.()
+    cancelBuild = null
+    shared?.geometry.dispose()
+    shared = null
+  }
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+const sharedSpicules = () => shared
+
+function createMaterial() {
+  return new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
     transparent: true,
@@ -33,7 +66,6 @@ function createSpicules() {
       uFringe: { value: SUN_FRINGE },
     },
   })
-  return { geometry, material, blades: geometry.instanceCount }
 }
 
 // Outside the component: the react-hooks lint rejects mutating a memoised
@@ -43,50 +75,44 @@ function setTime(material: THREE.ShaderMaterial, time: number) {
 }
 
 // Per view, at draw time: the view's height (the main view and each panel
-// differ), and none of the ~100k blades at all while even the widest, at
-// the nearest the surface comes to the eye, would be under the fade.
+// differ), and none of the ~100k blades while they would all be too thin.
+// The geometry is shared, so its count is set for each draw.
 function prepare(
-  { geometry, material, blades }: ReturnType<typeof createSpicules>,
+  material: THREE.ShaderMaterial,
   renderer: THREE.WebGLRenderer,
   camera: THREE.Camera,
-  mesh: THREE.Object3D
+  mesh: THREE.Mesh
 ) {
+  if (!shared) return
   renderer.getCurrentViewport(viewport)
   const viewHeight = viewport.w / renderer.getPixelRatio()
   material.uniforms.uViewHeight.value = viewHeight
-  const radius = mesh.matrixWorld.getMaxScaleOnAxis()
-  let px = SPICULE_WIDTH[1] * radius * camera.projectionMatrix.elements[5] * 0.5 * viewHeight
-  if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) {
-    centre.setFromMatrixPosition(mesh.matrixWorld)
-    eye.setFromMatrixPosition(camera.matrixWorld)
-    px /= Math.max(centre.distanceTo(eye) - radius, 1e-9)
-  }
-  geometry.instanceCount = px < SPICULE_FADE_PX[0] ? 0 : blades
+  shared.geometry.instanceCount = spiculeInstanceCount(camera, mesh, viewHeight, shared.blades)
 }
 
 /**
  * The spicules as 3D blades in tufts (sun-spicules.ts), one instanced draw,
- * high tier only. A child of the Sun's oriented group, so they turn with it.
+ * high tier only, once their geometry is built. A child of the Sun's
+ * oriented group, so they turn with it.
  */
 export function SunSpicules({ radius }: { radius: number }) {
-  const spicules = useMemo(() => createSpicules(), [])
-  const { geometry, material } = spicules
-  useEffect(() => () => {
-    geometry.dispose()
-    material.dispose()
-  }, [geometry, material])
+  useEffect(() => retainSpicules(), [])
+  const spicules = useSyncExternalStore(subscribe, sharedSpicules)
+  const material = useMemo(() => createMaterial(), [])
+  useEffect(() => () => material.dispose(), [material])
   useFrame((state) => setTime(material, state.clock.elapsedTime))
   const mesh = useRef<THREE.Mesh>(null)
   const onBeforeRender = useCallback(
     (renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
-      if (mesh.current) prepare(spicules, renderer, camera, mesh.current)
+      if (mesh.current) prepare(material, renderer, camera, mesh.current)
     },
-    [spicules]
+    [material]
   )
+  if (!spicules) return null
   return (
     <mesh
       ref={mesh}
-      geometry={geometry}
+      geometry={spicules.geometry}
       material={material}
       scale={radius}
       onBeforeRender={onBeforeRender}

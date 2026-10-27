@@ -9,19 +9,11 @@ import { meshBounds } from '@react-three/drei'
 import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE } from './corona-geometry'
 import { SunGlare } from './SunGlare'
 import { useStore } from '../store'
-import { LIMB_SEGMENTS, useBodySphere } from '../ship/limb-detail'
 import { isLowQuality } from '../quality'
 import { sunSurface } from './sun-surface'
 import { SunProminences } from './SunProminences'
 import { SunSpicules } from './SunSpicules'
-import { SUN_FRINGE, SUN_FRINGE_FADE_PX, sunShellScale } from './sun-spicules'
-
-const SUN_SEGMENTS = [128, 128] as const
-
-// Both spheres useBodySphere may hand over, so one shell fits either.
-const SUN_SHELL = Math.max(sunShellScale(SUN_SEGMENTS), sunShellScale(LIMB_SEGMENTS))
-
-const eyeToObject = new THREE.Matrix4()
+import { eyeInObject, SUN_FRINGE, SUN_FRINGE_FADE_PX, SUN_SEGMENTS, SUN_SHELL } from './sun-spicules'
 
 // Outside the component: the react-hooks lint rejects mutating a memoised
 // material in place, as three's uniforms are meant to be.
@@ -30,12 +22,13 @@ function tick(surface: ReturnType<typeof sunSurface>, material: THREE.ShaderMate
   material.uniforms.time.value = time
 }
 
-// The eye and the view direction in the Sun's frame, per view: the
-// photosphere traces its sphere there (sun/fragment.frag).
-function setEye(material: THREE.ShaderMaterial, camera: THREE.Camera, mesh: THREE.Object3D) {
-  eyeToObject.multiplyMatrices(camera.matrixWorldInverse, mesh.matrixWorld).invert()
-  material.uniforms.uEyeObject.value.set(0, 0, 0).applyMatrix4(eyeToObject)
-  material.uniforms.uDirObject.value.set(0, 0, -1).transformDirection(eyeToObject)
+// Per view, at draw time: the eye and the view direction in the Sun's
+// frame, which the photosphere traces its sphere in (sun/fragment.frag),
+// and the fringe's fade in device px, which its fwidth measures in.
+function setView(material: THREE.ShaderMaterial, renderer: THREE.WebGLRenderer, camera: THREE.Camera, mesh: THREE.Object3D) {
+  const { uEyeObject, uDirObject, uFringeFadePx } = material.uniforms
+  eyeInObject(camera, mesh, uEyeObject.value, uDirObject.value)
+  uFringeFadePx.value.set(...SUN_FRINGE_FADE_PX).multiplyScalar(renderer.getPixelRatio())
 }
 
 interface SunRendererProps {
@@ -47,7 +40,15 @@ interface SunRendererProps {
 export default function SunRenderer({ diameter, interactive = false }: SunRendererProps) {
   // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
   const shipMode = useStore((s) => s.shipMode)
-  const sphere = useBodySphere('sun', diameter, SUN_SEGMENTS)
+  // A plain sphere: the trace makes the limb exact, so no limb sphere.
+  const sphere = useMemo(() => {
+    const geometry = new THREE.SphereGeometry(diameter, ...SUN_SEGMENTS)
+    // Culled and picked by the shell the vertex shader draws.
+    geometry.computeBoundingSphere()
+    geometry.boundingSphere!.radius *= SUN_SHELL
+    return geometry
+  }, [diameter])
+  useEffect(() => () => sphere.dispose(), [sphere])
   const gl = useThree((s) => s.gl)
   // The photosphere's and corona's baked detail, shared by every view on
   // this renderer.
@@ -67,6 +68,10 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
       },
       vertexShader: sunVertex,
       fragmentShader: sunFragment,
+      // The traced surface's depth, where blades and filaments stand on it
+      // close in: the high tier only, as the low tier has no blades and a
+      // depth write costs a phone its early depth test.
+      defines: isLowQuality() ? {} : { SUN_TRACED_DEPTH: '' },
       // The traced limb's coverage, smoothed by the canvas's MSAA.
       alphaToCoverage: true,
     })
@@ -100,8 +105,8 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
   useFrame((state) => tick(surface, sunMaterial, state.clock.elapsedTime))
   const mesh = useRef<THREE.Mesh>(null)
   const onBeforeRender = useCallback(
-    (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
-      if (mesh.current) setEye(sunMaterial, camera, mesh.current)
+    (renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
+      if (mesh.current) setView(sunMaterial, renderer, camera, mesh.current)
     },
     [sunMaterial]
   )
@@ -132,7 +137,9 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
         />
       </mesh>
       <SunProminences radius={diameter} />
-      {!isLowQuality() && <SunSpicules radius={diameter} />}
+      {/* Only where the eye can come close: View from Earth and Moon Phase
+          never draw a blade. */}
+      {!isLowQuality() && (shipMode || interactive) && <SunSpicules radius={diameter} />}
       {/* Far glare: keeps the Sun a bright point when its disc is sub-pixel
           at flight-scale ranges (tides-2hv.12); separate from the corona. */}
       {shipMode && <SunGlare radius={diameter} />}
