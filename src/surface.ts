@@ -9,6 +9,11 @@
 // and terrain shadows (beads under tides-zmw.9), which must land before the
 // flag becomes the default (tides-zmw.9.10).
 //
+// The flag is an experiment toggle kept for convenience, not a mode of its
+// own: the ship flies the same speed law over the globe and the tiles
+// (tides-zmw.9.29, ship/ship-bodies.ts EARTH_GROUND_SPEED_LAW), and nothing
+// new should branch on it beyond what the tiles themselves need.
+//
 // High tier only: the tiles stream tens of MB of textures and meshes a phone
 // budget can't spare. iPads report the high tier; there, without linear
 // filtering of float textures (OES_texture_float_linear), the elevation maps

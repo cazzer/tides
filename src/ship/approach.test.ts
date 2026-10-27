@@ -6,6 +6,7 @@ import {
   V_TOP,
   collisionRadius,
   createShipState,
+  lawFloor,
   stepShip,
   wellFactor,
   type Body,
@@ -401,10 +402,11 @@ describe('approachSubject', () => {
 describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
   const M = EARTH_UNITS_PER_METRE
   const law = EARTH_GROUND_SPEED_LAW
-  const ground = { law, stop: FINE_GROUND_CLEARANCE }
   const wellTime = wellFactor(BODY_MASS_KG.earth) / K_WELL
 
   test('the plateau, then the gap e-folding every 1 / (rate · share), then to the stop', () => {
+    // The gap law alone, without the air (closed form).
+    const ground = { law: { ...law, air: undefined }, stop: FINE_GROUND_CLEARANCE }
     // On the plateau, closing at it: linear.
     const plateauGap = law.max / law.rate
     expect(approachEta(0.05, law.max, wellTime, 1, EARTH_SLOWEST, ground) - approachEta(plateauGap, law.max, wellTime, 1, EARTH_SLOWEST, ground)).toBeCloseTo((0.05 - plateauGap) / law.max, 9)
@@ -416,28 +418,50 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
     expect(approachEta(1, 0, wellTime, 1, EARTH_SLOWEST, ground)).toBe(Infinity)
   })
 
-  test.each([0.5, 1])('a locked descent at throttle %s from 5 km arrives within 15%% of the ETA it starts with', (throttle) => {
+  test('with the air (tides-zmw.9.29): its leg at share · sea · e^(gap / scale), summed close to the closed form', () => {
+    const ground = { law, stop: FINE_GROUND_CLEARANCE }
+    const air = law.air!
+    // From 20 km to 1 km the air alone sets the floor: ∫ dx / (sea · e^(x / L)).
+    const between = (hi: number, lo: number) =>
+      approachEta(hi * M, 1, wellTime, 1, EARTH_SLOWEST, ground) - approachEta(lo * M, 1, wellTime, 1, EARTH_SLOWEST, ground)
+    const exact = (air.scale / air.sea) * (Math.exp((-1000 * M) / air.scale) - Math.exp((-20000 * M) / air.scale))
+    expect(between(20000, 1000) / exact).toBeCloseTo(1, 2)
+    // Half throttle: twice as long.
+    const half = approachEta(20000 * M, 1, wellTime, 0.5, EARTH_SLOWEST, ground)
+    expect(half / approachEta(20000 * M, 1, wellTime, 1, EARTH_SLOWEST, ground)).toBeCloseTo(2, 2)
+    expect(approachEta(FINE_GROUND_CLEARANCE, 1e-4, wellTime, 1, EARTH_SLOWEST, ground)).toBe(0)
+  })
+
+  // Through the air now (tides-zmw.9.29): about a minute at full throttle.
+  // Onto a 5 km plateau the air is thinner all the way down (the ETA's base).
+  test.each([
+    [0.5, 0],
+    [1, 0],
+    [1, 5000],
+  ])('a locked descent at throttle %s from 20 km onto ground %s m up arrives within 15%% of the ETA it starts with', (throttle, plateau) => {
+    const base = plateau * M
+    const ground = { law, stop: FINE_GROUND_CLEARANCE, base }
     const earth: Body = {
       key: 'earth',
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
       collisionRadius: EARTH_RADIUS + 10 * M,
       mass: BODY_MASS_KG.earth,
-      ground: () => EARTH_RADIUS,
+      ground: () => EARTH_RADIUS + base,
       groundClearance: FINE_GROUND_CLEARANCE,
       minSpeed: EARTH_SLOWEST,
       groundSpeed: law,
     }
     const state = createShipState()
-    state.position.set(0, EARTH_RADIUS + 5000 * M, 0)
+    state.position.set(0, EARTH_RADIUS + base + 20000 * M, 0)
     // Nose down, already at its steady speed.
     state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
-    state.velocity.set(0, -throttle * law.rate * 5000 * M, 0)
-    const eta = approachEta(5000 * M, -state.velocity.y, wellTime, throttle, EARTH_SLOWEST, ground)
+    state.velocity.set(0, -throttle * lawFloor(law, 20000 * M, base + 20000 * M), 0)
+    const eta = approachEta(20000 * M, -state.velocity.y, wellTime, throttle, EARTH_SLOWEST, ground)
     const input: ShipInput = { throttle, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true }
     const telemetry = createShipTelemetry()
     let t = 0
-    for (; t < 60; t += 1 / 60) {
+    for (; t < 300; t += 1 / 60) {
       stepShip(state, input, 1 / 60, { bodies: [earth], targetKey: 'earth' }, telemetry)
       // Arrived: within a metre of the stop.
       if (telemetry.nearest.surfaceDistance < FINE_GROUND_CLEARANCE + 1 * M) break

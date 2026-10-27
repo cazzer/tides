@@ -366,11 +366,11 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       look.up.copy(dir)
       look.lookAt(state.position.clone().add(fwd))
       state.orientation.copy(look.quaternion)
-      // Half throttle: the floor follows the gap here (tides-zmw.9.18), so the
-      // gap e-folds every ~1.4 s on the way down.
+      // Half throttle: the air's floor here (tides-zmw.9.29), ~90 m/s down
+      // the 45°, then the gap law's last ~100 m.
       const input: ShipInput = { ...still, throttle: 0.5 }
       let lowest = Infinity
-      for (let k = 0; k < 2400; k++) {
+      for (let k = 0; k < 6000; k++) {
         setSurfaceEye(radius(earth, state) - EARTH_RADIUS)
         // Every 37th frame the tiles change under the ship as it settles.
         const change = k % 37 === 0 ? () => (field.base += k % 74 === 0 ? 15 : -20) : undefined

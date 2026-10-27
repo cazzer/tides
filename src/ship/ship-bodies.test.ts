@@ -15,6 +15,7 @@ import {
   V_NORMAL,
   collisionRadius,
   floorRadius,
+  lawFloor,
   speedCap,
   speedFloor,
   wellFactor,
@@ -177,7 +178,7 @@ describe('ship bodies', () => {
       const tiled = createShipBodies('high', true).find((b) => b.key === 'earth')!
       expect(collisionRadius(tiled)).toBe(EARTH_RADIUS + EARTH_HARD_CLEARANCE)
       expect(tiled.groundClearance).toBe(EARTH_GROUND_CLEARANCE)
-      expect(speedFloor(earth)).toBe(EARTH_GROUND_SPEED)
+      expect(speedFloor(earth)).toBe(EARTH_SLOWEST)
       // Under the cloud base, and far enough up that 0.4 of it stays over
       // shipNear's floor.
       expect(EARTH_GROUND_CLEARANCE).toBeLessThan(CLOUD_CLEARANCE)
@@ -396,13 +397,15 @@ describe('ship bodies', () => {
       expect(closest).toBeGreaterThan(reach)
     })
 
-    it('flies the floor slowly: the cap falls to EARTH_GROUND_SPEED near the ground, with no FOV kick', () => {
+    it("flies the floor slowly: the cap falls to the air's near the ground (tides-zmw.9.29), with no FOV kick", () => {
       const { earth } = byKey()
       const up = new THREE.Vector3(0, 1, 0)
       const at = (gap: number) =>
         earth.position.clone().addScaledVector(up, earth.ground!(up) + gap)
       const bodies = [earth]
-      expect(speedCap(at(EARTH_GROUND_CLEARANCE), bodies)).toBe(EARTH_GROUND_SPEED)
+      const altitude = earth.ground!(up) + EARTH_GROUND_CLEARANCE - earth.radius
+      expect(speedCap(at(EARTH_GROUND_CLEARANCE), bodies)).toBeCloseTo(lawFloor(EARTH_GROUND_SPEED_LAW, EARTH_GROUND_CLEARANCE, altitude), 15)
+      expect(speedCap(at(EARTH_GROUND_CLEARANCE), bodies)).toBeLessThan(EARTH_GROUND_SPEED / 10)
       // Down the well past V_NORMAL, as it would be with the low tier's floor.
       expect(speedCap(at(0.5), bodies)).toBeLessThan(V_NORMAL)
       expect(speedCap(at(0.5), bodies)).toBeGreaterThan(EARTH_GROUND_SPEED)
@@ -442,14 +445,14 @@ describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
     expect(axis.distanceTo(new THREE.Vector3(0, 1, 0).applyQuaternion(frame.quaternion))).toBeLessThan(1e-14)
   })
 
-  it('follows the gap over the tiles only; without them, the 0.02 floor as before', () => {
+  it('flies the same law with the tiles or without (tides-zmw.9.29); the low tier keeps V_NORMAL', () => {
     const over = createShipBodies('high', true).find((b) => b.key === 'earth')!
     expect(over.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
     expect(over.minSpeed).toBe(EARTH_SLOWEST)
     expect(EARTH_SLOWEST * 6371000 / EARTH_RADIUS).toBeCloseTo(50, 6)
     const without = createShipBodies('high', false).find((b) => b.key === 'earth')!
-    expect(without.groundSpeed).toBeUndefined()
-    expect(without.minSpeed).toBe(EARTH_GROUND_SPEED)
+    expect(without.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
+    expect(without.minSpeed).toBe(EARTH_SLOWEST)
     const low = createShipBodies('low', false).find((b) => b.key === 'earth')!
     expect(low.groundSpeed).toBeUndefined()
     expect(low.minSpeed).toBeUndefined()

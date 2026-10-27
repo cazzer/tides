@@ -16,7 +16,7 @@ import { EARTH_KM_PER_UNIT, SURFACE_MAX_METRES, surfaceOpacityUniform } from '..
 import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
 import { SURFACE_TILES_ON } from '../surface'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
-import type { Body as FlightBody, GroundSpeedLaw } from './flight'
+import type { AirSpeedLaw, Body as FlightBody, GroundSpeedLaw } from './flight'
 import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE, shipNear } from './ship-session'
 import {
   earthLimbTerrain,
@@ -27,6 +27,7 @@ import {
   terrainFloorRadius,
 } from './terrain-floor'
 import { limbSphereInUse } from './limb-detail'
+import { SCALE_HEIGHT_KM } from './frame-carry'
 
 // The scene draws Sun, Earth and Moon with sceneRadius(diameter) as the sphere
 // radius (solar-system.tsx), so these match what is on screen.
@@ -147,27 +148,46 @@ export const GROUND_DROP_TAU = 1
 export const NEAR_SAMPLE_MAX = 20 / EARTH_KM_PER_UNIT
 
 /**
- * The slowest the speed cap falls to near Earth's ground on the high tier
- * (flight.ts speedFloor), units/s: the cloud deck's few hundredths of a unit
- * take a second or two to cross, where V_NORMAL went through a column a
- * frame. [TUNE]
+ * The top of Earth's floor (EARTH_GROUND_SPEED_LAW's plateau), units/s:
+ * ~43 km/s, where the air's floor meets it ~91 km up and the well takes
+ * over from it ~170 km up. [TUNE]
  */
 export const EARTH_GROUND_SPEED = 0.02
 
 /**
- * Over the streamed tiles (tides-zmw.9.18), the floor follows the gap to
- * the ground: EARTH_GAP_RATE · gap, never under EARTH_SLOWEST nor over
- * EARTH_GROUND_SPEED, today's plateau (flight.ts speedFloorAt). Flying at
- * a share of it the gap e-folds every 1 / (rate · share) s: 720 km/h at
- * full throttle 100 m up, 216 at the 30 m stop. [TUNE]
+ * Near the ground (tides-zmw.9.18) the floor follows the gap to it:
+ * EARTH_GAP_RATE · gap, never under EARTH_SLOWEST nor over
+ * EARTH_GROUND_SPEED, the plateau (flight.ts speedFloorAt). Flying at a
+ * share of it the gap e-folds every 1 / (rate · share) s: 720 km/h at full
+ * throttle 100 m up, 216 at the 30 m stop. [TUNE]
+ *
+ * Above that the air sets it (tides-zmw.9.29, EARTH_AIR_SPEED): constant
+ * dynamic pressure from EARTH_AIR_SEA_SPEED at sea level, an e-fold every
+ * two scale heights (17 km): 760 km/h 1 km up, 1,300 at 10 km, 7,600 at
+ * 40 km, meeting the plateau ~91 km up, in the air's release band, above
+ * which the cap is the gap law's as before. Flying level over mountains it
+ * holds, the gap law only guarding the last ~100 m (~180 m at 10 km up).
+ * Climbing past 30° hands the floor back to the gap law by 60°,
+ * Elite's escape vector: a climb from the sea to space takes seconds, not
+ * the minute and a half the air alone would.
  */
 export const EARTH_GAP_RATE = 2
-/** 50 m/s: the least Earth's floor falls to over the tiles. [TUNE] */
+/** 50 m/s: the least Earth's floor falls to near the ground. [TUNE] */
 export const EARTH_SLOWEST = 50 * EARTH_UNITS_PER_METRE
+/** 200 m/s: the air's floor at sea level (the user's call, 2026-10-26). [TUNE] */
+export const EARTH_AIR_SEA_SPEED = 200 * EARTH_UNITS_PER_METRE
+/** Sines of the ship's climb (its velocity's) where the escape vector starts and is full (30°, 60°). [TUNE] */
+export const EARTH_ESCAPE: readonly [number, number] = [Math.sin(Math.PI / 6), Math.sin(Math.PI / 3)]
+export const EARTH_AIR_SPEED: Readonly<AirSpeedLaw> = {
+  sea: EARTH_AIR_SEA_SPEED,
+  scale: (2 * SCALE_HEIGHT_KM) / EARTH_KM_PER_UNIT,
+  escape: EARTH_ESCAPE,
+}
 export const EARTH_GROUND_SPEED_LAW: Readonly<GroundSpeedLaw> = {
   rate: EARTH_GAP_RATE,
   min: EARTH_SLOWEST,
   max: EARTH_GROUND_SPEED,
+  air: EARTH_AIR_SPEED,
 }
 
 /**
@@ -263,7 +283,9 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
   const latLon: [number, number] = [0, 0]
   const low = tier === 'low'
   // Without the tiles (production until tides-zmw.9.10) the stop is the
-  // globe's as it was: the standard clearance and window, no settling.
+  // globe's as it was: the standard clearance and window, no settling. The
+  // speed law is the same either way: ?surface=1 is an experiment toggle,
+  // not a flight mode of its own (the user, 2026-10-26).
   const fixed = low || !surfaceTiles
   const clearance: EarthClearance = earthClearance(false)
   let lift = 0
@@ -314,8 +336,8 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
     ? EARTH_COLLISION_RADIUS
     : EARTH_RADIUS + (surfaceTiles ? clearance.hard : EARTH_GROUND_CLEARANCE)
   body.groundClearance = EARTH_GROUND_CLEARANCE
-  body.minSpeed = low ? undefined : fixed ? EARTH_GROUND_SPEED : EARTH_SLOWEST
-  if (!fixed) body.groundSpeed = EARTH_GROUND_SPEED_LAW
+  body.minSpeed = low ? undefined : EARTH_SLOWEST
+  if (!low) body.groundSpeed = EARTH_GROUND_SPEED_LAW
   body.spin = spin
   body.ground = (direction, reach = clearance.reach) => drawn(toEarth(direction), reach) + Math.max(lift, 0)
   body.turnTo = (t) => {
