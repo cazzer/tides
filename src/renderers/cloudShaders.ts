@@ -76,8 +76,6 @@ import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './p
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
-import { TERRAIN_BLEND, terrainScaleUniform } from '../terrain-scale'
-import { liveTerrain } from './cloudTerrainScale'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import depthGlsl from '../shaders/depth.glsl'
@@ -1754,7 +1752,7 @@ const GROUND_FRAGMENT_LIGHT = /* glsl */ `
  * after lights_fragment_end), for the streamed tiles to reuse by text
  * (surface/tile-clouds.ts, tides-zmw.9.12). */
 export const CLOUD_GROUND_GLSL = {
-  head: (flat: boolean, live: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + liveTerrain(GROUND_FRAGMENT_HEAD, live),
+  head: (flat: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + GROUND_FRAGMENT_HEAD,
   light: GROUND_FRAGMENT_LIGHT,
 }
 
@@ -1788,8 +1786,6 @@ export interface CloudLayer {
     uCloudType: THREE.IUniform<THREE.Texture>
     uSunDir: THREE.IUniform<THREE.Vector3>
     uSeaLevel: THREE.IUniform<number>
-    /** The live terrain scale (../terrain-scale.ts), when `live`. */
-    uTerrainScale: THREE.IUniform<number>
   }
   /**
    * Shows `map`: whether it has measured heights (only geostationary imagery
@@ -1834,7 +1830,7 @@ async function fetchCeiling(): Promise<THREE.DataTexture> {
   return ceilingTexture(grey, TERRAIN_MAP_SIZE)
 }
 
-export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: boolean = TERRAIN_BLEND): CloudLayer {
+export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLayer {
   const uniforms: CloudLayer['uniforms'] = {
     uCloudMap: { value: null },
     uTerrainMap: { value: null },
@@ -1845,7 +1841,6 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
     uCloudType: { value: neutralTypeTexture() },
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
-    uTerrainScale: terrainScaleUniform,
   }
   const defines: Record<string, string> = flat ? { CLOUD_FLAT: '' } : {}
   const material = new THREE.ShaderMaterial({
@@ -1861,8 +1856,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
       uPixelScale: { value: 1 },
     },
     defines,
-    vertexShader: liveTerrain(VERTEX, live),
-    fragmentShader: liveTerrain(FRAGMENT, live),
+    vertexShader: VERTEX,
+    fragmentShader: FRAGMENT,
     transparent: true,
     depthWrite: false,
     // The shader premultiplies, so that within reach the haze it adds over a
@@ -1975,12 +1970,12 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean, live: bo
         GROUND_VERTEX_BODY
       )
       shader.fragmentShader = inject(
-        inject(shader.fragmentShader, 'common', flag + liveTerrain(GROUND_FRAGMENT_HEAD, live)),
+        inject(shader.fragmentShader, 'common', flag + GROUND_FRAGMENT_HEAD),
         'lights_fragment_end',
         GROUND_FRAGMENT_LIGHT
       )
     },
-    customProgramCacheKey: () => (flat ? 'cloud-shadow-flat' : 'cloud-shadow') + (live ? '-live' : ''),
+    customProgramCacheKey: () => (flat ? 'cloud-shadow-flat' : 'cloud-shadow'),
   }
   const setMap = (map: THREE.Texture, measured: boolean, types: THREE.Texture | null) => {
     uniforms.uCloudMap.value = map

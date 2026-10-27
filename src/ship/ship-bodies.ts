@@ -10,15 +10,9 @@ import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN, MAX_DT } from './flight'
-import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
-import {
-  EARTH_KM_PER_UNIT,
-  SURFACE_MAX_METRES,
-  TRUE_FLOOR_MAX,
-  liveTerrainDisplacement,
-  surfaceOpacityUniform,
-  terrainScaleUniform,
-} from '../terrain-scale'
+import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { RELIEF } from '../relief'
+import { EARTH_KM_PER_UNIT, SURFACE_MAX_METRES, surfaceOpacityUniform } from '../surface-handover'
 import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
 import { SURFACE_TILES_ON } from '../surface'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
@@ -28,6 +22,7 @@ import {
   earthLimbTerrain,
   earthTerrain,
   loadEarthTerrain,
+  TERRAIN_GREY_MARGIN,
   terrainFloorGreyAround,
   terrainFloorRadius,
 } from './terrain-floor'
@@ -69,6 +64,10 @@ export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
 /** Scene units per true metre at Earth (~4.63e-7). */
 export const EARTH_UNITS_PER_METRE = 1 / (EARTH_KM_PER_UNIT * 1000)
+
+/** The highest the globe's floor stands at true scale, scene units: its
+ * highest drawn ground (TERRAIN_MAX_GREY) plus the floor's margin. */
+const TRUE_FLOOR_MAX = TRUE_TERRAIN_DISPLACEMENT * (TERRAIN_MAX_GREY + TERRAIN_GREY_MARGIN / 255)
 
 /**
  * How far above the displaced ground (terrain-floor.ts) the ship stops over
@@ -235,8 +234,9 @@ const DEG = Math.PI / 180
 // (terrain-floor.ts), the sphere EarthRenderer's ground holds (the limb
 // sphere's while it does, tides-42p, else the 128 × 128 one's); over the
 // streamed tiles their mesh (renderers/surface/surface-ground.ts, through
-// ../surface-ground.ts, tides-zmw.9.8). The tiles draw nothing above the
-// blend's top, the globe fills their screen-door through the dissolve, and
+// ../surface-ground.ts, tides-zmw.9.8), both at the page's relief. The
+// tiles draw nothing above the handover's top (../surface-handover.ts), the
+// globe fills their screen-door through the dissolve, and
 // it shows wherever no tile has loaded, so the floor takes the higher of
 // the two there and the tiles' alone where they cover the window at full
 // opacity. Missing tiles (no sampler, 503s) leave today's floor.
@@ -248,8 +248,8 @@ const DEG = Math.PI / 180
 // rather than pop the ship, the floor settles. The change measured under
 // the ship across the tiles' update (mark, settle) and between frames
 // (mark, beginFrame: the dissolve's end, the globe's sphere swapping), at
-// one point in Earth's frame and in true height, so the ship's own motion,
-// the spin and the scale its altitude sets don't count, goes into `lift`, which the stop adds and then lets decay: ground that fell holds
+// one point in Earth's frame, so the ship's own motion and the spin don't
+// count, goes into `lift`, which the stop adds and then lets decay: ground that fell holds
 // the floor up and lowers it over GROUND_DROP_TAU; ground that rose eats
 // into the clearance down to the hard one (snapping beyond it) and lifts
 // the ship over GROUND_RISE_TAU. Ground the ship flies onto (a cliff ahead)
@@ -267,9 +267,7 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
   const fixed = low || !surfaceTiles
   const clearance: EarthClearance = earthClearance(false)
   let lift = 0
-  // The ground at `marked` as true height (over the sea, / the live scale),
-  // so a change of scale (the ship's own altitude, spatial) never counts;
-  // NaN when unmarked, or marked over the globe's fallback (not on the scale).
+  // The drawn ground at `marked` over the sea; NaN when unmarked.
   let markedHeight = NaN
 
   const toEarth = (direction: THREE.Vector3) => local.copy(direction).applyQuaternion(toLocal)
@@ -279,7 +277,7 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
     const floor = (limbSphereInUse(EARTH_RADIUS) ? earthLimbTerrain() : null) ?? earthTerrain()
     if (!floor) return terrainFloorRadius(null, EARTH_RADIUS, at)
     const grey = terrainFloorGreyAround(floor, at, reach / EARTH_RADIUS)
-    return EARTH_RADIUS + (liveTerrainDisplacement() * grey) / 255
+    return EARTH_RADIUS + (TERRAIN_DISPLACEMENT * grey) / 255
   }
 
   // The highest ground drawn within `reach` of `at` (see the header).
@@ -290,17 +288,16 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
     const [lat, lon] = earthLatLon(at, latLon)
     const tiles = sampler.maxElevation(lat, lon, reach / EARTH_UNITS_PER_METRE)
     if (!tiles) return globe(at, reach)
-    const ground =
-      EARTH_RADIUS + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * terrainScaleUniform.value * EARTH_UNITS_PER_METRE
+    const ground = EARTH_RADIUS + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * EARTH_UNITS_PER_METRE
     return opacity < 1 || !tiles.covered ? Math.max(ground, globe(at, reach)) : ground
   }
 
-  const height = (at: THREE.Vector3) => (drawn(at, clearance.reach) - EARTH_RADIUS) / terrainScaleUniform.value
+  const height = (at: THREE.Vector3) => drawn(at, clearance.reach) - EARTH_RADIUS
 
   // Takes the change in the ground at the marked point since the mark into the lift.
   const absorb = () => {
     if (Number.isFinite(markedHeight)) {
-      const change = (height(marked) - markedHeight) * terrainScaleUniform.value
+      const change = height(marked) - markedHeight
       if (Number.isFinite(change)) lift -= change
     }
     markedHeight = NaN
@@ -371,7 +368,7 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
       let top = field
       if (window > NEAR_SAMPLE_MAX) {
         const peak = Math.max(TRUE_FLOOR_MAX, (SURFACE_MAX_METRES + SURFACE_GROUND_MARGIN_METRES) * EARTH_UNITS_PER_METRE)
-        top = Math.max(field, EARTH_RADIUS + peak * terrainScaleUniform.value)
+        top = Math.max(field, EARTH_RADIUS + peak * RELIEF)
       } else if (window > clearance.reach) {
         top = drawn(at, window)
       }

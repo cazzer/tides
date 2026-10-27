@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import { REFERENCE_TERRAIN_DISPLACEMENT, TERRAIN_DISPLACEMENT, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { REFERENCE_RELIEF } from '../relief'
 import { latLonToLocal } from '../aurora'
 import { DEM_METRES_PER_UNIT, boxMips, decodeEarthDem, demLevel, toHalfBits } from '../earth-dem'
@@ -56,7 +56,6 @@ import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { createCloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
-import { terrainDisplacement } from '../terrain-scale'
 
 const shipped = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
 const [dem4k, dem2k, demMean] = await Promise.all(['earth-dem-4k.bin', 'earth-dem-2k.bin', 'earth-dem-mean.bin'].map(shipped))
@@ -475,12 +474,12 @@ describe('ground displacement (tides-zmw.2)', () => {
     })
   })
 
-  // The live terrain scale (tides-zmw.9.5) moves the material's
-  // displacementScale, which the displacement and its slope read as three's
-  // uniform (the patch test above), never a constant: the CPU mirrors take it
-  // as a parameter, the full relief's by default, and scale with it.
+  // The displacement and its slope read the material's displacementScale as
+  // three's uniform (the patch test above), never a constant: the CPU
+  // mirrors take it as a parameter, the page's relief's by default, and
+  // scale with it (the tests compare reliefs through it).
   it.each([1, 4])('mirrors the ground drawn at %dx: vertices, mesh slope and relief slope scale with the displacement', (scale) => {
-    const displacement = terrainDisplacement(scale)
+    const displacement = TRUE_TERRAIN_DISPLACEMENT * scale
     const share = displacement / TERRAIN_DISPLACEMENT
     const grid = meshGrid(EARTH_BASE_SEGMENTS)
     const grey = vertexGrey(ground4k, grid)

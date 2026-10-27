@@ -16,7 +16,7 @@
 //    TilesRenderer gathers the materials and textures it disposes after
 //    processTileModel, so the swapped-in one is disposed with the tile; the
 //    Lambert, never drawn, is disposed here.
-// 2. The live scale, the skirts, the stencil mark and the dissolve
+// 2. The page's relief, the stencil mark and the dissolve
 //    (surface-scale.ts prepareSurfaceMaterial, unchanged).
 // 3. The base GLSL every feature may read (basePatch()):
 //    vertex   surfaceUp      the sphere's up in the ground mesh's frame
@@ -89,9 +89,8 @@
 // the base's own code sits above each anchor, so every feature reads it set.
 import * as THREE from 'three'
 import { composePatches, type MaterialPatch } from '../eclipseShadow'
-import { RELIEF } from '../../relief'
 import type { GlobeLink } from './surface-link'
-import { prepareSurfaceMaterial, surfaceSkirtRange } from './surface-scale'
+import { prepareSurfaceMaterial } from './surface-scale'
 
 /** What a feature lays on every tile of a tileset. */
 export interface TileFeature {
@@ -352,13 +351,10 @@ export interface TileComposer {
   readonly key: string
   /** The features laid on, by slot name, in order. */
   readonly features: readonly string[]
-  /** The base and the features, composed (after the scale's patch). */
+  /** The base and the features, composed (after the dissolve's patch). */
   readonly patch: MaterialPatch
-  /**
-   * Builds `mesh`'s material (header, steps 1 to 4) for its `tile`, whose
-   * elevation range (the skirt lift's) is `skirtRangeMetres`.
-   */
-  prepare(mesh: THREE.Mesh, tile: object, skirtRangeMetres?: number): void
+  /** Builds `mesh`'s material (header, steps 1 to 4) for its `tile`. */
+  prepare(mesh: THREE.Mesh, tile: object): void
 }
 
 let warnedNotLambert = false
@@ -407,7 +403,7 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
     key,
     features: active.map(({ name }) => name),
     patch,
-    prepare(mesh, tile, skirtRangeMetres = 0) {
+    prepare(mesh, tile) {
       const built: { material: TerrainPhongMaterial; own: Record<string, THREE.IUniform> }[] = []
       const swap = (old: THREE.Material) => {
         // The library's lit tile material (not its unlit one): anything
@@ -426,7 +422,7 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
           },
           customProgramCacheKey: () => '',
         }
-        prepareSurfaceMaterial(material, hooks.length ? [patch, tileUniforms] : [patch], skirtRangeMetres)
+        prepareSurfaceMaterial(material, hooks.length ? [patch, tileUniforms] : [patch])
         material.customProgramCacheKey = () => key
         built.push({ material, own })
         return material
@@ -453,17 +449,17 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
  * parses (processTileModel runs in parseTile, before the load-model event
  * the fade plugin wraps materials at).
  */
-export function createTileMaterialPlugin(composer: TileComposer, relief: number = RELIEF) {
+export function createTileMaterialPlugin(composer: TileComposer) {
   return {
     name: 'SURFACE_SCALE',
-    processTileModel(scene: THREE.Object3D, tile: { geometricError?: number }) {
+    processTileModel(scene: THREE.Object3D, tile: object) {
       const meshes: THREE.Mesh[] = []
       scene.traverse((object) => {
         const mesh = object as THREE.Mesh
         if (mesh.isMesh && mesh.material) meshes.push(mesh)
       })
       for (const mesh of meshes) {
-        composer.prepare(mesh, tile ?? {}, surfaceSkirtRange(mesh.geometry, tile?.geometricError ?? 0, relief))
+        composer.prepare(mesh, tile ?? {})
       }
     },
   }

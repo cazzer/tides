@@ -56,7 +56,7 @@ import { CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY } from '../clou
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 import { carryShip, createFrameCarry, earthSpinRate } from './frame-carry'
-import { EARTH_KM_PER_UNIT } from '../terrain-scale'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 
 const FRAME = 1 / 60
 const Y = new THREE.Vector3(0, 1, 0)

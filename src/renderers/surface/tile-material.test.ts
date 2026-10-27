@@ -4,13 +4,11 @@
 // stubs don't meet here.
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
-import { SkirtedPlaneGeometry } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/SkirtedPlaneGeometry.js'
 import { wrapFadeMaterial } from '3d-tiles-renderer/src/three/plugins/fade/wrapFadeMaterial.js'
 import { RELIEF } from '../../relief'
-import { terrainScaleUniform } from '../../terrain-scale'
 import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS, SURFACE_SCALE } from './surface-frame'
 import type { GlobeLink } from './surface-link'
-import { SURFACE_STENCIL_REF, SURFACE_VERTEX_COUNT } from './surface-scale'
+import { SURFACE_STENCIL_REF } from './surface-scale'
 import { TILE_FEATURES } from './tile-features'
 import {
   createTileComposer,
@@ -110,7 +108,7 @@ describe('the Phong swap (tides-zmw.9.16)', () => {
     const lambert = mesh.material as THREE.MeshLambertMaterial
     const disposed = vi.fn()
     lambert.addEventListener('dispose', disposed)
-    createTileComposer(null).prepare(mesh, {}, 0)
+    createTileComposer(null).prepare(mesh, {})
     const phong = mesh.material as TerrainPhongMaterial
     expect(phong).toBeInstanceOf(TerrainPhongMaterial)
     expect(phong.isMeshPhongMaterial).toBe(true)
@@ -119,21 +117,21 @@ describe('the Phong swap (tides-zmw.9.16)', () => {
     expect(phong.map).toBe(lambert.map)
     expect(phong.displacementMap).toBe(lambert.displacementMap)
     expect(phong.bumpMap).toBe(lambert.bumpMap)
-    // prepareSurfaceMaterial: metres and scene units, the stencil mark.
-    expect(phong.displacementScale).toBe(1)
-    expect(phong.bumpScale).toBe(SURFACE_SCALE)
+    // prepareSurfaceMaterial: metres and scene units at the relief, the stencil mark.
+    expect(phong.displacementScale).toBe(RELIEF)
+    expect(phong.bumpScale).toBe(SURFACE_SCALE * RELIEF)
     expect(phong.stencilRef).toBe(SURFACE_STENCIL_REF)
     expect(phong.specular.getHex()).toBe(GLOBE_SPECULAR)
     expect(phong.shininess).toBe(GLOBE_SHININESS)
     expect(phong.emissive.getHex()).toBe(0)
     const shader = compiled(phong)
-    // The library's bump chunk, on the live scale.
+    // The library's bump chunk, as it comes.
     expect(shader.fragmentShader).toContain('DEGENERATE_DET_EPSILON')
-    expect(shader.fragmentShader).toContain('float dBx = bumpScale * uTerrainScale * ( gradU * dSTdx.x + gradV * dSTdx.y );')
+    expect(shader.fragmentShader).toContain('float dBx = bumpScale * ( gradU * dSTdx.x + gradV * dSTdx.y );')
     expect(shader.fragmentShader).not.toContain('#include <bumpmap_pars_fragment>')
     // No specular after three's chunk sets its strength.
     expect(shader.fragmentShader).toContain('#include <specularmap_fragment>\n\nspecularStrength = 0.0;\n' + SURFACE_ANCHORS.specular)
-    expect(shader.uniforms.uTerrainScale).toBe(terrainScaleUniform)
+    expect(shader.uniforms.uTerrainScale).toBeUndefined()
   })
 })
 
@@ -293,7 +291,6 @@ describe('the composer (tides-zmw.9.16)', () => {
     expect(sa.uniforms.uSame.value).toBe(true)
     expect(sa.uniforms.uShared).toBe(shared)
     expect(sb.uniforms.uShared).toBe(shared)
-    expect(sa.uniforms.uSkirtRange).not.toBe(sb.uniforms.uSkirtRange)
   })
 
   it('frees what onTile made once, when the tile unloads or its parse aborts', () => {
@@ -354,33 +351,9 @@ describe('the tile material plugin (tides-zmw.9.16)', () => {
     plugin.processTileModel(new THREE.Group().add(a, new THREE.Group().add(b)), {})
     for (const m of [a, b]) {
       expect(m.material).toBeInstanceOf(TerrainPhongMaterial)
-      expect((m.material as THREE.MeshPhongMaterial).displacementScale).toBe(1)
+      expect((m.material as THREE.MeshPhongMaterial).displacementScale).toBe(RELIEF)
       expect((m.material as THREE.MeshPhongMaterial).stencilRef).toBe(SURFACE_STENCIL_REF)
     }
-  })
-
-  it('lifts the skirts from the full relief\'s depth to the live scale\'s, each tile by its own range', () => {
-    // A tile's geometry as the plugin leaves it: surface on the sphere, skirt
-    // vertices dropped geometricError + range x RELIEF along the normal.
-    const geometry = new SkirtedPlaneGeometry(1, 1, 32, 32)
-    const position = geometry.getAttribute('position')
-    const geometricError = 150
-    const range = 1800
-    for (let k = 0; k < geometry.skirtSourceIndices.length; k++) {
-      const src = geometry.skirtSourceIndices[k]
-      position.setXYZ(geometry.surfaceVertexCount + k, position.getX(src), position.getY(src), position.getZ(src) - (geometricError + range * RELIEF))
-    }
-    const composer = createTileComposer(null)
-    const [a, b] = [tileMesh(geometry), tileMesh()]
-    createTileMaterialPlugin(composer).processTileModel(new THREE.Group().add(a), { geometricError })
-    composer.prepare(b, {})
-    const sa = compiled(a.material as THREE.Material)
-    const sb = compiled(b.material as THREE.Material)
-    expect(sa.uniforms.uSkirtRange.value).toBeCloseTo(range, 2)
-    expect(sb.uniforms.uSkirtRange.value).toBe(0)
-    expect(sa.vertexShader).toContain(
-      `if ( gl_VertexID >= ${SURFACE_VERTEX_COUNT} ) transformed += normalize( objectNormal ) * uSkirtRange * ( ${RELIEF.toFixed(6)} - uTerrainScale );`
-    )
   })
 })
 

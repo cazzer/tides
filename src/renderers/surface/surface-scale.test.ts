@@ -1,33 +1,17 @@
-// The tiles on the live terrain scale and the stencil handover
-// (tides-zmw.9.7), checked on the library's own tile material and geometry.
+// The tiles at the page's relief and the stencil handover (tides-zmw.9.7,
+// tides-zmw.21), checked on the library's own tile material and geometry.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
 import { TerrainLambertMaterial } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/TerrainLambertMaterial.js'
-import { SkirtedPlaneGeometry } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/SkirtedPlaneGeometry.js'
 import { wrapFadeMaterial } from '3d-tiles-renderer/src/three/plugins/fade/wrapFadeMaterial.js'
 import { RELIEF } from '../../relief'
-import { surfaceOpacityUniform, terrainScaleUniform } from '../../terrain-scale'
+import { surfaceOpacityUniform } from '../../surface-handover'
 import type { MaterialPatch } from '../eclipseShadow'
 import { createSurfaceTiles, SURFACE_RENDER_ORDER } from './createSurfaceTiles'
 import { SURFACE_SCALE } from './surface-frame'
 import { TerrainPhongMaterial } from './tile-material'
-import {
-  DISPLACEMENT_VERTEX,
-  globeStencil,
-  patchSurfaceShader,
-  prepareSurfaceMaterial,
-  fitSurfaceBounds,
-  SURFACE_FIT_SLACK,
-  SURFACE_FIT_STEP,
-  SURFACE_STENCIL_REF,
-  nextSurfaceFit,
-  surfaceFitFloor,
-  SURFACE_VERTEX_COUNT,
-  surfaceElevationMetres,
-  surfaceFitScale,
-  surfaceSkirtRange,
-} from './surface-scale'
+import { globeStencil, patchSurfaceShader, prepareSurfaceMaterial, SURFACE_STENCIL_REF, surfaceElevationMetres } from './surface-scale'
 
 /** What three hands onBeforeCompile for a Lambert material (chunks unresolved). */
 function lambertShader(): THREE.WebGLProgramParametersWithUniforms {
@@ -47,36 +31,23 @@ function compiled(material: THREE.Material) {
 }
 
 describe('the tile patch (tides-zmw.9.7)', () => {
-  it("stands in for three's displacement chunk, times the live scale", () => {
-    const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
-    expect(squash(DISPLACEMENT_VERTEX.replace(' * uTerrainScale', ''))).toBe(squash(THREE.ShaderChunk.displacementmap_vertex))
-  })
-
-  it('puts the height and the bump on the live scale, after the terrain material its own bump chunk', () => {
+  it("leaves three's displacement chunk and the terrain material's bump chunk as they are, and declares the dissolve once", () => {
     const material = new TerrainLambertMaterial()
     prepareSurfaceMaterial(material)
     const shader = compiled(material)
-    expect(shader.vertexShader).toContain('uniform float uTerrainScale;')
-    expect(shader.vertexShader).toContain(
-      'texture2D( displacementMap, vDisplacementMapUv ).x * displacementScale * uTerrainScale + displacementBias'
-    )
-    expect(shader.vertexShader).not.toContain('#include <displacementmap_vertex>')
+    expect(shader.vertexShader).toBe(THREE.ShaderLib.lambert.vertexShader)
+    expect(shader.vertexShader).toContain('#include <displacementmap_vertex>')
     // The library's bump chunk, not three's (which normalises the slope away).
-    expect(shader.fragmentShader).toContain('float dBx = bumpScale * uTerrainScale * ( gradU * dSTdx.x + gradV * dSTdx.y );')
-    expect(shader.fragmentShader).toContain('float dBy = bumpScale * uTerrainScale * ( gradU * dSTdy.x + gradV * dSTdy.y );')
-    expect(shader.uniforms.uTerrainScale).toBe(terrainScaleUniform)
+    expect(shader.fragmentShader).toContain('float dBx = bumpScale * ( gradU * dSTdx.x + gradV * dSTdx.y );')
+    expect(shader.fragmentShader).toContain('float dBy = bumpScale * ( gradU * dSTdy.x + gradV * dSTdy.y );')
+    expect(shader.vertexShader + shader.fragmentShader).not.toContain('uTerrainScale')
     expect(shader.uniforms.uSurfaceOpacity).toBe(surfaceOpacityUniform)
-    // Each declared once, before its first use (GLSL needs it).
-    for (const [stage, uniform] of [
-      [shader.vertexShader, 'uTerrainScale'],
-      [shader.fragmentShader, 'uTerrainScale'],
-      [shader.fragmentShader, 'uSurfaceOpacity'],
-    ]) {
-      const declared = stage.indexOf(`uniform float ${uniform};`)
-      expect(stage.split(`uniform float ${uniform};`), uniform).toHaveLength(2)
-      expect(declared, uniform).toBeGreaterThanOrEqual(0)
-      expect(stage.indexOf(uniform), uniform).toBe(declared + 'uniform float '.length)
-    }
+    // Declared once, before its first use (GLSL needs it).
+    const f = shader.fragmentShader
+    const declared = f.indexOf('uniform float uSurfaceOpacity;')
+    expect(f.split('uniform float uSurfaceOpacity;')).toHaveLength(2)
+    expect(declared).toBeGreaterThanOrEqual(0)
+    expect(f.indexOf('uSurfaceOpacity')).toBe(declared + 'uniform float '.length)
   })
 
   it('dissolves on an 8x8 Bayer pattern nested in the fade plugin\'s 4x4, first thing in main', () => {
@@ -107,21 +78,22 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     expect(four.size).toBe(16)
   })
 
-  it('throws when an anchor is missing', () => {
+  it('throws when its anchor is missing', () => {
     const shader = lambertShader()
-    expect(() => patchSurfaceShader({ ...shader, vertexShader: 'void main() {}' })).toThrow(/displacementmap_vertex/)
-    // three's own bump chunk has dBx too, but the terrain material's replacement is what runs;
-    // without either it must throw.
-    expect(() => patchSurfaceShader({ ...shader, fragmentShader: 'void main() {}' })).toThrow(/dBx/)
+    expect(() => patchSurfaceShader({ ...shader, fragmentShader: 'void mainly() {}' })).toThrow(/void main/)
   })
 
-  it('sets metres for the displacement, scene units for the bump, and the stencil mark', () => {
+  it('sets metres times the relief for the displacement, scene units times it for the bump, and the stencil mark', () => {
     const material = new TerrainLambertMaterial()
     material.displacementScale = 7
     material.bumpScale = 7
     prepareSurfaceMaterial(material)
-    expect(material.displacementScale).toBe(1)
-    expect(material.bumpScale).toBe(SURFACE_SCALE)
+    expect(material.displacementScale).toBe(RELIEF)
+    expect(material.bumpScale).toBe(SURFACE_SCALE * RELIEF)
+    const twelve = new TerrainLambertMaterial()
+    prepareSurfaceMaterial(twelve, [], 12)
+    expect(twelve.displacementScale).toBe(12)
+    expect(twelve.bumpScale).toBe(SURFACE_SCALE * 12)
     expect(material.stencilWrite).toBe(true)
     expect(material.stencilFunc).toBe(THREE.AlwaysStencilFunc)
     expect(material.stencilRef).toBe(SURFACE_STENCIL_REF)
@@ -134,7 +106,7 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     const order: string[] = []
     const haze: MaterialPatch = {
       onBeforeCompile(shader) {
-        order.push(shader.fragmentShader.includes('uTerrainScale') ? 'haze after scale' : 'haze before scale')
+        order.push(shader.fragmentShader.includes('uSurfaceOpacity') ? 'haze after dissolve' : 'haze before dissolve')
         shader.uniforms.uHaze = { value: 1 }
       },
       customProgramCacheKey: () => 'haze',
@@ -142,37 +114,18 @@ describe('the tile patch (tides-zmw.9.7)', () => {
     prepareSurfaceMaterial(material, [haze])
     const params = wrapFadeMaterial(material, material.onBeforeCompile)
     const shader = compiled(material)
-    expect(order).toEqual(['haze after scale'])
+    expect(order).toEqual(['haze after dissolve'])
     // The wrapper calls what it wraps unbound and without the renderer.
     const unbound = lambertShader()
     const run = material.onBeforeCompile
     expect(() => run(unbound, undefined as unknown as THREE.WebGLRenderer)).not.toThrow()
-    expect(unbound.uniforms.uTerrainScale).toBe(terrainScaleUniform)
-    expect(shader.uniforms.uTerrainScale).toBe(terrainScaleUniform)
+    expect(unbound.uniforms.uSurfaceOpacity).toBe(surfaceOpacityUniform)
+    expect(shader.uniforms.uSurfaceOpacity).toBe(surfaceOpacityUniform)
     expect(shader.uniforms.uHaze).toBeDefined()
     expect(shader.uniforms.fadeIn).toBe(params.fadeIn)
     expect(shader.fragmentShader).toContain('if ( dither >= fadeIn )')
     // three's default key, the wrapper's source: the same for every tile.
     expect(material.customProgramCacheKey()).toBe(material.onBeforeCompile.toString())
-  })
-
-  it('recovers a tile\'s elevation range from its skirt (the composer lifts the skirts by it, tile-material.test.ts)', () => {
-    // A tile's geometry as the plugin leaves it: surface on the sphere, skirt
-    // vertices dropped geometricError + range x RELIEF along the normal.
-    const geometry = new SkirtedPlaneGeometry(1, 1, 32, 32)
-    const position = geometry.getAttribute('position')
-    const geometricError = 150
-    const range = 1800
-    for (let k = 0; k < geometry.skirtSourceIndices.length; k++) {
-      const src = geometry.skirtSourceIndices[k]
-      position.setXYZ(geometry.surfaceVertexCount + k, position.getX(src), position.getY(src), position.getZ(src) - (geometricError + range * RELIEF))
-    }
-    expect(surfaceSkirtRange(geometry, geometricError)).toBeCloseTo(range, 2)
-    expect(surfaceSkirtRange(new THREE.PlaneGeometry(), geometricError)).toBe(0)
-  })
-
-  it('counts the surface vertices before the skirts as the library builds them', () => {
-    expect(new SkirtedPlaneGeometry(1, 1, 32, 32).surfaceVertexCount).toBe(SURFACE_VERTEX_COUNT)
   })
 })
 
@@ -209,7 +162,7 @@ class FakeOffscreenCanvas {
   }
 }
 
-describe('createSurfaceTiles on the live scale (tides-zmw.9.7)', () => {
+describe('createSurfaceTiles at the relief (tides-zmw.9.7, tides-zmw.21)', () => {
   beforeEach(() => vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas))
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -228,9 +181,12 @@ describe('createSurfaceTiles on the live scale (tides-zmw.9.7)', () => {
       const plugins = (surface.tiles as unknown as { plugins: { name: string; processTileModel?: (s: THREE.Object3D, t: unknown) => unknown }[] }).plugins
       for (const p of plugins) p.processTileModel?.(scene, {})
       expect(setter).toHaveBeenCalledTimes(1)
-      // The composer's Phong (tile-material.ts) in the Lambert's place.
+      // The composer's Phong (tile-material.ts) in the Lambert's place,
+      // drawn at the plugin's heightScale: its skirts and bounding regions
+      // are the ground as drawn, so neither is refitted (tides-zmw.21).
       expect(mesh.material).toBeInstanceOf(TerrainPhongMaterial)
-      expect((mesh.material as THREE.MeshPhongMaterial).displacementScale).toBe(1)
+      expect((mesh.material as THREE.MeshPhongMaterial).displacementScale).toBe(surface.terrain.heightScale)
+      expect(Object.prototype.hasOwnProperty.call(surface.terrain, '_updateBoundingVolume')).toBe(false)
     } finally {
       surface.dispose()
     }
@@ -258,170 +214,5 @@ describe('createSurfaceTiles on the live scale (tides-zmw.9.7)', () => {
     expect(surfaceElevationMetres(terrain, 0, 0)).toBeCloseTo(2400, 9)
     const none = { heightScale: RELIEF, sampleCartographicElevation: () => null } as unknown as TerrariumMeshPlugin
     expect(surfaceElevationMetres(none, 0, 0)).toBeNull()
-  })
-})
-
-describe('the bounding regions on the live scale (tides-zmw.9.7)', () => {
-  // The blend's relief, passed explicitly: at ?relief=1 the live scale is 1x
-  // throughout and there is no band to fit.
-  const BLEND_RELIEF = 12
-
-  it('fits to the next step up, never under the drawn scale, between 1 and the relief', () => {
-    expect(surfaceFitScale(1, BLEND_RELIEF)).toBe(1)
-    expect(surfaceFitScale(0.5, BLEND_RELIEF)).toBe(1)
-    expect(surfaceFitScale(BLEND_RELIEF, BLEND_RELIEF)).toBe(BLEND_RELIEF)
-    expect(surfaceFitScale(BLEND_RELIEF * 2, BLEND_RELIEF)).toBe(BLEND_RELIEF)
-    const fits = new Set<number>()
-    for (let k = 0; k <= 2000; k++) {
-      const s = 1 + ((BLEND_RELIEF - 1) * k) / 2000
-      const fit = surfaceFitScale(s, BLEND_RELIEF)
-      expect(fit).toBeGreaterThanOrEqual(s)
-      expect(fit).toBeLessThanOrEqual(Math.min(BLEND_RELIEF, s * SURFACE_FIT_STEP) + 1e-9)
-      fits.add(fit)
-    }
-    // A descent from the relief to 1x refits a dozen times or so, not per frame.
-    expect(fits.size).toBeLessThanOrEqual(Math.ceil(Math.log(BLEND_RELIEF) / Math.log(SURFACE_FIT_STEP)) + 1)
-  })
-
-  it('steps the fit up at once, and down only two steps under, so level flight across a step refits nothing', () => {
-    expect(SURFACE_FIT_SLACK).toBe(2)
-    let fit = surfaceFitScale(3, BLEND_RELIEF)
-    expect(nextSurfaceFit(fit, fit * 1.01, BLEND_RELIEF)).toBeGreaterThan(fit)
-    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP, BLEND_RELIEF)).toBe(fit)
-    expect(nextSurfaceFit(fit, fit / SURFACE_FIT_STEP ** 2 + 1e-9, BLEND_RELIEF)).toBe(fit)
-    expect(nextSurfaceFit(fit, (fit / SURFACE_FIT_STEP ** 2) * 0.99, BLEND_RELIEF)).toBeLessThan(fit)
-    // Level flight wobbling across a step boundary: one fit.
-    const boundary = SURFACE_FIT_STEP ** 5
-    fit = surfaceFitScale(boundary * 1.001, BLEND_RELIEF)
-    const seen = new Set<number>()
-    for (let k = 0; k < 1000; k++) {
-      fit = nextSurfaceFit(fit, boundary * (1 + 0.001 * Math.sin(k)), BLEND_RELIEF)
-      seen.add(fit)
-    }
-    expect(seen.size).toBe(1)
-    // Any descent and climb: the live scale always within the fitted band.
-    fit = surfaceFitScale(BLEND_RELIEF, BLEND_RELIEF)
-    let changes = 0
-    for (let k = 0; k <= 4000; k++) {
-      const s = k <= 2000 ? BLEND_RELIEF - ((BLEND_RELIEF - 1) * k) / 2000 : 1 + ((BLEND_RELIEF - 1) * (k - 2000)) / 2000
-      const next = nextSurfaceFit(fit, s, BLEND_RELIEF)
-      if (next !== fit) changes++
-      fit = next
-      expect(s).toBeLessThanOrEqual(fit + 1e-12)
-      expect(s).toBeGreaterThanOrEqual(surfaceFitFloor(fit) - 1e-12)
-    }
-    // ~6 down from 12x to 1x, ~11 back up.
-    expect(changes).toBeLessThanOrEqual(20)
-  })
-
-  it('steps down near the ground too, where two steps under would be under 1x', () => {
-    let fit = surfaceFitScale(1, BLEND_RELIEF)
-    for (const s of [1.1, 1.2, 1.3, 1.4]) fit = nextSurfaceFit(fit, s, BLEND_RELIEF)
-    expect(fit).toBe(SURFACE_FIT_STEP ** 2)
-    for (const s of [1.3, 1.2, 1.1, 1.05]) fit = nextSurfaceFit(fit, s, BLEND_RELIEF)
-    expect(fit).toBe(SURFACE_FIT_STEP)
-    expect(surfaceFitFloor(fit)).toBe(1)
-  })
-
-  it('merges the band for ground under the sea too, where the lower scale gives the higher top', () => {
-    // A tile -400 to -100 m: at scale k the library's region is
-    // [-400k - 300k - pad, -100k + pad], its top highest at the band's floor.
-    const pad = 20
-    const terrain = {
-      _heightScale: BLEND_RELIEF,
-      tiles: { ellipsoid: 'E' },
-      _updateBoundingVolume(this: { _heightScale: number }, tile: { boundingVolume: { region: number[] } }) {
-        const k = this._heightScale
-        tile.boundingVolume.region[4] = -400 * k - 300 * k - pad
-        tile.boundingVolume.region[5] = -100 * k + pad
-      },
-    }
-    const tiles = { calculateTileViewError() {} }
-    const bounds = fitSurfaceBounds(tiles, terrain, () => 3, BLEND_RELIEF)
-    const floor = surfaceFitFloor(bounds.fit)
-    const data: number[][] = []
-    const tile = {
-      boundingVolume: { region: [0, 0, 1, 1, 0, 0] },
-      engineData: { boundingVolume: { setRegionData: (...a: unknown[]) => data.push(a.slice(1) as number[]) } },
-    }
-    terrain._updateBoundingVolume(tile)
-    const [min, max] = tile.boundingVolume.region.slice(4)
-    expect(max).toBeCloseTo(-100 * floor + pad, 9)
-    expect(min).toBeCloseTo(-700 * bounds.fit - pad, 9)
-    for (const k of [floor, bounds.fit]) {
-      expect(min).toBeLessThanOrEqual(-400 * k)
-      expect(max).toBeGreaterThanOrEqual(-100 * k)
-    }
-    expect(data[data.length - 1]).toEqual([0, 0, 1, 1, min, max])
-  })
-
-  it('writes every region across the fitted band, merged, keeps the plugin at its own scale, and refits a tile once per fit', () => {
-    // A tile 1500-2500 m high: the library's region at scale k is
-    // [1500k - (2500 - 1500)k - pad, 2500k + pad].
-    const pad = 20
-    const written: number[] = []
-    const regionData: number[][] = []
-    const terrain = {
-      _heightScale: BLEND_RELIEF,
-      tiles: { ellipsoid: 'E' },
-      _updateBoundingVolume(this: { _heightScale: number }, tile: { boundingVolume: { region: number[] } }) {
-        const k = this._heightScale
-        written.push(k)
-        tile.boundingVolume.region[4] = 1500 * k - 1000 * k - pad
-        tile.boundingVolume.region[5] = 2500 * k + pad
-      },
-    }
-    const viewed: object[] = []
-    const tiles = {
-      calculateTileViewError(tile: object) {
-        viewed.push(tile)
-      },
-    }
-    let scale = 1.9
-    const bounds = fitSurfaceBounds(tiles, terrain, () => scale, BLEND_RELIEF)
-    const fit = bounds.fit
-    const floor = surfaceFitFloor(fit)
-    expect(fit).toBe(surfaceFitScale(1.9, BLEND_RELIEF))
-    const tile = {
-      boundingVolume: { region: [0, 0, 1, 1, 0, 0] },
-      engineData: { boundingVolume: { setRegionData: (...a: unknown[]) => regionData.push(a.slice(1) as number[]) } },
-    }
-    // The plugin writing a region (a parse) writes it across the band.
-    terrain._updateBoundingVolume(tile)
-    expect(written).toEqual([floor, fit])
-    expect(terrain._heightScale).toBe(BLEND_RELIEF)
-    // It holds the drawn ground at every scale in the band.
-    const [min, max] = tile.boundingVolume.region.slice(4)
-    for (const k of [floor, (floor + fit) / 2, fit]) {
-      expect(min).toBeLessThanOrEqual(1500 * k)
-      expect(max).toBeGreaterThanOrEqual(2500 * k)
-    }
-    expect(regionData[regionData.length - 1]).toEqual([0, 0, 1, 1, min, max])
-    // Traversed at the same fit, or within the band: no refit.
-    tiles.calculateTileViewError(tile)
-    scale = 1.3
-    bounds.update()
-    tiles.calculateTileViewError(tile)
-    expect(written).toHaveLength(2)
-    expect(viewed).toHaveLength(2)
-    // Above the fit: refitted once, before its view error.
-    scale = 3
-    bounds.update()
-    tiles.calculateTileViewError(tile)
-    tiles.calculateTileViewError(tile)
-    expect(written).toHaveLength(4)
-    expect(bounds.refits).toBe(2)
-    expect(terrain._heightScale).toBe(BLEND_RELIEF)
-  })
-
-  it('held RELIEF regions over the ground drawn lower, the culling the band fixes', () => {
-    // The 31 km canyon hole (headless): a depth-11 tile's region at 12x
-    // floated 7.5-25 km up over ground drawn at ~3 km.
-    const at = (k: number) => [1500 * k - 1000 * k, 2500 * k]
-    expect(at(BLEND_RELIEF)[0]).toBeGreaterThan(2500 * 1.9)
-  })
-
-  it('refuses objects that are not the 0.5.3 plugin and renderer', () => {
-    expect(() => fitSurfaceBounds({}, {}, () => 1)).toThrow(/0\.5\.3/)
   })
 })

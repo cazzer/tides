@@ -2,7 +2,8 @@
 // shadows by rename, and each grid's own horizon map bound per tile.
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { surfaceOpacityUniform, terrainDisplacement } from '../../terrain-scale'
+import { TERRAIN_DISPLACEMENT } from '../../cloud-layer'
+import { surfaceOpacityUniform } from '../../surface-handover'
 import { surfaceEcef } from './surface-frame'
 import { GROUND_SHADOW_GLSL } from '../groundShadow'
 import { gridHorizon, horizonTexture, setGridHorizon } from './terrain-internals'
@@ -27,7 +28,7 @@ describe('terrain shadows on the tiles (tides-zmw.9.15)', () => {
       .replace('texture(uGroundHorizon, vec3(vMapUv, 0.0))', 'textureLod(uGroundHorizon, vec3(surfaceShadowUv, 0.0), 0.0)')
       .replace('texture(uGroundHorizon, vec3(vMapUv, 1.0))', 'textureLod(uGroundHorizon, vec3(surfaceShadowUv, 1.0), 0.0)')
       .replace('vMapUv', 'surfaceShadowUv')
-      .replace('uGroundShadowScale', `(uTerrainScale * ${terrainDisplacement(1).toExponential(9)})`)
+      .replace('uGroundShadowScale', `(${TERRAIN_DISPLACEMENT.toExponential(9)})`)
       .replace('reflectedLight.directDiffuse *= sunLit;', 'vSurfaceShadow.x = sunLit;')
       .replace('reflectedLight.directSpecular *= sunLit;', '')
       .replace('reflectedLight.indirectDiffuse *= groundHorizonSky;', 'vSurfaceShadow.y = groundHorizonSky;')
@@ -36,9 +37,10 @@ describe('terrain shadows on the tiles (tides-zmw.9.15)', () => {
     expect(glsl.vertexHead.startsWith(GROUND_SHADOW_GLSL.fragmentHead.replace('uniform float uGroundShadowScale;', ''))).toBe(true)
     expect(glsl.vertexHead).toContain('const float SURFACE_SHADOW_RADIUS = 2.950000000;')
     // nothing of the globe's frame, map or screen left
-    for (const name of ['vMapUv', 'vGroundDetailPos', 'uGroundShadowScale', 'dFdx', 'reflectedLight']) expect(glsl.vertexBody).not.toContain(name)
-    // the live scale reads as the globe's displacementScale at it
-    expect(terrainDisplacement(1) * 3).toBeCloseTo(terrainDisplacement(3), 12)
+    for (const name of ['vMapUv', 'vGroundDetailPos', 'uGroundShadowScale', 'uTerrainScale', 'dFdx', 'reflectedLight']) {
+      expect(glsl.vertexBody).not.toContain(name)
+    }
+    expect(glsl.fragmentBody).not.toContain('uTerrainScale')
   })
 
   it('lays (a) at the vertex and (b) after the lights, on the globe\'s uniforms, one multiply of the deeper shadow', () => {
@@ -105,7 +107,7 @@ describe('terrain shadows on the tiles (tides-zmw.9.15)', () => {
     expect(nnw.layers.toArray()).toEqual([1, 0])
     expect(nnw.a.w).toBeCloseTo(0.25, 9)
     expect(nnw.b.x).toBeCloseTo(0.75, 9)
-    // off: the Sun over the highest horizon (at the live scale), at night, or no tiles drawn
+    // off: the Sun over the highest horizon (at the relief), at night, or no tiles drawn
     expect(tileSun(tileFrame(up, 1e-4), 0.5, sunAt(90, 40).normalize(), 1, 1, target()).on).toBe(0)
     expect(tileSun(tileFrame(up, 1e-4), 0.5, sunAt(90, 40).normalize(), 2, 1, target()).on).toBe(1) // atan(2 * 0.5) = 45°
     expect(tileSun(tileFrame(up, 1e-4), 0.5, sunAt(90, -10).normalize(), 1, 1, target()).on).toBe(0)

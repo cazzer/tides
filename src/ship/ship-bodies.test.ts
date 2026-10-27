@@ -52,8 +52,6 @@ import {
 import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from './limb-detail'
 import { TERRAIN_READ_TEXELS } from '../cloud-layer'
 import { boxMips, decodeEarthDem, demLevel } from '../earth-dem'
-import { groundLevels, meshGrid, meshRadius, displace, vertexGrey } from './ground-mesh-model'
-import { setTerrainEye, terrainBlendTop, terrainDisplacement, terrainScale, terrainScaleUniform } from '../terrain-scale'
 
 const shippedDem = (name: string) => decodeEarthDem(readFileSync(new URL(`../assets/${name}`, import.meta.url)))
 const [demMax, demMean, dem4k] = await Promise.all(['earth-dem-max.bin', 'earth-dem-mean.bin', 'earth-dem-4k.bin'].map(shippedDem))
@@ -298,11 +296,7 @@ describe('ship bodies', () => {
     // tides-zmw.1 this took the 2 × 2 mean of the pooled maxima for that
     // ground, which overstated the share: 0.75 against 0.52 on the 8-bit
     // map at e27cb87. The 16-bit map gives 0.55, the proxy 0.78.)
-    function underBaseShare(
-      earth: ReturnType<typeof byKey>[string],
-      pooled: Float32Array,
-      displacement: number = TERRAIN_DISPLACEMENT
-    ) {
+    function underBaseShare(earth: ReturnType<typeof byKey>[string], pooled: Float32Array) {
       const [width, height] = TERRAIN_MAP_SIZE
       let land = 0
       let under = 0
@@ -316,7 +310,7 @@ describe('ship bodies', () => {
           const stop = floorRadius(earth, toWorld(latLonToLocal(lat, lon), T)) - EARTH_RADIUS
           land += weight
           const ground = marchGround.data[(y / 2) * marchGround.width + x / 2]
-          if (stop < cloudColumn(1, 1.5, ground, displacement).base) under += weight
+          if (stop < cloudColumn(1, 1.5, ground, TERRAIN_DISPLACEMENT).base) under += weight
         }
       }
       return under / land
@@ -426,59 +420,6 @@ describe('ship bodies', () => {
       expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(fallback + EARTH_GROUND_CLEARANCE)
       expect(floorRadius(byKey(T, 'low').earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
     })
-
-    // The blend at the relief it was built for, passed explicitly (at the
-    // 1x default, tides-zmw.21, it is 1x throughout).
-    const BLEND_RELIEF = 12
-    // The eye altitude at which the blend draws `scale` (tides-zmw.9.5).
-    function eyeFor(scale: number): number {
-      let [lo, hi] = [0, terrainBlendTop(BLEND_RELIEF)]
-      for (let k = 0; k < 200; k++) {
-        const mid = (lo + hi) / 2
-        if (terrainScale(mid, BLEND_RELIEF, true) < scale) lo = mid
-        else hi = mid
-      }
-      return hi
-    }
-
-    it.each([1, 4, BLEND_RELIEF])(
-      'follows the live terrain scale at %sx (tides-zmw.9.5): on the ground drawn at it, linear in it, under the cloud base',
-      (scale) => {
-        setEarthTerrain(baseFloor())
-        onTestFinished(() => setTerrainEye(Infinity))
-        const { earth } = byKey()
-        const pooled = pooledTerrain()
-        const fullShare = underBaseShare(earth, pooled)
-        const directions: THREE.Vector3[] = []
-        const locals: THREE.Vector3[] = []
-        for (let lat = -80; lat <= 80; lat += 4) {
-          for (let lon = -180; lon < 180; lon += 4) locals.push(latLonToLocal(lat, lon))
-        }
-        // Everest, K2, the Grand Canyon, the Altiplano.
-        for (const [lat, lon] of [[27.99, 86.93], [35.88, 76.51], [36.1, -112.1], [-16, -68]]) {
-          for (let k = 0; k < 25; k++) locals.push(latLonToLocal(lat + (k % 5) * 0.4 - 0.8, lon + Math.floor(k / 5) * 0.4 - 0.8))
-        }
-        for (const local of locals) directions.push(toWorld(local, T))
-        const full = directions.map((d) => earth.ground!(d))
-
-        setTerrainEye(eyeFor(scale), true, BLEND_RELIEF)
-        expect(terrainScaleUniform.value).toBeCloseTo(scale, 9)
-        const displacement = terrainDisplacement(terrainScaleUniform.value)
-        const grid = meshGrid(EARTH_BASE_SEGMENTS)
-        const mesh = displace(grid, vertexGrey(groundLevels(dem4k), grid), EARTH_RADIUS, displacement)
-        directions.forEach((direction, k) => {
-          const ground = earth.ground!(direction)
-          expect(ground).toBeGreaterThanOrEqual(meshRadius(mesh, EARTH_BASE_SEGMENTS, locals[k]))
-          expect(ground - EARTH_RADIUS).toBeCloseTo(((full[k] - EARTH_RADIUS) * displacement) / TERRAIN_DISPLACEMENT, 14)
-          expect(floorRadius(earth, direction)).toBeCloseTo(ground + EARTH_GROUND_CLEARANCE, 12)
-        })
-        // tides-42p at every scale: the stop (the max-around floor) under the
-        // cloud base on the march's smoothed ground, both at the live scale
-        // (tides-zmw.9.6), over at least as much land as at the full relief.
-        expect(underBaseShare(earth, pooled, displacement)).toBeGreaterThanOrEqual(fullShare)
-      },
-      60_000
-    )
 
     it('gives no other body a ground', () => {
       for (const body of createShipBodies()) {

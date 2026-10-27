@@ -11,10 +11,9 @@
 // float textures (iOS); and the instance has its own memory cap and
 // download queue rather than the library's shared defaults.
 //
-// tides-zmw.9.7 put the tiles on the globe's live terrain scale and handed
-// the ground over from the globe by stencil (surface-scale.ts): the plugin
-// is built at the page's RELIEF (the skirts of the largest scale; the
-// bounding regions follow the live scale stepwise), the tiles draw first, and each tile dithers in (TilesFadePlugin)
+// tides-zmw.9.7 handed the ground over from the globe by stencil
+// (surface-scale.ts): the plugin is built at the page's RELIEF, the tiles
+// draw first, and each tile dithers in (TilesFadePlugin)
 // rather than popping over the globe it replaces.
 //
 // tides-zmw.9.21 drew the tiles past the source's coverage (Mapterhorn has
@@ -36,7 +35,7 @@
 // tile's clone of a grid nothing (grid-upload.ts).
 //
 // tides-zmw.9.16 built each tile's material in one composer (tile-material.ts):
-// Phong, the live scale and handover, and the globe's features from its link
+// Phong, the relief and handover, and the globe's features from its link
 // (surface-link.ts) in the globe's order (tile-features.ts).
 import * as THREE from 'three'
 import { DEFAULT_LRU_CACHE, LRUCache } from '3d-tiles-renderer/core'
@@ -46,7 +45,6 @@ import { RELIEF } from '../../relief'
 import { FrameBudget } from './frame-budget'
 import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { applySurfaceFrame, SURFACE_ELLIPSOID_RADIUS } from './surface-frame'
-import { fitSurfaceBounds, type SurfaceBounds } from './surface-scale'
 import type { GlobeLink } from './surface-link'
 import { TILE_FEATURES } from './tile-features'
 import { createTileComposer, createTileMaterialPlugin, type TileComposer } from './tile-material'
@@ -55,7 +53,6 @@ import { GridEdges, type RectWriter } from './grid-upload'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { createSurfaceQueues } from './surface-queues'
-import { terrainScaleUniform } from '../../terrain-scale'
 import {
   GRID_LEVEL_STEP,
   installSurfaceGridCache,
@@ -100,8 +97,6 @@ export interface SurfaceTiles {
   composer: TileComposer
   /** Tick once per frame: runs the next grids, then bakes, for up to FRAME_BUDGET_MS. */
   budget: FrameBudget
-  /** Update once per frame, before tiles.update(): the regions' fit. */
-  bounds: SurfaceBounds
   /** The view error near the eye and past the coverage end (surface-coverage.ts). */
   viewError: SurfaceViewError
   /**
@@ -155,9 +150,7 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     url: MAPTERHORN_URL,
     tileDimension: MAPTERHORN_TILE_SIZE,
     maxZoom: MAPTERHORN_MAX_ZOOM,
-    // The largest scale the live one reaches, for the skirts (the bounding
-    // regions follow the live scale stepwise, fitSurfaceBounds); the shaders
-    // draw at terrainScaleUniform (surface-scale.ts), and the setter is never
+    // The page's relief, the globe's (surface-scale.ts); the setter is never
     // called again (it rewrites every material and refits the whole tree).
     heightScale: RELIEF,
     overlay,
@@ -221,18 +214,14 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
   // to spare, ahead of a crowded first draw; the tile doesn't wait (tile-upload.ts).
   if (tracked) tiles.registerPlugin(createTileUploadPlugin(budget, tracked))
   tiles.registerPlugin(new TilesFadePlugin({ fadeRootTiles: true }))
-  // The bounding regions on the live scale, stepwise (surface-scale.ts).
-  const bounds = fitSurfaceBounds(tiles, terrain, () => terrainScaleUniform.value)
-  // After it (so on the refitted regions): the error near the eye from the
-  // drawn ground, the eye's chain at rest detail, and none past the source's
-  // coverage (surface-coverage.ts).
+  // The error near the eye from the drawn ground, the eye's chain at rest
+  // detail, and none past the source's coverage (surface-coverage.ts).
   let restErrorTarget = tiles.errorTarget
   let eyeMarginRadians = 0
   const viewError = boundSurfaceViewError(tiles, {
     coverageLevel: (x, y, level) => grids.coverageLevel(x, y, level),
     hasCoverageEnds: () => grids.coverageEnd.size > 0,
     maxSourceLevel: GRID_LEVEL_STEP * Math.floor(MAPTERHORN_MAX_ZOOM / GRID_LEVEL_STEP),
-    scale: () => terrainScaleUniform.value,
     eyeErrorScale: () => tiles.errorTarget / restErrorTarget,
     eyeMarginRadians: () => eyeMarginRadians,
   })
@@ -278,8 +267,6 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     data.maxViewError = viewError.maxError
     data.imageryFallbacks = overlay.fallbacks
     data.errorTarget = tiles.errorTarget
-    data.fitScale = bounds.fit
-    data.refits = bounds.refits
     data.edgeUploads = edges?.stats ?? null
   }
 
@@ -290,7 +277,6 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     grids,
     composer,
     budget,
-    bounds,
     viewError,
     setErrorTarget(target, rest, eyeMargin = 0) {
       tiles.errorTarget = target

@@ -53,7 +53,7 @@
 // wherever w is 0.
 import * as THREE from 'three'
 import { GROUND_DETAIL_GLSL } from '../groundDetail'
-import { EARTH_KM_PER_UNIT } from '../../terrain-scale'
+import { EARTH_KM_PER_UNIT } from '../../surface-handover'
 import { earthLatLon, surfaceGroundSampler } from '../../surface-ground'
 import { tileRadianBounds } from './credit-sources'
 import { terrainTileSymbols } from './surface-coverage'

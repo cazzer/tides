@@ -7,7 +7,6 @@ import { LIMB_SEGMENTS, type SphereSegments } from './limb-detail'
 import { EARTH_RADIUS } from './ship-bodies'
 import { decodeEarthDem } from '../earth-dem'
 import { displace, groundLevels, meshGrid, meshRadius, vertexGrey } from './ground-mesh-model'
-import { terrainDisplacement } from '../terrain-scale'
 import {
   EARTH_BASE_SEGMENTS,
   TERRAIN_FALLBACK_GREY,
@@ -227,31 +226,6 @@ describe('terrain floor (tides-01v.8.3, tides-zmw.2)', () => {
       expect(fallback).toBeGreaterThan(EARTH_RADIUS + (TERRAIN_DISPLACEMENT * floor.grey.reduce((a, b) => Math.max(a, b), 0)) / 255)
     }
   })
-
-  it.each([1, 4])(
-    'at %dx (the live terrain scale, tides-zmw.9.5), sits on the ground drawn at that scale; the fallback stays at the full relief',
-    (scale) => {
-      const displacement = terrainDisplacement(scale)
-      const grid = meshGrid(base.segments)
-      const mesh = displace(grid, vertexGrey(groundLevels(dem4k), grid), EARTH_RADIUS, displacement)
-      const sagUnits = (sag(base.segments) / 255) * TERRAIN_DISPLACEMENT
-      for (const region of ['Himalaya', 'Andes'] as const) {
-        for (const local of sweep(region, 1500)) {
-          const radius = terrainFloorRadius(base.floor, EARTH_RADIUS, local, displacement)
-          const ground = meshRadius(mesh, base.segments, local)
-          expect(radius, `${local.toArray()}`).toBeGreaterThanOrEqual(ground)
-          expect(radius - ground).toBeLessThanOrEqual((displacement * (TERRAIN_GREY_MARGIN + 0.5)) / 255 + sagUnits)
-          // Linear in the displacement: the floor at the full relief, scaled.
-          const full = terrainFloorRadius(base.floor, EARTH_RADIUS, local)
-          expect(radius - EARTH_RADIUS).toBeCloseTo(((full - EARTH_RADIUS) * displacement) / TERRAIN_DISPLACEMENT, 14)
-        }
-      }
-      expect(terrainFloorRadius(null, EARTH_RADIUS, latLonToLocal(0, -150), displacement)).toBe(
-        EARTH_RADIUS + (TERRAIN_DISPLACEMENT * TERRAIN_FALLBACK_GREY) / 255
-      )
-    },
-    60_000
-  )
 
   it("rejects a map with no level at the mesh's rows", () => {
     const map = (width: number, height: number) => ({ width, height, data: new Float32Array(width * height) })

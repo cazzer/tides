@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
-import { SURFACE_MAX_METRES } from '../../terrain-scale'
+import { SURFACE_MAX_METRES } from '../../surface-handover'
 import { earthLatLon } from '../../surface-ground'
 import {
   ANTICIPATE_MAX_M,
