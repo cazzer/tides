@@ -29,6 +29,7 @@ import DockToggle from './DockToggle'
 import { opensDownOnPhone, phoneDock, useDockDisclosure } from './dock-disclosure'
 import { Credits } from './Credits'
 import { CloudsShown } from './CloudsShown'
+import { qualityTier, savedQualityChoice, saveQualityChoice, type QualityChoice } from './quality'
 
 const FOCUS_OPTIONS: {
   value: CameraFocus
@@ -174,6 +175,18 @@ const CONSTELLATIONS_OPTIONS: { value: 'off' | 'lines' | 'art'; label: string }[
   { value: 'art', label: 'Lines + art' },
 ]
 
+const QUALITY_OPTIONS: { value: QualityChoice; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'low', label: 'Low' },
+  { value: 'high', label: 'High' },
+]
+
+// Read once, like the tier itself: the page runs on these until it reloads.
+const QUALITY_CHOICE = savedQualityChoice()
+const QUALITY_TIER = qualityTier()
+const QUALITY_FROM_URL =
+  typeof window !== 'undefined' && ['low', 'high'].includes(new URLSearchParams(window.location.search).get('quality') ?? '')
+
 /** A native modal dialog: showModal() supplies the focus trap, Esc, and focus return. */
 function SettingsDialog({
   open,
@@ -204,6 +217,7 @@ function SettingsDialog({
   const setShowLunar = useStore((s) => s.setShowLunar)
   const showZodiac = useStore((s) => s.showZodiac)
   const setShowZodiac = useStore((s) => s.setShowZodiac)
+  const qualityHintId = useId()
 
   useEffect(() => {
     const dialog = ref.current
@@ -328,6 +342,23 @@ function SettingsDialog({
             options={PLANETS_OPTIONS}
             onChange={(value) => setShowZodiac(value === 'on')}
           />
+        </SettingGroup>
+        <SettingGroup aria-describedby={qualityHintId}>
+          <SettingLegend>Quality</SettingLegend>
+          <SegmentedControl
+            name="quality"
+            value={QUALITY_CHOICE}
+            options={QUALITY_OPTIONS}
+            onChange={(value) => {
+              // The tier is read once at load; a choice that didn't save stays on Auto.
+              if (saveQualityChoice(value)) window.location.reload()
+            }}
+          />
+          <SettingHint id={qualityHintId}>
+            Now {QUALITY_TIER === 'low' ? 'Low' : 'High'}
+            {QUALITY_FROM_URL ? ', set by ?quality in the URL' : ''}. Auto
+            picks Low on phones and tablets. Changing it reloads the page.
+          </SettingHint>
         </SettingGroup>
         {/* Not a form control, so a section with a heading in the legend's look. */}
         <SettingGroup as="section">
