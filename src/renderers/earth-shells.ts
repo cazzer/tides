@@ -63,7 +63,7 @@ const eye = new THREE.Vector3()
  * mode, which keeps every other view's camera on today's front faces,
  * including the Moon Phase panel's, which sits inside the shells.
  */
-function shipNearEarth(camera: THREE.Camera): boolean {
+export function shipNearEarth(camera: THREE.Camera): boolean {
   return (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true && limbBody() === 'earth'
 }
 

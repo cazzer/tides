@@ -83,6 +83,7 @@ import { prefersReducedMotion } from '../ship/reduced-motion'
 import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
+import { SKY_VIEW_GLSL, SKY_VIEW_UNIFORMS } from './skyView'
 import depthGlsl from '../shaders/depth.glsl'
 
 const f = (x: number) => x.toFixed(6)
@@ -583,6 +584,7 @@ float cloudPathClear(float alpha, float thickness, float path) {
 #define uGain ${f(ATMOSPHERE_GAIN)}
 #define uSky ${v3(ATMOSPHERE_SKY)}
 #define uDusk ${v3(ATMOSPHERE_DUSK)}
+${SKY_VIEW_GLSL}
 ${hazeGlsl}
 
 // Within reach the atmosphere draws its haze before the clouds
@@ -600,7 +602,7 @@ vec3 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
   float past = columnAhead(eye + d * s, d, grazing, atPast);
   float front = clamp(1.0 - past / max(column, 1e-9), 0.0, 1.0);
   front = mix(front, 1.0, smoothstep(shell - 2.0 * uScaleHeight, shell, length(eye)));
-  return hazeGlow(column, grazing, at, uSunDir) * front;
+  return hazeGlow(column, grazing, at, uSunDir, d, eye) * front;
 }
 
 // The fragment, premultiplied, at depth z (the program writes gl_FragDepth
@@ -2005,6 +2007,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uMarchPhase: { value: 0 },
       uCloudCeiling: { value: ceilingTexture() },
       uPixelScale: { value: 1 },
+      ...SKY_VIEW_UNIFORMS,
     },
     defines,
     vertexShader: VERTEX,

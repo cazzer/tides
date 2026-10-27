@@ -17,9 +17,11 @@ import {
   ATMOSPHERE_SURFACE,
   groundHazeTop,
   pickShellFaces,
+  shipNearEarth,
 } from './earth-shells'
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
+import { createSkyView, SKY_VIEW_UNIFORMS, type SkyView } from './skyView'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
 // thins out with an (exaggerated, for visibility) ~60 km scale height.
@@ -31,6 +33,36 @@ const SKY = new THREE.Vector3(...ATMOSPHERE_SKY)
 const DUSK = new THREE.Vector3(...ATMOSPHERE_DUSK)
 
 const noRaycast = () => null
+
+// After the ship's settle (ShipController, SHIP_SETTLE_PRIORITY) has put the
+// camera where this frame draws it, before drei's Views render (1 and up).
+const SKY_VIEW_PRIORITY = 0.9
+const _eye = new THREE.Vector3()
+const _sun = new THREE.Vector3()
+
+// The table for `camera`'s eye in the shell's frame (sea level `radius`),
+// or off over the haze, where the limb's glow takes over (haze.glsl
+// hazeGlow()), and for any camera but the ship's near Earth (the Moon Phase
+// panel's sits inside the shells, at the centre, but never draws the sky
+// from inside). Module level, so the memoised table isn't mutated in a hook.
+function drawSkyView(
+  skyView: SkyView,
+  gl: THREE.WebGLRenderer,
+  shell: { current: THREE.Object3D | null },
+  camera: THREE.Camera,
+  radius: number,
+  timestamp: number
+) {
+  if (!shell.current) return
+  if (!shipNearEarth(camera)) {
+    skyView.update(gl, null, 0)
+    return
+  }
+  const eye = shell.current.worldToLocal(camera.getWorldPosition(_eye))
+  const eyeR = eye.length() / radius
+  const inside = eyeR < ATMOSPHERE_SURFACE + 4 * ATMOSPHERE_SCALE_HEIGHT
+  skyView.update(gl, inside ? eyeR : null, eye.normalize().dot(sunDirectionLocal(timestamp, _sun)))
+}
 
 export default function AtmosphereRenderer({ radius }: { radius: number }) {
   const material = useMemo(
@@ -47,6 +79,7 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
           uGain: { value: ATMOSPHERE_GAIN },
           uSky: { value: SKY },
           uDusk: { value: DUSK },
+          ...SKY_VIEW_UNIFORMS,
         },
         transparent: true,
         depthWrite: false,
@@ -81,6 +114,15 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
     u.uSeaLevel.value = radius
     sunDirectionLocal(timestamp, u.uSun.value)
   })
+
+  // The high tier's sky-view table, marched for the drawing eye each frame
+  // it is inside the haze (skyView.ts).
+  const skyView = useMemo(() => (isLowQuality() ? null : createSkyView()), [])
+  useEffect(() => () => skyView?.dispose(), [skyView])
+  useFrame(({ gl, camera }) => {
+    const { timestamp } = useStore.getState()
+    if (skyView && timestamp != null) drawSkyView(skyView, gl, mesh, camera, radius, timestamp)
+  }, SKY_VIEW_PRIORITY)
 
   return (
     <mesh

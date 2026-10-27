@@ -4,6 +4,8 @@ import { Body, Illumination } from 'astronomy-engine'
 import { earthPosition, moonOffset } from './ephemeris'
 import { CLOUD_AMBIENT } from './lighting'
 import {
+  DAY_ADAPT_GAIN,
+  dayExposure,
   moonIlluminatedFraction,
   moonlightStrength,
   moonUp,
@@ -13,7 +15,9 @@ import {
   NIGHT_ADAPT_NEAR,
   nightAdaptation,
   nightCloudAmbient,
+  skyDaylight,
 } from './night-flight'
+import { ATMOSPHERE_SCALE_HEIGHT, ATMOSPHERE_SURFACE } from './renderers/earth-shells'
 
 const sinDeg = (deg: number) => Math.sin((deg * Math.PI) / 180)
 
@@ -43,6 +47,47 @@ describe('night adaptation', () => {
       expect(a).toBeGreaterThanOrEqual(last)
       last = a
     }
+  })
+})
+
+describe("the eye's adaptation to a low Sun (tides-34q)", () => {
+  it('leaves the day, the night, high up and the system view at the exposure as it was', () => {
+    expect(dayExposure(sinDeg(60), 0.002)).toBe(1)
+    expect(dayExposure(sinDeg(25), 0.002)).toBe(1)
+    expect(dayExposure(sinDeg(-8), 0.002)).toBe(1)
+    expect(dayExposure(sinDeg(-30), 0.002)).toBe(1)
+    expect(dayExposure(sinDeg(3), NIGHT_ADAPT_FAR)).toBe(1)
+    expect(dayExposure(sinDeg(3), 5)).toBe(1)
+  })
+
+  it('opens the eye fully by 3 deg near the ground, and eases it off for the night', () => {
+    expect(dayExposure(sinDeg(3), 0.002)).toBeCloseTo(1 + DAY_ADAPT_GAIN, 9)
+    expect(dayExposure(sinDeg(-2), NIGHT_ADAPT_NEAR)).toBeCloseTo(1 + DAY_ADAPT_GAIN, 9)
+    let last = 0
+    for (let deg = 25; deg >= 3; deg -= 0.5) {
+      const e = dayExposure(sinDeg(deg), 0.002)
+      expect(e).toBeGreaterThanOrEqual(last)
+      last = e
+    }
+    // Between: late afternoon some of the way.
+    const afternoon = dayExposure(sinDeg(15), 0.002)
+    expect(afternoon).toBeGreaterThan(1.1)
+    expect(afternoon).toBeLessThan(1 + DAY_ADAPT_GAIN)
+  })
+})
+
+describe("the daylit sky's veil on the stars (tides-34q)", () => {
+  const base = ATMOSPHERE_SURFACE
+  const H = ATMOSPHERE_SCALE_HEIGHT
+  it('hides them by day under the haze, none at night or over it', () => {
+    expect(skyDaylight(sinDeg(30), 1.001)).toBe(1)
+    expect(skyDaylight(sinDeg(6), base + H)).toBe(1)
+    expect(skyDaylight(sinDeg(-4), 1.001)).toBe(0)
+    expect(skyDaylight(sinDeg(-30), 1.001)).toBe(0)
+    expect(skyDaylight(sinDeg(30), base + 4 * H)).toBe(0)
+    expect(skyDaylight(sinDeg(30), 1.5)).toBe(0)
+    expect(skyDaylight(sinDeg(1), 1.001)).toBeGreaterThan(0)
+    expect(skyDaylight(sinDeg(1), 1.001)).toBeLessThan(1)
   })
 })
 

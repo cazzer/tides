@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
+import { SKY_VIEW_GLSL } from './skyView'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
@@ -150,6 +151,8 @@ function preprocess(source: string, defines: Set<string>): string {
     let m: RegExpMatchArray | null
     if ((m = t.match(/^#ifdef (\w+)/)))
       stack.push({ active: defines.has(m[1]), taken: defines.has(m[1]) })
+    else if ((m = t.match(/^#ifndef (\w+)/)))
+      stack.push({ active: !defines.has(m[1]), taken: !defines.has(m[1]) })
     else if ((m = t.match(/^#if (.*)/))) stack.push({ active: holds(m[1]), taken: holds(m[1]) })
     else if ((m = t.match(/^#elif (.*)/))) {
       const top = stack[stack.length - 1]
@@ -1544,22 +1547,31 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // fragment, after the shader's own conditionals), and of the ground's and
   // the tiles' cloud shadow as injected, at tides-tvr.4.2 (404f3eb), and
   // unchanged by tides-zmw.21, which took the live-relief programs away: the
-  // typed tops are the typed program's alone.
+  // typed tops are the typed program's alone. The back faces' (from inside,
+  // where a cloud lays the haze in front of it over itself) regenerated at
+  // tides-34q, whose haze from inside is the sky's (haze.glsl hazeSky()).
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
     'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-back-noease': '33a8fa08be9db6e184b0d604dc66e92130fa519318a7568233256e48b3cb204f',
-    'relief-full-back-ease': '284fd6ba44b57ec22265dd5034a540954fb94bff5cacbbb13050f35ecdb0a11a',
+    'relief-full-back-noease': 'a5b8eaa4a2d01e0ce0fe7c004b3f7cf628fbde748c77fd22244808bdd538f039',
+    'relief-full-back-ease': '767a246f64adb01e2334a4196523040691ccf2d6a14f919c3574be8336a34fde',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
-    'flat-full-back-noease': '134fda5cafc9c83446987adc34e10e8493f91addf4a4916e7e7da2afe6959285',
-    'flat-full-back-ease': '0a83b945871ad6257844a8c833a762b33a353bed9cf618debfa7ea31a97db503',
+    'flat-full-back-noease': '0fd725186b0c5768f4962bdceb9aecfba8aa976da98e4ac25cdb977dab99b0b8',
+    'flat-full-back-ease': '485a4987ea88ec4ae5850d3ab8e6d7d5b4fcc2b341f4216030c0cdd9e03eade8',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
     'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
     'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+  // The sky-view table's uniforms (tides-34q.2), declared with the haze in
+  // the programs from inside: taken out, so the rest is pinned.
+  const withoutSkyView = (fragment: string) => {
+    const declared = preprocess(SKY_VIEW_GLSL, new Set()) + '\n'
+    expect(fragment.split(declared).length).toBeLessThanOrEqual(2)
+    return fragment.replace(declared, '')
+  }
   const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
 
   for (const flat of [false, true]) {
@@ -1575,7 +1587,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
             ...(ease === 'ease' ? ['FOG_EASE'] : []),
           ])
           const vertex = preprocess(vertexShader, defines)
-          const fragment = preprocess(fragmentShader, defines)
+          const fragment = withoutSkyView(preprocess(fragmentShader, defines))
           expect(vertex + fragment).not.toMatch(TYPED_WORDS)
           expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
             UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]

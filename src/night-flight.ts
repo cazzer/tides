@@ -15,6 +15,7 @@ import {
   MOONLIGHT_INTENSITY,
   NIGHT_FILL_INTENSITY,
 } from './lighting'
+import { ATMOSPHERE_SCALE_HEIGHT, ATMOSPHERE_SURFACE } from './renderers/earth-shells'
 
 /** Height over the surface, in Earth radii, under which the eye is fully
  * adapted and over which it isn't at all: the ship's low stops (60 and
@@ -44,6 +45,44 @@ export function nightAdaptation(sunSin: number, gap: number): number {
   const nearness = 1 - smoothstep(NIGHT_ADAPT_NEAR, NIGHT_ADAPT_FAR, gap)
   return darkness * nearness
 }
+
+/** The eye's adaptation to a low Sun near the ground (tides-34q): the
+ * exposure's gain over the day's, rising from DAY_ADAPT_SUN_FROM down to
+ * DAY_ADAPT_SUN_LOW, and giving way to the night's adaptation (its fill)
+ * between DAY_ADAPT_SUN_OUT and NIGHT_ADAPT_SUN_TO. 1 high up and in the
+ * system view. */
+export const DAY_ADAPT_GAIN = 0.6
+export const DAY_ADAPT_SUN_FROM = Math.sin((25 * Math.PI) / 180)
+export const DAY_ADAPT_SUN_LOW = Math.sin((3 * Math.PI) / 180)
+export const DAY_ADAPT_SUN_OUT = Math.sin((-2 * Math.PI) / 180)
+
+/** The exposure's scale, 1 to 1 + DAY_ADAPT_GAIN, for the Sun at `sunSin`
+ * at the sub-point and the eye `gap` Earth radii over the surface. */
+export function dayExposure(sunSin: number, gap: number): number {
+  const low = smoothstep(DAY_ADAPT_SUN_FROM, DAY_ADAPT_SUN_LOW, sunSin) * (1 - smoothstep(DAY_ADAPT_SUN_OUT, NIGHT_ADAPT_SUN_TO, sunSin))
+  const nearness = 1 - smoothstep(NIGHT_ADAPT_NEAR, NIGHT_ADAPT_FAR, gap)
+  return 1 + DAY_ADAPT_GAIN * low * nearness
+}
+
+/** sin(elevation) of the Sun at the sub-point over which the daylit sky
+ * hides the stars from inside the atmosphere: they come out from 6 deg up
+ * to 4 deg down (tides-34q). */
+export const DAYLIGHT_SUN_FROM = Math.sin((-4 * Math.PI) / 180)
+export const DAYLIGHT_SUN_TO = Math.sin((6 * Math.PI) / 180)
+
+/** How much the daylit sky hides the stars, 0 to 1, for the Sun at `sunSin`
+ * at the sub-point and the eye `radius` Earth radii from the centre: as the
+ * sky's own draw from inside, over the haze's base by one to four scale
+ * heights (shaders/atmosphere/haze.glsl hazeGlow()). */
+export function skyDaylight(sunSin: number, radius: number): number {
+  const base = ATMOSPHERE_SURFACE
+  const inside = 1 - smoothstep(base + ATMOSPHERE_SCALE_HEIGHT, base + 4 * ATMOSPHERE_SCALE_HEIGHT, radius)
+  return smoothstep(DAYLIGHT_SUN_FROM, DAYLIGHT_SUN_TO, sunSin) * inside
+}
+
+/** The drawing camera's skyDaylight(), set before its draws (EarthRenderer's
+ * per-camera hook) and read by the stars; 0 outside ship mode. */
+export const eyeSky = { daylight: 0 }
 
 /** The Moon's illuminated fraction from Earth, for unit directions from
  * Earth's centre to the Sun and to the Moon. */

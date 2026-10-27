@@ -157,6 +157,21 @@ const LIGHT_BODY = renameInSnippet(
   2
 )
 
+// The globe's tint of the Sun's light (tides-34q), on the tiles' normals.
+const SUN_TINT_BODY = renameInSnippet(
+  renameInSnippet(
+    GROUND_DETAIL_GLSL.sunTintBody,
+    '#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0',
+    '#if NUM_DIR_LIGHTS > 0',
+    WHAT,
+    1
+  ),
+  'groundUp',
+  'surfaceGeomNormal',
+  WHAT,
+  1
+)
+
 // The relief's light evened out where the tiles match the globe (by w): the
 // globe has no relief at that scale to shade (its ground is flat-lit from
 // the band down), while the tiles' bumped relief, drawn 3 to 12 times true,
@@ -175,7 +190,7 @@ if (colourW > 0.0) {
 `
 
 /** The adapter's GLSL (the test checks it against the globe's). */
-export const TILE_COLOUR_GLSL = { fragmentHead: FRAGMENT_HEAD, albedoBody: ALBEDO_BODY, lightBody: LIGHT_BODY, reliefBody: RELIEF_BODY }
+export const TILE_COLOUR_GLSL = { fragmentHead: FRAGMENT_HEAD, albedoBody: ALBEDO_BODY, lightBody: LIGHT_BODY, sunTintBody: SUN_TINT_BODY, reliefBody: RELIEF_BODY }
 
 /** Stands in for a tile's reference until it arrives. */
 let placeholder: THREE.DataTexture | null = null
@@ -340,6 +355,7 @@ export function createTileColour(store: () => ColourRefStore = colourRefStore): 
           fragment = injectAfterChunk(fragment, 'map_fragment', ALBEDO_BODY, WHAT)
           // The sky fill, then the evening out (the later injection lands first).
           fragment = injectAfterChunk(fragment, 'lights_fragment_end', RELIEF_BODY, WHAT)
+          fragment = injectAfterChunk(fragment, 'lights_fragment_maps', SUN_TINT_BODY, WHAT)
           shader.fragmentShader = injectAfterChunk(fragment, 'lights_fragment_end', LIGHT_BODY, WHAT)
         },
         customProgramCacheKey: () => 'colour-surface',
