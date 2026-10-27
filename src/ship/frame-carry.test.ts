@@ -390,7 +390,6 @@ describe('the carry, degenerate (tides-zmw.9.18)', () => {
     const carry = createFrameCarry()
     carryShip(carry, state, earth, moon, FRAME, earthSpinRate(1))
     fillAir(carry, carried, state, earth, earthSpinRate(1))
-    fillAirDensity(telemetry, state.position, earth)
-    expect(carried.air.density).toBe(telemetry.air.density)
+    expect(carried.air.density).toBeCloseTo(Math.exp(-10 / SCALE_HEIGHT_KM), 6)
   })
 })

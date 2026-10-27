@@ -934,8 +934,8 @@ function fillTelemetry(
   out.boosted = boosted
   out.velocity.copy(state.velocity)
   out.colliding = colliding
-  // The carry (frame-carry.ts fillAir) overwrites these after the step, or
-  // without it ShipController's fillAirDensity the density and pressure.
+  // The carry (frame-carry.ts fillAir) overwrites these after the step, or,
+  // without it, ShipController's fillAirDensity fills the density and pressure.
   out.air.speed = out.speed
   out.air.coupling = 0
   out.air.density = 0

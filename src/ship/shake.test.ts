@@ -6,17 +6,18 @@ import {
   SHAKE_FALL_TAU,
   SHAKE_HZ,
   SHAKE_MAX_INTENSITY,
-  SHAKE_PITCH,
+  SHAKE_MIN_VIEW_PX,
+  SHAKE_PX,
   SHAKE_Q_MIN,
   SHAKE_Q_REF,
   SHAKE_RISE_TAU,
-  SHAKE_ROLL,
+  SHAKE_ROLL_SHARE,
   SHAKE_WEIGHTS,
-  SHAKE_YAW,
   airShakeShare,
   easeShake,
   shakeAngles,
   shakeNoise,
+  shakeRadiansPerPx,
   shakeTarget,
   type ShakeAngles,
 } from './shake'
@@ -26,6 +27,8 @@ const q = (km: number, speed: number) => 0.5 * SEA_LEVEL_DENSITY * airDensity(km
 const AXES = [0, 1, 2] as const
 const FRAME = 1 / 60
 const angles = (): ShakeAngles => ({ pitch: 0, yaw: 0, roll: 0 })
+// A 60° view 900 CSS px tall.
+const DESKTOP = shakeRadiansPerPx(60, 900)
 
 describe('shake target', () => {
   test('none in vacuum: no pressure, the plateau speed from 150 km up, nonsense', () => {
@@ -63,8 +66,9 @@ describe('shake target', () => {
     expect(last).toBeGreaterThan(0)
   })
 
-  test('the air floor at sea level is the reference, and the share never reaches 1', () => {
-    expect(SHAKE_Q_REF).toBeCloseTo(q(0, 200), 6)
+  test('half the air floor at sea level is the reference, and the share never reaches 1', () => {
+    expect(SHAKE_Q_REF).toBeCloseTo(q(0, 200) / 2, 6)
+    expect(airShakeShare(q(0, 200))).toBeGreaterThan(0.8)
     expect(airShakeShare(SHAKE_Q_REF + SHAKE_Q_MIN)).toBeCloseTo(1 - 1 / Math.E, 12)
     for (const pressure of [1e3, 1e5, 1e7, 1e9]) expect(airShakeShare(pressure)).toBeLessThanOrEqual(1)
     expect(airShakeShare(1e5)).toBeLessThan(1)
@@ -98,21 +102,32 @@ describe('shake signal', () => {
     const out = angles()
     for (let t = 0; t <= 1e4; t += 0.37) {
       for (const axis of AXES) expect(Math.abs(shakeNoise(t, axis))).toBeLessThanOrEqual(1)
-      shakeAngles(t, SHAKE_MAX_INTENSITY, out)
-      expect(Math.abs(out.pitch)).toBeLessThanOrEqual(SHAKE_PITCH * SHAKE_MAX_INTENSITY)
-      expect(Math.abs(out.yaw)).toBeLessThanOrEqual(SHAKE_YAW * SHAKE_MAX_INTENSITY)
-      expect(Math.abs(out.roll)).toBeLessThanOrEqual(SHAKE_ROLL * SHAKE_MAX_INTENSITY)
-      shakeAngles(t, 0, out)
+      shakeAngles(t, SHAKE_MAX_INTENSITY, DESKTOP, out)
+      const peak = SHAKE_PX * DESKTOP * SHAKE_MAX_INTENSITY
+      expect(Math.abs(out.pitch)).toBeLessThanOrEqual(peak)
+      expect(Math.abs(out.yaw)).toBeLessThanOrEqual(peak)
+      expect(Math.abs(out.roll)).toBeLessThanOrEqual(SHAKE_ROLL_SHARE * peak)
+      shakeAngles(t, 0, DESKTOP, out)
       expect(out).toEqual({ pitch: 0, yaw: 0, roll: 0 })
     }
-    shakeAngles(3, 1, out)
-    shakeAngles(3, NaN, out)
+    shakeAngles(3, 1, DESKTOP, out)
+    shakeAngles(3, NaN, DESKTOP, out)
     expect(out).toEqual({ pitch: 0, yaw: 0, roll: 0 })
   })
 
+  test('sized in screen pixels: the same px on a short view, but not wilder than a minimum view', () => {
+    expect(shakeRadiansPerPx(60, 900)).toBeCloseTo(Math.tan(Math.PI / 6) / 450, 12)
+    expect(shakeRadiansPerPx(60, 450)).toBeCloseTo(2 * shakeRadiansPerPx(60, 900), 12)
+    expect(shakeRadiansPerPx(60, 50)).toBe(shakeRadiansPerPx(60, SHAKE_MIN_VIEW_PX))
+    expect(shakeRadiansPerPx(NaN, 900)).toBe(0)
+    expect(shakeRadiansPerPx(60, NaN)).toBe(0)
+    // Peak boosted on a desktop: a few px, still well under a degree.
+    expect(SHAKE_PX * DESKTOP * SHAKE_MAX_INTENSITY).toBeLessThan((0.5 * Math.PI) / 180)
+  })
+
   test('deterministic in time', () => {
-    const a = shakeAngles(12.34, 1.7, angles())
-    const b = shakeAngles(12.34, 1.7, angles())
+    const a = shakeAngles(12.34, 1.7, DESKTOP, angles())
+    const b = shakeAngles(12.34, 1.7, DESKTOP, angles())
     expect(a).toEqual(b)
     expect(a.pitch).not.toBe(0)
   })
