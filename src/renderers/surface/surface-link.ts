@@ -16,6 +16,7 @@ import type { EarthHorizonUniforms } from '../earthHorizonTexture'
 import type { MaterialPatch } from '../eclipseShadow'
 import type { GroundHaze } from '../groundHaze'
 import type { NightFlightUniforms } from '../nightLights'
+import type { Water } from '../water'
 
 /** A streamed globe patch (gibsStream.ts StreamedPatch) as the link hands it. */
 export interface GlobeStream {
@@ -57,6 +58,9 @@ export interface GlobeLink {
   horizon: EarthHorizonUniforms
   /** The ground sphere's radius, scene units. */
   seaLevel: number
+  /** The water's wave phases (water.ts createWater), set per camera before
+   * anything draws. */
+  water: Pick<Water, 'uniforms'>
 }
 
 type Listener = () => void

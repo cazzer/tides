@@ -15,6 +15,8 @@ import { useGibsNightPatch } from './gibsNightPatch'
 import { streamedPatch } from './gibsStream'
 import { nightLightsPatch, useNightFlight } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
+import { createWater, waterPatch } from './water'
+import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
 import {
   driftOffset,
@@ -119,6 +121,9 @@ export default function EarthRenderer({
     () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
     [clouds, diameter, textureSet.low]
   )
+  // Open water that reads as water from low down (tides-07z): its waves'
+  // clock and phases, at the haze's eye.
+  const water = useMemo(() => createWater(groundHaze.frame), [groundHaze])
   // The streamed tiles (tides-zmw.9.7) take the globe's features through
   // this link (its haze, eclipse, clouds, night, maps and horizon; the
   // tiles' composer, tides-zmw.9.16, surface/tile-material.ts), and the globe
@@ -148,9 +153,10 @@ export default function EarthRenderer({
             maps: surfaceMaps,
             horizon: earthHorizon(earthHorizonUrl),
             seaLevel: diameter,
+            water,
           }
         : null,
-    [groundHaze, clouds, textureSet.low, eclipseShadow, nightFlight, gibsPatch, gibsNightPatch, surfaceMaps, diameter]
+    [groundHaze, clouds, textureSet.low, eclipseShadow, nightFlight, gibsPatch, gibsNightPatch, surfaceMaps, diameter, water]
   )
   useEffect(() => {
     if (!surfaceLink) return
@@ -170,13 +176,17 @@ export default function EarthRenderer({
         // The tiles' handover marks (surface-scale.ts), cleared within this
         // View's scissor.
         if (SURFACE_TILES_ON) renderer.clearStencil()
-        if (groundRef.current) groundHaze.update(groundRef.current, camera)
+        if (groundRef.current) {
+          groundHaze.update(groundRef.current, camera)
+          // At the haze's eye, just set.
+          water.update()
+        }
         // After the Sun, which it reads; as the ground's onBeforeRender.
         if (tileNightFlight && groundRef.current && cloudRef.current?.parent) {
           tileNightFlight.update(groundRef.current, camera, diameter)
         }
       }),
-    [scene, clouds, groundHaze, tileNightFlight, diameter]
+    [scene, clouds, groundHaze, water, tileNightFlight, diameter]
   )
   const groundPatch = useMemo(
     () =>
@@ -187,11 +197,14 @@ export default function EarthRenderer({
         poleSmoothingPatch(),
         groundDetailPatch(textureSet.low),
         groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
+        // After the shadows in the list, so its sky lands before they dim
+        // directSpecular.
+        waterPatch(water, groundHaze.frame, textureSet.low),
         gibsPatch,
         gibsNightPatch,
         groundHaze.patch
       ),
-    [eclipseShadow, clouds, textureSet.low, gibsPatch, gibsNightPatch, nightFlight, groundHaze]
+    [eclipseShadow, clouds, textureSet.low, gibsPatch, gibsNightPatch, nightFlight, groundHaze, water]
   )
   // The mesh's displacement, at its vertex spacing (tides-zmw.2).
   const displacement = useMemo(() => createGroundDisplacement(EARTH_BASE_SEGMENTS), [])
@@ -216,8 +229,10 @@ export default function EarthRenderer({
 
   // The static clouds drift east, slower than the Earth turns; the shader
   // offsets the texture rather than turning the mesh, so the ground's shadows
-  // drift with them.
-  useFrame(({ clock, gl }) => {
+  // drift with them. The waves move on by the wall clock, still under
+  // prefers-reduced-motion.
+  useFrame(({ clock, gl }, delta) => {
+    water.advance(delta, prefersReducedMotion())
     if (!real) {
       drift.current += STATIC_DRIFT_PER_FRAME
       clouds.uniforms.uCloudShift.value = driftOffset(drift.current)
@@ -267,7 +282,6 @@ export default function EarthRenderer({
           emissiveMap={nightTexture}
           emissive={CITY_LIGHTS_COLOR}
           emissiveIntensity={CITY_LIGHTS_INTENSITY}
-          shininess={100}
           displacementMap={demTexture}
           displacementScale={TERRAIN_DISPLACEMENT}
         />

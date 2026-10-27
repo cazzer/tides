@@ -5,9 +5,9 @@
 // sparkles (detailOctaveWeight()). From the system view no octave survives.
 //
 // It keys off the material's own inputs after the albedo lookup: the specular
-// mask (open water, left smooth so its glint is untouched) and the albedo's
-// colour (ice, given a gentler grain). Night lights (emissive) and the clouds'
-// shadows (applied to the lit result) are untouched. A finer albedo source
+// mask (open water, left to its own waves and glint, ./water.ts) and the
+// albedo's colour (ice, given a gentler grain). Night lights (emissive) and
+// the clouds' shadows (applied to the lit result) are untouched. A finer albedo source
 // over part of the ground (the GIBS patch, tides-01v.7, ./gibsPatch.ts) sets
 // groundDetailFine and groundDetailFineTexel there, which fade out the
 // octaves it already resolves. Changing groundDetailTexel itself across the

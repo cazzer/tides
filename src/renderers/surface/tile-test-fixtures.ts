@@ -8,6 +8,7 @@ import { TerrainLambertMaterial } from '3d-tiles-renderer/src/three/plugins/imag
 import { RELIEF } from '../../relief'
 import { createEclipseShadow } from '../eclipseShadow'
 import { createGroundHaze } from '../groundHaze'
+import { createWater } from '../water'
 import type { GlobeLink } from './surface-link'
 
 /** What three hands onBeforeCompile for a Phong material (chunks unresolved). */
@@ -32,8 +33,9 @@ const noPatch = () => ({ patch: { onBeforeCompile() {}, customProgramCacheKey: (
  * (a feature's test swaps in its own globe module's objects). */
 export function fakeLink(): GlobeLink {
   const sunDir = { value: new THREE.Vector3(1, 0, 0) }
+  const haze = createGroundHaze(sunDir, 2.95, false)
   return {
-    haze: createGroundHaze(sunDir, 2.95, false),
+    haze,
     sunDir,
     clouds: { uniforms: {} as GlobeLink['clouds']['uniforms'], flat: false },
     eclipse: createEclipseShadow('earth').uniforms,
@@ -43,6 +45,7 @@ export function fakeLink(): GlobeLink {
     maps: { day: { value: new THREE.Texture() }, specular: { value: new THREE.Texture() }, night: { value: new THREE.Texture() } },
     horizon: { map: { value: new THREE.DataArrayTexture() }, code: { value: new THREE.Vector2() } },
     seaLevel: 2.95,
+    water: createWater(haze.frame),
   }
 }
 

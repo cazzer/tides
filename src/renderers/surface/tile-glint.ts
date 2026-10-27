@@ -1,8 +1,8 @@
-// The water's sun glint on the streamed tiles (tides-zmw.9.14): the globe's
-// Phong specular (GLOBE_SPECULAR, GLOBE_SHININESS, which the composer's
-// TerrainPhongMaterial already carries) with specularStrength from the
-// globe's specular (water) mask, as the globe's specularmap_fragment takes
-// it, sharpened at the coasts by the tile's own elevation.
+// The water on the streamed tiles (tides-zmw.9.14, tides-07z): the globe's
+// water (../water.ts: the sky it mirrors, the Cox-Munk glint, the deep
+// body's floor and the moving waves), its strength (specularStrength) from
+// the globe's specular (water) mask, as the globe's specularmap_fragment
+// takes it, sharpened at the coasts by the tile's own elevation.
 //
 // The mask is the globe's map (link.maps.specular, through a uniform: a
 // slot would be freed with each tile), read at the base's surfaceGlobeUv
@@ -34,11 +34,16 @@
 // No varyings, no feature defines: one tap of the mask (filtered for the
 // pixel, no implicit derivatives) and one of the grid, after the base's
 // anchor (below three's specularmap_fragment and the base's
-// specularStrength = 0), skipped with the Sun under the level ground's
-// horizon (GLINT_SUN) and on tiles with no water under them (uTileWet);
-// and Phong's direct light with its specular term skipped where the
-// strength is 0 (below).
+// specularStrength = 0), skipped on tiles with no water under them
+// (uTileWet); the water's body and waves just before
+// emissivemap_fragment (after the library's bump), the water's direct light
+// for Phong's and its sky after lights_fragment_end, each skipped where the
+// strength is 0 (the land, as it was). The water's prelude takes the
+// base's ray, up and frame; its phases are the globe's (link.water). No
+// longer gated on the Sun: the sky's reflection lights the sea through
+// twilight, and the glint goes out under the level horizon by itself.
 import type * as THREE from 'three'
+import { injectWater, WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
 import { injectAfterChunk, surfaceInject, type TileAdapter } from './tile-material'
 
 const WHAT = 'tile glint'
@@ -65,14 +70,10 @@ export function glintStrength(mask: number, elevation: number): number {
 
 const f = (x: number) => x.toFixed(6)
 
-/** sin of the Sun's elevation under which the glint is skipped: Phong's
- * specular is 0 there anyway (dotNL saturates to 0 on level water), so the
- * night side and the terminator's dark side skip both taps. */
-export const GLINT_SUN = -0.02
+const WATER = WATER_GLSL(WATER_WAVE_TABLE)
 
 const HEAD = /* glsl */ `
 uniform sampler2D uTileSpecularMap;
-uniform vec3 uTileGlintSun;
 uniform float uTileWet;
 `
 
@@ -81,7 +82,7 @@ uniform float uTileWet;
 // branch no implicit derivatives: the grid's tap at level 0 (it has no
 // mips, so the same texel texture2D read).
 const SPECULAR = /* glsl */ `
-if (uTileWet > 0.5 && dot(surfaceUp, uTileGlintSun) > ${f(GLINT_SUN)}) {
+if (uTileWet > 0.5) {
   float glintMask = surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r;
   #ifdef USE_BUMPMAP
     float glintSea = 1.0 - smoothstep(${f(GLINT_SEA_LEVEL[0])}, ${f(GLINT_SEA_LEVEL[1])}, abs(textureLod(bumpMap, vBumpMapUv, 0.0).x));
@@ -91,27 +92,6 @@ if (uTileWet > 0.5 && dot(surfaceUp, uTileGlintSun) > ${f(GLINT_SUN)}) {
   specularStrength = mix(smoothstep(${f(GLINT_INLAND[0])}, ${f(GLINT_INLAND[1])}, glintMask),
     smoothstep(${f(GLINT_SEA[0])}, ${f(GLINT_SEA[1])}, glintMask), glintSea);
 }
-`
-
-// three r180's RE_Direct_BlinnPhong (lights_phong_pars_fragment as three
-// ships it, blank lines stripped; the test pins it to three's text) with
-// its specular term skipped where the strength is 0 (the land), which
-// leaves those pixels as they were: with the base's constant
-// specularStrength = 0 the compiler dropped Blinn-Phong altogether, and the
-// glint's strength brings it back for every light.
-export const BLINN_PHONG_DIRECT = /* glsl */ `void RE_Direct_BlinnPhong( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in BlinnPhongMaterial material, inout ReflectedLight reflectedLight ) {
-\tfloat dotNL = saturate( dot( geometryNormal, directLight.direction ) );
-\tvec3 irradiance = dotNL * directLight.color;
-\treflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );
-\treflectedLight.directSpecular += irradiance * BRDF_BlinnPhong( directLight.direction, geometryViewDir, geometryNormal, material.specularColor, material.specularShininess ) * material.specularStrength;
-}`
-
-const GATED_DIRECT = `${BLINN_PHONG_DIRECT.replace('RE_Direct_BlinnPhong(', 'RE_Direct_TileGlint(').replace(
-  '\treflectedLight.directSpecular +=',
-  '\tif ( material.specularStrength > 0.0 ) reflectedLight.directSpecular +='
-)}
-#undef RE_Direct
-#define RE_Direct RE_Direct_TileGlint
 `
 
 // Which tiles hold any water: the mask on the CPU, averaged down to
@@ -155,20 +135,29 @@ export function regionHasWater(grid: Uint8Array, region: readonly number[]): boo
   return false
 }
 
-/** The adapter's GLSL (the test checks it). */
-export const TILE_GLINT_GLSL = { head: HEAD, specular: SPECULAR, direct: GATED_DIRECT }
+/** The adapter's GLSL (the test checks it): the strength (specular, the
+ * water's body inside its branch), and the water's pieces. */
+export const TILE_GLINT_GLSL = {
+  head: HEAD + WATER.head,
+  specular: SPECULAR,
+  normal: WATER_PRELUDE.tiles.body + WATER.normal,
+  direct: WATER.direct,
+  sky: WATER.sky,
+}
 
 export const tileGlint: TileAdapter = (link) => {
-  const uniforms = { uTileSpecularMap: link.maps.specular, uTileGlintSun: link.sunDir }
+  const uniforms = { uTileSpecularMap: link.maps.specular, ...link.water.uniforms }
   return {
     patch: {
       onBeforeCompile(shader) {
         Object.assign(shader.uniforms, uniforms)
-        let fragment = surfaceInject(surfaceInject(shader.fragmentShader, 'fragmentHead', HEAD), 'specular', SPECULAR)
-        fragment = injectAfterChunk(fragment, 'lights_phong_pars_fragment', GATED_DIRECT, WHAT)
-        shader.fragmentShader = fragment
+        const g = TILE_GLINT_GLSL
+        let fragment = surfaceInject(surfaceInject(shader.fragmentShader, 'fragmentHead', g.head), 'specular', g.specular)
+        fragment = injectAfterChunk(fragment, 'lights_phong_pars_fragment', g.direct, WHAT)
+        fragment = injectWater(fragment, 'emissivemap_fragment', g.normal, true)
+        shader.fragmentShader = injectAfterChunk(fragment, 'lights_fragment_end', g.sky, WHAT)
       },
-      customProgramCacheKey: () => 'glint-surface',
+      customProgramCacheKey: () => 'water-surface',
     },
     onTile(_material, _mesh, tile) {
       const region = (tile as { boundingVolume?: { region?: readonly number[] } }).boundingVolume?.region

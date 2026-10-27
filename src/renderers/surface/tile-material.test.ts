@@ -13,8 +13,6 @@ import { TILE_FEATURES } from './tile-features'
 import {
   createTileComposer,
   createTileMaterialPlugin,
-  GLOBE_SHININESS,
-  GLOBE_SPECULAR,
   renameInSnippet,
   SURFACE_ANCHORS,
   SURFACE_GROUND_FROM_ECEF,
@@ -121,8 +119,6 @@ describe('the Phong swap (tides-zmw.9.16)', () => {
     expect(phong.displacementScale).toBe(RELIEF)
     expect(phong.bumpScale).toBe(SURFACE_SCALE * RELIEF)
     expect(phong.stencilRef).toBe(SURFACE_STENCIL_REF)
-    expect(phong.specular.getHex()).toBe(GLOBE_SPECULAR)
-    expect(phong.shininess).toBe(GLOBE_SHININESS)
     expect(phong.emissive.getHex()).toBe(0)
     const shader = compiled(phong)
     // The library's bump chunk, as it comes.
@@ -141,7 +137,7 @@ describe('the Phong swap\'s edges (tides-zmw.9.16)', () => {
     const copy = phong.clone()
     expect(copy).toBeInstanceOf(TerrainPhongMaterial)
     expect(copy.map).toBe(phong.map)
-    expect(copy.specular.getHex()).toBe(GLOBE_SPECULAR)
+    expect(copy.bumpMap).toBe(phong.bumpMap)
   })
 
   it('leaves a tile material that isn\'t the plugin\'s Lambert as it came', () => {

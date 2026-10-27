@@ -2,8 +2,8 @@
 // in EarthRenderer's composePatches order for the globe's ground: eclipse,
 // cloud shadows, night (city lights, night fill, GIBS night), colour (sky
 // fill, groundDetail; source grading), terrain shadows (groundShadow), the
-// glint (Phong's specular, which the globe takes from its map), and the haze
-// last. The composer applies them in this order, so text injected at a
+// glint (the globe's water, ../water.ts, its strength the globe's map's),
+// and the haze last. The composer applies them in this order, so text injected at a
 // shared anchor lands as on the globe. Each slot is its own module, owned by
 // one bead: tides-zmw.9.16 eclipse, 9.12 clouds, 9.13 night, 9.11 colour,
 // 9.15 shadow, 9.14 glint; the haze is tides-zmw.9.7's.
