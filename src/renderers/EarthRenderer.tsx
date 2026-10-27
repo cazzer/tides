@@ -196,6 +196,9 @@ export default function EarthRenderer({
       }),
     [scene, clouds, groundHaze, water, tileNightFlight, nightFlight, diameter]
   )
+  // Out of flight, the eye as the day's at once, for a View with no Earth of
+  // its own to set it (the 'top' panel).
+  useEffect(() => () => restoreEye(gl), [nightFlight, gl])
   const groundPatch = useMemo(
     () =>
       composePatches(
@@ -334,6 +337,13 @@ function globeStream(patch: MaterialPatch): GlobeStream {
 // yet. Outside the component:
 // the react-hooks lint rejects mutating the scene from useThree in place.
 // Returns the cleanup.
+// The eye outside flight: the day's exposure, and no daylight veil on the
+// stars. Module level, so the renderer from useThree isn't mutated in a hook.
+function restoreEye(renderer: THREE.WebGLRenderer) {
+  renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE
+  eyeSky.daylight = 0
+}
+
 function cloudsFaceEachCamera(
   scene: THREE.Scene,
   clouds: CloudLayer,

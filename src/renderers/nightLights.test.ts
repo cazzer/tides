@@ -257,7 +257,14 @@ describe('night lights in flight', () => {
         '  vec3 tangent = across * sqrt(1.0 - dip2) - up * sqrt(dip2);\n  float column = columnAhead(eye, tangent, grazing, at);',
         '  float column = columnAhead(eye, across * sqrt(1.0 - dip2) - up * sqrt(dip2), grazing, at);',
       ],
-      ['hazeGlow(column, grazing, at, uGroundHazeSun, tangent, eye)', 'hazeGlow(column, grazing, at, uGroundHazeSun)'],
+      [
+        "  // The colour's direction too: the tangent sweeps every azimuth round the\n" +
+          '  // nadir, and the sky along it (by its angle to the Sun) would split the\n' +
+          '  // haze under the ship into sectors.\n' +
+          '  vec3 look = normalize(mix(tangent, dir, down * down));\n' +
+          '  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, look, eye);',
+        '  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun);',
+      ],
       ['hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye)', 'hazeGlow(own, grazing, atOwn, uGroundHazeSun)'],
     ]
     for (const [now, before] of swaps) {
@@ -293,12 +300,23 @@ describe('night lights in flight', () => {
     }
   }
 
-  it("leaves the system view's ground at the default exactly as tides-zmw.21 left it", () => {
+  // What skyAsBefore() swaps out, pinned as tides-34q left it, so that a
+  // change to it fails here too.
+  it("pins tides-34q's sky light and haze, which the pins below take out", () => {
+    const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+    expect(sha(GROUND_DETAIL_GLSL.lightBody)).toBe('2f6f8a716ac3f104c5a5ded8dc62499ce46fbdadd96e7dab400cb0bf7389c137')
+    expect(sha(GROUND_DETAIL_GLSL.sunTintBody)).toBe('0f437dff1b138b14d5532c045a1f98f28bd2f9196d1d48c2f20ba8459b3bf9d4')
+    expect(sha(hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb(')))).toBe(
+      'c428cccb41c9c63cf015e5e03cfb0d19faa64371ecf937a51a83b1a3c9c18fae'
+    )
+  })
+
+  it("leaves the system view's ground at the default as tides-zmw.21 left it, but for tides-34q's sky light and haze", () => {
     expect(systemGroundHash(false)).toBe(SYSTEM_GROUND_SHA256.high)
     expect(systemGroundHash(true)).toBe(SYSTEM_GROUND_SHA256.low)
   })
 
-  it("leaves the system view's ground at ?relief=12 exactly as it was before tides-tvr.2", async () => {
+  it("leaves the system view's ground at ?relief=12 as it was before tides-tvr.2, but for tides-34q's sky light and haze", async () => {
     expect(await systemGroundHashesAt('?relief=12')).toEqual(SYSTEM_GROUND_SHA256_12X)
   })
 })

@@ -81,7 +81,9 @@ export function createSkyView(): SkyView {
   const camera = new THREE.OrthographicCamera()
   return {
     update(renderer, eyeR, sunMu) {
-      if (eyeR == null) {
+      // A half-float target needs a colour-buffer extension (WebGL2 without
+      // it, a forced high tier, would draw the sky black): else analytic.
+      if (eyeR == null || !(renderer.extensions.has('EXT_color_buffer_half_float') || renderer.extensions.has('EXT_color_buffer_float'))) {
         SKY_VIEW_UNIFORMS.uSkyViewOn.value = 0
         return
       }

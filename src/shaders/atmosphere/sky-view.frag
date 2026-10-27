@@ -7,7 +7,7 @@
 // the Belt of Venus stands opposite, and the twilight glows. A texel is a
 // direction by its azimuth from the Sun's (u, 0 to pi: the sky is symmetric
 // about the Sun's vertical) and its elevation over the eye's level (v,
-// squeezed toward the horizon: skyViewUv() in haze.glsl), for the Sun at
+// squeezed toward the horizon: skyViewDir() and skyViewGlow() in haze.glsl), for the Sun at
 // uSunMu (the sine of its elevation at the eye).
 
 precision highp float;

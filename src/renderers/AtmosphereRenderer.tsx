@@ -17,6 +17,7 @@ import {
   ATMOSPHERE_SURFACE,
   groundHazeTop,
   pickShellFaces,
+  shipNearEarth,
 } from './earth-shells'
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
@@ -41,7 +42,9 @@ const _sun = new THREE.Vector3()
 
 // The table for `camera`'s eye in the shell's frame (sea level `radius`),
 // or off over the haze, where the limb's glow takes over (haze.glsl
-// hazeGlow()). Module level, so the memoised table isn't mutated in a hook.
+// hazeGlow()), and for any camera but the ship's near Earth (the Moon Phase
+// panel's sits inside the shells, at the centre, but never draws the sky
+// from inside). Module level, so the memoised table isn't mutated in a hook.
 function drawSkyView(
   skyView: SkyView,
   gl: THREE.WebGLRenderer,
@@ -51,6 +54,10 @@ function drawSkyView(
   timestamp: number
 ) {
   if (!shell.current) return
+  if (!shipNearEarth(camera)) {
+    skyView.update(gl, null, 0)
+    return
+  }
   const eye = shell.current.worldToLocal(camera.getWorldPosition(_eye))
   const eyeR = eye.length() / radius
   const inside = eyeR < ATMOSPHERE_SURFACE + 4 * ATMOSPHERE_SCALE_HEIGHT

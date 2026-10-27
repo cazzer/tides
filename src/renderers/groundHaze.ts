@@ -215,7 +215,11 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   at = mix(at, eye + ray, down * down);
   float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, rE);
   float haze = mix(share, 1.0, ease);
-  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, tangent, eye);
+  // The colour's direction too: the tangent sweeps every azimuth round the
+  // nadir, and the sky along it (by its angle to the Sun) would split the
+  // haze under the ship into sectors.
+  vec3 look = normalize(mix(tangent, dir, down * down));
+  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, look, eye);
   if (ease > 0.0) {
     vec3 atOwn;
     float own = columnAheadOverSea(eye, dir, grazing, atOwn);
