@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
+import { TYPED_CODE_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
   CLOUD_GROUND_GLSL,
@@ -62,8 +63,6 @@ import {
   NEUTRAL_LOOK,
   STRETCH_EDGES,
   TYPE_LOOKS,
-  TYPED_CODE_STEPS,
-  TYPED_DELTA_KM,
   TYPED_ZERO_CODE,
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
@@ -1547,7 +1546,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     'flat-live': '9774cc5d301fd5b2948150dc21b26bac52d6fd4a0c6716bd73b992e9ffb92121',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
-  const TYPED_WORDS = /TYPED_ZERO_CODE|TYPED_CODE_STEPS|TYPED_DELTA_KM|typedKm|CLOUD_TYPED/
+  const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED/
 
   for (const flat of [false, true]) {
     for (const live of [false, true]) {
@@ -1603,20 +1602,55 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         const reads = (text: string) => text.match(/\btexture(Lod)?\(|cloudPoleSmoothed\(/g)?.length
         expect(reads(column)).toBe(reads(before))
         expect(column).toMatch(/vec4 c = cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\);/)
-        expect(column).toContain('float code = c.a * 255.0 - TYPED_ZERO_CODE;')
-        expect(column).toContain('float typedKm = abs(code) < 0.25 ? 0.0 : code * (TYPED_DELTA_KM / TYPED_CODE_STEPS);')
-        expect(column).toContain('float top = base + CLOUD_UNITS_PER_KM * km * shape;')
-        expect(column).toContain(
-          'return vec4(c.g, base + CLOUD_UNITS_PER_KM * max(typedKm, 0.0),\n' +
-            '    min(top + CLOUD_UNITS_PER_KM * typedKm, base + CLOUD_UNITS_PER_KM * uCloudMaxKm), base);'
-        )
-        const f = (x: number) => x.toFixed(6)
-        expect(src).toContain(`#define TYPED_ZERO_CODE ${f(TYPED_ZERO_CODE)}`)
-        expect(src).toContain(`#define TYPED_CODE_STEPS ${f(TYPED_CODE_STEPS)}`)
-        expect(src).toContain(`#define TYPED_DELTA_KM ${f(TYPED_DELTA_KM)}`)
+        // Lowered by a share on the ground, or lifted as a layer under the
+        // map's tallest; within the slack, the untyped column exactly.
+        for (const line of [
+          'float code = c.a * 255.0 - TYPED_ZERO_CODE;',
+          'if (code < TYPED_ZERO_SLACK) {',
+          'float keep = code > -TYPED_ZERO_SLACK ? 1.0\n      : max((code + TYPED_ZERO_CODE) / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE);',
+          'return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape * keep, base);',
+          'float lift = code * TYPED_LIFT_KM_PER_CODE;',
+          'float layer = mix(km * shape, min(km * shape, LIFTED_THICKNESS(c.g)),\n    smoothstep(0.0, TYPED_LIFT_EASE_KM, lift));',
+          'float lifted = base + CLOUD_UNITS_PER_KM * min(lift, uCloudMaxKm - layer);',
+          'return vec4(c.g, lifted, lifted + CLOUD_UNITS_PER_KM * layer, base);',
+        ]) {
+          expect(column).toContain(line)
+        }
+        expect(src).toContain(TYPED_CODE_GLSL)
+        expect(src).toContain(`#define TYPED_ZERO_CODE ${TYPED_ZERO_CODE.toFixed(6)}`)
       }
       // The vertex stage reads the tops, never the grid.
       expect(preprocess(clouds.material.vertexShader, typed)).not.toMatch(/uCloudType\b|cloudLook/)
+      clouds.dispose()
+    })
+
+    it(`meets a lifted layer from outside only between its base and its top (${name})`, () => {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
+      const outside = !variant.includes('FLIP_SIDED') && !variant.includes('CLOUD_FLAT')
+      const src = preprocess(clouds.material.fragmentShader, new Set([...variant, 'CLOUD_TYPED']))
+      const main = src.replace(/\/\/.*$/gm, '').slice(src.replace(/\/\/.*$/gm, '').indexOf('void main()'))
+      if (outside) {
+        // From the column it already reads, its height over the top and
+        // under the base, each taken linear over the step; at the first
+        // step, whether it is in between.
+        for (const line of [
+          'vec4 colq = cloudColumn(cloudUv(q / r), lodq, terrain);',
+          'float gap = r - uSeaLevel - colq.z;',
+          'float under = colq.y - (r - uSeaLevel);',
+          'vec2 underTop = i > 0 ? cloudSpan(gapPrev, gap) : gap <= 0.0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);',
+          'vec2 overBase = i > 0 ? cloudSpan(underPrev, under) : under <= 0.0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);',
+          'if (from <= min(underTop.y, overBase.y)) {',
+          'tHit = i == 0 ? t : mix(tPrev, t, from);',
+          'underPrev = under;',
+        ]) {
+          expect(main).toContain(line)
+        }
+        expect(main).not.toContain('if (gap <= 0.0) {')
+        // Untyped, the tops alone, as ever.
+        expect(preprocess(clouds.material.fragmentShader, new Set(variant))).toContain(
+          'float gap = r - uSeaLevel - cloudColumn(cloudUv(q / r), lodq, terrain).z;\n    if (gap <= 0.0) {'
+        )
+      }
       clouds.dispose()
     })
 

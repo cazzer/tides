@@ -10,8 +10,8 @@
 // and the detail's RELIEF and DETAIL_* defines. Every number comes from
 // ../cloud-types.ts, which mirrors it.
 //
-// And their tops (tides-tvr.4.3): the blend (./cloudBlend.ts) writes how far
-// the typed top lies from the untyped one into the blended map's alpha
+// And their columns (tides-tvr.4.3): the blend (./cloudBlend.ts) writes how
+// each typed top is lowered or its base lifted into the blended map's alpha
 // (CLOUD_TYPED_TOP_GLSL), which the typed march reads back in cloudColumn()
 // (TYPED_CODE_GLSL, ./cloudShaders.ts).
 import {
@@ -21,6 +21,7 @@ import {
   type CloudLook,
   CUMULUS_TOP_KM,
   IR_COLD_KM,
+  LIFTED_THICKNESS_KM,
   IR_DECK_OPACITY,
   IR_DEEP_KM,
   IR_THIN_OPACITY,
@@ -32,9 +33,13 @@ import {
   TYPE_LOOKS,
   TYPE_SHAPES,
   TYPE_TOP_KM,
-  TYPED_CODE_STEPS,
-  TYPED_DELTA_KM,
+  TYPED_LIFT_EASE_KM,
+  TYPED_LIFT_KM,
+  TYPED_LIFT_SHARES,
+  TYPED_LIFT_STEPS,
+  TYPED_LOWEST_SHARE,
   TYPED_ZERO_CODE,
+  TYPED_ZERO_SLACK,
 } from '../cloud-types'
 import { MAX_CLOUD_TOP_KM, MIN_MEASURED_TOP_KM } from '../cloud-layer'
 
@@ -124,13 +129,20 @@ void cloudLook(vec2 st, float lod, out vec4 lookD, out vec4 lookL) {
 }
 `
 
-// How the alpha codes the typed top (../cloud-types.ts encodeTypedTop()): km
-// above the untyped top, TYPED_CODE_STEPS codes either side of
-// TYPED_ZERO_CODE over TYPED_DELTA_KM.
+// How the alpha codes the typed column (../cloud-types.ts typedTopCode(),
+// typedColumn()): under TYPED_ZERO_CODE, the share of the untyped top's
+// height kept (code over TYPED_ZERO_CODE, at least TYPED_LOWEST_SHARE); over
+// it, how far the base is lifted, TYPED_LIFT_KM over TYPED_LIFT_STEPS codes,
+// the column then a layer LIFTED_THICKNESS(alpha) km deep once lifted
+// TYPED_LIFT_EASE_KM; within TYPED_ZERO_SLACK of it, no change.
 export const TYPED_CODE_GLSL = /* glsl */ `
 #define TYPED_ZERO_CODE ${f(TYPED_ZERO_CODE)}
-#define TYPED_CODE_STEPS ${f(TYPED_CODE_STEPS)}
-#define TYPED_DELTA_KM ${f(TYPED_DELTA_KM)}
+#define TYPED_ZERO_SLACK ${f(TYPED_ZERO_SLACK)}
+#define TYPED_LOWEST_SHARE ${f(TYPED_LOWEST_SHARE)}
+#define TYPED_LIFT_KM_PER_CODE (${f(TYPED_LIFT_KM)} / ${f(TYPED_LIFT_STEPS)})
+#define TYPED_LIFT_STEPS ${f(TYPED_LIFT_STEPS)}
+#define TYPED_LIFT_EASE_KM ${f(TYPED_LIFT_EASE_KM)}
+#define LIFTED_THICKNESS(alpha) (${f(LIFTED_THICKNESS_KM[0])} + ${f(LIFTED_THICKNESS_KM[1])} * (alpha))
 `
 
 /** A vec4 of each kind's `value`, in the grid's order. */
@@ -139,11 +151,13 @@ const kinds = (value: (kind: CloudKind) => string) => `vec4(${CLOUD_KINDS.map(va
 // The blend's: the alpha for the blended map's texel c (its height over
 // MAX_CLOUD_TOP_KM, opacity and trust, the height and trust 0 where no
 // input measured them, as the march reads them) under the blended type
-// texel t: typedTopDeltaKm() of the shares refined by the infrared there,
-// coded. No confidence, no change (TYPED_ZERO_CODE): the untyped clouds',
-// and the static ones'. The untyped top is cloudColumn()'s, and each kind's
-// as ../cloud-types.ts has it, its top where unmeasured mixed toward the
-// measured one by the trust and shaped by its opacity.
+// texel t: typedTopCode() of the shares refined by the infrared there. No
+// confidence, no change (TYPED_ZERO_CODE): the untyped clouds', and the
+// static ones'. The untyped top is cloudColumn()'s, and each kind's as
+// ../cloud-types.ts has it, its top where unmeasured mixed toward the
+// measured one by the trust and shaped by its opacity. Mostly cirrus and
+// alto (R and B), the column is lifted; short of a code's lift, the top is
+// lowered, never raised, so that it stays on the ground.
 export const CLOUD_TYPED_TOP_GLSL = /* glsl */ `
 ${TYPED_CODE_GLSL}
 // Each kind's shape (typeShape()): the share of its height it keeps at no
@@ -161,7 +175,13 @@ float cloudTypedCode(vec4 t, vec3 c) {
   vec4 km = mix(${kinds((k) => (k === 'cumulus' ? `${f(CUMULUS_TOP_KM[0])} + ${f(CUMULUS_TOP_KM[1])} * g * g` : f(TYPE_TOP_KM[k])))},
     vec4(measured), c.b);
   vec4 shape = TYPE_SHAPE_FLOOR + (1.0 - TYPE_SHAPE_FLOOR) * smoothstep(TYPE_SHAPE_FROM, TYPE_SHAPE_TO, vec4(g));
-  float delta = t.a * (dot(s, km * shape) - untyped);
-  return (TYPED_ZERO_CODE + TYPED_CODE_STEPS * clamp(delta / TYPED_DELTA_KM, -1.0, 1.0)) / 255.0;
+  float typed = dot(s, km * shape);
+  float lifting = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, s.x + s.z);
+  float lift = t.a * lifting * max(typed - min(untyped, LIFTED_THICKNESS(g)), 0.0);
+  if (lift >= TYPED_LIFT_KM_PER_CODE) {
+    return (TYPED_ZERO_CODE + min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS)) / 255.0;
+  }
+  float keep = clamp(mix(1.0, typed / max(untyped, 1e-6), t.a), TYPED_LOWEST_SHARE, 1.0);
+  return TYPED_ZERO_CODE * keep / 255.0;
 }
 `

@@ -277,18 +277,26 @@ ${typed ? `#ifdef CLOUD_TYPED
   float base = terrain + CLOUD_CLEARANCE;
   float shape = 0.25 + 0.75 * smoothstep(0.0, 0.65, c.g);
 ${typed ? `#ifdef CLOUD_TYPED
-  // Typed (tides-tvr.4.3), ../cloud-types.ts typedColumn(): the top moved as
-  // the map's alpha has it (the blend's, ./cloudBlend.ts), no taller than
-  // the map's tallest. A raised top lifts the base with it, so w is instead
-  // where the untyped base stands, the clearance over the ground, for what
-  // is reckoned from the ground rather than the cloud's own base. A code
-  // within a quarter of no change is none (decodeTypedTop()), so a texel
-  // the types leave alone (confidence 0) is the untyped column exactly.
+  // Typed (tides-tvr.4.3), ../cloud-types.ts typedColumn(), as the map's
+  // alpha has it (the blend's, ./cloudBlend.ts): under TYPED_ZERO_CODE the
+  // top lowered by a share of its height, on the ground; over it the base
+  // lifted, the column a layer, no taller than the map's tallest. Either
+  // holds where texels are filtered together, whatever their codes and
+  // opacities. w is where the untyped base stands, the clearance over the
+  // ground, for what is reckoned from the ground rather than the cloud's
+  // own base. Within TYPED_ZERO_SLACK of no change, the untyped column
+  // exactly (a texel the types leave alone, of confidence 0).
   float code = c.a * 255.0 - TYPED_ZERO_CODE;
-  float typedKm = abs(code) < 0.25 ? 0.0 : code * (TYPED_DELTA_KM / TYPED_CODE_STEPS);
-  float top = base + CLOUD_UNITS_PER_KM * km * shape;
-  return vec4(c.g, base + CLOUD_UNITS_PER_KM * max(typedKm, 0.0),
-    min(top + CLOUD_UNITS_PER_KM * typedKm, base + CLOUD_UNITS_PER_KM * uCloudMaxKm), base);
+  if (code < TYPED_ZERO_SLACK) {
+    float keep = code > -TYPED_ZERO_SLACK ? 1.0
+      : max((code + TYPED_ZERO_CODE) / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE);
+    return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape * keep, base);
+  }
+  float lift = code * TYPED_LIFT_KM_PER_CODE;
+  float layer = mix(km * shape, min(km * shape, LIFTED_THICKNESS(c.g)),
+    smoothstep(0.0, TYPED_LIFT_EASE_KM, lift));
+  float lifted = base + CLOUD_UNITS_PER_KM * min(lift, uCloudMaxKm - layer);
+  return vec4(c.g, lifted, lifted + CLOUD_UNITS_PER_KM * layer, base);
 #else
   return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, km);
 #endif` : `  return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, km);`}
@@ -1444,6 +1452,9 @@ void main() {
   float tPrev = tIn;
   float gapPrev = 0.0;
   float tHit = -1.0;
+#ifdef CLOUD_TYPED
+  float underPrev = 0.0;
+#endif
   for (int i = 0; i <= MARCH_STEPS; i++) {
     if (i > steps) break;
     float t = tIn + dt * float(i);
@@ -1451,12 +1462,33 @@ void main() {
     float r = length(q);
     float mu = dot(d, q / r);
     float lodq = max(lod, cloudMarchLod(dt * sqrt(max(1.0 - mu * mu, 0.0))));
+#ifdef CLOUD_TYPED
+    // In cloud only over its base as well as under its top (tides-tvr.4.3):
+    // a type lifts a layer's base off the ground, and a ray under it hasn't
+    // met it (taken as met, cirrus hung in curtains to the ground). Over a
+    // step the ray's height over the top and under the base are taken
+    // linear, as the march from inside takes them (cloudSpan()), so a layer
+    // thinner than a step is still met where the ray is between the two,
+    // and down through a top it is the same secant as untyped.
+    vec4 colq = cloudColumn(cloudUv(q / r), lodq, terrain);
+    float gap = r - uSeaLevel - colq.z;
+    float under = colq.y - (r - uSeaLevel);
+    vec2 underTop = i > 0 ? cloudSpan(gapPrev, gap) : gap <= 0.0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+    vec2 overBase = i > 0 ? cloudSpan(underPrev, under) : under <= 0.0 ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+    float from = max(underTop.x, overBase.x);
+    if (from <= min(underTop.y, overBase.y)) {
+      tHit = i == 0 ? t : mix(tPrev, t, from);
+      break;
+    }
+    underPrev = under;
+#else
     float gap = r - uSeaLevel - cloudColumn(cloudUv(q / r), lodq, terrain).z;
     if (gap <= 0.0) {
       // Secant refinement between the last step above and this one below.
       tHit = i == 0 ? t : mix(tPrev, t, gapPrev / max(gapPrev - gap, 1e-6));
       break;
     }
+#endif
     tPrev = t;
     gapPrev = gap;
   }
@@ -1702,6 +1734,11 @@ void main() {
   vec3 n = normalize(upShade - slope.x * east - slope.y * north);
 
   // Taller cloud toward the Sun shades this top.
+#ifdef CLOUD_TYPED
+  // Under its top is enough, though a type can lift a layer's base
+  // (tides-tvr.4.3): a sunbeam under a lifted layer, rising toward the Sun,
+  // goes on up through it.
+#endif
   vec3 s = uSunDir;
   vec3 lit = upShade * (uSeaLevel + colShade.z);
   float occ = 0.0;

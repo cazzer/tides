@@ -9,14 +9,19 @@ import {
   typesOf,
   type BlendPassState,
 } from './cloudBlend'
-import { CLOUD_TYPED_TOP_GLSL } from './cloudTypeGlsl'
+import { CLOUD_TYPED_TOP_GLSL, TYPED_CODE_GLSL } from './cloudTypeGlsl'
 import {
   CUMULUS_TOP_KM,
   TYPE_SHAPES,
   TYPE_TOP_KM,
-  TYPED_CODE_STEPS,
-  TYPED_DELTA_KM,
+  LIFTED_THICKNESS_KM,
+  TYPED_LIFT_EASE_KM,
+  TYPED_LIFT_KM,
+  TYPED_LIFT_SHARES,
+  TYPED_LIFT_STEPS,
+  TYPED_LOWEST_SHARE,
   TYPED_ZERO_CODE,
+  TYPED_ZERO_SLACK,
 } from '../cloud-types'
 import { MAX_CLOUD_TOP_KM, MIN_MEASURED_TOP_KM } from '../cloud-layer'
 
@@ -165,9 +170,19 @@ describe('typed tops in the blend (tides-tvr.4.3)', () => {
   test("codes the tops with ../cloud-types.ts's numbers", () => {
     const f = (x: number) => x.toFixed(6)
     const src = CLOUD_TYPED_TOP_GLSL
-    expect(src).toContain(`#define TYPED_ZERO_CODE ${f(TYPED_ZERO_CODE)}`)
-    expect(src).toContain(`#define TYPED_CODE_STEPS ${f(TYPED_CODE_STEPS)}`)
-    expect(src).toContain(`#define TYPED_DELTA_KM ${f(TYPED_DELTA_KM)}`)
+    // The code, shared with the march's cloudColumn().
+    expect(src).toContain(TYPED_CODE_GLSL)
+    for (const line of [
+      `#define TYPED_ZERO_CODE ${f(TYPED_ZERO_CODE)}`,
+      `#define TYPED_ZERO_SLACK ${f(TYPED_ZERO_SLACK)}`,
+      `#define TYPED_LOWEST_SHARE ${f(TYPED_LOWEST_SHARE)}`,
+      `#define TYPED_LIFT_KM_PER_CODE (${f(TYPED_LIFT_KM)} / ${f(TYPED_LIFT_STEPS)})`,
+      `#define TYPED_LIFT_STEPS ${f(TYPED_LIFT_STEPS)}`,
+      `#define TYPED_LIFT_EASE_KM ${f(TYPED_LIFT_EASE_KM)}`,
+      `#define LIFTED_THICKNESS(alpha) (${f(LIFTED_THICKNESS_KM[0])} + ${f(LIFTED_THICKNESS_KM[1])} * (alpha))`,
+    ]) {
+      expect(TYPED_CODE_GLSL).toContain(line)
+    }
     // Each kind in the grid's order: cirrus, cumulus, alto, stratus.
     const kinds = [TYPE_SHAPES.cirrus, TYPE_SHAPES.cumulus, TYPE_SHAPES.alto, TYPE_SHAPES.stratus]
     for (const [name, i] of [['FLOOR', 0], ['FROM', 1], ['TO', 2]] as const) {
@@ -185,9 +200,18 @@ describe('typed tops in the blend (tides-tvr.4.3)', () => {
     // No confidence, no change; the shares refined as at the hit.
     const fn = src.slice(src.indexOf('float cloudTypedCode('))
     expect(fn.indexOf('if (t.a <= 0.0) return TYPED_ZERO_CODE / 255.0;')).toBeLessThan(fn.indexOf('cloudTypeShares(t, c)'))
-    expect(fn).toContain('float delta = t.a * (dot(s, km * shape) - untyped);')
-    expect(fn).toContain(
-      'return (TYPED_ZERO_CODE + TYPED_CODE_STEPS * clamp(delta / TYPED_DELTA_KM, -1.0, 1.0)) / 255.0;'
-    )
+    // typedTopCode(): lifted where mostly cirrus and alto (R and B), by a
+    // whole code at least; else lowered by a share, never raised.
+    for (const line of [
+      'float typed = dot(s, km * shape);',
+      `float lifting = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, s.x + s.z);`,
+      'float lift = t.a * lifting * max(typed - min(untyped, LIFTED_THICKNESS(g)), 0.0);',
+      'if (lift >= TYPED_LIFT_KM_PER_CODE) {',
+      'return (TYPED_ZERO_CODE + min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS)) / 255.0;',
+      'float keep = clamp(mix(1.0, typed / max(untyped, 1e-6), t.a), TYPED_LOWEST_SHARE, 1.0);',
+      'return TYPED_ZERO_CODE * keep / 255.0;',
+    ]) {
+      expect(fn).toContain(line)
+    }
   })
 })
