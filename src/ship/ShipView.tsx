@@ -12,6 +12,7 @@ import { ShipShake } from './useShipShake'
 import { SpeedBlur } from './SpeedBlur'
 import { ShipHud } from './ShipHud'
 import { ShipTargeting } from './ShipTargeting'
+import { WellRings } from './WellRings'
 import { ShipWarmup } from './ShipWarmup'
 import { SurfaceCredit } from './SurfaceCredit'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
@@ -101,7 +102,8 @@ export function ShipView({ children }: { children: ReactNode }) {
         {children}
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust, the
-            speed FOV kick (tides-3bl.6), the air shudder (tides-xxg) and
+            speed FOV kick (tides-3bl.6), the gravity wells' rings
+            (tides-h6a), the air shudder (tides-xxg) and
             the engine and wind sound (tides-a4j.2) and its one-shot cues
             (tides-a4j.3), which read what ShipController, SpeedFov and
             ShipTargeting write, so they come after them. */}
@@ -109,6 +111,7 @@ export function ShipView({ children }: { children: ReactNode }) {
         <SpeedFov />
         <ShipShake />
         <ShipTargeting />
+        <WellRings />
         <ShipWarmup />
         <ShipSound />
         <ShipCues />
