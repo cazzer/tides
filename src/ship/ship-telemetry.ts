@@ -39,8 +39,8 @@ export interface ShipTelemetry {
    */
   nearest: { key: string | null; surfaceDistance: number }
   /**
-   * The body whose gravity well sets speedCap (smallest gap / wellFactor in
-   * flight.ts), which a heavy body far off can be rather than the nearest:
+   * The body whose gravity well sets speedCap (smallest d_eff, flight.ts
+   * wellDistanceAt), which a heavy body far off can be rather than the nearest:
    * crawling past the Sun, it is the Sun. key is null only with no bodies;
    * factor is that body's wellFactor (1 then) and floor its speedFloor
    * (V_NORMAL then).

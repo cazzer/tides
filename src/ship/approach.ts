@@ -99,9 +99,11 @@ export function canCrash(speedFloor: number): boolean {
 
 /**
  * A safe-arrival throttle this close to full reads as full: the tick at the
- * end of the bar would only be noise.
+ * end of the bar would only be noise. Close enough that a body whose full
+ * throttle does overshoot keeps its tick: since the slowdown bands
+ * (tides-h6a) Mars' is ~0.955, and full throttle there warns.
  */
-export const SAFE_SHARE_FULL = 0.95
+export const SAFE_SHARE_FULL = 0.98
 
 /**
  * - over: above the cap now, so the well can't stop the ship (overshooting).
@@ -209,8 +211,8 @@ const safeShares = new Map<number, Map<number, number>>()
  * The safe-arrival throttle for a body of wellFactor `factor` and speed
  * floor `speedFloor`: the highest Flight Assist throttle that rides its well
  * down without overshooting (peakShare ≤ OVER_ON) from its edge; 1 from
- * SAFE_SHARE_FULL up. Above it, unlocked, the ship overshoots. ~0.72 at the
- * Moon, ~0.85 at Mercury, ~0.92 at Mars, 1 for Venus, Earth and heavier,
+ * SAFE_SHARE_FULL up. Above it, unlocked, the ship overshoots. ~0.79 at the
+ * Moon, ~0.9 at Mercury, ~0.955 at Mars, 1 for Venus, Earth and heavier,
  * and 1 where no arrival can crash (canCrash). The HUD's throttle bar
  * marks it.
  */

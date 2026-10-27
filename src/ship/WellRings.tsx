@@ -45,8 +45,8 @@ interface Ring {
   parent: number
   positionAt: (t: number) => readonly number[]
   rings: Rings
-  inner: THREE.LineLoop
-  outer: THREE.LineLoop
+  inner: THREE.Line
+  outer: THREE.Line
 }
 
 function simTime(): number {
@@ -55,8 +55,8 @@ function simTime(): number {
 
 function noRaycast() {}
 
-function loop(geometry: THREE.BufferGeometry, material: THREE.Material): THREE.LineLoop {
-  const line = new THREE.LineLoop(geometry, material)
+function loop(geometry: THREE.BufferGeometry, material: THREE.Material): THREE.Line {
+  const line = new THREE.Line(geometry, material)
   line.raycast = noRaycast
   line.frustumCulled = false
   line.visible = false
@@ -112,21 +112,22 @@ function createRings(geometry: THREE.BufferGeometry): Ring[] {
   })
 }
 
+// Closed by repeating the first point (a Line, not a LineLoop), so the
+// dashes' lineDistance runs on round the closing segment rather than back
+// to 0 along it.
 function unitCircle(): THREE.BufferGeometry {
-  const points = Array.from({ length: RING_SEGMENTS }, (_, i) => {
+  const points = Array.from({ length: RING_SEGMENTS + 1 }, (_, i) => {
     const a = (i / RING_SEGMENTS) * Math.PI * 2
     return new THREE.Vector3(Math.cos(a), Math.sin(a), 0)
   })
   const geometry = new THREE.BufferGeometry().setFromPoints(points)
-  // LineDashedMaterial reads lineDistance; a closing segment back to the
-  // start is LineLoop's own, so the pattern is measured over the points.
-  const distances = new Float32Array(RING_SEGMENTS)
-  for (let i = 1; i < RING_SEGMENTS; i++) distances[i] = distances[i - 1] + points[i].distanceTo(points[i - 1])
+  const distances = new Float32Array(points.length)
+  for (let i = 1; i < points.length; i++) distances[i] = distances[i - 1] + points[i].distanceTo(points[i - 1])
   geometry.setAttribute('lineDistance', new THREE.BufferAttribute(distances, 1))
   return geometry
 }
 
-function show(line: THREE.LineLoop, centre: THREE.Vector3, radius: number, eye: THREE.Vector3, strength: number, opacity: number): void {
+function show(line: THREE.Line, centre: THREE.Vector3, radius: number, eye: THREE.Vector3, strength: number, opacity: number): void {
   line.visible = strength > 0
   if (!line.visible) return
   placeRing(line, centre, radius, eye)
@@ -134,7 +135,7 @@ function show(line: THREE.LineLoop, centre: THREE.Vector3, radius: number, eye: 
 }
 
 export function WellRings() {
-  const geometry = useMemo(unitCircle, [])
+  const geometry = useMemo(() => unitCircle(), [])
   const rings = useMemo(() => createRings(geometry), [geometry])
   const group = useRef<THREE.Group>(null)
   const bodiesAt = useRef<number | null>(null)

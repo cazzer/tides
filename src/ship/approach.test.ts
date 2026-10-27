@@ -135,14 +135,11 @@ describe('safeShare', () => {
     const mars = safeShare(wellFactor(BODY_MASS_KG.mars))
     expect(moon).toBeGreaterThan(0.6)
     expect(moon).toBeLessThan(0.8)
-    const mercury = safeShare(wellFactor(BODY_MASS_KG.mercury))
-    expect(mercury).toBeGreaterThan(moon)
-    expect(mercury).toBeLessThan(SAFE_SHARE_FULL)
+    expect(mars).toBeGreaterThan(moon)
+    expect(mars).toBeLessThan(SAFE_SHARE_FULL)
     // Earth and Venus peak at ~1.1× the cap at full throttle and land
-    // gently: no tick, no warning. Mars' safe throttle is just over
-    // SAFE_SHARE_FULL since the slowdown band (tides-h6a) brings the ship
-    // to its well's edge at the throttle, so it reads full too.
-    for (const key of ['mars', 'venus', 'earth', 'jupiter', 'saturn', 'sun'] as const) {
+    // gently: no tick, no warning.
+    for (const key of ['venus', 'earth', 'jupiter', 'saturn', 'sun'] as const) {
       expect(safeShare(wellFactor(BODY_MASS_KG[key]))).toBe(1)
     }
   })
@@ -157,8 +154,7 @@ describe('safeShare', () => {
         const run = approach(subject, { start: V_TOP * T * 1.2, throttle, locked: false })
         return Math.max(...run.map((s) => s.speed / s.cap))
       }
-      // A share rounded up to full (SAFE_SHARE_FULL) holds below the rounding.
-      expect(peak((share === 1 ? SAFE_SHARE_FULL : share) - 0.04)).toBeLessThanOrEqual(OVER_ON)
+      expect(peak(share - 0.04)).toBeLessThanOrEqual(OVER_ON)
       if (share + 0.04 <= 1) expect(peak(share + 0.04)).toBeGreaterThan(OVER_ON)
     }
   )

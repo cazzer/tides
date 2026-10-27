@@ -708,7 +708,7 @@ interface Proximity {
   targetBoost: number
   /** The clearance over the held ground measure() read the target's floor with; NaN for none. */
   targetHold: number
-  /** min over bodies of max(0, gap) / wellFactor; Infinity with no bodies. */
+  /** min over bodies of wellDistanceAt(gap, wellFactor); Infinity with no bodies. */
   wellDistance: number
   /** The body that sets wellDistance (d_eff), its wellFactor and speedFloor (speedFloorAt its gap). */
   wellKey: string | null
@@ -896,7 +896,7 @@ function boostRaises(p: Proximity, cap: number): boolean {
 
 /**
  * The speed limit at `position`, scene units/s: clamp(K_WELL · d_eff,
- * floor, V_TOP), with d_eff the smallest gap / wellFactor over `bodies` and
+ * floor, V_TOP), with d_eff the smallest wellDistanceAt(gap, wellFactor) over `bodies` and
  * floor the speedFloor of the body that sets it (speedFloorAt, with the
  * ship's `heading`, its direction of travel, world frame, unit, for an air
  * law's escape; none reads as level, the `boost` spool, ShipState.boost,
@@ -929,7 +929,7 @@ export function speedCap(
  * the band's cap rising with the gap.
  */
 export function approachCap(gap: number, eta: number, dt = 0, floor = V_NORMAL): number {
-  if (!(gap > wellEdgeGap(eta))) return Math.max(floor, Math.max(0, gap) / (eta + dt))
+  if (!(gap > wellEdgeGap(eta)) || gap === Infinity) return Math.max(floor, Math.max(0, gap) / (eta + dt))
   return Math.max(floor, wellSpeedOf(gap - wellSpeedOf(gap, eta) * dt, eta))
 }
 
