@@ -11,7 +11,8 @@ import { earthHorizon } from './earthHorizonTexture'
 import { createGibsNightPatch } from './gibsNightPatch'
 import { createGibsPatch } from './gibsPatch'
 import { createGroundDisplacement } from './groundDisplacement'
-import { groundDetailPatch } from './groundDetail'
+import { GROUND_DETAIL_GLSL, groundDetailPatch } from './groundDetail'
+import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import { createGroundHaze } from './groundHaze'
 import { groundShadowPatch } from './groundShadow'
 import {
@@ -205,7 +206,7 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + groundShadowAsDefine(out.fragment)).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(out.fragment))).digest('hex')
   }
 
   // The cloud shadow's strength, a define until tides-l0z made it a uniform
@@ -218,6 +219,48 @@ describe('night lights in flight', () => {
     return fragment
       .replace(SHADOW_UNIFORM, `#define GROUND_SHADOW ${GROUND_SHADOW.toFixed(1)}`)
       .replace('uGroundShadow * occ', 'GROUND_SHADOW * occ')
+  }
+
+  // The sky's light on the ground (the sky fill, the Sun's tint) and the
+  // haze's colour from inside, as tides-34q changed them: put back as they
+  // were, so that the pins still hold the rest of the chain.
+  const OLD_SKY_FILL = `
+#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
+{
+  float groundSunUp = saturate(dot(groundUp, directionalLights[0].direction));
+  float groundSkyView = 0.5 + 0.5 * dot(normal, groundUp);
+#ifdef GROUND_HORIZON
+  groundSkyView = min(groundSkyView, groundHorizonSky);
+#endif
+  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse
+    + GROUND_SKY_FILL * groundSunUp * groundSkyView * directionalLights[0].color
+      * BRDF_Lambert(material.diffuseColor);
+}
+#endif
+`
+  // As the glsl plugin serves it (comments stripped).
+  const OLD_HAZE_GLOW =
+    'vec3 hazeGlow(float column, float grazing, vec3 at, vec3 sun) {\n  float mu = dot(normalize(at), sun);\n' +
+    '  float lit = smoothstep(-0.18, 0.12, mu);\n  \n  float dusk = 1.0 - smoothstep(0.0, 0.35, mu);\n' +
+    '  float glow = (column / grazing) * lit * uGain;\n  \n' +
+    '  return mix(uSky, uDusk, dusk * 0.6) * (glow / (1.0 + glow));\n}'
+  function skyAsBefore(fragment: string) {
+    const sky = hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb('))
+    const swaps: [string, string][] = [
+      [GROUND_DETAIL_GLSL.lightBody, OLD_SKY_FILL],
+      [sky, OLD_HAZE_GLOW],
+      [
+        '  vec3 tangent = across * sqrt(1.0 - dip2) - up * sqrt(dip2);\n  float column = columnAhead(eye, tangent, grazing, at);',
+        '  float column = columnAhead(eye, across * sqrt(1.0 - dip2) - up * sqrt(dip2), grazing, at);',
+      ],
+      ['hazeGlow(column, grazing, at, uGroundHazeSun, tangent, eye)', 'hazeGlow(column, grazing, at, uGroundHazeSun)'],
+      ['hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye)', 'hazeGlow(own, grazing, atOwn, uGroundHazeSun)'],
+    ]
+    for (const [now, before] of swaps) {
+      expect(fragment.split(now).length).toBe(2)
+      fragment = fragment.replace(now, before)
+    }
+    return fragment
   }
 
   /** Both tiers' hashes with the page at `search`: every module afresh. */

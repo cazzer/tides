@@ -205,7 +205,8 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   across = a2 > 1e-10 ? across * inversesqrt(a2) : normalize(cross(up, abs(up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
   float dip2 = clamp((rE - rP) * (rE + rP) / (rE * rE), 0.0, 1.0);
   vec3 at;
-  float column = columnAhead(eye, across * sqrt(1.0 - dip2) - up * sqrt(dip2), grazing, at);
+  vec3 tangent = across * sqrt(1.0 - dip2) - up * sqrt(dip2);
+  float column = columnAhead(eye, tangent, grazing, at);
   // Light it at the point itself as the ray steepens: the tangent's at swings
   // with the azimuth and would pinch under the ship. Near the horizon (the
   // sea's seam) the weight is a few thousandths.
@@ -213,11 +214,11 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   at = mix(at, eye + ray, down * down);
   float ease = smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, rE);
   float haze = mix(share, 1.0, ease);
-  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun);
+  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, tangent, eye);
   if (ease > 0.0) {
     vec3 atOwn;
     float own = columnAheadOverSea(eye, dir, grazing, atOwn);
-    glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun), ease / haze);
+    glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye), ease / haze);
   }
   cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);
   return vec4(glow, haze);

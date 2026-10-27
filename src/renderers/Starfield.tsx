@@ -8,6 +8,7 @@ import starsDistanceUrl from '../assets/stars.distance.bin?url'
 import starsMeta from '../assets/stars.meta.json'
 import { eclipticToScene } from '../ephemeris'
 import { useStore } from '../store'
+import { eyeSky } from '../night-flight'
 import { depthAmount, shellDepth, shellPointVertex, shellScale, shellVertex } from './starDepth'
 
 type StarfieldProps = {
@@ -116,6 +117,7 @@ if (uExtinction > 0.5) {
   float airmass = 1.0 / (s + 0.025 * exp(-11.0 * s));
   vColor.rgb *= pow(10.0, -0.4 * ${DRAWN_EXTINCTION_PER_AIRMASS.toFixed(5)} * (airmass - 1.0));
 }
+vColor.rgb *= 1.0 - uDaylight;
 `
 
 // Sets the shell's fade and size (starDepth.ts).
@@ -128,6 +130,12 @@ function fadeShell(
 ) {
   uDepth.value = amount
   stars?.scale.setScalar(scale)
+}
+
+// The daylit sky's veil for the camera drawing (night-flight.ts eyeSky).
+// Module level, as fadeShell.
+function veilStars(uDaylight: { value: number }) {
+  uDaylight.value = eyeSky.daylight
 }
 
 // The surface camera's parent is the observer, whose +Y is the zenith.
@@ -195,6 +203,7 @@ export default function Starfield({
       uZenith: { value: new THREE.Vector3(0, 1, 0) },
       uExtinction: { value: fromSurface ? 1 : 0 },
       uDepth: { value: 0 },
+      uDaylight: { value: 0 },
     }),
     [fromSurface]
   )
@@ -204,7 +213,7 @@ export default function Starfield({
       shader.vertexShader = shader.vertexShader
         .replace(
           'void main() {',
-          'uniform vec3 uZenith;\nuniform float uExtinction;\nuniform float uDepth;\nattribute float starDepth;\nvoid main() {'
+          'uniform vec3 uZenith;\nuniform float uExtinction;\nuniform float uDepth;\nuniform float uDaylight;\nattribute float starDepth;\nvoid main() {'
         )
         .replace('#include <begin_vertex>', shellVertex)
         .replace('#include <color_vertex>', extinctionVertex)
@@ -234,6 +243,8 @@ export default function Starfield({
         if (!stars.current) return
         centreStarfieldOn(stars.current, camera, shellTarget.current, uniforms.uDepth.value)
         if (fromSurface) zenithOf(camera, uniforms.uZenith.value)
+        // From inside the daylit atmosphere in flight, the sky hides them.
+        veilStars(uniforms.uDaylight)
       }}
       frustumCulled={false}
       scale={radius}

@@ -137,7 +137,7 @@ describe('the colour on the tiles (tides-zmw.9.11)', () => {
     expect(f.indexOf('float colourW = 0.0;')).toBeLessThan(f.indexOf('#include <normal_fragment_begin>'))
     // The sky fill, then the evening out, both after the lights.
     const lights = f.indexOf('#include <lights_fragment_end>')
-    const fill = f.indexOf('GROUND_SKY_FILL * groundSunUp')
+    const fill = f.indexOf('GROUND_SKY_FILL * groundSkyLight')
     const relief = f.indexOf('reflectedLight.directDiffuse *= mix(1.0, 1.0 / max(dot(normal, surfaceGeomNormal)')
     expect(lights).toBeLessThan(fill)
     expect(fill).toBeLessThan(relief)

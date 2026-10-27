@@ -21,6 +21,9 @@ import {
   NIGHT_FILL_RGB,
   moonIlluminatedFraction,
   moonlightStrength,
+  dayExposure,
+  eyeSky,
+  skyDaylight,
   nightAdaptation,
   nightCloudAmbient,
 } from '../night-flight'
@@ -294,6 +297,10 @@ export interface NightFlight {
    * ground mesh, whose local sphere has `radius`. Reads the Sun from the
    * `sun` uniform, so after it is set for the frame. */
   update(ground: THREE.Object3D, camera: THREE.Camera, radius: number): void
+  /** For the drawing camera, before anything draws: sets the sky's
+   * daylight for its draws (eyeSky) and returns the exposure's scale
+   * (dayExposure()). */
+  adaptEye(ground: THREE.Object3D, camera: THREE.Camera, radius: number): number
 }
 
 /**
@@ -340,6 +347,13 @@ export function createNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbie
       uniforms.uNightFill.value.copy(NIGHT_FILL_RGB).multiplyScalar(adaptation)
       uniforms.uNightMoonLight.value.copy(MOONLIGHT_RGB).multiplyScalar(adaptation * strength)
       cloudAmbient.value = nightCloudAmbient(adaptation, strength, up.dot(moon))
+    },
+    adaptEye(ground, camera, radius) {
+      ground.worldToLocal(up.setFromMatrixPosition(camera.matrixWorld))
+      const height = up.length() / radius
+      const sunSin = up.normalize().dot(sun.value)
+      eyeSky.daylight = skyDaylight(sunSin, height)
+      return dayExposure(sunSin, height - 1)
     },
   }
 }

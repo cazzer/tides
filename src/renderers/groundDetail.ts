@@ -35,7 +35,14 @@
 // tuned).
 //
 // Spread through composePatches onto the ground's Phong material.
-import { DETAIL_BASE_TEXELS, DETAIL_FADE_END, DETAIL_FADE_START, REFERENCE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
+import {
+  DETAIL_BASE_TEXELS,
+  DETAIL_FADE_END,
+  DETAIL_FADE_START,
+  REFERENCE_TERRAIN_DISPLACEMENT,
+  SUNLIGHT_EXTINCTION,
+  SUNSET_FLOOR,
+} from '../cloud-layer'
 import { REFERENCE_RELIEF, RELIEF } from '../relief'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { GROUND_RELIEF_GLSL } from './groundRelief'
@@ -58,6 +65,12 @@ export const DETAIL_TILT_DISPLACEMENT = REFERENCE_TERRAIN_DISPLACEMENT * (Math.m
 export const DETAIL_TILT_SCALED = RELIEF < DETAIL_TILT_RELIEF
 
 const f = (x: number) => x.toFixed(6)
+
+/** The sky's light on the ground (tides-34q): its colour (linear RGB, about
+ * unit luminance), and what is left of it, over the root of the Sun's sine
+ * by day, as the Sun sets (gone 6 degrees down). */
+export const GROUND_SKY_COLOUR: readonly [number, number, number] = [0.86, 0.98, 1.3]
+export const GROUND_SKY_TWILIGHT = 0.12
 
 const VERTEX_HEAD = /* glsl */ `
 varying vec3 vGroundDetailPos;
@@ -180,14 +193,25 @@ vec3 groundUp = normal;
 const LIGHT_BODY = /* glsl */ `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
 {
-  float groundSunUp = saturate(dot(groundUp, directionalLights[0].direction));
+  float groundSunSin = dot(groundUp, directionalLights[0].direction);
   float groundSkyView = 0.5 + 0.5 * dot(normal, groundUp);
 #ifdef GROUND_HORIZON
   groundSkyView = min(groundSkyView, groundHorizonSky);
 #endif
-  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse
-    + GROUND_SKY_FILL * groundSunUp * groundSkyView * directionalLights[0].color
+  // The sunlight's colour through the air mass toward the Sun, as a cloud
+  // top's at sea level (cloud-layer.ts sunlightTint()).
+  float groundZenith = min(90.0, degrees(acos(clamp(groundSunSin, -1.0, 1.0))));
+  float groundAirMass = 1.0 / (cos(radians(groundZenith)) + 0.50572 * pow(96.07995 - groundZenith, -1.6364)) - 1.0;
+  vec3 groundSunTint = exp(-vec3(${SUNLIGHT_EXTINCTION.map(f).join(', ')}) * groundAirMass);
+  groundSunTint /= max(groundSunTint.r, ${f(SUNSET_FLOOR)});
+  // The sky's light falls off far slower than the Sun's on level ground
+  // (about with the root of its sine), into the civil twilight.
+  float groundSkyLight = sqrt(max(groundSunSin, 0.0))
+    + ${f(GROUND_SKY_TWILIGHT)} * smoothstep(${f(Math.sin((-6 * Math.PI) / 180))}, 0.0, groundSunSin);
+  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse * groundSunTint
+    + GROUND_SKY_FILL * groundSkyLight * groundSkyView * vec3(${GROUND_SKY_COLOUR.map(f).join(', ')}) * directionalLights[0].color
       * BRDF_Lambert(material.diffuseColor);
+  reflectedLight.directSpecular *= groundSunTint;
 }
 #endif
 `

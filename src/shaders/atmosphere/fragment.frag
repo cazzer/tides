@@ -59,7 +59,7 @@ void main() {
     column = grazing * sqrt(p / uSurface) * exp(-(p - uSurface) / H);
   }
 
-  gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun), 1.0);
+  gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun, rd, ro), 1.0);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

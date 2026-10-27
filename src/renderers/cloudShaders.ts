@@ -600,7 +600,7 @@ vec3 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
   float past = columnAhead(eye + d * s, d, grazing, atPast);
   float front = clamp(1.0 - past / max(column, 1e-9), 0.0, 1.0);
   front = mix(front, 1.0, smoothstep(shell - 2.0 * uScaleHeight, shell, length(eye)));
-  return hazeGlow(column, grazing, at, uSunDir) * front;
+  return hazeGlow(column, grazing, at, uSunDir, d, eye) * front;
 }
 
 // The fragment, premultiplied, at depth z (the program writes gl_FragDepth

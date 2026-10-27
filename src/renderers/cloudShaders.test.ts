@@ -1544,16 +1544,18 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // fragment, after the shader's own conditionals), and of the ground's and
   // the tiles' cloud shadow as injected, at tides-tvr.4.2 (404f3eb), and
   // unchanged by tides-zmw.21, which took the live-relief programs away: the
-  // typed tops are the typed program's alone.
+  // typed tops are the typed program's alone. The back faces' (from inside,
+  // where a cloud lays the haze in front of it over itself) regenerated at
+  // tides-34q, whose haze from inside is the sky's (haze.glsl hazeSky()).
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
     'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-back-noease': '33a8fa08be9db6e184b0d604dc66e92130fa519318a7568233256e48b3cb204f',
-    'relief-full-back-ease': '284fd6ba44b57ec22265dd5034a540954fb94bff5cacbbb13050f35ecdb0a11a',
+    'relief-full-back-noease': '61e0f400323aeb427ddcc8c149aa156b6c7f4aebfebf009ace4507fe1347f6ae',
+    'relief-full-back-ease': '56d37dc2344d743de35af180df369b1770270bb622c0c8b5976aa1613e38b8ce',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
-    'flat-full-back-noease': '134fda5cafc9c83446987adc34e10e8493f91addf4a4916e7e7da2afe6959285',
-    'flat-full-back-ease': '0a83b945871ad6257844a8c833a762b33a353bed9cf618debfa7ea31a97db503',
+    'flat-full-back-noease': '276bf6c5c13f74c3d04c50fcea005aaf3fe07dc1dfb8a3a64ef3869f86ac7c97',
+    'flat-full-back-ease': '25eb6f2434d3d9e2c509db30d4916d31ad0669bd75028e688204c61a541a953c',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
     'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',

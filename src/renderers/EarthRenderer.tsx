@@ -14,10 +14,11 @@ import { useGibsPatch } from './gibsPatch'
 import { useGibsNightPatch } from './gibsNightPatch'
 import { streamedPatch } from './gibsStream'
 import { nightLightsPatch, useNightFlight } from './nightLights'
+import { eyeSky } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
 import { prefersReducedMotion } from '../ship/reduced-motion'
-import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../lighting'
+import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
   driftOffset,
   STATIC_DRIFT_PER_FRAME,
@@ -181,12 +182,19 @@ export default function EarthRenderer({
           // At the haze's eye, just set.
           water.update()
         }
+        // The eye for this camera: its exposure, up a little under a low
+        // Sun near the ground in flight, and how much the daylit sky hides
+        // the stars (night-flight.ts dayExposure(), skyDaylight()).
+        eyeSky.daylight = 0
+        renderer.toneMappingExposure =
+          TONE_MAPPING_EXPOSURE *
+          (nightFlight && groundRef.current ? nightFlight.adaptEye(groundRef.current, camera, diameter) : 1)
         // After the Sun, which it reads; as the ground's onBeforeRender.
         if (tileNightFlight && groundRef.current && cloudRef.current?.parent) {
           tileNightFlight.update(groundRef.current, camera, diameter)
         }
       }),
-    [scene, clouds, groundHaze, water, tileNightFlight, diameter]
+    [scene, clouds, groundHaze, water, tileNightFlight, nightFlight, diameter]
   )
   const groundPatch = useMemo(
     () =>
