@@ -6,6 +6,8 @@
 // In flight the same night side also takes the adapted eye's fill and the
 // Moon's light (tides-tvr.2; ../night-flight.ts), from uniforms the flight
 // sets per camera (createNightFlight); without one the patch is as before.
+// In flight the lights also break into points as the ground nears
+// (tides-zmw.23; ./nightPoints.ts), on the night side before its mask.
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
@@ -22,6 +24,7 @@ import {
   nightCloudAmbient,
 } from '../night-flight'
 import type { MaterialPatch } from './eclipseShadow'
+import { NIGHT_POINTS_GLSL, nightPointsEye } from './nightPoints'
 
 const VERTEX_HEAD = /* glsl */ `
 varying vec3 vNightLightsDir;
@@ -41,7 +44,38 @@ const FRAGMENT_BODY = /* glsl */ `
 totalEmissiveRadiance *= smoothstep(0.035, -0.1, dot(normalize(vNightLightsDir), uNightLightsSun));
 `
 
+/** sin of the Sun's elevation from which the night mask (and the flight's
+ * fill) is 0: FRAGMENT_BODY's smoothstep(0.035, -0.1, ...). */
+export const NIGHT_MASK_SUN = 0.035
+
 const f = (x: number) => x.toFixed(6)
+
+// In flight, after the map and VIIRS (whose code lands first), before the
+// mask: the emissive broken into points (./nightPoints.ts) on the map's own
+// coordinate in cells, its derivatives taken before any branch and wrapped
+// at the antimeridian as VIIRS's are, its finest source VIIRS's where it
+// covers. Where the mask is 0 the light is dark anyway, so the day side
+// skips it.
+const POINTS_BODY = /* glsl */ `
+#ifdef USE_EMISSIVEMAP
+{
+  vec2 nightPointsAt = vEmissiveMapUv * NIGHT_POINTS_CELLS;
+  vec2 nightPointsDx = dFdx(vEmissiveMapUv) * NIGHT_POINTS_CELLS;
+  vec2 nightPointsDy = dFdy(vEmissiveMapUv) * NIGHT_POINTS_CELLS;
+  nightPointsDx.x -= NIGHT_POINTS_CELLS.x * floor(nightPointsDx.x / NIGHT_POINTS_CELLS.x + 0.5);
+  nightPointsDy.x -= NIGHT_POINTS_CELLS.x * floor(nightPointsDy.x / NIGHT_POINTS_CELLS.x + 0.5);
+  if (dot(normalize(vNightLightsDir), uNightLightsSun) < ${f(NIGHT_MASK_SUN)}) {
+#ifdef GIBS_NIGHT_SIDE
+    float nightPointsFine = gibsNightCover;
+#else
+    float nightPointsFine = 0.0;
+#endif
+    totalEmissiveRadiance *= nightPoints(emissiveColor.rgb, nightPointsFine, vec2(0.0), nightPointsAt,
+      nightPointsDx, nightPointsDy, vEmissiveMapUv.y, float(textureSize(emissiveMap, 0).x));
+  }
+}
+#endif
+`
 
 const FLIGHT_FRAGMENT_HEAD = /* glsl */ `
 uniform vec3 uNightMoon;
@@ -85,6 +119,7 @@ export const NIGHT_LIGHTS_GLSL = {
   fragmentBody: FRAGMENT_BODY,
   flightFragmentHead: FLIGHT_FRAGMENT_HEAD,
   flightLightBody: FLIGHT_LIGHT_BODY,
+  pointsBody: POINTS_BODY,
 }
 
 function inject(source: string, chunk: string, code: string): string {
@@ -103,6 +138,8 @@ export interface NightFlightUniforms {
   /** Linear, already scaled by the adaptation (and the Moon's by its phase). */
   uNightFill: THREE.IUniform<THREE.Color>
   uNightMoonLight: THREE.IUniform<THREE.Color>
+  /** The eye's cell for the streamed tiles' points (nightPointsEye()). */
+  uNightPointsEye: THREE.IUniform<THREE.Vector4>
 }
 
 /** `sun`: the Sun's direction in the ground mesh's local frame, kept up to
@@ -114,9 +151,13 @@ export function nightLightsPatch(sun: THREE.IUniform<THREE.Vector3>, flight?: Ni
       shader.uniforms.uNightLightsSun = sun
       shader.vertexShader = inject(VERTEX_HEAD + shader.vertexShader, 'begin_vertex', VERTEX_BODY)
       shader.fragmentShader = inject(
-        inject(shader.fragmentShader, 'common', flight ? FRAGMENT_HEAD + FLIGHT_FRAGMENT_HEAD : FRAGMENT_HEAD),
+        inject(
+          shader.fragmentShader,
+          'common',
+          flight ? FRAGMENT_HEAD + FLIGHT_FRAGMENT_HEAD + NIGHT_POINTS_GLSL.head : FRAGMENT_HEAD
+        ),
         'emissivemap_fragment',
-        FRAGMENT_BODY
+        flight ? POINTS_BODY + FRAGMENT_BODY : FRAGMENT_BODY
       )
       if (!flight) return
       Object.assign(shader.uniforms, flight)
@@ -146,6 +187,7 @@ export function createNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbie
     uNightMoonView: { value: new THREE.Vector3(0, 1, 0) },
     uNightFill: { value: new THREE.Color(0, 0, 0) },
     uNightMoonLight: { value: new THREE.Color(0, 0, 0) },
+    uNightPointsEye: { value: new THREE.Vector4() },
   }
   const moonWorld = new THREE.Vector3()
   let moonAt: number | null = null
@@ -172,6 +214,9 @@ export function createNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbie
       const moon = uniforms.uNightMoon.value.copy(moonWorld).applyQuaternion(quaternion.invert())
       uniforms.uNightMoonView.value.copy(moonWorld).transformDirection(camera.matrixWorldInverse)
       ground.worldToLocal(up.setFromMatrixPosition(camera.matrixWorld))
+      // The eye in the ground's frame, in double, as the haze's
+      // uGroundHazeEyeLocal (the tiles' uSurfaceEyeGround) has it.
+      nightPointsEye(up, uniforms.uNightPointsEye.value)
       const gap = up.length() / radius - 1
       up.normalize()
       const adaptation = nightAdaptation(up.dot(sun.value), gap)

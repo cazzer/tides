@@ -39,22 +39,27 @@
 // EarthRenderer updates per camera before the tiles draw. Outside ship mode
 // there is no flight (null) and no fill, as on the globe.
 //
+// Points. In flight the globe breaks its lights into points near the ground
+// (../nightPoints.ts, tides-zmw.23); the tiles take its head, so the same
+// lights stand on both at the hand-off, but make their own call: the cell
+// coordinate is the flight's uNightPointsEye (the eye's, split into whole
+// cells and fraction in double on the CPU) plus nightPointsOffset() along
+// surfaceRay, never the quantised surfaceGlobeUv's, with the base's analytic
+// derivatives as for VIIRS.
+//
 // No varyings, no defines: one program per tileset, keyed by whether the
 // flight and the stream are on (fixed for a link).
 import * as THREE from 'three'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../../lighting'
 import { GIBS_COLS, GIBS_ROWS } from '../../gibs-patch'
 import { GIBS_NIGHT_GLSL } from '../gibsNightPatch'
-import { NIGHT_LIGHTS_GLSL } from '../nightLights'
+import { NIGHT_LIGHTS_GLSL, NIGHT_MASK_SUN } from '../nightLights'
+import { NIGHT_POINTS_GLSL } from '../nightPoints'
 import { injectAfterChunk, renameInSnippet, surfaceInject, type TileAdapter } from './tile-material'
 
 const WHAT = 'tile night'
 
 const f = (x: number) => x.toFixed(6)
-
-/** sin of the Sun's elevation from which the globe's night mask (and its
- * fill) is 0: nightLights.ts's smoothstep(0.035, -0.1, ...). */
-export const NIGHT_MASK_SUN = 0.035
 
 // The night map and the globe's emissive colour (emissive times its
 // intensity, as three sets the uniform).
@@ -106,6 +111,24 @@ body = renameInSnippet(body, 'dFdy(nightAt)', nightDerivative('surfaceGlobeDy'),
 body = renameInSnippet(body, 'emissive * emissiveColor.rgb', 'uTileCityLights * emissiveColor.rgb', WHAT, 1)
 const GIBS_BODY = body
 
+// In flight, the points (header) inside the gate after VIIRS, as the
+// globe's land after its VIIRS and before its mask.
+const POINTS_HEAD = `${NIGHT_POINTS_GLSL.head}${NIGHT_POINTS_GLSL.offsetHead}uniform vec4 uNightPointsEye;
+`
+const POINTS_BODY = /* glsl */ `
+{
+#ifdef GIBS_NIGHT_SIDE
+  float nightPointsFine = gibsNightCover;
+#else
+  float nightPointsFine = 0.0;
+#endif
+  totalEmissiveRadiance *= nightPoints(emissiveColor.rgb, nightPointsFine, uNightPointsEye.xy,
+    uNightPointsEye.zw + nightPointsOffset(uSurfaceEyeGround, surfaceRay),
+    surfaceGlobeDx * NIGHT_POINTS_CELLS, surfaceGlobeDy * NIGHT_POINTS_CELLS, surfaceGlobeUv.y,
+    float(textureSize(uTileNightMap, 0).x));
+}
+`
+
 /** The adapter's GLSL (the test checks it against the globe's). */
 export const TILE_NIGHT_GLSL = {
   gateOpen: NIGHT_GATE_OPEN,
@@ -118,6 +141,9 @@ export const TILE_NIGHT_GLSL = {
   flightLight: FLIGHT_LIGHT,
   gibsHead: GIBS_NIGHT_GLSL.fragmentHead,
   gibsBody: GIBS_BODY,
+  pointsHead: NIGHT_POINTS_GLSL.head,
+  pointsOffsetHead: NIGHT_POINTS_GLSL.offsetHead,
+  pointsBody: POINTS_BODY,
 }
 
 /** The globe's emissive uniform: CITY_LIGHTS_COLOR (sRGB, made linear as
@@ -136,10 +162,15 @@ export const tileNight: TileAdapter = (link) => {
     ...flight,
     ...(side ? link.gibsNight.uniforms : {}),
   }
-  const head = CITY_HEAD + MASK_HEAD + (flight ? TILE_NIGHT_GLSL.flightHead : '') + (side ? GIBS_NIGHT_GLSL.fragmentHead(side) : '')
-  // The globe's order: the map, VIIRS's redistribution, the night side's
-  // mask (on the night side: the gate).
-  const emissive = NIGHT_GATE_OPEN + CITY_BODY + (side ? GIBS_BODY : '') + NIGHT_GATE_CLOSE + MASK_BODY
+  const head =
+    CITY_HEAD +
+    MASK_HEAD +
+    (flight ? TILE_NIGHT_GLSL.flightHead + POINTS_HEAD : '') +
+    (side ? GIBS_NIGHT_GLSL.fragmentHead(side) : '')
+  // The globe's order: the map, VIIRS's redistribution, in flight the
+  // points, the night side's mask (on the night side: the gate).
+  const emissive =
+    NIGHT_GATE_OPEN + CITY_BODY + (side ? GIBS_BODY : '') + (flight ? POINTS_BODY : '') + NIGHT_GATE_CLOSE + MASK_BODY
   return {
     patch: {
       onBeforeCompile(shader) {

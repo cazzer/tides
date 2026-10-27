@@ -7,10 +7,11 @@ import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../../lighting'
 import { GIBS_COLS, GIBS_ROWS } from '../../gibs-patch'
 import { composePatches } from '../eclipseShadow'
 import { createGibsNightPatch, GIBS_NIGHT_GLSL } from '../gibsNightPatch'
-import { NIGHT_LIGHTS_GLSL, nightLightsPatch, type NightFlightUniforms } from '../nightLights'
+import { NIGHT_LIGHTS_GLSL, NIGHT_MASK_SUN, nightLightsPatch, type NightFlightUniforms } from '../nightLights'
+import { NIGHT_POINTS_GLSL } from '../nightPoints'
 import type { GlobeLink } from './surface-link'
 import { tileEclipse } from './tile-eclipse'
-import { cityLightsColor, NIGHT_MASK_SUN, tileNight, TILE_NIGHT_GLSL } from './tile-night'
+import { cityLightsColor, tileNight, TILE_NIGHT_GLSL } from './tile-night'
 import { createTileComposer, surfaceGlobeUv, surfaceGlobeUvDelta, type TerrainPhongMaterial } from './tile-material'
 import { compiled, fakeLink, phongShader, tileMesh } from './tile-test-fixtures'
 
@@ -19,6 +20,7 @@ const flight = (): NightFlightUniforms => ({
   uNightMoonView: { value: new THREE.Vector3(0, 0, 1) },
   uNightFill: { value: new THREE.Color(0.01, 0.01, 0.02) },
   uNightMoonLight: { value: new THREE.Color(0.02, 0.02, 0.03) },
+  uNightPointsEye: { value: new THREE.Vector4(300_000, 150_000, 0.25, 0.75) },
 })
 
 /** A link in flight with a GIBS night stream `side` tiles square. */
@@ -95,7 +97,7 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     for (const k of ['r', 'g', 'b'] as const) expect(got[k]).toBeCloseTo(expected[k], 9)
   })
 
-  it('lays the map, VIIRS, then the mask after the emissive chunk, as the globe\'s patches leave them', () => {
+  it('lays the map, VIIRS, the points, then the mask after the emissive chunk, as the globe\'s patches leave them', () => {
     const link = nightLink(8)
     const { composer, shader } = tileShader(link)
     expect(composer.key).toBe('surface-tile:surface-base+night-surface-flight-gibs8')
@@ -106,7 +108,7 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     expect(at(TILE_NIGHT_GLSL.gateOpen)).toBe(1)
     expect(at(TILE_NIGHT_GLSL.cityBody)).toBeGreaterThan(at(TILE_NIGHT_GLSL.gateOpen))
     expect(at(TILE_NIGHT_GLSL.gibsBody)).toBeGreaterThan(at(TILE_NIGHT_GLSL.cityBody))
-    expect(at(TILE_NIGHT_GLSL.gibsBody + TILE_NIGHT_GLSL.gateClose)).toBeGreaterThan(-1)
+    expect(at(TILE_NIGHT_GLSL.gibsBody + TILE_NIGHT_GLSL.pointsBody + TILE_NIGHT_GLSL.gateClose)).toBeGreaterThan(-1)
     expect(at(TILE_NIGHT_GLSL.maskBody)).toBeGreaterThan(at(TILE_NIGHT_GLSL.gibsBody))
     expect(at(TILE_NIGHT_GLSL.maskBody)).toBeLessThan(at('#include'))
     // The globe's own order: compose its patches on a Phong shader and
@@ -116,7 +118,8 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     const globeShader = phongShader()
     globe.onBeforeCompile(globeShader, {} as THREE.WebGLRenderer)
     const g = after(globeShader.fragmentShader, 'emissivemap_fragment')
-    expect(g.indexOf(GIBS_NIGHT_GLSL.emissiveBody)).toBeLessThan(g.indexOf(NIGHT_LIGHTS_GLSL.fragmentBody))
+    expect(g.indexOf(GIBS_NIGHT_GLSL.emissiveBody)).toBeLessThan(g.indexOf(NIGHT_LIGHTS_GLSL.pointsBody))
+    expect(g.indexOf(NIGHT_LIGHTS_GLSL.pointsBody)).toBeLessThan(g.indexOf(NIGHT_LIGHTS_GLSL.fragmentBody))
     // The fill after the lights, before the emissive's use.
     const light = after(f, 'lights_fragment_end')
     expect(light.indexOf(TILE_NIGHT_GLSL.flightLight)).toBe(1)
@@ -145,7 +148,7 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     expect(f.split('varying ').length).toBe(THREE.ShaderLib.phong.fragmentShader.split('varying ').length)
     // Every name the night's code reads is declared above main.
     const main = f.indexOf('void main')
-    for (const decl of ['uniform sampler2D uTileNightMap;', 'uniform vec3 uTileCityLights;', 'uniform vec3 uNightLightsSun;', 'uniform vec3 uNightFill;', 'uniform sampler2D uGibsNight;']) {
+    for (const decl of ['uniform sampler2D uTileNightMap;', 'uniform vec3 uTileCityLights;', 'uniform vec3 uNightLightsSun;', 'uniform vec3 uNightFill;', 'uniform sampler2D uGibsNight;', 'uniform vec4 uNightPointsEye;', 'float gibsNightCover = 0.0;', NIGHT_POINTS_GLSL.head, NIGHT_POINTS_GLSL.offsetHead]) {
       expect(f.indexOf(decl), decl).toBeGreaterThan(-1)
       expect(f.indexOf(decl), decl).toBeLessThan(main)
     }
@@ -159,5 +162,36 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     expect(f).toContain(TILE_NIGHT_GLSL.maskBody)
     expect(f).not.toContain('uNightFill')
     expect(f).not.toContain('uGibsNight')
+    expect(f).not.toMatch(/nightPoints|NIGHT_POINTS/)
+  })
+
+  // tides-zmw.23: the globe's points, on the eye's cell from the CPU and the
+  // base's analytic derivatives.
+  it("breaks the lights into the globe's points from the eye's cell, never differencing", () => {
+    expect(TILE_NIGHT_GLSL.pointsHead).toBe(NIGHT_POINTS_GLSL.head)
+    expect(TILE_NIGHT_GLSL.pointsOffsetHead).toBe(NIGHT_POINTS_GLSL.offsetHead)
+    const body = TILE_NIGHT_GLSL.pointsBody
+    for (const read of [
+      'uNightPointsEye.xy',
+      'uNightPointsEye.zw + nightPointsOffset(uSurfaceEyeGround, surfaceRay)',
+      'surfaceGlobeDx * NIGHT_POINTS_CELLS',
+      'surfaceGlobeDy * NIGHT_POINTS_CELLS',
+      'surfaceGlobeUv.y',
+      'textureSize(uTileNightMap, 0)',
+      'float nightPointsFine = gibsNightCover;',
+    ]) {
+      expect(body, read).toContain(read)
+    }
+    // No derivative in any of the tiles' night code.
+    for (const code of Object.values(TILE_NIGHT_GLSL)) {
+      const text = typeof code === 'function' ? code(8) : code
+      expect(text).not.toMatch(/dFd[xy]|fwidth/)
+    }
+    // The flight's points without a stream: VIIRS's cover is 0.
+    const { composer, shader } = tileShader(nightLink(0))
+    expect(composer.key).toBe('surface-tile:surface-base+night-surface-flight')
+    const emissive = after(shader.fragmentShader, 'emissivemap_fragment')
+    expect(emissive.indexOf(TILE_NIGHT_GLSL.cityBody + TILE_NIGHT_GLSL.pointsBody + TILE_NIGHT_GLSL.gateClose)).toBeGreaterThan(-1)
+    expect(shader.fragmentShader).not.toContain('#define GIBS_NIGHT_SIDE')
   })
 })

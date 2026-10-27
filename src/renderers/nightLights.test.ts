@@ -14,7 +14,8 @@ import { createGroundDisplacement } from './groundDisplacement'
 import { groundDetailPatch } from './groundDetail'
 import { createGroundHaze } from './groundHaze'
 import { groundShadowPatch } from './groundShadow'
-import { createNightFlight, nightLightsPatch } from './nightLights'
+import { createNightFlight, NIGHT_LIGHTS_GLSL, NIGHT_MASK_SUN, nightLightsPatch } from './nightLights'
+import { NIGHT_POINTS_GLSL, nightPointsEye } from './nightPoints'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 
@@ -71,6 +72,40 @@ describe('night lights in flight', () => {
     expect(code).toContain('smoothstep(-0.020000, 0.060000, dot(nightUp, uNightMoon))')
     expect(uniforms).toEqual(expect.arrayContaining(['uNightMoon', 'uNightMoonView', 'uNightFill', 'uNightMoonLight']))
     expect(key).toContain('night-lights-flight')
+  })
+
+  // tides-zmw.23: in flight the lights break into points, after the map and
+  // VIIRS, before the mask, on the night side only.
+  it('breaks the lights into points after VIIRS and before the mask, its derivatives before any branch', () => {
+    const sun = { value: new THREE.Vector3(1, 0, 0) }
+    const flight = createNightFlight(sun, { value: CLOUD_AMBIENT })
+    const night = createGibsNightPatch(8)
+    const { fragment: frag, key } = compiled(composePatches(nightLightsPatch(sun, flight.uniforms), night.material))
+    const at = (s: string) => {
+      expect(frag).toContain(s)
+      return frag.indexOf(s)
+    }
+    expect(at(NIGHT_POINTS_GLSL.head)).toBeLessThan(at('void main'))
+    expect(frag).not.toContain(NIGHT_POINTS_GLSL.offsetHead)
+    const points = at(NIGHT_LIGHTS_GLSL.pointsBody)
+    expect(at('gibsNightCover = cover;')).toBeLessThan(points)
+    expect(at('totalEmissiveRadiance = emissive * emissiveColor.rgb;')).toBeLessThan(points)
+    expect(points).toBeLessThan(at('totalEmissiveRadiance *= smoothstep(0.035, -0.1'))
+    const body = NIGHT_LIGHTS_GLSL.pointsBody
+    expect(body.trim().startsWith('#ifdef USE_EMISSIVEMAP')).toBe(true)
+    expect(body.trim().endsWith('#endif')).toBe(true)
+    expect(body.indexOf('dFdx(')).toBeLessThan(body.indexOf('if ('))
+    expect(body.indexOf('dFdy(')).toBeLessThan(body.indexOf('if ('))
+    expect(body).toContain(`if (dot(normalize(vNightLightsDir), uNightLightsSun) < ${NIGHT_MASK_SUN.toFixed(6)})`)
+    expect(body).toContain('float nightPointsFine = gibsNightCover;')
+    expect(body).toContain('totalEmissiveRadiance *= nightPoints(emissiveColor.rgb, nightPointsFine, vec2(0.0), nightPointsAt,')
+    expect(key).toBe('night-lights-flight+gibs-night-8')
+    expect(nightLightsPatch(sun, flight.uniforms).customProgramCacheKey()).toBe('night-lights-flight')
+  })
+
+  it('adds no points outside flight', () => {
+    const { fragment } = compiled(nightLightsPatch({ value: new THREE.Vector3(1, 0, 0) }))
+    expect(fragment).not.toMatch(/nightPoints|NIGHT_POINTS/)
   })
 
   // EarthRenderer's ground outside ship mode: no flight for the night lights
@@ -244,5 +279,31 @@ describe('night flight', () => {
     // Fully adapted there.
     expect(flight.uniforms.uNightFill.value.equals(NIGHT_FILL_RGB)).toBe(true)
     expect(cloudAmbient.value).toBeGreaterThan(CLOUD_AMBIENT)
+  })
+
+  it("puts the eye's cell in the ground's frame, as the haze's uGroundHazeEyeLocal has the eye", () => {
+    const t = Date.parse('2026-10-26T04:12:00Z')
+    useStore.setState({ timestamp: t })
+    for (const turn of [0, 1.3]) {
+      const ground = new THREE.Object3D()
+      ground.position.fromArray(earthPosition(t))
+      ground.rotation.set(0.2, turn, -0.4)
+      ground.updateMatrixWorld()
+      const eyeLocal = new THREE.Vector3(0.3, 0.8, -0.5).normalize().multiplyScalar(1.002)
+      const camera = new THREE.PerspectiveCamera()
+      camera.position.copy(ground.localToWorld(eyeLocal.clone()))
+      camera.lookAt(ground.position)
+      camera.updateMatrixWorld()
+      const haze = createGroundHaze({ value: new THREE.Vector3(1, 0, 0) }, 1, false)
+      haze.update(ground, camera)
+      const flight = createNightFlight({ value: new THREE.Vector3(1, 0, 0) }, { value: CLOUD_AMBIENT })
+      flight.update(ground, camera, 1)
+      const expected = nightPointsEye(haze.frame.uGroundHazeEyeLocal.value, new THREE.Vector4())
+      const got = flight.uniforms.uNightPointsEye.value
+      expect(got.x).toBe(expected.x)
+      expect(got.y).toBe(expected.y)
+      expect(got.z).toBeCloseTo(expected.z, 4)
+      expect(got.w).toBeCloseTo(expected.w, 4)
+    }
   })
 })

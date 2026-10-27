@@ -57,6 +57,10 @@ describe('GIBS night patch on the ground', () => {
     expect(code).not.toMatch(/max\(emissiveColor/)
     // Its seam fade is its own, wider than the day patch's.
     expect(code).toContain('vec2 ramp = smoothstep(0.200000, 0.5, abs(e));')
+    // Its cover for the night lights' points (tides-zmw.23): declared with
+    // the head, 0 unless the patch ran, then the cover it used.
+    expect(at('float gibsNightCover = 0.0;')).toBeLessThan(at('void main'))
+    expect(code).toMatch(/float cover = [^;]*;\n\s*gibsNightCover = cover;/)
     expect(frag).toContain('vec2 ramp = smoothstep(0.250000, 0.5, abs(e));')
     expect(code).toContain('log2(81920.000000 / nightMapSize.x)')
     expect(Object.keys(shader.uniforms)).toEqual(
