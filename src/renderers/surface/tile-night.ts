@@ -39,6 +39,16 @@
 // EarthRenderer updates per camera before the tiles draw. Outside ship mode
 // there is no flight (null) and no fill, as on the globe.
 //
+// Fade. In flight the globe fades its lights as their finest source's
+// texel is magnified past a few pixels (../nightLights.ts, tides-zmw.24),
+// after VIIRS and with the mask; the tiles take its functions and call by
+// text, the map's width renamed to theirs, and measure the footprint from
+// the base's analytic derivatives of the map's uv (surfaceGlobeDx/Dy, no
+// antimeridian jump, so no wrap) where the globe differences its view
+// position, inside the gate after VIIRS: where the mask is 0 the light is
+// dark anyway. Its VIIRS cover is the patch's gibsNightCover, as on the
+// globe.
+//
 // No varyings, no defines: one program per tileset, keyed by whether the
 // flight and the stream are on (fixed for a link).
 import * as THREE from 'three'
@@ -106,6 +116,12 @@ body = renameInSnippet(body, 'dFdy(nightAt)', nightDerivative('surfaceGlobeDy'),
 body = renameInSnippet(body, 'emissive * emissiveColor.rgb', 'uTileCityLights * emissiveColor.rgb', WHAT, 1)
 const GIBS_BODY = body
 
+const FADE_WIDTH = renameInSnippet(NIGHT_LIGHTS_GLSL.fadeWidth, 'textureSize(emissiveMap, 0)', 'textureSize(uTileNightMap, 0)', WHAT, 1)
+const FADE_PIXEL = `  float nightFadePixel = nightLightsUvPixel(surfaceGlobeDx, surfaceGlobeDy, surfaceGlobeUv.y, nightFadeWidth);
+`
+const FADE_BODY = `{${FADE_WIDTH}${FADE_PIXEL}${NIGHT_LIGHTS_GLSL.fadeCall}}
+`
+
 /** The adapter's GLSL (the test checks it against the globe's). */
 export const TILE_NIGHT_GLSL = {
   gateOpen: NIGHT_GATE_OPEN,
@@ -118,6 +134,8 @@ export const TILE_NIGHT_GLSL = {
   flightLight: FLIGHT_LIGHT,
   gibsHead: GIBS_NIGHT_GLSL.fragmentHead,
   gibsBody: GIBS_BODY,
+  fadeHead: NIGHT_LIGHTS_GLSL.fadeHead,
+  fadeBody: FADE_BODY,
 }
 
 /** The globe's emissive uniform: CITY_LIGHTS_COLOR (sRGB, made linear as
@@ -136,10 +154,15 @@ export const tileNight: TileAdapter = (link) => {
     ...flight,
     ...(side ? link.gibsNight.uniforms : {}),
   }
-  const head = CITY_HEAD + MASK_HEAD + (flight ? TILE_NIGHT_GLSL.flightHead : '') + (side ? GIBS_NIGHT_GLSL.fragmentHead(side) : '')
-  // The globe's order: the map, VIIRS's redistribution, the night side's
-  // mask (on the night side: the gate).
-  const emissive = NIGHT_GATE_OPEN + CITY_BODY + (side ? GIBS_BODY : '') + NIGHT_GATE_CLOSE + MASK_BODY
+  const head =
+    CITY_HEAD +
+    MASK_HEAD +
+    (flight ? TILE_NIGHT_GLSL.flightHead + TILE_NIGHT_GLSL.fadeHead : '') +
+    (side ? GIBS_NIGHT_GLSL.fragmentHead(side) : '')
+  // The globe's order: the map, VIIRS's redistribution, in flight the fade,
+  // the night side's mask (on the night side: the gate).
+  const emissive =
+    NIGHT_GATE_OPEN + CITY_BODY + (side ? GIBS_BODY : '') + (flight ? FADE_BODY : '') + NIGHT_GATE_CLOSE + MASK_BODY
   return {
     patch: {
       onBeforeCompile(shader) {
