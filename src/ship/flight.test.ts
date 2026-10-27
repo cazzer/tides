@@ -5,6 +5,9 @@ import {
   BLUE_ZONE,
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
+  HOLD_FALL_TAU,
+  HOLD_REACH_ALTITUDES,
+  HOLD_REACH_SECONDS,
   K_WELL,
   MAX_DT,
   OVERSPEED_MAX,
@@ -23,6 +26,7 @@ import {
   collisionRadius,
   createShipState,
   floorRadius,
+  lawCeiling,
   lawFloor,
   nearestBody,
   settleShip,
@@ -32,10 +36,12 @@ import {
   speedFraction,
   stepShip,
   turnRateMultiplier,
+  updateGroundHold,
   velocityTau,
   wellFactor,
   wellTime,
   type Body,
+  type GroundHold,
   type GroundSpeedLaw,
   type FlightEnv,
   type ShipState,
@@ -43,7 +49,10 @@ import {
 import {
   BODY_MASS_KG,
   EARTH_AIR_BOOST,
+  EARTH_BOOST_GUARD_OFFSET,
+  EARTH_BOOST_GUARD_RATE,
   EARTH_COLLISION_RADIUS,
+  EARTH_GAP_RATE,
   EARTH_GROUND_CLEARANCE,
   EARTH_GROUND_SPEED,
   EARTH_GROUND_SPEED_LAW,
@@ -1734,7 +1743,8 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
           stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env([flat]), telemetry)
           hold()
         }
-        const boostedCap = speedCap(state.position, [flat], null, 1)
+        // Over the flat sea the held ground is the sea (tides-5lj).
+        const boostedCap = speedCap(state.position, [flat], null, 1, { key: 'earth', radius: RF })
         const ceiling = Math.exp(RIDE_UP_RATE * FRAME) * (1 + 1e-9)
         let reached = NaN
         for (let i = 0; i < 5 * 60; i++) {
@@ -1830,6 +1840,7 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       ['in the air 60 km up, under the plateau unboosted', true, sea, 60, 1],
       ['part-spooled 10 km up', true, sea, 10, 0.1],
       ['200 m up, the air under the gap law unboosted', true, sea, 0.2, 1],
+      ['1 km over flat ground', true, sea, 1, 1],
       ['with the spool at 0', false, sea, 10, 0],
       ['92 km up, where the air meets the plateau', false, sea, 92, 1],
       ['150 km up, in the well', false, sea, 150, 1],
@@ -1845,6 +1856,16 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       expect(telemetry.boosted).toBe(expected)
       // Honest: exactly when the cap is over the unboosted one.
       expect(telemetry.speedCap > speedCap(state.position, [body], null) * (1 + 1e-6)).toBe(expected)
+    })
+
+    test("1 km over flat ground, boosted, the cap is over the gap law's 2 · gap (tides-5lj)", () => {
+      const state = shipAt(above(1), above(1).add(nose(0)))
+      state.boost = 1
+      const telemetry = createShipTelemetry()
+      stepShip(state, input({ boost: true }), FRAME, env([sea]), telemetry)
+      const gap = state.position.length() - R
+      expect(telemetry.boosted).toBe(true)
+      expect(telemetry.speedCap).toBeGreaterThan(2 * EARTH_GAP_RATE * gap)
     })
 
     test('telemetry.boosted is false on the Moon, the spool full', () => {
@@ -1876,6 +1897,263 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       expect(state.boost).toBe(0)
       expect(telemetry.boost).toBe(0)
       expect(createShipState().boost).toBe(0)
+    })
+  })
+})
+
+describe('boosted guard on the held ground (tides-5lj)', () => {
+  const M = EARTH_UNITS_PER_METRE
+  const KM = 1000 * M
+  const law = EARTH_GROUND_SPEED_LAW
+  // A sea a thousand times Earth's radius, so level flight stays level over
+  // tens of km, with ground along the arc s = RF · atan2(x, y) over +X:
+  // `top(lo, hi)` is the highest it stands over the sea between arcs lo and
+  // hi. Its ground reads the highest within `reach` of the direction, as
+  // Earth's does (ship-bodies.ts); without one, straight under it.
+  const RF = 1000 * EARTH_RADIUS
+  const arcOf = (direction: THREE.Vector3) => RF * Math.atan2(direction.x, direction.y)
+  const earthOver = (top: (lo: number, hi: number) => number): Body => ({
+    key: 'earth',
+    position: new THREE.Vector3(),
+    radius: RF,
+    collisionRadius: RF + 10 * M,
+    mass: BODY_MASS_KG.earth,
+    ground: (direction, reach = 0) => {
+      const s = arcOf(direction)
+      return RF + top(s - reach, s + reach)
+    },
+    groundClearance: FINE_GROUND_CLEARANCE,
+    minSpeed: EARTH_SLOWEST,
+    groundSpeed: law,
+  })
+  const flat = earthOver(() => 0)
+  // Ridges 0 to 4 km over the sea every 16 km: 2 km + 2 km · sin(2π s / λ).
+  const WAVE = 16 * KM
+  const ridge = (s: number) => 2 * KM + 2 * KM * Math.sin((2 * Math.PI * s) / WAVE)
+  const ridgeTop = (lo: number, hi: number) => {
+    if (hi - lo >= WAVE) return 4 * KM
+    // The first crest (s = λ/4 + nλ) at or after lo.
+    const crest = WAVE / 4 + Math.ceil((lo - WAVE / 4) / WAVE) * WAVE
+    return crest <= hi ? 4 * KM : Math.max(ridge(lo), ridge(hi))
+  }
+  const ridges = earthOver(ridgeTop)
+  const hold = (radius: number, key: string | null = 'earth'): GroundHold => ({ key, radius })
+
+  // Level `km` over `body`'s sea along +X at `speed`; `keep` puts it back at
+  // that height, level, after each step.
+  function level(km: number, speed = 0) {
+    const start = new THREE.Vector3(0, RF + km * KM, 0)
+    const state = shipAt(start, start.clone().add(new THREE.Vector3(1, 0, 0)))
+    state.velocity.set(speed, 0, 0)
+    const radial = new THREE.Vector3()
+    const keep = () => {
+      state.position.setLength(RF + km * KM)
+      state.velocity.projectOnPlane(radial.copy(state.position).normalize())
+    }
+    return { state, keep }
+  }
+
+  test('flying level 5 km up over 4 km ridges at full throttle, boosted, the cap holds steady at 5 · (1 km − 120 m), where the guard straight under the ship swung it over 2×', () => {
+    const { state, keep } = level(5, speedCap(new THREE.Vector3(0, RF + 5 * KM, 0), [ridges]))
+    const telemetry = createShipTelemetry()
+    const fly = (seconds: number, record?: (cap: number) => void) => {
+      for (let i = 0; i < seconds * 60; i++) {
+        stepShip(state, input({ throttle: 1, boost: true }), FRAME, env([ridges]), telemetry)
+        keep()
+        record?.(telemetry.speedCap)
+      }
+    }
+    fly(3)
+    let lo = Infinity
+    let hi = 0
+    const start = arcOf(state.position)
+    fly(20, (cap) => {
+      lo = Math.min(lo, cap)
+      hi = Math.max(hi, cap)
+    })
+    // Over several ridges.
+    expect(arcOf(state.position) - start).toBeGreaterThan(4 * WAVE)
+    expect(hi / lo).toBeLessThan(1.03)
+    const steady = EARTH_BOOST_GUARD_RATE * (1 * KM - EARTH_BOOST_GUARD_OFFSET)
+    expect(Math.abs(lo / steady - 1)).toBeLessThan(0.02)
+    expect(Math.abs(hi / steady - 1)).toBeLessThan(0.02)
+    expect(steady / M).toBeCloseTo(4400, 6)
+    // Without a held ground the boosted guard reads the gap, 2 · gap: 2 km/s
+    // over a peak, the boosted air's ~5.4 km/s over a valley.
+    let flo = Infinity
+    let fhi = 0
+    for (let i = 0; i <= 100; i++) {
+      const at = new THREE.Vector3(Math.sin((i / 100) * (WAVE / RF)), Math.cos((i / 100) * (WAVE / RF)), 0).multiplyScalar(RF + 5 * KM)
+      const cap = speedCap(at, [ridges], null, 1)
+      flo = Math.min(flo, cap)
+      fhi = Math.max(fhi, cap)
+    }
+    expect(fhi / flo).toBeGreaterThan(2)
+  })
+
+  test('unboosted, the held ground changes nothing: the floor and ceiling are the same numbers, and stepShip holds no ground', () => {
+    for (const metres of [10, 30, 100, 150, 200, 500, 1000, 3000, 10000, 50000, 120000]) {
+      const gap = metres * M
+      for (const base of [0, 4 * KM]) {
+        for (const climb of [0, 0.6, 0.9]) {
+          for (const held of [gap, 0.5 * gap, 2 * gap, 0, -gap, Infinity]) {
+            expect(lawFloor(law, gap, gap + base, climb, 0, held)).toBe(lawFloor(law, gap, gap + base, climb))
+            expect(lawCeiling(law, gap, gap + base, climb, 0, held)).toBe(lawCeiling(law, gap, gap + base, climb))
+          }
+        }
+      }
+    }
+    const { state, keep } = level(5)
+    for (let i = 0; i < 120; i++) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env([ridges]))
+      keep()
+      expect(state.groundHold.key).toBeNull()
+      expect(state.groundHold.radius).toBeNaN()
+    }
+    expect(createShipState().groundHold).toEqual({ key: null, radius: NaN })
+  })
+
+  test("near the ground the boosted guard is the gap law's as before: today's boosted floor under 200 m, the unboosted one under 100 m", () => {
+    for (let metres = 30; metres <= 190; metres += 10) {
+      const gap = metres * M
+      const unboosted = lawFloor(law, gap, gap)
+      const before = lawFloor(law, gap, gap, 0, 1)
+      // Held at the gap (flat ground): as before.
+      expect(lawFloor(law, gap, gap, 0, 1, gap)).toBe(before)
+      // Higher ground held: between the two.
+      const higher = lawFloor(law, gap, gap, 0, 1, 0.5 * gap)
+      expect(higher).toBeGreaterThanOrEqual(unboosted)
+      expect(higher).toBeLessThanOrEqual(before)
+      if (metres < 100) expect(lawFloor(law, gap, gap, 0, 1, gap)).toBe(unboosted)
+    }
+  })
+
+  test('the spool moves the boosted floor no faster than ln(EARTH_AIR_BOOST) per unit of spool in log', () => {
+    const ds = 0.05
+    const bound = Math.log(EARTH_AIR_BOOST) * ds * (1 + 1e-9)
+    for (const metres of [50, 200, 1000, 3000, 10000, 40000]) {
+      const gap = metres * M
+      for (const share of [1, 0.5, 0.1]) {
+        for (const base of [0, 4 * KM]) {
+          for (const climb of [0, 0.7]) {
+            for (let s = 0; s < 1 - 1e-9; s += ds) {
+              const a = lawFloor(law, gap, gap + base, climb, s, share * gap)
+              const b = lawFloor(law, gap, gap + base, climb, Math.min(1, s + ds), share * gap)
+              expect(Math.abs(Math.log(b / a))).toBeLessThanOrEqual(bound)
+            }
+          }
+        }
+      }
+    }
+  })
+
+  test('a boosted dive at the cap over flat ground with Flight Assist on rides the cap down: never clamped at RIDE_DOWN_RATE between 975 m and 200 m', () => {
+    const start = new THREE.Vector3(0, RF + 3 * KM, 0)
+    const state = shipAt(start, new THREE.Vector3())
+    state.boost = 1
+    state.groundHold = hold(RF)
+    state.velocity.copy(noseOf(state)).multiplyScalar(speedCap(start, [flat], noseOf(state), 1, state.groundHold))
+    const telemetry = createShipTelemetry()
+    const clamp = Math.exp(-RIDE_DOWN_RATE * FRAME)
+    let checked = 0
+    for (let i = 0; i < 60 * 60; i++) {
+      const gap = state.position.length() - RF
+      const before = state.velocity.length()
+      stepShip(state, input({ throttle: 1, boost: true }), FRAME, env([flat]), telemetry)
+      if (gap < 975 * M && gap > 200 * M) {
+        checked++
+        expect(state.velocity.length() / before).toBeGreaterThan(clamp * (1 + 1e-6))
+        expect(telemetry.speed / telemetry.speedCap).toBeGreaterThan(0.99)
+        expect(telemetry.speed / telemetry.speedCap).toBeLessThanOrEqual(1 + 1e-9)
+      }
+      if (gap < FINE_GROUND_CLEARANCE + 1 * M) break
+    }
+    expect(checked).toBeGreaterThan(10)
+  })
+
+  describe('updateGroundHold', () => {
+    const V = 4 * KM
+    const ALT = 5 * KM
+    const P = 3 * KM
+    // A narrow bump P over the sea centred on arc `at`.
+    const bumpAt = (at: number) => earthOver((lo, hi) => (hi >= at - 10 * M && lo <= at + 10 * M ? P : 0))
+    const position = new THREE.Vector3(0, RF + ALT, 0)
+    const velocity = new THREE.Vector3(V, 0, 0)
+
+    test('takes a peak in the corridor at once, from 1.5 s behind to 3.5 s ahead, and none outside it', () => {
+      for (const [seconds, seen] of [
+        [0, true],
+        [1.5, true],
+        [3.4, true],
+        [-1.4, true],
+        [3.7, false],
+        [4, false],
+        [-1.7, false],
+        [-2, false],
+      ] as const) {
+        const h = hold(NaN, null)
+        updateGroundHold(h, bumpAt(seconds * V), position, velocity, 1, FRAME)
+        expect(h.key).toBe('earth')
+        expect(h.radius).toBe(RF + (seen ? P : 0))
+      }
+      // Rising is instant from a lower hold too.
+      const h = hold(RF)
+      updateGroundHold(h, bumpAt(1.5 * V), position, velocity, 1, FRAME)
+      expect(h.radius).toBe(RF + P)
+    })
+
+    test('falls toward lower ground over HOLD_FALL_TAU', () => {
+      const h = hold(RF + P)
+      updateGroundHold(h, flat, position, velocity, 1, 0.5)
+      expect((h.radius - RF) / P).toBeCloseTo(Math.exp(-0.5 / HOLD_FALL_TAU), 6)
+      for (let i = 0; i < 60 * 30; i++) updateGroundHold(h, flat, position, velocity, 1, FRAME)
+      expect((h.radius - RF) / P).toBeLessThan(1e-3)
+      // A zero or NaN step holds it.
+      const held = h.radius
+      updateGroundHold(h, flat, position, velocity, 1, 0)
+      updateGroundHold(h, flat, position, velocity, 1, NaN)
+      expect(h.radius).toBe(held)
+    })
+
+    test('lets go with the spool at 0, without a body or ground, and starts over on a new body', () => {
+      for (const [body, spool] of [
+        [flat, 0],
+        [flat, NaN],
+        [null, 1],
+        [{ ...flat, ground: undefined }, 1],
+      ] as const) {
+        const h = hold(RF + P)
+        updateGroundHold(h, body, position, velocity, spool, FRAME)
+        expect(h.key).toBeNull()
+        expect(h.radius).toBeNaN()
+      }
+      // Lower ground on another body's hold: taken at once.
+      const h = hold(RF + P, 'mars')
+      updateGroundHold(h, flat, position, velocity, 1, FRAME)
+      expect(h).toEqual({ key: 'earth', radius: RF })
+    })
+
+    test('reads windows of HOLD_REACH_SECONDS of travel, never over HOLD_REACH_ALTITUDES × the altitude', () => {
+      const reaches: number[] = []
+      const spy: Body = { ...flat, ground: (direction, reach = 0) => (reaches.push(reach), flat.ground!(direction, reach)) }
+      updateGroundHold(hold(NaN, null), spy, position, new THREE.Vector3(1 * KM, 0, 0), 1, FRAME)
+      expect(reaches.length).toBe(3)
+      for (const reach of reaches) expect(reach / KM).toBeCloseTo(HOLD_REACH_SECONDS, 9)
+      reaches.length = 0
+      updateGroundHold(hold(NaN, null), spy, new THREE.Vector3(0, RF + 1 * KM, 0), velocity, 1, FRAME)
+      for (const reach of reaches) expect(reach / KM).toBeCloseTo(HOLD_REACH_ALTITUDES, 9)
+    })
+
+    test('a NaN window never wins, and with no ground read at all it holds none', () => {
+      let calls = 0
+      const first: Body = { ...flat, ground: () => (calls++ === 0 ? NaN : RF + P) }
+      const h = hold(NaN, null)
+      updateGroundHold(h, first, position, velocity, 1, FRAME)
+      expect(h.radius).toBe(RF + P)
+      const none: Body = { ...flat, ground: () => NaN }
+      updateGroundHold(h, none, position, velocity, 1, FRAME)
+      expect(h.key).toBeNull()
+      expect(h.radius).toBeNaN()
     })
   })
 })

@@ -167,9 +167,11 @@ export const EARTH_GROUND_SPEED = 0.02
  * 40 km, meeting the plateau ~91 km up, in the air's release band, above
  * which the cap is the gap law's as before. Flying level over mountains it
  * holds, the gap law only guarding the last ~100 m (~180 m at 10 km up).
- * Climbing past 30° hands the floor back to the gap law by 60°,
- * Elite's escape vector: a climb from the sea to space takes seconds, not
- * the minute and a half the air alone would.
+ * Boosted, the guard reads the clearance over the held ground at
+ * EARTH_BOOST_GUARD_RATE instead, meeting this rate's over the last 200 m
+ * (EARTH_BOOST_GUARD_FROM, tides-5lj). Climbing past 30° hands the floor
+ * back to the gap law by 60°, Elite's escape vector: a climb from the sea
+ * to space takes seconds, not the minute and a half the air alone would.
  */
 export const EARTH_GAP_RATE = 2
 /** 50 m/s: the least Earth's floor falls to near the ground. [TUNE] */
@@ -180,20 +182,39 @@ export const EARTH_AIR_SEA_SPEED = 200 * EARTH_UNITS_PER_METRE
 export const EARTH_ESCAPE: readonly [number, number] = [Math.sin(Math.PI / 6), Math.sin(Math.PI / 3)]
 /**
  * What holding boost multiplies the air's floor by (tides-zmw.25): straight
- * down from 100 km to the 30 m stop at full throttle in ~9 s against ~87 s
- * unboosted. It never lifts the floor over the gap law's 2 · gap, the edge
- * of what the tiles stream (tides-zmw.9.29), so near the ground the guard
- * binds as before. From ~40 km up the boosted floor meets the plateau
+ * down from 100 km to the 30 m stop at full throttle in ~8 s against
+ * ~87 s unboosted. The guard under it no longer reads the gap straight
+ * under the ship at 2 · gap, the edge of what the tiles stream, which
+ * swung the boosted cap with every peak and valley up to ~2.7 km of
+ * clearance (tides-5lj): it reads the clearance over the highest ground
+ * around and ahead of the ship (flight.ts updateGroundHold) at
+ * EARTH_BOOST_GUARD_RATE, so 5 km up over 4 km peaks the cap holds at
+ * 4.4 km/s over peak and valley alike, and under EARTH_BOOST_GUARD_FROM it
+ * is exactly the gap law's: over the last ~100 m the boost changes
+ * nothing. The speed blur (speed-blur.ts) covers the coarse tiles that
+ * leaves. From ~40 km up the boosted floor meets the plateau
  * (EARTH_GROUND_SPEED) and goes no higher, but it still raises the cap
  * there until the unboosted air meets the plateau too (60 km up: 6.8 →
  * 43 km/s); only from ~91 km up does it change nothing. [TUNE]
  */
 export const EARTH_AIR_BOOST = 20
+/**
+ * The boosted guard's rate on the held clearance, 1/s (tides-5lj): at the
+ * cap the clearance e-folds every 0.2 s, under RIDE_DOWN_RATE's 6/s, so a
+ * boosted dive rides its cap down. [TUNE]
+ */
+export const EARTH_BOOST_GUARD_RATE = 5
+/** The clearance from which the boosted guard's term outruns the gap law's (200 m). [TUNE] */
+export const EARTH_BOOST_GUARD_FROM = 200 * EARTH_UNITS_PER_METRE
+/** The boosted guard's offset (120 m), so its term meets EARTH_GAP_RATE · c at EARTH_BOOST_GUARD_FROM. */
+export const EARTH_BOOST_GUARD_OFFSET = EARTH_BOOST_GUARD_FROM * (1 - EARTH_GAP_RATE / EARTH_BOOST_GUARD_RATE)
 export const EARTH_AIR_SPEED: Readonly<AirSpeedLaw> = {
   sea: EARTH_AIR_SEA_SPEED,
   scale: (2 * SCALE_HEIGHT_KM) / EARTH_KM_PER_UNIT,
   escape: EARTH_ESCAPE,
   boost: EARTH_AIR_BOOST,
+  guardRate: EARTH_BOOST_GUARD_RATE,
+  guardOffset: EARTH_BOOST_GUARD_OFFSET,
 }
 export const EARTH_GROUND_SPEED_LAW: Readonly<GroundSpeedLaw> = {
   rate: EARTH_GAP_RATE,
