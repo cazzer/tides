@@ -1,6 +1,7 @@
 // True-scale body sizes in ship mode (tides-o39), chosen at load:
-// ?truescale=<a> in the URL, a in [0, MAX_TRUESCALE], 0 (today's sizes) if
-// absent or unreadable, BARE_TRUESCALE for a bare ?truescale.
+// ?truescale=<a> in the URL, a in [0, MAX_TRUESCALE], MAX_TRUESCALE if absent
+// or unreadable (on by default on every device and tier, tides-krh),
+// BARE_TRUESCALE for a bare ?truescale; ?truescale=0 is the old sizes.
 //
 // The user's call: keep every distance as it is (the flight scale's 1000
 // units per AU, the Moon's packed 10 units, the moon systems' log maps) and
@@ -27,13 +28,14 @@
 // (../ship/ship-distances.ts, tides-3ln). Fixing that would unlock 0.8–0.9.
 //
 // Read once at load, like ?relief= (./relief.ts): a change is a reload, so
-// nothing has to rebuild live. A worker's location is its script's, with no
-// query, so it takes 0.
+// nothing has to rebuild live. Outside a browser (the tests) it is 0, so the
+// rest of the suite keeps the scene sizes; a worker's location is its
+// script's, with no query, so one that imported this would take the default.
 
-export const DEFAULT_TRUESCALE = 0
+export const MAX_TRUESCALE = 0.7
+export const DEFAULT_TRUESCALE = MAX_TRUESCALE
 /** A bare ?truescale (no value): halfway, in log space. */
 export const BARE_TRUESCALE = 0.5
-export const MAX_TRUESCALE = 0.7
 
 export function parseTrueScale(search: string): number {
   const raw = new URLSearchParams(search).get('truescale')
@@ -45,12 +47,11 @@ export function parseTrueScale(search: string): number {
 }
 
 /** This page's factor; 0 outside a browser. */
-export const TRUESCALE =
-  typeof location === 'undefined' ? DEFAULT_TRUESCALE : parseTrueScale(location.search)
+export const TRUESCALE = typeof location === 'undefined' ? 0 : parseTrueScale(location.search)
 
 /**
  * A radius `a` of the way from `scene` to `truth` in log space. At a = 0 it
- * is `scene` itself, not a round trip through pow, so the default changes
+ * is `scene` itself, not a round trip through pow, so ?truescale=0 changes
  * nothing.
  */
 export function towardTrue(scene: number, truth: number, a: number = TRUESCALE): number {

@@ -16,12 +16,12 @@
 //     Scaled with Earth it would sit 2.57 units out, inside Earth's
 //     radius-2.95 sphere; true scale only reaches 10 units at ~3900 per AU.
 //
-// The radii are the one exception, and only behind ?truescale=<a>
-// (truescale.ts, tides-o39): flight then slides the Sun's, the Moon's and
-// the planets' radii toward true size at Earth's drawn scale (flightRadii),
-// with every distance above unchanged. Earth's stays put, being true at that
-// scale already. Without the flag (a = 0) the flight radii are the system
-// ones, the same numbers.
+// The radii are the one exception, by true-scale factor a (truescale.ts,
+// tides-o39; 0.7 by default, ?truescale=<a> sets it): flight slides the
+// Sun's, the Moon's and the planets' radii toward true size at Earth's drawn
+// scale (flightRadii), with every distance above unchanged. Earth's stays
+// put, being true at that scale already. At ?truescale=0 the flight radii
+// are the system ones, the same numbers.
 //
 // positionsFor(scale) is the one way in for anything placed by distance from
 // the Sun, or sized by its scale, so the system view and ship mode can't

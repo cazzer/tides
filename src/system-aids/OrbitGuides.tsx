@@ -11,7 +11,7 @@
 //
 // Ship mode shows them too, round the planets at flight spacing, and the fade
 // measures them through the perspective camera. The orbits are relative to
-// the parent at both scales but only the same size without ?truescale
+// the parent at both scales but only the same size at ?truescale=0
 // (moons.ts), so each set is built at its view's scale.
 import { createRef, useEffect, useMemo, type FC, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
