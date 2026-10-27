@@ -19,10 +19,11 @@
 //   Sun's road widens and brightens toward the horizon and at a low Sun as
 //   the real sea's does; under the level horizon (the tilted wave facets
 //   could see a Sun the sea can't) it goes out;
-// - the body (body): the day map's ocean is near black (its deep water a
+// - the body (in normal): the day map's ocean is near black (its deep water a
 //   few thousandths), darker than water's own colour; anything darker than
 //   WATER_DEEP is lifted to it, the lighter shelves, lagoons and silt left
-//   as the map has them;
+//   as the map has them; by day only (SKY_DAY), so the night fill and the
+//   Moon's light find the night sea as dark as they did;
 // - the waves (normal): WATER_WAVES fixed sinusoids in the Earth's frame
 //   (Earth-fixed, so the swell stays put under a moving eye), deep-water
 //   dispersion for their speeds, the longer ones carrying more of the
@@ -41,8 +42,8 @@
 // base's). The frame is the ground haze's (GroundHaze.frame), filled per
 // camera before anything draws; update() runs after it.
 //
-// No varyings. The globe's pieces go in at: the body after
-// specularmap_fragment, the waves just before emissivemap_fragment (after
+// No varyings. The globe's pieces go in at: the body and the waves just
+// before emissivemap_fragment (after
 // every patch's normal_fragment_maps code, so the ground detail's groundUp
 // stays the unbent normal), the glint after lights_phong_pars_fragment
 // (RE_Direct redefined), the sky after lights_fragment_end.
@@ -50,7 +51,7 @@ import * as THREE from 'three'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
-import { SKY_RADIANCE_GLSL } from './skyRadiance'
+import { SKY_DAY, SKY_RADIANCE_GLSL } from './skyRadiance'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
 export const WATER_WAVES = 12
@@ -287,21 +288,21 @@ vec3 waterBody(vec3 c) {
 }
 `
 
-// After the strength is known.
-const BODY = /* glsl */ `
-diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb), specularStrength);
-`
-
 // One wave, unrolled (no arrays indexed in the loop: those spill on some
-// GPUs): its level part at this ground, its fade, its slope.
+// GPUs): its level part at this ground, its fade, its slope. The longer
+// waves' warp crowds its crests by up to waterWarpK (the warp's steepest
+// pull, level), so it fades on its wavenumber plus that: bent crests
+// sharper than the pixel would bring the speckle back. (The TS mirrors fade
+// on the wavelength alone: the warp only ever fades a wave sooner.)
 const wave = (w: WaterWave) => /* glsl */ `
   waterD = ${v3(w.dir)};
   waterDt = waterD - waterUpGround * dot(waterD, waterUpGround);
   waterDt2 = dot(waterDt, waterDt);
-  waterW = 1.0 - smoothstep(${f(WATER_FADE_START)}, ${f(WATER_FADE_END)}, waterFootprint * sqrt(waterDt2) * ${e(1 / w.lambda)});
+  waterW = 1.0 - smoothstep(${f(WATER_FADE_START)}, ${f(WATER_FADE_END)}, waterFootprint * (sqrt(waterDt2) * ${e(w.k)} + waterWarpK) * ${f(1 / TAU)});
   waterS = sin(uWavePhase[${w.index}] + ${e(w.k)} * dot(waterD, waterRay) + waterWarp);
   waterGrad -= (waterW * ${f(w.slope)} * waterS) * waterDt;
   waterWarp += waterW * ${f(WATER_WARP)} * waterS;
+  waterWarpK += waterW * ${e(WATER_WARP * w.k)} * sqrt(waterDt2);
   waterSeen += waterW * ${e(0.5 * w.slope * w.slope)} * waterDt2;`
 
 // After the prelude (waterRay, waterUpGround, waterUpView and
@@ -312,6 +313,10 @@ const wave = (w: WaterWave) => /* glsl */ `
 // running nearly vertical here, which have no slope to speak of).
 const normal = (waves: readonly WaterWave[]) => /* glsl */ `
 waterMss = ${f(WATER_MSS)};
+#if NUM_DIR_LIGHTS > 0
+diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
+  specularStrength * smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, dot(waterUpView, directionalLights[0].direction)));
+#endif
 {
   vec3 waterEye = normalize(vViewPosition);
   float waterSpread = max(length(dFdx(waterEye)), length(dFdy(waterEye)));
@@ -325,7 +330,8 @@ waterMss = ${f(WATER_MSS)};
     float waterDt2;
     float waterW;
     float waterS;
-    float waterWarp = 0.0;${[...waves].sort((a, b) => b.lambda - a.lambda).map(wave).join('')}
+    float waterWarp = 0.0;
+    float waterWarpK = 0.0;${[...waves].sort((a, b) => b.lambda - a.lambda).map(wave).join('')}
     waterMss = max(${f(WATER_MSS)} - waterSeen, ${f(WATER_MSS_FLOOR)});
     normal = normalize(normal - specularStrength * (waterGrad * waterViewToGround));
   }
@@ -337,10 +343,13 @@ waterMss = ${f(WATER_MSS)};
 const SKY = /* glsl */ `
 #if NUM_DIR_LIGHTS > 0
 if (material.specularStrength > 0.0) {
-  float waterCos = 1.0 - saturate(dot(geometryNormal, geometryViewDir));
+  float waterNv = dot(geometryNormal, geometryViewDir);
+  float waterCos = 1.0 - saturate(waterNv);
   float waterCos2 = waterCos * waterCos;
   float waterFresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * waterCos2 * waterCos2 * waterCos;
-  reflectedLight.directSpecular += material.specularStrength * waterFresnel
+  // A facet tilted away from the eye (a wave's back at a grazing view) isn't
+  // seen: without this it took Fresnel 1 and the horizon's sky.
+  reflectedLight.directSpecular += material.specularStrength * waterFresnel * smoothstep(0.0, 0.05, waterNv)
     * skyRadiance(reflect(-geometryViewDir, geometryNormal), waterUpView, directionalLights[0].direction)
     * directionalLights[0].color;
 }
@@ -348,11 +357,11 @@ if (material.specularStrength > 0.0) {
 `
 
 /** The water's GLSL for `waves` (the test checks it; the tiles reuse it):
- * head (globals, after common), body (after the strength), normal (the
- * waves, after a prelude), direct (after lights_phong_pars_fragment), sky
- * (after lights_fragment_end). */
+ * head (globals, after common), normal (the body and the waves, after a
+ * prelude), direct (after lights_phong_pars_fragment), sky (after
+ * lights_fragment_end). */
 export function WATER_GLSL(waves: readonly WaterWave[]) {
-  return { head: head(), body: BODY, normal: normal(waves), direct: DIRECT, sky: SKY }
+  return { head: head(), normal: normal(waves), direct: DIRECT, sky: SKY }
 }
 
 /** Each chain's prelude, run first in the normal piece: the ray, the level
@@ -434,7 +443,6 @@ export function waterPatch(water: Water, frame: GroundHaze['frame'], low: boolea
       Object.assign(shader.uniforms, uniforms)
       let fragment = injectWater(shader.fragmentShader, 'common', WATER_PRELUDE.globe.head + glsl.head)
       fragment = injectWater(fragment, 'lights_phong_pars_fragment', glsl.direct)
-      fragment = injectWater(fragment, 'specularmap_fragment', `#ifdef USE_SPECULARMAP\n${glsl.body}#endif\n`)
       fragment = injectWater(fragment, 'emissivemap_fragment', WATER_PRELUDE.globe.body + glsl.normal, true)
       shader.fragmentShader = injectWater(fragment, 'lights_fragment_end', glsl.sky)
     },

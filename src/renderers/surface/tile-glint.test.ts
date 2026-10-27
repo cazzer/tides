@@ -18,15 +18,15 @@ function glintTile() {
 }
 
 describe('the glint on the tiles (tides-zmw.9.14)', () => {
-  it('lays the globe\'s water on, with all its waves, its body after the strength', () => {
+  it('lays the globe\'s water on, with all its waves and its body', () => {
     const water = WATER_GLSL(WATER_WAVE_TABLE)
     expect(TILE_GLINT_GLSL.head).toContain(water.head)
     expect(TILE_GLINT_GLSL.normal).toBe(WATER_PRELUDE.tiles.body + water.normal)
     expect(TILE_GLINT_GLSL.direct).toBe(water.direct)
     expect(TILE_GLINT_GLSL.sky).toBe(water.sky)
-    const s = TILE_GLINT_GLSL.specular
-    expect(s.indexOf('specularStrength = mix(')).toBeLessThan(s.indexOf(water.body.trim()))
-    expect(s.indexOf(water.body.trim())).toBeLessThan(s.lastIndexOf('}'))
+    // The body comes with the waves (after the strength's anchor, by day).
+    expect(TILE_GLINT_GLSL.specular).not.toContain('waterBody')
+    expect(water.normal).toContain('waterBody(diffuseColor.rgb)')
     // The prelude takes the base's ray, up and frame.
     for (const name of ['surfaceRay', 'surfaceUp', 'uSurfaceViewToGround']) expect(WATER_PRELUDE.tiles.body).toContain(name)
   })

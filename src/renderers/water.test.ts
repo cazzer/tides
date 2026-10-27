@@ -244,8 +244,6 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(at('#include <common>')).toBeLessThan(at('uniform float uWavePhase[12];'))
     expect(at('uniform float uWavePhase[12];')).toBeLessThan(at('void main'))
     expect(at('#include <lights_phong_pars_fragment>')).toBeLessThan(at('#define RE_Direct RE_Direct_Water'))
-    expect(at('#include <specularmap_fragment>')).toBeLessThan(at(glsl.body))
-    expect(at(glsl.body)).toBeLessThan(at('#include <normal_fragment_begin>'))
     // The waves after every patch's normal_fragment_maps code (the ground
     // detail's groundUp stays the unbent normal), before the emissive.
     expect(at('vec3 groundUp = normal;')).toBeLessThan(at(WATER_PRELUDE.globe.body + glsl.normal))
@@ -257,8 +255,11 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= sunLit;'))
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= cloudLit;'))
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= eclipse.x;'))
-    // The body only where the map says how much is water.
-    expect(f).toContain(`#ifdef USE_SPECULARMAP\n${glsl.body}#endif`)
+    // The body after the strength, before the lights take the colour, by
+    // day only (the Sun over this sea's level).
+    expect(at('#include <specularmap_fragment>')).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
+    expect(at('waterBody(diffuseColor.rgb)')).toBeLessThan(at('#include <lights_phong_fragment>'))
+    expect(glsl.normal).toMatch(/waterBody\(diffuseColor\.rgb\),\s*specularStrength \* smoothstep\([^)]*dot\(waterUpView, directionalLights\[0\]\.direction\)\)/)
     // Its uniforms: the phases and the haze's frame, the same objects.
     expect(shader.uniforms.uWavePhase).toBe(water.uniforms.uWavePhase)
     expect(shader.uniforms.uWaterViewToGround).toBe(haze.frame.uGroundHazeViewToLocal)

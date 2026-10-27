@@ -35,7 +35,7 @@
 // pixel, no implicit derivatives) and one of the grid, after the base's
 // anchor (below three's specularmap_fragment and the base's
 // specularStrength = 0), skipped on tiles with no water under them
-// (uTileWet), then the water's body there; the waves just before
+// (uTileWet); the water's body and waves just before
 // emissivemap_fragment (after the library's bump), the water's direct light
 // for Phong's and its sky after lights_fragment_end, each skipped where the
 // strength is 0 (the land, as it was). The water's prelude takes the
@@ -80,8 +80,7 @@ uniform float uTileWet;
 // The library's tiles always bind the grid as the bump map; without one
 // (never on a lit tile) the mask decides alone, as inland. Inside the
 // branch no implicit derivatives: the grid's tap at level 0 (it has no
-// mips, so the same texel texture2D read). The water's body follows its
-// strength, in the branch (a dry tile's colour is the map's).
+// mips, so the same texel texture2D read).
 const SPECULAR = /* glsl */ `
 if (uTileWet > 0.5) {
   float glintMask = surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r;
@@ -92,7 +91,6 @@ if (uTileWet > 0.5) {
   #endif
   specularStrength = mix(smoothstep(${f(GLINT_INLAND[0])}, ${f(GLINT_INLAND[1])}, glintMask),
     smoothstep(${f(GLINT_SEA[0])}, ${f(GLINT_SEA[1])}, glintMask), glintSea);
-  ${WATER.body.trim()}
 }
 `
 
