@@ -19,12 +19,11 @@ import {
   TYPE_TOP_KM,
   liftedThicknessKm,
   typedColumn,
-  typedTopCode,
   typedTopKm,
-  TYPED_LIFT_KM_PER_CODE,
-  TYPED_LIFT_STEPS,
-  TYPED_LOWEST_SHARE,
-  TYPED_ZERO_CODE,
+  typedTops,
+  typedTopsTexel,
+  TYPED_LIFT_SHARES,
+  TYPED_TOPS_KM,
   typeTopKm,
   visibleShares,
 } from './cloud-types'
@@ -341,15 +340,17 @@ describe('lookOf', () => {
   })
 })
 
-describe('typed tops (tides-tvr.4.3)', () => {
+describe('typed tops (tides-tvr.4.3, tides-tvr.4.9)', () => {
   const asShares = (v: ReturnType<typeof visibleShares>): TypeShares => [v.cirrus, v.cumulus, v.alto, v.stratus]
+  /** Half a step of the tops' bytes (km). */
+  const HALF_STEP = TYPED_TOPS_KM / 510
   /** A map texel as the blend writes it: its height r, opacity alpha and
-   * coverage, and its alpha byte for these (unrefined) shares. */
+   * coverage, and its tops' texel for these (unrefined) shares. */
   interface Texel {
     r: number
     alpha: number
     coverage: number
-    code: number
+    tops: [top: number, lift: number, typed: number]
   }
   function texel(
     shares: TypeShares,
@@ -361,18 +362,34 @@ describe('typed tops (tides-tvr.4.3)', () => {
   ): Texel {
     const trust = measured ? coverage : 0
     const refined = refineWithIr(shares, r * MAX_CLOUD_TOP_KM, alpha, trust)
-    return { r, alpha, coverage, code: typedTopCode(refined, confidence, alpha, r, trust) }
+    return { r, alpha, coverage, tops: typedTopsTexel(refined, confidence, alpha, r, trust) }
   }
   /** The typed column the march reads from a texel, km over the ground's
    * base. */
   function column(t: Texel, measured: boolean, grey = 0.3) {
-    const c = typedColumn(t.alpha, t.r, t.coverage, measured, t.code, grey, TERRAIN_DISPLACEMENT)
+    const c = typedColumn(t.alpha, t.r, t.coverage, measured, t.tops, grey, TERRAIN_DISPLACEMENT)
     const km = (y: number) => (y - c.ground) / CLOUD_UNITS_PER_KM
     return { ...c, baseKm: km(c.base), topKm: km(c.top) }
   }
+  /** The untyped column's top (km) for a texel's map channels. */
+  const untypedTopKm = (t: Texel, measured: boolean) =>
+    cloudTopKm(t.r, t.coverage, t.alpha, measured ? 1 : 0) * cloudShape(t.alpha)
+  /** Texels filtered together, every channel alike: weights ws. */
+  const mixTexels = (ts: Texel[], ws: number[]): Texel => {
+    const at = (get: (t: Texel) => number) => ts.reduce((sum, t, i) => sum + ws[i] * get(t), 0)
+    return {
+      r: at((t) => t.r),
+      alpha: at((t) => t.alpha),
+      coverage: at((t) => t.coverage),
+      tops: [at((t) => t.tops[0]), at((t) => t.tops[1]), at((t) => t.tops[2])],
+    }
+  }
+  /** A mip's 2x2 averages of two texels. */
+  const squares = (a: Texel, b: Texel) =>
+    [[a, a, b, b], [a, b, b, b], [a, a, a, b]].map((square) => mixTexels(square, [0.25, 0.25, 0.25, 0.25]))
   const sound = (c: ReturnType<typeof column>, measured: boolean, what: string) => {
     expect(c.base, what).toBeGreaterThanOrEqual(c.ground)
-    expect(c.top, what).toBeGreaterThan(c.base)
+    expect(c.top, what).toBeGreaterThanOrEqual(c.base)
     expect(c.topKm, what).toBeLessThanOrEqual(maxTopKm(measured) + 1e-9)
   }
   const forecast = (shares: TypeShares, alpha: number, confidence = 1) =>
@@ -390,18 +407,74 @@ describe('typed tops (tides-tvr.4.3)', () => {
     [0, 0.3, 0, 0.7],
   ]
   const ALPHAS = [0, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.8, 0.9, 1]
+  const MAP_TEXELS: [r: number, coverage: number, measured: boolean][] = [
+    // Unmeasured textures carry no height nor trust.
+    [0, 0, false],
+    ...[0, 0.05, 0.2, 0.35, 0.5, 0.7, 0.9, 1].flatMap((r) =>
+      [0.3, 1].map((coverage): [number, number, boolean] => [r, coverage, true])
+    ),
+  ]
+
+  test('never draws the untyped column between a deck and a lifted layer beside it (alpha 0.9)', () => {
+    const mixes: [string, (s: number) => TypeShares][] = [
+      ['cirrus and stratus', (s) => [s, 0, 0, 1 - s]],
+      ['alto and stratus', (s) => [0, 0, s, 1 - s]],
+    ]
+    const alpha = 0.9
+    for (const [name, mix] of mixes) {
+      for (const measured of [false, true]) {
+        for (const confidence of [1, 0.5]) {
+          const what = `${name} ${measured ? 'measured' : 'forecast'} ${confidence}`
+          const at = (k: number) =>
+            measured
+              ? texel(mix(k / 100), confidence, alpha, 10 / MAX_CLOUD_TOP_KM, 1, true)
+              : texel(mix(k / 100), confidence, alpha, 0, 0, false)
+          // The one pair of neighbouring shares where the base leaves the
+          // ground.
+          const onsets: [Texel, Texel][] = []
+          for (let k = 0; k < 100; k++) {
+            const [a, b] = [at(k), at(k + 1)]
+            const [ca, cb] = [column(a, measured), column(b, measured)]
+            if (ca.base === ca.ground && cb.base > cb.ground) {
+              onsets.push([a, b])
+            }
+          }
+          expect(onsets, what).toHaveLength(1)
+          const [deck, lifted] = onsets[0]
+          const sides = [column(deck, measured).topKm, column(lifted, measured).topKm]
+          const [low, high] = [Math.min(...sides), Math.max(...sides)]
+          // The untyped column there stands well over both, so drawing it
+          // would fail below. A measured top is the untyped one either side,
+          // so only the base could go wrong there, and the base stays between.
+          if (!measured) expect(untypedTopKm(deck, measured), what).toBeGreaterThan(high + 0.5)
+          const filtered = [
+            ...Array.from({ length: 101 }, (_, i) => mixTexels([deck, lifted], [1 - i / 100, i / 100])),
+            ...squares(deck, lifted),
+          ]
+          for (const t of filtered) {
+            const c = column(t, measured)
+            expect(c.topKm, what).toBeLessThanOrEqual(high + 0.5)
+            expect(c.topKm, what).toBeGreaterThanOrEqual(low - 0.5)
+            expect(c.baseKm, what).toBeLessThanOrEqual(column(lifted, measured).baseKm + 1e-9)
+            sound(c, measured, what)
+          }
+        }
+      }
+    }
+  })
 
   test('leaves the column exactly as untyped with no confidence', () => {
     for (const shares of SHARES) {
       for (const alpha of ALPHAS) {
         for (const [r, coverage, measured] of [[0, 0, false], [0.4, 1, true], [0.8, 0.5, true]] as const) {
           const t = texel(shares, 0, alpha, r, coverage, measured)
-          expect(t.code).toBe(TYPED_ZERO_CODE)
+          expect(t.tops[1]).toBe(0)
+          expect(t.tops[2]).toBe(0)
           for (const grey of [0, 0.3, 1]) {
             const untyped = cloudColumn(alpha, cloudTopKm(r, coverage, alpha, measured ? 1 : 0), grey, TERRAIN_DISPLACEMENT)
-            // Read back a hair off the code, still none.
-            for (const code of [TYPED_ZERO_CODE, TYPED_ZERO_CODE - 0.2, TYPED_ZERO_CODE + 0.2]) {
-              expect(typedColumn(alpha, r, coverage, measured, code, grey, TERRAIN_DISPLACEMENT)).toEqual({
+            // Whatever R and G hold where B says untyped.
+            for (const tops of [t.tops, [0, 0, 0], [1, 1, 0], [0.3, 0.9, 0]] as const) {
+              expect(typedColumn(alpha, r, coverage, measured, tops, grey, TERRAIN_DISPLACEMENT)).toEqual({
                 ground: untyped.base,
                 ...untyped,
               })
@@ -412,21 +485,40 @@ describe('typed tops (tides-tvr.4.3)', () => {
     }
   })
 
-  test('codes a lowered top as its share and a lift in whole codes, within the byte', () => {
+  test('writes the top over the lift, both within the bytes, and B typed or not', () => {
     for (const shares of SHARES) {
-      for (const confidence of [0.3, 1]) {
+      for (const confidence of [0, 0.3, 1]) {
         for (const alpha of ALPHAS) {
-          for (const measured of [false, true]) {
-            const { code } = texel(shares, confidence, alpha, measured ? 0.6 : 0, measured ? 1 : 0, measured)
-            expect(Number.isInteger(code)).toBe(true)
-            expect(code).toBeGreaterThanOrEqual(Math.round(TYPED_ZERO_CODE * TYPED_LOWEST_SHARE))
-            expect(code).toBeLessThanOrEqual(TYPED_ZERO_CODE + TYPED_LIFT_STEPS)
+          for (const [r, coverage, measured] of MAP_TEXELS) {
+            const [top, lift, typed] = texel(shares, confidence, alpha, r, coverage, measured).tops
+            const what = `${shares} ${confidence} ${alpha} ${r} ${coverage}`
+            expect(lift, what).toBeGreaterThanOrEqual(0)
+            expect(top, what).toBeGreaterThanOrEqual(lift)
+            expect(top, what).toBeLessThanOrEqual(1)
+            expect(typed, what).toBe(confidence > 0 ? 1 : 0)
+            for (const channel of [top, lift]) expect(Number.isInteger(channel * 255)).toBe(true)
           }
         }
       }
     }
-    // The lowest lift is a whole code's.
-    expect(TYPED_LIFT_KM_PER_CODE).toBeCloseTo(12 / 127, 12)
+  })
+
+  test('reads back the column it wrote, to within half a byte', () => {
+    for (const shares of SHARES) {
+      for (const confidence of [0.3, 1]) {
+        for (const alpha of ALPHAS) {
+          for (const [r, coverage, measured] of MAP_TEXELS) {
+            const trust = measured ? coverage : 0
+            const refined = refineWithIr(shares, r * MAX_CLOUD_TOP_KM, alpha, trust)
+            const exact = typedTops(refined, confidence, alpha, r, trust)
+            const c = column(texel(shares, confidence, alpha, r, coverage, measured), measured)
+            const what = `${shares} ${confidence} ${alpha} ${r} ${coverage}`
+            expect(Math.abs(c.topKm - exact.topKm), what).toBeLessThanOrEqual(HALF_STEP + 1e-9)
+            expect(Math.abs(c.baseKm - exact.liftKm), what).toBeLessThanOrEqual(HALF_STEP + 1e-9)
+          }
+        }
+      }
+    }
   })
 
   test("lifts thin forecast cirrus to a layer from 6.8 km to 8, well off the ground", () => {
@@ -436,11 +528,14 @@ describe('typed tops (tides-tvr.4.3)', () => {
     for (const alpha of [0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5]) {
       const thin = forecast(asShares(visibleShares(0, 0, 0.6)), alpha)
       expect(thin.baseKm).toBeGreaterThanOrEqual(5)
-      // Its own top, to within half a lift's code.
-      expect(Math.abs(thin.topKm - typedTopKm(CIRRUS, alpha, 0, 0))).toBeLessThanOrEqual(TYPED_LIFT_KM_PER_CODE / 2 + 1e-9)
-      // As deep as the untyped column, or a lifted layer, whichever is less.
+      // Its own top, to within half a byte.
+      expect(Math.abs(thin.topKm - typedTopKm(CIRRUS, alpha, 0, 0))).toBeLessThanOrEqual(HALF_STEP + 1e-9)
+      // As deep as the untyped column, or a lifted layer, whichever is less,
+      // to within the top's and the lift's half bytes.
       const untyped = cloudTopKm(0, 0, alpha, 0) * cloudShape(alpha)
-      expect(thin.topKm - thin.baseKm).toBeCloseTo(Math.min(untyped, liftedThicknessKm(alpha)), 6)
+      expect(Math.abs(thin.topKm - thin.baseKm - Math.min(untyped, liftedThicknessKm(alpha)))).toBeLessThanOrEqual(
+        2 * HALF_STEP + 1e-9
+      )
     }
     // Opaque, off the ground too.
     expect(forecast(CIRRUS, 0.9).baseKm).toBeGreaterThan(4)
@@ -449,7 +544,7 @@ describe('typed tops (tides-tvr.4.3)', () => {
   test('lifts measured opaque cirrus off the ground, to its measured top', () => {
     const c = measuredAt(CIRRUS, 0.9, 10)
     expect(c.baseKm).toBeGreaterThanOrEqual(5)
-    expect(c.topKm).toBeLessThanOrEqual(10 + 1e-9)
+    expect(c.topKm).toBeLessThanOrEqual(10 + HALF_STEP)
     for (const topKm of [9, 9.5, 10]) {
       for (const alpha of [0.7, 0.8, 0.9, 1]) {
         expect(measuredAt(CIRRUS, alpha, topKm).baseKm).toBeGreaterThanOrEqual(5)
@@ -497,14 +592,7 @@ describe('typed tops (tides-tvr.4.3)', () => {
     for (const shares of SHARES) {
       for (const confidence of [0, 0.3, 0.7, 1]) {
         for (const alpha of ALPHAS) {
-          // Unmeasured textures carry no height nor trust.
-          const texels: [r: number, coverage: number, measured: boolean][] = [
-            [0, 0, false],
-            ...[0, 0.05, 0.2, 0.35, 0.5, 0.7, 0.9, 1].flatMap((r) =>
-              [0.3, 1].map((coverage): [number, number, boolean] => [r, coverage, true])
-            ),
-          ]
-          for (const [r, coverage, measured] of texels) {
+          for (const [r, coverage, measured] of MAP_TEXELS) {
             sound(column(texel(shares, confidence, alpha, r, coverage, measured), measured), measured, `${shares} ${alpha} ${r}`)
           }
         }
@@ -513,11 +601,7 @@ describe('typed tops (tides-tvr.4.3)', () => {
     expect(Math.max(...Object.values(TYPE_TOP_KM), typeTopKm('cumulus', 1))).toBeLessThan(maxTopKm(false))
   })
 
-  test('holds up where texels are filtered together, whatever their codes', () => {
-    const mixTexels = (ts: Texel[], ws: number[]): Texel => {
-      const at = (key: keyof Texel) => ts.reduce((sum, t, i) => sum + ws[i] * t[key], 0)
-      return { r: at('r'), alpha: at('alpha'), coverage: at('coverage'), code: at('code') }
-    }
+  test('holds up where texels are filtered together, whatever their tops', () => {
     const clear = (shares: TypeShares, measured: boolean) => texel(shares, 1, 0, 0, measured ? 1 : 0, measured)
     const pairs: [string, Texel, Texel, boolean][] = [
       // A forecast deck's opaque edge (lowered most) beside clear air.
@@ -525,22 +609,19 @@ describe('typed tops (tides-tvr.4.3)', () => {
       ['stratus deck by an untyped gap', texel([0, 0, 0, 1], 1, 1, 0, 0, false), texel(CIRRUS, 0, 0, 0, 0, false), false],
       ['cirrus edge', texel(CIRRUS, 1, 0.3, 0, 0, false), clear(CIRRUS, false), false],
       ['opaque cirrus by clear', texel(CIRRUS, 1, 0.9, 0, 0, false), texel(CIRRUS, 0, 0, 0, 0, false), false],
+      ['opaque cirrus by untyped cloud', texel(CIRRUS, 1, 0.9, 0, 0, false), texel(CIRRUS, 0, 0.9, 0, 0, false), false],
       ['lifted cirrus by a lowered deck', texel(CIRRUS, 1, 0.3, 0, 0, false), texel([0, 0, 0, 1], 1, 1, 0, 0, false), false],
       ['lifted alto by a lowered deck', texel([0, 0, 1, 0], 1, 0.8, 0, 0, false), texel([0, 0, 0, 1], 1, 0.6, 0, 0, false), false],
       ['measured cirrus by deep convection', texel(CIRRUS, 1, 0.9, 10 / 16, 1, true), texel([0, 1, 0, 0], 1, 1, 0.75, 1, true), true],
       ['measured cirrus edge', texel(CIRRUS, 1, 0.4, 13 / 16, 1, true), clear(CIRRUS, true), true],
-      ['the highest lift by opaque cloud', { r: 0, alpha: 0.2, coverage: 0, code: 255 }, texel([0, 0, 0, 1], 1, 1, 0, 0, false), false],
+      ['measured cirrus by untyped cloud', texel(CIRRUS, 1, 0.4, 13 / 16, 1, true), texel(CIRRUS, 0, 1, 0.9, 1, true), true],
+      ['the highest lift by opaque cloud', { r: 0, alpha: 0.2, coverage: 0, tops: [1, 1, 1] }, texel([0, 0, 0, 1], 1, 1, 0, 0, false), false],
     ]
     for (const [name, a, b, measured] of pairs) {
       for (const w of [0, 0.1, 0.25, 0.375, 0.5, 0.625, 0.75, 0.9, 1]) {
         sound(column(mixTexels([a, b], [1 - w, w]), measured), measured, `${name} at ${w}`)
       }
-    }
-    // A mip's 2x2 average of each pair's ends and their mixes.
-    for (const [name, a, b, measured] of pairs) {
-      for (const square of [[a, a, b, b], [a, b, b, b], [a, a, a, b]]) {
-        sound(column(mixTexels(square, [0.25, 0.25, 0.25, 0.25]), measured), measured, `${name} mip`)
-      }
+      for (const t of squares(a, b)) sound(column(t, measured), measured, `${name} mip`)
     }
   })
 
@@ -554,22 +635,23 @@ describe('typed tops (tides-tvr.4.3)', () => {
       for (const alpha of [0.3, 0.5, 0.7, 0.9, 1]) {
         for (const confidence of [0.25, 0.5, 1]) {
           for (const measured of [false, true]) {
-            let prev: (ReturnType<typeof column> & { code: number }) | null = null
+            let prev: ReturnType<typeof column> | null = null
             let steps = 0
             for (let k = 0; k <= 100; k++) {
               const t = measured
                 ? texel(mix(k / 100), confidence, alpha, 10 / MAX_CLOUD_TOP_KM, 1, true)
                 : texel(mix(k / 100), confidence, alpha, 0, 0, false)
-              const c = { ...column(t, measured), code: t.code }
+              const c = column(t, measured)
               const what = `${name} ${alpha} ${confidence} ${measured} at ${k / 100}`
               if (prev) {
                 // A quarter of a km over a hundredth of the shares at most,
-                // give or take the rounding to a lift's code.
-                const most = 0.25 + TYPED_LIFT_KM_PER_CODE / 2
+                // give or take the rounding to a byte.
+                const most = 0.25 + 2 * HALF_STEP
                 expect(Math.abs(c.topKm - prev.topKm), what).toBeLessThanOrEqual(most)
                 if (Math.abs(c.baseKm - prev.baseKm) > most) {
-                  // Only where it goes from the ground to lifted.
-                  expect(prev.code <= TYPED_ZERO_CODE !== c.code <= TYPED_ZERO_CODE, what).toBe(true)
+                  // Only where it goes from the ground to lifted, at the
+                  // onset of the lift.
+                  expect(prev.base === prev.ground !== (c.base === c.ground), what).toBe(true)
                   steps++
                 }
               }
@@ -580,6 +662,7 @@ describe('typed tops (tides-tvr.4.3)', () => {
         }
       }
     }
+    expect(TYPED_LIFT_SHARES[0]).toBe(0.5)
   })
 
   test('keeps a lowered top on the ground, and lowers a share of it at most', () => {
@@ -589,7 +672,7 @@ describe('typed tops (tides-tvr.4.3)', () => {
     expect(c.topKm).toBeCloseTo(typeTopKm('cumulus', 0.6) * typeShape('cumulus', 0.6), 1)
     // A thin edge whose own top would be taller stays as it was.
     const edge = forecast([0, 0, 0, 1], 0.1)
-    expect(edge.topKm).toBeCloseTo(cloudTopKm(0, 0, 0.1, 0) * cloudShape(0.1), 9)
+    expect(Math.abs(edge.topKm - cloudTopKm(0, 0, 0.1, 0) * cloudShape(0.1))).toBeLessThanOrEqual(HALF_STEP + 1e-9)
     expect(typedTopKm([1, 0, 0, 0], 0.5, 0, 0)).toBeCloseTo(TYPE_TOP_KM.cirrus * typeShape('cirrus', 0.5), 12)
   })
 })

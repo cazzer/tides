@@ -240,7 +240,7 @@ export default function EarthRenderer({
       cloudsTexture,
       wallMs
     )
-    clouds.setMap(out?.texture ?? cloudsTexture, out?.measured ?? false, out?.typed ? out.typeTexture : null)
+    clouds.setMap(out?.texture ?? cloudsTexture, out?.measured ?? false, out?.typed ? { grid: out.typeTexture, tops: out.topsTexture } : null)
   })
 
   return (
