@@ -1,10 +1,11 @@
-// The sun glint on the streamed tiles (tides-zmw.9.14): the globe's Phong
-// specular, its strength from the globe's water mask sharpened at the coast
-// by the tile's own elevation.
+// The water on the streamed tiles (tides-zmw.9.14, tides-07z): the globe's
+// water (../water.ts), its strength from the globe's water mask sharpened at
+// the coast by the tile's own elevation.
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { BLINN_PHONG_DIRECT, GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, GLINT_SUN, glintStrength, regionHasWater, tileGlint, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
-import { createTileComposer, GLOBE_SHININESS, GLOBE_SPECULAR, SURFACE_ANCHORS, type TerrainPhongMaterial } from './tile-material'
+import { WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
+import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
+import { createTileComposer, SURFACE_ANCHORS, type TerrainPhongMaterial } from './tile-material'
 import { compiled, fakeLink, tileMesh } from './tile-test-fixtures'
 
 function glintTile() {
@@ -17,17 +18,22 @@ function glintTile() {
 }
 
 describe('the glint on the tiles (tides-zmw.9.14)', () => {
-  it('shades with the globe\'s Phong specular colour and shininess', () => {
-    const { material } = glintTile()
-    expect(material.specular.getHex()).toBe(GLOBE_SPECULAR)
-    expect(material.shininess).toBe(GLOBE_SHININESS)
-    expect(GLOBE_SPECULAR).toBe(new THREE.MeshPhongMaterial().specular.getHex()) // the globe leaves three's default
-    expect(GLOBE_SHININESS).toBe(100) // EarthRenderer's shininess={100}
+  it('lays the globe\'s water on, with all its waves, its body after the strength', () => {
+    const water = WATER_GLSL(WATER_WAVE_TABLE)
+    expect(TILE_GLINT_GLSL.head).toContain(water.head)
+    expect(TILE_GLINT_GLSL.normal).toBe(WATER_PRELUDE.tiles.body + water.normal)
+    expect(TILE_GLINT_GLSL.direct).toBe(water.direct)
+    expect(TILE_GLINT_GLSL.sky).toBe(water.sky)
+    const s = TILE_GLINT_GLSL.specular
+    expect(s.indexOf('specularStrength = mix(')).toBeLessThan(s.indexOf(water.body.trim()))
+    expect(s.indexOf(water.body.trim())).toBeLessThan(s.lastIndexOf('}'))
+    // The prelude takes the base's ray, up and frame.
+    for (const name of ['surfaceRay', 'surfaceUp', 'uSurfaceViewToGround']) expect(WATER_PRELUDE.tiles.body).toContain(name)
   })
 
   it('sets the strength after the base zeroes it, from the globe\'s mask through a uniform and the tile\'s grid', () => {
     const { link, composer, material, shader } = glintTile()
-    expect(composer.key).toBe('surface-tile:surface-base+glint-surface')
+    expect(composer.key).toBe('surface-tile:surface-base+water-surface')
     const f = shader.fragmentShader
     expect(f.indexOf('specularStrength = 0.0;')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.specular))
     expect(f.indexOf(SURFACE_ANCHORS.specular)).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.specular))
@@ -43,23 +49,22 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(f.split('varying ').length).toBe(THREE.ShaderLib.phong.fragmentShader.split('varying ').length)
   })
 
-  it('skips Phong\'s specular term only where the strength is 0, on three\'s own direct light', () => {
-    // A three upgrade that changes RE_Direct_BlinnPhong fails here, not on screen.
-    expect(THREE.ShaderChunk.lights_phong_pars_fragment).toContain(BLINN_PHONG_DIRECT)
-    const gated = TILE_GLINT_GLSL.direct
-    expect(gated).toContain('if ( material.specularStrength > 0.0 ) reflectedLight.directSpecular += irradiance * BRDF_BlinnPhong(')
-    expect(gated.replace('RE_Direct_TileGlint(', 'RE_Direct_BlinnPhong(').replace('\tif ( material.specularStrength > 0.0 ) ', '\t')).toContain(BLINN_PHONG_DIRECT)
+  it('replaces Phong\'s direct light with the water\'s, and lands the waves and the sky in order', () => {
     const { shader } = glintTile()
     const f = shader.fragmentShader
-    expect(f.indexOf('#include <lights_phong_pars_fragment>')).toBeLessThan(f.indexOf('#define RE_Direct RE_Direct_TileGlint'))
-    expect(f.indexOf('#define RE_Direct RE_Direct_TileGlint')).toBeLessThan(f.indexOf('#include <lights_fragment_begin>'))
+    expect(f.indexOf('#include <lights_phong_pars_fragment>')).toBeLessThan(f.indexOf('#define RE_Direct RE_Direct_Water'))
+    expect(f.indexOf('#define RE_Direct RE_Direct_Water')).toBeLessThan(f.indexOf('#include <lights_fragment_begin>'))
+    // The waves after the library's bump (normal_fragment_maps), before the emissive.
+    expect(f.indexOf('#include <normal_fragment_maps>')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.normal))
+    expect(f.indexOf(TILE_GLINT_GLSL.normal)).toBeLessThan(f.indexOf('#include <emissivemap_fragment>'))
+    expect(f.indexOf('#include <lights_fragment_end>')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.sky))
   })
 
-  it('skips the taps on the Sun\'s far side and on dry tiles, and binds the link\'s Sun', () => {
-    expect(GLINT_SUN).toBe(-0.02)
-    expect(TILE_GLINT_GLSL.specular).toContain('if (uTileWet > 0.5 && dot(surfaceUp, uTileGlintSun) > -0.020000) {')
+  it('binds the globe\'s wave phases, and no longer the Sun', () => {
     const { link, shader } = glintTile()
-    expect(shader.uniforms.uTileGlintSun).toBe(link.sunDir)
+    expect(shader.uniforms.uWavePhase).toBe(link.water.uniforms.uWavePhase)
+    expect(shader.uniforms.uTileGlintSun).toBeUndefined()
+    expect(TILE_GLINT_GLSL.specular).toContain('if (uTileWet > 0.5) {')
     // No region (or no mask loaded yet): wet, the glint as without the flag.
     expect(shader.uniforms.uTileWet.value).toBe(1)
   })

@@ -7,12 +7,14 @@
 // plugin wraps the material at load-model), in this order:
 // 1. Phong. The library's TerrainLambertMaterial becomes a
 //    TerrainPhongMaterial carrying its maps and scales and the library's own
-//    bump chunk (its onBeforeCompile), with the globe's specular colour and
-//    shininess and specularStrength 0: in three r180 Lambert's diffuse is
-//    Phong's (the same BRDF_Lambert, per fragment), so with no specular the
-//    output is the same (headless: within 1/255), and the features that
-//    multiply reflectedLight.directSpecular (eclipse, clouds, shadow) or set
-//    the strength (the glint) mean on the tiles what they mean on the globe.
+//    bump chunk (its onBeforeCompile), with specularStrength 0: in three
+//    r180 Lambert's diffuse is Phong's (the same BRDF_Lambert, per
+//    fragment), so with no specular the output is the same (headless:
+//    within 1/255), and the features that multiply
+//    reflectedLight.directSpecular (eclipse, clouds, shadow) or set the
+//    strength (the glint, which brings the globe's water, ../water.ts, and
+//    its own direct light: Phong's specular colour and shininess go unread)
+//    mean on the tiles what they mean on the globe.
 //    TilesRenderer gathers the materials and textures it disposes after
 //    processTileModel, so the swapped-in one is disposed with the tile; the
 //    Lambert, never drawn, is disposed here.
@@ -121,11 +123,6 @@ export interface TileFeatureSlot {
   name: string
   adapter: TileAdapter
 }
-
-/** The globe ground's Phong specular colour (three's default) and
- * shininess (EarthRenderer), for the glint. */
-export const GLOBE_SPECULAR = 0x111111
-export const GLOBE_SHININESS = 100
 
 /**
  * The tileset's ECEF (Z through the north pole, X through lon 0, Y through
@@ -318,7 +315,7 @@ export function basePatch(frame: GlobeLink['haze']['frame'] | null): MaterialPat
 
 /**
  * The library's tile material as Phong (header, step 1): its maps, scales
- * and bump chunk, the globe's specular colour and shininess, no emissive.
+ * and bump chunk, no emissive.
  */
 export class TerrainPhongMaterial extends THREE.MeshPhongMaterial {
   readonly isTerrainPhongMaterial = true
@@ -328,8 +325,6 @@ export class TerrainPhongMaterial extends THREE.MeshPhongMaterial {
     // type stays MeshPhongMaterial: three picks the shader by it.
     super()
     this.emissive.setScalar(0)
-    this.specular.setHex(GLOBE_SPECULAR)
-    this.shininess = GLOBE_SHININESS
     if (!terrain) return
     this.color.copy(terrain.color)
     this.map = terrain.map
