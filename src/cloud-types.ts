@@ -357,13 +357,14 @@ export function liftedThicknessKm(alpha: number): number {
   return LIFTED_THICKNESS_KM[0] + LIFTED_THICKNESS_KM[1] * alpha
 }
 
-/** The share of cirrus and alto over which a column goes from standing on
- * the ground to lifted. Its share itself lifted it no further than that
- * share of the way, which over a mixed column left a slab hung half way:
- * an opaque 12 km top that the infrared reads as mostly towering cumulus
- * (refineWithIr()), and a 10 km cirrus top a sixth of which it reads so,
- * came out 2.7 to 5.9 km and 5.5 to 8.7 km. */
-export const TYPED_LIFT_SHARES = [0.3, 0.7] as const
+/** The share of cirrus and alto from which a column is lifted ([0]), and
+ * over which ([0] to [1]) a typed top taller than the untyped one rises to
+ * it: on the ground it could stand no taller, so from [0] on the top is
+ * the same either side, and only the base steps up. Lifted by the share
+ * itself, a mixed column was a slab hung half way (an opaque 12 km top the
+ * infrared reads as mostly towering cumulus, refineWithIr(), 2.7 to 5.9
+ * km), and at the onset its top spiked and dipped by 2 km. */
+export const TYPED_LIFT_SHARES = [0.5, 1] as const
 
 /** The alpha's code for no change. */
 export const TYPED_ZERO_CODE = 128
@@ -381,16 +382,27 @@ export const TYPED_LIFT_EASE_KM = 0.5
  * change (the byte, as a float, lands a hair off it). */
 export const TYPED_ZERO_SLACK = 0.25
 
+/** The depth (km) of a column lifted `liftKm`, as the march reads it
+ * (typedColumn()): the untyped column's, easing to a lifted layer's over
+ * TYPED_LIFT_EASE_KM. */
+function liftedLayerKm(untyped: number, alpha: number, liftKm: number): number {
+  const ease = smoothstep(0, TYPED_LIFT_EASE_KM, liftKm)
+  return untyped + ease * (Math.min(untyped, liftedThicknessKm(alpha)) - untyped)
+}
+
 /**
  * The alpha byte the blend writes for cloud with these shares (refined by
  * the infrared, refineWithIr()) and confidence, at opacity alpha, over a
  * map texel's measured height r trusted trust (as typedTopKm()), as its
- * 8-bit target rounds it. Where it is mostly cirrus and alto
- * (TYPED_LIFT_SHARES), they lift it, confidence of the way, as far as the
- * typed top stands over a lifted layer's depth: a forecast frame's thin cirrus from 6.8 km to 8, a measured
- * opaque one to its measured top. Short of a code's lift, the typed top is
- * the untyped one's share, confidence of the way, and no higher.
- * TYPED_ZERO_CODE exactly with no confidence.
+ * 8-bit target rounds it. Its top is the typed one, confidence of the way
+ * from the untyped one. Where it is mostly cirrus and alto
+ * (TYPED_LIFT_SHARES), the column is lifted so that a layer reaches that
+ * top: a forecast frame's thin cirrus from 6.8 km to 8, a measured opaque
+ * one to its measured top. Else, and where a lift would be too short for
+ * the march to read its layer as the depth it is lifted for (to within a
+ * code), on the ground, its top that share of the untyped one's, and no
+ * higher. Either way the top is continuous over the shares; only the base
+ * steps. TYPED_ZERO_CODE exactly with no confidence.
  */
 export function typedTopCode(
   shares: TypeShares,
@@ -401,15 +413,19 @@ export function typedTopCode(
 ): number {
   if (!(confidence > 0)) return TYPED_ZERO_CODE
   const untyped = cloudTopKm(r, trust, alpha, 1) * cloudShape(alpha)
-  const typed = typedTopKm(shares, alpha, r, trust)
-  const layer = Math.min(untyped, liftedThicknessKm(alpha))
-  const lifting = smoothstep(TYPED_LIFT_SHARES[0], TYPED_LIFT_SHARES[1], shares[0] + shares[2])
-  const lift = confidence * lifting * Math.max(typed - layer, 0)
-  if (lift >= TYPED_LIFT_KM_PER_CODE) {
-    return Math.round(TYPED_ZERO_CODE + Math.min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS))
+  const typed = untyped + confidence * (typedTopKm(shares, alpha, r, trust) - untyped)
+  const share = shares[0] + shares[2]
+  if (share >= TYPED_LIFT_SHARES[0]) {
+    const rise = smoothstep(TYPED_LIFT_SHARES[0], TYPED_LIFT_SHARES[1], share)
+    const top = Math.min(typed, untyped) + rise * Math.max(typed - untyped, 0)
+    const layer = Math.min(untyped, liftedThicknessKm(alpha))
+    const lift = top - layer
+    const misread = liftedLayerKm(untyped, alpha, lift) - layer
+    if (lift >= TYPED_LIFT_KM_PER_CODE && misread <= TYPED_LIFT_KM_PER_CODE) {
+      return Math.round(TYPED_ZERO_CODE + Math.min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS))
+    }
   }
-  const ratio = typed / Math.max(untyped, 1e-6)
-  const keep = Math.min(Math.max(1 + confidence * (ratio - 1), TYPED_LOWEST_SHARE), 1)
+  const keep = Math.min(Math.max(typed / Math.max(untyped, 1e-6), TYPED_LOWEST_SHARE), 1)
   return Math.round(TYPED_ZERO_CODE * keep)
 }
 
@@ -439,9 +455,7 @@ export function typedColumn(
     const keep = steps > -TYPED_ZERO_SLACK ? 1 : Math.max(code / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE)
     return { ground, base: ground, top: ground + CLOUD_UNITS_PER_KM * topKm * shape * keep }
   }
-  const untyped = topKm * shape
-  const ease = smoothstep(0, TYPED_LIFT_EASE_KM, steps * TYPED_LIFT_KM_PER_CODE)
-  const layer = untyped + ease * (Math.min(untyped, liftedThicknessKm(alpha)) - untyped)
+  const layer = liftedLayerKm(topKm * shape, alpha, steps * TYPED_LIFT_KM_PER_CODE)
   const lift = Math.min(steps * TYPED_LIFT_KM_PER_CODE, maxTopKm(measured) - layer)
   const base = ground + CLOUD_UNITS_PER_KM * lift
   return { ground, base, top: base + CLOUD_UNITS_PER_KM * layer }

@@ -544,6 +544,44 @@ describe('typed tops (tides-tvr.4.3)', () => {
     }
   })
 
+  test('keeps the top continuous over the shares, only the base stepping where a column is lifted', () => {
+    const mixes: [string, (s: number) => TypeShares][] = [
+      ['cirrus and stratus', (s) => [s, 0, 0, 1 - s]],
+      ['alto and stratus', (s) => [0, 0, s, 1 - s]],
+      ['cirrus and cumulus', (s) => [s, 1 - s, 0, 0]],
+    ]
+    for (const [name, mix] of mixes) {
+      for (const alpha of [0.3, 0.5, 0.7, 0.9, 1]) {
+        for (const confidence of [0.25, 0.5, 1]) {
+          for (const measured of [false, true]) {
+            let prev: (ReturnType<typeof column> & { code: number }) | null = null
+            let steps = 0
+            for (let k = 0; k <= 100; k++) {
+              const t = measured
+                ? texel(mix(k / 100), confidence, alpha, 10 / MAX_CLOUD_TOP_KM, 1, true)
+                : texel(mix(k / 100), confidence, alpha, 0, 0, false)
+              const c = { ...column(t, measured), code: t.code }
+              const what = `${name} ${alpha} ${confidence} ${measured} at ${k / 100}`
+              if (prev) {
+                // A quarter of a km over a hundredth of the shares at most,
+                // give or take the rounding to a lift's code.
+                const most = 0.25 + TYPED_LIFT_KM_PER_CODE / 2
+                expect(Math.abs(c.topKm - prev.topKm), what).toBeLessThanOrEqual(most)
+                if (Math.abs(c.baseKm - prev.baseKm) > most) {
+                  // Only where it goes from the ground to lifted.
+                  expect(prev.code <= TYPED_ZERO_CODE !== c.code <= TYPED_ZERO_CODE, what).toBe(true)
+                  steps++
+                }
+              }
+              prev = c
+            }
+            expect(steps, `${name} ${alpha} ${confidence} ${measured}`).toBeLessThanOrEqual(1)
+          }
+        }
+      }
+    }
+  })
+
   test('keeps a lowered top on the ground, and lowers a share of it at most', () => {
     // Opaque cumulus heaps, untyped 8.5 km tall.
     const c = forecast([0, 1, 0, 0], 0.6)

@@ -156,8 +156,10 @@ const kinds = (value: (kind: CloudKind) => string) => `vec4(${CLOUD_KINDS.map(va
 // static ones'. The untyped top is cloudColumn()'s, and each kind's as
 // ../cloud-types.ts has it, its top where unmeasured mixed toward the
 // measured one by the trust and shaped by its opacity. Mostly cirrus and
-// alto (R and B), the column is lifted; short of a code's lift, the top is
-// lowered, never raised, so that it stays on the ground.
+// alto (R and B), the column is lifted to a layer reaching the typed top;
+// else, or where the march would misread the layer of so short a lift, it
+// stands on the ground, lowered and never raised: the top is continuous
+// either side of the onset, and only the base steps.
 export const CLOUD_TYPED_TOP_GLSL = /* glsl */ `
 ${TYPED_CODE_GLSL}
 // Each kind's shape (typeShape()): the share of its height it keeps at no
@@ -175,13 +177,19 @@ float cloudTypedCode(vec4 t, vec3 c) {
   vec4 km = mix(${kinds((k) => (k === 'cumulus' ? `${f(CUMULUS_TOP_KM[0])} + ${f(CUMULUS_TOP_KM[1])} * g * g` : f(TYPE_TOP_KM[k])))},
     vec4(measured), c.b);
   vec4 shape = TYPE_SHAPE_FLOOR + (1.0 - TYPE_SHAPE_FLOOR) * smoothstep(TYPE_SHAPE_FROM, TYPE_SHAPE_TO, vec4(g));
-  float typed = dot(s, km * shape);
-  float lifting = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, s.x + s.z);
-  float lift = t.a * lifting * max(typed - min(untyped, LIFTED_THICKNESS(g)), 0.0);
-  if (lift >= TYPED_LIFT_KM_PER_CODE) {
-    return (TYPED_ZERO_CODE + min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS)) / 255.0;
+  float typed = mix(untyped, dot(s, km * shape), t.a);
+  float share = s.x + s.z;
+  if (share >= ${f(TYPED_LIFT_SHARES[0])}) {
+    float rise = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, share);
+    float layer = min(untyped, LIFTED_THICKNESS(g));
+    float lift = min(typed, untyped) + rise * max(typed - untyped, 0.0) - layer;
+    // As the march would read the layer lifted that far (cloudColumn()).
+    float misread = mix(untyped, layer, smoothstep(0.0, TYPED_LIFT_EASE_KM, lift)) - layer;
+    if (lift >= TYPED_LIFT_KM_PER_CODE && misread <= TYPED_LIFT_KM_PER_CODE) {
+      return (TYPED_ZERO_CODE + min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS)) / 255.0;
+    }
   }
-  float keep = clamp(mix(1.0, typed / max(untyped, 1e-6), t.a), TYPED_LOWEST_SHARE, 1.0);
+  float keep = clamp(typed / max(untyped, 1e-6), TYPED_LOWEST_SHARE, 1.0);
   return TYPED_ZERO_CODE * keep / 255.0;
 }
 `

@@ -1469,7 +1469,9 @@ void main() {
     // step the ray's height over the top and under the base are taken
     // linear, as the march from inside takes them (cloudSpan()), so a layer
     // thinner than a step is still met where the ray is between the two,
-    // and down through a top it is the same secant as untyped.
+    // and down through a top it is the same secant as untyped. A grazing ray
+    // near the limb that rises into a lifted layer's base is shaded as a
+    // top: rare, and let be.
     vec4 colq = cloudColumn(cloudUv(q / r), lodq, terrain);
     float gap = r - uSeaLevel - colq.z;
     float under = colq.y - (r - uSeaLevel);

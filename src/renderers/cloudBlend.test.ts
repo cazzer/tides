@@ -200,15 +200,20 @@ describe('typed tops in the blend (tides-tvr.4.3)', () => {
     // No confidence, no change; the shares refined as at the hit.
     const fn = src.slice(src.indexOf('float cloudTypedCode('))
     expect(fn.indexOf('if (t.a <= 0.0) return TYPED_ZERO_CODE / 255.0;')).toBeLessThan(fn.indexOf('cloudTypeShares(t, c)'))
-    // typedTopCode(): lifted where mostly cirrus and alto (R and B), by a
-    // whole code at least; else lowered by a share, never raised.
+    // typedTopCode(): the typed top, confidence of the way; lifted to it
+    // where mostly cirrus and alto (R and B) and the march reads the layer
+    // as lifted for; else lowered by a share, never raised.
     for (const line of [
-      'float typed = dot(s, km * shape);',
-      `float lifting = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, s.x + s.z);`,
-      'float lift = t.a * lifting * max(typed - min(untyped, LIFTED_THICKNESS(g)), 0.0);',
-      'if (lift >= TYPED_LIFT_KM_PER_CODE) {',
+      'float typed = mix(untyped, dot(s, km * shape), t.a);',
+      'float share = s.x + s.z;',
+      `if (share >= ${f(TYPED_LIFT_SHARES[0])}) {`,
+      `float rise = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, share);`,
+      'float layer = min(untyped, LIFTED_THICKNESS(g));',
+      'float lift = min(typed, untyped) + rise * max(typed - untyped, 0.0) - layer;',
+      'float misread = mix(untyped, layer, smoothstep(0.0, TYPED_LIFT_EASE_KM, lift)) - layer;',
+      'if (lift >= TYPED_LIFT_KM_PER_CODE && misread <= TYPED_LIFT_KM_PER_CODE) {',
       'return (TYPED_ZERO_CODE + min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS)) / 255.0;',
-      'float keep = clamp(mix(1.0, typed / max(untyped, 1e-6), t.a), TYPED_LOWEST_SHARE, 1.0);',
+      'float keep = clamp(typed / max(untyped, 1e-6), TYPED_LOWEST_SHARE, 1.0);',
       'return TYPED_ZERO_CODE * keep / 255.0;',
     ]) {
       expect(fn).toContain(line)
