@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import { IconChevronRight, IconQuestionMark, IconX } from '@tabler/icons-react'
-import { glassButton, glassFloatingButton, glassPanel, PHONE } from '../glass-styles'
+import { glassButton, glassFloatingButton, glassPanel, hudGlyphButton, PHONE } from '../glass-styles'
 import { BLUE_ZONE, speedFraction, turnRateMultiplier } from './flight'
 import { shipInput, THROTTLE_MAX, THROTTLE_MIN, throttlePercent } from './ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
@@ -19,6 +19,7 @@ import { prefersReducedMotion } from './reduced-motion'
 import { SURFACE_TILES_ON } from '../surface'
 import { BodyMarkers } from './BodyMarkers'
 import { ShipControlsDialog } from './ShipControlsDialog'
+import { ShipSoundButton } from './audio/ShipSoundButton'
 
 // Text redraws this often; the throttle bar follows every frame. Faster text
 // is unreadable and flickers in the last digit.
@@ -481,6 +482,7 @@ export function ShipHud() {
               </ClearButton>
             </TargetLine>
           </SubjectCell>
+          <ShipSoundButton />
         </Row>
       </Strip>
       <VisuallyHidden
@@ -869,18 +871,7 @@ const Switch = styled.span`
 `
 
 const ClearButton = styled.button`
-  ${glassButton}
-  width: 24px;
-  height: 24px;
-  margin: -4px 0;
-  position: relative;
-
-  /* A 40px tap target around the small glyph. */
-  &::before {
-    content: '';
-    position: absolute;
-    inset: -8px;
-  }
+  ${hudGlyphButton}
 
   /* Only a locked target can be cleared; "Ahead" has nothing to clear. */
   &[hidden] {

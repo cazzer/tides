@@ -31,6 +31,30 @@ export const glassButton = `
   }
 `
 
+/** A small glyph button in a row of the ship HUD, with a 40px tap target. */
+export const hudGlyphButton = `
+  ${glassButton}
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+  }
+
+  /* Touch keeps :hover after a tap. */
+  @media (hover: none) {
+    &:hover {
+      background-color: transparent;
+      color: rgba(255, 255, 255, 0.78);
+    }
+  }
+`
+
 export const glassPanel = `
   background-color: rgba(30, 30, 34, 0.55);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
