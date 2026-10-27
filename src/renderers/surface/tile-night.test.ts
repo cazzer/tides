@@ -95,7 +95,7 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     for (const k of ['r', 'g', 'b'] as const) expect(got[k]).toBeCloseTo(expected[k], 9)
   })
 
-  it('lays the map, VIIRS, then the mask after the emissive chunk, as the globe\'s patches leave them', () => {
+  it('lays the map, VIIRS, the fade, then the mask after the emissive chunk, as the globe\'s patches leave them', () => {
     const link = nightLink(8)
     const { composer, shader } = tileShader(link)
     expect(composer.key).toBe('surface-tile:surface-base+night-surface-flight-gibs8')
@@ -106,7 +106,7 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     expect(at(TILE_NIGHT_GLSL.gateOpen)).toBe(1)
     expect(at(TILE_NIGHT_GLSL.cityBody)).toBeGreaterThan(at(TILE_NIGHT_GLSL.gateOpen))
     expect(at(TILE_NIGHT_GLSL.gibsBody)).toBeGreaterThan(at(TILE_NIGHT_GLSL.cityBody))
-    expect(at(TILE_NIGHT_GLSL.gibsBody + TILE_NIGHT_GLSL.gateClose)).toBeGreaterThan(-1)
+    expect(at(TILE_NIGHT_GLSL.gibsBody + TILE_NIGHT_GLSL.fadeBody + TILE_NIGHT_GLSL.gateClose)).toBeGreaterThan(-1)
     expect(at(TILE_NIGHT_GLSL.maskBody)).toBeGreaterThan(at(TILE_NIGHT_GLSL.gibsBody))
     expect(at(TILE_NIGHT_GLSL.maskBody)).toBeLessThan(at('#include'))
     // The globe's own order: compose its patches on a Phong shader and
@@ -116,7 +116,8 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     const globeShader = phongShader()
     globe.onBeforeCompile(globeShader, {} as THREE.WebGLRenderer)
     const g = after(globeShader.fragmentShader, 'emissivemap_fragment')
-    expect(g.indexOf(GIBS_NIGHT_GLSL.emissiveBody)).toBeLessThan(g.indexOf(NIGHT_LIGHTS_GLSL.fragmentBody))
+    expect(g.indexOf(GIBS_NIGHT_GLSL.emissiveBody)).toBeLessThan(g.indexOf(NIGHT_LIGHTS_GLSL.fadeBody))
+    expect(g.indexOf(NIGHT_LIGHTS_GLSL.fadeBody + NIGHT_LIGHTS_GLSL.fragmentBody)).toBeGreaterThan(-1)
     // The fill after the lights, before the emissive's use.
     const light = after(f, 'lights_fragment_end')
     expect(light.indexOf(TILE_NIGHT_GLSL.flightLight)).toBe(1)
@@ -145,7 +146,7 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     expect(f.split('varying ').length).toBe(THREE.ShaderLib.phong.fragmentShader.split('varying ').length)
     // Every name the night's code reads is declared above main.
     const main = f.indexOf('void main')
-    for (const decl of ['uniform sampler2D uTileNightMap;', 'uniform vec3 uTileCityLights;', 'uniform vec3 uNightLightsSun;', 'uniform vec3 uNightFill;', 'uniform sampler2D uGibsNight;']) {
+    for (const decl of ['uniform sampler2D uTileNightMap;', 'uniform vec3 uTileCityLights;', 'uniform vec3 uNightLightsSun;', 'uniform vec3 uNightFill;', 'uniform sampler2D uGibsNight;', 'float gibsNightCover = 0.0;', NIGHT_LIGHTS_GLSL.fadeHead]) {
       expect(f.indexOf(decl), decl).toBeGreaterThan(-1)
       expect(f.indexOf(decl), decl).toBeLessThan(main)
     }
@@ -159,5 +160,37 @@ describe('the night on the tiles (tides-zmw.9.13)', () => {
     expect(f).toContain(TILE_NIGHT_GLSL.maskBody)
     expect(f).not.toContain('uNightFill')
     expect(f).not.toContain('uGibsNight')
+    expect(f).not.toMatch(/nightLightsFade|nightFade/)
+  })
+
+  // tides-zmw.24: the globe's fade, on the base's analytic derivatives.
+  it("fades the lights by the globe's function, never differencing", () => {
+    expect(TILE_NIGHT_GLSL.fadeHead).toBe(NIGHT_LIGHTS_GLSL.fadeHead)
+    expect(TILE_NIGHT_GLSL.fadeBody).toBe(
+      `{${NIGHT_LIGHTS_GLSL.fadeCall
+        .replace('nightFadeDx', 'surfaceGlobeDx')
+        .replace('nightFadeDy', 'surfaceGlobeDy')
+        .replace('vEmissiveMapUv', 'surfaceGlobeUv')
+        .replace('textureSize(emissiveMap, 0)', 'textureSize(uTileNightMap, 0)')}}\n`
+    )
+    expect(TILE_NIGHT_GLSL.fadeBody).toContain(
+      'nightLightsFade(surfaceGlobeDx, surfaceGlobeDy, surfaceGlobeUv.y,\n    float(textureSize(uTileNightMap, 0).x), nightFadeFine)'
+    )
+    // No derivative in any of the tiles' night code.
+    for (const code of Object.values(TILE_NIGHT_GLSL)) {
+      const text = typeof code === 'function' ? code(8) : code
+      expect(text).not.toMatch(/dFd[xy]|fwidth/)
+    }
+    // In flight without a stream: inside the gate after the map, VIIRS's
+    // cover 0 (no GIBS_NIGHT_SIDE); the keys as before.
+    const { composer, shader } = tileShader(nightLink(0))
+    expect(composer.key).toBe('surface-tile:surface-base+night-surface-flight')
+    const emissive = after(shader.fragmentShader, 'emissivemap_fragment')
+    expect(emissive.indexOf(TILE_NIGHT_GLSL.cityBody + TILE_NIGHT_GLSL.fadeBody + TILE_NIGHT_GLSL.gateClose)).toBeGreaterThan(-1)
+    expect(shader.fragmentShader).not.toContain('#define GIBS_NIGHT_SIDE')
+    // Without flight, a stream but no fade.
+    const still = tileShader(nightLink(8, false))
+    expect(still.composer.key).toBe('surface-tile:surface-base+night-surface-gibs8')
+    expect(still.shader.fragmentShader).not.toMatch(/nightLightsFade|nightFade/)
   })
 })

@@ -14,7 +14,18 @@ import { createGroundDisplacement } from './groundDisplacement'
 import { groundDetailPatch } from './groundDetail'
 import { createGroundHaze } from './groundHaze'
 import { groundShadowPatch } from './groundShadow'
-import { createNightFlight, nightLightsPatch } from './nightLights'
+import {
+  createNightFlight,
+  NIGHT_FADE_EQUATOR_M,
+  NIGHT_FADE_FLOOR,
+  NIGHT_FADE_PIXEL_M_OFF,
+  NIGHT_FADE_TEXEL_PX_END,
+  NIGHT_FADE_TEXEL_PX_START,
+  NIGHT_LIGHTS_GLSL,
+  nightLightsFade,
+  nightLightsPatch,
+} from './nightLights'
+import { GIBS_GROUND_WIDTH } from '../gibs-patch'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 
@@ -71,6 +82,54 @@ describe('night lights in flight', () => {
     expect(code).toContain('smoothstep(-0.020000, 0.060000, dot(nightUp, uNightMoon))')
     expect(uniforms).toEqual(expect.arrayContaining(['uNightMoon', 'uNightMoonView', 'uNightFill', 'uNightMoonLight']))
     expect(key).toContain('night-lights-flight')
+  })
+
+  // tides-zmw.24: in flight the lights fade as their source is magnified,
+  // after the map and VIIRS, with the mask.
+  it('fades the lights after VIIRS and before the mask, its derivatives in main\'s top level', () => {
+    const sun = { value: new THREE.Vector3(1, 0, 0) }
+    const flight = createNightFlight(sun, { value: CLOUD_AMBIENT })
+    const night = createGibsNightPatch(8)
+    const { fragment: frag, key } = compiled(composePatches(nightLightsPatch(sun, flight.uniforms), night.material))
+    night.release()
+    const at = (s: string) => {
+      expect(frag).toContain(s)
+      return frag.indexOf(s)
+    }
+    expect(at(NIGHT_LIGHTS_GLSL.fadeHead)).toBeLessThan(at('void main'))
+    expect(at('float gibsNightCover = 0.0;')).toBeLessThan(at('void main'))
+    const fade = at(NIGHT_LIGHTS_GLSL.fadeBody + NIGHT_LIGHTS_GLSL.fragmentBody)
+    expect(at('gibsNightCover = cover;')).toBeLessThan(fade)
+    expect(at('totalEmissiveRadiance = emissive * emissiveColor.rgb;')).toBeLessThan(fade)
+    // Nothing but main is open where the derivatives are taken: VIIRS's
+    // branch has closed.
+    const before = frag.slice(at('void main'), fade)
+    expect(before.split('{').length - before.split('}').length).toBe(1)
+    const body = NIGHT_LIGHTS_GLSL.fadeBody
+    expect(body.trim().startsWith('#ifdef USE_EMISSIVEMAP')).toBe(true)
+    expect(body.trim().endsWith('#endif')).toBe(true)
+    expect(body.match(/dFd[xy]\([^)]*\)/g)).toEqual(['dFdx(vEmissiveMapUv)', 'dFdy(vEmissiveMapUv)'])
+    expect(body).not.toContain('if (')
+    expect(NIGHT_LIGHTS_GLSL.fadeHead).not.toMatch(/dFd[xy]|fwidth|if \(/)
+    // Wrapped at the antimeridian.
+    expect(body).toContain('nightFadeDx.x -= floor(nightFadeDx.x + 0.5);')
+    expect(body).toContain('nightFadeDy.x -= floor(nightFadeDy.x + 0.5);')
+    expect(body).toContain(NIGHT_LIGHTS_GLSL.fadeCall)
+    expect(NIGHT_LIGHTS_GLSL.fadeCall).toContain('float nightFadeFine = gibsNightCover;')
+    expect(NIGHT_LIGHTS_GLSL.fadeCall).toContain('totalEmissiveRadiance *= nightLightsFade(nightFadeDx, nightFadeDy, vEmissiveMapUv.y,')
+    // The mirror's constants, as the GLSL has them.
+    const head = NIGHT_LIGHTS_GLSL.fadeHead
+    expect(head).toContain(`smoothstep(${Math.log2(NIGHT_FADE_TEXEL_PX_START).toFixed(6)}, ${Math.log2(NIGHT_FADE_TEXEL_PX_END).toFixed(6)}, texelPx)`)
+    expect(head).toContain(`mix(1.0, ${NIGHT_FADE_FLOOR.toFixed(6)},`)
+    expect(head).toContain(`(logWidth - ${Math.log2(GIBS_GROUND_WIDTH).toFixed(6)})`)
+    expect(head).toContain(`${Math.log2(NIGHT_FADE_PIXEL_M_OFF).toFixed(6)}, pixelM)`)
+    expect(key).toBe('night-lights-flight+gibs-night-8')
+  })
+
+  it('adds no fade outside flight', () => {
+    const { fragment, key } = compiled(nightLightsPatch({ value: new THREE.Vector3(1, 0, 0) }))
+    expect(fragment).not.toMatch(/nightLightsFade|nightFade|dFd[xy]\(vEmissiveMapUv/)
+    expect(key).toBe('night-lights')
   })
 
   // EarthRenderer's ground outside ship mode: no flight for the night lights
@@ -244,5 +303,127 @@ describe('night flight', () => {
     // Fully adapted there.
     expect(flight.uniforms.uNightFill.value.equals(NIGHT_FILL_RGB)).toBe(true)
     expect(cloudAmbient.value).toBeGreaterThan(CLOUD_AMBIENT)
+  })
+})
+
+describe('the night lights\' fade (tides-zmw.24)', () => {
+  const C = NIGHT_FADE_EQUATOR_M
+  const D = Math.PI / 180
+  /** The factor for a footprint `along` by `across` metres on the ground at
+   * `lat`, its long axis `heading` degrees from north. */
+  function fadeAt(along: number, across: number, opts: { lat?: number; heading?: number; width?: number; fine?: number } = {}) {
+    const { lat = 30.05, heading = 0, width = 10800, fine = 0 } = opts
+    const k = Math.cos(lat * D)
+    // Ground metres east and north to uv: a turn of u is C k, of v C / 2.
+    const uv = (east: number, north: number) => [east / (C * k), (2 * north) / C] as const
+    const h = heading * D
+    const dx = uv(along * Math.sin(h), along * Math.cos(h))
+    const dy = uv(across * Math.cos(h), -across * Math.sin(h))
+    return nightLightsFade(dx, dy, 0.5 + lat / 180, width, fine)
+  }
+  /** The nadir pixel, metres, `km` over the ground on `rows` rows through 60°. */
+  const nadirPixel = (km: number, rows: number) => (km * 1000 * 2 * Math.tan(30 * D)) / rows
+
+  it('is exactly 1 from 1500 km up on every screen, with or without VIIRS', () => {
+    // Straight down from 1500 km a 2880-row screen's pixel is ~601 m: ~6 px
+    // a 3.7 km map texel, past START, so the pixel guard holds it.
+    const tall = nadirPixel(1500, 2880)
+    expect(tall).toBeGreaterThan(600)
+    expect(C / 10800 / tall).toBeGreaterThan(NIGHT_FADE_TEXEL_PX_START)
+    // A phone's (~1700 rows) at the 2048 px map: a 19.5 km texel, ~19 px.
+    const phone = nadirPixel(1500, 1700)
+    expect(C / 2048 / phone).toBeGreaterThan(19)
+    for (const km of [1500, 3000, 36000]) {
+      for (const rows of [720, 1700, 2880]) {
+        for (const width of [10800, 2048]) {
+          for (const fine of [0, 0.5, 1]) {
+            const p = nadirPixel(km, rows)
+            expect(fadeAt(p, p, { width, fine }), `${km} km ${rows} rows ${width} ${fine}`).toBe(1)
+          }
+        }
+      }
+    }
+  })
+
+  it('is exactly 1 while the finest texel is START pixels or less', () => {
+    for (const lat of [0, 30.05, 60]) {
+      // VIIRS's texel at START px: its narrow axis is the texel over START.
+      const viirs = C / GIBS_GROUND_WIDTH / NIGHT_FADE_TEXEL_PX_START
+      expect(fadeAt(viirs * 1.0001, viirs * 1.0001, { lat, fine: 1 })).toBe(1)
+      expect(fadeAt(viirs * 0.98, viirs * 0.98, { lat, fine: 1 })).toBeLessThan(1)
+      // 300 km on a 2880-row screen with VIIRS: ~4 px a texel, barely touched.
+      const p = nadirPixel(300, 2880)
+      expect(fadeAt(p, p, { lat, fine: 1 })).toBeGreaterThan(0.999)
+    }
+  })
+
+  it('falls monotonically as the footprint shrinks, to FLOOR past END, and is FLOOR at a zero footprint', () => {
+    for (const fine of [0, 0.4, 1]) {
+      for (const width of [10800, 2048]) {
+        let last = 1
+        for (let p = 2000; p > 0.001; p /= 1.05) {
+          const fade = fadeAt(p, p, { width, fine })
+          expect(fade).toBeLessThanOrEqual(last)
+          last = fade
+        }
+        expect(last).toBe(NIGHT_FADE_FLOOR)
+      }
+    }
+    const end = C / GIBS_GROUND_WIDTH / NIGHT_FADE_TEXEL_PX_END
+    expect(fadeAt(end * 0.999, end * 0.999, { fine: 1 })).toBe(NIGHT_FADE_FLOOR)
+    expect(fadeAt(end * 1.2, end * 1.2, { fine: 1 })).toBeGreaterThan(NIGHT_FADE_FLOOR)
+    for (const [dx, dy] of [
+      [[0, 0], [0, 0]],
+      [[1e-6, 0], [2e-6, 0]],
+    ] as const) {
+      const fade = nightLightsFade(dx, dy, 0.667, 10800, 1)
+      expect(Number.isFinite(fade)).toBe(true)
+      expect(fade).toBe(NIGHT_FADE_FLOOR)
+    }
+  })
+
+  it('reads the narrow axis, whatever the long one or the heading', () => {
+    const viirs = C / GIBS_GROUND_WIDTH
+    for (const across of [viirs / 2, viirs / 8, viirs / 20]) {
+      const square = fadeAt(across, across, { fine: 1 })
+      for (const stretch of [1, 4, 30, 300]) {
+        for (const heading of [0, 37, 90]) {
+          expect(fadeAt(across * stretch, across, { fine: 1, heading })).toBeCloseTo(square, 9)
+        }
+      }
+    }
+    // At the map's texel east-west narrows by cos(lat): a pixel half a
+    // texel wide either way has the texel's north-south size to compare.
+    expect(fadeAt(100, 100, { lat: 0 })).toBeCloseTo(fadeAt(100, 100, { lat: 60 }), 9)
+  })
+
+  // The globe differences the interpolated uv: what its float32 step (2^-24
+  // from 0.5 up) does to the factor over Cairo, east-west and north-south.
+  it("stays near FLOOR where the globe's uv steps are some of the pixel, and moves little with a step", () => {
+    const step = 2 ** -24
+    const lat = 30.05
+    const k = Math.cos(lat * D)
+    const v = 0.5 + lat / 180
+    const stepEast = step * C * k
+    const stepNorth = (step * C) / 2
+    expect(stepEast).toBeCloseTo(2.07, 2)
+    expect(stepNorth).toBeCloseTo(1.19, 2)
+    let worst = 0
+    for (let p = 1; p < 700; p *= 1.01) {
+      const dx = [p / (C * k), 0] as const
+      const dy = [0, (2 * p) / C] as const
+      for (const fine of [0, 1]) {
+        const fade = nightLightsFade(dx, dy, v, 10800, fine)
+        // A step a tenth of the pixel or more: near FLOOR with VIIRS's
+        // texel; past END with the map's alone once a step is a fiftieth.
+        if (stepEast >= p / 10) expect(fade).toBeLessThan(fine ? 0.13 : 1e-12)
+        if (stepEast >= p / 50 && !fine) expect(fade).toBe(NIGHT_FADE_FLOOR)
+        for (const [ex, ey] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1]]) {
+          const off = nightLightsFade([dx[0] + ex * step, 0], [0, dy[1] + ey * step], v, 10800, fine)
+          worst = Math.max(worst, Math.abs(off - fade))
+        }
+      }
+    }
+    expect(worst).toBeLessThan(0.05)
   })
 })
