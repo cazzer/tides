@@ -1,11 +1,19 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createShipTelemetry } from '../ship-telemetry'
 import type { ShipInput } from '../ship-input'
 import { createShipAudio, type ShipAudio } from './ship-audio'
 import { stepShipAudioFrame } from './useShipAudioFrame'
-import { stepShipVoices, teardownShipVoices, type ShipVoices } from './ship-voices'
+import { buildShipVoices, stepShipVoices, teardownShipVoices, type ShipVoices } from './ship-voices'
+import { engineDrive, engineParams, windLevel, windParams } from './engine-mix'
 
-type Param = { value: number; setTargetAtTime: ReturnType<typeof vi.fn>; cancelScheduledValues: ReturnType<typeof vi.fn> }
+type Param = {
+  value: number
+  /** Every value scheduled, by either method, in order. */
+  targets: number[]
+  setTargetAtTime: ReturnType<typeof vi.fn>
+  setValueAtTime: ReturnType<typeof vi.fn>
+  cancelScheduledValues: ReturnType<typeof vi.fn>
+}
 type Node = { connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; [key: string]: unknown }
 
 // Just enough of an AudioContext for the voices: every node and param it
@@ -18,6 +26,7 @@ class FakeAudioContext {
   nodes: Node[] = []
   params: Param[] = []
   oscillators = 0
+  buffers = 0
   addEventListener() {}
   resume() {
     this.state = 'running'
@@ -28,7 +37,9 @@ class FakeAudioContext {
     return Promise.resolve()
   }
   param(): Param {
-    const param = { value: 0, setTargetAtTime: vi.fn(), cancelScheduledValues: vi.fn() }
+    const targets: number[] = []
+    const record = (value: number) => void targets.push(value)
+    const param = { value: 0, targets, setTargetAtTime: vi.fn(record), setValueAtTime: vi.fn(record), cancelScheduledValues: vi.fn() }
     this.params.push(param)
     return param
   }
@@ -54,6 +65,7 @@ class FakeAudioContext {
     return this.source({ buffer: null, loop: false })
   }
   createBuffer(_channels: number, length: number) {
+    this.buffers++
     const data = new Float32Array(length)
     return { getChannelData: () => data }
   }
@@ -86,20 +98,25 @@ function setup() {
   telemetry.speedCap = 10
   const pilot = input()
   let voices: ShipVoices | null = null
+  // The wall clock runs on whether or not the frame reaches the voices.
+  let wallMs = 0
   // As ShipSound's frame.
-  const frame = (dt = 1 / 60) =>
-    stepShipAudioFrame((out, step) => (voices = stepShipVoices(voices, out, telemetry, pilot, step)), dt, audio)
-  const scheduled = () =>
-    contexts.reduce((n, c) => n + c.params.reduce((m, p) => m + p.setTargetAtTime.mock.calls.length, 0), 0)
+  const frame = (dt = 1 / 60) => {
+    wallMs += dt * 1000
+    stepShipAudioFrame((out, step) => (voices = stepShipVoices(voices, out, telemetry, pilot, step, wallMs)), dt, audio)
+  }
+  const scheduled = () => contexts.reduce((n, c) => n + c.params.reduce((m, p) => m + p.targets.length, 0), 0)
   return { audio, contexts, telemetry, pilot, frame, voices: () => voices!, scheduled }
 }
 
-const lastTarget = (param: AudioParam) => {
-  const calls = (param.setTargetAtTime as unknown as Param['setTargetAtTime']).mock.calls
-  return calls[calls.length - 1][0] as number
-}
+const fake = (param: AudioParam) => param as unknown as Param
+const lastTarget = (param: AudioParam) => fake(param).targets[fake(param).targets.length - 1]
 
 describe('ship voices (tides-a4j.2)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('makes nothing before the first gesture', () => {
     const { audio, contexts, frame } = setup()
     audio.activate()
@@ -163,8 +180,67 @@ describe('ship voices (tides-a4j.2)', () => {
     telemetry.throttle = 0.1
     frame()
     expect(lastTarget(voices().thrustGain.gain)).toBeGreaterThan(0)
+    for (let i = 0; i < 120; i++) frame()
+    expect(lastTarget(voices().thrustGain.gain)).toBe(0)
+  })
+
+  it('opens at the ship’s pitch and bands, fading in only the levels', () => {
+    const { audio, telemetry, frame, voices } = setup()
+    audio.activate()
+    audio.gesture()
+    telemetry.throttle = 0.8
+    telemetry.speed = 6
+    telemetry.air.dynamicPressure = 20_000
+    frame()
+    const v = voices()
+    const hz = engineParams(engineDrive(0.8, 6, 10), { hz: 0, gain: 0, cutoff: 0, noiseGain: 0 }).hz
+    for (const saw of v.saws) {
+      expect(fake(saw.frequency).setValueAtTime).toHaveBeenCalledWith(hz, expect.any(Number))
+      expect(fake(saw.frequency).setTargetAtTime).not.toHaveBeenCalled()
+    }
+    const windHz = windParams(windLevel(20_000), { gain: 0, hz: 0 }).hz
+    expect(fake(v.windBand.frequency).setValueAtTime).toHaveBeenCalledWith(windHz, expect.any(Number))
+    expect(fake(v.windBand.frequency).setTargetAtTime).not.toHaveBeenCalled()
+    expect(fake(v.windGain.gain).setTargetAtTime).toHaveBeenCalled()
+    expect(fake(v.oscGain.gain).setValueAtTime).not.toHaveBeenCalled()
+  })
+
+  it('forgets a throttle moved while the sound was suspended', () => {
+    const { audio, contexts, telemetry, frame, voices } = setup()
+    audio.activate()
+    audio.gesture()
+    frame()
+    contexts[0].state = 'suspended'
+    telemetry.throttle = 1
+    for (let i = 0; i < 30; i++) frame()
+    contexts[0].state = 'running'
     frame()
     expect(lastTarget(voices().thrustGain.gain)).toBe(0)
+  })
+
+  it('lets a voice reach exactly 0 from a level too small to step', () => {
+    const { audio, telemetry, frame, voices } = setup()
+    audio.activate()
+    audio.gesture()
+    telemetry.boosted = true
+    telemetry.boost = 1
+    frame()
+    telemetry.boost = 1e-5
+    frame()
+    expect(lastTarget(voices().boostGain.gain)).toBeGreaterThan(0)
+    telemetry.boost = 0
+    frame()
+    expect(lastTarget(voices().boostGain.gain)).toBe(0)
+  })
+
+  it('makes the noise once per context', () => {
+    const { audio, contexts } = setup()
+    audio.activate()
+    audio.gesture()
+    const out = audio.output()!
+    buildShipVoices(out)
+    buildShipVoices(out)
+    expect(contexts[0].buffers).toBe(2)
   })
 
   it('schedules nothing while the ship holds steady', () => {
@@ -210,6 +286,7 @@ describe('ship voices (tides-a4j.2)', () => {
   })
 
   it('fades out and stops the sources, then disconnects everything', () => {
+    vi.useFakeTimers()
     const { audio, frame, voices } = setup()
     audio.activate()
     audio.gesture()
@@ -220,7 +297,21 @@ describe('ship voices (tides-a4j.2)', () => {
     for (const source of v.sources) expect(source.stop).toHaveBeenCalledWith(expect.any(Number))
     for (const node of v.nodes) expect(node.disconnect).not.toHaveBeenCalled()
     v.sources[0].onended?.(new Event('ended'))
-    for (const node of v.nodes) expect(node.disconnect).toHaveBeenCalled()
+    for (const node of v.nodes) expect(node.disconnect).toHaveBeenCalledTimes(1)
+    vi.runAllTimers()
+    for (const node of v.nodes) expect(node.disconnect).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes the graph down even if the stop never lands', () => {
+    vi.useFakeTimers()
+    const { audio, frame, voices } = setup()
+    audio.activate()
+    audio.gesture()
+    frame()
+    const v = voices()
+    teardownShipVoices(v)
+    vi.advanceTimersByTime(400)
+    for (const node of v.nodes) expect(node.disconnect).toHaveBeenCalledTimes(1)
   })
 
   it('takes a silent graph down at once', () => {
