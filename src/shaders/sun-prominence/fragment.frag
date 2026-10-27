@@ -61,10 +61,14 @@ void main() {
   }
   density *= vFade * (0.25 + 0.75 * vSlant);
 
-  // In white light both vanish against the disc, but for the faintest
-  // shadow of a filament (strands overlap, so this adds up several times).
-  float filament = kind < 1.5 ? 0.012 : 0.0;
-  vec3 emission = glow * density * (1.0 - (kind < 1.5 ? 1.0 : 0.65) * onDisc);
+  // In EUV and H-alpha a prominence seen against the disc is a filament:
+  // its cool plasma absorbs the light from below, so it reads dark, with
+  // only a trace of its glow (strands overlap, so the cover adds up). Loops
+  // stay emission, a little dimmed against the disc.
+  float filament = kind < 1.5 ? 0.7 : 0.0;
+  vec3 emission = glow * density * (1.0 - (kind < 1.5 ? 0.8 : 0.4) * onDisc);
+  // Cool plasma against the disc: dark, but still warm.
+  emission += vec3(0.5, 0.16, 0.02) * 0.45 * density * filament * onDisc;
   float cover = density * filament * onDisc;
   if (cover + dot(emission, vec3(1.0)) < 0.002) discard;
   gl_FragColor = vec4(emission, cover);

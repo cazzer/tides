@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { activeRegions } from './sun-activity'
 import { surfaceBakeUniforms } from './sun-surface'
+import { LIMB_SEGMENTS, type SphereSegments } from '../ship/limb-detail'
+import {
+  cellEdgeDistance,
+  createSpiculeGeometry,
+  EDGE_BAND,
+  SPICULE_BUDGET,
+  SPICULE_MAX_BLADES,
+  SPICULE_MAX_LEAN,
+  spiculeTufts,
+  SUN_FRINGE,
+  sunShellScale,
+  TUFT_RADIUS,
+} from './sun-spicules'
 import {
   createProminenceGeometry,
   PROMINENCE_BUDGET,
@@ -52,9 +65,42 @@ describe('the photosphere', () => {
     expect(renderer).not.toMatch(/frames=\{Infinity\}/)
   })
 
-  it('costs three texture lookups and no noise per pixel', () => {
+  it('costs three texture lookups, and noise only in the limb\'s fringe', () => {
     expect(fragment.match(/textureCube\(/g)).toHaveLength(3)
-    expect(fragment).not.toMatch(/snoise|worley/)
+    expect(fragment).not.toMatch(/worley/)
+    const start = fragment.indexOf('if (miss > 0.999')
+    const end = fragment.indexOf('\n  }\n', start)
+    expect(start).toBeGreaterThan(0)
+    const branch = fragment.slice(start, end)
+    const outside = fragment.slice(0, start) + fragment.slice(end)
+    expect(branch).toMatch(/snoise3/)
+    expect(outside).not.toMatch(/snoise/)
+  })
+
+  it('writes the traced sphere\'s depth, and coverage for its edge', () => {
+    expect(fragment).toMatch(/gl_FragDepth = fragDepthOfClip\(projectionMatrix \* modelViewMatrix \* vec4\(hit, 1\.0\)\)/)
+    expect(fragment).toMatch(/gl_FragColor = vec4\(gold\(I\), solid\)/)
+    expect(fragment).toMatch(/if \(solid <= 0\.0\) discard;/)
+    expect(renderer).toMatch(/alphaToCoverage: true/)
+  })
+
+  it('takes no settings from the URL', () => {
+    expect(renderer).not.toMatch(/URLSearchParams/)
+    expect(read('./SunProminences.tsx')).not.toMatch(/URLSearchParams/)
+    expect(read('../shaders/sun-prominence/fragment.frag')).not.toMatch(/uProto/)
+  })
+
+  it('draws a shell that holds the tallest jets, on either sphere it may get', () => {
+    expect(SUN_FRINGE).toBeGreaterThanOrEqual(0.005)
+    expect(SUN_FRINGE).toBeLessThanOrEqual(0.02)
+    const segments: SphereSegments[] = [[128, 128], LIMB_SEGMENTS]
+    for (const seg of segments) {
+      const [width, height] = seg
+      const halfDiagonal = 0.5 * Math.hypot((2 * Math.PI) / width, Math.PI / height)
+      // A facet's plane sits no deeper than this under the sphere.
+      expect(sunShellScale(seg) * Math.cos(halfDiagonal)).toBeGreaterThanOrEqual(1 + SUN_FRINGE - 1e-12)
+      expect(sunShellScale(seg) * Math.cos(Math.PI / Math.min(...seg))).toBeGreaterThanOrEqual(1 + SUN_FRINGE)
+    }
   })
 
   it('bakes its churn with the rest, not per frame', () => {
@@ -114,5 +160,85 @@ describe('the prominences and loops', () => {
   it('test the Sun along the ray, as the depth test can tie at ship range', () => {
     const fragment = read('../shaders/sun-prominence/fragment.frag')
     expect(fragment).toMatch(/if \(b > 0\.0 && across > 0\.99\) discard;/)
+  })
+})
+
+describe('the spicule tufts', () => {
+  const tufts = spiculeTufts()
+  const blades = tufts.flatMap((t) => t.blades)
+  type V = [number, number, number]
+  const unit = (v: V): V => {
+    const l = Math.hypot(...v)
+    return [v[0] / l, v[1] / l, v[2] / l]
+  }
+  const dist = (a: V, b: V) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+  it('are laid out the same on every build', () => {
+    // Checksums: comparing ~1M floats element by element is slow.
+    const sums = () => {
+      const geometry = createSpiculeGeometry()
+      const out = ['aSpicule', 'aLean', 'aSize'].map((name) => {
+        const attribute = geometry.getAttribute(name)
+        expect(attribute.count).toBe(blades.length)
+        let sum = 0
+        attribute.array.forEach((v, i) => (sum += v * ((i % 7) + 1)))
+        return sum
+      })
+      expect(geometry.instanceCount).toBe(blades.length)
+      geometry.dispose()
+      return out
+    }
+    expect(sums()).toEqual(sums())
+  })
+
+  it('stand on the network\'s lanes', () => {
+    expect(tufts).toHaveLength(SPICULE_BUDGET.high.tufts)
+    for (const tuft of tufts) expect(cellEdgeDistance(tuft.axis)).toBeLessThan(EDGE_BAND)
+  })
+
+  it('keep their blades round them, rooted under the limb and short of the fringe\'s reach', () => {
+    const [fewest, most] = SPICULE_BUDGET.high.blades
+    for (const tuft of tufts) {
+      expect(tuft.blades.length).toBeGreaterThanOrEqual(fewest)
+      expect(tuft.blades.length).toBeLessThanOrEqual(most)
+      for (const b of tuft.blades) {
+        const up = unit(b.foot)
+        expect(dist(up, tuft.axis)).toBeLessThanOrEqual(TUFT_RADIUS)
+        expect(Math.hypot(...b.foot)).toBeLessThan(1)
+        const lean = Math.hypot(...b.lean)
+        expect(lean).toBeLessThanOrEqual(SPICULE_MAX_LEAN + 1e-9)
+        // The lean is tangent at the foot.
+        expect(Math.abs(b.lean[0] * up[0] + b.lean[1] * up[1] + b.lean[2] * up[2])).toBeLessThan(1e-9)
+        const axis = unit([up[0] + b.lean[0], up[1] + b.lean[1], up[2] + b.lean[2]])
+        const top: V = [b.foot[0] + axis[0] * b.height, b.foot[1] + axis[1] * b.height, b.foot[2] + axis[2] * b.height]
+        expect(Math.hypot(...top)).toBeLessThan(1 + 2 * SUN_FRINGE)
+      }
+    }
+  })
+
+  it('fit the budget', () => {
+    expect(blades.length).toBeLessThanOrEqual(SPICULE_MAX_BLADES)
+    expect(blades.length).toBeLessThanOrEqual(120000)
+  })
+
+  it('clump into bushes, not an even fur', () => {
+    // Nearest neighbours by a lattice of buckets, ~0.05 R wide.
+    const key = (v: V) => v.map((x) => Math.floor(x * 20)).join(',')
+    const buckets = new Map<string, V[]>()
+    for (const t of tufts) buckets.set(key(t.axis), [...(buckets.get(key(t.axis)) ?? []), t.axis])
+    let spacing = 0
+    for (const t of tufts) {
+      const [x, y, z] = t.axis.map((v) => Math.floor(v * 20))
+      let nearest = Infinity
+      for (let dx = -1; dx <= 1; dx++)
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dz = -1; dz <= 1; dz++)
+            for (const other of buckets.get([x + dx, y + dy, z + dz].join(',')) ?? [])
+              if (other !== t.axis) nearest = Math.min(nearest, dist(other, t.axis))
+      spacing += nearest / tufts.length
+    }
+    let spread = 0
+    for (const t of tufts) for (const b of t.blades) spread += dist(unit(b.foot), t.axis) / blades.length
+    expect(spread).toBeLessThan(0.2 * spacing)
   })
 })

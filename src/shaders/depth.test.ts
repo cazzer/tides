@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import depthGlsl from './depth.glsl'
 import shellVertex from './shell/vertex.glsl'
+import clipDepthGlsl from './clip-depth.glsl'
 
 // depth.glsl's helpers (tides-zmw.9.3), ported in float32 as the GPU runs
 // them (the first test pins the lines they copy). P is column-major as GLSL
@@ -42,6 +43,48 @@ describe('depth.glsl', () => {
       expect(half).toContain('float viewDepthToFragDepth(mat4 P, float z)')
     }
   })
+
+  it('ports fragDepthOfClip as clip-depth.glsl has it, by depth mode', () => {
+    const [clipReversed, clipStandard] = clipDepthGlsl.split('#else')
+    expect(clipDepthGlsl).toContain('#ifdef USE_REVERSED_DEPTH_BUFFER')
+    expect(clipReversed).toContain('return clip.z / clip.w;')
+    expect(clipStandard).toContain('return 0.5 + 0.5 * clip.z / clip.w;')
+  })
+
+  // fragDepthOfClip, in float32: clip = P · (0, 0, −z, 1) for a point z in
+  // front of the eye.
+  const ofClip = (m: Float32Array, reversed: boolean, z: number) => {
+    const clipZ = f(f(m[10] * -z) + m[14])
+    const clipW = f(f(m[11] * -z) + m[15])
+    const ndc = f(clipZ / clipW)
+    return reversed ? ndc : f(0.5 + f(0.5 * ndc))
+  }
+
+  for (const rev of [false, true]) {
+    it(`gives a clip-space point the perspective helper's depth (${rev ? 'reversed' : 'standard'})`, () => {
+      for (const n of [1e-6, 1e-3, 0.1]) {
+        const m = projection(n, FAR, rev)
+        for (const z of [n, 2 * n, 0.01, 1, 384, FAR]) {
+          const want = fragDepth(m, rev, z)
+          expect(Math.abs(ofClip(m, rev, z) - want)).toBeLessThanOrEqual(Math.max(Math.abs(want), 1e-6) * 1e-6)
+        }
+      }
+    })
+
+    it(`runs linear in view depth for an orthographic camera (${rev ? 'reversed' : 'standard'})`, () => {
+      const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 100)
+      Object.assign(camera, { _reversedDepth: rev })
+      camera.updateProjectionMatrix()
+      const m = new Float32Array(camera.projectionMatrix.elements)
+      const near = ofClip(m, rev, 0.5)
+      const far = ofClip(m, rev, 100)
+      expect(near).toBeCloseTo(rev ? 1 : 0, 6)
+      expect(far).toBeCloseTo(rev ? 0 : 1, 6)
+      for (const z of [1, 10, 37.5, 80]) {
+        expect(ofClip(m, rev, z)).toBeCloseTo(near + ((far - near) * (z - 0.5)) / 99.5, 6)
+      }
+    })
+  }
 
   for (const n of [1e-6, 1e-3, 0.1]) {
     for (const rev of [false, true]) {
