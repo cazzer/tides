@@ -178,10 +178,22 @@ export const EARTH_SLOWEST = 50 * EARTH_UNITS_PER_METRE
 export const EARTH_AIR_SEA_SPEED = 200 * EARTH_UNITS_PER_METRE
 /** Sines of the ship's climb (its velocity's) where the escape vector starts and is full (30°, 60°). [TUNE] */
 export const EARTH_ESCAPE: readonly [number, number] = [Math.sin(Math.PI / 6), Math.sin(Math.PI / 3)]
+/**
+ * What holding boost multiplies the air's floor by (tides-zmw.25): straight
+ * down from 100 km to the 30 m stop at full throttle in ~9 s against ~87 s
+ * unboosted. It never lifts the floor over the gap law's 2 · gap, the edge
+ * of what the tiles stream (tides-zmw.9.29), so near the ground the guard
+ * binds as before. From ~40 km up the boosted floor meets the plateau
+ * (EARTH_GROUND_SPEED) and goes no higher, but it still raises the cap
+ * there until the unboosted air meets the plateau too (60 km up: 6.8 →
+ * 43 km/s); only from ~91 km up does it change nothing. [TUNE]
+ */
+export const EARTH_AIR_BOOST = 20
 export const EARTH_AIR_SPEED: Readonly<AirSpeedLaw> = {
   sea: EARTH_AIR_SEA_SPEED,
   scale: (2 * SCALE_HEIGHT_KM) / EARTH_KM_PER_UNIT,
   escape: EARTH_ESCAPE,
+  boost: EARTH_AIR_BOOST,
 }
 export const EARTH_GROUND_SPEED_LAW: Readonly<GroundSpeedLaw> = {
   rate: EARTH_GAP_RATE,

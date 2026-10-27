@@ -60,6 +60,7 @@ function setup({ fine = true, dialog = false } = {}) {
     roll: 0,
     level: false,
     flightAssist: true,
+    boost: false,
   }
   const drawn = { visible: false, x: 0, y: 0, mode: '' }
   const display: JoystickDisplay = {

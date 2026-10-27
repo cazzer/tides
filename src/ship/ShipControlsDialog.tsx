@@ -51,6 +51,7 @@ const KEYBOARD_ROWS: readonly [ReactNode, string][] = [
     'Roll left and right',
   ],
   [<Key>L</Key>, 'Hold to level out'],
+  [<Key>Shift</Key>, "Hold to fly faster low in Earth's air"],
   [<Key>Z</Key>, 'Flight assist on or off'],
   [<Key>T</Key>, "Target what's nearest the centre; press again for the next"],
   ['Click a planet', 'Target it'],
@@ -63,6 +64,7 @@ const TOUCH_ROWS: readonly [ReactNode, string][] = [
     'Right stick',
     'Push up or down to change the throttle; it holds when you let go. It stops at zero: keep pulling, or let go and pull again, to reverse. Tap the stick to cut the throttle. Left or right to roll',
   ],
+  ['Bolt button (by the right stick)', "Hold to fly faster low in Earth's air"],
   [
     'Flight assist (top bar)',
     'Tap to switch: on, the ship slows and straightens itself; off, it drifts',

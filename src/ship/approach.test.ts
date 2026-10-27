@@ -52,6 +52,7 @@ function input(overrides: Partial<ShipInput> = {}): ShipInput {
     roll: 0,
     level: false,
     flightAssist: true,
+    boost: false,
     ...overrides,
   }
 }
@@ -108,6 +109,7 @@ function approach(
       speed: telemetry.speed,
       cap: telemetry.speedCap,
       capFloor: telemetry.well.floor,
+      boost: telemetry.boost,
       throttle: telemetry.throttle,
       flightAssist,
       targetKey,
@@ -223,6 +225,7 @@ describe("touching Earth's ground (tides-01v.8.17)", () => {
           speed: telemetry.speed,
           cap: telemetry.speedCap,
           capFloor: telemetry.well.floor,
+          boost: telemetry.boost,
           throttle: telemetry.throttle,
           flightAssist,
           targetKey: null,
@@ -432,6 +435,49 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
     expect(approachEta(FINE_GROUND_CLEARANCE, 1e-4, wellTime, 1, EARTH_SLOWEST, ground)).toBe(0)
   })
 
+  test('boosted (tides-zmw.25): from 100 km at the cap in ~7 s, against ~85 s without', () => {
+    const eta = (boost?: number) =>
+      approachEta(100000 * M, 1e9, wellTime, 1, EARTH_SLOWEST, { law, stop: FINE_GROUND_CLEARANCE, base: 0, boost })
+    expect(eta(1)).toBeCloseTo(6.9, 0)
+    expect(eta(0)).toBeGreaterThan(80)
+    expect(eta()).toBe(eta(0))
+    expect(eta(0.5)).toBeLessThan(eta(0))
+    expect(eta(0.5)).toBeGreaterThan(eta(1))
+  })
+
+  test("updateApproach reads the frame's boost into the ETA", () => {
+    const earth: Body = {
+      key: 'earth',
+      position: new THREE.Vector3(),
+      radius: EARTH_RADIUS,
+      mass: BODY_MASS_KG.earth,
+      ground: () => EARTH_RADIUS,
+      groundClearance: FINE_GROUND_CLEARANCE,
+      minSpeed: EARTH_SLOWEST,
+      groundSpeed: law,
+    }
+    const eta = (boost: number) => {
+      resetShipApproach()
+      updateApproach({
+        bodies: [earth],
+        position: new THREE.Vector3(0, EARTH_RADIUS + 20000 * M, 0),
+        velocity: new THREE.Vector3(0, -1, 0),
+        speed: 1,
+        cap: 1,
+        capFloor: EARTH_SLOWEST,
+        boost,
+        throttle: 1,
+        flightAssist: true,
+        targetKey: 'earth',
+        km: [20],
+      })
+      return shipApproach.eta
+    }
+    const boosted = eta(1)
+    expect(boosted).toBeCloseTo(approachEta(20000 * M, 1, wellTime, 1, EARTH_SLOWEST, { law, stop: FINE_GROUND_CLEARANCE, base: 0, boost: 1 }), 9)
+    expect(boosted).toBeLessThan(eta(0) / 5)
+  })
+
   // Through the air now (tides-zmw.9.29): about a minute at full throttle.
   // Onto a 5 km plateau the air is thinner all the way down (the ETA's base).
   test.each([
@@ -458,7 +504,7 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
     state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
     state.velocity.set(0, -throttle * lawFloor(law, 20000 * M, base + 20000 * M), 0)
     const eta = approachEta(20000 * M, -state.velocity.y, wellTime, throttle, EARTH_SLOWEST, ground)
-    const input: ShipInput = { throttle, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true }
+    const input: ShipInput = { throttle, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true, boost: false }
     const telemetry = createShipTelemetry()
     let t = 0
     for (; t < 300; t += 1 / 60) {

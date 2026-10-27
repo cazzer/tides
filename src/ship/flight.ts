@@ -30,6 +30,12 @@
 //     only guarding the last stretch above the ground; climbing steeply away
 //     from the body (Elite's escape vector) hands the floor back to the gap
 //     law, so a climb out of the air is still quick.
+//   • Holding boost (Shift, tides-zmw.25) multiplies the air's term of that
+//     floor by the law's `boost` factor, spooled over BOOST_SPOOL_SECONDS,
+//     so a descent from orbit takes seconds rather than a minute and a half.
+//     The gap law still guards the last stretch above the ground, and above
+//     the air (where the gap law or the well sets the cap) it changes
+//     nothing.
 //   • With Flight Assist on the velocity "rides" the cap: after each step it
 //     is scaled by how much the cap changed over it, so speed / cap tracks
 //     the throttle in steady flight however fast the cap is moving (turning
@@ -86,6 +92,11 @@ export interface ShipState {
    * sign to ShipInput, whose +1 means right; rotate() does the flip.
    */
   angularVelocity: THREE.Vector3
+  /**
+   * The boost's spool, 0..1: rises while ShipInput.boost is held and falls
+   * after, over BOOST_SPOOL_SECONDS (AirSpeedLaw.boost at 1).
+   */
+  boost: number
 }
 
 /** A sphere the ship measures speed against and cannot enter. */
@@ -167,22 +178,28 @@ export interface AirSpeedLaw {
   scale: number
   /** Sines of the velocity's climb where the escape starts and is full. */
   escape: readonly [number, number]
+  /**
+   * What holding boost multiplies the air's term by at full spool
+   * (ShipState.boost; tides-zmw.25), never past the gap law's rate · gap.
+   */
+  boost: number
 }
 
 /**
  * The cap's floor while `body` sets d_eff `gap` over its surface: its
  * groundSpeed law at that gap where it has one, else speedFloor. A law with
  * `air` reads `altitude` over the body's sphere (the gap when missing) and
- * the sine of the ship's `climb` away from the body (its velocity's).
+ * the sine of the ship's `climb` away from the body (its velocity's), and
+ * the `boost` spool (ShipState.boost, 0..1).
  */
-export function speedFloorAt(body: Body, gap: number, altitude = gap, climb = 0): number {
+export function speedFloorAt(body: Body, gap: number, altitude = gap, climb = 0, boost = 0): number {
   const law = body.groundSpeed
-  return law ? lawFloor(law, gap, altitude, climb) : speedFloor(body)
+  return law ? lawFloor(law, gap, altitude, climb, boost) : speedFloor(body)
 }
 
-/** A groundSpeed law's floor at `gap`, `altitude` and `climb` (speedFloorAt). */
-export function lawFloor(law: Readonly<GroundSpeedLaw>, gap: number, altitude = gap, climb = 0): number {
-  return Number.isFinite(gap) ? clamp(lawSpeed(law, gap, altitude, climb), law.min, law.max) : law.max
+/** A groundSpeed law's floor at `gap`, `altitude`, `climb` and `boost` (speedFloorAt). */
+export function lawFloor(law: Readonly<GroundSpeedLaw>, gap: number, altitude = gap, climb = 0, boost = 0): number {
+  return Number.isFinite(gap) ? clamp(lawSpeed(law, gap, altitude, climb, boost), law.min, law.max) : law.max
 }
 
 /**
@@ -191,19 +208,28 @@ export function lawFloor(law: Readonly<GroundSpeedLaw>, gap: number, altitude = 
  * ~1 km up to ~80 km over Earth, so without this the cap would still swing
  * with the ground there. Infinity without air.
  */
-export function lawCeiling(law: Readonly<GroundSpeedLaw>, gap: number, altitude = gap, climb = 0): number {
-  return law.air && Number.isFinite(gap) ? lawSpeed(law, gap, altitude, climb) : Infinity
+export function lawCeiling(law: Readonly<GroundSpeedLaw>, gap: number, altitude = gap, climb = 0, boost = 0): number {
+  return law.air && Number.isFinite(gap) ? lawSpeed(law, gap, altitude, climb, boost) : Infinity
 }
 
-function lawSpeed(law: Readonly<GroundSpeedLaw>, gap: number, altitude: number, climb: number): number {
+function lawSpeed(law: Readonly<GroundSpeedLaw>, gap: number, altitude: number, climb: number, boost = 0): number {
   const ground = law.rate * gap
-  return law.air ? airFloor(law.air, ground, altitude, climb) : ground
+  return law.air ? airFloor(law.air, ground, altitude, climb, boost) : ground
 }
 
 // The air's floor at `altitude`, never over the gap law's `ground`.
-function airFloor({ sea, scale, escape }: AirSpeedLaw, ground: number, altitude: number, climb: number): number {
-  // A NaN altitude reads as the sea; Infinity overflows to the gap law.
-  const air = sea * Math.exp(Math.max(0, altitude || 0) / scale)
+function airFloor(
+  { sea, scale, escape, boost: factor }: AirSpeedLaw,
+  ground: number,
+  altitude: number,
+  climb: number,
+  boost = 0
+): number {
+  // A NaN altitude reads as the sea; Infinity overflows to the gap law. The
+  // boost raises the air's term only, before the test below: boosted, the
+  // floor is still never over the gap law's, so the guard near the ground
+  // and the tile throughput edge (2 · gap) hold.
+  const air = sea * factor ** clamp(boost || 0, 0, 1) * Math.exp(Math.max(0, altitude || 0) / scale)
   if (!(air < ground)) return ground
   const share = smoothstep(climb, escape[0], escape[1])
   return share > 0 ? air * (ground / air) ** share : air
@@ -251,8 +277,8 @@ export interface FlightEnv {
 // K_WELL · MAX_DT = 0.15 of the mass-weighted gap (wellFactor ≥ 1, so at most
 // 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor (at
 // most OVERSPEED_MAX · rate · MAX_DT = 0.6 of the gap under a groundSpeed
-// law, whose air never raises it over that), and the collision clamps a step
-// to the floor, so it cannot tunnel.
+// law, whose air, boosted or not, never raises it over that), and the
+// collision clamps a step to the floor, so it cannot tunnel.
 export const MAX_DT = 0.1
 
 // Hard-sphere radius as a multiple of the body radius, for a body without its
@@ -380,6 +406,18 @@ export const BLUE_ZONE: readonly [number, number] = [0.5, 0.75]
 // tight manoeuvres, not so much that a fast ship can't be steered.
 export const TURN_RATE_MIN_FACTOR = 0.4
 
+// Seconds the boost takes to spool fully up, and back down on release
+// (ShipState.boost, tides-zmw.25). [TUNE] The cap moves at
+// ln(AirSpeedLaw.boost) / this in log while it spools, which must stay
+// within RIDE_UP_RATE (ship-bodies.test): then in level flight Flight
+// Assist's ride keeps speed / cap at the throttle both ways, and with FA off
+// the OVERSPEED_MAX clamp brings a release's speed down no faster than that,
+// never a snap. Climbing, the air's rise stacks on the spool's and the ride
+// clamps at RIDE_UP_RATE (the headroom is ln 20 = 2.996 against 3), so FA's
+// share lags the throttle briefly until the spool is full. A boolean boost
+// would drop the cap 20× in a frame.
+export const BOOST_SPOOL_SECONDS = 1
+
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 
 export function createShipState(): ShipState {
@@ -388,6 +426,7 @@ export function createShipState(): ShipState {
     velocity: new THREE.Vector3(),
     orientation: new THREE.Quaternion(),
     angularVelocity: new THREE.Vector3(),
+    boost: 0,
   }
 }
 
@@ -440,6 +479,8 @@ interface Proximity {
   targetFloor: number
   targetAltitude: number
   targetClimb: number
+  /** The boost spool measure() read the target's floor with. */
+  targetBoost: number
   /** min over bodies of max(0, gap) / wellFactor; Infinity with no bodies. */
   wellDistance: number
   /** The body that sets wellDistance (d_eff), its wellFactor and speedFloor (speedFloorAt its gap). */
@@ -450,6 +491,15 @@ interface Proximity {
   wellCeiling: number
   /** Whether that body has a groundSpeed law (wellCap: whether its floor sets the cap). */
   wellGround: boolean
+  /**
+   * That body's groundSpeed law (null without one) and the gap, altitude
+   * and climb measure() read it at, so boostRaises can read it again at
+   * spool 0 without a second pass over the bodies.
+   */
+  wellLaw: Readonly<GroundSpeedLaw> | null
+  wellGap: number
+  wellAltitude: number
+  wellClimb: number
 }
 
 const proximity: Proximity = {
@@ -460,12 +510,17 @@ const proximity: Proximity = {
   targetFloor: V_NORMAL,
   targetAltitude: Infinity,
   targetClimb: 0,
+  targetBoost: 0,
   wellDistance: Infinity,
   wellKey: null,
   wellBodyFactor: 1,
   wellFloor: V_NORMAL,
   wellCeiling: Infinity,
   wellGround: false,
+  wellLaw: null,
+  wellGap: Infinity,
+  wellAltitude: Infinity,
+  wellClimb: 0,
 }
 
 const outward = new THREE.Vector3()
@@ -492,7 +547,8 @@ function measure(
   position: THREE.Vector3,
   bodies: readonly Body[],
   targetKey: string | null,
-  heading: THREE.Vector3 | null = null
+  heading: THREE.Vector3 | null = null,
+  boost = 0
 ): Proximity {
   proximity.nearest = null
   proximity.nearestGap = Infinity
@@ -501,12 +557,17 @@ function measure(
   proximity.targetFloor = V_NORMAL
   proximity.targetAltitude = Infinity
   proximity.targetClimb = 0
+  proximity.targetBoost = boost
   proximity.wellDistance = Infinity
   proximity.wellKey = null
   proximity.wellBodyFactor = 1
   proximity.wellFloor = V_NORMAL
   proximity.wellCeiling = Infinity
   proximity.wellGround = false
+  proximity.wellLaw = null
+  proximity.wellGap = Infinity
+  proximity.wellAltitude = Infinity
+  proximity.wellClimb = 0
   for (const body of bodies) {
     const gap = surfaceGap(position, body)
     // A NaN gap never wins the nearest or well comparisons, so it can't
@@ -517,7 +578,7 @@ function measure(
     }
     const altitude = centreDistance - body.radius
     const climb = climbSine(position, body, heading)
-    const floor = speedFloorAt(body, gap, altitude, climb)
+    const floor = speedFloorAt(body, gap, altitude, climb, boost)
     const factor = wellFactor(body.mass)
     const well = Math.max(0, gap) / factor
     if (well < proximity.wellDistance) {
@@ -525,8 +586,12 @@ function measure(
       proximity.wellKey = body.key
       proximity.wellBodyFactor = factor
       proximity.wellFloor = floor
-      proximity.wellCeiling = body.groundSpeed ? lawCeiling(body.groundSpeed, gap, altitude, climb) : Infinity
+      proximity.wellCeiling = body.groundSpeed ? lawCeiling(body.groundSpeed, gap, altitude, climb, boost) : Infinity
       proximity.wellGround = body.groundSpeed !== undefined
+      proximity.wellLaw = body.groundSpeed ?? null
+      proximity.wellGap = gap
+      proximity.wellAltitude = altitude
+      proximity.wellClimb = climb
     }
     if (targetKey != null && body.key === targetKey) {
       proximity.target = body
@@ -558,9 +623,31 @@ function groundLawSets({ wellGround, wellFloor, wellCeiling, wellDistance }: Pro
 
 // wellDistance is Infinity with no bodies (or none with a usable gap).
 function wellCap({ wellDistance, wellFloor, wellCeiling }: Proximity): number {
-  return Number.isFinite(wellDistance)
-    ? clamp(Math.min(K_WELL * wellDistance, wellCeiling), wellFloor, V_TOP)
-    : V_NORMAL
+  return capAt(wellDistance, wellFloor, wellCeiling)
+}
+
+function capAt(wellDistance: number, floor: number, ceiling: number): number {
+  return Number.isFinite(wellDistance) ? clamp(Math.min(K_WELL * wellDistance, ceiling), floor, V_TOP) : V_NORMAL
+}
+
+// The least relative rise over the unboosted cap that counts as the boost
+// raising it (boostRaises), well clear of rounding: where the boost changes
+// nothing both caps come from the same expressions and match exactly.
+const BOOST_RAISES_BY = 1e-6
+
+// Whether the boost raised `cap`, wellCap(p) for a measure() read with the
+// spool over 0, over the cap the same measure gives at spool 0: the well
+// body's law read again at its gap, altitude and climb. False without an
+// air law (space, the Moon, the low tier), where the air already meets the
+// gap law or the plateau (~91 km up), and in the guard band near the ground
+// where the gap law binds either way. The HUD's "Boost" (tides-zmw.25)
+// reads it, so it never claims a boost that changes nothing.
+function boostRaises(p: Proximity, cap: number): boolean {
+  const law = p.wellLaw
+  if (!law?.air) return false
+  const { wellGap: gap, wellAltitude: altitude, wellClimb: climb } = p
+  const unboosted = capAt(p.wellDistance, lawFloor(law, gap, altitude, climb), lawCeiling(law, gap, altitude, climb))
+  return cap > unboosted * (1 + BOOST_RAISES_BY)
 }
 
 /**
@@ -568,15 +655,16 @@ function wellCap({ wellDistance, wellFloor, wellCeiling }: Proximity): number {
  * floor, V_TOP), with d_eff the smallest gap / wellFactor over `bodies` and
  * floor the speedFloor of the body that sets it (speedFloorAt, with the
  * ship's `heading`, its direction of travel, world frame, unit, for an air
- * law's escape; none reads as level). With no bodies there is nothing to
- * scale against, so V_NORMAL.
+ * law's escape; none reads as level, and the `boost` spool, ShipState.boost).
+ * With no bodies there is nothing to scale against, so V_NORMAL.
  */
 export function speedCap(
   position: THREE.Vector3,
   bodies: readonly Body[],
-  heading: THREE.Vector3 | null = null
+  heading: THREE.Vector3 | null = null,
+  boost = 0
 ): number {
-  return wellCap(measure(position, bodies, null, heading))
+  return wellCap(measure(position, bodies, null, heading, boost))
 }
 
 /**
@@ -605,17 +693,25 @@ function airApproachCap(
   altitude: number,
   climb: number,
   eta: number,
-  dt: number
+  dt: number,
+  boost: number
 ): number {
-  const ahead = airCapAt(law, gap, altitude, climb, eta) * dt
-  return airCapAt(law, gap - ahead, altitude - ahead, climb, eta)
+  const ahead = airCapAt(law, gap, altitude, climb, eta, boost) * dt
+  return airCapAt(law, gap - ahead, altitude - ahead, climb, eta, boost)
 }
 
 // wellCap with the target setting d_eff, for airApproachCap.
-function airCapAt(law: Readonly<GroundSpeedLaw>, gap: number, altitude: number, climb: number, eta: number): number {
+function airCapAt(
+  law: Readonly<GroundSpeedLaw>,
+  gap: number,
+  altitude: number,
+  climb: number,
+  eta: number,
+  boost: number
+): number {
   return Math.max(
-    lawFloor(law, gap, altitude, climb),
-    Math.min(Math.max(0, gap) / eta, lawCeiling(law, gap, altitude, climb))
+    lawFloor(law, gap, altitude, climb, boost),
+    Math.min(Math.max(0, gap) / eta, lawCeiling(law, gap, altitude, climb, boost))
   )
 }
 
@@ -728,7 +824,7 @@ function translate(
   input: Readonly<ShipInput>,
   dt: number,
   cap: number,
-  { target, targetGap, targetFloor, targetAltitude, targetClimb }: Proximity
+  { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost }: Proximity
 ): void {
   bodyAxes(state.orientation)
   // Thrust as a share of the cap, world frame.
@@ -760,7 +856,7 @@ function translate(
   const closing = v.dot(toTarget)
   const law = target.groundSpeed
   const limit = law?.air
-    ? airApproachCap(law, targetGap, targetAltitude, targetClimb, wellTime(target), dt)
+    ? airApproachCap(law, targetGap, targetAltitude, targetClimb, wellTime(target), dt, targetBoost)
     : approachCap(targetGap, wellTime(target), dt, targetFloor)
   if (closing > limit) v.addScaledVector(toTarget, limit - closing)
 }
@@ -827,12 +923,15 @@ function fillTelemetry(
   input: Readonly<ShipInput>,
   { nearest, nearestGap, target, targetGap, wellKey, wellBodyFactor, wellFloor }: Proximity,
   cap: number,
-  colliding: boolean
+  colliding: boolean,
+  boosted: boolean
 ): void {
   out.speed = state.velocity.length()
   out.speedCap = cap
   out.throttle = usableThrottle(input.throttle)
   out.flightAssist = input.flightAssist
+  out.boost = state.boost
+  out.boosted = boosted
   out.velocity.copy(state.velocity)
   out.colliding = colliding
   // The carry (frame-carry.ts fillAir) overwrites these after the step.
@@ -861,6 +960,14 @@ function fillTelemetry(
 }
 
 const heading = new THREE.Vector3()
+
+// The boost spool after `dt` with boost `held`: toward 1 or 0 at
+// 1 / BOOST_SPOOL_SECONDS. A NaN spool restarts from 0.
+function spoolBoost(spool: number, held: boolean, dt: number): number {
+  const s = Number.isFinite(spool) ? clamp(spool, 0, 1) : 0
+  const step = dt / BOOST_SPOOL_SECONDS
+  return held ? Math.min(1, s + step) : Math.max(0, s - step)
+}
 
 // The ship's direction of travel (unit), or null when still.
 function headingOf(state: ShipState): THREE.Vector3 | null {
@@ -895,9 +1002,14 @@ export function stepShip(
   const h = Number.isFinite(dt) ? clamp(dt, 0, MAX_DT) : 0
   // measure() reuses one record, so take what this step needs before the
   // end-of-step measure overwrites it.
-  const here = measure(state.position, env.bodies, env.targetKey, headingOf(state))
+  const here = measure(state.position, env.bodies, env.targetKey, headingOf(state), state.boost)
   const capBefore = wellCap(here)
   const { target } = here
+  // The spool this step ends on, ahead of the move: a locked approach
+  // closes at the cap where the step ends, so while the boost spools down
+  // it reads the lower of the two (airApproachCap).
+  const spool = h > 0 ? spoolBoost(state.boost, input.boost, h) : state.boost
+  here.targetBoost = Math.min(here.targetBoost, spool)
   if (h > 0) {
     rotate(state, input, h, speedFraction(state.velocity.length(), capBefore))
     translate(state, input, h, capBefore, here)
@@ -906,11 +1018,17 @@ export function stepShip(
   // Even on a zero step: the ground can rise under a still ship (the live
   // terrain scale follows the altitude, tides-zmw.9.5; tiles load).
   const colliding = collide(state, env.bodies)
+  // Spooled after the move and before the end-of-step measure, so the ride's
+  // capAfter / capBefore carries the boost's change with the gap's.
+  state.boost = spool
   // End-of-step distances, so the ride and the HUD match where the camera
   // now is.
-  const there = measure(state.position, env.bodies, env.targetKey, headingOf(state))
+  const there = measure(state.position, env.bodies, env.targetKey, headingOf(state), state.boost)
   const capAfter = wellCap(there)
   if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, groundLawSets(there))
-  if (telemetry) fillTelemetry(telemetry, state, input, there, capAfter, colliding)
+  if (telemetry) {
+    const boosted = state.boost > 0 && boostRaises(there, capAfter)
+    fillTelemetry(telemetry, state, input, there, capAfter, colliding, boosted)
+  }
   return state
 }

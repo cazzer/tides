@@ -56,6 +56,7 @@ const ZERO_AT = -THROTTLE_MIN / SPAN
 const at = (throttle: number) => `${((throttle - THROTTLE_MIN) / SPAN) * 100}%`
 
 interface Readouts {
+  speedCell: HTMLElement | null
   speed: HTMLElement | null
   speedUnit: HTMLElement | null
   wideTurn: HTMLElement | null
@@ -92,6 +93,7 @@ interface Readouts {
 export function ShipHud() {
   const [controlsOpen, setControlsOpen] = useState(false)
   const readouts = useRef<Readouts>({
+    speedCell: null,
     speed: null,
     speedUnit: null,
     wideTurn: null,
@@ -219,6 +221,12 @@ export function ShipHud() {
       const [speed, unit] = speedParts(formatSpeed(shipTelemetry.air.speed * shipNav.kmPerUnit, SURFACE_TILES_ON))
       set(r.speed, speed)
       set(r.speedUnit, unit && ` ${unit}`)
+      // While the boost raises the cap (tides-zmw.25), the speed's label
+      // says so: not merely while it's held, since in space, on the Moon,
+      // from ~91 km up and in the guard band near the ground holding it
+      // changes nothing (flight.ts boostRaises). Not announced: the player
+      // is holding it.
+      r.speedCell?.toggleAttribute('data-boost', shipTelemetry.boosted)
       const well = wellSuffix(shipTelemetry.well.key, shipTelemetry.speedCap)
       set(r.well, well)
       if (r.well) r.well.hidden = well === ''
@@ -375,9 +383,12 @@ export function ShipHud() {
         data-ship-ui
       >
         <Row>
-          <Cell>
+          <Cell ref={bind('speedCell')}>
             <Label>
-              Speed
+              <SpeedLabel>
+                <span>Speed</span>
+                <span>Boost</span>
+              </SpeedLabel>
               <WideTurn
                 ref={bind('wideTurn')}
                 hidden
@@ -585,6 +596,28 @@ const Value = styled.div`
 // The speed's unit, dimmed like a label so the number reads first.
 const Unit = styled.span`
   color: rgba(255, 255, 255, 0.6);
+`
+
+// "Speed", or "Boost" while the boost raises the cap, lit like the touch throttle readout's
+// flash. Both words share one cell, so the label is as wide as the wider and
+// row 1 doesn't shift as the boost comes and goes.
+const SpeedLabel = styled.span`
+  display: inline-grid;
+
+  & > span {
+    grid-area: 1 / 1;
+  }
+
+  & > span:last-child,
+  [data-boost] & > span:first-child {
+    visibility: hidden;
+  }
+
+  [data-boost] & > span:last-child {
+    visibility: visible;
+    color: #fff;
+    text-shadow: 0 0 8px #4c9ffe;
+  }
 `
 
 const WideTurn = styled.span``

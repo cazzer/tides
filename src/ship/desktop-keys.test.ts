@@ -32,6 +32,7 @@ function setup() {
     roll: 0,
     level: false,
     flightAssist: true,
+    boost: false,
   }
   const down = (code: string, extra?: Partial<ShipKeyEvent>) =>
     shipKeyDown(keys, key(code, extra), input)
@@ -91,6 +92,54 @@ describe('desktop ship keys (tides-3bl.3)', () => {
     expect(input.level).toBe(true)
     up('KeyL')
     expect(input.level).toBe(false)
+  })
+
+  it('holds boost while either Shift is down, and Shift+W still throttles (tides-zmw.25)', () => {
+    const { down, up, input, keys } = setup()
+    for (const shift of ['ShiftLeft', 'ShiftRight']) {
+      expect(down(shift)).toBe(true)
+      down(shift, { repeat: true })
+      expect(input.boost).toBe(true)
+      expect(up(shift)).toBe(true)
+      expect(input.boost).toBe(false)
+    }
+    down('ShiftLeft')
+    expect(down('KeyW', { shiftKey: true } as Partial<ShipKeyEvent>)).toBe(true)
+    stepThrottle(keys, input, 0.1)
+    expect(input.throttle).toBeCloseTo(THROTTLE_RATE * 0.1, 12)
+    expect(input.boost).toBe(true)
+    // Cmd+Shift is the browser's.
+    up('ShiftLeft')
+    expect(down('ShiftLeft', { metaKey: true })).toBe(false)
+    expect(input.boost).toBe(false)
+  })
+
+  it('keeps boosting until both Shifts are up', () => {
+    const { down, up, input } = setup()
+    down('ShiftLeft')
+    down('ShiftRight')
+    expect(up('ShiftLeft')).toBe(true)
+    expect(input.boost).toBe(true)
+    down('ShiftLeft', { repeat: true })
+    expect(up('ShiftRight')).toBe(true)
+    expect(input.boost).toBe(true)
+    expect(up('ShiftLeft')).toBe(true)
+    expect(input.boost).toBe(false)
+    // A stray keyup for a Shift that was never down lets nothing go.
+    down('ShiftRight')
+    expect(up('ShiftLeft')).toBe(false)
+    expect(input.boost).toBe(true)
+  })
+
+  it('lets go of boost when Cmd is released or the keys are', () => {
+    const { down, keys, input } = setup()
+    down('ShiftLeft')
+    shipKeyUp(keys, { code: 'MetaLeft', key: 'Meta' }, input)
+    expect(input.boost).toBe(false)
+    down('ShiftRight')
+    expect(input.boost).toBe(true)
+    releaseShipKeys(keys, input)
+    expect(input.boost).toBe(false)
   })
 
   it('releases on keyup even when a modifier went down meanwhile', () => {

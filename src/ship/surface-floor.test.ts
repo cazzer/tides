@@ -90,7 +90,7 @@ function drawnRadius(earth: ShipBody, field: ConeField, point: THREE.Vector3): n
   return EARTH_RADIUS + field.at(lat, lon) * RELIEF * M
 }
 
-const still: ShipInput = { throttle: 0, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true }
+const still: ShipInput = { throttle: 0, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true, boost: false }
 
 // One frame as ShipController runs it, `change` standing in for the tiles' update.
 function frameOf(state: ShipState, earth: ShipBody, dt: number, input: ShipInput = still, change?: () => void, fine = true) {

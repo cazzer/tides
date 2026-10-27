@@ -120,6 +120,7 @@ export function ShipTargeting() {
       capFloor: shipTelemetry.well.floor,
       throttle: shipTelemetry.throttle,
       flightAssist: shipTelemetry.flightAssist,
+      boost: shipTelemetry.boost,
       targetKey: target,
       km: ranges.km,
     })

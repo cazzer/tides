@@ -18,6 +18,7 @@ export type ShipKeyAction =
   | 'rollRight'
   | 'flightAssist'
   | 'level'
+  | 'boost'
 
 export const SHIP_KEYS: Readonly<Record<string, ShipKeyAction>> = {
   KeyW: 'throttleUp',
@@ -31,6 +32,8 @@ export const SHIP_KEYS: Readonly<Record<string, ShipKeyAction>> = {
   KeyE: 'rollRight',
   KeyZ: 'flightAssist',
   KeyL: 'level',
+  ShiftLeft: 'boost',
+  ShiftRight: 'boost',
 }
 
 /** Holding W (or S) sweeps the whole throttle range in this long. */
@@ -56,16 +59,24 @@ export interface ShipKeys {
    * takes a fresh press, as in Elite Dangerous.
    */
   detent: Set<ShipKeyAction>
+  /**
+   * The codes behind `held`. Two keys can share an action (ShiftLeft and
+   * ShiftRight both boost), so an action is let go only once every key
+   * holding it is up: releasing one Shift while the other is down keeps
+   * boosting.
+   */
+  codes: Set<string>
 }
 
 export function createShipKeys(): ShipKeys {
-  return { held: new Set(), detent: new Set() }
+  return { held: new Set(), detent: new Set(), codes: new Set() }
 }
 
 /**
  * The action a key press maps to, or null when ship mode should leave it
  * alone: unbound keys, and chords with Cmd/Ctrl/Alt so browser and OS
- * shortcuts (Cmd+R, Ctrl+W, …) keep working. Shift is not a modifier here.
+ * shortcuts (Cmd+R, Ctrl+W, …) keep working. Shift is not a modifier here
+ * but a held ship key of its own (boost), so Shift+W still throttles up.
  */
 export function shipKeyAction(event: Omit<ShipKeyEvent, 'key' | 'repeat'>): ShipKeyAction | null {
   if (event.metaKey || event.ctrlKey || event.altKey) return null
@@ -81,6 +92,7 @@ function applyHeld(held: Set<ShipKeyAction>, input: ShipInput): void {
   input.strafeY = axis(held, 'strafeDown', 'strafeUp')
   input.roll = axis(held, 'rollLeft', 'rollRight')
   input.level = held.has('level')
+  input.boost = held.has('boost')
 }
 
 /**
@@ -107,6 +119,7 @@ export function shipKeyDown(keys: ShipKeys, event: ShipKeyEvent, input: ShipInpu
     else keys.detent.delete(action)
   }
   keys.held.add(action)
+  keys.codes.add(event.code)
   applyHeld(keys.held, input)
   return true
 }
@@ -129,7 +142,10 @@ export function shipKeyUp(
     return false
   }
   const action = SHIP_KEYS[event.code]
-  if (!action || !keys.held.delete(action)) return false
+  if (!action || !keys.codes.delete(event.code)) return false
+  // Another key still holds the action: the press was ours, the hold isn't over.
+  for (const code of keys.codes) if (SHIP_KEYS[code] === action) return true
+  keys.held.delete(action)
   keys.detent.delete(action)
   applyHeld(keys.held, input)
   return true
@@ -153,5 +169,6 @@ export function stepThrottle(keys: ShipKeys, input: ShipInput, dt: number): void
 export function releaseShipKeys(keys: ShipKeys, input: ShipInput): void {
   keys.held.clear()
   keys.detent.clear()
+  keys.codes.clear()
   applyHeld(keys.held, input)
 }
