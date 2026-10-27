@@ -368,6 +368,25 @@ describe('playShipCue', () => {
     expect(build).not.toHaveBeenCalled()
   })
 
+  it('cuts a sounding cue short inside the fade on a mute', () => {
+    const { audio, context } = setup()
+    audio.activate()
+    audio.gesture()
+    const stop = vi.fn()
+    const end = { onended: null as (() => void) | null, disconnect: vi.fn(), stop }
+    playShipCue(() => ({ end, nodes: [] }) as unknown as ShipCue, audio)
+    audio.setMuted(true)
+    expect(stop).toHaveBeenCalledTimes(1)
+    const at = stop.mock.calls[0][0] as number
+    expect(at).toBeGreaterThan(context().currentTime)
+    expect(at).toBeLessThan(context().currentTime + SUSPEND_DELAY_MS / 1000)
+    // Once it has ended it is left alone.
+    end.onended?.()
+    audio.setMuted(false)
+    audio.setVisible(false)
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
   it('builds a cue at the current time and frees it when it ends', () => {
     const { audio, context } = setup()
     audio.activate()

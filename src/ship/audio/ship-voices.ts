@@ -139,7 +139,11 @@ function noiseBuffer(context: BaseAudioContext, brown: boolean): AudioBuffer {
 // Made once per context: a rebuild (a voice graph per flight) reuses them.
 const noiseBuffers = new WeakMap<BaseAudioContext, { brown: AudioBuffer; white: AudioBuffer }>()
 
-function noise(context: BaseAudioContext) {
+/**
+ * The context's looping noise, NOISE_SECONDS long: red-ish (see
+ * BROWN_CORNER_HZ) and white. Made on first ask; the cues share it.
+ */
+export function shipNoise(context: BaseAudioContext): { brown: AudioBuffer; white: AudioBuffer } {
   let buffers = noiseBuffers.get(context)
   if (!buffers) {
     buffers = { brown: noiseBuffer(context, true), white: noiseBuffer(context, false) }
@@ -167,7 +171,7 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
     nodes.push(node)
     return node
   }
-  const { brown, white } = noise(context)
+  const { brown, white } = shipNoise(context)
   // Each noise voice starts at its own place in the loop, so two voices on
   // one buffer don't sound as one.
   const loop = (buffer: AudioBuffer, offset: number) => {

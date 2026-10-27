@@ -4,15 +4,19 @@ import { shipAudio, type ShipAudio, type ShipAudioOutput } from './ship-audio'
 
 export type ShipAudioUpdate = (out: ShipAudioOutput, dt: number) => void
 
-/** One frame of useShipAudioFrame: `update` only while the sound is running. */
+/**
+ * One frame of useShipAudioFrame: `update` only while the sound is running
+ * (ShipAudio.isRunning, as for the cues), so not in the fade before a
+ * suspend either; the master gain is fading then anyway.
+ */
 export function stepShipAudioFrame(update: ShipAudioUpdate, delta: number, audio: ShipAudio = shipAudio): void {
   const out = audio.output()
-  if (out?.context.state === 'running') update(out, Math.min(delta, MAX_DT))
+  if (out && audio.isRunning()) update(out, Math.min(delta, MAX_DT))
 }
 
 /**
  * Calls `update` every frame with the ship's sound output and the frame time,
- * capped like the flight step's, while the context runs: not before the first
+ * capped like the flight step's, while the sound runs: not before the first
  * gesture, nor while muted, hidden or resuming. For voices driven by ship
  * state (tides-a4j.2), mounted in the ship scene. The output can change (a
  * closed context remade), so key voices by out.context.

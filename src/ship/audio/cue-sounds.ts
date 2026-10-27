@@ -6,6 +6,7 @@
 
 import type { ShipAudioOutput, ShipCue } from './ship-audio'
 import type { ShipCueKind } from './ship-cues'
+import { shipNoise } from './ship-voices'
 
 /** [TUNE] The impact's thud: a sine falling from the first pitch to the second, Hz, over IMPACT_SECONDS. */
 export const IMPACT_HZ: readonly [number, number] = [90, 38]
@@ -55,7 +56,6 @@ function tones(
   const osc = context.createOscillator()
   osc.type = type
   const level = context.createGain()
-  level.gain.setValueAtTime(0, at)
   const nodes: AudioNode[] = [level]
   let into: AudioNode = level
   if (cutoff != null) {
@@ -82,7 +82,10 @@ function tones(
   return { end: osc, nodes }
 }
 
-/** A falling sine thud with a short burst of lowpassed noise over its start. */
+/**
+ * A falling sine thud with a short burst of lowpassed noise over its start,
+ * a slice of the voices' white noise from a random place in it.
+ */
 function impact(out: ShipAudioOutput, at: number): ShipCue {
   const { context } = out
   const end = at + IMPACT_SECONDS
@@ -97,12 +100,9 @@ function impact(out: ShipAudioOutput, at: number): ShipCue {
   osc.connect(thud)
   thud.connect(out.bus)
 
-  const length = Math.round(IMPACT_NOISE_SECONDS * context.sampleRate)
-  const buffer = context.createBuffer(1, length, context.sampleRate)
-  const data = buffer.getChannelData(0)
-  for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1
+  const { white } = shipNoise(context)
   const noise = context.createBufferSource()
-  noise.buffer = buffer
+  noise.buffer = white
   const lowpass = context.createBiquadFilter()
   lowpass.type = 'lowpass'
   lowpass.frequency.value = IMPACT_NOISE_HZ
@@ -113,7 +113,7 @@ function impact(out: ShipAudioOutput, at: number): ShipCue {
   lowpass.connect(crunch)
   crunch.connect(out.bus)
 
-  noise.start(at)
+  noise.start(at, Math.random() * (white.duration - IMPACT_NOISE_SECONDS), IMPACT_NOISE_SECONDS)
   osc.start(at)
   osc.stop(end + TAIL_SECONDS)
   // The thud outlasts the crunch, so its end frees both.

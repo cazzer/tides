@@ -22,6 +22,9 @@ const FADE_TIME_CONSTANT = 0.015
 // of mind inside it (a quick mute and unmute) never suspends at all.
 const SUSPEND_DELAY_MS = 100
 
+// A cue cut off by a mute or a hidden tab ends this far into the fade, s.
+const CUE_CUT_SECONDS = 3 * FADE_TIME_CONSTANT
+
 const ignore = () => {}
 
 /** What a voice or cue plays into: the context and the master gain. */
@@ -62,6 +65,8 @@ export interface ShipAudio {
    * the tab showing, unmuted), so not in the fade before a suspend.
    */
   isRunning(): boolean
+  /** playShipCue's work: see there. */
+  playCue(build: (out: ShipAudioOutput, at: number) => ShipCue): boolean
 }
 
 export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
@@ -73,6 +78,8 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
   let muted: boolean | null = null
   let suspendTimer: ReturnType<typeof setTimeout> | null = null
   const listeners = new Set<() => void>()
+  // The cues still sounding, by the source whose end frees each.
+  const cueEnds = new Set<AudioScheduledSourceNode>()
 
   // Read on first use rather than at import, so the page touches storage
   // only once ship mode asks.
@@ -88,6 +95,7 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
   }
 
   const shouldRun = () => bindings > 0 && visible && !isMuted()
+  const isRunning = () => context?.state === 'running' && shouldRun()
 
   const suspendLater = () => {
     suspendTimer = null
@@ -108,8 +116,13 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
       if (suspendTimer != null) clearTimeout(suspendTimer)
       suspendTimer = null
       if (context.state !== 'running') context.resume().catch(ignore)
-    } else if (context.state === 'running' && suspendTimer == null) {
-      suspendTimer = setTimeout(suspendLater, SUSPEND_DELAY_MS)
+    } else {
+      // A cue cut off here ends inside the fade, before the suspend; left to
+      // its own stop, it would finish on the next resume, out of its moment.
+      for (const end of cueEnds) end.stop(now + CUE_CUT_SECONDS)
+      if (context.state === 'running' && suspendTimer == null) {
+        suspendTimer = setTimeout(suspendLater, SUSPEND_DELAY_MS)
+      }
     }
   }
 
@@ -162,7 +175,19 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
       }
     },
     output: () => (bindings > 0 && context?.state !== 'closed' ? out : null),
-    isRunning: () => context?.state === 'running' && shouldRun(),
+    isRunning,
+    playCue(build) {
+      if (!out || !isRunning()) return false
+      const cue = build(out, out.context.currentTime)
+      const { end } = cue
+      cueEnds.add(end)
+      end.onended = () => {
+        cueEnds.delete(end)
+        end.disconnect()
+        for (const node of cue.nodes) node.disconnect()
+      }
+      return true
+    },
   }
 }
 
@@ -200,18 +225,11 @@ export interface ShipCue {
  * sound is running (ShipAudio.isRunning); returns whether it did. `build` is
  * not called otherwise, so a silent cue costs nothing, and none plays into
  * the fade before a suspend. Once `end` ends, it and `nodes` are
- * disconnected.
+ * disconnected; a mute or a hidden tab cuts it short, inside the fade.
  */
 export function playShipCue(
   build: (out: ShipAudioOutput, at: number) => ShipCue,
   audio: ShipAudio = shipAudio
 ): boolean {
-  const out = audio.output()
-  if (!out || !audio.isRunning()) return false
-  const cue = build(out, out.context.currentTime)
-  cue.end.onended = () => {
-    cue.end.disconnect()
-    for (const node of cue.nodes) node.disconnect()
-  }
-  return true
+  return audio.playCue(build)
 }
