@@ -4,17 +4,18 @@
 // playback runs. When the pair changes in a way that isn't the next step along
 // (a frame arrives late, a jump, a hold refresh, the first output) the last
 // output is frozen and faded out over FADE_MS instead of cut. The result is
-// one texture laid out like a cloud build's (R height, G alpha, B height
-// confidence) for the cloud layer (./cloudShaders.ts).
+// a texture laid out like a cloud build's (R height, G alpha, B height
+// confidence) for the cloud layer (./cloudShaders.ts), with the typed tops
+// beside it (below).
 //
 // The frames' cloud-type grids (tides-tvr.4.1, ../cloud-types.ts) are blended
 // the same way in a second, tiny pass of their own, so the output also has a
 // type grid that keeps step with the clouds. A frame without one (the static
 // clouds, a frame the cover grid didn't type) counts as confidence 0. That
-// pass runs first, so that the main pass can write, into its output's alpha,
-// how far the typed tops lie from the untyped ones (tides-tvr.4.3,
-// ./cloudTypeGlsl.ts CLOUD_TYPED_TOP_GLSL), for the typed march to read in
-// the fetch it already makes.
+// pass runs first, so that the main pass can write, into a second texture
+// beside its output, each typed column's top and lift (tides-tvr.4.3,
+// tides-tvr.4.9, ./cloudTypeGlsl.ts CLOUD_TYPED_TOP_GLSL), for the typed
+// march to read where it reads the map.
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import { OUT_H, OUT_W, smoothstep } from '../real-clouds'
@@ -76,12 +77,14 @@ void main() {
 // Inputs are sampled at their full resolution (the static clouds are 2048 px
 // wide, the builds and the output 2560). Only geostationary builds carry
 // heights; elsewhere R and B are zeroed so the cloud layer uses its defaults.
-// The alpha is the typed top's code, from the blended type grid (uTypes,
-// this output's own, drawn first) and the blended texel, whose B is already
-// the trust the march takes (B times whether the output is measured): B is
-// 0 wherever no input measured heights. The frozen output's alpha is never
-// read: its code is worked out afresh from the blend.
+// The tops (the second output) come from the blended type grid (uTypes, this
+// output's own, drawn first) and the blended texel, whose B is already the
+// trust the march takes (B times whether the output is measured): B is 0
+// wherever no input measured heights. The frozen output's tops are never
+// read: they are worked out afresh from the blend.
 const fragmentShader = /* glsl */ `
+layout(location = 0) out highp vec4 cloudMap;
+layout(location = 1) out highp vec4 cloudTops;
 uniform sampler2D uPrev;
 uniform sampler2D uA;
 uniform sampler2D uB;
@@ -110,7 +113,8 @@ vec3 blendCloud(vec3 x, vec3 y, float t) {
 void main() {
   vec3 frames = blendCloud(cloudTexel(uA, uAGeo), cloudTexel(uB, uBGeo), uMix);
   vec3 c = blendCloud(cloudTexel(uPrev, uPrevGeo), frames, uFade);
-  gl_FragColor = vec4(c, cloudTypedCode(textureLod(uTypes, vUv, 0.0), c));
+  cloudMap = vec4(c, 1.0);
+  cloudTops = cloudTypedTops(textureLod(uTypes, vUv, 0.0), c);
 }
 `
 
@@ -183,6 +187,7 @@ export function outputFlags(
 }
 
 interface Output {
+  /** The blended map (textures[0]) and its typed tops (textures[1]). */
   target: THREE.WebGLRenderTarget
   /** The blended type grid, TYPE_W x TYPE_H. */
   types: THREE.WebGLRenderTarget
@@ -212,8 +217,11 @@ function createTypeTarget(): THREE.WebGLRenderTarget {
 function createTarget(): Output {
   // Rendering to a target writes linear values with no tone mapping, so the
   // bytes pass straight through; three regenerates the mipmaps after each
-  // render, which the cloud layer's LOD sampling needs.
+  // render, which the cloud layer's LOD sampling needs. Two attachments
+  // alike: the map, and its tops, which the march reads with the map's own
+  // coordinates and mip.
   const target = new THREE.WebGLRenderTarget(OUT_W, OUT_H, {
+    count: 2,
     format: THREE.RGBAFormat,
     type: THREE.UnsignedByteType,
     depthBuffer: false,
@@ -267,6 +275,7 @@ export function createCloudBlender() {
       },
       vertexShader,
       fragmentShader,
+      glslVersion: THREE.GLSL3,
       depthTest: false,
       depthWrite: false,
       blending: THREE.NoBlending,
@@ -352,14 +361,21 @@ export function createCloudBlender() {
      * Blends `pick` (null: keep the last output) and returns the texture to
      * show, or null before the first output. Idempotent within a frame for the
      * same wallMs, so every View can call it. typeTexture is the blended
-     * cloud-type grid, which only counts where typed.
+     * cloud-type grid, which only counts where typed, and topsTexture its
+     * typed columns, laid out like the map.
      */
     update(
       gl: THREE.WebGLRenderer,
       pick: { a: THREE.Texture; b: THREE.Texture; mix: number } | null,
       staticTexture: THREE.Texture,
       wallMs: number
-    ): { texture: THREE.Texture; measured: boolean; typed: boolean; typeTexture: THREE.Texture } | null {
+    ): {
+      texture: THREE.Texture
+      measured: boolean
+      typed: boolean
+      typeTexture: THREE.Texture
+      topsTexture: THREE.Texture
+    } | null {
       if (pick) {
         const step = planBlendPass(
           state,
@@ -371,7 +387,13 @@ export function createCloudBlender() {
       }
       if (!hasOutput || !outputs) return null
       const out = outputs[current]
-      return { texture: out.target.texture, measured: out.measured, typed: out.typed, typeTexture: out.types.texture }
+      return {
+        texture: out.target.texture,
+        measured: out.measured,
+        typed: out.typed,
+        typeTexture: out.types.texture,
+        topsTexture: out.target.textures[1],
+      }
     },
     /** Frees the GPU resources; the next update starts afresh. */
     release() {

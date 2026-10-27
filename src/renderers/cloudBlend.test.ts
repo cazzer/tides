@@ -9,19 +9,15 @@ import {
   typesOf,
   type BlendPassState,
 } from './cloudBlend'
-import { CLOUD_TYPED_TOP_GLSL, TYPED_CODE_GLSL } from './cloudTypeGlsl'
+import { CLOUD_TYPED_TOP_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import {
   CUMULUS_TOP_KM,
   TYPE_SHAPES,
   TYPE_TOP_KM,
   LIFTED_THICKNESS_KM,
-  TYPED_LIFT_EASE_KM,
-  TYPED_LIFT_KM,
   TYPED_LIFT_SHARES,
-  TYPED_LIFT_STEPS,
   TYPED_LOWEST_SHARE,
-  TYPED_ZERO_CODE,
-  TYPED_ZERO_SLACK,
+  TYPED_TOPS_KM,
 } from '../cloud-types'
 import { MAX_CLOUD_TOP_KM, MIN_MEASURED_TOP_KM } from '../cloud-layer'
 
@@ -130,7 +126,7 @@ describe('type grids', () => {
   })
 })
 
-describe('typed tops in the blend (tides-tvr.4.3)', () => {
+describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
   /** A renderer that records what each pass draws, and into what. */
   function recorder() {
     let target: THREE.WebGLRenderTarget | null = null
@@ -147,7 +143,7 @@ describe('typed tops in the blend (tides-tvr.4.3)', () => {
     return { gl: gl as unknown as THREE.WebGLRenderer, passes }
   }
 
-  test("draws the type grid first, for the main pass to code its output's tops from", () => {
+  test("draws the type grid first, for the main pass to work its output's tops out from", () => {
     const { gl, passes } = recorder()
     const blender = createCloudBlender()
     const a = new THREE.Texture()
@@ -161,28 +157,54 @@ describe('typed tops in the blend (tides-tvr.4.3)', () => {
     expect(main.target!.texture).toBe(out.texture)
     // The output's own grid, just drawn; not the frozen output's.
     expect(main.material.uniforms.uTypes.value).toBe(out.typeTexture)
-    expect(main.material.fragmentShader).toContain(
-      'gl_FragColor = vec4(c, cloudTypedCode(textureLod(uTypes, vUv, 0.0), c));'
-    )
     blender.release()
   })
 
-  test("codes the tops with ../cloud-types.ts's numbers", () => {
+  test('writes the map and its tops to two textures alike, read with the same coordinates and mip', () => {
+    const { gl, passes } = recorder()
+    const blender = createCloudBlender()
+    const out = blender.update(gl, { a: new THREE.Texture(), b: new THREE.Texture(), mix: 0.5 }, new THREE.Texture(), 0)!
+    const target = passes[1].target!
+    expect(target.textures).toHaveLength(2)
+    expect(target.textures[0]).toBe(out.texture)
+    expect(target.textures[1]).toBe(out.topsTexture)
+    const [map, tops] = target.textures
+    for (const key of ['format', 'type', 'minFilter', 'magFilter', 'generateMipmaps', 'wrapS', 'wrapT', 'colorSpace'] as const) {
+      expect(tops[key], key).toBe(map[key])
+    }
+    expect(map.generateMipmaps).toBe(true)
+    expect(map.minFilter).toBe(THREE.LinearMipmapLinearFilter)
+    expect([tops.image.width, tops.image.height]).toEqual([map.image.width, map.image.height])
+    // GLSL3, for the second output; the map's alpha back to 1 as before
+    // tides-tvr.4.3, and the frozen output's map alone fed back.
+    const main = passes[1].material
+    expect(main.glslVersion).toBe(THREE.GLSL3)
+    const src = main.fragmentShader
+    expect(src).toContain('layout(location = 0) out highp vec4 cloudMap;')
+    expect(src).toContain('layout(location = 1) out highp vec4 cloudTops;')
+    expect(src).not.toContain('gl_FragColor')
+    expect(src).toContain('cloudMap = vec4(c, 1.0);')
+    expect(src).toContain('cloudTops = cloudTypedTops(textureLod(uTypes, vUv, 0.0), c);')
+    // A swap: the next pass fades from this output's map, not its tops.
+    blender.update(gl, { a: new THREE.Texture(), b: new THREE.Texture(), mix: 0.5 }, new THREE.Texture(), 1000)
+    expect(passes[3].material.uniforms.uPrev.value).toBe(out.texture)
+    blender.release()
+  })
+
+  test("works the tops out with ../cloud-types.ts's numbers", () => {
     const f = (x: number) => x.toFixed(6)
     const src = CLOUD_TYPED_TOP_GLSL
-    // The code, shared with the march's cloudColumn().
-    expect(src).toContain(TYPED_CODE_GLSL)
+    // The tops' scale, shared with the march's cloudColumn().
+    expect(src).toContain(TYPED_TOPS_GLSL)
+    expect(TYPED_TOPS_GLSL).toContain(`#define TYPED_TOPS_KM ${f(TYPED_TOPS_KM)}`)
+    expect(TYPED_TOPS_KM).toBe(MAX_CLOUD_TOP_KM)
     for (const line of [
-      `#define TYPED_ZERO_CODE ${f(TYPED_ZERO_CODE)}`,
-      `#define TYPED_ZERO_SLACK ${f(TYPED_ZERO_SLACK)}`,
       `#define TYPED_LOWEST_SHARE ${f(TYPED_LOWEST_SHARE)}`,
-      `#define TYPED_LIFT_KM_PER_CODE (${f(TYPED_LIFT_KM)} / ${f(TYPED_LIFT_STEPS)})`,
-      `#define TYPED_LIFT_STEPS ${f(TYPED_LIFT_STEPS)}`,
-      `#define TYPED_LIFT_EASE_KM ${f(TYPED_LIFT_EASE_KM)}`,
       `#define LIFTED_THICKNESS(alpha) (${f(LIFTED_THICKNESS_KM[0])} + ${f(LIFTED_THICKNESS_KM[1])} * (alpha))`,
     ]) {
-      expect(TYPED_CODE_GLSL).toContain(line)
+      expect(src).toContain(line)
     }
+    expect(src).not.toMatch(/TYPED_ZERO|TYPED_LIFT_KM|TYPED_LIFT_EASE|cloudTypedCode/)
     // Each kind in the grid's order: cirrus, cumulus, alto, stratus.
     const kinds = [TYPE_SHAPES.cirrus, TYPE_SHAPES.cumulus, TYPE_SHAPES.alto, TYPE_SHAPES.stratus]
     for (const [name, i] of [['FLOOR', 0], ['FROM', 1], ['TO', 2]] as const) {
@@ -197,24 +219,24 @@ describe('typed tops in the blend (tides-tvr.4.3)', () => {
     expect(src).toContain(
       'float untyped = mix(1.5 + 7.0 * g * g, measured, c.b) * (0.25 + 0.75 * smoothstep(0.0, 0.65, g));'
     )
-    // No confidence, no change; the shares refined as at the hit.
-    const fn = src.slice(src.indexOf('float cloudTypedCode('))
-    expect(fn.indexOf('if (t.a <= 0.0) return TYPED_ZERO_CODE / 255.0;')).toBeLessThan(fn.indexOf('cloudTypeShares(t, c)'))
-    // typedTopCode(): the typed top, confidence of the way; lifted to it
-    // where mostly cirrus and alto (R and B) and the march reads the layer
-    // as lifted for; else lowered by a share, never raised.
+    // No confidence, untyped; the shares refined as at the hit.
+    const fn = src.slice(src.indexOf('vec4 cloudTypedTops('))
+    expect(fn.indexOf('if (t.a <= 0.0) return vec4(untyped / TYPED_TOPS_KM, 0.0, 0.0, 0.0);')).toBeGreaterThan(0)
+    expect(fn.indexOf('if (t.a <= 0.0) return')).toBeLessThan(fn.indexOf('cloudTypeShares(t, c)'))
+    // typedTops(): lowered on the ground to a share, never raised; lifted to
+    // a layer where mostly cirrus and alto (R and B); then confidence of the
+    // way from the untyped column, both channels over TYPED_TOPS_KM.
     for (const line of [
-      'float typed = mix(untyped, dot(s, km * shape), t.a);',
+      'float typed = dot(s, km * shape);',
+      'float top = clamp(typed, TYPED_LOWEST_SHARE * untyped, untyped);',
+      'float lift = 0.0;',
       'float share = s.x + s.z;',
       `if (share >= ${f(TYPED_LIFT_SHARES[0])}) {`,
       `float rise = smoothstep(${f(TYPED_LIFT_SHARES[0])}, ${f(TYPED_LIFT_SHARES[1])}, share);`,
+      'float lifted = min(typed, untyped) + rise * max(typed - untyped, 0.0);',
       'float layer = min(untyped, LIFTED_THICKNESS(g));',
-      'float lift = min(typed, untyped) + rise * max(typed - untyped, 0.0) - layer;',
-      'float misread = mix(untyped, layer, smoothstep(0.0, TYPED_LIFT_EASE_KM, lift)) - layer;',
-      'if (lift >= TYPED_LIFT_KM_PER_CODE && misread <= TYPED_LIFT_KM_PER_CODE) {',
-      'return (TYPED_ZERO_CODE + min(lift / TYPED_LIFT_KM_PER_CODE, TYPED_LIFT_STEPS)) / 255.0;',
-      'float keep = clamp(typed / max(untyped, 1e-6), TYPED_LOWEST_SHARE, 1.0);',
-      'return TYPED_ZERO_CODE * keep / 255.0;',
+      'if (lifted > layer) {\n      top = lifted;\n      lift = lifted - layer;\n    }',
+      'return vec4(mix(untyped, top, t.a) / TYPED_TOPS_KM, t.a * lift / TYPED_TOPS_KM, 1.0, 0.0);',
     ]) {
       expect(fn).toContain(line)
     }

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
-import { TYPED_CODE_GLSL } from './cloudTypeGlsl'
+import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
   CLOUD_GROUND_GLSL,
@@ -63,7 +63,7 @@ import {
   NEUTRAL_LOOK,
   STRETCH_EDGES,
   TYPE_LOOKS,
-  TYPED_ZERO_CODE,
+  TYPED_TOPS_KM,
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
@@ -1485,13 +1485,19 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       clouds.faceCamera(mesh, camera)
       expect(material.defines).not.toHaveProperty('CLOUD_TYPED')
 
+      // The typed columns too (tides-tvr.4.9), neutral to start: zeros,
+      // untyped.
+      expect(uniforms.uCloudTops.value).toBe(neutralTypeTexture())
+      expect(material.uniforms.uCloudTops).toBe(uniforms.uCloudTops)
+
       const map = new THREE.Texture()
-      const types = new THREE.Texture()
+      const types = { grid: new THREE.Texture(), tops: new THREE.Texture() }
       clouds.setMap(map, true, types)
       expect(uniforms.uCloudMap.value).toBe(map)
       expect(uniforms.uCloudMeasured.value).toBe(1)
       expect(uniforms.uCloudMaxKm.value).toBe(MAX_CLOUD_TOP_KM)
-      expect(uniforms.uCloudType.value).toBe(types)
+      expect(uniforms.uCloudType.value).toBe(types.grid)
+      expect(uniforms.uCloudTops.value).toBe(types.tops)
       expect(uniforms.uCloudTyped.value).toBe(1)
       let version = material.version
       clouds.faceCamera(mesh, camera)
@@ -1505,6 +1511,7 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       clouds.setMap(map, false, null)
       expect(uniforms.uCloudMeasured.value).toBe(0)
       expect(uniforms.uCloudType.value).toBe(neutralTypeTexture())
+      expect(uniforms.uCloudTops.value).toBe(neutralTypeTexture())
       expect(uniforms.uCloudTyped.value).toBe(0)
       clouds.faceCamera(mesh, camera)
       expect(material.defines).not.toHaveProperty('CLOUD_TYPED')
@@ -1537,7 +1544,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
-  const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED/
+  const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
 
   for (const flat of [false, true]) {
     const name = `${flat ? 'flat' : 'relief'}-full`
@@ -1578,7 +1585,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   const columnOf = (src: string) => src.slice(src.indexOf('vec4 cloudColumn('), src.indexOf('float cloudShade('))
   for (const variant of variants) {
     const name = variant.join('+') || 'relief'
-    it(`reads the typed top from the column's own read (${name})`, () => {
+    it(`reads the typed tops beside the map (${name})`, () => {
       const clouds = createCloudLayer(createEclipseShadow('earth'), variant.includes('CLOUD_FLAT'))
       const untyped = new Set(variant)
       const typed = new Set([...variant, 'CLOUD_TYPED'])
@@ -1587,26 +1594,28 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         if (!src.includes('vec4 cloudColumn(')) continue
         const column = columnOf(src)
         const before = columnOf(preprocess(clouds.material[stage], untyped))
-        // No more reads than untyped: the alpha comes with the rgb.
-        const reads = (text: string) => text.match(/\btexture(Lod)?\(|cloudPoleSmoothed\(/g)?.length
-        expect(reads(column)).toBe(reads(before))
-        expect(column).toMatch(/vec4 c = cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\);/)
-        // Lowered by a share on the ground, or lifted as a layer under the
-        // map's tallest; within the slack, the untyped column exactly.
+        // The map read as untyped, and the tops read the same way beside
+        // it: the same place, mip and smoothing near the poles.
+        const mapRead = before.match(/vec3 c = (cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\))\.rgb;/)
+        expect(mapRead).not.toBeNull()
+        expect(column).toContain(`vec3 c = ${mapRead![1]}.rgb;`)
+        expect(column).toContain(`vec3 typedTop = ${mapRead![1].replace(/uCloudMap/g, 'uCloudTops')}.rgb;`)
+        // Nothing from the map's alpha, nor the byte's codes, any more.
+        expect(column).not.toMatch(/\bc\.a\b|TYPED_ZERO|vec4 c = /)
+        // Untyped tops, the untyped column exactly; else the top mixed
+        // toward it by how far the texel is untyped, under the map's
+        // tallest, and the base lifted, never over it.
         for (const line of [
-          'float code = c.a * 255.0 - TYPED_ZERO_CODE;',
-          'if (code < TYPED_ZERO_SLACK) {',
-          'float keep = code > -TYPED_ZERO_SLACK ? 1.0\n      : max((code + TYPED_ZERO_CODE) / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE);',
-          'return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape * keep, base);',
-          'float lift = code * TYPED_LIFT_KM_PER_CODE;',
-          'float layer = mix(km * shape, min(km * shape, LIFTED_THICKNESS(c.g)),\n    smoothstep(0.0, TYPED_LIFT_EASE_KM, lift));',
-          'float lifted = base + CLOUD_UNITS_PER_KM * min(lift, uCloudMaxKm - layer);',
-          'return vec4(c.g, lifted, lifted + CLOUD_UNITS_PER_KM * layer, base);',
+          'if (typedTop.b <= 0.0) return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, base);',
+          'float topKm = min(mix(km * shape, typedTop.r * TYPED_TOPS_KM, typedTop.b), uCloudMaxKm);',
+          'float liftKm = min(typedTop.b * typedTop.g * TYPED_TOPS_KM, topKm);',
+          'return vec4(c.g, base + CLOUD_UNITS_PER_KM * liftKm, base + CLOUD_UNITS_PER_KM * topKm, base);',
         ]) {
           expect(column).toContain(line)
         }
-        expect(src).toContain(TYPED_CODE_GLSL)
-        expect(src).toContain(`#define TYPED_ZERO_CODE ${TYPED_ZERO_CODE.toFixed(6)}`)
+        expect(src).toContain('uniform sampler2D uCloudTops;')
+        expect(src).toContain(TYPED_TOPS_GLSL)
+        expect(src).toContain(`#define TYPED_TOPS_KM ${TYPED_TOPS_KM.toFixed(6)}`)
       }
       // The vertex stage reads the tops, never the grid.
       expect(preprocess(clouds.material.vertexShader, typed)).not.toMatch(/uCloudType\b|cloudLook/)

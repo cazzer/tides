@@ -20,8 +20,8 @@
 // (./cloudTypeGlsl.ts), in a program of their own (CLOUD_TYPED) for typed
 // maps. The march never sees the types themselves, only their tops
 // (tides-tvr.4.3): how high each column's top stands, and its base where a
-// type lifts it, come with the map's own read in cloudColumn(), from its
-// alpha, which the blend (./cloudBlend.ts) fills in.
+// type lifts it, read in cloudColumn() beside the map from the texture of
+// tops the blend (./cloudBlend.ts) draws alongside it (tides-tvr.4.9).
 //
 // The maths mirrors ../cloud-layer.ts; constants come from there.
 import * as THREE from 'three'
@@ -61,7 +61,7 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { sceneRadius } from '../planets'
 import { neutralTypeTexture } from './cloudBlend'
-import { CLOUD_LOOK_GLSL, TYPED_CODE_GLSL } from './cloudTypeGlsl'
+import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
 import {
@@ -212,10 +212,12 @@ export function marchPhaseShare(stepExtinction: number): number {
   return 1 - t * t * (3 - 2 * t)
 }
 
-// The cloud map's texel at st for cloudColumn(), smoothed near the poles.
-const COLUMN_READ = `cloudPoleSmoothed(uCloudMap, st,
-    max(lod, log2(float(textureSize(uCloudMap, 0).x)) + ${f(poleSmoothingLod(1))}),
-    textureLod(uCloudMap, st, lod))`
+// The texel at st of the map `map` (the cloud map, or its typed tops) for
+// cloudColumn(), smoothed near the poles.
+const columnRead = (map: string) => `cloudPoleSmoothed(${map}, st,
+    max(lod, log2(float(textureSize(${map}, 0).x)) + ${f(poleSmoothingLod(1))}),
+    textureLod(${map}, st, lod))`
+const COLUMN_READ = columnRead('uCloudMap')
 
 // Height field shared by the cloud shell and the ground's shadow. The
 // shell's (typed) also has typed tops (tides-tvr.4.3) under CLOUD_TYPED;
@@ -238,7 +240,9 @@ uniform float uSeaLevel;
 
 ${poleSmoothingGlsl('cloudPoleSmoothed', POLE_SMOOTH_CLOUD_TAPS)}
 ${typed ? `#ifdef CLOUD_TYPED
-${TYPED_CODE_GLSL}#endif
+// The typed columns, laid out like the map (./cloudBlend.ts).
+uniform sampler2D uCloudTops;
+${TYPED_TOPS_GLSL}#endif
 ` : ''}
 // directionToUv(): SphereGeometry's texture coordinates of a local direction.
 vec2 cloudUv(vec3 dir) {
@@ -264,37 +268,28 @@ float cloudTerrain(vec2 uv) {
 vec4 cloudColumn(vec2 uv, float lod, float terrain) {
   vec2 st = vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0));
   // Smoothed near the poles (./poleSmoothing.ts).
-${typed ? `#ifdef CLOUD_TYPED
-  // With its alpha: the typed top (below).
-  vec4 c = ${COLUMN_READ};
-#else
   vec3 c = ${COLUMN_READ}.rgb;
-#endif` : `  vec3 c = ${COLUMN_READ}.rgb;`}
   float trust = c.b * uCloudMeasured;
   float km = mix(1.5 + 7.0 * c.g * c.g, max(c.r * ${f(MAX_CLOUD_TOP_KM)}, ${f(MIN_MEASURED_TOP_KM)}), trust);
   float base = terrain + CLOUD_CLEARANCE;
   float shape = 0.25 + 0.75 * smoothstep(0.0, 0.65, c.g);
 ${typed ? `#ifdef CLOUD_TYPED
-  // Typed (tides-tvr.4.3), ../cloud-types.ts typedColumn(), as the map's
-  // alpha has it (the blend's, ./cloudBlend.ts): under TYPED_ZERO_CODE the
-  // top lowered by a share of its height, on the ground; over it the base
-  // lifted, the column a layer, no taller than the map's tallest. Either
-  // holds where texels are filtered together, whatever their codes and
-  // opacities. w is where the untyped base stands, the clearance over the
-  // ground, for what is reckoned from the ground rather than the cloud's
-  // own base. Within TYPED_ZERO_SLACK of no change, the untyped column
-  // exactly (a texel the types leave alone, of confidence 0).
-  float code = c.a * 255.0 - TYPED_ZERO_CODE;
-  if (code < TYPED_ZERO_SLACK) {
-    float keep = code > -TYPED_ZERO_SLACK ? 1.0
-      : max((code + TYPED_ZERO_CODE) / TYPED_ZERO_CODE, TYPED_LOWEST_SHARE);
-    return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape * keep, base);
-  }
-  float lift = code * TYPED_LIFT_KM_PER_CODE;
-  float layer = mix(km * shape, min(km * shape, LIFTED_THICKNESS(c.g)),
-    smoothstep(0.0, TYPED_LIFT_EASE_KM, lift));
-  float lifted = base + CLOUD_UNITS_PER_KM * min(lift, uCloudMaxKm - layer);
-  return vec4(c.g, lifted, lifted + CLOUD_UNITS_PER_KM * layer, base);
+  // Typed (tides-tvr.4.3), ../cloud-types.ts typedColumn(), from the tops
+  // beside the map (the blend's, ./cloudBlend.ts), read the same way: the
+  // top, mixed toward the untyped one by how typed the texel is (B, under 1
+  // only where a filter takes in untyped texels, whose R is their untyped
+  // top already: the mix keeps the top continuous as B goes to 0), no
+  // taller than the map's tallest, and the base lifted, never over it.
+  // Each is a height filtered as heights, so a deck beside a lifted layer
+  // reads a top between theirs. w is where the untyped base stands, the
+  // clearance over the ground, for what is reckoned from the ground rather
+  // than the cloud's own base. Untyped (a texel the types leave alone, of
+  // confidence 0), the untyped column exactly.
+  vec3 typedTop = ${columnRead('uCloudTops')}.rgb;
+  if (typedTop.b <= 0.0) return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, base);
+  float topKm = min(mix(km * shape, typedTop.r * TYPED_TOPS_KM, typedTop.b), uCloudMaxKm);
+  float liftKm = min(typedTop.b * typedTop.g * TYPED_TOPS_KM, topKm);
+  return vec4(c.g, base + CLOUD_UNITS_PER_KM * liftKm, base + CLOUD_UNITS_PER_KM * topKm, base);
 #else
   return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, km);
 #endif` : `  return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, km);`}
@@ -1867,6 +1862,12 @@ function inject(source: string, chunk: string, code: string): string {
   return source.replace(include, `${include}\n${code}`)
 }
 
+/** A typed map's blended type grid and its typed columns (./cloudBlend.ts). */
+export interface CloudTypes {
+  grid: THREE.Texture
+  tops: THREE.Texture
+}
+
 export interface CloudLayer {
   /** For the cloud shell's mesh. */
   material: THREE.ShaderMaterial
@@ -1887,16 +1888,20 @@ export interface CloudLayer {
     uCloudTyped: THREE.IUniform<number>
     /** Its blended type grid (./cloudBlend.ts), or the neutral one. */
     uCloudType: THREE.IUniform<THREE.Texture>
+    /** Its typed columns (./cloudBlend.ts), or the neutral grid, whose
+     * zeros read as untyped. */
+    uCloudTops: THREE.IUniform<THREE.Texture>
     uSunDir: THREE.IUniform<THREE.Vector3>
     uSeaLevel: THREE.IUniform<number>
   }
   /**
    * Shows `map`: whether it has measured heights (only geostationary imagery
    * carries cloud-top heights, R, and their confidence, B; the static and
-   * daily textures are grey), and its blended cloud-type grid (tides-tvr.4.2),
-   * null where it has none: untyped, the clouds are drawn as before types.
+   * daily textures are grey), and its blended cloud-type grid (tides-tvr.4.2)
+   * with the typed columns drawn from it (tides-tvr.4.9), null where it has
+   * none: untyped, the clouds are drawn as before types.
    */
-  setMap(map: THREE.Texture, measured: boolean, types: THREE.Texture | null): void
+  setMap(map: THREE.Texture, measured: boolean, types: CloudTypes | null): void
   /** Altitude of the shell mesh above sea level. */
   shellAltitude: number
   /** Readies the shell's mesh for drawing to `camera`: before three sorts
@@ -1942,6 +1947,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uCloudMaxKm: { value: MAX_CLOUD_TOP_KM },
     uCloudTyped: { value: 0 },
     uCloudType: { value: neutralTypeTexture() },
+    uCloudTops: { value: neutralTypeTexture() },
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
   }
@@ -2080,12 +2086,13 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     },
     customProgramCacheKey: () => (flat ? 'cloud-shadow-flat' : 'cloud-shadow'),
   }
-  const setMap = (map: THREE.Texture, measured: boolean, types: THREE.Texture | null) => {
+  const setMap = (map: THREE.Texture, measured: boolean, types: CloudTypes | null) => {
     uniforms.uCloudMap.value = map
     uniforms.uCloudMeasured.value = measured ? 1 : 0
     uniforms.uCloudMaxKm.value = maxTopKm(measured)
     uniforms.uCloudTyped.value = types ? 1 : 0
-    uniforms.uCloudType.value = types ?? neutralTypeTexture()
+    uniforms.uCloudType.value = types?.grid ?? neutralTypeTexture()
+    uniforms.uCloudTops.value = types?.tops ?? neutralTypeTexture()
   }
   return {
     material,
