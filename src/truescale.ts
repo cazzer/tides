@@ -16,20 +16,24 @@
 // (moons/moons.ts), and each planet's moon system grows or shrinks with its
 // planet (moons.ts moonOrbitRadiiAt).
 //
-// MAX_TRUESCALE: the Sun is the body that runs out of room. Its radius is
-// 10 · 32.2^a (scene 10, true ~322 units), and Mercury's perihelion surface
-// sits ~306 units from its centre at the flight scale. At 0.9 the Sun is
-// ~228 units (~232 with the ship's collision margin), ~74 clear; 0.95 leaves
-// ~30, and 1 puts Mercury inside it. flight-scale.test.ts samples 1900–2100
-// to hold the line.
+// MAX_TRUESCALE: the Sun is the body that grows most, to 10 · 32.2^a (scene
+// 10, true ~322 units), ~114 units at 0.7. Room alone would allow more:
+// Mercury's perihelion surface sits ~306 units from the Sun's centre at the
+// flight scale, so 0.9 (Sun ~228) leaves ~74 clear, ~0.95 still ~30, and 1
+// puts Mercury inside it (flight-scale.test.ts samples 1900–2100). The cap is
+// the HUD's instead: past ~0.7 the Sun's range anchor reads on its pair scale
+// with the squeezed-in Mercury however far out the ship is, and a run in to
+// Venus or Mars that passes the Sun can read its range backwards
+// (../ship/ship-distances.ts, tides-3ln). Fixing that would unlock 0.8–0.9.
 //
 // Read once at load, like ?relief= (./relief.ts): a change is a reload, so
-// nothing has to rebuild live. A worker has no location and takes 0.
+// nothing has to rebuild live. A worker's location is its script's, with no
+// query, so it takes 0.
 
 export const DEFAULT_TRUESCALE = 0
 /** A bare ?truescale (no value): halfway, in log space. */
 export const BARE_TRUESCALE = 0.5
-export const MAX_TRUESCALE = 0.9
+export const MAX_TRUESCALE = 0.7
 
 export function parseTrueScale(search: string): number {
   const raw = new URLSearchParams(search).get('truescale')

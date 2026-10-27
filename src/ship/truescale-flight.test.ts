@@ -2,6 +2,8 @@
 // case reloads the modules with a stubbed location.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
+import { MAX_TRUESCALE } from '../truescale'
+import type { MainCameraPose } from '../main-camera-session'
 
 const T = Date.UTC(2026, 9, 22, 12)
 const DAY = 86_400_000
@@ -9,15 +11,16 @@ const DAY = 86_400_000
 async function loadAt(search: string) {
   vi.resetModules()
   vi.stubGlobal('location', { search })
-  const [bodies, distances, flight, scale, moons, truescale] = await Promise.all([
+  const [bodies, distances, flight, scale, moons, truescale, session] = await Promise.all([
     import('./ship-bodies'),
     import('./ship-distances'),
     import('./flight'),
     import('../flight-scale'),
     import('../moons/moons'),
     import('../truescale'),
+    import('./ship-session'),
   ])
-  return { bodies, distances, flight, scale, moons, truescale }
+  return { bodies, distances, flight, scale, moons, truescale, session }
 }
 
 afterEach(() => {
@@ -52,13 +55,14 @@ describe('?truescale=0.5', () => {
   })
 })
 
-// The run-ins below hold for every planet up to a = 0.7. Past that, the
-// Sun's anchor reads on its pair scale with Mercury, ~4× the flight scale at
-// a = 0.9 (the scene gap between them squeezed to ~74 units), all the way
-// out, so on a run in to Venus or Mars that passes the Sun at a few hundred
-// units the blended range runs backwards by up to ~3–5 million km on about a
-// quarter of dates (2 of 120 at 0.8). Hence the inner planets at 0.5 here.
-async function setup(t: number, search = '?truescale=0.9') {
+// At the cap. Past it the Sun's anchor reads on its pair scale with Mercury
+// all the way out (~4× the flight scale at 0.9), so a run in to Venus or
+// Mars that passes the Sun at a few hundred units read the range backwards,
+// by up to ~3–5 million km at 0.9 and on 3–4 of 120 dates at 0.8: the run-ins
+// below are what tides-3ln has to keep passing to raise the cap.
+const AT_MAX = `?truescale=${MAX_TRUESCALE}`
+
+async function setup(t: number, search = AT_MAX) {
   const loaded = await loadAt(search)
   const { bodies, distances } = loaded
   const ship = bodies.createShipBodies('high', false)
@@ -76,10 +80,11 @@ async function setup(t: number, search = '?truescale=0.9') {
 
 describe('?truescale: HUD ranges', () => {
   it('falls monotonically to 0 on a straight run from Earth to the Sun', async () => {
-    const { ship, truth, find, ranges, distances, flight } = await setup(T)
+    const { ship, truth, find, ranges, distances, flight, scale } = await setup(T)
     const sun = find('sun')
     const earth = find('earth').body
-    expect(sun.body.radius).toBeGreaterThan(200)
+    expect(sun.body.radius).toBe(scale.flightRadii(MAX_TRUESCALE).sun)
+    expect(sun.body.radius).toBeGreaterThan(100)
     const dir = earth.position.clone().sub(sun.body.position).normalize()
     const shell = flight.collisionRadius(sun.body)
     const start = earth.position.distanceTo(sun.body.position) - 40
@@ -95,19 +100,12 @@ describe('?truescale: HUD ranges', () => {
     expect(ranges.nearest).toBe(sun.index)
   })
 
-  it.each([
-    ['venus', '?truescale=0.5'],
-    ['mars', '?truescale=0.5'],
-    ['jupiter', '?truescale=0.9'],
-    ['saturn', '?truescale=0.9'],
-    ['uranus', '?truescale=0.9'],
-    ['neptune', '?truescale=0.9'],
-  ])(
-    'falls steadily on a straight run in to %s at %s, on 10 dates',
-    async (key, search) => {
+  it.each(['venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
+    'falls steadily on a straight run in to %s, on 20 dates',
+    async (key) => {
       let worst = 0
-      for (let day = 0; day < 120; day += 12) {
-        const { ship, truth, find, ranges, distances, flight } = await setup(T + day * DAY, search)
+      for (let day = 0; day < 720; day += 36) {
+        const { ship, truth, find, ranges, distances, flight } = await setup(T + day * DAY)
         const planet = find(key)
         const from = find('earth').body
         const dir = from.position.clone().sub(planet.body.position).normalize()
@@ -136,4 +134,66 @@ describe('?truescale: HUD ranges', () => {
       expect(ranges.nearest, key).toBe(moon.index)
     }
   })
+})
+
+describe('?truescale=0.5: spawning from the main view', () => {
+  const target: [number, number, number] = [10, -4, 7]
+  const eye: [number, number, number] = [34, 8, 39]
+  const quaternion = new THREE.Quaternion()
+    .setFromRotationMatrix(
+      new THREE.Matrix4().lookAt(new THREE.Vector3(...eye), new THREE.Vector3(...target), new THREE.Vector3(0, 1, 0))
+    )
+    .toArray() as [number, number, number, number]
+  const pose: MainCameraPose = {
+    position: eye,
+    target,
+    quaternion,
+    up: [0, 1, 0],
+    projection: 'perspective',
+    fov: 30,
+    zoom: 1,
+  }
+  const tanHalf = (fov: number) => Math.tan((fov * Math.PI) / 360)
+  const angularRadius = (radius: number, distance: number, fov: number) =>
+    radius / (Math.sqrt(distance ** 2 - radius ** 2) * tanHalf(fov))
+
+  it.each(['sun', 'jupiter', 'io'] as const)(
+    'keeps %s as large on screen as the main view drew it, clear of every body',
+    async (key) => {
+      const { bodies, scale, moons, session, flight } = await loadAt('?truescale=0.5')
+      const systemRadius = moons.isMoonKey(key)
+        ? moons.moonRadius(key, 'system')
+        : scale.positionsFor('system').radius[key]
+      const sourceDistance = new THREE.Vector3(...eye).distanceTo(new THREE.Vector3(...target))
+      const pushed: number[] = []
+      for (let day = 0; day < 40; day += 4) {
+        const ship = bodies.createShipBodies('high', false)
+        bodies.updateShipBodies(ship, T + day * DAY)
+        const body = ship.find((b) => b.key === key)!
+        expect(body.radius).not.toBe(systemRadius)
+        const state = session.spawnPoseFromCamera(pose, key, ship)!
+        const distance = state.position.distanceTo(body.position)
+        const mapped = session.cameraToShipDistance(pose, systemRadius, body.radius)!
+        if (Math.abs(distance / mapped - 1) < 1e-9) {
+          expect(angularRadius(body.radius, distance, session.SHIP_FOV)).toBeCloseTo(
+            angularRadius(systemRadius, sourceDistance, pose.fov),
+            10
+          )
+        } else {
+          // Carried on out past a grown parent standing on the line.
+          pushed.push(day)
+          expect(distance).toBeGreaterThan(mapped)
+        }
+        for (const other of ship) {
+          expect(state.position.distanceTo(other.position), `${key} day ${day}: ${other.key}`).toBeGreaterThan(
+            flight.collisionRadius(other)
+          )
+        }
+      }
+      // Only Io, whose parent grows round it, ever needs carrying out: on
+      // day 8 the mapped point is inside Jupiter.
+      if (key !== 'io') expect(pushed).toEqual([])
+      else expect(pushed).toContain(8)
+    }
+  )
 })

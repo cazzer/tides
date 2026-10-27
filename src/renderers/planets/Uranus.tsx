@@ -4,6 +4,7 @@
 //
 // Texture: Solar System Scope, CC BY 4.0 (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_uranus.jpg
+import { PLANETS } from '../../planets'
 import {
   PlanetAtmosphere,
   PlanetRings,
@@ -11,7 +12,6 @@ import {
   type RingProfile,
 } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
-import { PLANETS } from '../../planets'
 import uranusTexture from '../../assets/uranus-2k.jpg'
 import type { PlanetRendererProps } from './index'
 

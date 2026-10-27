@@ -16,11 +16,11 @@ describe('parseTrueScale', () => {
 
   it('reads the factor, clamped to [0, MAX_TRUESCALE]', () => {
     expect(parseTrueScale('?truescale=0.3')).toBe(0.3)
-    expect(parseTrueScale('?ship=1&truescale=0.75')).toBe(0.75)
+    expect(parseTrueScale('?ship=1&truescale=0.65')).toBe(0.65)
     expect(parseTrueScale('?truescale=0')).toBe(0)
     expect(parseTrueScale('?truescale=-1')).toBe(0)
     expect(parseTrueScale('?truescale=5')).toBe(MAX_TRUESCALE)
-    expect(MAX_TRUESCALE).toBe(0.9)
+    expect(MAX_TRUESCALE).toBe(0.7)
   })
 
   it('falls back to 0 when unreadable', () => {

@@ -82,18 +82,20 @@
 // Under ?truescale=<a> (../truescale.ts, tides-o39) the drawn radii grow
 // toward true while the distances stay, and nothing here changes: the pair
 // scales are true gaps over the drawn shell gaps, so they follow the radii.
-// The Sun shows it most. At a = 0.9 it is drawn ~228 units across where the
-// true surface gaps are as before, so the scene gap between it and Mercury
-// or Earth shrinks by ~220 units and the km a unit stands for near it grows
-// (up to ~4× against Mercury at perihelion, ~1.3× toward Earth): the same
-// flight covers more km and the speed reads higher there, which the user
-// accepted. A run straight in to the Sun still falls to 0 at its shell, and
-// the moon systems' hand-over bands (MOON_SYSTEMS) grow with their flight
-// extents (moonSystemExtent(parent, 'flight')). The cost: the Sun's anchor
-// reads on that Mercury-dominated scale however far out the ship is, so
-// above a ≈ 0.7, on a run in to Venus or Mars that passes a few hundred
-// units from the Sun, the blend can run a range backwards (up to ~3–5
-// million km at 0.9; truescale-flight.test.ts).
+// The Sun shows it most. At the cap, a = 0.7 (MAX_TRUESCALE), it is drawn
+// ~114 units across where the true surface gaps are as before, so the scene
+// gap between it and Mercury or Earth shrinks by ~104 units and the km a
+// unit stands for near it grows (up to ~1.5× against Mercury at perihelion,
+// ~1.1× toward Earth): the same flight covers more km and the speed reads
+// higher there, which the user accepted. A run straight in to the Sun still
+// falls to 0 at its shell, and the moon systems' hand-over bands
+// (MOON_SYSTEMS) grow with their flight extents (moonSystemExtent(parent,
+// 'flight')). The Sun's anchor reads on that Mercury-dominated scale however
+// far out the ship is, which is what caps a at 0.7: at 0.8 (Sun ~160) and
+// 0.9 (~228, ~4× against Mercury), a run in to Venus or Mars that passes a
+// few hundred units from the Sun can read its range backwards, by up to
+// ~3–5 million km at 0.9. Giving the Sun a hand-over to the planets' scale,
+// as the moon systems have, would unlock them (tides-3ln).
 
 import {
   Body,
@@ -138,8 +140,8 @@ const MIN_GAP = 1e-3
 // scale; between, a smooth blend. Earth's Moon orbits ~10 units out; the
 // spawn is ~12 out on a wide screen and ~28 on a portrait phone (Earth
 // framed across the short side), hence 30 to 60. The other systems can
-// reach further (moonSystemExtent: Saturn's ~31), so theirs start at
-// MOON_SYSTEM_EXTENT_FACTOR × that if it is more. The boost has to be large
+// reach further (moonSystemExtent: Saturn's ~31 without ?truescale), so
+// theirs start at MOON_SYSTEM_EXTENT_FACTOR × that if it is more. The boost has to be large
 // because another body's guess is tens of millions of km off (its scale is
 // the planets'): 1e4 is a gap 10× smaller, so with a planet as near as Earth
 // the position moves ~2% instead of ~50% (a boost of 100).
@@ -218,7 +220,7 @@ const ASTRO_BODIES: Record<string, Body> = {
 }
 
 // Mean radii, km: half the diameters the scene's spheres are sized from
-// (ship-bodies.ts, planets.ts).
+// (flight-scale.ts SUN_DIAMETER and MOON_DIAMETER, planets.ts).
 const RADIUS_KM: Record<string, number> = {
   sun: 1_392_700 / 2,
   earth: 12_742 / 2,

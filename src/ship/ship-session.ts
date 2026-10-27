@@ -283,11 +283,44 @@ export function spawnPoseFromCamera(
   if (mappedDistance === null) return null
   const outward = new THREE.Vector3(...pose.position).sub(new THREE.Vector3(...pose.target))
   if (!(outward.lengthSq() > 0) || !Number.isFinite(outward.lengthSq())) return null
-  const distance = Math.max(mappedDistance, collisionRadius(body) + 0.01)
+  outward.normalize()
+  const distance = beyondShells(body, outward, Math.max(mappedDistance, collisionRadius(body) + 0.01), bodies)
   const state = createShipState()
-  state.position.copy(body.position).addScaledVector(outward.normalize(), distance)
+  state.position.copy(body.position).addScaledVector(outward, distance)
   state.orientation.fromArray(pose.quaternion).normalize()
   return state
+}
+
+const toOther = new THREE.Vector3()
+
+// How far out along `outward` from `body` the ship can stand at `distance`
+// or beyond, clear of every other body's shell. Under ?truescale a moon's
+// grown parent can swallow the mapped point: the main view's eye then stood
+// beyond the parent on that line, so the ship goes on out past its far side,
+// the parent in front of the moon as it was there, the moon smaller.
+function beyondShells(
+  body: FlightBody,
+  outward: THREE.Vector3,
+  distance: number,
+  bodies: readonly FlightBody[]
+): number {
+  for (let moved = true; moved; ) {
+    moved = false
+    for (const other of bodies) {
+      if (other === body) continue
+      const shell = collisionRadius(other)
+      toOther.subVectors(other.position, body.position)
+      const along = toOther.dot(outward)
+      const across2 = toOther.lengthSq() - along * along
+      if (across2 >= shell * shell) continue
+      const exit = along + Math.sqrt(shell * shell - across2)
+      if (distance < exit && distance > along - Math.sqrt(shell * shell - across2)) {
+        distance = exit + 0.01
+        moved = true
+      }
+    }
+  }
+  return distance
 }
 
 function surfaceGap(position: THREE.Vector3, body: FlightBody): number {
