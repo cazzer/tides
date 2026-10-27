@@ -21,6 +21,7 @@ import {
   earthSpinRate,
   equilibriumKappa,
   fillAir,
+  fillAirDensity,
   relaxKappa,
   releaseRate,
   resetFrameCarry,
@@ -372,5 +373,23 @@ describe('the carry, degenerate (tides-zmw.9.18)', () => {
     expect(ms).toBeCloseTo(SIDEREAL_RATE * (6371000 + 10000), -1)
     expect(telemetry.air.dynamicPressure).toBeCloseTo(0.5 * 1.225 * telemetry.air.density * ms * ms, 3)
     expect(MAX_DT).toBe(0.1)
+  })
+
+  it('fills the density and dynamic pressure without the carry, as fillAir does', () => {
+    const { earth, moon } = carriers(T0)
+    const state = shipOver(earth, 0, 0, 10000)
+    const telemetry = createShipTelemetry()
+    telemetry.air.speed = 0
+    fillAirDensity(telemetry, state.position, earth)
+    expect(telemetry.air.density).toBeCloseTo(Math.exp(-10 / SCALE_HEIGHT_KM), 6)
+    expect(telemetry.air.dynamicPressure).toBe(0)
+    telemetry.air.speed = 300 * M
+    fillAirDensity(telemetry, state.position, earth)
+    expect(telemetry.air.dynamicPressure).toBeCloseTo(0.5 * 1.225 * telemetry.air.density * 300 * 300, 3)
+    const carried = createShipTelemetry()
+    const carry = createFrameCarry()
+    carryShip(carry, state, earth, moon, FRAME, earthSpinRate(1))
+    fillAir(carry, carried, state, earth, earthSpinRate(1))
+    expect(carried.air.density).toBeCloseTo(Math.exp(-10 / SCALE_HEIGHT_KM), 6)
   })
 })

@@ -143,6 +143,19 @@ export const NEAR_CORNER_REACH = Math.sqrt(1 + Math.tan(THREE.MathUtils.degToRad
 export const SHIP_SETTLE_PRIORITY = 0.75
 
 /**
+ * useShipShake's turn of the camera (tides-xxg): after the settle has put
+ * the camera where the ship is and before drei's View renders (1), so only
+ * the drawn frame shakes.
+ */
+export const SHIP_SHAKE_PRIORITY = 0.9
+
+/**
+ * useShipShake's restore: after drei's View has rendered (1), it puts the
+ * camera's clean pose back for everything that reads it until the next frame.
+ */
+export const SHIP_SHAKE_RESTORE_PRIORITY = 2
+
+/**
  * Whether the ship flies the true-scale stop (tides-zmw.9.8): only over the
  * streamed tiles (`surfaceTiles`, ../surface.ts) and on a reversed-Z float
  * depth buffer (renderers/depth-precision.ts reversedFloatDepth). Without
