@@ -21,6 +21,8 @@ const flight = (): NightFlightUniforms => ({
   uNightFill: { value: new THREE.Color(0.01, 0.01, 0.02) },
   uNightMoonLight: { value: new THREE.Color(0.02, 0.02, 0.03) },
   uNightPointsEye: { value: new THREE.Vector4(300_000, 150_000, 0.25, 0.75) },
+  uNightPointsEyeGround: { value: new THREE.Vector3(2.95, 0, 0) },
+  uNightPointsEyeLow: { value: new THREE.Vector3() },
 })
 
 /** A link in flight with a GIBS night stream `side` tiles square. */

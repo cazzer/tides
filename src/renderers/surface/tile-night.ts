@@ -40,12 +40,16 @@
 // there is no flight (null) and no fill, as on the globe.
 //
 // Points. In flight the globe breaks its lights into points near the ground
-// (../nightPoints.ts, tides-zmw.23); the tiles take its head, so the same
-// lights stand on both at the hand-off, but make their own call: the cell
-// coordinate is the flight's uNightPointsEye (the eye's, split into whole
+// (../nightPoints.ts, tides-zmw.23); the tiles take its head and its cell
+// coordinate, the flight's uNightPointsEye (the eye's, split into whole
 // cells and fraction in double on the CPU) plus nightPointsOffset() along
-// surfaceRay, never the quantised surfaceGlobeUv's, with the base's analytic
-// derivatives as for VIIRS.
+// the ray to the drawn point (here the base's surfaceRay, never the
+// quantised surfaceGlobeUv), with the base's analytic derivatives as for
+// VIIRS. Both key on the drawn point's direction, so the lights agree where
+// the globe and the tiles draw the same ground; where the globe's coarser
+// mesh stands off the tiles' surface (its flat cells sag under the sphere,
+// its relief is smoother), the point under a pixel differs by that much
+// and a light can shift across the hand-off's dissolve.
 //
 // No varyings, no defines: one program per tileset, keyed by whether the
 // flight and the stream are on (fixed for a link).

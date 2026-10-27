@@ -80,13 +80,21 @@ describe('night lights in flight', () => {
     const sun = { value: new THREE.Vector3(1, 0, 0) }
     const flight = createNightFlight(sun, { value: CLOUD_AMBIENT })
     const night = createGibsNightPatch(8)
-    const { fragment: frag, key } = compiled(composePatches(nightLightsPatch(sun, flight.uniforms), night.material))
+    const { fragment: frag, vertex, uniforms, key } = compiled(composePatches(nightLightsPatch(sun, flight.uniforms), night.material))
     const at = (s: string) => {
       expect(frag).toContain(s)
       return frag.indexOf(s)
     }
-    expect(at(NIGHT_POINTS_GLSL.head)).toBeLessThan(at('void main'))
-    expect(frag).not.toContain(NIGHT_POINTS_GLSL.offsetHead)
+    expect(at(NIGHT_POINTS_GLSL.head)).toBeLessThan(at(NIGHT_POINTS_GLSL.offsetHead))
+    expect(at(NIGHT_POINTS_GLSL.offsetHead)).toBeLessThan(at('void main'))
+    expect(at('varying vec3 vNightPointsRay;')).toBeLessThan(at('void main'))
+    // The drawn point from the eye: the vertex after its displacement, less
+    // the eye as float32 holds it.
+    const v = vertex.indexOf(NIGHT_LIGHTS_GLSL.pointsVertexBody)
+    expect(v).toBeGreaterThan(vertex.indexOf('#include <project_vertex>'))
+    expect(vertex.indexOf('#include <displacementmap_vertex>')).toBeLessThan(v)
+    expect(NIGHT_LIGHTS_GLSL.pointsVertexBody.trim()).toBe('vNightPointsRay = transformed - uNightPointsEyeGround;')
+    expect(uniforms).toEqual(expect.arrayContaining(['uNightPointsEye', 'uNightPointsEyeGround', 'uNightPointsEyeLow']))
     const points = at(NIGHT_LIGHTS_GLSL.pointsBody)
     expect(at('gibsNightCover = cover;')).toBeLessThan(points)
     expect(at('totalEmissiveRadiance = emissive * emissiveColor.rgb;')).toBeLessThan(points)
@@ -94,18 +102,25 @@ describe('night lights in flight', () => {
     const body = NIGHT_LIGHTS_GLSL.pointsBody
     expect(body.trim().startsWith('#ifdef USE_EMISSIVEMAP')).toBe(true)
     expect(body.trim().endsWith('#endif')).toBe(true)
-    expect(body.indexOf('dFdx(')).toBeLessThan(body.indexOf('if ('))
+    // Derivatives of the small, smooth ray only, before any branch; the
+    // eye's rounding off past the varying; the cell from the eye's.
+    expect(body.match(/dFd[xy]\([^)]*\)/g)).toEqual(['dFdx(vNightPointsRay)', 'dFdy(vNightPointsRay)'])
     expect(body.indexOf('dFdy(')).toBeLessThan(body.indexOf('if ('))
+    expect(body).not.toMatch(/vEmissiveMapUv \*|dFd[xy]\(vEmissiveMapUv/)
+    expect(body).toContain('vec3 nightPointsRay = vNightPointsRay - uNightPointsEyeLow;')
+    expect(body).toContain('uNightPointsEye.zw + nightPointsOffset(uNightPointsEyeGround, nightPointsRay)')
+    expect(body).toContain('nightPointsDelta(nightPointsAt, nightPointsRayDx), nightPointsDelta(nightPointsAt, nightPointsRayDy)')
     expect(body).toContain(`if (dot(normalize(vNightLightsDir), uNightLightsSun) < ${NIGHT_MASK_SUN.toFixed(6)})`)
     expect(body).toContain('float nightPointsFine = gibsNightCover;')
-    expect(body).toContain('totalEmissiveRadiance *= nightPoints(emissiveColor.rgb, nightPointsFine, vec2(0.0), nightPointsAt,')
+    expect(body).toContain('totalEmissiveRadiance *= nightPoints(emissiveColor.rgb, nightPointsFine, uNightPointsEye.xy,')
     expect(key).toBe('night-lights-flight+gibs-night-8')
     expect(nightLightsPatch(sun, flight.uniforms).customProgramCacheKey()).toBe('night-lights-flight')
   })
 
   it('adds no points outside flight', () => {
-    const { fragment } = compiled(nightLightsPatch({ value: new THREE.Vector3(1, 0, 0) }))
+    const { fragment, vertex } = compiled(nightLightsPatch({ value: new THREE.Vector3(1, 0, 0) }))
     expect(fragment).not.toMatch(/nightPoints|NIGHT_POINTS/)
+    expect(vertex).not.toMatch(/NightPoints/)
   })
 
   // EarthRenderer's ground outside ship mode: no flight for the night lights
@@ -304,6 +319,15 @@ describe('night flight', () => {
       expect(got.y).toBe(expected.y)
       expect(got.z).toBeCloseTo(expected.z, 4)
       expect(got.w).toBeCloseTo(expected.w, 4)
+      // The eye itself, and what float32 rounds off it: together the eye
+      // in double.
+      const eye = flight.uniforms.uNightPointsEyeGround.value
+      const low = flight.uniforms.uNightPointsEyeLow.value
+      expect(eye.distanceTo(haze.frame.uGroundHazeEyeLocal.value)).toBeLessThan(1e-12)
+      for (const c of ['x', 'y', 'z'] as const) {
+        expect(Math.fround(eye[c]) + low[c]).toBe(eye[c])
+        expect(Math.abs(low[c])).toBeLessThanOrEqual(2 ** -23)
+      }
     }
   })
 })
