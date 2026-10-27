@@ -18,6 +18,7 @@ import { TouchShipControls } from './TouchShipControls'
 import { releaseFlightTextures } from '../renderers/useFlightTexture'
 import { useShipAudio } from './audio/bind-ship-audio'
 import { ShipSound } from './audio/ShipSound'
+import { ShipCues } from './audio/ShipCues'
 
 // After the exit has rendered, focus the ship button if the three-body view
 // came back with one (it carries data-ship-button); otherwise focus falls to
@@ -100,14 +101,16 @@ export function ShipView({ children }: { children: ReactNode }) {
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust, the
             speed FOV kick (tides-3bl.6), the air shudder (tides-xxg) and
-            the engine and wind sound (tides-a4j.2), which reads the
-            telemetry ShipController writes, so it comes after it. */}
+            the engine and wind sound (tides-a4j.2) and its one-shot cues
+            (tides-a4j.3), which read what ShipController, SpeedFov and
+            ShipTargeting write, so they come after them. */}
         <SpaceDust />
         <SpeedFov />
         <ShipShake />
         <ShipTargeting />
         <ShipWarmup />
         <ShipSound />
+        <ShipCues />
       </View>
       <ExitButton
         ref={exitButton}

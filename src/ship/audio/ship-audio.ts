@@ -57,6 +57,11 @@ export interface ShipAudio {
    * scheduled then plays once it runs. The same object every call.
    */
   output(): ShipAudioOutput | null
+  /**
+   * Whether sound plays now: the context runs and is meant to (in ship mode,
+   * the tab showing, unmuted), so not in the fade before a suspend.
+   */
+  isRunning(): boolean
 }
 
 export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
@@ -157,6 +162,7 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
       }
     },
     output: () => (bindings > 0 && context?.state !== 'closed' ? out : null),
+    isRunning: () => context?.state === 'running' && shouldRun(),
   }
 }
 
@@ -191,16 +197,17 @@ export interface ShipCue {
 
 /**
  * Plays a one-shot cue built by `build` at `at` (the context's now), if the
- * sound is running and unmuted; returns whether it did. `build` is not called
- * otherwise, so a silent cue costs nothing. Once `end` ends, it and `nodes`
- * are disconnected.
+ * sound is running (ShipAudio.isRunning); returns whether it did. `build` is
+ * not called otherwise, so a silent cue costs nothing, and none plays into
+ * the fade before a suspend. Once `end` ends, it and `nodes` are
+ * disconnected.
  */
 export function playShipCue(
   build: (out: ShipAudioOutput, at: number) => ShipCue,
   audio: ShipAudio = shipAudio
 ): boolean {
   const out = audio.output()
-  if (!out || out.context.state !== 'running' || audio.isMuted()) return false
+  if (!out || !audio.isRunning()) return false
   const cue = build(out, out.context.currentTime)
   cue.end.onended = () => {
     cue.end.disconnect()

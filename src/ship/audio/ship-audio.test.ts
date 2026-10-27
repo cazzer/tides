@@ -350,12 +350,15 @@ describe('playShipCue', () => {
     expect(build).not.toHaveBeenCalled()
   })
 
-  it("doesn't build a cue while suspended or muted", () => {
-    const { audio } = setup()
+  it("doesn't build a cue while suspended or muted, nor in the fade before", () => {
+    const { audio, context } = setup()
     audio.activate()
     audio.gesture()
     const build = vi.fn()
     audio.setVisible(false)
+    expect(context().state).toBe('running')
+    expect(audio.isRunning()).toBe(false)
+    expect(playShipCue(build, audio)).toBe(false)
     vi.advanceTimersByTime(SUSPEND_DELAY_MS)
     expect(playShipCue(build, audio)).toBe(false)
     audio.setVisible(true)

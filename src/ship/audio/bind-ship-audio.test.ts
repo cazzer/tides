@@ -42,6 +42,7 @@ function setup(visibilityState = 'visible', { dialog = false } = {}) {
     setMuted: vi.fn((next: boolean) => void (muted = next)),
     subscribe: () => () => {},
     output: () => null,
+    isRunning: () => false,
   } satisfies ShipAudio
   const cleanup = bindShipAudio(audio, win, doc)
   return { win, doc, audio, cleanup }
