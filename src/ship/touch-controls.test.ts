@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resetShipInput, shipInput } from './ship-input'
 import {
+  bindBoost,
   bindSteer,
   bindThrottle,
   blockPagePinch,
@@ -476,6 +477,72 @@ describe('touch ship controls (tides-3bl.4)', () => {
     win.fire('resize')
     expect(released).toBe(1)
     stop()
+  })
+
+  describe('boost button (tides-zmw.25)', () => {
+    it('boosts while held, by mouse too, and lets go on release', () => {
+      const button = control()
+      const boost = bindBoost(button.element, shipInput)
+      const down = button.fire('pointerdown', 0, 0, { pointerType: 'mouse' })
+      expect(down).toEqual({ stopped: true, prevented: true })
+      expect(button.captured).toEqual([1])
+      expect(shipInput.boost).toBe(true)
+      expect(boost.held()).toBe(true)
+      button.fire('pointerup')
+      expect(shipInput.boost).toBe(false)
+      expect(boost.held()).toBe(false)
+    })
+
+    it.each(['pointercancel', 'lostpointercapture'])('lets go on %s', (type) => {
+      const button = control()
+      bindBoost(button.element, shipInput)
+      button.fire('pointerdown')
+      button.fire(type)
+      expect(shipInput.boost).toBe(false)
+    })
+
+    it('lets go on release() and dispose()', () => {
+      const button = control()
+      const boost = bindBoost(button.element, shipInput)
+      button.fire('pointerdown')
+      boost.release()
+      expect(shipInput.boost).toBe(false)
+      expect(boost.held()).toBe(false)
+      button.fire('pointerdown', 0, 0, { id: 2 })
+      boost.dispose()
+      expect(shipInput.boost).toBe(false)
+      expect(button.listeners.size).toBe(0)
+    })
+
+    it('ignores a second finger: only the first one lifting ends the boost', () => {
+      const button = control()
+      bindBoost(button.element, shipInput)
+      button.fire('pointerdown', 0, 0, { id: 1 })
+      button.fire('pointerdown', 0, 0, { id: 2 })
+      button.fire('pointerup', 0, 0, { id: 2 })
+      expect(shipInput.boost).toBe(true)
+      button.fire('pointerup', 0, 0, { id: 1 })
+      expect(shipInput.boost).toBe(false)
+    })
+
+    it('re-asserts a held boost another writer cleared, and stops once let go', () => {
+      const button = control()
+      const boost = bindBoost(button.element, shipInput)
+      boost.reassert()
+      expect(shipInput.boost).toBe(false)
+      button.fire('pointerdown')
+      // A key event on a hybrid: applyHeld writes the keys' boost, false.
+      shipInput.boost = false
+      boost.reassert()
+      expect(shipInput.boost).toBe(true)
+      button.fire('pointerup')
+      boost.reassert()
+      expect(shipInput.boost).toBe(false)
+      // Shift held on the keyboard is left alone.
+      shipInput.boost = true
+      boost.reassert()
+      expect(shipInput.boost).toBe(true)
+    })
   })
 
   it("blocks Safari's page pinch while mounted", () => {

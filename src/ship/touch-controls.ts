@@ -272,6 +272,46 @@ export function bindThrottle(
   }
 }
 
+export interface BoostBinding extends Binding {
+  /**
+   * Writes the held boost again; a no-op when let go. Run each frame: on a
+   * hybrid any key event rewrites shipInput.boost from the held keys
+   * (desktop-keys applyHeld), which would drop a boost the thumb still holds.
+   */
+  reassert(): void
+  /** Whether a finger is on the button. */
+  held(): boolean
+}
+
+/**
+ * The hold-to-boost button (tides-zmw.25): boost while pressed, off when the
+ * press ends for any reason. It's drawn, so a mouse press counts too.
+ */
+export function bindBoost(element: ControlElement, input: ShipInput): BoostBinding {
+  let pressed = false
+  const binding = bindPress(
+    element,
+    {
+      down() {
+        pressed = true
+        input.boost = true
+      },
+      release() {
+        pressed = false
+        input.boost = false
+      },
+    },
+    { touchOnly: false }
+  )
+  return {
+    ...binding,
+    reassert() {
+      if (pressed) input.boost = true
+    },
+    held: () => pressed,
+  }
+}
+
 type EventSource = Pick<Window, 'addEventListener' | 'removeEventListener'>
 
 /**

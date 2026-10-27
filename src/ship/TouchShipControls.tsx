@@ -1,8 +1,10 @@
+import { IconBolt } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { shipInput, throttlePercent } from './ship-input'
 import {
+  bindBoost,
   bindSteer,
   bindThrottle,
   blockPagePinch,
@@ -44,8 +46,9 @@ function useTouchControlsVisible() {
 /**
  * Touch ship controls (tides-3bl.4, tides-2hv.3): a floating steer stick on
  * the left, and on the right a spring-return throttle stick (up/down moves
- * the throttle, sideways rolls) with the throttle readout above it. Writes
- * only shipInput; mounted in ShipView's overlay.
+ * the throttle, sideways rolls) with the throttle readout above it and a
+ * hold-to-boost button by it (tides-zmw.25). Writes only shipInput; mounted
+ * in ShipView's overlay.
  */
 export function TouchShipControls() {
   return useTouchControlsVisible() ? <Controls /> : null
@@ -65,6 +68,7 @@ function Controls() {
   const label = useRef<HTMLSpanElement>(null)
   const thumb = useRef<HTMLDivElement>(null)
   const dwell = useRef<HTMLDivElement>(null)
+  const boostButton = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const overlay = root.current!
@@ -76,6 +80,7 @@ function Controls() {
     const labelEl = label.current!
     const thumbEl = thumb.current!
     const dwellEl = dwell.current!
+    const boostEl = boostButton.current!
 
     // The stick's base jumps to the thumb, in the overlay's coordinates
     // (measured once per press), and goes back to its resting ghost after.
@@ -140,7 +145,8 @@ function Controls() {
       onStick: onThrottleStick,
       onTap,
     })
-    const bindings = [steer, throttle]
+    const boost = bindBoost(boostEl, shipInput)
+    const bindings = [steer, throttle, boost]
     const releaseAll = () => bindings.forEach((binding) => binding.release())
     const stopInterruptions = releaseOnInterruption(
       { win: window, doc: document, orientation: screen.orientation ?? null },
@@ -155,13 +161,16 @@ function Controls() {
 
     // The throttle also changes from the keyboard on hybrids, so the
     // readout follows shipInput rather than the touches.
-    let shown = { throttle: NaN, dwell: NaN }
+    let shown = { throttle: NaN, dwell: NaN, boost: false }
     let last: number | null = null
     let frame = requestAnimationFrame(function draw(now) {
       const dt = last == null ? 0 : (now - last) / 1000
       last = now
       throttle.step(dt)
       steer.reassert()
+      boost.reassert()
+      const boosting = boost.held()
+      if (boosting !== shown.boost) boostEl.toggleAttribute('data-active', boosting)
       const value = shipInput.throttle
       if (value !== shown.throttle) {
         thumbEl.style.bottom = `${throttleToTrack(value) * 100}%`
@@ -177,7 +186,7 @@ function Controls() {
         if (held > 0) cluster.dataset.dwell = detent.arrivedFrom > 0 ? 'reverse' : 'ahead'
         else delete cluster.dataset.dwell
       }
-      shown = { throttle: value, dwell: held }
+      shown = { throttle: value, dwell: held, boost: boosting }
       frame = requestAnimationFrame(draw)
     })
 
@@ -226,6 +235,17 @@ function Controls() {
           <ThrottleKnob ref={throttleKnob} />
         </ThrottleBase>
       </ThrottleCluster>
+      {/* After the zone, so it takes its own presses. The HUD shows the
+          boost too ("Boost" for "Speed"), for screen readers as well. */}
+      <BoostButton
+        ref={boostButton}
+        aria-hidden
+      >
+        <IconBolt
+          size={24}
+          stroke={1.75}
+        />
+      </BoostButton>
     </Overlay>
   )
 }
@@ -522,6 +542,62 @@ const ThrottleKnob = styled.div`
   }
 
   @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+`
+
+// [TUNE] The boost button's gap to the throttle stick's base: wide enough that
+// its nearest edge (STICK_RADIUS_PX + this from the base's centre) is past
+// TAP_REACH_PX, so a tap on the button never zeroes the throttle.
+const BOOST_GAP = 16
+
+// Hold to boost (tides-zmw.25): under the throttle stick, for the right thumb
+// to roll down onto, a 64 px target round the 52 px disc. Clear of the floor
+// when the sticks sit low. On a short landscape screen there's no room below,
+// so it sits inboard of the base, level with its bottom.
+const BoostButton = styled.div`
+  ${glassPanel}
+  position: absolute;
+  right: ${restInset('right')};
+  bottom: max(
+    calc(var(--stick-floor) + 8px),
+    calc(
+      var(--stick-bottom) + var(--stick-h) / 2 - ${STICK_RADIUS_PX + BOOST_GAP + KNOB_SIZE}px
+    )
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: ${KNOB_SIZE}px;
+  height: ${KNOB_SIZE}px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.78);
+  transform: translateX(50%);
+  pointer-events: auto;
+  touch-action: none;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+  }
+
+  @media (orientation: landscape) and (max-height: 500px) {
+    right: calc(${restInset('right')} + ${STICK_RADIUS_PX + BOOST_GAP + KNOB_SIZE / 2}px);
+    bottom: calc(var(--stick-bottom) + var(--stick-h) / 2 - ${STICK_RADIUS_PX}px);
+  }
+
+  /* Lit like the throttle's dwell while held. */
+  &[data-active] {
+    color: #fff;
+    border-color: ${BLUE};
+    box-shadow: 0 0 12px rgba(76, 159, 254, 0.45);
     transition: none;
   }
 `
