@@ -22,6 +22,7 @@ import {
   collisionRadius,
   createShipState,
   floorRadius,
+  lawFloor,
   nearestBody,
   settleShip,
   speedCap,
@@ -34,6 +35,7 @@ import {
   wellFactor,
   wellTime,
   type Body,
+  type GroundSpeedLaw,
   type FlightEnv,
   type ShipState,
 } from './flight'
@@ -847,7 +849,7 @@ describe("Earth's floor (tides-01v.8.7)", () => {
     let peakSpeed = 0
     let lowest = Infinity
     const direction = new THREE.Vector3()
-    for (; seconds < 120; seconds += FRAME) {
+    for (; seconds < 600; seconds += FRAME) {
       stepShip(state, input({ throttle }), FRAME, env(bodies), telemetry)
       const d = direction.subVectors(state.position, earth.position).length()
       direction.divideScalar(d)
@@ -856,7 +858,8 @@ describe("Earth's floor (tides-01v.8.7)", () => {
       peakSpeed = Math.max(peakSpeed, telemetry.speed)
       if (telemetry.speed < 1e-3 && d - floorRadius(earth, direction) < 1e-9) break
     }
-    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, cap: telemetry.speedCap }
+    const altitude = state.position.distanceTo(earth.position) - earth.radius
+    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, altitude, cap: telemetry.speedCap }
     state.orientation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI))
     fly(state, climb, input({ throttle }), env(bodies))
     const height = state.position.distanceTo(earth.position) - earth.ground!(direction.subVectors(state.position, earth.position).normalize())
@@ -867,19 +870,22 @@ describe("Earth's floor (tides-01v.8.7)", () => {
     const { landed, peakShare, lowest } = dive('high', throttle)
     expect(lowest).toBeGreaterThanOrEqual(-1e-9)
     expect(landed.gap).toBeCloseTo(EARTH_GROUND_CLEARANCE, 6)
-    expect(landed.cap).toBe(EARTH_GROUND_SPEED)
-    // Rides the well down without the approach warning's overshoot.
+    // The air's floor at the stop, with or without the tiles (tides-zmw.9.29).
+    expect(landed.cap).toBeCloseTo(lawFloor(EARTH_GROUND_SPEED_LAW, landed.gap, landed.altitude), 12)
+    // Rides the well and the air down without the approach warning's overshoot.
     expect(peakShare).toBeLessThan(1.5)
-    expect(landed.seconds).toBeLessThan(60)
+    // Most of it in the air: ~70 s at full throttle, over 3 min at 0.3.
+    expect(landed.seconds).toBeLessThan(120 / throttle)
   })
 
   // The deck's tallest tops over the ground under them.
   const DECK = CLOUD_LAYER_TOP - TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY
 
-  test('crosses the cloud deck in seconds, not frames', () => {
+  // At the air's speed now (tides-zmw.9.29): ~1,300 km/h through the deck.
+  test('crosses the cloud deck in tens of seconds, not frames', () => {
     const { landed } = dive('high', 1, DECK)
     expect(landed.seconds).toBeGreaterThan(2)
-    expect(landed.seconds).toBeLessThan(6)
+    expect(landed.seconds).toBeLessThan(60)
   })
 
   test('climbs back out of the deck at full throttle within seconds', () => {
@@ -1330,7 +1336,8 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     // Flat ground 100 m under the ship for x < 0, a 2 km drop past it.
     const R = EARTH_RADIUS
     const ground = (direction: THREE.Vector3) => (direction.x < 0 ? R : R - 2000 * M)
-    const make = (law: boolean): Body => ({
+    const gapLaw: GroundSpeedLaw = { ...EARTH_GROUND_SPEED_LAW, air: undefined }
+    const make = (law?: GroundSpeedLaw): Body => ({
       key: 'earth',
       position: new THREE.Vector3(),
       radius: R,
@@ -1339,9 +1346,9 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
       ground,
       groundClearance: FINE_GROUND_CLEARANCE,
       minSpeed: law ? EARTH_SLOWEST : 0.02,
-      ...(law ? { groundSpeed: EARTH_GROUND_SPEED_LAW } : {}),
+      ...(law ? { groundSpeed: law } : {}),
     })
-    const growth = (law: boolean) => {
+    const growth = (law?: GroundSpeedLaw) => {
       const body = make(law)
       // ~1 km short of the edge, flying at it.
       const state = shipAt(new THREE.Vector3(-0.0005, R + 100 * M, 0), new THREE.Vector3(1, R + 100 * M, 0))
@@ -1366,12 +1373,14 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     // ride would pass straight on to the speed. Limited, the edge's step grows
     // it e^(3h) at most, and after it Flight Assist spools toward the new cap
     // over its τ (2 s): (1 − e^(−h/τ)) · (21 − 1) ≈ 17% a frame at first.
-    const { worst, edge } = growth(true) as { worst: number; edge: number }
+    const { worst, edge } = growth(gapLaw) as { worst: number; edge: number }
     expect(edge).toBeCloseTo(Math.exp(RIDE_UP_RATE * FRAME), 3)
     expect(worst).toBeLessThan(1 + (1 - Math.exp(-FRAME / VELOCITY_TAU_WELL)) * 20 + 1e-3)
     expect(worst).toBeGreaterThan(Math.exp(RIDE_UP_RATE * FRAME))
     // Before the law, at the flat 0.02 floor, the edge changed nothing (the floor held the cap).
-    expect(growth(false)).toBeLessThan(1.02)
+    expect(growth()).toBeLessThan(1.02)
+    // Nor with the air (tides-zmw.9.29): 100 m over the sea either side, the cap holds.
+    expect((growth(EARTH_GROUND_SPEED_LAW) as { worst: number }).worst).toBeLessThan(1.02)
   })
 
   test('an unlocked dive under the law rides the cap down: speed / cap stays at the throttle to the stop', () => {
@@ -1381,17 +1390,21 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     const telemetry = createShipTelemetry()
     let peak = 0
     let seconds = 0
-    for (; seconds < 60; seconds += FRAME) {
+    for (; seconds < 600; seconds += FRAME) {
       stepShip(state, input({ throttle: 0.6 }), FRAME, env(bodies), telemetry)
       // After the spool-up (2 s τ deep in the well).
       if (seconds > 8) peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
       if (gapOf(earth, state) < FINE_GROUND_CLEARANCE + 1e-3 * M) break
     }
     expect(peak).toBeLessThan(0.62)
-    // ~4 s down the plateau (30 km at 0.6 · 43 km/s, less the spool-up), then
-    // ln(21.6 km / 30 m) / (2 · 0.6) ≈ 5.5 s down the law.
-    expect(seconds).toBeGreaterThan(6)
-    expect(seconds).toBeLessThan(14)
+    // Through the air (tides-zmw.9.29): ∫ dh / (0.6 · sea · e^(h / L)) from
+    // the stop's altitude to the start's, ~2 min, then the last ~100 m on the
+    // gap law in about a second.
+    const air = EARTH_GROUND_SPEED_LAW.air!
+    const base = earth.ground!(UP) - earth.radius
+    const inAir = (air.scale / (0.6 * air.sea)) * (Math.exp(-base / air.scale) - Math.exp(-(base + 30000 * M) / air.scale))
+    expect(seconds).toBeGreaterThan(0.95 * inAir)
+    expect(seconds).toBeLessThan(1.05 * inAir + 4)
   })
 
   test('a ridge passing under the ship eases the speed down at most e^(−RIDE_DOWN_RATE·dt) a step, not a 3.3× brake', () => {
@@ -1453,5 +1466,128 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES), telemetry)
     expect(telemetry.air).toEqual({ speed: telemetry.speed, coupling: 0, density: 0, dynamicPressure: 0 })
     expect(telemetry.speed).toBeGreaterThan(0)
+  })
+})
+
+describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
+  const M = EARTH_UNITS_PER_METRE
+  const KM = 1000 * M
+  const R = EARTH_RADIUS
+  const law = EARTH_GROUND_SPEED_LAW
+  const air = law.air!
+  const gapLaw: GroundSpeedLaw = { ...law, air: undefined }
+  // Earth with its ground `height` over the sea along each direction.
+  const earthWith = (height: (direction: THREE.Vector3) => number, groundSpeed: GroundSpeedLaw = law): Body => ({
+    key: 'earth',
+    position: new THREE.Vector3(),
+    radius: R,
+    collisionRadius: R + 10 * M,
+    mass: BODY_MASS_KG.earth,
+    ground: (direction) => R + height(direction),
+    groundClearance: FINE_GROUND_CLEARANCE,
+    minSpeed: EARTH_SLOWEST,
+    groundSpeed,
+  })
+  const sea = earthWith(() => 0)
+  const above = (km: number) => new THREE.Vector3(0, R + km * KM, 0)
+  // The nose `degrees` over the horizon, ship over +Y.
+  const nose = (degrees: number) => new THREE.Vector3(Math.cos(degrees * DEG), Math.sin(degrees * DEG), 0)
+  const DEG = Math.PI / 180
+
+  test('rises steadily with the altitude through the air and joins the well cap above it with no step', () => {
+    const level = nose(0)
+    let km = 0.03
+    let previous = speedCap(above(km), [sea], level)
+    while (km < 150) {
+      // 1% or 100 m a sample, whichever is less.
+      km += Math.min(0.01 * km, 0.1)
+      const cap = speedCap(above(km), [sea], level)
+      expect(cap).toBeGreaterThanOrEqual(previous)
+      expect(cap / previous).toBeLessThan(1.011)
+      // Over the guard's last stretch and under the plateau, the air's own.
+      if (km > 1 && km < 90) expect(cap / (air.sea * Math.exp((km * KM) / air.scale))).toBeCloseTo(1, 12)
+      // Above the air, as without it.
+      if (km > 92) expect(cap).toBe(speedCap(above(km), [earthWith(() => 0, gapLaw)], level))
+      previous = cap
+    }
+    const kmh = (km: number) => (speedCap(above(km), [sea], level) * EARTH_KM_PER_UNIT * 3600)
+    expect(kmh(0.1)).toBeCloseTo(720, -1)
+    expect(kmh(10)).toBeCloseTo(1300, -2)
+    expect(kmh(40)).toBeCloseTo(7600, -2)
+  })
+
+  test('flying level 10 km up over 8 km peaks, the cap holds within 10%, where the gap law swung with the ground', () => {
+    // Ridges every ~20 km: 0 to 8 km over the sea.
+    const ridges = (direction: THREE.Vector3) => 4 * KM + 4 * KM * Math.sin(2000 * Math.atan2(direction.x, direction.y))
+    const swing = (groundSpeed: GroundSpeedLaw) => {
+      const earth = earthWith(ridges, groundSpeed)
+      let lo = Infinity
+      let hi = 0
+      for (let i = 0; i <= 1000; i++) {
+        const angle = (0.01 * i) / 1000
+        const at = new THREE.Vector3(Math.sin(angle), Math.cos(angle), 0).multiplyScalar(R + 10 * KM)
+        const level = new THREE.Vector3(Math.cos(angle), -Math.sin(angle), 0)
+        const cap = speedCap(at, [earth], level)
+        lo = Math.min(lo, cap)
+        hi = Math.max(hi, cap)
+      }
+      return hi / lo
+    }
+    expect(swing(law)).toBeLessThanOrEqual(1.1)
+    expect(swing(gapLaw)).toBeGreaterThan(3)
+  })
+
+  test("the escape vector: the nose climbing from 30° to 60° hands the cap back to the gap law's, smoothly", () => {
+    const at = above(1)
+    const airCap = speedCap(at, [sea], nose(0))
+    const gapCap = speedCap(at, [earthWith(() => 0, gapLaw)], nose(0))
+    expect(gapCap / airCap).toBeGreaterThan(5)
+    for (const degrees of [-90, -45, 0, 15, 29]) expect(speedCap(at, [sea], nose(degrees))).toBe(airCap)
+    for (const degrees of [61, 75, 90]) expect(speedCap(at, [sea], nose(degrees))).toBeCloseTo(gapCap, 15)
+    let previous = airCap
+    for (let degrees = 30; degrees <= 60; degrees += 0.5) {
+      const cap = speedCap(at, [sea], nose(degrees))
+      expect(cap).toBeGreaterThanOrEqual(previous)
+      expect(cap / previous).toBeLessThan(1.1)
+      previous = cap
+    }
+    // No nose reads as level.
+    expect(speedCap(at, [sea])).toBe(airCap)
+  })
+
+  test('climbs from the sea to 100 km in seconds nose up, where the air alone takes over a minute', () => {
+    const climb = (groundSpeed: GroundSpeedLaw) => {
+      const earth = earthWith(() => 0, groundSpeed)
+      const state = shipAt(above(0.03), above(1000))
+      let seconds = 0
+      for (; seconds < 300; seconds += FRAME) {
+        stepShip(state, input({ throttle: 1 }), FRAME, env([earth]))
+        if (state.position.length() > R + 100 * KM) break
+      }
+      return seconds
+    }
+    expect(climb(law)).toBeLessThan(15)
+    expect(climb({ ...law, air: { ...air, escape: [2, 3] } })).toBeGreaterThan(60)
+  })
+
+  test('flying level at the cap into rising ground: never under the floor, and it comes to the 30 m stop over the slope', () => {
+    // Sea for x < 0, then a slope rising to 3 km at 1:2.
+    const slope = (direction: THREE.Vector3) => THREE.MathUtils.clamp(0.5 * R * Math.atan2(direction.x, direction.y), 0, 3 * KM)
+    const earth = earthWith(slope)
+    const start = new THREE.Vector3(-0.002, R + 1 * KM, 0)
+    const state = shipAt(start, start.clone().add(new THREE.Vector3(1, 0, 0)))
+    const telemetry = createShipTelemetry()
+    const direction = new THREE.Vector3()
+    let resting = 0
+    for (let i = 0; i < 120 * 60; i++) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env([earth]), telemetry)
+      const d = direction.copy(state.position).length()
+      direction.divideScalar(d)
+      expect(d - floorRadius(earth, direction)).toBeGreaterThanOrEqual(-1e-12)
+      expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * telemetry.speedCap + 1e-12)
+      if (d - earth.ground!(direction) < FINE_GROUND_CLEARANCE + 1 * M) resting++
+    }
+    // It met the slope and rode it at the stop.
+    expect(resting).toBeGreaterThan(0)
   })
 })
