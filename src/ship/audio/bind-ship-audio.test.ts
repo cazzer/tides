@@ -43,6 +43,7 @@ function setup(visibilityState = 'visible', { dialog = false } = {}) {
     subscribe: () => () => {},
     output: () => null,
     isRunning: () => false,
+    playCue: () => false,
   } satisfies ShipAudio
   const cleanup = bindShipAudio(audio, win, doc)
   return { win, doc, audio, cleanup }

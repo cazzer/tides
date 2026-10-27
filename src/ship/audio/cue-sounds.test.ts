@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createShipAudio, playShipCue, type ShipAudioOutput } from './ship-audio'
-import { SHIP_CUE_SOUNDS } from './cue-sounds'
+import { IMPACT_NOISE_SECONDS, SHIP_CUE_SOUNDS } from './cue-sounds'
 import type { ShipCueKind } from './ship-cues'
 
 type Param = {
@@ -17,6 +17,7 @@ class FakeAudioContext {
   destination = { name: 'destination' }
   nodes: Record<string, unknown>[] = []
   oscillators = 0
+  buffers = 0
   addEventListener() {}
   resume() {
     this.state = 'running'
@@ -57,9 +58,10 @@ class FakeAudioContext {
   createBufferSource() {
     return this.node({ buffer: null, start: vi.fn(), stop: vi.fn(), onended: null })
   }
-  createBuffer(_channels: number, length: number) {
+  createBuffer(_channels: number, length: number, sampleRate: number) {
+    this.buffers++
     const data = new Float32Array(length)
-    return { getChannelData: () => data }
+    return { duration: length / sampleRate, getChannelData: () => data }
   }
 }
 
@@ -111,6 +113,24 @@ describe('ship cue sounds (tides-a4j.3)', () => {
     const off = notes(out, 'assistOff')
     expect(on[1]).toBeGreaterThan(on[0])
     expect(off[1]).toBeLessThan(off[0])
+  })
+
+  it('plays the impact’s crunch from the shared noise, a slice of it each time', () => {
+    const { audio, context } = running()
+    const out = audio.output()!
+    SHIP_CUE_SOUNDS.impact(out, 3)
+    SHIP_CUE_SOUNDS.impact(out, 3)
+    // The voices' brown and white, made once.
+    expect(context.buffers).toBe(2)
+    const sources = context.nodes.filter((node) => 'buffer' in node)
+    expect(sources).toHaveLength(2)
+    for (const source of sources) {
+      const [at, offset, duration] = (source.start as ReturnType<typeof vi.fn>).mock.calls[0] as number[]
+      expect(at).toBe(3)
+      expect(offset).toBeGreaterThanOrEqual(0)
+      expect(offset + duration).toBeLessThanOrEqual(2)
+      expect(duration).toBe(IMPACT_NOISE_SECONDS)
+    }
   })
 
   it('makes nothing while muted, and frees a played cue when it ends', () => {
