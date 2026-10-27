@@ -187,6 +187,24 @@ vec3 groundUp = normal;
 #endif
 `
 
+// Before the lights' end, where the direct light is the Sun's alone: the
+// sunlight's colour through the air mass toward the Sun, as a cloud top's at
+// sea level (cloud-layer.ts sunlightTint(); tides-34q), on its diffuse light
+// and its glint. Before lights_fragment_end, so the sky the sea mirrors
+// (water.ts), added to directSpecular after it, keeps its own colour.
+const SUN_TINT_BODY = /* glsl */ `
+#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
+{
+  float groundZenith = min(90.0, degrees(acos(clamp(dot(groundUp, directionalLights[0].direction), -1.0, 1.0))));
+  float groundAirMass = 1.0 / (cos(radians(groundZenith)) + 0.50572 * pow(96.07995 - groundZenith, -1.6364)) - 1.0;
+  vec3 groundSunTint = exp(-vec3(${SUNLIGHT_EXTINCTION.map(f).join(', ')}) * groundAirMass);
+  groundSunTint /= max(groundSunTint.r, ${f(SUNSET_FLOOR)});
+  reflectedLight.directDiffuse *= groundSunTint;
+  reflectedLight.directSpecular *= groundSunTint;
+}
+#endif
+`
+
 // After the lights, before the cloud shadow and the eclipse (patches earlier
 // in the chain, whose code lands after this) dim the sunlight, skylight and
 // all.
@@ -198,28 +216,22 @@ const LIGHT_BODY = /* glsl */ `
 #ifdef GROUND_HORIZON
   groundSkyView = min(groundSkyView, groundHorizonSky);
 #endif
-  // The sunlight's colour through the air mass toward the Sun, as a cloud
-  // top's at sea level (cloud-layer.ts sunlightTint()).
-  float groundZenith = min(90.0, degrees(acos(clamp(groundSunSin, -1.0, 1.0))));
-  float groundAirMass = 1.0 / (cos(radians(groundZenith)) + 0.50572 * pow(96.07995 - groundZenith, -1.6364)) - 1.0;
-  vec3 groundSunTint = exp(-vec3(${SUNLIGHT_EXTINCTION.map(f).join(', ')}) * groundAirMass);
-  groundSunTint /= max(groundSunTint.r, ${f(SUNSET_FLOOR)});
   // The sky's light falls off far slower than the Sun's on level ground
   // (about with the root of its sine), into the civil twilight.
   float groundSkyLight = sqrt(max(groundSunSin, 0.0))
     + ${f(GROUND_SKY_TWILIGHT)} * smoothstep(${f(Math.sin((-6 * Math.PI) / 180))}, 0.0, groundSunSin);
-  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse * groundSunTint
+  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse
     + GROUND_SKY_FILL * groundSkyLight * groundSkyView * vec3(${GROUND_SKY_COLOUR.map(f).join(', ')}) * directionalLights[0].color
       * BRDF_Lambert(material.diffuseColor);
-  reflectedLight.directSpecular *= groundSunTint;
 }
 #endif
 `
 
 /** The sky fill's GLSL for the streamed tiles to reuse by text
  * (tides-zmw.9.11): lightBody after lights_fragment_end, reading groundUp
- * (the unbent normal), normal and GROUND_SKY_FILL. */
-export const GROUND_DETAIL_GLSL = { lightBody: LIGHT_BODY }
+ * (the unbent normal), normal and GROUND_SKY_FILL; sunTintBody after
+ * lights_fragment_maps, reading groundUp (tides-34q). */
+export const GROUND_DETAIL_GLSL = { lightBody: LIGHT_BODY, sunTintBody: SUN_TINT_BODY }
 
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
@@ -250,6 +262,7 @@ export function groundDetailPatch(low: boolean, scaled: boolean = DETAIL_TILT_SC
         'lights_fragment_end',
         LIGHT_BODY
       )
+      shader.fragmentShader = inject(shader.fragmentShader, 'lights_fragment_maps', SUN_TINT_BODY)
     },
     customProgramCacheKey: () => `ground-detail-${octaves}${scaled ? '-scaled' : ''}`,
   }

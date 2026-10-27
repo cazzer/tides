@@ -250,6 +250,7 @@ describe('night lights in flight', () => {
     const sky = hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb('))
     const swaps: [string, string][] = [
       [GROUND_DETAIL_GLSL.lightBody, OLD_SKY_FILL],
+      ['#include <lights_fragment_maps>\n' + GROUND_DETAIL_GLSL.sunTintBody, '#include <lights_fragment_maps>'],
       ['varying vec3 vGroundHazeEye;\n' + SKY_VIEW_GLSL + '\n', 'varying vec3 vGroundHazeEye;\n\n'],
       [sky, OLD_HAZE_GLOW],
       [
