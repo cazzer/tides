@@ -13,12 +13,18 @@
 //
 //   • Speed cap v_max = clamp(K_WELL · d_eff, floor, V_TOP), Elite's
 //     supercruise governed by gravity wells (tides-2hv.7). d_eff is the
-//     smallest gap to a surface divided by that body's wellFactor, which
-//     grows slowly with mass, so the Sun and Jupiter slow the ship from
-//     further out than Mercury does. Inside a well the gap e-folds every
-//     wellTime = wellFactor / K_WELL seconds at the cap; in open space the
-//     cap tops out at V_TOP, which is what makes Neptune minutes away rather
-//     than seconds. One continuous regime, no mode switch. The floor is
+//     smallest over bodies of wellDistanceAt(gap, wellFactor): each body
+//     has two bands (tides-h6a), drawn as rings (WellRings.tsx). Inside its
+//     well (gap under wellEdgeGap, where the cap is WELL_EDGE_SPEED) d_eff
+//     is the gap divided by the body's wellFactor, which grows slowly with
+//     mass, so the gap e-folds every wellTime = wellFactor / K_WELL seconds
+//     at the cap. Outside it, in the slowdown band, the cap climbs from
+//     WELL_EDGE_SPEED by BAND_RATE per unit of gap to V_TOP at bandEdgeGap
+//     (~300 units out for every body), and past that the body doesn't
+//     limit the speed at all: Earth → Jupiter is mostly at V_TOP, where
+//     the wells' 300 × wellFactor reach (the Sun's past Mars) held the
+//     whole inner system under ~60 units/s. One continuous regime, no mode
+//     switch. The floor is
 //     V_NORMAL, or the minSpeed of the body setting d_eff (speedFloor): a
 //     body the ship can fly down to its ground (Earth) keeps its well
 //     slowing the ship below V_NORMAL all the way down. Over the streamed
@@ -48,7 +54,10 @@
 //     is scaled by how much the cap changed over it, so speed / cap tracks
 //     the throttle in steady flight however fast the cap is moving (turning
 //     keys off that share; see turnRateMultiplier). With no target locked,
-//     riding down a well is rate-limited to WELL_BRAKE, so diving at a light
+//     riding down the slowdown band is rate-limited to BAND_RATE, the rate
+//     its cap falls at at full throttle, so the band brakes the ship
+//     smoothly from V_TOP; riding down a well is rate-limited to
+//     WELL_BRAKE, so diving at a light
 //     body faster than its well can shed carries the ship in over the cap
 //     (overshoot), up to OVERSPEED_MAX × cap. With a target locked the ride
 //     down is unlimited, so speed / cap ≤ 1 holds whichever well takes over:
@@ -68,7 +77,7 @@
 //     (plus strafe) and rotation eases toward the stick demand, so letting go
 //     stops the spin. Off: thrust adds to velocity and spin persists; thrust
 //     can't push past the cap and speed carried above it bleeds off at
-//     WELL_BRAKE. Either way the velocity e-fold, velocityTau, lengthens
+//     WELL_BRAKE (BAND_RATE in the slowdown band). Either way the velocity e-fold, velocityTau, lengthens
 //     deep in a well: the throttle feels heavy near mass and free in open
 //     space.
 //   • Turn rates are full up to the top of BLUE_ZONE (speed as a share of
@@ -364,8 +373,9 @@ export interface FlightEnv {
 // Frames longer than this (tab switch, GC pause, debugger) are simulated as
 // this long: the world just runs slow for that frame instead of the ship
 // covering seconds of flight in one jump. A step moves at most OVERSPEED_MAX ·
-// K_WELL · MAX_DT = 0.15 of the mass-weighted gap (wellFactor ≥ 1, so at most
-// 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor (at
+// K_WELL · MAX_DT = 0.15 of d_eff, which is never over the gap (wellFactor ≥
+// 1, and in the slowdown band wellDistanceAt is at most the gap), so at most
+// 15% of the gap to any surface, or 0.075 units at the V_NORMAL floor (at
 // most OVERSPEED_MAX · rate · MAX_DT = 0.6 of the gap under a groundSpeed
 // law unboosted, whose air never raises it over that), and the collision
 // clamps a step to the floor, so it cannot tunnel. Boosted (tides-5lj) the
@@ -395,27 +405,48 @@ export const COLLISION_MARGIN = 1.02
 // enough to read the surface, fast enough not to feel stuck.
 export const V_NORMAL = 0.25
 
-// Cap per unit of mass-weighted surface distance, 1/s. [TUNE] Sets how long a
-// well takes to cross: at the cap the gap e-folds every wellFactor / K_WELL
-// seconds (2 s at the Moon, 3.7 s at Earth, 22 s at the Sun). Mostly moves
-// the short trips: Earth → Moon (flight.test.ts, 10–15 s) is almost all well.
+// Cap per unit of mass-weighted surface distance, 1/s, inside a body's well
+// (wellEdgeGap). [TUNE] Sets how long a well takes to cross: at the cap the
+// gap e-folds every wellFactor / K_WELL seconds (2 s at the Moon, 3.7 s at
+// Earth, 22 s at the Sun). Mostly moves the short trips: Earth → Moon
+// (flight.test.ts, 10–15 s) is all inside Earth's well.
 export const K_WELL = 0.5
 
 // Top speed, scene units/s: ~0.15 AU/s at the flight scale (roughly 75c).
 // [TUNE] Sets the long trips, which are mostly open space: Earth → Neptune
 // (~29 AU, flight.test.ts 180–300 s) is ~D / V_TOP plus the wells at each
-// end. The cap reaches it where the mass-weighted gap passes V_TOP / K_WELL.
+// end. The cap reaches it at each body's bandEdgeGap.
 export const V_TOP = 150
+
+// The cap at a body's well edge, units/s: where its slowdown band ends and
+// its well begins (wellEdgeGap = this · wellTime; tides-h6a). [TUNE] It
+// places the inner rings: at 2.5 Earth's (12.2 from its centre) clears the
+// Moon's orbit, Jupiter's (40.8) holds Io and Europa and not Ganymede, and
+// Mars' holds both its moons. Inside, the cap is as it was before the bands.
+export const WELL_EDGE_SPEED = 2.5
+
+// How fast the slowdown band's cap climbs with the gap, units/s per unit:
+// from WELL_EDGE_SPEED at the well's edge to V_TOP (V_TOP − WELL_EDGE_SPEED)
+// / this = 295 units further out, for every body (tides-h6a). Closing at
+// the cap the speed e-folds every 1 / this = 2 s there, the Moon's well
+// time, so a light body's band is its old well and a heavy body's well is
+// ~300 units across where it was 300 × wellFactor (the Sun's 3300, past
+// Mars). [TUNE] Higher narrows the bands and brakes harder: 1 halved them
+// to ~150 units and, in simulated arrivals, halved the speed every 0.7 s
+// against 1.4 s at this rate. Flight Assist rides the band down at this rate unlocked (rideWell),
+// so a full-cruise arrival brakes smoothly at the cap, never clamping.
+export const BAND_RATE = 0.5
 
 // The lightest well: the Moon's mass, kg. wellFactor normalises to it so
 // every body's factor is ≥ 1, which keeps the MAX_DT tunnel bound.
 export const WELL_REFERENCE_MASS_KG = 7.342e22
 
 // How the well grows with mass: wellFactor = (mass / Moon)^this. [TUNE] It
-// sets the middle-distance trips: higher stretches Jupiter (factor 4.15 at
-// 0.14) and the Sun's leg of every interplanetary trip; 0.15 put Earth →
-// Jupiter past 120 s. The Sun's 11 against Mercury's 1.2 is the "big wells
-// reach further" feel.
+// sizes each well (wellEdgeGap ∝ wellFactor) and how slowly it is crossed:
+// the Sun's 11 against Mercury's 1.2 is the "big wells reach further" feel.
+// Before the slowdown bands (tides-h6a) it also set every well's reach, 300
+// × wellFactor, and with it the middle-distance trips (0.15 put Earth →
+// Jupiter past 120 s); the bands are ~300 units for every body.
 export const WELL_MASS_EXPONENT = 0.14
 
 // Velocity e-fold, s, in open space (cap at V_TOP) and deep in a well (cap at
@@ -603,6 +634,47 @@ export function wellFactor(mass: number | undefined): number {
 }
 
 /**
+ * The gap, scene units, at which a body whose gap e-folds every `wellTime`
+ * s (wellTime) has its well's edge: inside it, its well; outside, its
+ * slowdown band (tides-h6a). WELL_EDGE_SPEED · wellTime: 9.25 units over
+ * Earth, 5 over the Moon, 55 over the Sun.
+ */
+export function wellEdgeGap(wellTime: number): number {
+  return WELL_EDGE_SPEED * wellTime
+}
+
+/**
+ * The gap at which that body's slowdown band starts (its outer ring), past
+ * which it doesn't limit the speed: the well's edge plus (V_TOP −
+ * WELL_EDGE_SPEED) / BAND_RATE.
+ */
+export function bandEdgeGap(wellTime: number): number {
+  return wellEdgeGap(wellTime) + (V_TOP - WELL_EDGE_SPEED) / BAND_RATE
+}
+
+/**
+ * The cap a body whose gap e-folds every `wellTime` s sets `gap` from its
+ * surface, before the floor and V_TOP: the gap over wellTime inside its
+ * well, then climbing at BAND_RATE through the band (unbounded: past
+ * bandEdgeGap it is over V_TOP, which caps it). Continuous and rising, the
+ * band's slope being at least the well's (wellTime ≥ 2 = 1 / BAND_RATE,
+ * wellFactor being ≥ 1), and never over K_WELL · gap.
+ */
+export function wellSpeedOf(gap: number, wellTime: number): number {
+  const g = Math.max(0, gap)
+  const edge = wellEdgeGap(wellTime)
+  return g > edge ? WELL_EDGE_SPEED + BAND_RATE * (g - edge) : g / wellTime
+}
+
+// d_eff for one body, measure()'s: wellSpeedOf over K_WELL, but inside the
+// well exactly the gap / wellFactor it always was.
+function wellDistanceAt(gap: number, factor: number): number {
+  const g = Math.max(0, gap)
+  const T = factor / K_WELL
+  return g > wellEdgeGap(T) ? wellSpeedOf(g, T) / K_WELL : g / factor
+}
+
+/**
  * Seconds per e-fold of the gap to `body` when closing at the cap it sets:
  * wellFactor / K_WELL. 2 s at the Moon, 3.7 s at Earth, 8.3 s at Jupiter.
  */
@@ -636,7 +708,7 @@ interface Proximity {
   targetBoost: number
   /** The clearance over the held ground measure() read the target's floor with; NaN for none. */
   targetHold: number
-  /** min over bodies of max(0, gap) / wellFactor; Infinity with no bodies. */
+  /** min over bodies of wellDistanceAt(gap, wellFactor); Infinity with no bodies. */
   wellDistance: number
   /** The body that sets wellDistance (d_eff), its wellFactor and speedFloor (speedFloorAt its gap). */
   wellKey: string | null
@@ -647,6 +719,8 @@ interface Proximity {
   wellCeiling: number
   /** Whether that body has a groundSpeed law (wellCap: whether its floor sets the cap). */
   wellGround: boolean
+  /** Whether the ship is in that body's slowdown band, outside its well's edge (rideWell's brake). */
+  wellBand: boolean
   /**
    * That body's groundSpeed law (null without one) and the gap, altitude
    * and climb measure() read it at, so boostRaises can read it again at
@@ -675,6 +749,7 @@ const proximity: Proximity = {
   wellFloor: V_NORMAL,
   wellCeiling: Infinity,
   wellGround: false,
+  wellBand: false,
   wellLaw: null,
   wellGap: Infinity,
   wellAltitude: Infinity,
@@ -725,6 +800,7 @@ function measure(
   proximity.wellFloor = V_NORMAL
   proximity.wellCeiling = Infinity
   proximity.wellGround = false
+  proximity.wellBand = false
   proximity.wellLaw = null
   proximity.wellGap = Infinity
   proximity.wellAltitude = Infinity
@@ -743,7 +819,7 @@ function measure(
     const held = hold && hold.key === body.key ? centreDistance - hold.radius : NaN
     const floor = speedFloorAt(body, gap, altitude, climb, boost, held)
     const factor = wellFactor(body.mass)
-    const well = Math.max(0, gap) / factor
+    const well = wellDistanceAt(gap, factor)
     if (well < proximity.wellDistance) {
       proximity.wellDistance = well
       proximity.wellKey = body.key
@@ -752,6 +828,7 @@ function measure(
       proximity.wellFloor = floor
       proximity.wellCeiling = body.groundSpeed ? lawCeiling(body.groundSpeed, gap, altitude, climb, boost, held) : Infinity
       proximity.wellGround = body.groundSpeed !== undefined
+      proximity.wellBand = gap > wellEdgeGap(factor / K_WELL)
       proximity.wellLaw = body.groundSpeed ?? null
       proximity.wellGap = gap
       proximity.wellAltitude = altitude
@@ -819,7 +896,7 @@ function boostRaises(p: Proximity, cap: number): boolean {
 
 /**
  * The speed limit at `position`, scene units/s: clamp(K_WELL · d_eff,
- * floor, V_TOP), with d_eff the smallest gap / wellFactor over `bodies` and
+ * floor, V_TOP), with d_eff the smallest wellDistanceAt(gap, wellFactor) over `bodies` and
  * floor the speedFloor of the body that sets it (speedFloorAt, with the
  * ship's `heading`, its direction of travel, world frame, unit, for an air
  * law's escape; none reads as level, the `boost` spool, ShipState.boost,
@@ -839,17 +916,21 @@ export function speedCap(
 
 /**
  * The limit on speed toward a locked target `gap` from its surface, whose
- * gap should e-fold every `eta` seconds (its wellTime): max(floor, gap / eta),
- * with `floor` its speedFloor. When the target sets d_eff this is the cap
+ * gap should e-fold every `eta` seconds (its wellTime) inside its well:
+ * max(floor, gap / eta), with `floor` its speedFloor; in its slowdown band,
+ * wellSpeedOf (tides-h6a). When the target sets d_eff this is the cap
  * itself, so it only binds on speed carried in above the cap: a locked
  * approach can't overshoot.
  *
  * `dt` makes the cap exact for a discrete step: closing at gap / (eta + dt)
  * for dt leaves the closing speed ≤ newGap / eta, so the rule holds after
- * the step as well as before it.
+ * the step as well as before it. In the band the cap is read where the
+ * step at the cap here would end, which it can only be further out than,
+ * the band's cap rising with the gap.
  */
 export function approachCap(gap: number, eta: number, dt = 0, floor = V_NORMAL): number {
-  return Math.max(floor, Math.max(0, gap) / (eta + dt))
+  if (!(gap > wellEdgeGap(eta)) || gap === Infinity) return Math.max(floor, Math.max(0, gap) / (eta + dt))
+  return Math.max(floor, wellSpeedOf(gap - wellSpeedOf(gap, eta) * dt, eta))
 }
 
 // approachCap over a law with air: the cap (wellCap's, the target setting
@@ -884,7 +965,7 @@ function airCapAt(
 ): number {
   return Math.max(
     lawFloor(law, gap, altitude, climb, boost, hold),
-    Math.min(Math.max(0, gap) / eta, lawCeiling(law, gap, altitude, climb, boost, hold))
+    Math.min(wellSpeedOf(gap, eta), lawCeiling(law, gap, altitude, climb, boost, hold))
   )
 }
 
@@ -997,7 +1078,7 @@ function translate(
   input: Readonly<ShipInput>,
   dt: number,
   cap: number,
-  { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost, targetHold }: Proximity
+  { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost, targetHold, wellBand }: Proximity
 ): void {
   bodyAxes(state.orientation)
   // Thrust as a share of the cap, world frame.
@@ -1014,8 +1095,9 @@ function translate(
     v.lerp(scratch, 1 - Math.exp(-dt / tau))
   } else {
     // Thrust can't push past the cap; speed already above it (carried down
-    // a well) bleeds off at WELL_BRAKE instead of snapping to it.
-    const carried = v.length() * Math.exp(-WELL_BRAKE * dt)
+    // a well) bleeds off at WELL_BRAKE instead of snapping to it, or at
+    // BAND_RATE in the slowdown band, which falls that fast at the cap.
+    const carried = v.length() * Math.exp(-(wellBand ? BAND_RATE : WELL_BRAKE) * dt)
     v.addScaledVector(scratch, (cap / tau) * dt)
     v.clampLength(0, Math.max(cap, carried))
   }
@@ -1040,7 +1122,9 @@ function translate(
 // the share lags a moving cap by ~K·τ / wellFactor: departing at full
 // throttle it sat at ~0.73 (no wide-turn penalty), arriving it hit 1 at half
 // throttle (tides-2hv.4). Unlocked, riding down is rate-limited to
-// WELL_BRAKE, which is where overshoot comes from; locked, it follows the cap
+// WELL_BRAKE in a well, which is where overshoot comes from, and to
+// BAND_RATE in a slowdown band (`band`), which its cap falls no faster than
+// at full throttle, so the band rides down smoothly; locked, it follows the cap
 // all the way, so no well (the target's or one on the way) is overshot. FA
 // off doesn't ride: the pilot owns the speed. Where a groundSpeed law sets
 // the cap (`groundLaw`: its floor, or its air's ceiling under the well) the
@@ -1054,13 +1138,15 @@ function rideWell(
   capBefore: number,
   capAfter: number,
   locked: boolean,
-  groundLaw: boolean
+  groundLaw: boolean,
+  band: boolean
 ): void {
   const v = state.velocity
   if (input.flightAssist) {
     const ratio = capAfter / capBefore
+    const brake = band ? BAND_RATE : WELL_BRAKE
     if (groundLaw) v.multiplyScalar(clamp(ratio, Math.exp(-RIDE_DOWN_RATE * dt), Math.exp(RIDE_UP_RATE * dt)))
-    else v.multiplyScalar(locked ? ratio : Math.max(ratio, Math.exp(-WELL_BRAKE * dt)))
+    else v.multiplyScalar(locked ? ratio : Math.max(ratio, Math.exp(-brake * dt)))
   }
   v.clampLength(0, OVERSPEED_MAX * capAfter)
 }
@@ -1277,7 +1363,7 @@ export function stepShip(
   // now is.
   const there = measure(state.position, env.bodies, env.targetKey, headingOf(state), state.boost, state.groundHold)
   const capAfter = wellCap(there)
-  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, groundLawSets(there))
+  if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, groundLawSets(there), there.wellBand)
   if (telemetry) {
     const boosted = state.boost > 0 && boostRaises(there, capAfter)
     fillTelemetry(telemetry, state, input, there, capAfter, colliding, boosted)

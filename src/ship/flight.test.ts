@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, test } from 'vitest'
 import { PLANETS, sceneRadius } from '../planets'
 import {
+  BAND_RATE,
   BLUE_ZONE,
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
@@ -22,8 +23,10 @@ import {
   VELOCITY_TAU_OPEN,
   VELOCITY_TAU_WELL,
   WELL_BRAKE,
+  WELL_EDGE_SPEED,
   YAW_RATE,
   approachCap,
+  bandEdgeGap,
   collisionRadius,
   createShipState,
   floorRadius,
@@ -40,7 +43,9 @@ import {
   holdSpeed,
   updateGroundHold,
   velocityTau,
+  wellEdgeGap,
   wellFactor,
+  wellSpeedOf,
   wellTime,
   type Body,
   type GroundHold,
@@ -189,24 +194,106 @@ describe('speedCap', () => {
   })
 
   test('weights each gap by its well: a heavy body slows the ship from further out', () => {
-    // 100 units off a Sun-mass body against 20 off a Moon-mass one: the Sun's
-    // gap counts as 100 / 11 ≈ 9, so the Sun sets the cap, not the nearer Moon.
+    // 40 units off a Sun-mass body, inside its well (edge ~55), against 20
+    // off a Moon-mass one: the Sun's gap counts as 40 / 11 ≈ 3.6, so the Sun
+    // sets the cap, not the nearer Moon.
     const sun: Body = { ...body, key: 'sun', mass: BODY_MASS_KG.sun }
     const moon: Body = {
       key: 'moon',
-      position: new THREE.Vector3(103 + 21, 0, 0),
+      position: new THREE.Vector3(43 + 21, 0, 0),
       radius: 1,
       mass: BODY_MASS_KG.moon,
     }
-    const p = at(100)
+    const p = at(40)
     expect(nearestBody(p, [sun, moon])?.body.key).toBe('moon')
-    expect(speedCap(p, [sun, moon])).toBeCloseTo((K_WELL * 100) / wellFactor(BODY_MASS_KG.sun), 9)
-    expect(speedCap(p, [{ ...sun, mass: undefined }, moon])).toBeCloseTo(K_WELL * 20, 9)
+    expect(speedCap(p, [sun, moon])).toBeCloseTo((K_WELL * 40) / wellFactor(BODY_MASS_KG.sun), 9)
+    expect(speedCap(p, [{ ...sun, mass: undefined }, moon])).toBeCloseTo(WELL_EDGE_SPEED + BAND_RATE * 15, 9)
   })
 
   test('is V_NORMAL with no bodies', () => {
     expect(nearestBody(new THREE.Vector3(), [])).toBeNull()
     expect(speedCap(new THREE.Vector3(1e6, 0, 0), [])).toBe(V_NORMAL)
+  })
+})
+
+describe('wells and slowdown bands (tides-h6a)', () => {
+  const heavy = ['earth', 'mars', 'jupiter', 'sun'] as const
+  const of = (key: (typeof heavy)[number]): Body => ({
+    key,
+    position: new THREE.Vector3(),
+    radius: 3,
+    mass: BODY_MASS_KG[key],
+  })
+  const at = (gap: number) => new THREE.Vector3(3 + gap, 0, 0)
+
+  test('inside the well the cap is the gap over wellTime, as before the bands', () => {
+    for (const key of heavy) {
+      const b = of(key)
+      const edge = wellEdgeGap(wellTime(b))
+      for (const share of [0.6, 0.9, 1]) {
+        const gap = share * edge
+        expect(speedCap(at(gap), [b]), key).toBeCloseTo(Math.max(V_NORMAL, K_WELL * (gap / wellFactor(b.mass))), 12)
+      }
+    }
+  })
+
+  test('climbs from WELL_EDGE_SPEED at the edge by BAND_RATE per unit to V_TOP at bandEdgeGap, and no further', () => {
+    for (const key of heavy) {
+      const b = of(key)
+      const T = wellTime(b)
+      const edge = wellEdgeGap(T)
+      const outer = bandEdgeGap(T)
+      expect(speedCap(at(edge), [b]), key).toBeCloseTo(WELL_EDGE_SPEED, 9)
+      expect(speedCap(at(edge + 1e-6), [b]), key).toBeCloseTo(WELL_EDGE_SPEED, 5)
+      expect(speedCap(at(edge + 100), [b]), key).toBeCloseTo(WELL_EDGE_SPEED + BAND_RATE * 100, 9)
+      expect(speedCap(at(outer), [b]), key).toBeCloseTo(V_TOP, 9)
+      expect(speedCap(at(outer + 1), [b]), key).toBe(V_TOP)
+      // ~300 units across whatever the mass, where the old law reached 300 × wellFactor.
+      expect(outer - edge).toBeCloseTo((V_TOP - WELL_EDGE_SPEED) / BAND_RATE, 9)
+    }
+  })
+
+  test('is the old law everywhere for a Moon-mass body, and never over K_WELL · gap', () => {
+    const moon: Body = { key: 'moon', position: new THREE.Vector3(), radius: 3, mass: BODY_MASS_KG.moon }
+    for (const gap of [1, 5, 20, 100, 290]) {
+      expect(speedCap(at(gap), [moon])).toBeCloseTo(Math.max(V_NORMAL, K_WELL * gap), 6)
+    }
+    for (const key of heavy) {
+      const T = wellTime(of(key))
+      for (let gap = 0.5; gap < 400; gap *= 1.3) {
+        expect(wellSpeedOf(gap, T)).toBeLessThanOrEqual(K_WELL * gap + 1e-9)
+        expect(wellSpeedOf(gap * 1.01, T)).toBeGreaterThan(wellSpeedOf(gap, T))
+      }
+    }
+  })
+
+  test('brakes a full-cruise arrival smoothly with Flight Assist on or off: the speed rides the cap down, never snapping', () => {
+    const jupiter: Body = { key: 'jupiter', position: new THREE.Vector3(), radius: 20, mass: BODY_MASS_KG.jupiter }
+    const T = wellTime(jupiter)
+    for (const flightAssist of [true, false]) {
+      const state = shipAt(new THREE.Vector3(0, 0, 20 + bandEdgeGap(T) + 200), jupiter.position)
+      state.velocity.set(0, 0, -V_TOP)
+      const telemetry = createShipTelemetry()
+      let previous = V_TOP
+      let bandPeak = 0
+      for (let t = 0; t < 60; t += FRAME) {
+        stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env([jupiter]), telemetry)
+        const gap = state.position.length() - 20
+        // No frame sheds more than the band's rate, with room for the
+        // velocity's own ease at the top.
+        expect(Math.log(previous / telemetry.speed) / FRAME, `${flightAssist} at ${gap.toFixed(1)}`).toBeLessThan(1.2 * BAND_RATE)
+        if (gap > wellEdgeGap(T)) bandPeak = Math.max(bandPeak, telemetry.speed / telemetry.speedCap)
+        previous = telemetry.speed
+        if (gap < wellEdgeGap(T) / 2) break
+      }
+      // Through the band: at the cap with Flight Assist, which rides it down
+      // at BAND_RATE. Off, nothing rides: the clamp holds the speed to the
+      // cap at the start of each step, which falls a little over it, and at
+      // the cap the share is neutral (the cap falls at BAND_RATE · share, the
+      // carried speed bleeds at BAND_RATE), so it drifts over a little: an
+      // overshoot under the ceiling, never a clamp.
+      expect(bandPeak, String(flightAssist)).toBeLessThan(flightAssist ? 1.05 : 1.4)
+    }
   })
 })
 
@@ -252,9 +339,9 @@ describe('velocityTau', () => {
 })
 
 describe('approachCap', () => {
-  test('is surface distance over the ETA, floored at V_NORMAL', () => {
-    expect(approachCap(195, 7)).toBeCloseTo(195 / 7, 12)
-    expect(approachCap(195, 7, 1)).toBeCloseTo(195 / 8, 12)
+  test('is surface distance over the ETA inside the well, floored at V_NORMAL', () => {
+    expect(approachCap(15, 7)).toBeCloseTo(15 / 7, 12)
+    expect(approachCap(15, 7, 1)).toBeCloseTo(15 / 8, 12)
     expect(approachCap(0.01, 2)).toBe(V_NORMAL)
     expect(approachCap(-1, 2)).toBe(V_NORMAL)
     expect(approachCap(0.01, 2, 0, 0.02)).toBe(0.02)
@@ -267,9 +354,22 @@ describe('approachCap', () => {
       radius: 5,
       mass: BODY_MASS_KG.neptune,
     }
-    for (const gap of [10, 100, 400]) {
+    for (const gap of [10, 100, 250]) {
       const p = new THREE.Vector3(5 + gap, 0, 0)
       expect(approachCap(gap, wellTime(neptune))).toBeCloseTo(speedCap(p, [neptune]), 9)
+    }
+    // Past the band's edge it no longer binds: over V_TOP.
+    expect(approachCap(400, wellTime(neptune))).toBeGreaterThan(V_TOP)
+  })
+
+  test("in the slowdown band, closing at it for dt ends under the cap there", () => {
+    const eta = wellTime({ key: 'n', position: new THREE.Vector3(), radius: 5, mass: BODY_MASS_KG.neptune })
+    for (const gap of [20, 50, 150, 300]) {
+      for (const dt of [FRAME, MAX_DT]) {
+        const closing = approachCap(gap, eta, dt)
+        expect(closing).toBeLessThan(wellSpeedOf(gap, eta))
+        expect(closing).toBeLessThanOrEqual(wellSpeedOf(gap - closing * dt, eta) + 1e-12)
+      }
     }
   })
 })
@@ -589,18 +689,36 @@ describe('target approach', () => {
     expect(targeted).toBeCloseTo(untargeted, 6)
   })
 
-  test("reports the target's wellTime as the ETA while at its cap", () => {
-    // Alone with a Neptune-mass body, inside its well (cap below V_TOP).
+  test("reports the target's wellTime as the ETA while at its cap in its well", () => {
+    // Alone with a Neptune-mass body, inside its well, already at the cap.
     const neptune: Body = { ...NEPTUNE, mass: BODY_MASS_KG.neptune }
-    const start = neptune.position.clone().add(new THREE.Vector3(0, 0, 700))
-    const state = shipAt(start, neptune.position)
+    const T = wellTime(neptune)
+    const gap = 0.9 * wellEdgeGap(T)
+    const state = shipAt(neptune.position.clone().add(new THREE.Vector3(0, 0, neptune.radius + gap)), neptune.position)
+    state.velocity.set(0, 0, -gap / T)
     const telemetry = createShipTelemetry()
-    for (let i = 0; i < 10 * 60; i++) {
+    for (let i = 0; i < 3 * 60; i++) {
       stepShip(state, input({ throttle: 1 }), FRAME, env([neptune], 'neptune'), telemetry)
     }
-    expect(telemetry.speedCap).toBeLessThan(V_TOP)
-    expect(telemetry.target!.etaSeconds).toBeGreaterThan(wellTime(neptune) - 0.1)
-    expect(telemetry.target!.etaSeconds).toBeLessThan(wellTime(neptune) + 0.1)
+    expect(telemetry.target!.etaSeconds).toBeGreaterThan(T - 0.1)
+    expect(telemetry.target!.etaSeconds).toBeLessThan(T + 0.1)
+  })
+
+  test("in its slowdown band, the gap's offset from the band's zero e-folds every 1 / BAND_RATE", () => {
+    const neptune: Body = { ...NEPTUNE, mass: BODY_MASS_KG.neptune }
+    const T = wellTime(neptune)
+    const zero = wellEdgeGap(T) - WELL_EDGE_SPEED / BAND_RATE
+    const start = 200
+    const state = shipAt(neptune.position.clone().add(new THREE.Vector3(0, 0, neptune.radius + start)), neptune.position)
+    state.velocity.set(0, 0, -wellSpeedOf(start, T))
+    const telemetry = createShipTelemetry()
+    for (let i = 0; i < 2 * 60; i++) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env([neptune], 'neptune'), telemetry)
+    }
+    const gap = telemetry.target!.surfaceDistance
+    expect(gap).toBeGreaterThan(wellEdgeGap(T))
+    expect(gap - zero).toBeCloseTo((start - zero) * Math.exp(-2 * BAND_RATE), 0)
+    expect(telemetry.target!.etaSeconds).toBeCloseTo(gap / (BAND_RATE * (gap - zero)), 1)
   })
 })
 
@@ -950,16 +1068,16 @@ describe('dt', () => {
 
 describe('telemetry', () => {
   test('reports the body whose well sets the cap, which can be other than the nearest', () => {
-    // As in speedCap: 100 units off a Sun-mass body, 20 off a Moon-mass one.
+    // As in speedCap: 40 units off a Sun-mass body, 20 off a Moon-mass one.
     const sun: Body = { key: 'sun', position: new THREE.Vector3(), radius: 3, mass: BODY_MASS_KG.sun }
     const moon: Body = {
       key: 'moon',
-      position: new THREE.Vector3(124, 0, 0),
+      position: new THREE.Vector3(64, 0, 0),
       radius: 1,
       mass: BODY_MASS_KG.moon,
     }
     const state = createShipState()
-    state.position.set(103, 0, 0)
+    state.position.set(43, 0, 0)
     const telemetry = createShipTelemetry()
     stepShip(state, input(), FRAME, env([sun, moon]), telemetry)
     expect(telemetry.nearest.key).toBe('moon')
@@ -1101,7 +1219,8 @@ function trip(
 // TRIP_DATE itself the line runs through Callisto (18.6 units out from
 // Jupiter): Callisto's well takes over ~18 units short and the locked ship
 // crawls through it at the V_NORMAL floor, ~20 s longer than the open
-// approach the band was set for (130 s against 109 s with no moons). The
+// approach the band was set for (81 s against 60 s with no moons, since the
+// slowdown bands, tides-h6a). The
 // moons' phases change the trip by tens of seconds from day to day, so the
 // band is for the open approach; crossing a moon system is tested on its own
 // below.
@@ -1136,8 +1255,10 @@ function galileanMisses(date: string): Record<(typeof GALILEANS)[number], number
 describe('trip times at the flight scale', () => {
   test.each([
     ['moon', 10, 15, TRIP_DATE],
-    ['mars', 30, 60, TRIP_DATE],
-    ['jupiter', 90, 120, JUPITER_TRIP_DATE],
+    // The slowdown bands (tides-h6a) took Mars from ~47 s and Jupiter from
+    // ~109 s: most of each leg is now at V_TOP, out of the Sun's old well.
+    ['mars', 20, 35, TRIP_DATE],
+    ['jupiter', 50, 75, JUPITER_TRIP_DATE],
     ['neptune', 180, 300, TRIP_DATE],
   ] as const)('Earth → %s at full throttle, locked, takes %s–%s s (%s)', (key, min, max, date) => {
     if (key === 'jupiter') {

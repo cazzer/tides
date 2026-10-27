@@ -16,16 +16,21 @@
 
 import * as THREE from 'three'
 import {
+  BAND_RATE,
   K_WELL,
   OVERSPEED_MAX,
   V_NORMAL,
   V_TOP,
   WELL_BRAKE,
+  WELL_EDGE_SPEED,
+  bandEdgeGap,
   lawCeiling,
   lawFloor,
   speedFloor,
   velocityTau,
+  wellEdgeGap,
   wellFactor,
+  wellSpeedOf,
   type Body,
   type GroundSpeedLaw,
 } from './flight'
@@ -53,8 +58,8 @@ export const AHEAD_SWITCH = 0.8
 export const AHEAD_MIN_SHARE = 0.05
 
 /**
- * [TUNE] "Too fast" warns this many seconds before the ship reaches the edge
- * of the subject's well (where the cap starts to fall, gap V_TOP · wellTime),
+ * [TUNE] "Too fast" warns this many seconds before the ship reaches the
+ * subject's slowdown band (where the cap starts to fall, bandEdgeGap),
  * and all the way in. Earlier, a cruise across the system would warn about
  * every planet on the line.
  */
@@ -94,9 +99,11 @@ export function canCrash(speedFloor: number): boolean {
 
 /**
  * A safe-arrival throttle this close to full reads as full: the tick at the
- * end of the bar would only be noise.
+ * end of the bar would only be noise. Close enough that a body whose full
+ * throttle does overshoot keeps its tick: since the slowdown bands
+ * (tides-h6a) Mars' is ~0.955, and full throttle there warns.
  */
-export const SAFE_SHARE_FULL = 0.95
+export const SAFE_SHARE_FULL = 0.98
 
 /**
  * - over: above the cap now, so the well can't stop the ship (overshooting).
@@ -112,10 +119,51 @@ function wellTimeOf(factor: number): number {
   return factor / K_WELL
 }
 
-// Steps over the well's depth in log gap, V_TOP · T down to V_NORMAL · T
-// (ln 600 ≈ 6.4 e-folds; ~8.9 down to Earth's ground speed): enough that
-// halving it moves safeShare < 0.01.
+// Steps over the well's depth in log gap, its edge (WELL_EDGE_SPEED · T)
+// down to V_NORMAL · T (ln 10 ≈ 2.3 e-folds; ~4.8 down to Earth's ground
+// speed), and as many over the slowdown band's: enough that halving them
+// moves safeShare < 0.01.
 const PREDICT_STEPS = 96
+
+// One leg of peakShare's run: the share `s` from log gap `start` down to
+// `end`, where the cap is e^x / T (x the log gap, offset in the band so the
+// cap there is BAND_RATE · its offset gap), the ride down limited to `brake`.
+// Returns the new share and writes the peak to `run.peak`.
+function rideLeg(
+  run: { s: number; peak: number },
+  start: number,
+  end: number,
+  T: number,
+  brake: number,
+  throttle: number,
+  flightAssist: boolean
+): void {
+  if (!(start > end)) return
+  const dLog = (start - end) / PREDICT_STEPS
+  for (let i = 0; i < PREDICT_STEPS && run.s > 0; i++) {
+    const cap = Math.exp(start - i * dLog) / T
+    const tau = velocityTau(cap)
+    let s = run.s
+    // Time to fall dLog in log gap: closing / gap = s / T.
+    const dt = (dLog * T) / s
+    if (flightAssist) {
+      s = throttle + (s - throttle) * Math.exp(-dt / tau)
+      s *= Math.exp(Math.max(0, s / T - brake) * dt)
+    } else {
+      const thrust = s + (throttle * dt) / tau
+      s = s > 1 ? s : Math.min(1, Math.max(0, thrust))
+      s *= Math.exp((s / T - (s > 1 ? brake : 0)) * dt)
+    }
+    run.s = s
+    if (!Number.isFinite(s)) {
+      run.peak = Infinity
+      return
+    }
+    run.peak = Math.max(run.peak, s)
+  }
+}
+
+const peakRun = { s: 0, peak: 0 }
 
 /**
  * The highest speed share (speed / cap) the ship reaches on a straight run
@@ -128,6 +176,9 @@ const PREDICT_STEPS = 96
  *   when that is positive;
  * - FA off, thrust adds throttle · cap / τ up to the cap, nothing rides, and
  *   speed over the cap bleeds at WELL_BRAKE.
+ * Through the slowdown band (tides-h6a) the same, in the log of the gap's
+ * offset from the band's zero (where its cap would reach 0) with T = 1 /
+ * BAND_RATE and BAND_RATE for WELL_BRAKE: the share grows only when over 1.
  * The run ends at the body's speed `floor` (flight.ts speedFloor), where the
  * cap stops falling.
  */
@@ -140,30 +191,17 @@ export function peakShare(
   speedFloor = V_NORMAL
 ): number {
   const T = wellTimeOf(factor)
-  const top = Math.log(V_TOP * T)
-  const floor = Math.log(speedFloor * T)
-  const start = Math.min(Math.log(Math.max(gap, 1e-9)), top)
-  let s = Math.max(0, share)
-  let peak = s
-  if (!(start > floor)) return peak
-  const dLog = (start - floor) / PREDICT_STEPS
-  for (let i = 0; i < PREDICT_STEPS && s > 0; i++) {
-    const cap = Math.exp(start - i * dLog) / T
-    const tau = velocityTau(cap)
-    // Time to fall dLog in log gap: closing / gap = s / T.
-    const dt = (dLog * T) / s
-    if (flightAssist) {
-      s = throttle + (s - throttle) * Math.exp(-dt / tau)
-      s *= Math.exp(Math.max(0, s / T - WELL_BRAKE) * dt)
-    } else {
-      const thrust = s + (throttle * dt) / tau
-      s = s > 1 ? s : Math.min(1, Math.max(0, thrust))
-      s *= Math.exp((s / T - (s > 1 ? WELL_BRAKE : 0)) * dt)
-    }
-    if (!Number.isFinite(s)) return Infinity
-    peak = Math.max(peak, s)
+  const edge = wellEdgeGap(T)
+  // The band's cap is BAND_RATE · (gap − zero).
+  const zero = edge - WELL_EDGE_SPEED / BAND_RATE
+  const g = Math.min(Math.max(gap, 1e-9), bandEdgeGap(T))
+  peakRun.s = Math.max(0, share)
+  peakRun.peak = peakRun.s
+  if (g > edge) {
+    rideLeg(peakRun, Math.log(g - zero), Math.log(edge - zero), 1 / BAND_RATE, BAND_RATE, throttle, flightAssist)
   }
-  return peak
+  rideLeg(peakRun, Math.log(Math.min(g, edge)), Math.log(speedFloor * T), T, WELL_BRAKE, throttle, flightAssist)
+  return peakRun.peak
 }
 
 // By wellFactor, then speed floor.
@@ -173,8 +211,8 @@ const safeShares = new Map<number, Map<number, number>>()
  * The safe-arrival throttle for a body of wellFactor `factor` and speed
  * floor `speedFloor`: the highest Flight Assist throttle that rides its well
  * down without overshooting (peakShare ≤ OVER_ON) from its edge; 1 from
- * SAFE_SHARE_FULL up. Above it, unlocked, the ship overshoots. ~0.72 at the
- * Moon, ~0.85 at Mercury, ~0.92 at Mars, 1 for Venus, Earth and heavier,
+ * SAFE_SHARE_FULL up. Above it, unlocked, the ship overshoots. ~0.79 at the
+ * Moon, ~0.9 at Mercury, ~0.955 at Mars, 1 for Venus, Earth and heavier,
  * and 1 where no arrival can crash (canCrash). The HUD's throttle bar
  * marks it.
  */
@@ -184,8 +222,7 @@ export function safeShare(factor: number, speedFloor = V_NORMAL): number {
   if (!byFloor) safeShares.set(factor, (byFloor = new Map()))
   const known = byFloor.get(speedFloor)
   if (known !== undefined) return known
-  const T = wellTimeOf(factor)
-  const edge = V_TOP * T
+  const edge = bandEdgeGap(wellTimeOf(factor))
   const over = (throttle: number) =>
     peakShare(factor, edge, throttle, throttle, true, speedFloor) > OVER_ON
   let result = 1
@@ -235,7 +272,9 @@ const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0, base: 
 
 /**
  * Predicted seconds to reach the surface `gap` away, closing at `closing`,
- * for a body whose gap e-folds every `wellTime` s at the cap, with speed
+ * for a body whose gap e-folds every `wellTime` s at the cap inside its well
+ * (and whose slowdown band is a leg of its own above that, tides-h6a: the
+ * gap's offset from the band's zero e-folding every 1 / BAND_RATE), with speed
  * `share` of the cap (the throttle, in steady Flight Assist flight). The
  * ship holds its closing speed until share · gap / wellTime (the cap
  * there) falls below it, then the gap e-folds every wellTime / share down to
@@ -262,6 +301,26 @@ export function approachEta(
   if (!(closing >= AHEAD_MIN_SHARE * speedFloor) || !(wellTime > 0)) return Infinity
   const g = Math.max(0, gap)
   const s = THREE.MathUtils.clamp(share, 1e-3, 1)
+  // A law with air sums the whole run, the band too (its cap is wellSpeedOf).
+  if (ground?.law.air) {
+    const { law } = ground
+    return airEta(g, Math.max(0, ground.stop), closing, wellTime, s, law, ground.base ?? 0, ground.boost ?? 0)
+  }
+  const edge = wellEdgeGap(wellTime)
+  const zero = edge - WELL_EDGE_SPEED / BAND_RATE
+  const band = g > edge ? leg(edge - zero, g - zero, closing, s, BAND_RATE, 0) : 0
+  return band + innerEta(Math.min(g, edge), closing, wellTime, s, speedFloor, ground)
+}
+
+// approachEta inside the well's edge.
+function innerEta(
+  g: number,
+  closing: number,
+  wellTime: number,
+  s: number,
+  speedFloor: number,
+  ground: EtaGround | undefined
+): number {
   if (!ground) {
     const floorGap = speedFloor * wellTime
     const holdGap = Math.max(floorGap, (closing * wellTime) / s)
@@ -274,7 +333,6 @@ export function approachEta(
   }
   const { law } = ground
   const stop = Math.max(0, ground.stop)
-  if (law.air) return airEta(g, stop, closing, wellTime, s, law, ground.base ?? 0, ground.boost ?? 0)
   const at = (x: number) => Math.min(g, x)
   const slowest = Math.max(stop, law.min / law.rate)
   const plateau = Math.max(slowest, law.max / law.rate)
@@ -320,7 +378,7 @@ function airEta(
     const x1 = i === AIR_ETA_STEPS ? gap : lo * Math.exp(i * step)
     const x = Math.sqrt(x0 * x1)
     const cap = Math.max(
-      Math.min(x / wellTime, lawCeiling(law, x, x + base, 0, boost, x)),
+      Math.min(wellSpeedOf(x, wellTime), lawCeiling(law, x, x + base, 0, boost, x)),
       lawFloor(law, x, x + base, 0, boost, x)
     )
     eta += (x1 - x0) / Math.min(closing, share * cap)
@@ -368,11 +426,10 @@ export function approachStatus(a: ApproachInput, previous: ApproachStatus | null
   if (!(a.closing > 0)) return 'open'
   if (!canCrash(floor)) return 'closing'
   const T = wellTimeOf(a.factor)
-  const edge = V_TOP * T
-  if ((a.gap - edge) / a.closing > FAST_WINDOW_S) return 'closing'
+  if ((a.gap - bandEdgeGap(T)) / a.closing > FAST_WINDOW_S) return 'closing'
   // As a share of the subject's own cap where the ship is; the run starts
-  // at the well's edge if it is still outside.
-  const subjectCap = THREE.MathUtils.clamp(a.gap / T, floor, V_TOP)
+  // at the band's edge if it is still outside.
+  const subjectCap = THREE.MathUtils.clamp(wellSpeedOf(a.gap, T), floor, V_TOP)
   const peak = peakShare(a.factor, a.gap, a.closing / subjectCap, a.throttle, a.flightAssist, floor)
   return peak > (previous === 'fast' ? FAST_OFF : OVER_ON) ? 'fast' : 'closing'
 }
