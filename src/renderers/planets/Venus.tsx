@@ -3,12 +3,10 @@
 // https://www.solarsystemscope.com/textures/download/2k_venus_atmosphere.jpg
 // (flight tier: 4k_venus_atmosphere.jpg, scripts/build-flight-textures.sh)
 import * as THREE from 'three'
-import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import venusTexture from '../../assets/venus-2k.jpg'
-
-const VENUS = PLANETS.venus
+import type { PlanetRendererProps } from './index'
 
 // The brightest planet: the cloud deck is drawn at its full map colour, and
 // the deck's haze darkens it gently toward the limb (Minnaert k > 1).
@@ -27,11 +25,11 @@ const HAZE_SKY = new THREE.Color(1, 0.8, 0.42)
 const HAZE_DUSK = new THREE.Color(1, 0.62, 0.3)
 const HAZE_GAIN = 0.55
 
-export function Venus() {
+export function Venus({ planet }: PlanetRendererProps) {
   return (
     <>
       <PlanetSurface
-        planet={VENUS}
+        planet={planet}
         texture={venusTexture}
         flightTexture="venus"
         albedo={VENUS_ALBEDO}
@@ -39,7 +37,7 @@ export function Venus() {
         detail={DETAIL}
       />
       <PlanetAtmosphere
-        planet={VENUS}
+        planet={planet}
         outer={HAZE_OUTER}
         scaleHeight={HAZE_SCALE_HEIGHT}
         sky={HAZE_SKY}

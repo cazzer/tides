@@ -27,9 +27,9 @@ describe('kmPerUnit', () => {
   })
 
   it('is the log map’s ratio for a major moon', () => {
-    expect(kmPerUnit('titan', T)).toBeCloseTo(MOONS.titan.aKm / moonOrbitRadius('titan'), 0)
+    expect(kmPerUnit('titan', T)).toBeCloseTo(MOONS.titan.aKm / moonOrbitRadius('titan', 'system'), 0)
     // The Galileans' true distances wander a little from the mean.
-    expect(kmPerUnit('io', T) / (MOONS.io.aKm / moonOrbitRadius('io'))).toBeCloseTo(1, 2)
+    expect(kmPerUnit('io', T) / (MOONS.io.aKm / moonOrbitRadius('io', 'system'))).toBeCloseTo(1, 2)
   })
 
   it('differs from the radial scale between orbits, hence the caption', () => {

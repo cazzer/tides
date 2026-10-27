@@ -2,12 +2,10 @@
 // (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_jupiter.jpg
 // (flight tier: 8k_jupiter.jpg, scripts/build-flight-textures.sh)
-import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import jupiterTexture from '../../assets/jupiter-2k.jpg'
-
-const JUPITER = PLANETS.jupiter
+import type { PlanetRendererProps } from './index'
 
 // Jupiter's cloud tops darken only gently toward the limb in visible light.
 const LIMB_DARKENING = 1.15
@@ -16,11 +14,11 @@ const LIMB_DARKENING = 1.15
 // the bands.
 const DETAIL: PlanetDetail = { style: 'bands', strength: 0.3 }
 
-export function Jupiter() {
+export function Jupiter({ planet }: PlanetRendererProps) {
   return (
     <>
       <PlanetSurface
-        planet={JUPITER}
+        planet={planet}
         texture={jupiterTexture}
         flightTexture="jupiter"
         limbDarkening={LIMB_DARKENING}
@@ -28,7 +26,7 @@ export function Jupiter() {
       />
       {/* A thin warm haze, seen only as a faint rim on the day side. */}
       <PlanetAtmosphere
-        planet={JUPITER}
+        planet={planet}
         outer={1.02}
         scaleHeight={0.004}
         sky="#f2d9b0"

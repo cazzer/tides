@@ -37,7 +37,7 @@ const offset = new THREE.Vector3()
  * major moon).
  */
 export function kmPerUnit(key: ScaleReference, t: number): number {
-  if (isMoonKey(key)) return moonTrueOffsetKm(key, t, offset).length() / moonOrbitRadius(key)
+  if (isMoonKey(key)) return moonTrueOffsetKm(key, t, offset).length() / moonOrbitRadius(key, 'system')
   const centre = key === 'moon' ? 'earth' : 'sun'
   const truth = trueBodies([key, centre], t)
   const { positionAt } = positionsFor('system')

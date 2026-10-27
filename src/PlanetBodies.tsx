@@ -47,10 +47,16 @@ function PlanetBody({
   interactive: boolean
   distanceScale: DistanceScale
 }) {
-  const { body, radius } = PLANETS[planetKey]
+  const { positionAt: positionsAt, radius: radii } = positionsFor(distanceScale)
+  const positionAt = positionsAt[planetKey]
+  const radius = radii[planetKey]
+  // The catalog planet at this scale's radius (flight's differs only under
+  // ?truescale, flight-scale.ts): the renderers size the globe, its rings
+  // and atmosphere by planet.radius.
+  const planet = useMemo(() => ({ ...PLANETS[planetKey], radius }), [planetKey, radius])
+  const { body } = planet
   const Renderer = PLANET_RENDERERS[planetKey]
   const ref = useRef<THREE.Mesh>(null)
-  const positionAt = positionsFor(distanceScale).positionAt[planetKey]
   const orientationAt = useMemo(() => bodyOrientation(body), [body])
   const setPlanet = useStore((s) => s.setPlanet)
 
@@ -79,7 +85,7 @@ function PlanetBody({
           Suspense beside this one, so a font load doesn't hide the globe
           or a texture load the text. */}
       <Suspense fallback={null}>
-        <Renderer />
+        <Renderer planet={planet} />
       </Suspense>
     </OrbitingBody>
   )

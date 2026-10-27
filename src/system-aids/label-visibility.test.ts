@@ -112,7 +112,7 @@ describe('labelOpacity', () => {
     expect(labelOpacity('titan', close, 'saturn', close)).toBe(1)
     expect(labelOpacity('enceladus', close, 'saturn', close)).toBeGreaterThan(0.9)
     // A moon's focus spares its siblings and parent.
-    const titanClose = at(4 * planetFramingZoom(moonRadius('titan'), EARTH_RADIUS))
+    const titanClose = at(4 * planetFramingZoom(moonRadius('titan', 'system'), EARTH_RADIUS))
     expect(labelOpacity('saturn', titanClose, 'titan', titanClose)).toBe(1)
     expect(labelOpacity('rhea', titanClose, 'titan', titanClose)).toBe(1)
     expect(labelOpacity('mars', titanClose, 'titan', titanClose)).toBeLessThan(0.01)

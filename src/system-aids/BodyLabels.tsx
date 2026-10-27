@@ -29,7 +29,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore, type CameraFocus } from '../store'
-import { positionsFor, type ScalePositions } from '../flight-scale'
+import { positionsFor } from '../flight-scale'
 import type { DistanceScale } from '../distance-scale'
 import { targetUnitsPerPixel, type ViewSize } from '../main-view'
 import { CLOCK_HALF_WIDTH } from '../clock-size'
@@ -163,12 +163,13 @@ const frame: LabelFrame = {
 function bodyPositionInto(
   key: LabelKey,
   t: number,
-  positionAt: ScalePositions['positionAt'],
+  scale: DistanceScale,
   out: THREE.Vector3
 ): THREE.Vector3 {
+  const { positionAt } = positionsFor(scale)
   if (!isMoonKey(key)) return out.fromArray(positionAt[key](t))
   const [x, y, z] = positionAt[MOONS[key].parent](t)
-  moonOffsetInto(key, t, out)
+  moonOffsetInto(key, t, out, scale)
   out.x += x
   out.y += y
   out.z += z
@@ -253,7 +254,6 @@ function placeLabels(
   viewUpp: number,
   delta: number
 ) {
-  const { positionAt } = positionsFor(scale)
   // The controls may have moved the camera since it last rendered.
   camera.updateMatrixWorld()
   // The camera's screen axes in world space (the scene's root is unrotated).
@@ -274,7 +274,7 @@ function placeLabels(
   // the eye (the Sun, close in to Saturn on its far side) has no name and
   // hides none.
   for (let i = 0; i < n; i++) {
-    bodyPositionInto(LABEL_KEYS[i], t, positionAt, position)
+    bodyPositionInto(LABEL_KEYS[i], t, scale, position)
     position.toArray(bodyAt, i * 3)
     inView[i] = project(camera, position, size) ? 1 : 0
     discX[i] = screen.x

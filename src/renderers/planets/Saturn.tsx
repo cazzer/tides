@@ -3,7 +3,6 @@
 // https://www.solarsystemscope.com/textures/download/2k_saturn.jpg and
 // https://www.solarsystemscope.com/textures/download/2k_saturn_ring_alpha.png
 // (flight tier: 8k_saturn.jpg, scripts/build-flight-textures.sh)
-import { PLANETS } from '../../planets'
 import {
   PlanetRings,
   PlanetSurface,
@@ -12,8 +11,7 @@ import {
 import type { PlanetDetail } from '../planetMaterials'
 import saturnTexture from '../../assets/saturn-2k.jpg'
 import ringTexture from '../../assets/saturn-ring-2k.png'
-
-const SATURN = PLANETS.saturn
+import type { PlanetRendererProps } from './index'
 
 const EQUATORIAL_RADIUS_KM = 60_268
 
@@ -45,12 +43,12 @@ const RING_UNLIT_FACE = 0.1
 // than Jupiter's under the haze.
 const DETAIL: PlanetDetail = { style: 'bands', strength: 0.18 }
 
-export function Saturn() {
+export function Saturn({ planet }: PlanetRendererProps) {
   return (
     <>
       {/* Hazier than Jupiter's, the cloud tops darken just as gently. */}
       <PlanetSurface
-        planet={SATURN}
+        planet={planet}
         texture={saturnTexture}
         flightTexture="saturn"
         limbDarkening={1.1}
@@ -58,7 +56,7 @@ export function Saturn() {
         detail={DETAIL}
       />
       <PlanetRings
-        planet={SATURN}
+        planet={planet}
         {...RINGS}
         law="lommel-seeliger"
         albedo={RING_ALBEDO}

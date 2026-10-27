@@ -3,7 +3,10 @@ import * as THREE from 'three'
 import { JupiterMoons, RotationAxis, Rotation_EQJ_ECT, RotateVector, Vector } from 'astronomy-engine'
 import { PLANETS, PLANET_KEYS, planetPosition, sceneRadius } from '../planets'
 import { moonPosition as earthMoonPosition, eclipticToScene } from '../ephemeris'
-import { positionsFor } from '../flight-scale'
+import { flightRadii, positionsFor } from '../flight-scale'
+import type { DistanceScale } from '../distance-scale'
+import { MAX_TRUESCALE } from '../truescale'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import {
   MOONS,
   MOON_KEYS,
@@ -15,7 +18,9 @@ import {
   moonOrbitPath,
   moonOrientationInto,
   moonOrbitRadius,
+  moonOrbitRadiiAt,
   moonPosition,
+  moonRadiiAt,
   moonRadius,
   moonSystemExtent,
   moonTrueOffsetKm,
@@ -28,7 +33,8 @@ const DAY = 86_400_000
 const DATES = [Date.UTC(2026, 9, 22, 12), Date.UTC(1987, 2, 3), Date.UTC(2051, 6, 9, 18)]
 const GALILEANS = ['io', 'europa', 'ganymede', 'callisto'] as const
 
-const offset = (key: MoonKey, t: number) => moonOffsetInto(key, t, new THREE.Vector3())
+const offset = (key: MoonKey, t: number, scale: DistanceScale = 'system') =>
+  moonOffsetInto(key, t, new THREE.Vector3(), scale)
 
 // The IAU pole flipped to whichever way the planet actually spins, from
 // RotationAxis alone (the sign of W's rate), independent of moons.ts.
@@ -66,17 +72,19 @@ describe('moon radius', () => {
   it('is positive and in size order, never below the floor', () => {
     const bySize = [...MOON_KEYS].sort((a, b) => MOONS[a].radiusKm - MOONS[b].radiusKm)
     for (let i = 0; i < bySize.length; i++) {
-      expect(moonRadius(bySize[i])).toBeGreaterThanOrEqual(MOON_RADIUS_FLOOR)
-      if (i > 0) expect(moonRadius(bySize[i])).toBeGreaterThan(moonRadius(bySize[i - 1]))
+      expect(moonRadius(bySize[i], 'system')).toBeGreaterThanOrEqual(MOON_RADIUS_FLOOR)
+      if (i > 0) {
+        expect(moonRadius(bySize[i], 'system')).toBeGreaterThan(moonRadius(bySize[i - 1], 'system'))
+      }
     }
     // sceneRadius alone would be ≤ 0 for Phobos.
     expect(sceneRadius(22_160)).toBeLessThan(0)
-    expect(moonRadius('phobos')).toBeCloseTo(0.236, 3)
+    expect(moonRadius('phobos', 'system')).toBeCloseTo(0.236, 3)
   })
 
   it('keeps the shared log scale for the large moons, and meets it continuously', () => {
     for (const key of ['io', 'europa', 'ganymede', 'callisto', 'titan', 'triton'] as const) {
-      expect(moonRadius(key)).toBe(sceneRadius(2 * MOONS[key].radiusKm * 1000))
+      expect(moonRadius(key, 'system')).toBe(sceneRadius(2 * MOONS[key].radiusKm * 1000))
     }
     expect(clampedSceneRadius(2662 - 1e-6)).toBeCloseTo(clampedSceneRadius(2662 + 1e-6), 6)
     for (let d = 10; d < 6000; d *= 1.05) {
@@ -91,23 +99,25 @@ describe('orbit radius (log map)', () => {
       const planet = PLANETS[parent]
       const keys = moonsOf(parent)
       const clear = planet.radius * (planet.rings?.outer ?? 1)
-      expect(moonOrbitRadius(keys[0]) - moonRadius(keys[0])).toBeCloseTo(
+      expect(moonOrbitRadius(keys[0], 'system') - moonRadius(keys[0], 'system')).toBeCloseTo(
         clear + MOON_ORBIT_GAP[parent],
         9
       )
       for (let i = 1; i < keys.length; i++) {
         const gap =
-          moonOrbitRadius(keys[i]) -
-          moonOrbitRadius(keys[i - 1]) -
-          moonRadius(keys[i]) -
-          moonRadius(keys[i - 1])
+          moonOrbitRadius(keys[i], 'system') -
+          moonOrbitRadius(keys[i - 1], 'system') -
+          moonRadius(keys[i], 'system') -
+          moonRadius(keys[i - 1], 'system')
         expect(gap).toBeGreaterThan(0.2)
       }
       const last = keys[keys.length - 1]
-      expect(moonSystemExtent(parent)).toBe(moonOrbitRadius(last) + moonRadius(last))
+      expect(moonSystemExtent(parent, 'system')).toBe(
+        moonOrbitRadius(last, 'system') + moonRadius(last, 'system')
+      )
     }
     // Saturn's innermost moon clears the A ring's outer edge (2.27 R).
-    expect(moonOrbitRadius('mimas') - moonRadius('mimas')).toBeGreaterThan(
+    expect(moonOrbitRadius('mimas', 'system') - moonRadius('mimas', 'system')).toBeGreaterThan(
       PLANETS.saturn.radius * 2.27
     )
   })
@@ -115,7 +125,7 @@ describe('orbit radius (log map)', () => {
   it('puts every moon at its orbit radius from the parent', () => {
     for (const t of DATES) {
       for (const key of MOON_KEYS) {
-        expect(offset(key, t).length()).toBeCloseTo(moonOrbitRadius(key), 9)
+        expect(offset(key, t).length()).toBeCloseTo(moonOrbitRadius(key, 'system'), 9)
       }
     }
   })
@@ -139,7 +149,7 @@ describe('Galilean moons', () => {
   })
 
   it('keeps their order outward', () => {
-    const r = GALILEANS.map(moonOrbitRadius)
+    const r = GALILEANS.map((key) => moonOrbitRadius(key, 'system'))
     expect(r).toEqual([...r].sort((a, b) => a - b))
   })
 })
@@ -195,7 +205,7 @@ describe('orbit sense and plane', () => {
     for (const key of MOON_KEYS) {
       if ((GALILEANS as readonly string[]).includes(key)) continue
       const later = offset(key, t + MOONS[key].periodDays * DAY)
-      expect(later.distanceTo(offset(key, t)) / moonOrbitRadius(key)).toBeLessThan(1e-3)
+      expect(later.distanceTo(offset(key, t)) / moonOrbitRadius(key, 'system')).toBeLessThan(1e-3)
     }
   })
 
@@ -208,12 +218,70 @@ describe('orbit sense and plane', () => {
   })
 })
 
+describe('?truescale (tides-o39)', () => {
+  it('is the system sizes at a = 0, and in flight without the flag', () => {
+    const radius = moonRadiiAt(0)
+    const orbit = moonOrbitRadiiAt(0)
+    for (const key of MOON_KEYS) {
+      expect(radius[key]).toBe(moonRadius(key, 'system'))
+      expect(orbit[key]).toBe(moonOrbitRadius(key, 'system'))
+      expect(moonRadius(key, 'flight')).toBe(moonRadius(key, 'system'))
+      expect(moonOrbitRadius(key, 'flight')).toBe(moonOrbitRadius(key, 'system'))
+    }
+    for (const parent of MOON_PARENTS) {
+      expect(moonSystemExtent(parent, 'flight')).toBe(moonSystemExtent(parent, 'system'))
+    }
+  })
+
+  it.each([0.5, MAX_TRUESCALE])('slides radii toward true, floored, at a = %f', (a) => {
+    const radius = moonRadiiAt(a)
+    for (const key of MOON_KEYS) {
+      const scene = moonRadius(key, 'system')
+      const truth = MOONS[key].radiusKm / EARTH_KM_PER_UNIT
+      expect(radius[key]).toBeGreaterThanOrEqual(MOON_RADIUS_FLOOR)
+      // Between the scene radius and the true one (or the floor).
+      expect(radius[key]).toBeLessThanOrEqual(Math.max(scene, truth) + 1e-12)
+      expect(radius[key]).toBeGreaterThanOrEqual(Math.min(scene, Math.max(truth, MOON_RADIUS_FLOOR)) - 1e-12)
+    }
+    // Ganymede is the largest: true ~1.22 units against a scene 1.63.
+    expect(radius.ganymede).toBeLessThan(moonRadius('ganymede', 'system'))
+    expect(radius.phobos).toBe(MOON_RADIUS_FLOOR)
+  })
+
+  it.each([0.5, MAX_TRUESCALE])(
+    'keeps each system clear of its grown planet and rings, its moons apart, at a = %f',
+    (a) => {
+      const radius = moonRadiiAt(a)
+      const orbit = moonOrbitRadiiAt(a)
+      const planetRadius = flightRadii(a)
+      for (const parent of MOON_PARENTS) {
+        const keys = moonsOf(parent)
+        const k = planetRadius[parent] / PLANETS[parent].radius
+        // The whole map scales with the planet: spacing in planet radii holds.
+        for (const key of keys) {
+          expect(orbit[key] / planetRadius[parent]).toBeCloseTo(
+            moonOrbitRadius(key, 'system') / PLANETS[parent].radius,
+            12
+          )
+          expect(orbit[key]).toBeCloseTo(moonOrbitRadius(key, 'system') * k, 12)
+        }
+        const clear = planetRadius[parent] * (PLANETS[parent].rings?.outer ?? 1)
+        expect(orbit[keys[0]] - radius[keys[0]], parent).toBeGreaterThan(clear + 0.2)
+        for (let i = 1; i < keys.length; i++) {
+          const gap = orbit[keys[i]] - orbit[keys[i - 1]] - radius[keys[i]] - radius[keys[i - 1]]
+          expect(gap, keys[i]).toBeGreaterThan(0.2)
+        }
+      }
+    }
+  )
+})
+
 describe('positions and orbit paths', () => {
   it.each(['system', 'flight'] as const)('sits at the %s parent position plus the offset', (scale) => {
     const t = DATES[0]
     for (const key of MOON_KEYS) {
       const parent = positionsFor(scale).positionAt[MOONS[key].parent](t)
-      const expected = new THREE.Vector3(...parent).add(offset(key, t))
+      const expected = new THREE.Vector3(...parent).add(offset(key, t, scale))
       const actual = new THREE.Vector3(...moonPosition(key, t, scale))
       expect(actual.distanceTo(expected)).toBeLessThan(1e-9)
     }
@@ -222,28 +290,28 @@ describe('positions and orbit paths', () => {
   it('draws an orbit loop through the moon, at its radius, the way it moves', () => {
     for (const t of DATES) {
       for (const key of MOON_KEYS) {
-        const path = moonOrbitPath(key, t, 64)
+        const path = moonOrbitPath(key, t, 64, 'system')
         expect(path).toHaveLength(192)
         const live = offset(key, t)
         const first = new THREE.Vector3().fromArray(path, 0)
         expect(first.distanceTo(live)).toBeLessThan(1e-5)
         for (let k = 0; k < 64; k++) {
           expect(new THREE.Vector3().fromArray(path, k * 3).length()).toBeCloseTo(
-            moonOrbitRadius(key),
+            moonOrbitRadius(key, 'system'),
             4
           )
         }
         // The second point is where the moon heads next.
         const second = new THREE.Vector3().fromArray(path, 3)
         const soon = offset(key, t + (MOONS[key].periodDays * DAY) / 64)
-        expect(second.distanceTo(soon) / moonOrbitRadius(key)).toBeLessThan(0.02)
+        expect(second.distanceTo(soon) / moonOrbitRadius(key, 'system')).toBeLessThan(0.02)
       }
     }
   })
 
   it('writes into `out` when given', () => {
     const out = new Float32Array(32 * 3)
-    expect(moonOrbitPath('titan', DATES[0], 32, out)).toBe(out)
+    expect(moonOrbitPath('titan', DATES[0], 32, 'system', out)).toBe(out)
   })
 
   it('gives non-Galilean true offsets at the true semi-major axis', () => {
@@ -293,7 +361,7 @@ describe('system view clearance, 1900–2100', () => {
       centres[parent].push(new THREE.Vector3(...positionsFor('system').positionAt[parent](t)))
       for (const key of moonsOf(parent)) {
         const r = Math.hypot(...moonPosition(key, t, 'system'))
-        widen(systemBand, parent, r - moonRadius(key), r + moonRadius(key))
+        widen(systemBand, parent, r - moonRadius(key, 'system'), r + moonRadius(key, 'system'))
       }
     }
   }
@@ -320,7 +388,7 @@ describe('system view clearance, 1900–2100', () => {
     ['jupiter', 'saturn'],
     ['saturn', 'uranus'],
   ] as const)('lets the %s and %s systems touch under 3%% of the time', (a, b) => {
-    const reach = moonSystemExtent(a) + moonSystemExtent(b)
+    const reach = moonSystemExtent(a, 'system') + moonSystemExtent(b, 'system')
     let touching = 0
     for (let i = 0; i < times.length; i++) {
       if (centres[a][i].distanceTo(centres[b][i]) < reach) touching++

@@ -2,7 +2,7 @@
 // independently. A file composes PlanetSurface, PlanetAtmosphere and
 // PlanetRings (../PlanetRenderer) with its own textures and parameters.
 import type { ComponentType } from 'react'
-import type { PlanetKey } from '../../planets'
+import type { Planet, PlanetKey } from '../../planets'
 import { Mercury } from './Mercury'
 import { Venus } from './Venus'
 import { Mars } from './Mars'
@@ -11,7 +11,12 @@ import { Saturn } from './Saturn'
 import { Uranus } from './Uranus'
 import { Neptune } from './Neptune'
 
-export const PLANET_RENDERERS: Readonly<Record<PlanetKey, ComponentType>> = {
+/** A planet's catalog entry at the view's scale (its radius is the scale's). */
+export interface PlanetRendererProps {
+  planet: Planet
+}
+
+export const PLANET_RENDERERS: Readonly<Record<PlanetKey, ComponentType<PlanetRendererProps>>> = {
   mercury: Mercury,
   venus: Venus,
   mars: Mars,

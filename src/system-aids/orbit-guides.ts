@@ -2,10 +2,10 @@
 // OrbitGuides.tsx so they can be tested without a renderer.
 //
 // One line set per parent: Earth (its Moon) and each planet with moons in
-// moons.ts. Every set is built relative to its parent's centre, which is the
-// same at both distance scales (moons.ts; Earth's Moon sits at moonOffset,
-// ~10 units, in both), so a set is drawn at the parent's live position and
-// only the parent moves with the scale.
+// moons.ts. Every set is built relative to its parent's centre and drawn at
+// the parent's live position. Earth's Moon sits at moonOffset, ~10 units, at
+// both distance scales; a planet's moons orbit at the scale's own radii,
+// which differ in flight only under ?truescale (moons.ts).
 import { MOON_UNITS_PER_KM, moonOffset } from '../ephemeris'
 import {
   MOON_PARENTS,
@@ -14,6 +14,7 @@ import {
   moonsOf,
   type MoonParent,
 } from '../moons/moons'
+import type { DistanceScale } from '../distance-scale'
 
 /** A body whose moons get orbit lines. */
 export type GuideParent = 'earth' | MoonParent
@@ -92,12 +93,13 @@ export function writeGuidePaths(
   parent: GuideParent,
   t: number,
   segments: number,
+  scale: DistanceScale,
   positions: Float32Array
 ): Float32Array {
   if (parent === 'earth') return earthMoonOrbitPath(t, segments, positions)
   const stride = segments * 3
   moonsOf(parent).forEach((key, i) => {
-    moonOrbitPath(key, t, segments, positions.subarray(i * stride, (i + 1) * stride))
+    moonOrbitPath(key, t, segments, scale, positions.subarray(i * stride, (i + 1) * stride))
   })
   return positions
 }
@@ -122,9 +124,9 @@ export function loopIndices(loops: number, segments: number): Uint16Array {
 // The Moon's apogee never passes ~406 700 km.
 const EARTH_MOON_EXTENT = 406_700 * MOON_UNITS_PER_KM
 
-/** How far the parent's outermost orbit line reaches from its centre, scene units. */
-export function guideExtent(parent: GuideParent): number {
-  return parent === 'earth' ? EARTH_MOON_EXTENT : moonSystemExtent(parent)
+/** How far the parent's outermost orbit line reaches from its centre at `scale`, scene units. */
+export function guideExtent(parent: GuideParent, scale: DistanceScale): number {
+  return parent === 'earth' ? EARTH_MOON_EXTENT : moonSystemExtent(parent, scale)
 }
 
 /**

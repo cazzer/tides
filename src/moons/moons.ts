@@ -24,10 +24,19 @@
 //
 // floor clears the planet (Saturn's and Uranus' ring edges) by MOON_ORBIT_GAP
 // plus the innermost moon's radius, and span is [TUNE] per parent. The map
-// is relative to the parent and the same in both distance scales: only the
-// parent's position changes with the scale, so an orbit line built once
-// serves both (moonOrbitPath), and at 1000 units/AU true scale would put
+// is relative to the parent, and at 1000 units/AU true scale would put
 // Triton inside Neptune and Oberon inside Uranus' rings anyway.
+//
+// Both distance scales share the map and the moons' sizes unless
+// ?truescale=<a> (../truescale.ts, tides-o39) slides flight's radii toward
+// true. Then, in flight only, each moon's radius slides the same way (true
+// radii, floored at MOON_RADIUS_FLOOR: the user's call), and each parent's
+// whole map is scaled by its planet's flight radius over its scene radius
+// (moonOrbitRadiiAt), so the moons keep their spacing in planet radii and
+// clear the grown rings as they did. So a size or an orbit radius is per
+// scale (moonRadius, moonOrbitRadius, moonSystemExtent, and the offsets and
+// orbit lines built from them), and the scale is a required argument, so
+// nothing reads one scale's where it draws the other.
 //
 // Every system stays clear of every other planet's orbit band in the system
 // view (moons.test.ts, 1900–2100). The one exception: neighbouring systems
@@ -47,8 +56,10 @@ import {
   type StateVector,
 } from 'astronomy-engine'
 import { PLANETS, sceneRadius, type PlanetKey } from '../planets'
-import { positionsFor } from '../flight-scale'
+import { flightRadii, positionsFor } from '../flight-scale'
 import type { DistanceScale } from '../distance-scale'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
+import { TRUESCALE, towardTrue } from '../truescale'
 import type { Vec3 } from '../ephemeris'
 import { MOON_KEYS, type MoonKey } from './moon-keys'
 
@@ -192,9 +203,24 @@ const RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
   MOON_KEYS.map((key) => [key, clampedSceneRadius(2 * MOONS[key].radiusKm)])
 ) as Record<MoonKey, number>
 
-/** The moon's sphere radius, scene units. */
-export function moonRadius(key: MoonKey): number {
-  return RADIUS[key]
+/**
+ * Every moon's flight radius at true-scale factor `a` (../truescale.ts): its
+ * scene radius slid toward its true radius at Earth's drawn scale, never
+ * under MOON_RADIUS_FLOOR. At a = 0, the scene radii.
+ */
+export function moonRadiiAt(a: number): Readonly<Record<MoonKey, number>> {
+  if (a === 0) return RADIUS
+  return Object.fromEntries(
+    MOON_KEYS.map((key) => [
+      key,
+      Math.max(MOON_RADIUS_FLOOR, towardTrue(RADIUS[key], MOONS[key].radiusKm / EARTH_KM_PER_UNIT, a)),
+    ])
+  ) as Record<MoonKey, number>
+}
+
+/** The moon's sphere radius at `scale`, scene units. */
+export function moonRadius(key: MoonKey, scale: DistanceScale): number {
+  return sizesFor(scale).radius[key]
 }
 
 // --- Orbit radii ---------------------------------------------------------
@@ -247,21 +273,59 @@ const ORBIT_RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
   MOON_PARENTS.flatMap(orbitRadii)
 ) as Record<MoonKey, number>
 
-/** The moon's orbit radius around its parent, scene units (both scales). */
-export function moonOrbitRadius(key: MoonKey): number {
-  return ORBIT_RADIUS[key]
+/**
+ * Every moon's flight orbit radius at true-scale factor `a`: its parent's
+ * whole map scaled by the parent's flight radius over its scene radius, so
+ * the orbits keep their spacing in planet radii (the user's call) and clear
+ * the grown planet and rings by MOON_ORBIT_GAP scaled alike. At a = 0, the
+ * scene orbit radii (the ratio is exactly 1).
+ */
+export function moonOrbitRadiiAt(a: number): Readonly<Record<MoonKey, number>> {
+  if (a === 0) return ORBIT_RADIUS
+  const planetRadius = flightRadii(a)
+  return Object.fromEntries(
+    MOON_KEYS.map((key) => {
+      const parent = MOONS[key].parent
+      return [key, ORBIT_RADIUS[key] * (planetRadius[parent] / PLANETS[parent].radius)]
+    })
+  ) as Record<MoonKey, number>
 }
 
-const EXTENT: Readonly<Record<MoonParent, number>> = Object.fromEntries(
-  MOON_PARENTS.map((parent) => [
-    parent,
-    Math.max(...moonsOf(parent).map((key) => ORBIT_RADIUS[key] + RADIUS[key])),
-  ])
-) as Record<MoonParent, number>
+interface MoonSizes {
+  radius: Readonly<Record<MoonKey, number>>
+  orbitRadius: Readonly<Record<MoonKey, number>>
+  extent: Readonly<Record<MoonParent, number>>
+}
 
-/** How far the parent's outermost moon reaches from its centre, scene units. */
-export function moonSystemExtent(parent: MoonParent): number {
-  return EXTENT[parent]
+function moonSizes(
+  radius: Readonly<Record<MoonKey, number>>,
+  orbitRadius: Readonly<Record<MoonKey, number>>
+): MoonSizes {
+  const extent = Object.fromEntries(
+    MOON_PARENTS.map((parent) => [
+      parent,
+      Math.max(...moonsOf(parent).map((key) => orbitRadius[key] + radius[key])),
+    ])
+  ) as Record<MoonParent, number>
+  return { radius, orbitRadius, extent }
+}
+
+const SYSTEM_SIZES = moonSizes(RADIUS, ORBIT_RADIUS)
+const FLIGHT_SIZES =
+  TRUESCALE === 0 ? SYSTEM_SIZES : moonSizes(moonRadiiAt(TRUESCALE), moonOrbitRadiiAt(TRUESCALE))
+
+function sizesFor(scale: DistanceScale): MoonSizes {
+  return scale === 'flight' ? FLIGHT_SIZES : SYSTEM_SIZES
+}
+
+/** The moon's orbit radius around its parent at `scale`, scene units. */
+export function moonOrbitRadius(key: MoonKey, scale: DistanceScale): number {
+  return sizesFor(scale).orbitRadius[key]
+}
+
+/** How far the parent's outermost moon reaches from its centre at `scale`, scene units. */
+export function moonSystemExtent(parent: MoonParent, scale: DistanceScale): number {
+  return sizesFor(scale).extent[parent]
 }
 
 // --- Positions -----------------------------------------------------------
@@ -385,10 +449,15 @@ function computeAll(t: number) {
   lastT = t
 }
 
-/** The moon's offset from its parent's centre at t (epoch ms), scene units, into `out`. */
-export function moonOffsetInto(key: MoonKey, t: number, out: THREE.Vector3): THREE.Vector3 {
+/** The moon's offset from its parent's centre at t (epoch ms) at `scale`, scene units, into `out`. */
+export function moonOffsetInto(
+  key: MoonKey,
+  t: number,
+  out: THREE.Vector3,
+  scale: DistanceScale
+): THREE.Vector3 {
   computeAll(t)
-  return out.fromArray(unitP, INDEX[key] * 3).multiplyScalar(ORBIT_RADIUS[key])
+  return out.fromArray(unitP, INDEX[key] * 3).multiplyScalar(sizesFor(scale).orbitRadius[key])
 }
 
 /** The moon's true offset from its parent's centre at t, km along the scene's axes. */
@@ -402,28 +471,28 @@ export function moonPosition(key: MoonKey, t: number, scale: DistanceScale): Vec
   const [x, y, z] = positionsFor(scale).positionAt[MOONS[key].parent](t)
   computeAll(t)
   const i = INDEX[key] * 3
-  const a = ORBIT_RADIUS[key]
+  const a = sizesFor(scale).orbitRadius[key]
   return [x + a * unitP[i], y + a * unitP[i + 1], z + a * unitP[i + 2]]
 }
 
 /**
- * The moon's orbit at t as `segments` xyz triples for a closed
- * THREE.LineLoop, relative to the parent's centre and the same at every
- * distance scale (add the parent's position, or draw it in a group there).
- * The loop starts at the moon and runs the way it orbits, so the moon is
- * always on it. The Galileans' loops are their osculating circles, within
- * ~0.5° of Jupiter's equator.
+ * The moon's orbit at t and `scale` as `segments` xyz triples for a closed
+ * THREE.LineLoop, relative to the parent's centre (add the parent's
+ * position, or draw it in a group there). The loop starts at the moon and
+ * runs the way it orbits, so the moon is always on it. The Galileans' loops
+ * are their osculating circles, within ~0.5° of Jupiter's equator.
  */
 export function moonOrbitPath(
   key: MoonKey,
   t: number,
   segments: number,
+  scale: DistanceScale,
   out?: Float32Array
 ): Float32Array {
   computeAll(t)
   const points = out ?? new Float32Array(segments * 3)
   const i = INDEX[key] * 3
-  const a = ORBIT_RADIUS[key]
+  const a = sizesFor(scale).orbitRadius[key]
   for (let k = 0; k < segments; k++) {
     const s = (2 * Math.PI * k) / segments
     const c = a * Math.cos(s)
