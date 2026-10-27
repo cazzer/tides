@@ -19,6 +19,7 @@ import { prefersReducedMotion } from './reduced-motion'
 import { SURFACE_TILES_ON } from '../surface'
 import { BodyMarkers } from './BodyMarkers'
 import { ShipControlsDialog } from './ShipControlsDialog'
+import { ShipSoundButton } from './audio/ShipSoundButton'
 
 // Text redraws this often; the throttle bar follows every frame. Faster text
 // is unreadable and flickers in the last digit.
@@ -481,6 +482,7 @@ export function ShipHud() {
               </ClearButton>
             </TargetLine>
           </SubjectCell>
+          <ShipSoundButton />
         </Row>
       </Strip>
       <VisuallyHidden
