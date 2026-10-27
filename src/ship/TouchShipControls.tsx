@@ -15,6 +15,7 @@ import {
   BLUE_BAND,
   REVERSE_DETENT_MS,
   STICK_RADIUS_PX,
+  TAP_REACH_PX,
   throttleToTrack,
 } from './touch-stick'
 
@@ -546,15 +547,22 @@ const ThrottleKnob = styled.div`
   }
 `
 
-// [TUNE] The boost button's gap to the throttle stick's base: wide enough that
-// its nearest edge (STICK_RADIUS_PX + this from the base's centre) is past
-// TAP_REACH_PX, so a tap on the button never zeroes the throttle.
-const BOOST_GAP = 16
+// How far the boost button's hit area reaches past its disc, px.
+const BOOST_HIT_SLOP = 6
+// The boost button's gap to the throttle stick's base: just wide enough that
+// its hit area's nearest edge (STICK_RADIUS_PX + this − BOOST_HIT_SLOP from
+// the base's centre) clears TAP_REACH_PX. The button takes its own presses
+// (it's after the zone), so it's the throttle's tap-to-zero ring it protects:
+// any tap in that ring still reaches the stick and cuts the throttle.
+const BOOST_GAP = TAP_REACH_PX + BOOST_HIT_SLOP - STICK_RADIUS_PX
 
 // Hold to boost (tides-zmw.25): under the throttle stick, for the right thumb
 // to roll down onto, a 64 px target round the 52 px disc. Clear of the floor
 // when the sticks sit low. On a short landscape screen there's no room below,
-// so it sits inboard of the base, level with its bottom.
+// so it sits inboard of the base, level with its bottom, its hit area kept
+// inside the right ZONE_SHARE so a narrow phone or a wide right inset can't
+// push it into the middle strip, whose presses belong to the view (there,
+// on a screen too narrow for both, the zone's edge wins over the gap).
 const BoostButton = styled.div`
   ${glassPanel}
   position: absolute;
@@ -584,12 +592,15 @@ const BoostButton = styled.div`
   &::before {
     content: '';
     position: absolute;
-    inset: -6px;
+    inset: -${BOOST_HIT_SLOP}px;
     border-radius: 50%;
   }
 
   @media (orientation: landscape) and (max-height: 500px) {
-    right: calc(${restInset('right')} + ${STICK_RADIUS_PX + BOOST_GAP + KNOB_SIZE / 2}px);
+    right: min(
+      calc(${restInset('right')} + ${STICK_RADIUS_PX + BOOST_GAP + KNOB_SIZE / 2}px),
+      calc(${ZONE_SHARE}% - ${KNOB_SIZE / 2 + BOOST_HIT_SLOP}px)
+    );
     bottom: calc(var(--stick-bottom) + var(--stick-h) / 2 - ${STICK_RADIUS_PX}px);
   }
 

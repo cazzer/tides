@@ -464,8 +464,10 @@ describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
   it("spools the air's boost no faster than Flight Assist rides a rising cap (tides-zmw.25)", () => {
     expect(EARTH_GROUND_SPEED_LAW.air!.boost).toBe(EARTH_AIR_BOOST)
     // The cap moves at ln(boost) / spool in log while it spools: within
-    // RIDE_UP_RATE, the ride keeps up both ways and a release never leaves
-    // the speed at OVERSPEED_MAX × the cap.
+    // RIDE_UP_RATE, in level flight the ride keeps up both ways and a
+    // release never leaves the speed at OVERSPEED_MAX × the cap. Climbing,
+    // the air's rise stacks on the spool's (headroom ln 20 = 2.996 against
+    // 3), the ride clamps at RIDE_UP_RATE and FA's share briefly lags.
     expect(Math.log(EARTH_AIR_BOOST) / BOOST_SPOOL_SECONDS).toBeLessThanOrEqual(RIDE_UP_RATE)
   })
 })

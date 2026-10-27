@@ -114,6 +114,23 @@ describe('desktop ship keys (tides-3bl.3)', () => {
     expect(input.boost).toBe(false)
   })
 
+  it('keeps boosting until both Shifts are up', () => {
+    const { down, up, input } = setup()
+    down('ShiftLeft')
+    down('ShiftRight')
+    expect(up('ShiftLeft')).toBe(true)
+    expect(input.boost).toBe(true)
+    down('ShiftLeft', { repeat: true })
+    expect(up('ShiftRight')).toBe(true)
+    expect(input.boost).toBe(true)
+    expect(up('ShiftLeft')).toBe(true)
+    expect(input.boost).toBe(false)
+    // A stray keyup for a Shift that was never down lets nothing go.
+    down('ShiftRight')
+    expect(up('ShiftLeft')).toBe(false)
+    expect(input.boost).toBe(true)
+  })
+
   it('lets go of boost when Cmd is released or the keys are', () => {
     const { down, keys, input } = setup()
     down('ShiftLeft')

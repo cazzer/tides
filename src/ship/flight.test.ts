@@ -1825,6 +1825,38 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       expect(seconds).toBeLessThan(15)
     })
 
+    test.each([
+      ['in the air 10 km up', true, sea, 10, 1],
+      ['in the air 60 km up, under the plateau unboosted', true, sea, 60, 1],
+      ['part-spooled 10 km up', true, sea, 10, 0.1],
+      ['200 m up, the air under the gap law unboosted', true, sea, 0.2, 1],
+      ['with the spool at 0', false, sea, 10, 0],
+      ['92 km up, where the air meets the plateau', false, sea, 92, 1],
+      ['150 km up, in the well', false, sea, 150, 1],
+      ['in the guard band 50 m up', false, sea, 0.05, 1],
+      ['in the guard band 100 m up', false, sea, 0.1, 1],
+      ['on the low tier, without a groundSpeed law', false, { ...sea, groundSpeed: undefined, minSpeed: undefined }, 10, 1],
+    ] as const)('telemetry.boosted %s: %s', (_, expected, body, km, spool) => {
+      const state = shipAt(above(km), above(km).add(nose(0)))
+      state.boost = spool
+      const telemetry = createShipTelemetry()
+      stepShip(state, input({ boost: spool > 0 }), FRAME, env([body]), telemetry)
+      expect(telemetry.boost > 0).toBe(spool > 0)
+      expect(telemetry.boosted).toBe(expected)
+      // Honest: exactly when the cap is over the unboosted one.
+      expect(telemetry.speedCap > speedCap(state.position, [body], null) * (1 + 1e-6)).toBe(expected)
+    })
+
+    test('telemetry.boosted is false on the Moon, the spool full', () => {
+      const state = shipAt(MOON.position.clone().add(new THREE.Vector3(0, 3, 0)), MOON.position)
+      state.boost = 1
+      const telemetry = createShipTelemetry()
+      stepShip(state, input({ boost: true }), FRAME, env([MOON]), telemetry)
+      expect(telemetry.boost).toBe(1)
+      expect(telemetry.boosted).toBe(false)
+      expect(createShipTelemetry().boosted).toBe(false)
+    })
+
     test('spools up over BOOST_SPOOL_SECONDS and back down after release; a zero or NaN step leaves it', () => {
       const state = shipAt(above(10), above(10).add(nose(0)))
       const telemetry = createShipTelemetry()

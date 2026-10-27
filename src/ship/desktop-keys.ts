@@ -59,10 +59,17 @@ export interface ShipKeys {
    * takes a fresh press, as in Elite Dangerous.
    */
   detent: Set<ShipKeyAction>
+  /**
+   * The codes behind `held`. Two keys can share an action (ShiftLeft and
+   * ShiftRight both boost), so an action is let go only once every key
+   * holding it is up: releasing one Shift while the other is down keeps
+   * boosting.
+   */
+  codes: Set<string>
 }
 
 export function createShipKeys(): ShipKeys {
-  return { held: new Set(), detent: new Set() }
+  return { held: new Set(), detent: new Set(), codes: new Set() }
 }
 
 /**
@@ -112,6 +119,7 @@ export function shipKeyDown(keys: ShipKeys, event: ShipKeyEvent, input: ShipInpu
     else keys.detent.delete(action)
   }
   keys.held.add(action)
+  keys.codes.add(event.code)
   applyHeld(keys.held, input)
   return true
 }
@@ -134,7 +142,10 @@ export function shipKeyUp(
     return false
   }
   const action = SHIP_KEYS[event.code]
-  if (!action || !keys.held.delete(action)) return false
+  if (!action || !keys.codes.delete(event.code)) return false
+  // Another key still holds the action: the press was ours, the hold isn't over.
+  for (const code of keys.codes) if (SHIP_KEYS[code] === action) return true
+  keys.held.delete(action)
   keys.detent.delete(action)
   applyHeld(keys.held, input)
   return true
@@ -158,5 +169,6 @@ export function stepThrottle(keys: ShipKeys, input: ShipInput, dt: number): void
 export function releaseShipKeys(keys: ShipKeys, input: ShipInput): void {
   keys.held.clear()
   keys.detent.clear()
+  keys.codes.clear()
   applyHeld(keys.held, input)
 }

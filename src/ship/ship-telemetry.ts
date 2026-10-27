@@ -23,6 +23,14 @@ export interface ShipTelemetry {
   flightAssist: boolean
   /** The boost's spool, 0..1 (flight.ts ShipState.boost). */
   boost: number
+  /**
+   * Whether the boost raised this step's cap (flight.ts boostRaises): the
+   * spool is over 0 and the cap is over what it would be unboosted. False
+   * where holding boost changes nothing (space, the Moon, the low tier, from
+   * ~91 km up, the guard band near the ground), so the HUD's "Boost" is
+   * honest.
+   */
+  boosted: boolean
   /** World-frame velocity, scene units per second. */
   velocity: THREE.Vector3
   /**
@@ -66,6 +74,7 @@ export function createShipTelemetry(): ShipTelemetry {
     throttle: 0,
     flightAssist: true,
     boost: 0,
+    boosted: false,
     velocity: new THREE.Vector3(),
     nearest: { key: null, surfaceDistance: Infinity },
     well: { key: null, factor: 1, floor: V_NORMAL },
@@ -84,6 +93,7 @@ export function resetShipTelemetry(): void {
   shipTelemetry.throttle = 0
   shipTelemetry.flightAssist = true
   shipTelemetry.boost = 0
+  shipTelemetry.boosted = false
   shipTelemetry.velocity.set(0, 0, 0)
   shipTelemetry.nearest.key = null
   shipTelemetry.nearest.surfaceDistance = Infinity

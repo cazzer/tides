@@ -221,9 +221,12 @@ export function ShipHud() {
       const [speed, unit] = speedParts(formatSpeed(shipTelemetry.air.speed * shipNav.kmPerUnit, SURFACE_TILES_ON))
       set(r.speed, speed)
       set(r.speedUnit, unit && ` ${unit}`)
-      // While the boost spools (tides-zmw.25), the speed's label says so.
-      // Not announced: the player is holding it.
-      r.speedCell?.toggleAttribute('data-boost', shipTelemetry.boost > 0)
+      // While the boost raises the cap (tides-zmw.25), the speed's label
+      // says so: not merely while it's held, since in space, on the Moon,
+      // from ~91 km up and in the guard band near the ground holding it
+      // changes nothing (flight.ts boostRaises). Not announced: the player
+      // is holding it.
+      r.speedCell?.toggleAttribute('data-boost', shipTelemetry.boosted)
       const well = wellSuffix(shipTelemetry.well.key, shipTelemetry.speedCap)
       set(r.well, well)
       if (r.well) r.well.hidden = well === ''
@@ -595,7 +598,7 @@ const Unit = styled.span`
   color: rgba(255, 255, 255, 0.6);
 `
 
-// "Speed", or "Boost" while boosting, lit like the touch throttle readout's
+// "Speed", or "Boost" while the boost raises the cap, lit like the touch throttle readout's
 // flash. Both words share one cell, so the label is as wide as the wider and
 // row 1 doesn't shift as the boost comes and goes.
 const SpeedLabel = styled.span`
