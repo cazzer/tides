@@ -432,7 +432,9 @@ export function typedTopsTexel(
  * The typed march's column (renderers/cloudShaders.ts cloudColumn() under
  * CLOUD_TYPED) for a map texel and its tops' texel `tops` (typedTopsTexel(),
  * or a mix of texels, filtered): the top read, mixed toward the untyped one
- * by how far the texel is untyped, no taller than the map's tallest
+ * by how typed the texel is (B, under 1 only where a filter takes in
+ * untyped texels, whose top read is their untyped top already: the mix
+ * keeps the top continuous as B goes to 0), no taller than the map's tallest
  * (maxTopKm()), and the base lifted by the lift read, never over the top.
  * ground is where the untyped base stands, the clearance over the ground.
  * Untyped (B 0), cloudColumn() exactly, whatever R and G hold.

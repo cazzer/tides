@@ -276,8 +276,10 @@ vec4 cloudColumn(vec2 uv, float lod, float terrain) {
 ${typed ? `#ifdef CLOUD_TYPED
   // Typed (tides-tvr.4.3), ../cloud-types.ts typedColumn(), from the tops
   // beside the map (the blend's, ./cloudBlend.ts), read the same way: the
-  // top, mixed toward the untyped one by how far the texel is untyped (B),
-  // no taller than the map's tallest, and the base lifted, never over it.
+  // top, mixed toward the untyped one by how typed the texel is (B, under 1
+  // only where a filter takes in untyped texels, whose R is their untyped
+  // top already: the mix keeps the top continuous as B goes to 0), no
+  // taller than the map's tallest, and the base lifted, never over it.
   // Each is a height filtered as heights, so a deck beside a lifted layer
   // reads a top between theirs. w is where the untyped base stands, the
   // clearance over the ground, for what is reckoned from the ground rather

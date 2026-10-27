@@ -4,8 +4,9 @@
 // playback runs. When the pair changes in a way that isn't the next step along
 // (a frame arrives late, a jump, a hold refresh, the first output) the last
 // output is frozen and faded out over FADE_MS instead of cut. The result is
-// one texture laid out like a cloud build's (R height, G alpha, B height
-// confidence) for the cloud layer (./cloudShaders.ts).
+// a texture laid out like a cloud build's (R height, G alpha, B height
+// confidence) for the cloud layer (./cloudShaders.ts), with the typed tops
+// beside it (below).
 //
 // The frames' cloud-type grids (tides-tvr.4.1, ../cloud-types.ts) are blended
 // the same way in a second, tiny pass of their own, so the output also has a
