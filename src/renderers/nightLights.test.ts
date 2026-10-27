@@ -6,7 +6,7 @@ import { earthPosition } from '../ephemeris'
 import { CLOUD_AMBIENT } from '../lighting'
 import { MOONLIGHT_RGB, NIGHT_FILL_RGB } from '../night-flight'
 import { composePatches, createEclipseShadow, type MaterialPatch } from './eclipseShadow'
-import { createCloudLayer } from './cloudShaders'
+import { createCloudLayer, GROUND_SHADOW } from './cloudShaders'
 import { earthHorizon } from './earthHorizonTexture'
 import { createGibsNightPatch } from './gibsNightPatch'
 import { createGibsPatch } from './gibsPatch'
@@ -205,7 +205,19 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + out.fragment).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + groundShadowAsDefine(out.fragment)).digest('hex')
+  }
+
+  // The cloud shadow's strength, a define until tides-l0z made it a uniform
+  // that is GROUND_SHADOW in the system view (cloudShaders.test.ts): put
+  // back, so that the pins still hold the rest of the chain.
+  const SHADOW_UNIFORM = '// groundShadowStrength() for the camera drawn (faceCamera()).\nuniform float uGroundShadow;'
+  function groundShadowAsDefine(fragment: string) {
+    expect(fragment.split(SHADOW_UNIFORM).length).toBe(2)
+    expect(fragment.split('uGroundShadow * occ').length).toBe(2)
+    return fragment
+      .replace(SHADOW_UNIFORM, `#define GROUND_SHADOW ${GROUND_SHADOW.toFixed(1)}`)
+      .replace('uGroundShadow * occ', 'GROUND_SHADOW * occ')
   }
 
   /** Both tiers' hashes with the page at `search`: every module afresh. */

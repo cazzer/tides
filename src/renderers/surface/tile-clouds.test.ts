@@ -117,7 +117,12 @@ describe('the cloud shadows on the tiles (tides-zmw.9.12)', () => {
       TILE_FEATURES,
     ]) {
       const { vertexShader: v, fragmentShader: f } = tileShader(slots).shader
-      for (const declaration of ['uniform float uSeaLevel;', 'uniform vec3 uSunDir;', 'uniform sampler2D uCloudMap;']) {
+      for (const declaration of [
+        'uniform float uSeaLevel;',
+        'uniform vec3 uSunDir;',
+        'uniform sampler2D uCloudMap;',
+        'uniform float uGroundShadow;',
+      ]) {
         expect(count(f, declaration), declaration).toBe(1)
         expect(count(v, declaration), declaration).toBe(1)
       }

@@ -36,6 +36,7 @@ import {
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
   CLOUD_UNITS_PER_KM,
+  defaultTopKm,
   DETAIL_BASE_TEXELS,
   DETAIL_FADE_END,
   DETAIL_FADE_START,
@@ -59,6 +60,7 @@ import {
   TERRAIN_READ_TEXELS,
 } from '../cloud-layer'
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
+import { smoothstep } from '../night-flight'
 import { sceneRadius } from '../planets'
 import { neutralTypeTexture } from './cloudBlend'
 import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
@@ -78,7 +80,7 @@ import {
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
-import { TERRAIN_MAP_SIZE } from '../ship/terrain-floor'
+import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import depthGlsl from '../shaders/depth.glsl'
@@ -1801,11 +1803,46 @@ const GROUND_VERTEX_BODY = /* glsl */ `
 vCloudGround = position;
 `
 
+/** How much of the Sun's light the shadow of opaque cloud takes from the
+ * ground, seen from over the cloud layer (and from the system view). */
+export const GROUND_SHADOW = 0.5
+/** And seen from under it by day (tides-l0z): the eye, adapted to the
+ * overcast light, sees the ground in the deck's shadow at near its sunlit
+ * brightness (at 0.5 the ground under a deck read 0.6 of the sunlit's on
+ * screen, the clouds above it light grey); patchy shadows still show. */
+export const GROUND_SHADOW_UNDER = 0.15
+/** The eye's height over the ground (scene units) from which the adaptation
+ * goes out: the lowest base. It is gone at the layer's top over the ground
+ * (groundShadowStrength()). */
+export const GROUND_SHADOW_ADAPT_FROM = CLOUD_CLEARANCE
+/** The relief layer's top over the ground for the adaptation: the thickest
+ * untyped top. Over a lower deck but under that, the eye is partly adapted:
+ * the CPU doesn't know the deck under it, and the band is the layer's. */
+export const GROUND_SHADOW_ADAPT_TOP = CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * defaultTopKm(1)
+/** sin(elevation) of the Sun at the eye's sub-point over which it comes in:
+ * none at dusk, 6 deg and under, all of it from 15 deg up. */
+export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
+  Math.sin((6 * Math.PI) / 180),
+  Math.sin((15 * Math.PI) / 180),
+]
+
+/** The ground shadow's strength (uGroundShadow) for an eye `height` over
+ * the ground under it, the layer's top `top` over that ground
+ * (GROUND_SHADOW_ADAPT_TOP, or the flat deck's), and the Sun at `sunSin` at
+ * the eye's sub-point. */
+export function groundShadowStrength(height: number, top: number, sunSin: number): number {
+  const under =
+    (1 - smoothstep(GROUND_SHADOW_ADAPT_FROM, Math.max(top, GROUND_SHADOW_ADAPT_FROM + 1e-6), height)) *
+    smoothstep(GROUND_SHADOW_ADAPT_SUN[0], GROUND_SHADOW_ADAPT_SUN[1], sunSin)
+  return GROUND_SHADOW + (GROUND_SHADOW_UNDER - GROUND_SHADOW) * under
+}
+
 const GROUND_FRAGMENT_HEAD = /* glsl */ `
 ${FIELD}
 varying vec3 vCloudGround;
 
-#define GROUND_SHADOW 0.5
+// groundShadowStrength() for the camera drawn (faceCamera()).
+uniform float uGroundShadow;
 
 // A sunbeam to this ground point, met at a few heights in the cloud layer
 // (shadowCaster()): cloud spanning that height there shades the point.
@@ -1834,7 +1871,7 @@ float cloudGroundShadow(vec3 dir) {
     occ = max(occ, cloudShade(col.x) * smoothstep(-0.008, 0.008, col.z - alt));
 #endif
   }
-  return 1.0 - GROUND_SHADOW * occ;
+  return 1.0 - uGroundShadow * occ;
 }
 `
 
@@ -1893,6 +1930,9 @@ export interface CloudLayer {
     uCloudTops: THREE.IUniform<THREE.Texture>
     uSunDir: THREE.IUniform<THREE.Vector3>
     uSeaLevel: THREE.IUniform<number>
+    /** The ground's shadow's strength for the camera drawn
+     * (groundShadowStrength(), set by faceCamera()). */
+    uGroundShadow: THREE.IUniform<number>
   }
   /**
    * Shows `map`: whether it has measured heights (only geostationary imagery
@@ -1911,6 +1951,7 @@ export interface CloudLayer {
 }
 
 const eye = new THREE.Vector3()
+const eyeDir = new THREE.Vector3()
 const viewport = new THREE.Vector4()
 const forward = new THREE.Vector3()
 const toLocal = new THREE.Matrix4()
@@ -1950,6 +1991,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uCloudTops: { value: neutralTypeTexture() },
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
+    uGroundShadow: { value: GROUND_SHADOW },
   }
   const defines: Record<string, string> = flat ? { CLOUD_FLAT: '' } : {}
   const material = new THREE.ShaderMaterial({
@@ -2006,7 +2048,20 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       material.needsUpdate = true
     }
     mesh.worldToLocal(camera.getWorldPosition(eye))
-    const underAurora = eye.length() < seaLevel * AURORA_SHELL_INNER
+    // The ground (globe and tiles) is drawn with this camera next, on the
+    // shared uniform: each view sets it for itself.
+    // Over the ground under the eye (the clouds' bases stand on it), sea
+    // level until the floor has loaded.
+    const eyeRadius = eye.length()
+    const up = eyeRadius > 0 ? eyeDir.copy(eye).divideScalar(eyeRadius) : eyeDir.set(0, 1, 0)
+    const floor = earthTerrain()
+    const ground = floor ? terrainFloorRadius(floor, seaLevel, up) : seaLevel
+    uniforms.uGroundShadow.value = groundShadowStrength(
+      eyeRadius - ground,
+      flat ? seaLevel + CLOUD_FLAT_ALTITUDE - ground : GROUND_SHADOW_ADAPT_TOP,
+      up.dot(uniforms.uSunDir.value)
+    )
+    const underAurora = eyeRadius < seaLevel * AURORA_SHELL_INNER
     mesh.renderOrder = !reach
       ? 0
       : underAurora
