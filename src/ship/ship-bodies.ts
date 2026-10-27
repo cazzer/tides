@@ -6,7 +6,7 @@
 import * as THREE from 'three'
 import { earthSpin, earthTilt, type Vec3 } from '../ephemeris'
 import { qualityTier, type QualityTier } from '../quality'
-import { PLANET_KEYS, PLANETS, sceneRadius, type PlanetKey } from '../planets'
+import { PLANET_KEYS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN, MAX_DT } from './flight'
@@ -29,11 +29,12 @@ import {
 import { limbSphereInUse } from './limb-detail'
 import { SCALE_HEIGHT_KM } from './frame-carry'
 
-// The scene draws Sun, Earth and Moon with sceneRadius(diameter) as the sphere
-// radius (solar-system.tsx), so these match what is on screen.
-export const SUN_RADIUS = sceneRadius(1392700000)
+// The scene draws Earth with sceneRadius(diameter) as the sphere radius
+// (solar-system.tsx), so this matches what is on screen, in flight at every
+// ?truescale too (flight-scale.ts flightRadii). The other bodies' radii come
+// from positionsFor('flight').radius and moonRadius(key, 'flight'), which
+// that flag changes.
 export const EARTH_RADIUS = sceneRadius(12742000)
-export const MOON_RADIUS = sceneRadius(3474800)
 
 /**
  * The shells Earth draws over its ground: the cloud deck (over terrain
@@ -424,7 +425,7 @@ export const MOON_COLLISION_CLEARANCE = 0.02
  * `surfaceTiles` whether it follows the streamed tiles (tides-zmw.9.8).
  */
 export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles: boolean = SURFACE_TILES_ON): ShipBody[] {
-  const { positionAt } = positionsFor('flight')
+  const { positionAt, radius: flightRadius } = positionsFor('flight')
   loadEarthTerrain()
   const earth: ShipBody = {
     key: 'earth',
@@ -438,7 +439,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
     {
       key: 'sun',
       position: new THREE.Vector3(),
-      radius: SUN_RADIUS,
+      radius: flightRadius.sun,
       mass: BODY_MASS_KG.sun,
       positionAt: null,
     },
@@ -446,19 +447,19 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
     {
       key: 'moon',
       position: new THREE.Vector3(),
-      radius: MOON_RADIUS,
+      radius: flightRadius.moon,
       mass: BODY_MASS_KG.moon,
       positionAt: positionAt.moon,
     },
     ...PLANET_KEYS.map((key) => ({
       key,
       position: new THREE.Vector3(),
-      radius: PLANETS[key].radius,
+      radius: flightRadius[key],
       mass: BODY_MASS_KG[key],
       positionAt: positionAt[key],
     })),
     ...MOON_KEYS.map((key) => {
-      const radius = moonRadius(key)
+      const radius = moonRadius(key, 'flight')
       return {
         key,
         position: new THREE.Vector3(),

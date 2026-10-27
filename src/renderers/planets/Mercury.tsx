@@ -2,10 +2,10 @@
 // Credits.tsx), from
 // https://www.solarsystemscope.com/textures/download/2k_mercury.jpg
 // (flight tier: 8k_mercury.jpg, scripts/build-flight-textures.sh)
-import { PLANETS } from '../../planets'
 import { PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import mercuryTexture from '../../assets/mercury-2k.jpg'
+import type { PlanetRendererProps } from './index'
 
 // Mercury's real albedo is close to the Moon's, so it is lifted until its
 // sunlit disc reads as bright as the Moon's (MOON_ALBEDO) does on screen:
@@ -18,10 +18,10 @@ const MERCURY_ALBEDO = 1.5
 // that catches a low Sun.
 const DETAIL: PlanetDetail = { style: 'rock', strength: 0.3, bump: 0.12 }
 
-export function Mercury() {
+export function Mercury({ planet }: PlanetRendererProps) {
   return (
     <PlanetSurface
-      planet={PLANETS.mercury}
+      planet={planet}
       texture={mercuryTexture}
       flightTexture="mercury"
       albedo={MERCURY_ALBEDO}

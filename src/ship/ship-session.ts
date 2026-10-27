@@ -5,7 +5,8 @@ import * as THREE from 'three'
 import type { CameraFocus, Layout, PanelKey } from '../store'
 import type { MainCameraPose } from '../main-camera-session'
 import { collisionRadius, createShipState, type Body as FlightBody, type ShipState } from './flight'
-import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
+import { FLIGHT_UNITS_PER_AU, positionsFor } from '../flight-scale'
+import { isMoonKey, moonRadius } from '../moons/moons'
 
 /** The view state ship mode overrides or hides, put back on exit. */
 export interface ShipSaved {
@@ -274,9 +275,11 @@ export function spawnPoseFromCamera(
   const key = focus === 'clock' || focus === 'location' ? 'earth' : focus
   const body = bodies.find((candidate) => candidate.key === key)
   if (!body) return null
-  // The body radii are deliberately identical across system and flight
-  // scales (flight-scale.ts); their centres use different spacing.
-  const mappedDistance = cameraToShipDistance(pose, body.radius, body.radius)
+  // The main view drew the body at its system radius; flight's is the same
+  // number unless ?truescale grows it (flight-scale.ts), so the ship keeps
+  // the view's framing of the body either way.
+  const systemRadius = isMoonKey(key) ? moonRadius(key, 'system') : positionsFor('system').radius[key]
+  const mappedDistance = cameraToShipDistance(pose, systemRadius, body.radius)
   if (mappedDistance === null) return null
   const outward = new THREE.Vector3(...pose.position).sub(new THREE.Vector3(...pose.target))
   if (!(outward.lengthSq() > 0) || !Number.isFinite(outward.lengthSq())) return null

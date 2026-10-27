@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
-import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
+import { FLIGHT_UNITS_PER_AU, flightPlanetPosition, positionsFor } from '../flight-scale'
 import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, cloudColumn } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
@@ -82,7 +82,7 @@ describe('ship bodies', () => {
   it('places and sizes the major moons as the flight scale draws them', () => {
     const b = byKey()
     for (const key of MOON_KEYS) {
-      expect(b[key].radius).toBe(moonRadius(key))
+      expect(b[key].radius).toBe(moonRadius(key, 'flight'))
       const [x, y, z] = moonPosition(key, T, 'flight')
       expect(b[key].position.distanceTo(new THREE.Vector3(x, y, z))).toBeLessThan(1e-9)
       // Near its parent, not its system-view distance from the Sun.
@@ -92,6 +92,11 @@ describe('ship bodies', () => {
 
   it('sizes them as the scene draws them', () => {
     const b = byKey()
+    const { radius } = positionsFor('flight')
+    for (const key of ['sun', 'earth', 'moon', ...PLANET_KEYS] as const) {
+      expect(b[key].radius).toBe(radius[key])
+    }
+    // Without ?truescale, the system view's sizes.
     expect(b.sun.radius).toBeCloseTo(10, 6)
     expect(b.moon.radius).toBeCloseTo(1, 6)
     expect(b.earth.radius).toBeCloseTo(sceneRadius(12742e3), 9)

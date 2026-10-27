@@ -45,7 +45,7 @@ function distanceToLoop(p: readonly number[], loop: Float32Array): number {
 }
 
 function guidePaths(parent: GuideParent, t: number): Float32Array {
-  return writeGuidePaths(parent, t, SEG, new Float32Array(guideLoopCount(parent) * SEG * 3))
+  return writeGuidePaths(parent, t, SEG, 'system', new Float32Array(guideLoopCount(parent) * SEG * 3))
 }
 
 const offset = new THREE.Vector3()
@@ -55,7 +55,7 @@ function moonsAgainstLoops(parent: GuideParent, pathT: number, t: number): numbe
   const paths = guidePaths(parent, pathT)
   if (parent === 'earth') return [distanceToLoop(moonOffset(t), paths)]
   return moonsOf(parent).map((key, i) => {
-    moonOffsetInto(key, t, offset)
+    moonOffsetInto(key, t, offset, 'system')
     return distanceToLoop(offset.toArray(), paths.subarray(i * SEG * 3, (i + 1) * SEG * 3))
   })
 }
@@ -101,7 +101,7 @@ describe('orbit guide paths', () => {
 
   it('writes into the buffer it is given', () => {
     const out = new Float32Array(guideLoopCount('saturn') * SEG * 3)
-    expect(writeGuidePaths('saturn', DATES[0], SEG, out)).toBe(out)
+    expect(writeGuidePaths('saturn', DATES[0], SEG, 'system', out)).toBe(out)
     expect(out.every(Number.isFinite)).toBe(true)
     expect(out.some((v) => v !== 0)).toBe(true)
   })
@@ -114,7 +114,7 @@ describe('orbit guide paths', () => {
         for (let i = 0; i < paths.length; i += 3) {
           reach = Math.max(reach, Math.hypot(paths[i], paths[i + 1], paths[i + 2]))
         }
-        expect(reach).toBeLessThanOrEqual(guideExtent(parent))
+        expect(reach).toBeLessThanOrEqual(guideExtent(parent, 'system'))
       }
     }
   })

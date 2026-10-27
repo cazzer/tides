@@ -173,7 +173,7 @@ describe('changing focus', () => {
 
   it.each([1, 30])('frames Io circling Jupiter at %s days a second', (days) => {
     const jupiter = new Vector3(-150, 0, 0)
-    const radius = moonOrbitRadius('io')
+    const radius = moonOrbitRadius('io', 'system')
     // 60 frames a second.
     const turn = ((2 * Math.PI) / MOONS.io.periodDays) * (days / 60)
     const io = (frame: number) =>
@@ -181,7 +181,7 @@ describe('changing focus', () => {
         .multiplyScalar(radius)
         .add(jupiter)
     const eye = new Vector3(100, 80, 80).setLength(MAIN_DISTANCE).add(jupiter)
-    const goal = framingDistance(moonRadius('io'), EARTH)
+    const goal = framingDistance(moonRadius('io', 'system'), EARTH)
     const { landedAt, eyeToFocus } = focusChange(eye, jupiter, io, 'io', goal, 'jupiter')
     // Framed on the target, which trails Io by up to ~10%.
     expect(Math.abs(eyeToFocus / goal - 1)).toBeLessThan(0.15)

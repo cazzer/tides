@@ -78,6 +78,22 @@
 // to ~6–8% over the pair scale through it, so from there out (the Moon
 // included) every range and speed is as it was. On the low tier the ship
 // stops above the shells, nowhere near the ground, and nothing changes.
+//
+// Under ?truescale=<a> (../truescale.ts, tides-o39) the drawn radii grow
+// toward true while the distances stay, and nothing here changes: the pair
+// scales are true gaps over the drawn shell gaps, so they follow the radii.
+// The Sun shows it most. At a = 0.9 it is drawn ~228 units across where the
+// true surface gaps are as before, so the scene gap between it and Mercury
+// or Earth shrinks by ~220 units and the km a unit stands for near it grows
+// (up to ~4× against Mercury at perihelion, ~1.3× toward Earth): the same
+// flight covers more km and the speed reads higher there, which the user
+// accepted. A run straight in to the Sun still falls to 0 at its shell, and
+// the moon systems' hand-over bands (MOON_SYSTEMS) grow with their flight
+// extents (moonSystemExtent(parent, 'flight')). The cost: the Sun's anchor
+// reads on that Mercury-dominated scale however far out the ship is, so
+// above a ≈ 0.7, on a run in to Venus or Mars that passes a few hundred
+// units from the Sun, the blend can run a range backwards (up to ~3–5
+// million km at 0.9; truescale-flight.test.ts).
 
 import {
   Body,
@@ -163,7 +179,7 @@ const GROUND_PAYBACK: Band = { inner: GROUND_BAND.outer, outer: 4 }
 const MOON_SYSTEMS: readonly MoonSystem[] = [
   { parent: 'earth', inner: MOON_SYSTEM_INNER, outer: 2 * MOON_SYSTEM_INNER },
   ...MOON_PARENTS.map((parent) => {
-    const inner = Math.max(MOON_SYSTEM_INNER, MOON_SYSTEM_EXTENT_FACTOR * moonSystemExtent(parent))
+    const inner = Math.max(MOON_SYSTEM_INNER, MOON_SYSTEM_EXTENT_FACTOR * moonSystemExtent(parent, 'flight'))
     return { parent, inner, outer: 2 * inner }
   }),
 ]

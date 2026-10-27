@@ -145,7 +145,7 @@ export default function SolarSystem({
         interactive={interactive}
       >
         <SunRenderer
-          diameter={sceneRadius(1392700000)}
+          diameter={positions.radius.sun}
           interactive={interactive}
         />
       </OrbitingBody>
@@ -195,13 +195,13 @@ export default function SolarSystem({
       <OrbitingBody
         ref={moon}
         focusKey="moon"
-        diameter={sceneRadius(3474800)}
+        diameter={positions.radius.moon}
         positionAt={moonPositionAt}
         orientationAt={moonOrientation}
         interactive={interactive}
       >
         <MoonRenderer
-          diameter={sceneRadius(3474800)}
+          diameter={positions.radius.moon}
           texture={moonTexture}
         />
       </OrbitingBody>

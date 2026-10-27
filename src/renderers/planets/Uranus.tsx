@@ -4,7 +4,6 @@
 //
 // Texture: Solar System Scope, CC BY 4.0 (credited in Credits.tsx),
 // https://www.solarsystemscope.com/textures/download/2k_uranus.jpg
-import { PLANETS } from '../../planets'
 import {
   PlanetAtmosphere,
   PlanetRings,
@@ -12,9 +11,9 @@ import {
   type RingProfile,
 } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
+import { PLANETS } from '../../planets'
 import uranusTexture from '../../assets/uranus-2k.jpg'
-
-const URANUS = PLANETS.uranus
+import type { PlanetRendererProps } from './index'
 
 // The main rings in Uranus radii (25 559 km), from 6 (41 837 km) out to ε
 // (51 149 km). Each is at most ~100 km wide, a fraction of a pixel when
@@ -24,7 +23,7 @@ const URANUS = PLANETS.uranus
 // stays the densest. The particles are as dark as charcoal (albedo ~0.02),
 // hence dim grey.
 const RINGS: RingProfile = {
-  ...URANUS.rings!,
+  ...PLANETS.uranus.rings!,
   bands: [
     { inner: 1.637, outer: 1.668, opacity: 0.25 }, // 6, 5, 4
     { inner: 1.740, outer: 1.760, opacity: 0.35 }, // α
@@ -44,11 +43,11 @@ const DETAIL: PlanetDetail = { style: 'bands', strength: 0.08 }
 // its cyan, so it is dimmed a little. The rings' shadow only reaches the
 // globe near the terminator, as faint arcs.
 
-export function Uranus() {
+export function Uranus({ planet }: PlanetRendererProps) {
   return (
     <>
       <PlanetSurface
-        planet={URANUS}
+        planet={planet}
         texture={uranusTexture}
         albedo={0.8}
         limbDarkening={1.1}
@@ -56,7 +55,7 @@ export function Uranus() {
         detail={DETAIL}
       />
       <PlanetAtmosphere
-        planet={URANUS}
+        planet={planet}
         outer={1.04}
         scaleHeight={0.008}
         sky="#7fe0dc"
@@ -64,7 +63,7 @@ export function Uranus() {
         gain={0.4}
       />
       <PlanetRings
-        planet={URANUS}
+        planet={planet}
         {...RINGS}
         color={RING_COLOR}
       />

@@ -9,9 +9,10 @@
 // small on screen to read: zoomed out to the whole system, Mars' and
 // Jupiter's moons would only thicken their planet's dot.
 //
-// Ship mode shows them too, round the planets at flight spacing: the moons
-// keep their parent-relative orbits at both scales, so the same lines serve,
-// and the fade measures them through the perspective camera.
+// Ship mode shows them too, round the planets at flight spacing, and the fade
+// measures them through the perspective camera. The orbits are relative to
+// the parent at both scales but only the same size without ?truescale
+// (moons.ts), so each set is built at its view's scale.
 import { createRef, useEffect, useMemo, type FC, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -47,16 +48,17 @@ function simTime(): number {
 
 interface Guide {
   parent: GuideParent
+  scale: DistanceScale
   geometry: THREE.BufferGeometry
   material: THREE.LineBasicMaterial
   /** Sim time the lines were last built for. */
   pathT: number
 }
 
-function createGuide(parent: GuideParent, t: number): Guide {
+function createGuide(parent: GuideParent, t: number, scale: DistanceScale): Guide {
   const loops = guideLoopCount(parent)
   const positions = new Float32Array(loops * MOON_ORBIT_SEGMENTS * 3)
-  writeGuidePaths(parent, t, MOON_ORBIT_SEGMENTS, positions)
+  writeGuidePaths(parent, t, MOON_ORBIT_SEGMENTS, scale, positions)
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setIndex(new THREE.BufferAttribute(loopIndices(loops, MOON_ORBIT_SEGMENTS), 1))
@@ -67,12 +69,12 @@ function createGuide(parent: GuideParent, t: number): Guide {
     opacity: MOON_ORBIT_OPACITY,
     depthWrite: false,
   })
-  return { parent, geometry, material, pathT: t }
+  return { parent, scale, geometry, material, pathT: t }
 }
 
 function rebuild(guide: Guide, t: number) {
   const position = guide.geometry.getAttribute('position') as THREE.BufferAttribute
-  writeGuidePaths(guide.parent, t, MOON_ORBIT_SEGMENTS, position.array as Float32Array)
+  writeGuidePaths(guide.parent, t, MOON_ORBIT_SEGMENTS, guide.scale, position.array as Float32Array)
   position.needsUpdate = true
   guide.geometry.computeBoundingSphere()
   guide.pathT = t
@@ -94,7 +96,7 @@ function updateGuides(
     const line = lines[i].current
     if (!line) continue
     line.position.fromArray(positionAt[guide.parent](t))
-    const extentPx = guideExtent(guide.parent) / worldUnitsPerPixel(camera, line.position, heightPx)
+    const extentPx = guideExtent(guide.parent, scale) / worldUnitsPerPixel(camera, line.position, heightPx)
     const strength = orbitGuideFade(extentPx)
     line.visible = strength > 0
     guide.material.opacity = MOON_ORBIT_OPACITY * strength
@@ -108,8 +110,8 @@ function noRaycast() {}
 export const OrbitGuides: FC<SystemAidProps> = ({ distanceScale }) => {
   const guides = useMemo(() => {
     const t = simTime()
-    return GUIDE_PARENTS.map((parent) => createGuide(parent, t))
-  }, [])
+    return GUIDE_PARENTS.map((parent) => createGuide(parent, t, distanceScale))
+  }, [distanceScale])
   const lines = useMemo(() => GUIDE_PARENTS.map(() => createRef<THREE.LineSegments>()), [])
 
   useEffect(

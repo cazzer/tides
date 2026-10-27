@@ -25,7 +25,6 @@ import {
   type PlanetDetail,
 } from '../renderers/planetMaterials'
 import { loadColorTexture } from '../renderers/planetTextures'
-import { PLANETS } from '../planets'
 import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
 import { moonTextureUrl } from './moon-textures'
 import { isLowQuality } from '../quality'
@@ -79,7 +78,7 @@ function placeMoons(meshes: readonly RefObject<THREE.Mesh | null>[], t: number, 
     if (!mesh) continue
     const key = MOON_KEYS[i]
     const parent = positionAt[MOONS[key].parent](t)
-    moonOffsetInto(key, t, mesh.position)
+    moonOffsetInto(key, t, mesh.position, scale)
     moonOrientationInto(key, t, mesh.quaternion)
     mesh.position.x += parent[0]
     mesh.position.y += parent[1]
@@ -106,7 +105,11 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   const { handleFocus } = useCamera() as { handleFocus: ((event: ThreeEvent<PointerEvent>) => void) | null }
   const setPlanet = useStore((s) => s.setPlanet)
   const limbMoon = useLimbBodyAmong(isMoonKey)
-  const wantsLimb = useWantsLimbSphere(limbMoon, limbMoon ? moonRadius(limbMoon) : 1, SPHERE_SEGMENTS)
+  const wantsLimb = useWantsLimbSphere(
+    limbMoon,
+    limbMoon ? moonRadius(limbMoon, distanceScale) : 1,
+    SPHERE_SEGMENTS
+  )
   const limbSphere = useLimbSphere(1, wantsLimb)
   const refs = useMemo(() => MOON_KEYS.map(() => createRef<THREE.Mesh>()), [])
   const looks = useMemo(
@@ -120,14 +123,14 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         // the rest.
         const userData: MoonPickData & { focus: string } = {
           focus: key,
-          radius: moonRadius(key),
+          radius: moonRadius(key, distanceScale),
           parentPosition: new THREE.Vector3(),
-          parentRadius: PLANETS[MOONS[key].parent].radius,
+          parentRadius: positionsFor(distanceScale).radius[MOONS[key].parent],
           viewHeight: 0,
         }
         return { material, onBeforeRender: sun.onBeforeRender, userData }
       }),
-    []
+    [distanceScale]
   )
   useEffect(() => () => looks.forEach(({ material }) => material.dispose()), [looks])
 

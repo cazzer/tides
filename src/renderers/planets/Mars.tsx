@@ -3,12 +3,10 @@
 // https://www.solarsystemscope.com/textures/download/2k_mars.jpg
 // (flight tier: 8k_mars.jpg, scripts/build-flight-textures.sh)
 import * as THREE from 'three'
-import { PLANETS } from '../../planets'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import marsTexture from '../../assets/mars-2k.jpg'
-
-const MARS = PLANETS.mars
+import type { PlanetRendererProps } from './index'
 
 // Mars reflects more light than the Moon. Lifted, the deserts climb tone
 // mapping's curve far enough to soften toward butterscotch, the map's own
@@ -28,18 +26,18 @@ const HAZE_SKY = new THREE.Color(0.85, 0.5, 0.4)
 const HAZE_DUSK = new THREE.Color(0.45, 0.5, 0.7)
 const HAZE_GAIN = 0.45
 
-export function Mars() {
+export function Mars({ planet }: PlanetRendererProps) {
   return (
     <>
       <PlanetSurface
-        planet={MARS}
+        planet={planet}
         texture={marsTexture}
         flightTexture="mars"
         albedo={MARS_ALBEDO}
         detail={DETAIL}
       />
       <PlanetAtmosphere
-        planet={MARS}
+        planet={planet}
         outer={HAZE_OUTER}
         scaleHeight={HAZE_SCALE_HEIGHT}
         sky={HAZE_SKY}

@@ -114,7 +114,7 @@ export function bodyRadius(key: LabelKey): number {
   if (key === 'sun') return SUN_RADIUS
   if (key === 'earth') return EARTH_RADIUS
   if (key === 'moon') return MOON_RADIUS
-  if (isMoonKey(key)) return moonRadius(key)
+  if (isMoonKey(key)) return moonRadius(key, 'system')
   return PLANETS[key].radius
 }
 
@@ -174,7 +174,7 @@ const CLEARANCE: Readonly<Record<LabelKey, number>> = (() => {
   })
   for (const parent of ['mars', 'jupiter', 'saturn', 'uranus', 'neptune'] as const) {
     const keys = moonsOf(parent)
-    const moonGaps = gaps(keys.map(moonOrbitRadius))
+    const moonGaps = gaps(keys.map((key) => moonOrbitRadius(key, 'system')))
     keys.forEach((key, i) => {
       table[key] = moonGaps[i]
     })
@@ -197,7 +197,7 @@ export function labelClearance(key: LabelKey): number {
 export function systemExtent(system: LabelSystem): number {
   if (system === 'earth') return MOON_ORBIT + MOON_RADIUS
   if (system === 'sun' || system === 'mercury' || system === 'venus') return 0
-  return moonSystemExtent(system)
+  return moonSystemExtent(system, 'system')
 }
 
 /**
