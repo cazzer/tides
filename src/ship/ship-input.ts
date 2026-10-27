@@ -25,6 +25,8 @@ export interface ShipInput {
   level: boolean
   /** Flight Assist: damp velocity to the throttle and rotation to the stick. */
   flightAssist: boolean
+  /** Held: raise the speed cap in a body's air (flight.ts AirSpeedLaw.boost). */
+  boost: boolean
 }
 
 export const THROTTLE_MIN = -0.25
@@ -45,6 +47,7 @@ export const shipInput: ShipInput = {
   roll: 0,
   level: false,
   flightAssist: true,
+  boost: false,
 }
 
 /** Back to a parked ship with Flight Assist on, e.g. on entering ship mode. */
@@ -57,4 +60,5 @@ export function resetShipInput(): void {
   shipInput.roll = 0
   shipInput.level = false
   shipInput.flightAssist = true
+  shipInput.boost = false
 }

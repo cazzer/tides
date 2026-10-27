@@ -10,8 +10,10 @@ import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import {
+  BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
   OVERSPEED_MAX,
+  RIDE_UP_RATE,
   V_NORMAL,
   collisionRadius,
   floorRadius,
@@ -25,6 +27,7 @@ import type { QualityTier } from '../quality'
 import { MOONS, MOON_KEYS, isMoonKey, moonPosition, moonRadius } from '../moons/moons'
 import {
   BODY_MASS_KG,
+  EARTH_AIR_BOOST,
   EARTH_COLLISION_RADIUS,
   EARTH_GROUND_CLEARANCE,
   EARTH_GROUND_SPEED,
@@ -456,5 +459,13 @@ describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
     const low = createShipBodies('low', false).find((b) => b.key === 'earth')!
     expect(low.groundSpeed).toBeUndefined()
     expect(low.minSpeed).toBeUndefined()
+  })
+
+  it("spools the air's boost no faster than Flight Assist rides a rising cap (tides-zmw.25)", () => {
+    expect(EARTH_GROUND_SPEED_LAW.air!.boost).toBe(EARTH_AIR_BOOST)
+    // The cap moves at ln(boost) / spool in log while it spools: within
+    // RIDE_UP_RATE, the ride keeps up both ways and a release never leaves
+    // the speed at OVERSPEED_MAX × the cap.
+    expect(Math.log(EARTH_AIR_BOOST) / BOOST_SPOOL_SECONDS).toBeLessThanOrEqual(RIDE_UP_RATE)
   })
 })

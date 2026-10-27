@@ -21,6 +21,8 @@ export interface ShipTelemetry {
   /** The throttle the step used: the input clamped to −0.25..1. */
   throttle: number
   flightAssist: boolean
+  /** The boost's spool, 0..1 (flight.ts ShipState.boost). */
+  boost: number
   /** World-frame velocity, scene units per second. */
   velocity: THREE.Vector3
   /**
@@ -63,6 +65,7 @@ export function createShipTelemetry(): ShipTelemetry {
     speedCap: 0,
     throttle: 0,
     flightAssist: true,
+    boost: 0,
     velocity: new THREE.Vector3(),
     nearest: { key: null, surfaceDistance: Infinity },
     well: { key: null, factor: 1, floor: V_NORMAL },
@@ -80,6 +83,7 @@ export function resetShipTelemetry(): void {
   shipTelemetry.speedCap = 0
   shipTelemetry.throttle = 0
   shipTelemetry.flightAssist = true
+  shipTelemetry.boost = 0
   shipTelemetry.velocity.set(0, 0, 0)
   shipTelemetry.nearest.key = null
   shipTelemetry.nearest.surfaceDistance = Infinity

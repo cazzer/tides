@@ -226,10 +226,12 @@ export interface EtaGround {
   stop: number
   /** The ground's height over the body's sphere there, for a law with air; 0 when missing. */
   base?: number
+  /** The boost spool the ship flies with (flight.ts ShipState.boost); 0 when missing. */
+  boost?: number
 }
 
 // updateApproach's, reused so a frame allocates nothing.
-const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0, base: 0 }
+const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0, base: 0, boost: 0 }
 
 /**
  * Predicted seconds to reach the surface `gap` away, closing at `closing`,
@@ -245,7 +247,8 @@ const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0, base: 
  * floor has regimes of its own under the well: the plateau (law.max, down
  * to gap max / rate), then the gap e-folding every 1 / (rate · share), then
  * law.min, to the stop. A law with air (tides-zmw.9.29) is summed instead
- * (airEta), its altitude the gap over the ground's `base`.
+ * (airEta), its altitude the gap over the ground's `base`, its air boosted
+ * by the ground's `boost` spool (tides-zmw.25).
  */
 export function approachEta(
   gap: number,
@@ -270,7 +273,7 @@ export function approachEta(
   }
   const { law } = ground
   const stop = Math.max(0, ground.stop)
-  if (law.air) return airEta(g, stop, closing, wellTime, s, law, ground.base ?? 0)
+  if (law.air) return airEta(g, stop, closing, wellTime, s, law, ground.base ?? 0, ground.boost ?? 0)
   const at = (x: number) => Math.min(g, x)
   const slowest = Math.max(stop, law.min / law.rate)
   const plateau = Math.max(slowest, law.max / law.rate)
@@ -301,7 +304,8 @@ function airEta(
   wellTime: number,
   share: number,
   law: Readonly<GroundSpeedLaw>,
-  base: number
+  base: number,
+  boost: number
 ): number {
   if (!(gap > stop)) return 0
   const lo = Math.max(stop, 1e-12)
@@ -311,7 +315,10 @@ function airEta(
   for (let i = 1; i <= AIR_ETA_STEPS; i++) {
     const x1 = i === AIR_ETA_STEPS ? gap : lo * Math.exp(i * step)
     const x = Math.sqrt(x0 * x1)
-    const cap = Math.max(Math.min(x / wellTime, lawCeiling(law, x, x + base)), lawFloor(law, x, x + base))
+    const cap = Math.max(
+      Math.min(x / wellTime, lawCeiling(law, x, x + base, 0, boost)),
+      lawFloor(law, x, x + base, 0, boost)
+    )
     eta += (x1 - x0) / Math.min(closing, share * cap)
     x0 = x1
   }
@@ -461,6 +468,8 @@ export interface ApproachFrame {
   capFloor: number
   throttle: number
   flightAssist: boolean
+  /** The boost spool (telemetry.boost), for the ETA. */
+  boost: number
   targetKey: string | null
   /** True range per body, km, in `bodies` order (ship-distances.ts). */
   km: ArrayLike<number>
@@ -520,6 +529,7 @@ export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApp
     etaGround.law = body.groundSpeed
     etaGround.stop = body.groundClearance ?? 0
     etaGround.base = distance - body.radius - gap
+    etaGround.boost = frame.boost
     ground = etaGround
   }
   out.eta = approachEta(gap, closing, wellTimeOf(factor), share, floor, ground)

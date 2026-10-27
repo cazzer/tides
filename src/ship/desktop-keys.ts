@@ -18,6 +18,7 @@ export type ShipKeyAction =
   | 'rollRight'
   | 'flightAssist'
   | 'level'
+  | 'boost'
 
 export const SHIP_KEYS: Readonly<Record<string, ShipKeyAction>> = {
   KeyW: 'throttleUp',
@@ -31,6 +32,8 @@ export const SHIP_KEYS: Readonly<Record<string, ShipKeyAction>> = {
   KeyE: 'rollRight',
   KeyZ: 'flightAssist',
   KeyL: 'level',
+  ShiftLeft: 'boost',
+  ShiftRight: 'boost',
 }
 
 /** Holding W (or S) sweeps the whole throttle range in this long. */
@@ -65,7 +68,8 @@ export function createShipKeys(): ShipKeys {
 /**
  * The action a key press maps to, or null when ship mode should leave it
  * alone: unbound keys, and chords with Cmd/Ctrl/Alt so browser and OS
- * shortcuts (Cmd+R, Ctrl+W, …) keep working. Shift is not a modifier here.
+ * shortcuts (Cmd+R, Ctrl+W, …) keep working. Shift is not a modifier here
+ * but a held ship key of its own (boost), so Shift+W still throttles up.
  */
 export function shipKeyAction(event: Omit<ShipKeyEvent, 'key' | 'repeat'>): ShipKeyAction | null {
   if (event.metaKey || event.ctrlKey || event.altKey) return null
@@ -81,6 +85,7 @@ function applyHeld(held: Set<ShipKeyAction>, input: ShipInput): void {
   input.strafeY = axis(held, 'strafeDown', 'strafeUp')
   input.roll = axis(held, 'rollLeft', 'rollRight')
   input.level = held.has('level')
+  input.boost = held.has('boost')
 }
 
 /**

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { PLANETS, sceneRadius } from '../planets'
 import {
   BLUE_ZONE,
+  BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
   K_WELL,
   MAX_DT,
@@ -41,6 +42,7 @@ import {
 } from './flight'
 import {
   BODY_MASS_KG,
+  EARTH_AIR_BOOST,
   EARTH_COLLISION_RADIUS,
   EARTH_GROUND_CLEARANCE,
   EARTH_GROUND_SPEED,
@@ -101,6 +103,7 @@ function input(overrides: Partial<ShipInput> = {}): ShipInput {
     roll: 0,
     level: false,
     flightAssist: true,
+    boost: false,
     ...overrides,
   }
 }
@@ -1620,5 +1623,208 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
     }
     // It met the slope and rode it at the stop.
     expect(resting).toBeGreaterThan(0)
+  })
+
+  describe('boost (tides-zmw.25)', () => {
+    const B = EARTH_AIR_BOOST
+    const gapEarth = earthWith(() => 0, gapLaw)
+    // The cap's fall per step at the spool's rate, the most a release may brake.
+    const releaseRatio = (dt: number) => Math.exp((-Math.log(B) * dt) / BOOST_SPOOL_SECONDS)
+    // A sea a thousand times Earth's radius: flat over a step to well under
+    // 1e-9 of the cap, so a level step's ratios are the flight model's own
+    // rather than the curve dropping away under it.
+    const RF = 1000 * R
+    const flat: Body = { ...sea, radius: RF, collisionRadius: RF + 10 * M, ground: () => RF }
+    // Level `km` over the flat sea along +X, `speed` along the nose; `hold`
+    // puts it back at that height after each step.
+    function level(km: number, speed = 0) {
+      const start = new THREE.Vector3(0, RF + km * KM, 0)
+      const state = shipAt(start, start.clone().add(new THREE.Vector3(1, 0, 0)))
+      state.velocity.set(speed, 0, 0)
+      const radial = new THREE.Vector3()
+      const hold = () => {
+        state.position.setLength(RF + km * KM)
+        state.velocity.projectOnPlane(radial.copy(state.position).normalize())
+      }
+      return { state, hold }
+    }
+
+    test("multiplies the air's cap by EARTH_AIR_BOOST through the air, never over the gap law's, with no step, and not near the ground or above the air", () => {
+      const flatNose = nose(0)
+      for (const km of [0.03, 0.05, 0.1]) expect(speedCap(above(km), [sea], flatNose, 1)).toBe(speedCap(above(km), [sea], flatNose))
+      let km = 0.03
+      let previous = speedCap(above(km), [sea], flatNose, 1)
+      while (km < 150) {
+        km += Math.min(0.01 * km, 0.1)
+        const base = speedCap(above(km), [sea], flatNose)
+        const cap = speedCap(above(km), [sea], flatNose, 1)
+        expect(cap).toBeGreaterThanOrEqual(previous)
+        expect(cap / previous).toBeLessThan(1.011)
+        expect(cap).toBeLessThanOrEqual(speedCap(above(km), [gapEarth], flatNose))
+        if (km >= 5 && km <= 30) expect(cap / base).toBeCloseTo(B, 9)
+        if (km >= 92) expect(cap).toBe(base)
+        previous = cap
+      }
+      // Part-spooled, a share of the factor in log; out of range clamps, NaN reads as none.
+      const at = above(10)
+      const base = speedCap(at, [sea], flatNose)
+      expect(speedCap(at, [sea], flatNose, 0.5) / base).toBeCloseTo(Math.sqrt(B), 9)
+      expect(speedCap(at, [sea], flatNose, 2)).toBe(speedCap(at, [sea], flatNose, 1))
+      expect(speedCap(at, [sea], flatNose, -1)).toBe(base)
+      expect(speedCap(at, [sea], flatNose, NaN)).toBe(base)
+    })
+
+    // Straight down from 100 km at full throttle, Flight Assist on, to the 30 m stop.
+    const descend = (boost: boolean, dt = FRAME) => {
+      const state = shipAt(above(100), new THREE.Vector3())
+      let seconds = 0
+      for (; seconds < 300; seconds += dt) {
+        stepShip(state, input({ throttle: 1, boost }), dt, env([sea]))
+        if (state.position.length() - R < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+      }
+      return seconds
+    }
+
+    test('boosted, straight down from 100 km to the 30 m stop takes seconds, not a minute and a half, as approachEta has it', () => {
+      const boosted = descend(true)
+      expect(boosted).toBeLessThan(10)
+      expect(descend(true, MAX_DT)).toBeLessThan(10)
+      expect(descend(false)).toBeGreaterThan(80)
+      const ground = { law, stop: FINE_GROUND_CLEARANCE, base: 0, boost: 1 }
+      // From rest at the cap all the way, the spool-up aside.
+      const eta = approachEta(100 * KM, 1e9, wellTime(sea), 1, speedFloor(sea), ground)
+      expect(boosted).toBeGreaterThan(0.95 * eta)
+      expect(boosted).toBeLessThan(1.1 * eta + 3)
+    })
+
+    test.each([
+      [1, true],
+      [10, true],
+      [30, true],
+      [1, false],
+      [10, false],
+      [30, false],
+    ])('released flying level %s km up (Flight Assist %s), the speed falls no faster than the spool lets the cap, to the cap', (km, flightAssist) => {
+      const { state, hold } = level(km)
+      const telemetry = createShipTelemetry()
+      for (let i = 0; i < 10 * 60; i++) {
+        stepShip(state, input({ throttle: 1, boost: true, flightAssist }), FRAME, env([flat]), telemetry)
+        hold()
+      }
+      expect(telemetry.speed).toBeGreaterThan(0.99 * telemetry.speedCap)
+      const floorRatio = releaseRatio(FRAME) * (1 - 1e-9)
+      const over = flightAssist ? 1 : OVERSPEED_MAX
+      for (let i = 0; i < 10 * 60; i++) {
+        const before = state.velocity.length()
+        stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env([flat]), telemetry)
+        hold()
+        expect(state.velocity.length() / before).toBeGreaterThanOrEqual(floorRatio)
+        expect(telemetry.speed).toBeLessThanOrEqual(over * telemetry.speedCap * (1 + 1e-9))
+      }
+      const base = speedCap(state.position, [flat])
+      expect(telemetry.speedCap / base).toBeCloseTo(1, 6)
+      expect(telemetry.speed / base).toBeCloseTo(1, 3)
+    })
+
+    test.each([1, 10, 30])('engaged flying level %s km up, the speed rises no faster than RIDE_UP_RATE and reaches the boosted cap within 1.5 s', (km) => {
+      for (const flightAssist of [true, false]) {
+        const { state, hold } = level(km, speedCap(new THREE.Vector3(0, RF + km * KM, 0), [flat]))
+        const telemetry = createShipTelemetry()
+        for (let i = 0; i < 60; i++) {
+          stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env([flat]), telemetry)
+          hold()
+        }
+        const boostedCap = speedCap(state.position, [flat], null, 1)
+        const ceiling = Math.exp(RIDE_UP_RATE * FRAME) * (1 + 1e-9)
+        let reached = NaN
+        for (let i = 0; i < 5 * 60; i++) {
+          const before = state.velocity.length()
+          stepShip(state, input({ throttle: 1, flightAssist, boost: true }), FRAME, env([flat]), telemetry)
+          hold()
+          expect(state.velocity.length() / before).toBeLessThanOrEqual(ceiling)
+          if (Number.isNaN(reached) && telemetry.speed >= 0.95 * boostedCap) reached = (i + 1) * FRAME
+        }
+        if (flightAssist) expect(reached).toBeLessThan(1.5)
+      }
+    })
+
+    test.each([
+      ['held', Infinity],
+      ['released at 5 s', 5],
+    ])('boost %s flying level at the cap into rising ground: never under the floor, never a hit, and it comes to the 30 m stop', (_, release) => {
+      const slope = (direction: THREE.Vector3) => THREE.MathUtils.clamp(0.5 * R * Math.atan2(direction.x, direction.y), 0, 3 * KM)
+      const earth = earthWith(slope)
+      const start = new THREE.Vector3(-0.002, R + 1 * KM, 0)
+      const state = shipAt(start, start.clone().add(new THREE.Vector3(1, 0, 0)))
+      const telemetry = createShipTelemetry()
+      const direction = new THREE.Vector3()
+      let resting = 0
+      for (let i = 0; i < 120 * 60; i++) {
+        stepShip(state, input({ throttle: 1, boost: i * FRAME < release }), FRAME, env([earth]), telemetry)
+        const d = direction.copy(state.position).length()
+        direction.divideScalar(d)
+        expect(d - floorRadius(earth, direction)).toBeGreaterThanOrEqual(-1e-12)
+        expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * telemetry.speedCap + 1e-12)
+        expect(telemetry.colliding).toBe(false)
+        if (d - earth.ground!(direction) < FINE_GROUND_CLEARANCE + 1 * M) resting++
+      }
+      expect(resting).toBeGreaterThan(0)
+    })
+
+    test('a locked dive with Flight Assist off, boosted, never closes faster than the cap', () => {
+      const state = shipAt(above(30), new THREE.Vector3())
+      const telemetry = createShipTelemetry()
+      const down = new THREE.Vector3()
+      let seconds = 0
+      for (; seconds < 120; seconds += FRAME) {
+        stepShip(state, input({ throttle: 1, flightAssist: false, boost: true }), FRAME, env([sea], 'earth'), telemetry)
+        const closing = state.velocity.dot(down.copy(state.position).normalize().negate())
+        expect(closing).toBeLessThanOrEqual(telemetry.speedCap * (1 + 1e-9))
+        if (state.position.length() - R < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+      }
+      expect(seconds).toBeLessThan(120)
+    })
+
+    test('changes nothing without an air law, and a climb nose up is still seconds', () => {
+      const run = (boost: boolean) => {
+        const state = shipAt(MOON.position.clone().add(new THREE.Vector3(0, 3, 0)), MOON.position)
+        fly(state, 5, input({ throttle: 1, boost }), env([MOON]))
+        return state
+      }
+      const on = run(true)
+      const off = run(false)
+      expect(on.boost).toBe(1)
+      expect(on.position.toArray()).toEqual(off.position.toArray())
+      expect(on.velocity.toArray()).toEqual(off.velocity.toArray())
+
+      const state = shipAt(above(0.03), above(1000))
+      let seconds = 0
+      for (; seconds < 300; seconds += FRAME) {
+        stepShip(state, input({ throttle: 1, boost: true }), FRAME, env([sea]))
+        if (state.position.length() > R + 100 * KM) break
+      }
+      expect(seconds).toBeLessThan(15)
+    })
+
+    test('spools up over BOOST_SPOOL_SECONDS and back down after release; a zero or NaN step leaves it', () => {
+      const state = shipAt(above(10), above(10).add(nose(0)))
+      const telemetry = createShipTelemetry()
+      const steps = Math.ceil(BOOST_SPOOL_SECONDS / FRAME)
+      for (let i = 0; i < steps / 2; i++) stepShip(state, input({ boost: true }), FRAME, env([sea]), telemetry)
+      expect(state.boost).toBeCloseTo(0.5, 9)
+      expect(telemetry.boost).toBe(state.boost)
+      stepShip(state, input({ boost: true }), 0, env([sea]))
+      stepShip(state, input({ boost: false }), NaN, env([sea]))
+      expect(state.boost).toBeCloseTo(0.5, 9)
+      for (let i = 0; i < steps; i++) stepShip(state, input({ boost: true }), FRAME, env([sea]))
+      expect(state.boost).toBe(1)
+      // A long frame spools only MAX_DT's worth.
+      stepShip(state, input({ boost: false }), 1, env([sea]))
+      expect(state.boost).toBeCloseTo(1 - MAX_DT / BOOST_SPOOL_SECONDS, 12)
+      for (let i = 0; i < steps; i++) stepShip(state, input({ boost: false }), FRAME, env([sea]), telemetry)
+      expect(state.boost).toBe(0)
+      expect(telemetry.boost).toBe(0)
+      expect(createShipState().boost).toBe(0)
+    })
   })
 })
