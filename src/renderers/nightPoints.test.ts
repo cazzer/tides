@@ -25,6 +25,8 @@ import {
   NIGHT_POINTS_RADIUS_CELLS0,
   NIGHT_POINTS_RESIDUAL,
   NIGHT_POINTS_SOFT,
+  NIGHT_POINTS_SPACING_PX_FULL,
+  NIGHT_POINTS_SPACING_PX_OFF,
   NIGHT_POINTS_SPREAD,
   NIGHT_POINTS_TEXEL_PX_FULL,
   NIGHT_POINTS_TEXEL_PX_START,
@@ -289,6 +291,7 @@ function points(lum: number, fine: number, base: V2, local: V2, dx: V2, dy: V2, 
     Math.log2(NIGHT_POINTS_CELLS_U / mapWidth) * (1 - fine) + Math.log2(NIGHT_POINTS_CELLS_U / GIBS_GROUND_WIDTH) * fine
   const footprint = Math.hypot(...mdx, ...mdy)
   const x = 0.5 * Math.log2(Math.max((NIGHT_POINTS_CELL_PX * footprint) / k, 1e-6))
+  const spacing = 2 * x - ground
   const breakup =
     smoothstep(Math.log2(NIGHT_POINTS_TEXEL_PX_START), Math.log2(NIGHT_POINTS_TEXEL_PX_FULL), texel - pixel) *
     (1 -
@@ -297,8 +300,9 @@ function points(lum: number, fine: number, base: V2, local: V2, dx: V2, dy: V2, 
         Math.log2(NIGHT_POINTS_PIXEL_M_OFF / NIGHT_POINTS_CELL0_M),
         ground
       )) *
-    (1 - smoothstep(NIGHT_POINTS_LEVEL_MAX - 1, NIGHT_POINTS_LEVEL_MAX, x))
-  if (breakup <= 0 || lum <= 0) return { n: 1, breakup: 0, levels: [] as number[] }
+    (1 - smoothstep(NIGHT_POINTS_LEVEL_MAX - 1, NIGHT_POINTS_LEVEL_MAX, x)) *
+    (1 - smoothstep(Math.log2(NIGHT_POINTS_SPACING_PX_FULL), Math.log2(NIGHT_POINTS_SPACING_PX_OFF), spacing))
+  if (breakup <= 0 || lum <= 0) return { n: 1, breakup: 0, spacing: 2 ** spacing, levels: [] as number[] }
   const above = Math.floor(x) + 1
   const l0 = Math.min(Math.max(above, 0), NIGHT_POINTS_LEVEL_MAX)
   const t = above < 0 || above >= NIGHT_POINTS_LEVEL_MAX ? 0 : smoothstep(NIGHT_POINTS_FADE_FROM, 1, x - Math.floor(x))
@@ -313,7 +317,7 @@ function points(lum: number, fine: number, base: V2, local: V2, dx: V2, dy: V2, 
     n += t * level(l0 + 1, base, local, L, reach).n
     levels.push(l0 + 1)
   }
-  return { n: 1 + breakup * (NIGHT_POINTS_RESIDUAL + (1 - NIGHT_POINTS_RESIDUAL) * n - 1), breakup, levels }
+  return { n: 1 + breakup * (NIGHT_POINTS_RESIDUAL + (1 - NIGHT_POINTS_RESIDUAL) * n - 1), breakup, spacing: 2 ** spacing, levels }
 }
 
 /** A deterministic uniform [0, 1). */
@@ -339,6 +343,8 @@ describe('the field of lights', () => {
       'vec2 share = vec2(0.095493 / A, 0.859437 * k / sqrt(determinant(coreS)));',
       'float p0 = lum / (5.000000 * max(1.047198 * A, 0.060000));',
       'float t = above < 0 || above >= 6 ? 0.0 : smoothstep(0.700000, 1.0, fract(x));',
+      'float spacing = 2.0 * x - ground;',
+      '* (1.0 - smoothstep(4.584963, 6.000000, spacing))',
       '* (1.0 - smoothstep(5.000000, 6.000000, x));',
     ]) {
       expect(g, line).toContain(line)
@@ -467,7 +473,7 @@ describe('the field of lights', () => {
     }
   })
 
-  it('stops the breakup where a texel is 2 px or less, from 1 km pixels up and past the coarsest level', () => {
+  it('stops the breakup where a texel is 2 px or less, from 600 m pixels up (orbit), at a grazing stretch and past the coarsest level', () => {
     const at: V2 = [1234.5, 678.9]
     // The base map (10800 px: ~48.5 cells a texel) seen at 2 px a texel.
     const texel = NIGHT_POINTS_CELLS_U / 10_800
@@ -478,18 +484,65 @@ describe('the field of lights', () => {
     expect(points(0.5, 1, [0, 0], at, [fine / 4, 0], [0, fine / 4], 0.5, 10_800).n).not.toBe(1)
     const off = NIGHT_POINTS_PIXEL_M_OFF / NIGHT_POINTS_CELL0_M
     expect(points(0.5, 0, [0, 0], at, [off, 0], [0, off], 0.5, 86_400).n).toBe(1)
-    // From orbit on a phone (2048 px map, ~19.5 km texels), 1500 km over
-    // the ground: a ~2.4 km pixel.
-    const orbit = 2400 / NIGHT_POINTS_CELL0_M
-    expect(points(0.5, 0, [0, 0], at, [orbit, 0], [0, orbit], 0.5, 2048).n).toBe(1)
-    // Grazing: a pixel 50 m across and 3 km along still breaks the texels
-    // it magnifies across, but not once it outgrows the coarsest level.
+    // From orbit, 1500 km over the ground straight down, on the tallest
+    // screen the page draws (2880 rows: 1440 px at its pixel ratio cap, 2)
+    // through the ship's 60° FOV, with the desktop's map and a phone's.
+    const orbit = (1500e3 * 2 * Math.tan(Math.PI / 6)) / 2880 / NIGHT_POINTS_CELL0_M
+    expect(orbit * NIGHT_POINTS_CELL0_M).toBeGreaterThan(600)
+    for (const map of [10_800, 2048]) {
+      // u's cells narrow by k: the same ground pixel is orbit / k of them.
+      for (const v of [0.5, 0.67]) {
+        const k = Math.sin(v * Math.PI)
+        expect(points(0.5, 0, [0, 0], at, [orbit / k, 0], [0, orbit], v, map).n).toBe(1)
+      }
+    }
+    // Grazing: a pixel 50 m across and 3x as long breaks the texels it
+    // magnifies across; 60x as long (its cells sized by the long axis would
+    // stand hundreds of pixels apart across it) it leaves the glow be.
     const across = 50 / NIGHT_POINTS_CELL0_M
+    expect(points(0.5, 0, [0, 0], at, [across, 0], [0, 3 * across], 0.5, 10_800).breakup).toBe(1)
     const graze = points(0.5, 0, [0, 0], at, [across, 0], [0, 60 * across], 0.5, 10_800)
-    expect(graze.breakup).toBe(1)
+    expect(graze.n).toBe(1)
+    expect(graze.spacing).toBeGreaterThan(NIGHT_POINTS_SPACING_PX_OFF)
     expect(points(0.5, 0, [0, 0], at, [across, 0], [0, 6000 * across], 0.5, 10_800).n).toBe(1)
     // No footprint at all (a degenerate quad): finite.
     expect(Number.isFinite(points(0.5, 0, [0, 0], at, [0, 0], [0, 0], 0.5, 10_800).n)).toBe(true)
+  })
+
+  // Wherever the breakup is on, the cells are at most SPACING_PX_OFF pixels
+  // apart across the footprint's narrow axis at the continuous level, 4
+  // times that at the level drawn (above level 0, whose cells are the
+  // ground's); and a footprint stretched 60 times leaves none on at level 3
+  // or coarser.
+  it('keeps the lights at most a few dozen pixels apart on screen wherever they are on', () => {
+    const rand = random(3)
+    let on = 0
+    for (let i = 0; i < 20_000; i++) {
+      const scale = 2 ** (rand() * 14 - 8)
+      const turn = rand() * Math.PI
+      const stretch = 2 ** (rand() * 7)
+      const dx: V2 = [scale * Math.cos(turn), scale * Math.sin(turn)]
+      const dy: V2 = [-stretch * scale * Math.sin(turn), stretch * scale * Math.cos(turn)]
+      const v = 0.08 + 0.84 * rand()
+      const r = points(0.5, 0, [0, 0], [10.5, 20.5], dx, dy, v, 10_800)
+      if (r.breakup > 0) {
+        on++
+        expect(r.spacing).toBeLessThan(NIGHT_POINTS_SPACING_PX_OFF)
+        // The finer level drawn (the cross-fade's other is 4 times
+        // coarser): its cell over the narrow axis on the ground. Level 0's
+        // cells are the ground's, however near.
+        const k = Math.max(Math.sin(v * Math.PI), NIGHT_POINTS_COS_MIN)
+        const level = Math.min(...r.levels)
+        if (level > 0) expect(4 ** level / narrow([dx[0] * k, dx[1]], [dy[0] * k, dy[1]])).toBeLessThan(4 * NIGHT_POINTS_SPACING_PX_OFF)
+      }
+      if (stretch >= 60 && r.levels.some((l) => l >= 3)) expect(r.breakup).toBe(0)
+    }
+    expect(on).toBeGreaterThan(2000)
+    // A stretch-60 footprint at level 3 or coarser: off.
+    for (const across of [2, 10, 30]) {
+      const r = points(0.5, 0, [0, 0], [0.5, 0.5], [across, 0], [0, 60 * across], 0.5, 10_800)
+      expect(r.breakup).toBe(0)
+    }
   })
 
   it('picks the same lights at a cell whichever way its coordinate is split, and across the antimeridian', () => {

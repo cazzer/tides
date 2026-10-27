@@ -85,9 +85,22 @@ export const NIGHT_POINTS_SPREAD = 1.5
 export const NIGHT_POINTS_TEXEL_PX_START = 2
 export const NIGHT_POINTS_TEXEL_PX_FULL = 6
 /** The footprint's narrow axis on the ground, metres, under which the
- * breakup is whole and over which it is off (the globe from orbit). */
-export const NIGHT_POINTS_PIXEL_M_FULL = 500
-export const NIGHT_POINTS_PIXEL_M_OFF = 1000
+ * breakup is whole and over which it is off: the globe from orbit, down to
+ * 1500 km over the ground on a 2880-row screen (a 1440 px window at the
+ * page's highest pixel ratio, 2), whose nadir pixel is ~600 m. */
+export const NIGHT_POINTS_PIXEL_M_FULL = 300
+export const NIGHT_POINTS_PIXEL_M_OFF = 600
+/** The level's cells on screen across the footprint's narrow axis, pixels,
+ * from which the breakup fades and by which it is off. The level is picked
+ * by the footprint's long axis, so at a grazing view the cells would stand
+ * hundreds of pixels apart across it, each lit one carrying a whole cell's
+ * light, blown out, between them the residual: there the glow stays, the
+ * points giving way to it gradually. Measured at the continuous level x
+ * (the level drawn is up to 4 times coarser), a cell seen square is under
+ * 23 px across down to COS_MIN, so only a footprint stretched past ~4x
+ * reaches the fade. */
+export const NIGHT_POINTS_SPACING_PX_FULL = 24
+export const NIGHT_POINTS_SPACING_PX_OFF = 64
 /** A glow's centre over the texel's colour (less the core's share), while
  * there are cells to light. */
 export const NIGHT_POINTS_PEAK = 5
@@ -183,8 +196,12 @@ float nightPoints(vec3 source, float fine, vec2 base, vec2 local, vec2 dx, vec2 
   // over k: a cell is k as wide as tall), and the next over the level's end.
   float footprint = length(vec4(mdx, mdy));
   float x = 0.5 * log2(max(${f(NIGHT_POINTS_CELL_PX)} * footprint / k, 1e-6));
+  // log2 of the cells' spacing on screen across the narrow axis: a cell at
+  // level x is 4^x level-0 cells (2x in log2), the narrow axis 2^ground.
+  float spacing = 2.0 * x - ground;
   float breakup = smoothstep(${f(Math.log2(NIGHT_POINTS_TEXEL_PX_START))}, ${f(Math.log2(NIGHT_POINTS_TEXEL_PX_FULL))}, texel - pixel)
     * (1.0 - smoothstep(${f(Math.log2(NIGHT_POINTS_PIXEL_M_FULL / NIGHT_POINTS_CELL0_M))}, ${f(Math.log2(NIGHT_POINTS_PIXEL_M_OFF / NIGHT_POINTS_CELL0_M))}, ground))
+    * (1.0 - smoothstep(${f(Math.log2(NIGHT_POINTS_SPACING_PX_FULL))}, ${f(Math.log2(NIGHT_POINTS_SPACING_PX_OFF))}, spacing))
     * (1.0 - smoothstep(${f(NIGHT_POINTS_LEVEL_MAX - 1)}, ${f(NIGHT_POINTS_LEVEL_MAX)}, x));
   if (breakup <= 0.0 || lum <= 0.0) return 1.0;
   int above = int(floor(x)) + 1;

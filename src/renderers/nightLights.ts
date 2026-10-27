@@ -52,9 +52,12 @@ const f = (x: number) => x.toFixed(6)
 
 // In flight, the drawn point from the eye in the ground mesh's frame (the
 // vertex after its displacement), for the points (./nightPoints.ts): the
-// vertex less the eye as float32 holds it, both near Earth's radius, so the
-// difference is exact; the eye's rounding (uNightPointsEyeLow) comes off in
-// the fragment, past the varying, where no compiler can fold it back in.
+// vertex less the eye as float32 holds it. A component of the two within a
+// factor of 2 of each other subtracts exactly (Sterbenz), and any other
+// rounds at most by its own size's step, so the ray's error is bounded by
+// the ray, not by Earth's radius. The eye's rounding (uNightPointsEyeLow)
+// comes off in the fragment, past the varying, where no compiler can fold
+// it back in.
 const POINTS_VERTEX_HEAD = /* glsl */ `
 uniform vec3 uNightPointsEyeGround;
 varying vec3 vNightPointsRay;
