@@ -957,6 +957,11 @@ export function stepShip(
   const here = measure(state.position, env.bodies, env.targetKey, headingOf(state), state.boost)
   const capBefore = wellCap(here)
   const { target } = here
+  // The spool this step ends on, ahead of the move: a locked approach
+  // closes at the cap where the step ends, so while the boost spools down
+  // it reads the lower of the two (airApproachCap).
+  const spool = h > 0 ? spoolBoost(state.boost, input.boost, h) : state.boost
+  here.targetBoost = Math.min(here.targetBoost, spool)
   if (h > 0) {
     rotate(state, input, h, speedFraction(state.velocity.length(), capBefore))
     translate(state, input, h, capBefore, here)
@@ -967,7 +972,7 @@ export function stepShip(
   const colliding = collide(state, env.bodies)
   // Spooled after the move and before the end-of-step measure, so the ride's
   // capAfter / capBefore carries the boost's change with the gap's.
-  if (h > 0) state.boost = spoolBoost(state.boost, input.boost, h)
+  state.boost = spool
   // End-of-step distances, so the ride and the HUD match where the camera
   // now is.
   const there = measure(state.position, env.bodies, env.targetKey, headingOf(state), state.boost)

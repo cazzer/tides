@@ -1785,6 +1785,25 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       expect(seconds).toBeLessThan(120)
     })
 
+    test.each([20, 5, 1])('a locked dive with Flight Assist off, boost released at %s km, never closes faster than the cap through the spool-down', (km) => {
+      const state = shipAt(above(100), new THREE.Vector3())
+      const telemetry = createShipTelemetry()
+      const down = new THREE.Vector3()
+      let released = NaN
+      let seconds = 0
+      for (; seconds < 120; seconds += FRAME) {
+        const gap = state.position.length() - R
+        if (Number.isNaN(released) && gap < km * KM) released = seconds
+        stepShip(state, input({ throttle: 1, flightAssist: false, boost: Number.isNaN(released) }), FRAME, env([sea], 'earth'), telemetry)
+        const closing = state.velocity.dot(down.copy(state.position).normalize().negate())
+        expect(closing).toBeLessThanOrEqual(telemetry.speedCap * (1 + 1e-9))
+        if (gap < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+      }
+      // Released, and the spool-down ran its course before the stop.
+      expect(seconds - released).toBeGreaterThan(BOOST_SPOOL_SECONDS)
+      expect(seconds).toBeLessThan(120)
+    })
+
     test('changes nothing without an air law, and a climb nose up is still seconds', () => {
       const run = (boost: boolean) => {
         const state = shipAt(MOON.position.clone().add(new THREE.Vector3(0, 3, 0)), MOON.position)
