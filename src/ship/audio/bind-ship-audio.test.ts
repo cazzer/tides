@@ -21,16 +21,25 @@ function fakeTarget() {
   }
 }
 
-function setup(visibilityState = 'visible') {
+// An element whose closest() matches when its tag is in the selector list.
+const element = (tag: string) => ({
+  closest: (selector: string) => (selector.split(',').some((s) => s.trim() === tag) ? element(tag) : null),
+})
+
+function setup(visibilityState = 'visible', { dialog = false } = {}) {
   const win = fakeTarget()
-  const doc = Object.assign(fakeTarget(), { visibilityState: visibilityState as DocumentVisibilityState })
+  const doc = Object.assign(fakeTarget(), {
+    visibilityState: visibilityState as DocumentVisibilityState,
+    querySelector: ((selector: string) => (dialog && selector === 'dialog[open]' ? {} : null)) as Document['querySelector'],
+  })
+  let muted = false
   const audio = {
     activate: vi.fn(),
     deactivate: vi.fn(),
     gesture: vi.fn(),
     setVisible: vi.fn(),
-    isMuted: () => false,
-    setMuted: vi.fn(),
+    isMuted: () => muted,
+    setMuted: vi.fn((next: boolean) => void (muted = next)),
     subscribe: () => () => {},
     output: () => null,
   } satisfies ShipAudio
@@ -68,6 +77,49 @@ describe('ship audio binding (tides-a4j.1)', () => {
     doc.visibilityState = 'visible'
     doc.fire('visibilitychange')
     expect(audio.setVisible).toHaveBeenLastCalledWith(true)
+  })
+
+  const keyM = (extra: object = {}) => ({
+    code: 'KeyM',
+    key: 'm',
+    repeat: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    defaultPrevented: false,
+    target: element('body'),
+    preventDefault: vi.fn(),
+    ...extra,
+  })
+
+  it('toggles the mute on M', () => {
+    const { win, audio } = setup()
+    const first = keyM()
+    win.fire('keydown', first)
+    expect(first.preventDefault).toHaveBeenCalled()
+    expect(audio.setMuted).toHaveBeenLastCalledWith(true)
+    win.fire('keydown', keyM())
+    expect(audio.setMuted).toHaveBeenLastCalledWith(false)
+  })
+
+  it('leaves M alone held, with a modifier, while typing, behind a dialog, or already handled', () => {
+    const { win, audio } = setup()
+    for (const extra of [
+      { repeat: true },
+      { ctrlKey: true },
+      { metaKey: true },
+      { altKey: true },
+      { target: element('input') },
+      { defaultPrevented: true },
+    ]) {
+      const event = keyM(extra)
+      win.fire('keydown', event)
+      expect(event.preventDefault).not.toHaveBeenCalled()
+    }
+    expect(audio.setMuted).not.toHaveBeenCalled()
+    const behindDialog = setup('visible', { dialog: true })
+    behindDialog.win.fire('keydown', keyM())
+    expect(behindDialog.audio.setMuted).not.toHaveBeenCalled()
   })
 
   it('removes every listener and deactivates on cleanup', () => {

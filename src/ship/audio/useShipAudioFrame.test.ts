@@ -12,8 +12,14 @@ describe('stepShipAudioFrame (tides-a4j.1)', () => {
     expect(update).not.toHaveBeenCalled()
   })
 
+  it('skips the update while the context is suspended', () => {
+    const update = vi.fn()
+    stepShipAudioFrame(update, 0.016, audioWith({ context: { state: 'suspended' }, bus: {} } as ShipAudioOutput))
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('passes the output and the frame time, capped like the flight step', () => {
-    const out = { context: {}, bus: {} } as ShipAudioOutput
+    const out = { context: { state: 'running' }, bus: {} } as ShipAudioOutput
     const update = vi.fn()
     stepShipAudioFrame(update, 0.016, audioWith(out))
     stepShipAudioFrame(update, 3, audioWith(out))

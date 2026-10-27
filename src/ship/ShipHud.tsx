@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import { IconChevronRight, IconQuestionMark, IconX } from '@tabler/icons-react'
-import { glassButton, glassFloatingButton, glassPanel, PHONE } from '../glass-styles'
+import { glassButton, glassFloatingButton, glassPanel, hudGlyphButton, PHONE } from '../glass-styles'
 import { BLUE_ZONE, speedFraction, turnRateMultiplier } from './flight'
 import { shipInput, THROTTLE_MAX, THROTTLE_MIN, throttlePercent } from './ship-input'
 import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
@@ -871,18 +871,7 @@ const Switch = styled.span`
 `
 
 const ClearButton = styled.button`
-  ${glassButton}
-  width: 24px;
-  height: 24px;
-  margin: -4px 0;
-  position: relative;
-
-  /* A 40px tap target around the small glyph. */
-  &::before {
-    content: '';
-    position: absolute;
-    inset: -8px;
-  }
+  ${hudGlyphButton}
 
   /* Only a locked target can be cleared; "Ahead" has nothing to clear. */
   &[hidden] {

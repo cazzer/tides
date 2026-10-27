@@ -1,39 +1,62 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createShipAudio, playShipCue, type ShipAudioDeps, type ShipCue } from './ship-audio'
 
-// Just enough of an AudioContext: state changes land at once, as they would
-// once the browser's promise settles, and fire onstatechange.
+// Just enough of an AudioContext. State changes land at once and fire
+// statechange, as they would once the browser's promise settles; with
+// `deferred` they wait for settle(), as a real resume or suspend does.
 class FakeAudioContext {
   state: AudioContextState | 'interrupted' = 'running'
   currentTime = 2
   destination = { kind: 'destination' }
-  onstatechange: (() => void) | null = null
   resumes = 0
   suspends = 0
   /** Turn resumes down, as iOS does outside a gesture. */
   refuse = false
-  gains: { gain: { value: number; setTargetAtTime: ReturnType<typeof vi.fn> }; connect: ReturnType<typeof vi.fn> }[] = []
+  deferred = false
+  pending: (() => void)[] = []
+  listeners: (() => void)[] = []
+  gains: {
+    gain: { value: number; setTargetAtTime: ReturnType<typeof vi.fn>; cancelScheduledValues: ReturnType<typeof vi.fn> }
+    connect: ReturnType<typeof vi.fn>
+  }[] = []
 
   createGain() {
-    const node = { gain: { value: -1, setTargetAtTime: vi.fn() }, connect: vi.fn() }
+    const node = { gain: { value: -1, setTargetAtTime: vi.fn(), cancelScheduledValues: vi.fn() }, connect: vi.fn() }
     this.gains.push(node)
     return node
+  }
+  addEventListener(type: string, listener: () => void) {
+    if (type === 'statechange') this.listeners.push(listener)
   }
   resume() {
     this.resumes++
     if (this.refuse) return Promise.reject(new Error('not allowed'))
-    this.set('running')
-    return Promise.resolve()
+    return this.change('running')
   }
   suspend() {
     this.suspends++
-    this.set('suspended')
-    return Promise.resolve()
+    return this.change('suspended')
+  }
+  change(state: FakeAudioContext['state']) {
+    if (!this.deferred) {
+      this.set(state)
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => {
+      this.pending.push(() => {
+        this.set(state)
+        resolve()
+      })
+    })
+  }
+  /** Lands every resume and suspend asked for so far, in order. */
+  settle() {
+    for (const land of this.pending.splice(0)) land()
   }
   set(state: FakeAudioContext['state']) {
     if (this.state === state) return
     this.state = state
-    this.onstatechange?.()
+    for (const listener of this.listeners) listener()
   }
 }
 
@@ -63,6 +86,12 @@ function setup(overrides: Partial<ShipAudioDeps> = {}) {
   const context = () => contexts[0]
   return { audio, contexts, context, storage }
 }
+
+// The fade out before a suspend (SUSPEND_DELAY_MS).
+const SUSPEND_DELAY_MS = 100
+
+beforeEach(() => vi.useFakeTimers())
+afterEach(() => vi.useRealTimers())
 
 describe('ship audio unlock (tides-a4j.1)', () => {
   it('makes no context until a gesture in ship mode', () => {
@@ -95,12 +124,13 @@ describe('ship audio unlock (tides-a4j.1)', () => {
     expect(contexts).toHaveLength(1)
   })
 
-  it('routes the master gain to the destination at full level', () => {
+  it('routes the master gain to the destination and fades it in', () => {
     const { audio, context } = setup()
     audio.activate()
     audio.gesture()
     const bus = context().gains[0]
-    expect(bus.gain.value).toBe(1)
+    expect(bus.gain.value).toBe(0)
+    expect(bus.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, 2, expect.any(Number))
     expect(bus.connect).toHaveBeenCalledWith(context().destination)
     const out = audio.output()
     expect(out?.bus).toBe(bus)
@@ -140,13 +170,19 @@ describe('ship audio unlock (tides-a4j.1)', () => {
 })
 
 describe('ship audio running state', () => {
-  it('suspends while the tab is hidden and resumes when it shows', () => {
+  it('fades out while the tab is hidden, suspends once the fade is done, and resumes when it shows', () => {
     const { audio, context } = setup()
     audio.activate()
     audio.gesture()
+    const bus = context().gains[0]
     audio.setVisible(false)
+    expect(bus.gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 2, expect.any(Number))
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS - 1)
+    expect(context().state).toBe('running')
+    vi.advanceTimersByTime(1)
     expect(context().state).toBe('suspended')
     audio.setVisible(true)
+    expect(bus.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, 2, expect.any(Number))
     expect(context().state).toBe('running')
   })
 
@@ -155,12 +191,62 @@ describe('ship audio running state', () => {
     audio.activate()
     audio.gesture()
     audio.deactivate()
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
     expect(context().state).toBe('suspended')
     expect(audio.output()).toBeNull()
     audio.setVisible(false)
     audio.setVisible(true)
     expect(context().state).toBe('suspended')
     audio.activate()
+    expect(context().state).toBe('running')
+  })
+
+  it('runs until every binding has let go', () => {
+    const { audio, context } = setup()
+    audio.activate()
+    audio.activate()
+    audio.gesture()
+    audio.deactivate()
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
+    expect(context().state).toBe('running')
+    expect(audio.output()).not.toBeNull()
+    audio.deactivate()
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
+    expect(context().state).toBe('suspended')
+    expect(audio.output()).toBeNull()
+  })
+
+  it('suspends a resume that lands after ship mode was left', () => {
+    const { audio, context } = setup()
+    audio.activate()
+    audio.gesture()
+    audio.setVisible(false)
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
+    context().deferred = true
+    audio.setVisible(true)
+    expect(context().resumes).toBe(1)
+    audio.deactivate()
+    context().settle()
+    expect(context().state).toBe('running')
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
+    context().settle()
+    expect(context().state).toBe('suspended')
+  })
+
+  it('resumes a suspend that lands after ship mode was entered again', () => {
+    const { audio, context } = setup()
+    audio.activate()
+    audio.gesture()
+    context().deferred = true
+    audio.deactivate()
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
+    expect(context().suspends).toBe(1)
+    audio.activate()
+    expect(context().resumes).toBe(0)
+    context().settle()
+    expect(context().state).toBe('suspended')
+    expect(context().resumes).toBe(1)
+    context().settle()
     expect(context().state).toBe('running')
   })
 })
@@ -202,6 +288,8 @@ describe('ship audio mute', () => {
     const bus = context().gains[0]
     audio.setMuted(true)
     expect(bus.gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 2, expect.any(Number))
+    expect(context().state).toBe('running')
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
     expect(context().state).toBe('suspended')
     audio.gesture()
     expect(context().state).toBe('suspended')
@@ -210,11 +298,27 @@ describe('ship audio mute', () => {
     expect(context().state).toBe('running')
   })
 
+  it('never suspends for a mute taken back within the fade', () => {
+    const { audio, context } = setup()
+    audio.activate()
+    audio.gesture()
+    audio.setMuted(true)
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS / 2)
+    audio.setMuted(false)
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS * 2)
+    expect(context().suspends).toBe(0)
+    expect(context().state).toBe('running')
+    expect(context().gains[0].gain.setTargetAtTime).toHaveBeenLastCalledWith(1, 2, expect.any(Number))
+  })
+
   it('makes a muted context silent from the start', () => {
     const { audio, context } = setup({ storage: fakeStorage({ 'tides.shipAudioMuted': '1' }) })
     audio.activate()
     audio.gesture()
-    expect(context().gains[0].gain.value).toBe(0)
+    const bus = context().gains[0]
+    expect(bus.gain.value).toBe(0)
+    expect(bus.gain.setTargetAtTime).toHaveBeenLastCalledWith(0, 2, expect.any(Number))
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
     expect(context().state).toBe('suspended')
   })
 
@@ -247,16 +351,16 @@ describe('playShipCue', () => {
   })
 
   it("doesn't build a cue while suspended or muted", () => {
-    const { audio, context } = setup()
+    const { audio } = setup()
     audio.activate()
     audio.gesture()
     const build = vi.fn()
     audio.setVisible(false)
+    vi.advanceTimersByTime(SUSPEND_DELAY_MS)
     expect(playShipCue(build, audio)).toBe(false)
     audio.setVisible(true)
+    // Still running through the fade before the suspend.
     audio.setMuted(true)
-    // Still running for a moment while the suspend lands.
-    context().state = 'running'
     expect(playShipCue(build, audio)).toBe(false)
     expect(build).not.toHaveBeenCalled()
   })

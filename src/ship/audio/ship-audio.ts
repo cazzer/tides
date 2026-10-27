@@ -7,15 +7,22 @@
 // (bindShipAudio), never at import or on entry. It is kept for the page's
 // life rather than closed on exit: Safari limits how many a page may make.
 // Every event only flips a flag and calls sync(), which is the one place
-// that decides whether the context runs: in ship mode, with the tab showing
-// and sound unmuted. Otherwise it is suspended, so the app is silent outside
-// ship mode and in a hidden tab.
+// that decides whether the context runs (in ship mode, with the tab showing
+// and sound unmuted) and sets the master gain to match. Otherwise the gain
+// fades out and the context is suspended, so the app is silent outside ship
+// mode and in a hidden tab.
 
 const MUTED_KEY = 'tides.shipAudioMuted'
 
 // The master gain eases to its new level over a few of these, so a mute
 // doesn't click.
-const MUTE_TIME_CONSTANT = 0.015
+const FADE_TIME_CONSTANT = 0.015
+
+// Long enough for the fade out to finish before the context stops; a change
+// of mind inside it (a quick mute and unmute) never suspends at all.
+const SUSPEND_DELAY_MS = 100
+
+const ignore = () => {}
 
 /** What a voice or cue plays into: the context and the master gain. */
 export interface ShipAudioOutput {
@@ -32,9 +39,9 @@ export interface ShipAudioDeps {
 }
 
 export interface ShipAudio {
-  /** Ship mode entered: the context may run. */
+  /** Ship mode entered: the context may run. Counted, one per binding. */
   activate(): void
-  /** Ship mode left: suspend, and stay so until activate(). */
+  /** Ship mode left: suspend once every activate() has its deactivate(). */
   deactivate(): void
   /** A user gesture: make the context if there is none yet, and resume it. */
   gesture(): void
@@ -56,9 +63,10 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
   let context: AudioContext | null = null
   let master: GainNode | null = null
   let out: ShipAudioOutput | null = null
-  let active = false
+  let bindings = 0
   let visible = true
   let muted: boolean | null = null
+  let suspendTimer: ReturnType<typeof setTimeout> | null = null
   const listeners = new Set<() => void>()
 
   // Read on first use rather than at import, so the page touches storage
@@ -74,38 +82,55 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
     return muted
   }
 
+  const shouldRun = () => bindings > 0 && visible && !isMuted()
+
+  const suspendLater = () => {
+    suspendTimer = null
+    if (!shouldRun() && context?.state === 'running') context.suspend().catch(ignore)
+  }
+
+  // Called again on every statechange, so a resume or suspend that lands
+  // after the wish changed is turned round. 'interrupted' (iOS, after a call
+  // or Siri) counts as not running; a resume refused for want of a gesture is
+  // retried on the next one.
   const sync = () => {
-    if (!context || context.state === 'closed') return
-    const run = active && visible && !isMuted()
-    // 'interrupted' (iOS, after a call or Siri) counts as not running. A
-    // resume refused for want of a gesture is retried on the next one, and
-    // onstatechange calls back here when either settles.
-    if (run && context.state !== 'running') context.resume().catch(() => {})
-    else if (!run && context.state === 'running') context.suspend().catch(() => {})
+    if (!context || !master || context.state === 'closed') return
+    const now = context.currentTime
+    const run = shouldRun()
+    master.gain.cancelScheduledValues(now)
+    master.gain.setTargetAtTime(run ? 1 : 0, now, FADE_TIME_CONSTANT)
+    if (run) {
+      if (suspendTimer != null) clearTimeout(suspendTimer)
+      suspendTimer = null
+      if (context.state !== 'running') context.resume().catch(ignore)
+    } else if (context.state === 'running' && suspendTimer == null) {
+      suspendTimer = setTimeout(suspendLater, SUSPEND_DELAY_MS)
+    }
   }
 
   const unlock = () => {
     if ((context && context.state !== 'closed') || !deps.hasActivation()) return
     context = deps.createContext()
     if (!context) return
+    // Silent until sync() fades it in.
     master = context.createGain()
-    master.gain.value = isMuted() ? 0 : 1
+    master.gain.value = 0
     master.connect(context.destination)
-    context.onstatechange = sync
+    context.addEventListener('statechange', sync)
     out = { context, bus: master }
   }
 
   return {
     activate() {
-      active = true
+      bindings++
       sync()
     },
     deactivate() {
-      active = false
+      bindings = Math.max(0, bindings - 1)
       sync()
     },
     gesture() {
-      if (!active) return
+      if (bindings === 0) return
       unlock()
       sync()
     },
@@ -122,7 +147,6 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
       } catch {
         // Private mode or blocked storage: the mute lasts until reload.
       }
-      if (context && master) master.gain.setTargetAtTime(next ? 0 : 1, context.currentTime, MUTE_TIME_CONSTANT)
       for (const listener of listeners) listener()
       sync()
     },
@@ -132,7 +156,7 @@ export function createShipAudio(deps: ShipAudioDeps): ShipAudio {
         listeners.delete(listener)
       }
     },
-    output: () => (active && context?.state !== 'closed' ? out : null),
+    output: () => (bindings > 0 && context?.state !== 'closed' ? out : null),
   }
 }
 
