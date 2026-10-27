@@ -1,4 +1,4 @@
-// Earth carries the ship (tides-zmw.9.18, behind ?surface=1). Without this
+// Earth carries the ship (tides-zmw.9.18, with the surface tiles). Without this
 // the ship flies in the heliocentric frame, so a ship hovering 30 m over the
 // Grand Canyon watches the ground slide by at Earth's orbital speed (~430 m/s
 // at the flight scale) plus its spin (up to 465 m/s).

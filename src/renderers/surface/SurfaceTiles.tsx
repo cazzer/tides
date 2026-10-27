@@ -1,5 +1,5 @@
-// The streamed true-scale surface under the ship (tides-zmw.9.1), behind
-// ?surface=1 (../../surface.ts). Mount inside Earth's OrbitingBody, beside
+// The streamed true-scale surface under the ship (tides-zmw.9.1), on unless
+// ?surface=0 (../../surface.ts). Mount inside Earth's OrbitingBody, beside
 // EarthRenderer, so its group inherits Earth's tilt and spin; solar-system
 // lazy-loads this module so the library stays out of the main chunk.
 //

@@ -62,9 +62,9 @@ export interface ShipTelemetry {
    * The ship through Earth's air (frame-carry.ts fillAir, tides-zmw.9.18):
    * speed, scene units/s (what the HUD reads); coupling, the share of
    * Earth's spin carried; density over sea level's; dynamic pressure, Pa.
-   * Without the carry (no ?surface=1) speed is `speed` and coupling 0;
-   * density and dynamic pressure are filled either way (fillAirDensity,
-   * tides-xxg), at that speed without it.
+   * Without the carry (?surface=0 or the low tier) speed is `speed` and
+   * coupling 0; density and dynamic pressure are filled either way
+   * (fillAirDensity, tides-xxg), at that speed without it.
    */
   air: { speed: number; coupling: number; density: number; dynamicPressure: number }
 }

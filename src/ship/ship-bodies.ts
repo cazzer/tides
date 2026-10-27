@@ -294,9 +294,9 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
   const marked = new THREE.Vector3()
   const latLon: [number, number] = [0, 0]
   const low = tier === 'low'
-  // Without the tiles (production until tides-zmw.9.10) the stop is the
-  // globe's as it was: the standard clearance and window, no settling. The
-  // speed law is the same either way: ?surface=1 is an experiment toggle,
+  // Without the tiles (?surface=0 or the low tier) the stop is the globe's
+  // as it was: the standard clearance and window, no settling. The speed
+  // law is the same either way: ?surface=0 is an experiment toggle,
   // not a flight mode of its own (the user, 2026-10-26).
   const fixed = low || !surfaceTiles
   const clearance: EarthClearance = earthClearance(false)

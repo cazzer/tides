@@ -51,7 +51,7 @@ import {
 const EARTH_DIAMETER = sceneRadius(12742000)
 
 // The streamed surface (tides-zmw.9.1) loads its own chunk, the tiles library
-// with it, and only when ?surface=1 asks for it in ship mode.
+// with it, and only in ship mode on the high tier unless ?surface=0.
 const SurfaceTiles = lazy(() => import('./renderers/surface/SurfaceTiles'))
 
 useTexture.preload(getEarthTexture())

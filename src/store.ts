@@ -91,10 +91,11 @@ function getInitialPanel(): PanelKey {
     : 'main'
 }
 
+// Real weather is the default (tides-6e8); ?weather=static opts out.
 function getInitialWeatherSource(): WeatherSource {
-  if (typeof window === 'undefined') return 'static'
+  if (typeof window === 'undefined') return 'real'
   const weather = new URLSearchParams(window.location.search).get('weather')
-  return weather === 'real' ? 'real' : 'static'
+  return weather === 'static' ? 'static' : 'real'
 }
 
 function getInitialLayout(): Layout {

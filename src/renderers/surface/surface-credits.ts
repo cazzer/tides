@@ -1,6 +1,6 @@
 // The sources the surface is drawing now (credit-sources.ts), shared between
 // SurfaceTiles, which writes it from its frame loop, and the HUD's credits
-// line, which reads it. Empty without ?surface=1, outside ship mode and while
+// line, which reads it. Empty with ?surface=0 or on the low tier, outside ship mode and while
 // no tile shows, so the line has nothing to draw there.
 import type { SurfaceSource } from './credit-sources'
 
