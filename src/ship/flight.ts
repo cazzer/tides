@@ -27,7 +27,7 @@
 //     to the 30 m stop. Inside the air the floor follows the altitude over
 //     the sea instead, constant dynamic pressure (the law's `air`,
 //     tides-zmw.9.29), so level flight is steady over mountains, the gap law
-//     only guarding the last stretch above the ground; the nose pitched away
+//     only guarding the last stretch above the ground; climbing steeply away
 //     from the body (Elite's escape vector) hands the floor back to the gap
 //     law, so a climb out of the air is still quick.
 //   • With Flight Assist on the velocity "rides" the cap: after each step it
@@ -41,9 +41,9 @@
 //     crossing a moon system on the way to a locked planet, the ship drops
 //     hard as each moon's well takes over, as Elite's supercruise does,
 //     rather than grazing the moon at twice its cap (tides-2hv.8). Where a
-//     groundSpeed law (Earth near its ground and in its air) sets the cap, the ride runs
-//     between e^(−RIDE_DOWN_RATE·dt) and e^(RIDE_UP_RATE·dt), locked or not
-//     (tides-zmw.9.18).
+//     groundSpeed law (Earth near its ground and in its air) sets the cap,
+//     the ride runs between e^(−RIDE_DOWN_RATE·dt) and e^(RIDE_UP_RATE·dt),
+//     locked or not (tides-zmw.9.18).
 //   • With a target locked, the speed *toward* it is also capped at
 //     approachCap: the gap over the target's wellTime, which is the cap
 //     itself when the target sets d_eff. A locked approach therefore never
@@ -122,8 +122,8 @@ export interface Body {
   minSpeed?: number
   /**
    * A speed floor that follows the gap to this body's ground, in place of
-   * minSpeed while it sets d_eff (speedFloorAt; Earth over the streamed
-   * tiles, tides-zmw.9.18): the cap stays true to scale down to the ground.
+   * minSpeed while it sets d_eff (speedFloorAt; Earth, tides-zmw.9.18, with
+   * its air's, tides-zmw.9.29): the cap stays true to scale down to the ground.
    * minSpeed stays the least it can be, for what reads the body's floor as
    * one number (approach.ts canCrash, ahead).
    */
@@ -153,17 +153,19 @@ export interface GroundSpeedLaw {
  * over the body's sphere (its sea level), wherever that is under the gap
  * law's rate · gap. With `scale` twice the air's scale height that is
  * constant dynamic pressure, so flying level the floor holds whatever the
- * ground below does, the gap law only taking over near the ground. The
- * nose climbing away from the body (the sine of its climb over `escape`,
- * smoothstep) blends the floor back to the gap law, in log: Elite's escape
- * vector.
+ * ground below does, the gap law only taking over near the ground. The ship
+ * climbing away from the body (the sine of its velocity's climb over
+ * `escape`, smoothstep) blends the floor back to the gap law, in log:
+ * Elite's escape vector. The velocity's, not the nose's: nose up in reverse
+ * is a descent, and pitching over from a climb lets the cap down only as
+ * fast as the motion turns, not in a flick of the stick.
  */
 export interface AirSpeedLaw {
   /** Scene units/s at sea level. */
   sea: number
   /** Scene units of altitude per e-fold of the floor. */
   scale: number
-  /** Sines of the nose's climb where the escape starts and is full. */
+  /** Sines of the velocity's climb where the escape starts and is full. */
   escape: readonly [number, number]
 }
 
@@ -171,7 +173,7 @@ export interface AirSpeedLaw {
  * The cap's floor while `body` sets d_eff `gap` over its surface: its
  * groundSpeed law at that gap where it has one, else speedFloor. A law with
  * `air` reads `altitude` over the body's sphere (the gap when missing) and
- * the sine of the nose's `climb` away from the body.
+ * the sine of the ship's `climb` away from the body (its velocity's).
  */
 export function speedFloorAt(body: Body, gap: number, altitude = gap, climb = 0): number {
   const law = body.groundSpeed
@@ -247,10 +249,10 @@ export interface FlightEnv {
 // this long: the world just runs slow for that frame instead of the ship
 // covering seconds of flight in one jump. A step moves at most OVERSPEED_MAX ·
 // K_WELL · MAX_DT = 0.15 of the mass-weighted gap (wellFactor ≥ 1, so at most
-// 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor (0.006
-// at Earth's ground speed; over the tiles, OVERSPEED_MAX · rate · MAX_DT =
-// 0.6 of the gap under a groundSpeed law), and the collision clamps a step to
-// the floor, so it cannot tunnel.
+// 15% of the gap to any surface), or 0.075 units at the V_NORMAL floor (at
+// most OVERSPEED_MAX · rate · MAX_DT = 0.6 of the gap under a groundSpeed
+// law, whose air never raises it over that), and the collision clamps a step
+// to the floor, so it cannot tunnel.
 export const MAX_DT = 0.1
 
 // Hard-sphere radius as a multiple of the body radius, for a body without its
@@ -434,7 +436,7 @@ interface Proximity {
   nearestGap: number
   target: Body | null
   targetGap: number
-  /** The target's speedFloorAt its gap, altitude and the nose's climb. */
+  /** The target's speedFloorAt its gap, altitude and the ship's climb. */
   targetFloor: number
   targetAltitude: number
   targetClimb: number
@@ -480,17 +482,17 @@ function surfaceGap(position: THREE.Vector3, body: Body): number {
   return d - body.ground(outward)
 }
 
-// The sine of `nose`'s climb away from `body`'s centre, from `position`.
-function climbSine(position: THREE.Vector3, body: Body, nose: THREE.Vector3 | null): number {
-  if (!nose || !(centreDistance > 0)) return 0
-  return outward.subVectors(position, body.position).dot(nose) / centreDistance
+// The sine of `heading`'s climb away from `body`'s centre, from `position`.
+function climbSine(position: THREE.Vector3, body: Body, heading: THREE.Vector3 | null): number {
+  if (!heading || !(centreDistance > 0)) return 0
+  return outward.subVectors(position, body.position).dot(heading) / centreDistance
 }
 
 function measure(
   position: THREE.Vector3,
   bodies: readonly Body[],
   targetKey: string | null,
-  nose: THREE.Vector3 | null = null
+  heading: THREE.Vector3 | null = null
 ): Proximity {
   proximity.nearest = null
   proximity.nearestGap = Infinity
@@ -514,7 +516,7 @@ function measure(
       proximity.nearestGap = gap
     }
     const altitude = centreDistance - body.radius
-    const climb = climbSine(position, body, nose)
+    const climb = climbSine(position, body, heading)
     const floor = speedFloorAt(body, gap, altitude, climb)
     const factor = wellFactor(body.mass)
     const well = Math.max(0, gap) / factor
@@ -565,15 +567,15 @@ function wellCap({ wellDistance, wellFloor, wellCeiling }: Proximity): number {
  * The speed limit at `position`, scene units/s: clamp(K_WELL · d_eff,
  * floor, V_TOP), with d_eff the smallest gap / wellFactor over `bodies` and
  * floor the speedFloor of the body that sets it (speedFloorAt, with the
- * ship's `nose`, world frame, unit, for an air law's escape; none reads as
- * level). With no bodies there is nothing to scale against, so V_NORMAL.
+ * ship's `heading`, its direction of travel, world frame, unit, for an air
+ * law's escape; none reads as level). With no bodies there is nothing to scale against, so V_NORMAL.
  */
 export function speedCap(
   position: THREE.Vector3,
   bodies: readonly Body[],
-  nose: THREE.Vector3 | null = null
+  heading: THREE.Vector3 | null = null
 ): number {
-  return wellCap(measure(position, bodies, null, nose))
+  return wellCap(measure(position, bodies, null, heading))
 }
 
 /**
@@ -604,10 +606,13 @@ function airApproachCap(
   eta: number,
   dt: number
 ): number {
-  const capAt = (g: number, a: number) =>
-    Math.max(lawFloor(law, g, a, climb), Math.min(Math.max(0, g) / eta, lawCeiling(law, g, a, climb)))
-  const ahead = capAt(gap, altitude) * dt
-  return capAt(gap - ahead, altitude - ahead)
+  const ahead = airCapAt(law, gap, altitude, climb, eta) * dt
+  return airCapAt(law, gap - ahead, altitude - ahead, climb, eta)
+}
+
+// wellCap with the target setting d_eff, for airApproachCap.
+function airCapAt(law: Readonly<GroundSpeedLaw>, gap: number, altitude: number, climb: number, eta: number): number {
+  return Math.max(lawFloor(law, gap, altitude, climb), Math.min(Math.max(0, gap) / eta, lawCeiling(law, gap, altitude, climb)))
 }
 
 // Inputs come from pointer maths; NaN would poison the state for good.
@@ -766,7 +771,9 @@ function translate(
 // all the way, so no well (the target's or one on the way) is overshot. FA
 // off doesn't ride: the pilot owns the speed. Where a groundSpeed law sets
 // the cap (`groundLaw`: its floor, or its air's ceiling under the well) the
-// ride is clamped to RIDE_DOWN_RATE and RIDE_UP_RATE, locked or not.
+// ride is clamped to RIDE_DOWN_RATE and RIDE_UP_RATE, locked or not: in
+// Earth's air that is all the way up to ~91 km, so a locked ride there is
+// rate-limited too.
 function rideWell(
   state: ShipState,
   input: Readonly<ShipInput>,
@@ -849,6 +856,14 @@ function fillTelemetry(
   out.target.etaSeconds = closing > 0 ? Math.max(0, targetGap) / closing : Infinity
 }
 
+const heading = new THREE.Vector3()
+
+// The ship's direction of travel (unit), or null when still.
+function headingOf(state: ShipState): THREE.Vector3 | null {
+  const speed = state.velocity.length()
+  return speed > 1e-12 ? heading.copy(state.velocity).divideScalar(speed) : null
+}
+
 /**
  * Puts the ship back over the ground after it moved under it between steps
  * (tides-zmw.9.8: the surface tiles update after the step, and the ground
@@ -876,8 +891,7 @@ export function stepShip(
   const h = Number.isFinite(dt) ? clamp(dt, 0, MAX_DT) : 0
   // measure() reuses one record, so take what this step needs before the
   // end-of-step measure overwrites it.
-  bodyAxes(state.orientation)
-  const here = measure(state.position, env.bodies, env.targetKey, nose)
+  const here = measure(state.position, env.bodies, env.targetKey, headingOf(state))
   const capBefore = wellCap(here)
   const { target } = here
   if (h > 0) {
@@ -890,8 +904,7 @@ export function stepShip(
   const colliding = collide(state, env.bodies)
   // End-of-step distances, so the ride and the HUD match where the camera
   // now is.
-  bodyAxes(state.orientation)
-  const there = measure(state.position, env.bodies, env.targetKey, nose)
+  const there = measure(state.position, env.bodies, env.targetKey, headingOf(state))
   const capAfter = wellCap(there)
   if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, groundLawSets(there))
   if (telemetry) fillTelemetry(telemetry, state, input, there, capAfter, colliding)

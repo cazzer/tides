@@ -149,8 +149,8 @@ export const NEAR_SAMPLE_MAX = 20 / EARTH_KM_PER_UNIT
 
 /**
  * The top of Earth's floor (EARTH_GROUND_SPEED_LAW's plateau), units/s:
- * the cloud deck's few hundredths of a unit take a second or two to cross,
- * where V_NORMAL went through a column a frame. [TUNE]
+ * ~43 km/s, where the air's floor meets it ~91 km up and the well takes
+ * over from it ~170 km up. [TUNE]
  */
 export const EARTH_GROUND_SPEED = 0.02
 
@@ -167,7 +167,7 @@ export const EARTH_GROUND_SPEED = 0.02
  * 40 km, meeting the plateau ~91 km up, in the air's release band, above
  * which the cap is the gap law's as before. Flying level over mountains it
  * holds, the gap law only guarding the last ~100 m (~180 m at 10 km up).
- * The nose climbing past 30° hands the floor back to the gap law by 60°,
+ * Climbing past 30° hands the floor back to the gap law by 60°,
  * Elite's escape vector: a climb from the sea to space takes seconds, not
  * the minute and a half the air alone would.
  */
@@ -176,7 +176,7 @@ export const EARTH_GAP_RATE = 2
 export const EARTH_SLOWEST = 50 * EARTH_UNITS_PER_METRE
 /** 200 m/s: the air's floor at sea level (the user's call, 2026-10-26). [TUNE] */
 export const EARTH_AIR_SEA_SPEED = 200 * EARTH_UNITS_PER_METRE
-/** Sines of the nose's climb where the escape vector starts and is full (30°, 60°). [TUNE] */
+/** Sines of the ship's climb (its velocity's) where the escape vector starts and is full (30°, 60°). [TUNE] */
 export const EARTH_ESCAPE: readonly [number, number] = [Math.sin(Math.PI / 6), Math.sin(Math.PI / 3)]
 export const EARTH_AIR_SPEED: Readonly<AirSpeedLaw> = {
   sea: EARTH_AIR_SEA_SPEED,

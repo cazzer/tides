@@ -59,6 +59,7 @@ import type { ShipInput } from './ship-input'
 import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 import { carryShip, createFrameCarry, earthSpinRate } from './frame-carry'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
+import { approachEta } from './approach'
 
 const FRAME = 1 / 60
 const Y = new THREE.Vector3(0, 1, 0)
@@ -859,7 +860,10 @@ describe("Earth's floor (tides-01v.8.7)", () => {
       if (telemetry.speed < 1e-3 && d - floorRadius(earth, direction) < 1e-9) break
     }
     const altitude = state.position.distanceTo(earth.position) - earth.radius
-    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, altitude, cap: telemetry.speedCap }
+    // Predicted from rest at the cap all the way (the spool-up aside).
+    const ground = { law: earth.groundSpeed!, stop: earth.groundClearance!, base: altitude - telemetry.nearest.surfaceDistance }
+    const eta = approachEta(gap, 1e9, wellTime(earth), throttle, speedFloor(earth), ground)
+    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, altitude, cap: telemetry.speedCap, eta }
     state.orientation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI))
     fly(state, climb, input({ throttle }), env(bodies))
     const height = state.position.distanceTo(earth.position) - earth.ground!(direction.subVectors(state.position, earth.position).normalize())
@@ -874,8 +878,9 @@ describe("Earth's floor (tides-01v.8.7)", () => {
     expect(landed.cap).toBeCloseTo(lawFloor(EARTH_GROUND_SPEED_LAW, landed.gap, landed.altitude), 12)
     // Rides the well and the air down without the approach warning's overshoot.
     expect(peakShare).toBeLessThan(1.5)
-    // Most of it in the air: ~70 s at full throttle, over 3 min at 0.3.
-    expect(landed.seconds).toBeLessThan(120 / throttle)
+    // Most of it in the air (~70 s at full throttle, over 3 min at 0.3), as approachEta has it.
+    expect(landed.seconds).toBeGreaterThan(0.95 * landed.eta)
+    expect(landed.seconds).toBeLessThan(1.1 * landed.eta + 3)
   })
 
   // The deck's tallest tops over the ground under them.
@@ -884,8 +889,9 @@ describe("Earth's floor (tides-01v.8.7)", () => {
   // At the air's speed now (tides-zmw.9.29): ~1,300 km/h through the deck.
   test('crosses the cloud deck in tens of seconds, not frames', () => {
     const { landed } = dive('high', 1, DECK)
-    expect(landed.seconds).toBeGreaterThan(2)
-    expect(landed.seconds).toBeLessThan(60)
+    expect(landed.seconds).toBeGreaterThan(10)
+    expect(landed.seconds).toBeGreaterThan(0.95 * landed.eta)
+    expect(landed.seconds).toBeLessThan(1.1 * landed.eta + 3)
   })
 
   test('climbs back out of the deck at full throttle within seconds', () => {
@@ -1568,6 +1574,31 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
     }
     expect(climb(law)).toBeLessThan(15)
     expect(climb({ ...law, air: { ...air, escape: [2, 3] } })).toBeGreaterThan(60)
+  })
+
+  test('the escape follows the motion: nose up in reverse is a descent at the air\'s cap', () => {
+    const state = shipAt(above(10), above(10).add(nose(70)))
+    const telemetry = createShipTelemetry()
+    for (let i = 0; i < 10 * 60; i++) {
+      stepShip(state, input({ throttle: -1 }), FRAME, env([sea]), telemetry)
+      const km = (state.position.length() - R) / KM
+      expect(telemetry.speedCap).toBeLessThanOrEqual(air.sea * Math.exp((km * KM) / air.scale) * (1 + 1e-9))
+    }
+    expect(state.position.length()).toBeLessThan(R + 10 * KM)
+  })
+
+  test('pitching over from an escape climb with Flight Assist off keeps the speed while the ship still climbs', () => {
+    const state = shipAt(above(10), above(10).add(nose(70)))
+    for (let i = 0; i < 1.5 * 60; i++) stepShip(state, input({ throttle: 1 }), FRAME, env([sea]))
+    const before = state.velocity.length()
+    expect(before).toBeGreaterThan(3 * speedCap(state.position, [sea], nose(0)))
+    // Nose level at once: the motion still climbs, so the cap holds; the
+    // carried speed bleeds at WELL_BRAKE, not a 20× brake in half a second.
+    const up = state.position.clone().normalize()
+    const level = new THREE.Vector3(1, 0, 0).projectOnPlane(up).normalize()
+    state.orientation.setFromUnitVectors(new THREE.Vector3(0, 0, -1), level)
+    for (let i = 0; i < 30; i++) stepShip(state, input({ throttle: 1, flightAssist: false }), FRAME, env([sea]))
+    expect(state.velocity.length() / before).toBeGreaterThan(0.8)
   })
 
   test('flying level at the cap into rising ground: never under the floor, and it comes to the 30 m stop over the slope', () => {

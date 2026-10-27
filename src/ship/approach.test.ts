@@ -433,24 +433,30 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
   })
 
   // Through the air now (tides-zmw.9.29): about a minute at full throttle.
-  test.each([0.5, 1])('a locked descent at throttle %s from 20 km arrives within 15%% of the ETA it starts with', (throttle) => {
-    const ground = { law, stop: FINE_GROUND_CLEARANCE }
+  // Onto a 5 km plateau the air is thinner all the way down (the ETA's base).
+  test.each([
+    [0.5, 0],
+    [1, 0],
+    [1, 5000],
+  ])('a locked descent at throttle %s from 20 km onto ground %s m up arrives within 15%% of the ETA it starts with', (throttle, plateau) => {
+    const base = plateau * M
+    const ground = { law, stop: FINE_GROUND_CLEARANCE, base }
     const earth: Body = {
       key: 'earth',
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
       collisionRadius: EARTH_RADIUS + 10 * M,
       mass: BODY_MASS_KG.earth,
-      ground: () => EARTH_RADIUS,
+      ground: () => EARTH_RADIUS + base,
       groundClearance: FINE_GROUND_CLEARANCE,
       minSpeed: EARTH_SLOWEST,
       groundSpeed: law,
     }
     const state = createShipState()
-    state.position.set(0, EARTH_RADIUS + 20000 * M, 0)
+    state.position.set(0, EARTH_RADIUS + base + 20000 * M, 0)
     // Nose down, already at its steady speed.
     state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
-    state.velocity.set(0, -throttle * lawFloor(law, 20000 * M), 0)
+    state.velocity.set(0, -throttle * lawFloor(law, 20000 * M, base + 20000 * M), 0)
     const eta = approachEta(20000 * M, -state.velocity.y, wellTime, throttle, EARTH_SLOWEST, ground)
     const input: ShipInput = { throttle, strafeX: 0, strafeY: 0, pitch: 0, yaw: 0, roll: 0, level: false, flightAssist: true }
     const telemetry = createShipTelemetry()

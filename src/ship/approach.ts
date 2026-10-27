@@ -224,10 +224,12 @@ function leg(lo: number, hi: number, closing: number, share: number, k: number, 
 export interface EtaGround {
   law: Readonly<GroundSpeedLaw>
   stop: number
+  /** The ground's height over the body's sphere there, for a law with air; 0 when missing. */
+  base?: number
 }
 
 // updateApproach's, reused so a frame allocates nothing.
-const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0 }
+const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0, base: 0 }
 
 /**
  * Predicted seconds to reach the surface `gap` away, closing at `closing`,
@@ -243,7 +245,7 @@ const etaGround: EtaGround = { law: { rate: 0, min: 0, max: 0 }, stop: 0 }
  * floor has regimes of its own under the well: the plateau (law.max, down
  * to gap max / rate), then the gap e-folding every 1 / (rate · share), then
  * law.min, to the stop. A law with air (tides-zmw.9.29) is summed instead
- * (airEta), its altitude taken as the gap.
+ * (airEta), its altitude the gap over the ground's `base`.
  */
 export function approachEta(
   gap: number,
@@ -268,7 +270,7 @@ export function approachEta(
   }
   const { law } = ground
   const stop = Math.max(0, ground.stop)
-  if (law.air) return airEta(g, stop, closing, wellTime, s, law)
+  if (law.air) return airEta(g, stop, closing, wellTime, s, law, ground.base ?? 0)
   const at = (x: number) => Math.min(g, x)
   const slowest = Math.max(stop, law.min / law.rate)
   const plateau = Math.max(slowest, law.max / law.rate)
@@ -288,11 +290,19 @@ const AIR_ETA_STEPS = 64
 // approachEta over a ground law with air (tides-zmw.9.29): seconds from
 // `gap` to `stop` at min(closing, share · cap), the cap as flight.ts
 // wellCap has it (the well's gap / wellTime under the law's ceiling, over
-// its floor), straight down over the sea
-// (altitude = gap) with the nose level. The air's leg has no closed form
+// its floor), straight down onto ground `base` over the sea (altitude =
+// gap + base), not climbing. The air's leg has no closed form
 // worth its kinks against the gap law's, so this sums it in log gap, each
 // step at the cap at its geometric middle.
-function airEta(gap: number, stop: number, closing: number, wellTime: number, share: number, law: Readonly<GroundSpeedLaw>): number {
+function airEta(
+  gap: number,
+  stop: number,
+  closing: number,
+  wellTime: number,
+  share: number,
+  law: Readonly<GroundSpeedLaw>,
+  base: number
+): number {
   if (!(gap > stop)) return 0
   const lo = Math.max(stop, 1e-12)
   const step = Math.log(gap / lo) / AIR_ETA_STEPS
@@ -301,7 +311,7 @@ function airEta(gap: number, stop: number, closing: number, wellTime: number, sh
   for (let i = 1; i <= AIR_ETA_STEPS; i++) {
     const x1 = i === AIR_ETA_STEPS ? gap : lo * Math.exp(i * step)
     const x = Math.sqrt(x0 * x1)
-    const cap = Math.max(Math.min(x / wellTime, lawCeiling(law, x)), lawFloor(law, x))
+    const cap = Math.max(Math.min(x / wellTime, lawCeiling(law, x, x + base)), lawFloor(law, x, x + base))
     eta += (x1 - x0) / Math.min(closing, share * cap)
     x0 = x1
   }
@@ -509,6 +519,7 @@ export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApp
   if (body.groundSpeed) {
     etaGround.law = body.groundSpeed
     etaGround.stop = body.groundClearance ?? 0
+    etaGround.base = distance - body.radius - gap
     ground = etaGround
   }
   out.eta = approachEta(gap, closing, wellTimeOf(factor), share, floor, ground)
