@@ -152,9 +152,6 @@ uniform sampler2D uGibsNightMask;
 uniform vec2 uGibsNightOrigin;
 uniform float uGibsNightActive;
 #define GIBS_NIGHT_SIDE ${f(side)}
-// The patch's cover where it ran, for the night lights' points
-// (./nightPoints.ts), whose code follows: their finest source is VIIRS's.
-float gibsNightCover = 0.0;
 
 // A slot's fade-in, for unwrapped tile coordinates.
 float gibsNightMask(ivec2 tile) {
@@ -198,7 +195,6 @@ if (uGibsNightActive > 0.5) {
     // the poles: nothing lights them.
     float cover = mask * smoothstep(0.0, ${f(EDGE_TILES)}, nightEdge)
       * (1.0 - smoothstep(nightMapLod - 1.0, nightMapLod, nightPixelLod));
-    gibsNightCover = cover;
     if (cover > 0.0) {
       vec2 st = q / GIBS_NIGHT_SIDE;
       float fine = textureGrad(uGibsNight, st, nightDx / GIBS_NIGHT_SIDE, nightDy / GIBS_NIGHT_SIDE).r;
