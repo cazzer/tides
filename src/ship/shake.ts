@@ -8,8 +8,10 @@
 // shakes as visibly as a desktop's. Rotation only: the dust is anchored on the camera's position,
 // and at the 30 m stop the near plane leaves no room to move the eye.
 //
-// The shake is a sum of a few incommensurate sines per axis, so it never
-// visibly repeats, and is smooth and deterministic in time (no per-frame
+// The shake is a sum of two bands of value noise per axis (tides-36x):
+// random values on a lattice in time, hashed from the lattice index and
+// smoothly joined, at buffet rates (~10–30 Hz), so it never repeats, has no
+// slow sway to read as a wobble, and is deterministic in time (no per-frame
 // random, which would jitter with the frame rate).
 
 import { clamp01, easeToward } from './dust'
@@ -43,31 +45,30 @@ export const SHAKE_EPSILON = 1e-4
  * [TUNE] Peak pitch and yaw at intensity 1, CSS px at the view's centre:
  * under a pixel unboosted reads as shimmer, a few boosted as a buffet.
  */
-export const SHAKE_PX = 1.6
+export const SHAKE_PX = 0.8
+/** [TUNE] Yaw's share of SHAKE_PX's turn: buffet is mostly up and down, so pitch leads. */
+export const SHAKE_YAW_SHARE = 0.5
 /** [TUNE] Roll's share of SHAKE_PX's turn: rolling tilts the horizon, which reads most as sway. */
-export const SHAKE_ROLL_SHARE = 0.6
+export const SHAKE_ROLL_SHARE = 0.1
 /** [TUNE] Views shorter than this, CSS px, shake as if this tall: a tiny view's pixels don't turn it wildly. */
 export const SHAKE_MIN_VIEW_PX = 300
 
 /**
- * [TUNE] Each axis's sines (pitch, yaw, roll), Hz: a buffet, not a sway
- * (~3–9 Hz; at or under 9 so a 30 fps phone still draws 3 frames a cycle),
- * and incommensurate.
+ * [TUNE] The noise bands' lattice rates, Hz: a new value this often, so the
+ * view turns about every other one. A buffet, not a sway; at 30 fps a band
+ * steps about every frame, which still reads as a shudder. Incommensurate,
+ * so the bands' lattices don't line up.
  */
-export const SHAKE_HZ: readonly (readonly [number, number, number])[] = [
-  [2.9, 5.3, 8.9],
-  [2.3, 4.7, 7.9],
-  [1.7, 3.7, 6.1],
+export const SHAKE_HZ: readonly [number, number] = [17, 29]
+/** [TUNE] The bands' weights, the slower strongest. */
+export const SHAKE_WEIGHTS: readonly [number, number] = [1, 0.5]
+// Each axis's and band's hash seed, so no two run in step.
+const SHAKE_SEEDS: readonly (readonly [number, number])[] = [
+  [0x3c6ef372, 0x1b873593],
+  [0x6a09e667, 0x5be0cd19],
+  [0x510e527f, 0x2545f491],
 ]
-/** [TUNE] The sines' weights, the slowest strongest. */
-export const SHAKE_WEIGHTS: readonly [number, number, number] = [1, 0.6, 0.4]
-// Fixed phases, so the axes don't start in step.
-const SHAKE_PHASES: readonly (readonly [number, number, number])[] = [
-  [0, 2.1, 4.4],
-  [1.3, 5.0, 0.7],
-  [3.6, 0.4, 2.8],
-]
-const WEIGHT_SUM = SHAKE_WEIGHTS[0] + SHAKE_WEIGHTS[1] + SHAKE_WEIGHTS[2]
+const WEIGHT_SUM = SHAKE_WEIGHTS[0] + SHAKE_WEIGHTS[1]
 
 /** How much of the shake dynamic pressure `q`, Pa, earns: 0 at or under SHAKE_Q_MIN, toward 1 above. */
 export function airShakeShare(q: number): number {
@@ -97,12 +98,30 @@ export function easeShake(current: number, target: number, dt: number): number {
   return target === 0 && Math.abs(next) < SHAKE_EPSILON ? 0 : next
 }
 
+/** A lattice value for index `i` and `seed`, -1..1: an integer hash. */
+function latticeValue(i: number, seed: number): number {
+  let h = Math.imul(i ^ seed, 0x27d4eb2d)
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  h ^= h >>> 16
+  return ((h >>> 0) / 0xffffffff) * 2 - 1
+}
+
+/** Value noise at `hz` lattice values a second, `t` seconds in, -1..1: smoothstepped between the lattice values. */
+function valueNoise(t: number, hz: number, seed: number): number {
+  const x = t * hz
+  const i = Math.floor(x)
+  const f = x - i
+  const a = latticeValue(i | 0, seed)
+  const b = latticeValue((i + 1) | 0, seed)
+  return a + (b - a) * f * f * (3 - 2 * f)
+}
+
 /** The shake's signal on `axis` (0 pitch, 1 yaw, 2 roll) at `t` seconds, -1..1. */
 export function shakeNoise(t: number, axis: 0 | 1 | 2): number {
-  const hz = SHAKE_HZ[axis]
-  const phase = SHAKE_PHASES[axis]
+  const seeds = SHAKE_SEEDS[axis]
   let sum = 0
-  for (let i = 0; i < 3; i++) sum += SHAKE_WEIGHTS[i] * Math.sin(2 * Math.PI * hz[i] * t + phase[i])
+  for (let i = 0; i < 2; i++) sum += SHAKE_WEIGHTS[i] * valueNoise(t, SHAKE_HZ[i], seeds[i])
   return sum / WEIGHT_SUM
 }
 
@@ -137,7 +156,7 @@ export function shakeAngles(t: number, intensity: number, radiansPerPx: number, 
   }
   const amplitude = SHAKE_PX * radiansPerPx * intensity
   out.pitch = amplitude * shakeNoise(t, 0)
-  out.yaw = amplitude * shakeNoise(t, 1)
+  out.yaw = SHAKE_YAW_SHARE * amplitude * shakeNoise(t, 1)
   out.roll = SHAKE_ROLL_SHARE * amplitude * shakeNoise(t, 2)
   return out
 }
