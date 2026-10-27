@@ -77,6 +77,7 @@ import {
 } from './earth-shells'
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
 import type { MaterialPatch } from './eclipseShadow'
+import { SKY_VIEW_GLSL, SKY_VIEW_UNIFORMS } from './skyView'
 
 /** (tau / L)^GROUND_HAZE_POWER at the nearest sea horizon (s / L = sqrt(3)
  * there): e^-3, 95% of the haze. */
@@ -167,7 +168,7 @@ uniform float uGroundHazeTop;
 uniform vec3 uGroundHazeSun;
 varying vec3 vGroundHazeRay;
 varying vec3 vGroundHazeEye;
-
+${SKY_VIEW_GLSL}
 #define uSeaLevel uGroundHazeSeaLevel
 #define uSurface (uGroundHazeSeaLevel * ${f(ATMOSPHERE_SURFACE)})
 #define uScaleHeight (uGroundHazeSeaLevel * ${f(ATMOSPHERE_SCALE_HEIGHT)})
@@ -302,6 +303,7 @@ export function createGroundHaze(
     uGroundHazeLength: { value: groundHazeLength(seaLevel) },
     uGroundHazeTop: { value: top },
     uGroundHazeSun: sun,
+    ...SKY_VIEW_UNIFORMS,
   }
   const frame = {
     uGroundHazeViewToLocal: { value: new THREE.Matrix3() },

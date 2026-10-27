@@ -83,6 +83,7 @@ import { prefersReducedMotion } from '../ship/reduced-motion'
 import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
+import { SKY_VIEW_GLSL, SKY_VIEW_UNIFORMS } from './skyView'
 import depthGlsl from '../shaders/depth.glsl'
 
 const f = (x: number) => x.toFixed(6)
@@ -583,6 +584,7 @@ float cloudPathClear(float alpha, float thickness, float path) {
 #define uGain ${f(ATMOSPHERE_GAIN)}
 #define uSky ${v3(ATMOSPHERE_SKY)}
 #define uDusk ${v3(ATMOSPHERE_DUSK)}
+${SKY_VIEW_GLSL}
 ${hazeGlsl}
 
 // Within reach the atmosphere draws its haze before the clouds
@@ -2005,6 +2007,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uMarchPhase: { value: 0 },
       uCloudCeiling: { value: ceilingTexture() },
       uPixelScale: { value: 1 },
+      ...SKY_VIEW_UNIFORMS,
     },
     defines,
     vertexShader: VERTEX,

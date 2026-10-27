@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
+import { SKY_VIEW_GLSL } from './skyView'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
@@ -150,6 +151,8 @@ function preprocess(source: string, defines: Set<string>): string {
     let m: RegExpMatchArray | null
     if ((m = t.match(/^#ifdef (\w+)/)))
       stack.push({ active: defines.has(m[1]), taken: defines.has(m[1]) })
+    else if ((m = t.match(/^#ifndef (\w+)/)))
+      stack.push({ active: !defines.has(m[1]), taken: !defines.has(m[1]) })
     else if ((m = t.match(/^#if (.*)/))) stack.push({ active: holds(m[1]), taken: holds(m[1]) })
     else if ((m = t.match(/^#elif (.*)/))) {
       const top = stack[stack.length - 1]
@@ -1550,18 +1553,25 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
     'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-back-noease': '61e0f400323aeb427ddcc8c149aa156b6c7f4aebfebf009ace4507fe1347f6ae',
-    'relief-full-back-ease': '56d37dc2344d743de35af180df369b1770270bb622c0c8b5976aa1613e38b8ce',
+    'relief-full-back-noease': 'a5b8eaa4a2d01e0ce0fe7c004b3f7cf628fbde748c77fd22244808bdd538f039',
+    'relief-full-back-ease': '767a246f64adb01e2334a4196523040691ccf2d6a14f919c3574be8336a34fde',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
-    'flat-full-back-noease': '276bf6c5c13f74c3d04c50fcea005aaf3fe07dc1dfb8a3a64ef3869f86ac7c97',
-    'flat-full-back-ease': '25eb6f2434d3d9e2c509db30d4916d31ad0669bd75028e688204c61a541a953c',
+    'flat-full-back-noease': '0fd725186b0c5768f4962bdceb9aecfba8aa976da98e4ac25cdb977dab99b0b8',
+    'flat-full-back-ease': '485a4987ea88ec4ae5850d3ab8e6d7d5b4fcc2b341f4216030c0cdd9e03eade8',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
     'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
     'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+  // The sky-view table's uniforms (tides-34q.2), declared with the haze in
+  // the programs from inside: taken out, so the rest is pinned.
+  const withoutSkyView = (fragment: string) => {
+    const declared = preprocess(SKY_VIEW_GLSL, new Set()) + '\n'
+    expect(fragment.split(declared).length).toBeLessThanOrEqual(2)
+    return fragment.replace(declared, '')
+  }
   const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
 
   for (const flat of [false, true]) {
@@ -1577,7 +1587,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
             ...(ease === 'ease' ? ['FOG_EASE'] : []),
           ])
           const vertex = preprocess(vertexShader, defines)
-          const fragment = preprocess(fragmentShader, defines)
+          const fragment = withoutSkyView(preprocess(fragmentShader, defines))
           expect(vertex + fragment).not.toMatch(TYPED_WORDS)
           expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
             UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]

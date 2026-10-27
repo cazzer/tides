@@ -3,7 +3,9 @@
 // cloud's reach lays the haze in front of a cloud over it (tides-01v.8.6).
 // The caller declares uSurface, uScaleHeight, uGain, uSky, uDusk and
 // uSeaLevel (read only by columnAheadOverSea(), but every includer
-// compiles it).
+// compiles it), and the sky-view table's uSkyView, uSkyViewSize and
+// uSkyViewOn (renderers/skyView.ts SKY_VIEW_GLSL), but for the table's own
+// build (SKY_VIEW_BUILD).
 
 // The column from radius r out to space along a ray climbing at cos(zenith)
 // mu ≥ 0: Chapman's grazing-incidence column, n(r)·H·sqrt(πx/2)·erfcx(z)
@@ -144,6 +146,34 @@ vec3 hazeSky(float column, vec3 at, vec3 sun, vec3 rd, vec3 eye) {
   return SKY_SUN * lit * (single + multi) * depth;
 }
 
+// The sky-view table's directions (tides-34q.2, sky-view.frag): u, the
+// azimuth from the Sun's over pi; v, the elevation over the eye's level,
+// squeezed toward the horizon, where the sky changes fastest. Both in 0..1
+// over the texel centres.
+#define SKY_VIEW_HALF_PI 1.5707963
+vec3 skyViewDir(vec2 uv) {
+  float phi = uv.x * 3.14159265;
+  float s = 2.0 * uv.y - 1.0;
+  float e = sign(s) * s * s * SKY_VIEW_HALF_PI;
+  return vec3(cos(e) * cos(phi), sin(e), cos(e) * sin(phi));
+}
+
+#ifndef SKY_VIEW_BUILD
+// The table's radiance along rd from eye with the Sun along sun (the
+// includer declares uSkyView and uSkyViewSize).
+vec3 skyViewGlow(vec3 rd, vec3 eye, vec3 sun) {
+  vec3 up = normalize(eye);
+  float y = clamp(dot(rd, up), -1.0, 1.0);
+  vec3 across = rd - up * y;
+  vec3 sunAcross = sun - up * dot(sun, up);
+  float a2 = dot(across, across) * dot(sunAcross, sunAcross);
+  float phi = a2 > 1e-14 ? acos(clamp(dot(across, sunAcross) * inversesqrt(a2), -1.0, 1.0)) : 0.0;
+  float e = asin(y);
+  vec2 uv = vec2(phi / 3.14159265, 0.5 + 0.5 * sign(e) * sqrt(abs(e) / SKY_VIEW_HALF_PI));
+  return texture(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize).rgb;
+}
+#endif
+
 // The haze's colour for a column (grazing: the limb's), lit where it is
 // thickest, at, by the Sun along sun, seen along rd from eye: the limb's
 // glow from outside, the sky's from inside (Earth only: uSeaLevel > 0),
@@ -153,5 +183,9 @@ vec3 hazeGlow(float column, float grazing, vec3 at, vec3 sun, vec3 rd, vec3 eye)
   if (uSeaLevel <= 0.0) return limb;
   float inside = 1.0 - smoothstep(uSurface + uScaleHeight, uSurface + 4.0 * uScaleHeight, length(eye));
   if (inside <= 0.0) return limb;
+#ifndef SKY_VIEW_BUILD
+  // The high tier's table (tides-34q.2), else the analytic sky.
+  if (uSkyViewOn > 0.5) return mix(limb, skyViewGlow(rd, eye, sun), inside);
+#endif
   return mix(limb, hazeSky(column, at, sun, rd, eye), inside);
 }

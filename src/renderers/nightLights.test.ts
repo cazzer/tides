@@ -13,6 +13,7 @@ import { createGibsPatch } from './gibsPatch'
 import { createGroundDisplacement } from './groundDisplacement'
 import { GROUND_DETAIL_GLSL, groundDetailPatch } from './groundDetail'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
+import { SKY_VIEW_GLSL } from './skyView'
 import { createGroundHaze } from './groundHaze'
 import { groundShadowPatch } from './groundShadow'
 import {
@@ -221,9 +222,10 @@ describe('night lights in flight', () => {
       .replace('uGroundShadow * occ', 'GROUND_SHADOW * occ')
   }
 
-  // The sky's light on the ground (the sky fill, the Sun's tint) and the
-  // haze's colour from inside, as tides-34q changed them: put back as they
-  // were, so that the pins still hold the rest of the chain.
+  // The sky's light on the ground (the sky fill, the Sun's tint), the
+  // haze's colour from inside and the sky-view table's uniforms, as
+  // tides-34q changed them: put back as they were, so that the pins still
+  // hold the rest of the chain.
   const OLD_SKY_FILL = `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
 {
@@ -248,6 +250,7 @@ describe('night lights in flight', () => {
     const sky = hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb('))
     const swaps: [string, string][] = [
       [GROUND_DETAIL_GLSL.lightBody, OLD_SKY_FILL],
+      ['varying vec3 vGroundHazeEye;\n' + SKY_VIEW_GLSL + '\n', 'varying vec3 vGroundHazeEye;\n\n'],
       [sky, OLD_HAZE_GLOW],
       [
         '  vec3 tangent = across * sqrt(1.0 - dip2) - up * sqrt(dip2);\n  float column = columnAhead(eye, tangent, grazing, at);',

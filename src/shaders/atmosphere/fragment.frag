@@ -18,6 +18,10 @@ uniform vec3 uSky;
 uniform vec3 uDusk;
 // Read only from inside (columnAheadOverSea()), so only the Earth's sets it.
 uniform float uSeaLevel;
+// The sky-view table (renderers/skyView.ts): only the Earth's, from inside.
+uniform sampler2D uSkyView;
+uniform vec2 uSkyViewSize;
+uniform float uSkyViewOn;
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
