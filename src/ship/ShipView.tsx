@@ -8,6 +8,7 @@ import { ShipController } from './ShipController'
 import { DesktopShipControls } from './DesktopShipControls'
 import { SpaceDust } from './SpaceDust'
 import { SpeedFov } from './useSpeedFov'
+import { ShipShake } from './useShipShake'
 import { ShipHud } from './ShipHud'
 import { ShipTargeting } from './ShipTargeting'
 import { ShipWarmup } from './ShipWarmup'
@@ -92,10 +93,11 @@ export function ShipView({ children }: { children: ReactNode }) {
         <ShipController />
         {children}
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
-            camera or the R3F frame loop go here, e.g. space dust and the
-            speed FOV kick (tides-3bl.6). */}
+            camera or the R3F frame loop go here, e.g. space dust, the
+            speed FOV kick (tides-3bl.6) and the air shudder (tides-xxg). */}
         <SpaceDust />
         <SpeedFov />
+        <ShipShake />
         <ShipTargeting />
         <ShipWarmup />
       </View>

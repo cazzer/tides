@@ -13,6 +13,7 @@ import {
 import { FOV_KICK } from './dust'
 import { Body } from 'astronomy-engine'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition } from '../flight-scale'
+import { SURFACE_FRAME_PRIORITY } from '../renderers/surface/surface-frame'
 import {
   enterShipPatch,
   exitShipPatch,
@@ -22,6 +23,9 @@ import {
   persistedView,
   SHIP_FAR,
   SHIP_FOV,
+  SHIP_SETTLE_PRIORITY,
+  SHIP_SHAKE_PRIORITY,
+  SHIP_SHAKE_RESTORE_PRIORITY,
   SHIP_STAR_RADIUS,
   SYSTEM_REACH,
   shellGap,
@@ -411,5 +415,14 @@ describe('ship camera range', () => {
     expect(shipFar(SYSTEM_REACH)).toBe(SHIP_FAR)
     // Neptune stays inside from anywhere.
     for (const d of [SHIP_FAR, 1e6, 1e8]) expect(shipFar(d)).toBeGreaterThan(d + neptuneMax)
+  })
+})
+
+describe('frame order', () => {
+  it('shakes the camera after the settle and before drei\'s View renders (1), and restores it after', () => {
+    expect(SURFACE_FRAME_PRIORITY).toBeLessThan(SHIP_SETTLE_PRIORITY)
+    expect(SHIP_SETTLE_PRIORITY).toBeLessThan(SHIP_SHAKE_PRIORITY)
+    expect(SHIP_SHAKE_PRIORITY).toBeLessThan(1)
+    expect(SHIP_SHAKE_RESTORE_PRIORITY).toBeGreaterThan(1)
   })
 })

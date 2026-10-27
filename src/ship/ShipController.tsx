@@ -22,7 +22,7 @@ import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail
 import { setSurfaceEye } from '../surface-handover'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 import { SURFACE_TILES_ON } from '../surface'
-import { carryShip, earthSpinRate, fillAir, resetFrameCarry, shipCarry } from './frame-carry'
+import { carryShip, earthSpinRate, fillAir, fillAirDensity, resetFrameCarry, shipCarry } from './frame-carry'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -103,6 +103,9 @@ export function ShipController() {
     if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
     if (SURFACE_TILES_ON && earth) fillAir(shipCarry, shipTelemetry, state, earth, spinRate)
+    // Without the carry the air is the frame the ship flies in (air.speed =
+    // speed); the air shudder still needs its dynamic pressure (tides-xxg).
+    else if (earth) fillAirDensity(shipTelemetry, state.position, earth)
     if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
 

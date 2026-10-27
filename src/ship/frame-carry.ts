@@ -30,7 +30,9 @@
 // There is no Newtonian falling or orbiting: the wells stay as they are.
 //
 // telemetry.air (fillAir) is the ship through the air: its speed, the grip,
-// the density and the dynamic pressure, the hook for entry visuals.
+// the density and the dynamic pressure, the hook for entry visuals and the
+// air shudder (tides-xxg). Without the carry ShipController still fills the
+// density and dynamic pressure (fillAirDensity), at the frame speed.
 
 import * as THREE from 'three'
 import { MAX_DT, type ShipState } from './flight'
@@ -319,12 +321,24 @@ export function fillAir(
   earth: Carrier,
   spinRate: number
 ): void {
-  const speed = airVelocity(air, state, earth, carry.kappa, spinRate).length()
-  const km = altitudeKm(state.position.distanceTo(earth.position), earth.radius)
-  const density = airDensity(km)
-  const metresPerSecond = speed * METRES_PER_UNIT
-  telemetry.air.speed = speed
+  telemetry.air.speed = airVelocity(air, state, earth, carry.kappa, spinRate).length()
   telemetry.air.coupling = carry.kappa
+  fillAirDensity(telemetry, state.position, earth)
+}
+
+/**
+ * Fills telemetry.air's density over sea level's at `position` and the
+ * dynamic pressure, Pa, at its speed through the air (air.speed): fillAir's
+ * last step, and all of it without the carry (tides-xxg), where the air is
+ * the frame the ship flies in.
+ */
+export function fillAirDensity(
+  telemetry: ShipTelemetry,
+  position: THREE.Vector3,
+  earth: Pick<Carrier, 'position' | 'radius'>
+): void {
+  const density = airDensity(altitudeKm(position.distanceTo(earth.position), earth.radius))
+  const metresPerSecond = telemetry.air.speed * METRES_PER_UNIT
   telemetry.air.density = density
   telemetry.air.dynamicPressure = 0.5 * SEA_LEVEL_DENSITY * density * metresPerSecond * metresPerSecond
 }
