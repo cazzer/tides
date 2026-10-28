@@ -6,6 +6,7 @@ import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import jupiterTexture from '../../assets/jupiter-2k.jpg'
 import type { PlanetRendererProps } from './index'
+import { JUPITER_HAZE_OUTER } from './haze-shells'
 
 // Jupiter's cloud tops darken only gently toward the limb in visible light.
 const LIMB_DARKENING = 1.15
@@ -27,7 +28,7 @@ export function Jupiter({ planet }: PlanetRendererProps) {
       {/* A thin warm haze, seen only as a faint rim on the day side. */}
       <PlanetAtmosphere
         planet={planet}
-        outer={1.02}
+        outer={JUPITER_HAZE_OUTER}
         scaleHeight={0.004}
         sky="#f2d9b0"
         dusk="#c98a4b"

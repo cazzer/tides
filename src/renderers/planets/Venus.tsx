@@ -7,6 +7,7 @@ import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import venusTexture from '../../assets/venus-2k.jpg'
 import type { PlanetRendererProps } from './index'
+import { VENUS_HAZE_OUTER } from './haze-shells'
 
 // The brightest planet: the cloud deck is drawn at its full map colour, and
 // the deck's haze darkens it gently toward the limb (Minnaert k > 1).
@@ -19,7 +20,6 @@ const DETAIL: PlanetDetail = { style: 'streaks', strength: 0.1 }
 // A thin haze above the cloud tops, in Venus radii, exaggerated as the
 // Earth's is to read at this scale. Linear RGB: pale yellow in full sun,
 // warming to cream toward the terminator.
-const HAZE_OUTER = 1.05
 const HAZE_SCALE_HEIGHT = 0.008
 const HAZE_SKY = new THREE.Color(1, 0.8, 0.42)
 const HAZE_DUSK = new THREE.Color(1, 0.62, 0.3)
@@ -38,7 +38,7 @@ export function Venus({ planet }: PlanetRendererProps) {
       />
       <PlanetAtmosphere
         planet={planet}
-        outer={HAZE_OUTER}
+        outer={VENUS_HAZE_OUTER}
         scaleHeight={HAZE_SCALE_HEIGHT}
         sky={HAZE_SKY}
         dusk={HAZE_DUSK}

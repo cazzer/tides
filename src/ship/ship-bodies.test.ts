@@ -10,6 +10,13 @@ import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import {
+  JUPITER_HAZE_OUTER,
+  MARS_HAZE_OUTER,
+  NEPTUNE_HAZE_OUTER,
+  URANUS_HAZE_OUTER,
+  VENUS_HAZE_OUTER,
+} from '../renderers/planets/haze-shells'
+import {
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
   OVERSPEED_MAX,
@@ -200,12 +207,23 @@ describe('ship bodies', () => {
       expect(shipNear(EARTH_GROUND_CLEARANCE)).toBeCloseTo(0.4 * EARTH_GROUND_CLEARANCE, 12)
     })
 
-    it('leaves the Moon and planets (no displaced or shelled surfaces) on the default margin', () => {
+    it('leaves the Sun, the Moon and the planets without a haze on the default margin', () => {
       const b = byKey()
-      for (const key of ['sun', 'moon', ...PLANET_KEYS]) {
-        expect(b[key].collisionRadius).toBeUndefined()
+      for (const key of ['sun', 'moon', 'mercury', 'saturn']) {
         expect(collisionRadius(b[key])).toBe(b[key].radius * COLLISION_MARGIN)
       }
+    })
+
+    it.each([
+      ['venus', VENUS_HAZE_OUTER],
+      ['mars', MARS_HAZE_OUTER],
+      ['jupiter', JUPITER_HAZE_OUTER],
+      ['uranus', URANUS_HAZE_OUTER],
+      ['neptune', NEPTUNE_HAZE_OUTER],
+    ])("stops a near plane's depth outside %s's haze (tides-9m0)", (key, haze) => {
+      const body = byKey()[key]
+      expect(haze).toBeGreaterThanOrEqual(1.02)
+      expect(collisionRadius(body)).toBeCloseTo(body.radius * haze + shipNear(Infinity), 12)
     })
 
     it('stops the ship well clear of even the smallest moon', () => {

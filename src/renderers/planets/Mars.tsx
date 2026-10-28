@@ -7,6 +7,7 @@ import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import marsTexture from '../../assets/mars-2k.jpg'
 import type { PlanetRendererProps } from './index'
+import { MARS_HAZE_OUTER } from './haze-shells'
 
 // Mars reflects more light than the Moon. Lifted, the deserts climb tone
 // mapping's curve far enough to soften toward butterscotch, the map's own
@@ -20,7 +21,6 @@ const DETAIL: PlanetDetail = { style: 'rock', strength: 0.25, bump: 0.08 }
 // A thin dusty haze, in Mars radii: subtler than the Earth's (lower gain,
 // thinner shell). Linear RGB: dusty pink in full sun; toward the terminator
 // it cools, as Martian sunsets are blue.
-const HAZE_OUTER = 1.04
 const HAZE_SCALE_HEIGHT = 0.007
 const HAZE_SKY = new THREE.Color(0.85, 0.5, 0.4)
 const HAZE_DUSK = new THREE.Color(0.45, 0.5, 0.7)
@@ -38,7 +38,7 @@ export function Mars({ planet }: PlanetRendererProps) {
       />
       <PlanetAtmosphere
         planet={planet}
-        outer={HAZE_OUTER}
+        outer={MARS_HAZE_OUTER}
         scaleHeight={HAZE_SCALE_HEIGHT}
         sky={HAZE_SKY}
         dusk={HAZE_DUSK}

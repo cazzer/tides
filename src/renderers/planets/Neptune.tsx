@@ -7,6 +7,7 @@ import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import neptuneTexture from '../../assets/neptune-2k.jpg'
 import type { PlanetRendererProps } from './index'
+import { NEPTUNE_HAZE_OUTER } from './haze-shells'
 
 // Below the map's resolution at a close pass: banded filaments.
 const DETAIL: PlanetDetail = { style: 'bands', strength: 0.18 }
@@ -22,7 +23,7 @@ export function Neptune({ planet }: PlanetRendererProps) {
       />
       <PlanetAtmosphere
         planet={planet}
-        outer={1.04}
+        outer={NEPTUNE_HAZE_OUTER}
         scaleHeight={0.008}
         sky="#5a82ff"
         dusk="#3a50c8"

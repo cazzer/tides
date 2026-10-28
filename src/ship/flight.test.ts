@@ -78,6 +78,14 @@ import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 import { carryShip, createFrameCarry, earthSpinRate } from './frame-carry'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { approachEta } from './approach'
+import {
+  JUPITER_HAZE_OUTER,
+  MARS_HAZE_OUTER,
+  NEPTUNE_HAZE_OUTER,
+  URANUS_HAZE_OUTER,
+  VENUS_HAZE_OUTER,
+} from '../renderers/planets/haze-shells'
+import { shipNear } from './ship-session'
 
 const FRAME = 1 / 60
 const Y = new THREE.Vector3(0, 1, 0)
@@ -806,6 +814,30 @@ describe('collision', () => {
         )
       }
       expect(state.position.distanceTo(shelled.position)).toBeCloseTo(shelled.collisionRadius!, 9)
+    }
+  })
+
+  test.each([
+    ['venus', VENUS_HAZE_OUTER],
+    ['mars', MARS_HAZE_OUTER],
+    ['jupiter', JUPITER_HAZE_OUTER],
+    ['uranus', URANUS_HAZE_OUTER],
+    ['neptune', NEPTUNE_HAZE_OUTER],
+  ])("stops a near plane's depth outside %s's haze shell at full throttle (tides-9m0)", (key, haze) => {
+    const planet = flightBodies().find((b) => b.key === key)!
+    const shell = planet.radius * haze
+    const start = planet.position.clone().add(new THREE.Vector3(0, 0, 30 + shell))
+    for (const targetKey of [null, key]) {
+      const state = shipAt(start, planet.position)
+      const telemetry = createShipTelemetry()
+      for (let i = 0; i < 60 * 60; i++) {
+        stepShip(state, input({ throttle: 1 }), FRAME, env([planet], targetKey), telemetry)
+        expect(state.position.distanceTo(planet.position)).toBeGreaterThan(shell)
+      }
+      const gap = state.position.distanceTo(planet.position) - shell
+      expect(gap).toBeCloseTo(shipNear(Infinity), 9)
+      // The near plane at the stop sits well short of the shell.
+      expect(shipNear(telemetry.nearest.surfaceDistance, gap)).toBeLessThan(gap / 2)
     }
   })
 

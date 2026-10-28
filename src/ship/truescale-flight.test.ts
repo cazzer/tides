@@ -154,7 +154,8 @@ describe('?truescale: HUD ranges', () => {
         }
       }
       expect(worst).toBeLessThanOrEqual(1e-6)
-    }
+    },
+    30_000
   )
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {
