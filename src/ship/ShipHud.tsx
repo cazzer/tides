@@ -384,7 +384,7 @@ export function ShipHud() {
         aria-label="Flight instruments"
         data-ship-ui
       >
-        <Row>
+        <InstrumentRow>
           <Cell ref={bind('speedCell')}>
             <Label>
               <SpeedLabel>
@@ -407,7 +407,7 @@ export function ShipHud() {
               <Unit ref={bind('speedUnit')} />
             </Value>
           </Cell>
-          <Cell $grow>
+          <ThrottleCell $grow>
             <Label>
               Throttle <span ref={bind('throttle')}>0%</span>
             </Label>
@@ -429,7 +429,7 @@ export function ShipHud() {
                 hidden
               />
             </Bar>
-          </Cell>
+          </ThrottleCell>
           <AssistButton
             ref={bind('assist')}
             type="button"
@@ -448,7 +448,7 @@ export function ShipHud() {
               </Value>
             </AssistText>
           </AssistButton>
-        </Row>
+        </InstrumentRow>
         <Row>
           <Cell
             ref={bind('nearestCell')}
@@ -579,6 +579,25 @@ const Cell = styled.div<{ $grow?: boolean }>`
 
   &[hidden] {
     display: none;
+  }
+`
+
+// Speed, throttle and Flight assist. On the narrowest phones (320 px) the
+// throttle had ~33 px left, under its bar's 72, which ran under the toggle
+// (tides-tvr.14): there the toggle wraps to a line of its own instead.
+const InstrumentRow = styled(Row)`
+  ${PHONE} {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+`
+
+// Grows into the row's room, the only cell that does, but never under its
+// bar's width (on a phone, where the row wraps).
+const ThrottleCell = styled(Cell)`
+  ${PHONE} {
+    flex-basis: 0;
+    min-width: 72px;
   }
 `
 

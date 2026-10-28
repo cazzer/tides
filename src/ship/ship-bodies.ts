@@ -16,6 +16,13 @@ import { EARTH_KM_PER_UNIT, SURFACE_MAX_METRES, surfaceOpacityUniform } from '..
 import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
 import { SURFACE_TILES_ON } from '../surface'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
+import {
+  JUPITER_HAZE_OUTER,
+  MARS_HAZE_OUTER,
+  NEPTUNE_HAZE_OUTER,
+  URANUS_HAZE_OUTER,
+  VENUS_HAZE_OUTER,
+} from '../renderers/planets/haze-shells'
 import type { AirSpeedLaw, Body as FlightBody, GroundSpeedLaw } from './flight'
 import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE, shipNear } from './ship-session'
 import {
@@ -442,6 +449,27 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
  */
 export const MOON_COLLISION_CLEARANCE = 0.02
 
+// The planets' haze shells, as fractions of their radii.
+const PLANET_HAZE_OUTER: Partial<Record<PlanetKey, number>> = {
+  venus: VENUS_HAZE_OUTER,
+  mars: MARS_HAZE_OUTER,
+  jupiter: JUPITER_HAZE_OUTER,
+  uranus: URANUS_HAZE_OUTER,
+  neptune: NEPTUNE_HAZE_OUTER,
+}
+
+/**
+ * The ship's stop above a planet of `radius` (tides-9m0): as for Earth on the
+ * low tier (EARTH_COLLISION_RADIUS), a near plane's depth (shipNear's
+ * ceiling) beyond its haze, which is drawn front-faced only and would vanish
+ * from inside, never inside COLLISION_MARGIN's default.
+ */
+export function planetCollisionRadius(key: PlanetKey, radius: number): number {
+  const haze = PLANET_HAZE_OUTER[key]
+  const stop = radius * COLLISION_MARGIN
+  return haze === undefined ? stop : Math.max(stop, radius * haze + shipNear(Infinity))
+}
+
 /**
  * Sun, Earth, Moon, the seven planets and their major moons, positions unset
  * until updated. `tier` sets Earth's stop (attachEarthStop), and
@@ -478,6 +506,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
       key,
       position: new THREE.Vector3(),
       radius: flightRadius[key],
+      collisionRadius: planetCollisionRadius(key, flightRadius[key]),
       mass: BODY_MASS_KG[key],
       positionAt: positionAt[key],
     })),

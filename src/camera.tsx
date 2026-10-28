@@ -23,7 +23,7 @@ import {
   type CameraFocus,
 } from './store'
 import { calculateLocationAndRotationForLatLng } from './utils'
-import { leaveClock, rideWithClock, useClockRide } from './clock-view'
+import { clockRideAllowed, leaveClock, rideWithClock, useClockRide } from './clock-view'
 import {
   FOCUS_EASE,
   MAIN_DISTANCE,
@@ -222,7 +222,8 @@ function listenForPivot(
  * middle-drag or a two-finger touch drag tilts the camera toward the horizon
  * and turns its heading (tides-7yt). Zooming out or leaving Earth focus eases
  * both back to zero (tides-nqy). `dom` is the element OrbitControls listens
- * on, which drei swaps when the View's event layer reconnects.
+ * on, which drei swaps when the View's event layer reconnects. Returns the
+ * pivot.
  */
 function useEarthPivot(
   camera: Camera,
@@ -270,6 +271,8 @@ function useEarthPivot(
       inEarthFocus() ? pivotDepth(controls.rotateSpeed) : null
     )
   })
+
+  return pivot
 }
 
 // useMainNearFar's per-frame scratch: LABEL_KEYS' bodies, then the clock.
@@ -436,7 +439,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
     | HTMLElement
     | undefined
   const canvas = useThree((s) => s.gl.domElement)
-  useEarthPivot(
+  const pivot = useEarthPivot(
     camera,
     controls as OrbitControlsImpl | null,
     cameraFocus,
@@ -500,7 +503,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
 
     if (hasTarget && controls) {
       const smoothness = FOCUS_EASE
-      if (cameraFocus === 'clock' && ref?.current) {
+      if (cameraFocus === 'clock' && ref?.current && clockRideAllowed(pivot.current)) {
         rideWithClock(
           camera.position,
           // @ts-ignore
@@ -508,7 +511,8 @@ export const CameraProvider = ({ children }: { children: any }) => {
           cameraTarget.current,
           target,
           rideRef.current,
-          smoothness
+          smoothness,
+          (camera as PerspectiveCamera).isPerspectiveCamera ? (camera as PerspectiveCamera).aspect : Infinity
         )
       } else {
         leaveClock(rideRef.current)

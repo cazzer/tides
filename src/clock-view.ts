@@ -15,6 +15,10 @@ export const CLOCK_VIEW = {
   distance: MAIN_DISTANCE,
 } as const
 export const CLOCK_FRAMING_EASE = 0.05
+// Earth sits off to the right of the clock: in a view narrower than this
+// (width / height), a portrait phone's, the eye backs off until the view is
+// as wide at the clock as here, or Earth ran off the edge (tides-3bc).
+export const CLOCK_MIN_ASPECT = 0.8
 
 export type ClockRide = { angle: number | null; ease: number; entryEase: number }
 
@@ -27,10 +31,12 @@ function wrapToPi(a: number): number {
   return a - 2 * Math.PI * Math.round(a / (2 * Math.PI))
 }
 
-export function clockViewOffset(angle: number, out = new Vector3()): Vector3 {
+/** The eye's offset from the clock at `angle`, in a view of `aspect`. */
+export function clockViewOffset(angle: number, out = new Vector3(), aspect = Infinity): Vector3 {
   const { azimuth, elevation, distance } = CLOCK_VIEW
   return out.setFromSphericalCoords(
-    distance,
+    // A view with no size yet (aspect NaN or 0) keeps the default.
+    distance * (aspect > 0 ? Math.max(1, CLOCK_MIN_ASPECT / aspect) : 1),
     Math.PI / 2 - elevation,
     angle + azimuth
   )
@@ -41,13 +47,31 @@ export function leaveClock(ride: ClockRide): void {
   ride.entryEase = CLOCK_FRAMING_EASE
 }
 
+// Under this tilt (~0.6°) the clock ride drops what is left of it rather than
+// wait out the ease's tail (~1.5 s more from here).
+export const CLOCK_RIDE_TILT = 0.01
+
+/**
+ * Whether the clock ride may move the eye this frame: not while the Earth
+ * pivot's tilt eases out after leaving Earth focus (tides-oyd). tiltControls
+ * takes any outside write to the camera as a new untilted pose and tilts it
+ * again, so riding then would compound the tilt every frame and spin the
+ * view; until then the view only turns to the clock. Under CLOCK_RIDE_TILT
+ * it sets the tilt to 0 and lets the ride start.
+ */
+export function clockRideAllowed(pivot: { tilt: number }): boolean {
+  if (Math.abs(pivot.tilt) < CLOCK_RIDE_TILT) pivot.tilt = 0
+  return pivot.tilt === 0
+}
+
 export function rideWithClock(
   position: Vector3,
   orbitTarget: Vector3,
   target: Vector3,
   clock: Vector3,
   ride: ClockRide,
-  smoothness: number
+  smoothness: number,
+  aspect = Infinity
 ): void {
   const angle = Math.atan2(-clock.z, clock.x)
   if (ride.angle === null) {
@@ -65,7 +89,7 @@ export function rideWithClock(
 
   if (ride.ease > 0) {
     spherical.setFromVector3(offset)
-    framed.setFromVector3(clockViewOffset(angle, canonical))
+    framed.setFromVector3(clockViewOffset(angle, canonical, aspect))
     const dTheta = wrapToPi(framed.theta - spherical.theta)
     const dPhi = framed.phi - spherical.phi
     const dRadius = framed.radius - spherical.radius

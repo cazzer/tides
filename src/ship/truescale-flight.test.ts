@@ -85,7 +85,7 @@ describe('the default (tides-krh)', () => {
 // all the way out (~4× the flight scale at 0.9), so a run in to Venus or
 // Mars that passes the Sun at a few hundred units read the range backwards,
 // by up to ~3–5 million km at 0.9 and on 3–4 of 120 dates at 0.8: the run-ins
-// below are what tides-3ln has to keep passing to raise the cap.
+// below are what tides-ofv has to keep passing to raise the cap.
 const AT_MAX = `?truescale=${MAX_TRUESCALE}`
 
 async function setup(t: number, search = AT_MAX) {
@@ -126,11 +126,20 @@ describe('?truescale: HUD ranges', () => {
     expect(ranges.nearest).toBe(sun.index)
   })
 
-  it.each(['venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
-    'falls steadily on a straight run in to %s, on 20 dates',
-    async (key) => {
+  // Venus and Mars, whose run-ins can pass the Sun, on 120 dates (tides-3ln);
+  // the outer planets on 20.
+  it.each([
+    ['venus', 6],
+    ['mars', 6],
+    ['jupiter', 36],
+    ['saturn', 36],
+    ['uranus', 36],
+    ['neptune', 36],
+  ] as const)(
+    'falls steadily on a straight run in to %s, every %i days for two years',
+    async (key, step) => {
       let worst = 0
-      for (let day = 0; day < 720; day += 36) {
+      for (let day = 0; day < 720; day += step) {
         const { ship, truth, find, ranges, distances, flight } = await setup(T + day * DAY)
         const planet = find(key)
         const from = find('earth').body
@@ -145,7 +154,8 @@ describe('?truescale: HUD ranges', () => {
         }
       }
       expect(worst).toBeLessThanOrEqual(1e-6)
-    }
+    },
+    30_000
   )
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {
