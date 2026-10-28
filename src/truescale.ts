@@ -25,7 +25,8 @@
 // the HUD's instead: past ~0.7 the Sun's range anchor reads on its pair scale
 // with the squeezed-in Mercury however far out the ship is, and a run in to
 // Venus or Mars that passes the Sun can read its range backwards
-// (../ship/ship-distances.ts, tides-3ln). Fixing that would unlock 0.8–0.9.
+// (../ship/ship-distances.ts, tides-3ln). Fixing that would unlock 0.8–0.9
+// (tides-ofv).
 //
 // Read once at load, like ?relief= (./relief.ts): a change is a reload, so
 // nothing has to rebuild live. Outside a browser (the tests) it is 0, so the

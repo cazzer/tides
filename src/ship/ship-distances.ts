@@ -95,7 +95,7 @@
 // 0.9 (~228, ~4× against Mercury), a run in to Venus or Mars that passes a
 // few hundred units from the Sun can read its range backwards, by up to
 // ~3–5 million km at 0.9. Giving the Sun a hand-over to the planets' scale,
-// as the moon systems have, would unlock them (tides-3ln).
+// as the moon systems have, would unlock them (tides-ofv).
 
 import {
   Body,
