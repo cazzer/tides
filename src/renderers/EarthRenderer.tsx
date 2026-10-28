@@ -14,7 +14,7 @@ import { useGibsPatch } from './gibsPatch'
 import { useGibsNightPatch } from './gibsNightPatch'
 import { streamedPatch } from './gibsStream'
 import { nightLightsPatch, useNightFlight } from './nightLights'
-import { eyeSky } from '../night-flight'
+import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
 import { prefersReducedMotion } from '../ship/reduced-motion'
@@ -200,6 +200,7 @@ export default function EarthRenderer({
         // Sun near the ground in flight, and how much the daylit sky hides
         // the stars (night-flight.ts dayExposure(), skyDaylight()).
         eyeSky.daylight = 0
+        eyeSky.heightKm = EYE_AIRLESS_KM
         renderer.toneMappingExposure =
           TONE_MAPPING_EXPOSURE *
           (nightFlight && groundRef.current ? nightFlight.adaptEye(groundRef.current, camera, diameter) : 1)
@@ -356,6 +357,7 @@ function globeStream(patch: MaterialPatch): GlobeStream {
 function restoreEye(renderer: THREE.WebGLRenderer) {
   renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE
   eyeSky.daylight = 0
+  eyeSky.heightKm = EYE_AIRLESS_KM
 }
 
 function cloudsFaceEachCamera(

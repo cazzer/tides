@@ -1,5 +1,5 @@
 // A thin blue limb glow on the sunlit side, warming toward the terminator
-// (tides-qe5). Additive, so it only ever brightens the limb.
+// (tides-qe5). Additive from outside, so it only ever brightens the limb.
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -83,7 +83,13 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
         },
         transparent: true,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        // Premultiplied: the haze adds its glow and, over the ground from
+        // inside, hides its cover's share of it (haze.glsl hazeCover(),
+        // tides-d9f.3); elsewhere its alpha is 0, an additive blend.
+        defines: { HAZE_COVER: '' },
+        blending: THREE.CustomBlending,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
         // Double-sided in ship mode (pickShellFaces), where the shader keeps
         // one face per ray; under the cloud shell's top it stops at the
         // ground, which lays its own share of the haze over itself

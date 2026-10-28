@@ -13,6 +13,8 @@ import { isLowQuality } from '../quality'
 import { sunSurface } from './sun-surface'
 import { SunProminences } from './SunProminences'
 import { SunSpicules } from './SunSpicules'
+import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
+import { sunDiscTint } from '../cloud-layer'
 import { eyeInObject, SUN_FRINGE, SUN_FRINGE_FADE_PX, SUN_SEGMENTS, SUN_SHELL } from './sun-spicules'
 
 // Outside the component: the react-hooks lint rejects mutating a memoised
@@ -24,12 +26,33 @@ function tick(surface: ReturnType<typeof sunSurface>, material: THREE.ShaderMate
 
 // Per view, at draw time: the eye and the view direction in the Sun's
 // frame, which the photosphere traces its sphere in (sun/fragment.frag),
-// and the fringe's fade in device px, which its fwidth measures in.
+// the fringe's fade in device px, which its fwidth measures in, and the
+// air the eye sees the Sun through (night-flight.ts eyeSky), by its up in
+// the Sun's frame (sun/air.glsl).
 function setView(material: THREE.ShaderMaterial, renderer: THREE.WebGLRenderer, camera: THREE.Camera, mesh: THREE.Object3D) {
-  const { uEyeObject, uDirObject, uFringeFadePx } = material.uniforms
+  const { uEyeObject, uDirObject, uFringeFadePx, uAirUp, uAirKm } = material.uniforms
   eyeInObject(camera, mesh, uEyeObject.value, uDirObject.value)
   uFringeFadePx.value.set(...SUN_FRINGE_FADE_PX).multiplyScalar(renderer.getPixelRatio())
+  uAirKm.value = eyeSky.heightKm
+  toObject.copy(mesh.matrixWorld).invert()
+  uAirUp.value.copy(eyeSky.up).transformDirection(toObject)
 }
+
+// The corona's, per view: the air's extinction toward the Sun's centre.
+function setCoronaAir(corona: THREE.ShaderMaterial, camera: THREE.Camera, sun: THREE.Object3D) {
+  const tint = corona.uniforms.uAirTint.value as THREE.Color
+  if (eyeSky.heightKm >= EYE_AIRLESS_KM) {
+    tint.setRGB(1, 1, 1)
+    return
+  }
+  sunWorld.setFromMatrixPosition(sun.matrixWorld)
+  const toward = sunWorld.sub(eyeWorld.setFromMatrixPosition(camera.matrixWorld)).normalize()
+  tint.setRGB(...sunDiscTint(toward.dot(eyeSky.up), eyeSky.heightKm))
+}
+
+const toObject = new THREE.Matrix4()
+const sunWorld = new THREE.Vector3()
+const eyeWorld = new THREE.Vector3()
 
 interface SunRendererProps {
   diameter: number
@@ -65,6 +88,8 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
         uFringeFadePx: { value: new THREE.Vector2(...SUN_FRINGE_FADE_PX) },
         uEyeObject: { value: new THREE.Vector3() },
         uDirObject: { value: new THREE.Vector3(0, 0, -1) },
+        uAirUp: { value: new THREE.Vector3(0, 1, 0) },
+        uAirKm: { value: EYE_AIRLESS_KM },
       },
       vertexShader: sunVertex,
       fragmentShader: sunFragment,
@@ -95,6 +120,7 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
         uMaxAngle: { value: CORONA_MAX_ANGLE },
         uOuter: { value: interactive ? CORONA_OUTER_MAIN : CORONA_OUTER_PERSPECTIVE },
         uCorona: { value: surface.corona },
+        uAirTint: { value: new THREE.Color(1, 1, 1) },
       },
     })
   }, [diameter, interactive, surface])
@@ -109,6 +135,12 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
       if (mesh.current) setView(sunMaterial, renderer, camera, mesh.current)
     },
     [sunMaterial]
+  )
+  const onBeforeCoronaRender = useCallback(
+    (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
+      if (mesh.current) setCoronaAir(coronaMaterial, camera, mesh.current)
+    },
+    [coronaMaterial]
   )
 
   return (
@@ -128,6 +160,7 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
       <mesh
         frustumCulled={false}
         renderOrder={-1}
+        onBeforeRender={onBeforeCoronaRender}
         raycast={() => null}
       >
         <planeGeometry args={[2, 2]} />

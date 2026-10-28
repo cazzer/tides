@@ -700,6 +700,15 @@ export function sunlightTint(mu: number, heightKm: number): Vec3 {
   return t.map((c) => c / norm) as Vec3
 }
 
+/** The Sun itself seen through the air at `mu` (sine of its elevation) from
+ * an eye `heightKm` up: the plain extinction, unlifted, so a low Sun's disc
+ * and its glint dim and redden as well as warm (tides-34q.4). Mirrored per
+ * pixel by shaders/sun/air.glsl. */
+export function sunDiscTint(mu: number, heightKm: number): Vec3 {
+  const m = sunbeamAirMass(mu, heightKm)
+  return SUNLIGHT_EXTINCTION.map((tau) => Math.exp(-tau * m)) as Vec3
+}
+
 // Fine detail where the cloud map is magnified (tides-01v.2): octaves of noise
 // from DETAIL_BASE_TEXELS cloud texels down, each halving the last, each
 // faded out as it shrinks toward a few screen pixels so none of it sparkles.

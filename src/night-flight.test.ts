@@ -5,6 +5,8 @@ import { earthPosition, moonOffset } from './ephemeris'
 import { CLOUD_AMBIENT } from './lighting'
 import {
   DAY_ADAPT_GAIN,
+  DAY_ADAPT_GAIN_AIR,
+  DAY_STOP,
   dayExposure,
   moonIlluminatedFraction,
   moonlightStrength,
@@ -18,6 +20,9 @@ import {
   skyDaylight,
 } from './night-flight'
 import { ATMOSPHERE_SCALE_HEIGHT, ATMOSPHERE_SURFACE } from './renderers/earth-shells'
+
+// The top of the air's full share (airInside()), as a gap over the surface.
+const airTop = ATMOSPHERE_SURFACE + ATMOSPHERE_SCALE_HEIGHT - 1
 
 const sinDeg = (deg: number) => Math.sin((deg * Math.PI) / 180)
 
@@ -50,18 +55,26 @@ describe('night adaptation', () => {
   })
 })
 
-describe("the eye's adaptation to a low Sun (tides-34q)", () => {
-  it('leaves the day, the night, high up and the system view at the exposure as it was', () => {
-    expect(dayExposure(sinDeg(60), 0.002)).toBe(1)
-    expect(dayExposure(sinDeg(25), 0.002)).toBe(1)
+describe("the eye's adaptation to daylight (tides-34q, tides-d9f)", () => {
+  // 400 km up: over the air, still near the ground.
+  const overAir = 0.063
+  it('leaves the night, high up and the system view at the exposure as it was', () => {
     expect(dayExposure(sinDeg(-8), 0.002)).toBe(1)
     expect(dayExposure(sinDeg(-30), 0.002)).toBe(1)
+    expect(dayExposure(sinDeg(60), overAir)).toBe(1)
     expect(dayExposure(sinDeg(3), NIGHT_ADAPT_FAR)).toBe(1)
     expect(dayExposure(sinDeg(3), 5)).toBe(1)
   })
 
-  it('opens the eye fully by 3 deg near the ground, and eases it off for the night', () => {
-    expect(dayExposure(sinDeg(3), 0.002)).toBeCloseTo(1 + DAY_ADAPT_GAIN, 9)
+  it('stops down under a high Sun inside the air', () => {
+    expect(dayExposure(sinDeg(60), 0.002)).toBeCloseTo(1 - DAY_STOP, 9)
+    expect(dayExposure(sinDeg(25), 0.002)).toBeCloseTo(1 - DAY_STOP, 9)
+    expect(dayExposure(sinDeg(60), airTop)).toBeCloseTo(1 - DAY_STOP, 9)
+  })
+
+  it('opens the eye by 3 deg near the ground, less inside the air, and eases it off for the night', () => {
+    expect(dayExposure(sinDeg(3), 0.002)).toBeCloseTo(1 + DAY_ADAPT_GAIN_AIR, 9)
+    expect(dayExposure(sinDeg(3), overAir)).toBeCloseTo(1 + DAY_ADAPT_GAIN, 9)
     expect(dayExposure(sinDeg(-2), NIGHT_ADAPT_NEAR)).toBeCloseTo(1 + DAY_ADAPT_GAIN, 9)
     let last = 0
     for (let deg = 25; deg >= 3; deg -= 0.5) {
@@ -71,8 +84,8 @@ describe("the eye's adaptation to a low Sun (tides-34q)", () => {
     }
     // Between: late afternoon some of the way.
     const afternoon = dayExposure(sinDeg(15), 0.002)
-    expect(afternoon).toBeGreaterThan(1.1)
-    expect(afternoon).toBeLessThan(1 + DAY_ADAPT_GAIN)
+    expect(afternoon).toBeGreaterThan(1 - DAY_STOP)
+    expect(afternoon).toBeLessThan(1 + DAY_ADAPT_GAIN_AIR)
   })
 })
 

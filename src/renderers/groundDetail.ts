@@ -189,8 +189,10 @@ vec3 groundUp = normal;
 
 // Before the lights' end, where the direct light is the Sun's alone: the
 // sunlight's colour through the air mass toward the Sun, as a cloud top's at
-// sea level (cloud-layer.ts sunlightTint(); tides-34q), on its diffuse light
-// and its glint. Before lights_fragment_end, so the sky the sea mirrors
+// sea level (cloud-layer.ts sunlightTint(); tides-34q), on its diffuse light;
+// its glint, the Sun's own image, takes the Sun's plain extinction
+// (sunDiscTint()), so a low Sun's road on the sea dims and reddens with its
+// disc (tides-d9f.2). Before lights_fragment_end, so the sky the sea mirrors
 // (water.ts), added to directSpecular after it, keeps its own colour.
 const SUN_TINT_BODY = /* glsl */ `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
@@ -198,9 +200,9 @@ const SUN_TINT_BODY = /* glsl */ `
   float groundZenith = min(90.0, degrees(acos(clamp(dot(groundUp, directionalLights[0].direction), -1.0, 1.0))));
   float groundAirMass = 1.0 / (cos(radians(groundZenith)) + 0.50572 * pow(96.07995 - groundZenith, -1.6364)) - 1.0;
   vec3 groundSunTint = exp(-vec3(${SUNLIGHT_EXTINCTION.map(f).join(', ')}) * groundAirMass);
+  reflectedLight.directSpecular *= groundSunTint;
   groundSunTint /= max(groundSunTint.r, ${f(SUNSET_FLOOR)});
   reflectedLight.directDiffuse *= groundSunTint;
-  reflectedLight.directSpecular *= groundSunTint;
 }
 #endif
 `

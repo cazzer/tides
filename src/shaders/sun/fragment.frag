@@ -25,6 +25,7 @@ varying vec3 vObject;
 
 #include ../aurora/noise3.glsl
 #include ../clip-depth.glsl
+#include air.glsl
 
 mat2 rotate(float a) {
   float s = sin(a);
@@ -118,7 +119,8 @@ void main() {
   I *= 0.88 + 0.75 * pow(limbward, 3.0);
   // The jets themselves: a little dimmer than the limb behind them.
   I *= 1.0 - 0.35 * smoothstep(1.0, 1.0 + 0.6 * uFringe, miss);
-  gl_FragColor = vec4(gold(I), solid);
+  // Seen from inside Earth's air, through it.
+  gl_FragColor = vec4(gold(I) * sunAir(d), solid);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

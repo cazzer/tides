@@ -90,7 +90,7 @@ describe('the photosphere', () => {
     expect(fragment).toMatch(/gl_FragDepth = depth;\n#endif/)
     // Not before the lookups, whose mip level needs their neighbours.
     expect(fragment.indexOf('discard')).toBeGreaterThan(fragment.lastIndexOf('textureCube('))
-    expect(fragment).toMatch(/gl_FragColor = vec4\(gold\(I\), solid\)/)
+    expect(fragment).toMatch(/gl_FragColor = vec4\(gold\(I\) \* sunAir\(d\), solid\)/)
     expect(fragment).toMatch(/if \(solid <= 0\.0\) discard;/)
     expect(renderer).toMatch(/alphaToCoverage: true/)
   })

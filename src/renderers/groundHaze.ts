@@ -121,21 +121,23 @@ export function groundHazeDepth(eye: THREE.Vector3, ray: THREE.Vector3, seaLevel
  * the grazing line's: `cover`, the share of the ground's colour the haze
  * hides, `haze`, the share of the haze laid over it, and `own`, the share of
  * that haze's colour taken from the eye's own ray (the ease to the
- * atmosphere's draw at the cloud shell's top).
+ * atmosphere's draw at the cloud shell's top, where the cover eases to
+ * `ownCover`, the own ray's haze.glsl hazeCover()).
  */
 export function groundHazeWeights(
   eye: number,
   depth: number,
   columnShare: number,
   seaLevel: number,
-  flat: boolean
+  flat: boolean,
+  ownCover = 0
 ): { cover: number; haze: number; own: number } {
   const share = 1 - Math.exp(-((depth / groundHazeLength(seaLevel)) ** GROUND_HAZE_POWER))
   const top = seaLevel + groundHazeTop(flat)
   const ease = THREE.MathUtils.smoothstep(eye, top - 2 * seaLevel * ATMOSPHERE_SCALE_HEIGHT, top)
   const haze = share + (1 - share) * ease
   return {
-    cover: share * Math.min(2 * columnShare, 1) * (1 - ease),
+    cover: THREE.MathUtils.lerp(share * Math.min(2 * columnShare, 1), ownCover, ease),
     haze,
     own: ease > 0 ? ease / haze : 0,
   }
@@ -188,7 +190,9 @@ float groundHazeDensity(float r) {
 // of it laid over the ground, from the segment's optical depth; cover: the
 // share of the ground it hides, as much as the haze is a horizon's (its
 // column next to a level ray's from the base, hazeAbove(), half the grazing
-// line). Mirrored by groundHazeDepth() and groundHazeWeights().
+// line), easing to the eye's own ray's cover (hazeCover(), what the
+// atmosphere hides over the ground at the shell's top; tides-d9f.3).
+// Mirrored by groundHazeDepth() and groundHazeWeights().
 vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   float grazing = sqrt(6.2831853 * uSurface * uScaleHeight);
   float s = length(ray);
@@ -220,12 +224,14 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   // haze under the ship into sectors.
   vec3 look = normalize(mix(tangent, dir, down * down));
   vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, look, eye);
+  float ownCover = 0.0;
   if (ease > 0.0) {
     vec3 atOwn;
     float own = columnAheadOverSea(eye, dir, grazing, atOwn);
     glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye), ease / haze);
+    ownCover = hazeCover(own, dir, eye, uGroundHazeSun);
   }
-  cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);
+  cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);
   return vec4(glow, haze);
 }
 #undef uSeaLevel

@@ -46,22 +46,42 @@ export function nightAdaptation(sunSin: number, gap: number): number {
   return darkness * nearness
 }
 
-/** The eye's adaptation to a low Sun near the ground (tides-34q): the
- * exposure's gain over the day's, rising from DAY_ADAPT_SUN_FROM down to
- * DAY_ADAPT_SUN_LOW, and giving way to the night's adaptation (its fill)
- * between DAY_ADAPT_SUN_OUT and NIGHT_ADAPT_SUN_TO. 1 high up and in the
- * system view. */
+/** The eye's adaptation to daylight near the ground (tides-34q,
+ * tides-d9f): the exposure's scale over the day's. Under a low Sun it opens
+ * by up to DAY_ADAPT_GAIN, rising from DAY_ADAPT_SUN_FROM down to
+ * DAY_ADAPT_SUN_LOW and giving way to the night's adaptation (its fill)
+ * between DAY_ADAPT_SUN_OUT and NIGHT_ADAPT_SUN_TO; inside the air, where
+ * the setting Sun and the sky's glow round it fill the view, by only
+ * DAY_ADAPT_GAIN_AIR (the full gain bleached the sky white there). Under a
+ * high Sun, inside the air, it closes by DAY_STOP, so sunlit land and cloud
+ * seen through the haze keep their colour and shading instead of crowding
+ * the tone curve's shoulder. 1 high up and in the system view. */
 export const DAY_ADAPT_GAIN = 0.6
+export const DAY_ADAPT_GAIN_AIR = 0.2
+export const DAY_STOP = 0.2
 export const DAY_ADAPT_SUN_FROM = Math.sin((25 * Math.PI) / 180)
 export const DAY_ADAPT_SUN_LOW = Math.sin((3 * Math.PI) / 180)
 export const DAY_ADAPT_SUN_OUT = Math.sin((-2 * Math.PI) / 180)
 
-/** The exposure's scale, 1 to 1 + DAY_ADAPT_GAIN, for the Sun at `sunSin`
- * at the sub-point and the eye `gap` Earth radii over the surface. */
+/** The exposure's scale for the Sun at `sunSin` at the sub-point and the eye
+ * `gap` Earth radii over the surface: a low Sun's lift near the ground
+ * (NIGHT_ADAPT_NEAR..FAR), a high Sun's stop inside the air (airInside()). */
 export function dayExposure(sunSin: number, gap: number): number {
   const low = smoothstep(DAY_ADAPT_SUN_FROM, DAY_ADAPT_SUN_LOW, sunSin) * (1 - smoothstep(DAY_ADAPT_SUN_OUT, NIGHT_ADAPT_SUN_TO, sunSin))
   const nearness = 1 - smoothstep(NIGHT_ADAPT_NEAR, NIGHT_ADAPT_FAR, gap)
-  return 1 + DAY_ADAPT_GAIN * low * nearness
+  const high = smoothstep(DAY_ADAPT_SUN_LOW, DAY_ADAPT_SUN_FROM, sunSin)
+  const air = airInside(1 + gap)
+  const gain = DAY_ADAPT_GAIN + (DAY_ADAPT_GAIN_AIR - DAY_ADAPT_GAIN) * air
+  return 1 + gain * low * nearness - DAY_STOP * high * air
+}
+
+/** How far inside the air an eye `radius` Earth radii from the centre is,
+ * 0 to 1, as the sky's own draw from inside: all of it under the haze's
+ * base plus one scale height, none past four (shaders/atmosphere/haze.glsl
+ * hazeGlow()). */
+export function airInside(radius: number): number {
+  const base = ATMOSPHERE_SURFACE
+  return 1 - smoothstep(base + ATMOSPHERE_SCALE_HEIGHT, base + 4 * ATMOSPHERE_SCALE_HEIGHT, radius)
 }
 
 /** sin(elevation) of the Sun at the sub-point over which the daylit sky
@@ -75,14 +95,18 @@ export const DAYLIGHT_SUN_TO = Math.sin((6 * Math.PI) / 180)
  * sky's own draw from inside, over the haze's base by one to four scale
  * heights (shaders/atmosphere/haze.glsl hazeGlow()). */
 export function skyDaylight(sunSin: number, radius: number): number {
-  const base = ATMOSPHERE_SURFACE
-  const inside = 1 - smoothstep(base + ATMOSPHERE_SCALE_HEIGHT, base + 4 * ATMOSPHERE_SCALE_HEIGHT, radius)
-  return smoothstep(DAYLIGHT_SUN_FROM, DAYLIGHT_SUN_TO, sunSin) * inside
+  return smoothstep(DAYLIGHT_SUN_FROM, DAYLIGHT_SUN_TO, sunSin) * airInside(radius)
 }
 
-/** The drawing camera's skyDaylight(), set before its draws (EarthRenderer's
- * per-camera hook) and read by the stars; 0 outside ship mode. */
-export const eyeSky = { daylight: 0 }
+/** Over this, eyeSky.heightKm means no air between the eye and the Sun. */
+export const EYE_AIRLESS_KM = 1e6
+
+/** The drawing camera's skyDaylight(), read by the stars, and the air it
+ * looks at the Sun through, read by the Sun (its up from Earth's centre in
+ * world axes, and its height over the sea): set before its draws
+ * (EarthRenderer's per-camera hook); no daylight and no air outside ship
+ * mode. */
+export const eyeSky = { daylight: 0, up: new THREE.Vector3(0, 1, 0), heightKm: EYE_AIRLESS_KM }
 
 /** The Moon's illuminated fraction from Earth, for unit directions from
  * Earth's centre to the Sun and to the Moon. */

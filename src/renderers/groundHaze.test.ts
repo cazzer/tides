@@ -144,7 +144,7 @@ describe('ground haze', () => {
       'vec3 look = normalize(mix(tangent, dir, down * down));',
       'vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, look, eye);',
       'glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye), ease / haze);',
-      'cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);',
+      'cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);',
       'return vec4(glow, haze);',
       'vec4 haze = groundHaze(vGroundHazeEye, vGroundHazeRay, cover);',
       'groundHazeLit.rgb = groundHazeLit.rgb * (1.0 - cover) + gl_FragColor.rgb * haze.a;',

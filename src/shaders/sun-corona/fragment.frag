@@ -1,4 +1,6 @@
 uniform samplerCube uCorona;
+// The Sun's sunDiscTint() at its centre, seen from inside Earth's air.
+uniform vec3 uAirTint;
 varying vec2 vPlane;
 varying float vOuter;
 varying vec3 vSolarPlane;
@@ -48,7 +50,7 @@ void main() {
   vec3 warm = vec3(1.0, 0.5, 0.17);
   vec3 pearl = vec3(1.0, 0.62, 0.32);
   vec3 col = warm * inner + pearl * corona + vec3(1.0, 0.62, 0.26) * chromosphere;
-  gl_FragColor = vec4(col * fade, 1.0);
+  gl_FragColor = vec4(col * fade * uAirTint, 1.0);
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

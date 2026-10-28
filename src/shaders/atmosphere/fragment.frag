@@ -7,7 +7,8 @@
 // already bright, and a full haze washes it out. Lit where it is thickest.
 // Shared by the Earth (AtmosphereRenderer) and the planets (PlanetAtmosphere),
 // which pass their own sky and dusk colours (linear RGB). Only the Earth's is
-// ever double-sided (ship mode), and so drawn from inside (tides-01v.8.2).
+// ever double-sided (ship mode), and so drawn from inside (tides-01v.8.2),
+// where over the ground it also hides some of what it covers (HAZE_COVER).
 
 uniform float uSurface;
 uniform float uOuter;
@@ -46,11 +47,15 @@ void main() {
   vec3 at;
   float column;
   float hs = uSurface * uSurface - c2;
+  float cover = 0.0;
   #ifdef DOUBLE_SIDED
   bool back = shellBackFace(ro, rd, uOuter);
   if (gl_FrontFacing == back) discard;
   if (back) {
     column = columnAheadOverSea(ro, rd, grazing, at);
+    // Over the ground from inside, the haze hides what it lies over.
+    float bSea = dot(ro, rd);
+    if (bSea < 0.0 && bSea * bSea - (dot(ro, ro) - uSeaLevel * uSeaLevel) > 0.0) cover = hazeCover(column, rd, ro, uSun);
   } else
   #endif
   if (hs > 0.0) {
@@ -63,7 +68,13 @@ void main() {
     column = grazing * sqrt(p / uSurface) * exp(-(p - uSurface) / H);
   }
 
+  #ifdef HAZE_COVER
+  // Blended premultiplied (the Earth's AtmosphereRenderer): added where
+  // cover is 0, as the planets' additive blend adds.
+  gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun, rd, ro), cover);
+  #else
   gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun, rd, ro), 1.0);
+  #endif
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
