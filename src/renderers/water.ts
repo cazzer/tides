@@ -714,7 +714,9 @@ const waveFaded = (w: WaterWave) => /* glsl */ `
 /** A pixel's narrower step on the sea past which every wave has faded: the
  * longest's fade end, for any wave with a level share over WATER_FADED_LEVEL
  * and a gain over WATER_FADED_GAIN (those under have next to no slope to
- * draw). */
+ * draw). The GLSL scales the step by the pixel's least gain (a wave fades on
+ * its step times its gain's fourth root): where every wave's gain is over
+ * WATER_FADED_GAIN, the cheaper paths come in that much nearer the eye. */
 const WATER_FADED_LEVEL = 0.3
 const WATER_FADED_GAIN = 0.02
 const fadedStep = (waves: readonly WaterWave[]) =>
@@ -742,7 +744,7 @@ const wavesByStep = (waves: readonly WaterWave[]) => {
   if (waves.length > WATER_WAVES_LOW) {
     for (let keep = WATER_WAVE_TIER; keep < sorted.length; keep += WATER_WAVE_TIER) {
       const short = sorted.slice(keep)
-      code += ` else if (waterNarrow > ${e(fadedStep(short))}) {${sorted.slice(0, keep).map(wave).join('')}${short.map(waveFaded).join('')}
+      code += ` else if (waterFadedNarrow > ${e(fadedStep(short))}) {${sorted.slice(0, keep).map(wave).join('')}${short.map(waveFaded).join('')}
     }`
     }
   }
@@ -808,11 +810,17 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     }
     // The narrower of the pixel's two steps (the smaller singular value of
     // the pair): past fadedStep every wave has faded, so the cheap path;
-    // on the full tier, past the shorter waves', theirs.
+    // on the full tier, past the shorter waves', theirs. The paths take it
+    // times the fourth root of the least gain any wave has here (each wave's
+    // waterF at its weakest: the lesser of the wind's and the swell's, its
+    // groups' and its pull off the axis'), over WATER_FADED_GAIN's.
     float waterGa = dot(waterRx, waterRx);
     float waterGb = dot(waterRx, waterRy);
     float waterGc = dot(waterRy, waterRy);
     float waterNarrow = sqrt(max(0.5 * (waterGa + waterGc) - sqrt(0.25 * (waterGa - waterGc) * (waterGa - waterGc) + waterGb * waterGb), 0.0));
+    float waterGroupsMin = max(1.0 - waterGroups * length(waterGroupNoise), 0.2);
+    float waterGainMin = min(waterWindF, waterSwellF) * waterGroupsMin * waterGroupsMin * (1.0 - ${f(WATER_ALIGN)} * waterSettled);
+    float waterFadedNarrow = waterNarrow * sqrt(sqrt(max(waterGainMin, ${f(WATER_FADED_GAIN)}) / ${f(WATER_FADED_GAIN)}));
     // The sparkle's cell: Earth-fixed, a power of two in metres under the
     // narrower step, so each pixel draws its own; and the facets it spans.
     float waterCellLevel = clamp(floor(log2(max(waterNarrow * ${f(METRES_PER_UNIT)}, 1e-3))), -2.0, 10.0);
@@ -833,7 +841,7 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterS;
     float waterWarp = 0.0;
     float waterWarpK = 0.0;
-    if (waterNarrow > ${e(fadedStep(waves))}) {${waves.map(waveFaded).join('')}
+    if (waterFadedNarrow > ${e(fadedStep(waves))}) {${waves.map(waveFaded).join('')}
     }${wavesByStep(waves)}
     waterVarAlong = max(waterAlong, ${f(WATER_MSS_FLOOR / 2)});
     waterVarCross = max(waterCross, ${f(WATER_MSS_FLOOR / 2)});

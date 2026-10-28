@@ -903,8 +903,8 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       const kept = low ? [] : [4, 8]
       expect(normal.split('if (waterW > 0.0) {').length - 1).toBe(count + kept.reduce((a, b) => a + b, 0))
       expect(normal.split('waterLost = ').length - 1).toBe((2 + kept.length) * count)
-      expect(normal.indexOf('if (waterNarrow > ')).toBeLessThan(normal.indexOf('if (waterW > 0.0) {'))
-      expect(normal.split('} else')[0].split('if (waterNarrow > ')[1]).not.toContain('sin(')
+      expect(normal.indexOf('if (waterFadedNarrow > ')).toBeLessThan(normal.indexOf('if (waterW > 0.0) {'))
+      expect(normal.split('} else')[0].split('if (waterFadedNarrow > ')[1]).not.toContain('sin(')
       for (const chunk of normal.split('if (waterW > 0.0) {').slice(1)) {
         expect(chunk.indexOf('sin(')).toBeLessThan(chunk.indexOf('}'))
       }
