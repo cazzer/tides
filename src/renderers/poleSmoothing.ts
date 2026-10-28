@@ -59,32 +59,6 @@ vec4 ${name}(sampler2D map, vec2 uv, float lod, vec4 colour) {
 `
 }
 
-/** GLSL: `name`(a, b, uv, lod, colourA, colourB) blends `colourA` and
- * `colourB` (maps a's and b's plain samples at uv) toward their averages
- * around the parallel, as poleSmoothingGlsl() does each, from one set of
- * tap coordinates and weights: for two maps laid out alike, read together
- * (the cloud map and its typed tops, tides-tvr.4.11). */
-export function poleSmoothingPairGlsl(name: string, taps: number): string {
-  return /* glsl */ `
-void ${name}(sampler2D a, sampler2D b, vec2 uv, float lod, inout vec4 colourA, inout vec4 colourB) {
-  float lat = (uv.y - 0.5) * 180.0;
-  float w = smoothstep(${f(POLE_SMOOTH_FROM)}, ${f(POLE_SMOOTH_TO)}, abs(lat));
-  if (w <= 0.0) return;
-  float span = min(${f(POLE_SMOOTH_ARC)} / max(cos(radians(abs(lat))), 1e-4), 180.0) / 360.0;
-  vec4 sumA = vec4(0.0);
-  vec4 sumB = vec4(0.0);
-  for (int i = 0; i < ${taps}; i++) {
-    float o = (float(i) / ${f(taps - 1)} * 2.0 - 1.0) * span;
-    vec2 q = vec2(fract(uv.x + o), uv.y);
-    sumA += textureLod(a, q, lod);
-    sumB += textureLod(b, q, lod);
-  }
-  colourA = mix(colourA, sumA / ${f(taps)}, w);
-  colourB = mix(colourB, sumB / ${f(taps)}, w);
-}
-`
-}
-
 /** The mip level (log2 texels) whose texels span about a third of the
  * average's width, for a map `width` texels around. */
 export function poleSmoothingLod(width: number): number {

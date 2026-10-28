@@ -77,7 +77,7 @@ import {
   CLOUD_UNDER_AURORA_RENDER_ORDER,
   withinShellReach,
 } from './earth-shells'
-import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod, poleSmoothingPairGlsl } from './poleSmoothing'
+import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
@@ -215,12 +215,12 @@ export function marchPhaseShare(stepExtinction: number): number {
   return 1 - t * t * (3 - 2 * t)
 }
 
-// The cloud map's texel at st for cloudColumn(), smoothed near the poles,
-// and the mip its smoothing taps.
-const COLUMN_TAP_LOD = `max(lod, log2(float(textureSize(uCloudMap, 0).x)) + ${f(poleSmoothingLod(1))})`
-const COLUMN_READ = `cloudPoleSmoothed(uCloudMap, st,
-    ${COLUMN_TAP_LOD},
-    textureLod(uCloudMap, st, lod))`
+// The texel at st of the map `map` (the cloud map, or its typed tops) for
+// cloudColumn(), smoothed near the poles.
+const columnRead = (map: string) => `cloudPoleSmoothed(${map}, st,
+    max(lod, log2(float(textureSize(${map}, 0).x)) + ${f(poleSmoothingLod(1))}),
+    textureLod(${map}, st, lod))`
+const COLUMN_READ = columnRead('uCloudMap')
 
 // Height field shared by the cloud shell and the ground's shadow. The
 // shell's (typed) also has typed tops (tides-tvr.4.3) under CLOUD_TYPED;
@@ -245,7 +245,7 @@ ${poleSmoothingGlsl('cloudPoleSmoothed', POLE_SMOOTH_CLOUD_TAPS)}
 ${typed ? `#ifdef CLOUD_TYPED
 // The typed columns, laid out like the map (./cloudBlend.ts).
 uniform sampler2D uCloudTops;
-${TYPED_TOPS_GLSL}${poleSmoothingPairGlsl('cloudPoleSmoothedPair', POLE_SMOOTH_CLOUD_TAPS)}#endif
+${TYPED_TOPS_GLSL}#endif
 ` : ''}
 // directionToUv(): SphereGeometry's texture coordinates of a local direction.
 vec2 cloudUv(vec3 dir) {
@@ -271,16 +271,7 @@ float cloudTerrain(vec2 uv) {
 vec4 cloudColumn(vec2 uv, float lod, float terrain) {
   vec2 st = vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0));
   // Smoothed near the poles (./poleSmoothing.ts).
-${typed ? `#ifdef CLOUD_TYPED
-  // With the typed tops beside it (below), from the same taps
-  // (tides-tvr.4.11): the tops are the map's twin, of its size.
-  vec4 map = textureLod(uCloudMap, st, lod);
-  vec4 tops = textureLod(uCloudTops, st, lod);
-  cloudPoleSmoothedPair(uCloudMap, uCloudTops, st, ${COLUMN_TAP_LOD}, map, tops);
-  vec3 c = map.rgb;
-#else
   vec3 c = ${COLUMN_READ}.rgb;
-#endif` : `  vec3 c = ${COLUMN_READ}.rgb;`}
   float trust = c.b * uCloudMeasured;
   float km = mix(1.5 + 7.0 * c.g * c.g, max(c.r * ${f(MAX_CLOUD_TOP_KM)}, ${f(MIN_MEASURED_TOP_KM)}), trust);
   float base = terrain + CLOUD_CLEARANCE;
@@ -299,7 +290,7 @@ ${typed ? `#ifdef CLOUD_TYPED
   // confidence 0, B 0), the untyped column exactly, with no branch for it
   // (tides-tvr.4.8): the lift is 0, and the untyped top is never over the
   // map's tallest (maxTopKm()), so the min leaves it as it is.
-  vec3 typedTop = tops.rgb;
+  vec3 typedTop = ${columnRead('uCloudTops')}.rgb;
   float topKm = min(mix(km * shape, typedTop.r * TYPED_TOPS_KM, typedTop.b), uCloudMaxKm);
   float liftKm = min(typedTop.b * typedTop.g * TYPED_TOPS_KM, topKm);
   return vec4(c.g, base + CLOUD_UNITS_PER_KM * liftKm, base + CLOUD_UNITS_PER_KM * topKm, base);

@@ -1674,20 +1674,11 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         const column = columnOf(src)
         const before = columnOf(preprocess(clouds.material[stage], untyped))
         // The map read as untyped, and the tops read the same way beside
-        // it: the same place, mip and smoothing near the poles, from one set
-        // of taps (tides-tvr.4.11).
-        const mapRead = before.match(/vec3 c = cloudPoleSmoothed\(uCloudMap, st,\s*([^;]*),\s*textureLod\(uCloudMap, st, lod\)\)\.rgb;/)
+        // it: the same place, mip and smoothing near the poles.
+        const mapRead = before.match(/vec3 c = (cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\))\.rgb;/)
         expect(mapRead).not.toBeNull()
-        for (const line of [
-          'vec4 map = textureLod(uCloudMap, st, lod);',
-          'vec4 tops = textureLod(uCloudTops, st, lod);',
-          `cloudPoleSmoothedPair(uCloudMap, uCloudTops, st, ${mapRead![1]}, map, tops);`,
-          'vec3 c = map.rgb;',
-          'vec3 typedTop = tops.rgb;',
-        ]) {
-          expect(column).toContain(line)
-        }
-        expect(column).not.toContain('cloudPoleSmoothed(')
+        expect(column).toContain(`vec3 c = ${mapRead![1]}.rgb;`)
+        expect(column).toContain(`vec3 typedTop = ${mapRead![1].replace(/uCloudMap/g, 'uCloudTops')}.rgb;`)
         // Nothing from the map's alpha, nor the byte's codes, any more.
         expect(column).not.toMatch(/\bc\.a\b|TYPED_ZERO|vec4 c = /)
         // Untyped tops, the untyped column exactly; else the top mixed
