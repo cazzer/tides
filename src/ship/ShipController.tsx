@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type * as THREE from 'three'
+import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
 import { mainCameraPose } from '../main-camera-session'
 import { settleShip, stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
-import { createShipBodies, EARTH_SHELL_RADII, updateShipBodies, updateShipBody } from './ship-bodies'
+import { createShipBodies, EARTH_SHELL_RADII, shipBodyVelocity, updateShipBodies, updateShipBody } from './ship-bodies'
 import {
   NEAR_MIN,
   SHIP_SETTLE_PRIORITY,
@@ -22,7 +22,7 @@ import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail
 import { setSurfaceEye } from '../surface-handover'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 import { SURFACE_TILES_ON } from '../surface'
-import { carryShip, earthSpinRate, fillAir, fillAirDensity, resetFrameCarry, shipCarry } from './frame-carry'
+import { carryShip, earthSpinRate, fillAir, fillAirUncarried, resetFrameCarry, shipCarry } from './frame-carry'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -30,6 +30,11 @@ import { carryShip, earthSpinRate, fillAir, fillAirDensity, resetFrameCarry, shi
 // ship can stand 30 m over their ground, and Earth carries the ship by
 // exactly how far it moved each frame (tides-zmw.9.8, tides-zmw.9.18).
 const BODY_REFRESH_MS = 250
+
+// Without the carry, Earth's velocity, scene units per sim second, as of the
+// last refresh: the air's speed takes it out (fillAirUncarried).
+const earthVelocity = new THREE.Vector3()
+const earthVelocityNow = new THREE.Vector3()
 
 /**
  * Flies the ship view's camera: each frame, steps the flight model with the
@@ -81,6 +86,7 @@ export function ShipController() {
     if (bodiesAt.current == null || Math.abs(t - bodiesAt.current) >= BODY_REFRESH_MS) {
       updateShipBodies(bodies, t)
       bodiesAt.current = t
+      if (!SURFACE_TILES_ON && earth) shipBodyVelocity(earth, t, earthVelocity)
     } else if (SURFACE_TILES_ON && earth) {
       updateShipBody(earth, t)
       if (moon) updateShipBody(moon, t)
@@ -96,16 +102,20 @@ export function ShipController() {
     // Over the tiles, Earth (or the Moon) carries the ship over the frame
     // before it steps, so the step, the floor's marks and the settle see the
     // ship where the ground left it (frame-carry.ts, tides-zmw.9.18).
-    const spinRate = earthSpinRate(useStore.getState().timeScale)
+    const timeScale = useStore.getState().timeScale
+    const spinRate = earthSpinRate(timeScale)
     if (SURFACE_TILES_ON && earth) carryShip(shipCarry, state, earth, moon ?? null, delta, spinRate)
     setSurfaceEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
     // Read each frame: the depth probe may answer after the first ones.
     if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
     if (SURFACE_TILES_ON && earth) fillAir(shipCarry, shipTelemetry, state, earth, spinRate)
-    // Without the carry the air is the frame the ship flies in (air.speed =
-    // speed); the air shudder still needs its dynamic pressure (tides-xxg).
-    else if (earth) fillAirDensity(shipTelemetry, state.position, earth)
+    // Without the carry the ship flies in the heliocentric frame: the air's
+    // speed (the HUD's, tides-d9f.1) takes Earth's orbit and spin out of it.
+    else if (earth) {
+      earthVelocityNow.copy(earthVelocity).multiplyScalar(Number.isFinite(timeScale) ? timeScale : 0)
+      fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
+    }
     if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
 

@@ -2,16 +2,17 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { shipTelemetry } from './ship-telemetry'
 import { prefersReducedMotion } from './reduced-motion'
-import { shipCarry } from './frame-carry'
+import { densityAltitudeKm, shipCarry } from './frame-carry'
 import {
   EDGE_FADE,
   NEAR_FADE,
   REDUCED_MOTION_OPACITY,
   STREAK_ENERGY_FLOOR,
+  airDustShare,
   dustAnchor,
-  dustLevel,
+  fieldLevel,
+  fieldOpacity,
   layerHalfSize,
-  motionOpacity,
   slotLayer,
   streakLength,
   wrapOffset,
@@ -71,7 +72,10 @@ const vertexShader = /* glsl */ `
     mat3 view = mat3(viewMatrix);
     vec3 head = view * rel;
     vec3 tail = head + view * uStreak;
-    float front = -uNear * 1.01;
+    // In front of the eye, not the near plane: low in the air the near plane
+    // stands 0.4x the ground gap off (shipNear), past the whole air's box, so
+    // a mote nearer than it draws at it (below): nothing drawn is nearer.
+    float front = -0.01 * uHalf;
     if (fade <= 0.0 || uOpacity <= 0.0 || head.z > front) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       return;
@@ -80,6 +84,8 @@ const vertexShader = /* glsl */ `
 
     vec4 clip0 = projectionMatrix * vec4(head, 1.0);
     vec4 clip1 = projectionMatrix * vec4(tail, 1.0);
+    vec4 nearClip = projectionMatrix * vec4(0.0, 0.0, -1.001 * uNear, 1.0);
+    float nearDepth = nearClip.z / nearClip.w;
     vec2 halfRes = 0.5 * uResolution;
     vec2 s0 = clip0.xy / clip0.w * halfRes;
     vec2 s1 = clip1.xy / clip1.w * halfRes;
@@ -101,7 +107,9 @@ const vertexShader = /* glsl */ `
 
     // w = 1 so the varyings interpolate linearly across the screen-space
     // quad; depth is linear in screen space anyway.
-    float depth = along < 0.5 ? clip0.z / clip0.w : clip1.z / clip1.w;
+    float depth = along < 0.5
+      ? (head.z > -uNear ? nearDepth : clip0.z / clip0.w)
+      : (tail.z > -uNear ? nearDepth : clip1.z / clip1.w);
     gl_Position = vec4(pixel / halfRes, depth, 1.0);
   }
 `
@@ -209,11 +217,13 @@ export function SpaceDust() {
       const uniforms = materials[slot].uniforms
       mesh.onBeforeRender = (renderer, _scene, camera) => {
         const { speed, velocity } = shipTelemetry
-        const level = dustLevel(speed)
+        // Low in Earth's air, a box sized to the ship's speed (dust.ts, tides-d9f.1).
+        const airShare = airDustShare(densityAltitudeKm(shipTelemetry.air.density))
+        const level = fieldLevel(speed, airShare)
         const { layer, weight } = slotLayer(level, slot)
         const half = layerHalfSize(layer)
         const reduced = prefersReducedMotion() ? REDUCED_MOTION_OPACITY : 1
-        const opacity = weight * motionOpacity(speed) * DUST_OPACITY * reduced
+        const opacity = weight * fieldOpacity(speed, airShare) * DUST_OPACITY * reduced
         uniforms.uOpacity.value = opacity
         if (opacity <= 0) return
         // The View's live viewport, in CSS pixels, so resizes and rotation
@@ -224,7 +234,7 @@ export function SpaceDust() {
         const p = dustAnchor(camera.position, shipCarry.carried, anchor)
         uniforms.uHalf.value = half
         uniforms.uOffset.value.set(wrapOffset(p.x, half), wrapOffset(p.y, half), wrapOffset(p.z, half))
-        const length = streakLength(speed, level, half)
+        const length = streakLength(speed, level, half, airShare)
         const streak = uniforms.uStreak.value as THREE.Vector3
         if (speed > 0) streak.copy(velocity).multiplyScalar(length / speed)
         else streak.set(0, 0, 0)

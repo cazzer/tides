@@ -1,7 +1,17 @@
 import { describe, expect, test } from 'vitest'
 import { OVERSPEED_MAX, V_NORMAL, V_TOP } from './flight'
 import { SHIP_FOV } from './ship-session'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import {
+  AIR_DUST_BAND_KM,
+  AIR_DUST_MIN_HALF,
+  AIR_DUST_OPACITY,
+  AIR_DUST_SECONDS,
+  AIR_STREAK_TIME,
+  airDustLevel,
+  airDustShare,
+  fieldLevel,
+  fieldOpacity,
   DUST_HALF_SIZE,
   DUST_SIZE_BASE,
   DUST_SPEED_BASE,
@@ -293,5 +303,67 @@ describe('dustAnchor (tides-zmw.9.18)', () => {
     const start = dustAnchor(camera, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
     const later = dustAnchor({ x: camera.x + 0.3, y: camera.y, z: camera.z }, { x: 0.3, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
     expect(wrapOffset(later.x, h)).toBeCloseTo(wrapOffset(start.x, h), 9)
+  })
+})
+
+describe('the air (tides-d9f.1)', () => {
+  const MPS = 1 / (EARTH_KM_PER_UNIT * 1000)
+
+  test('the slots pick both layers either side of a negative level, odd ones too', () => {
+    for (const level of [-0.5, -1, -6.3, -7.9, -8]) {
+      const a = slotLayer(level, 0)
+      const b = slotLayer(level, 1)
+      expect(a.weight + b.weight).toBeCloseTo(1)
+      expect(positiveMod(a.layer, 2)).toBe(0)
+      expect(positiveMod(b.layer, 2)).toBe(1)
+      expect(Math.abs(a.layer - b.layer)).toBe(1)
+      expect(Math.min(a.layer, b.layer)).toBe(Math.floor(level))
+    }
+  })
+
+  test('a slot changes layer only while its weight is ~0, below layer 0 too', () => {
+    const eps = 1e-6
+    for (const slot of [0, 1] as const) {
+      for (let level = -9; level < 1; level += 0.01) {
+        const a = slotLayer(level, slot)
+        const b = slotLayer(level + eps, slot)
+        if (a.layer !== b.layer) {
+          expect(a.weight).toBeLessThan(1e-3)
+          expect(b.weight).toBeLessThan(1e-3)
+        }
+      }
+    }
+  })
+
+  test('is whole under the band, gone over it, and gone with no air', () => {
+    expect(airDustShare(1)).toBe(1)
+    expect(airDustShare(AIR_DUST_BAND_KM[0])).toBe(1)
+    expect(airDustShare(AIR_DUST_BAND_KM[1])).toBe(0)
+    expect(airDustShare(Infinity)).toBe(0)
+    expect(airDustShare(NaN)).toBe(0)
+  })
+
+  test('sizes its box to be crossed in AIR_DUST_SECONDS, never under the floor', () => {
+    const speed = 212 * MPS // 764 km/h
+    expect(layerHalfSize(airDustLevel(speed))).toBeCloseTo(speed * AIR_DUST_SECONDS, 12)
+    expect(layerHalfSize(airDustLevel(0))).toBeCloseTo(AIR_DUST_MIN_HALF, 12)
+    expect(airDustLevel(speed)).toBeLessThan(-7)
+  })
+
+  test("blends with space's level across the band, and leaves space's alone", () => {
+    const speed = 300 * MPS
+    expect(fieldLevel(speed, 0)).toBe(dustLevel(speed))
+    expect(fieldLevel(speed, 1)).toBeCloseTo(airDustLevel(speed), 12)
+    expect(fieldLevel(speed, 0.5)).toBeCloseTo(airDustLevel(speed) / 2, 12)
+    expect(fieldOpacity(5, 0)).toBe(motionOpacity(5))
+    expect(fieldOpacity(speed, 1)).toBeCloseTo(AIR_DUST_OPACITY, 12)
+  })
+
+  test("streaks forward at the air's shutter, never backward below layer 0", () => {
+    const speed = 212 * MPS
+    const level = airDustLevel(speed)
+    const half = layerHalfSize(level)
+    expect(streakLength(speed, level, half)).toBeGreaterThan(0)
+    expect(streakLength(speed, level, half, 1)).toBeCloseTo(speed * AIR_STREAK_TIME, 12)
   })
 })

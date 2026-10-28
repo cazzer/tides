@@ -31,8 +31,8 @@
 //
 // telemetry.air (fillAir) is the ship through the air: its speed, the grip,
 // the density and the dynamic pressure, the hook for entry visuals and the
-// air shudder (tides-xxg). Without the carry ShipController still fills the
-// density and dynamic pressure (fillAirDensity), at the frame speed.
+// air shudder (tides-xxg). Without the carry ShipController fills them with
+// fillAirUncarried, Earth's orbit and spin taken out of the frame speed.
 
 import * as THREE from 'three'
 import { MAX_DT, type ShipState } from './flight'
@@ -127,6 +127,11 @@ export function earthSpinRate(timeScale: number): number {
 /** Altitude over the sea, km, `distance` scene units from the centre of a body of `radius`. */
 export function altitudeKm(distance: number, radius: number): number {
   return (distance - radius) * EARTH_KM_PER_UNIT
+}
+
+/** The altitude, km, at which the air is `density` of sea level's: Infinity for none. */
+export function densityAltitudeKm(density: number): number {
+  return density > 0 ? -SCALE_HEIGHT_KM * Math.log(density) : Infinity
 }
 
 /** Air density over sea level's, at `km` up. */
@@ -323,6 +328,31 @@ export function fillAir(
 ): void {
   telemetry.air.speed = airVelocity(air, state, earth, carry.kappa, spinRate).length()
   telemetry.air.coupling = carry.kappa
+  fillAirDensity(telemetry, state.position, earth)
+}
+
+/**
+ * Fills telemetry.air without the carry (?surface=0 and the low tier,
+ * tides-d9f.1): the speed through the air as fillAir reads it over the tiles,
+ * then the density and dynamic pressure. The ship flies in the heliocentric
+ * frame there, so its frame speed has Earth's own motion in it: its orbit at
+ * the flight scale, taken out inside its sphere of influence as the carry
+ * takes it (`earthVelocity`, scene units per real second), and the spin's
+ * ω × r in the air. With the frame speed the HUD read 15% off the ground
+ * track at 20 km.
+ */
+export function fillAirUncarried(
+  telemetry: ShipTelemetry,
+  state: ShipState,
+  earth: Carrier,
+  earthVelocity: THREE.Vector3,
+  spinRate: number
+): void {
+  const distance = state.position.distanceTo(earth.position)
+  const weightEarth = Number.isFinite(distance) ? 1 - smoothstep(EARTH_SOI[0], EARTH_SOI[1], distance) : 0
+  airVelocity(air, state, earth, 0, spinRate).addScaledVector(earthVelocity, -weightEarth)
+  telemetry.air.speed = Number.isFinite(air.x + air.y + air.z) ? air.length() : state.velocity.length()
+  telemetry.air.coupling = 0
   fillAirDensity(telemetry, state.position, earth)
 }
 

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { latLonToLocal } from '../aurora'
 import { createShipState, MAX_DT, type ShipState } from './flight'
-import { createShipBodies, EARTH_RADIUS, EARTH_UNITS_PER_METRE, updateShipBody, type ShipBody } from './ship-bodies'
+import { createShipBodies, EARTH_RADIUS, EARTH_UNITS_PER_METRE, shipBodyVelocity, updateShipBody, type ShipBody } from './ship-bodies'
 import { createShipTelemetry } from './ship-telemetry'
 import {
   DRAG_TAU,
@@ -22,6 +22,7 @@ import {
   equilibriumKappa,
   fillAir,
   fillAirDensity,
+  fillAirUncarried,
   relaxKappa,
   releaseRate,
   resetFrameCarry,
@@ -391,5 +392,50 @@ describe('the carry, degenerate (tides-zmw.9.18)', () => {
     carryShip(carry, state, earth, moon, FRAME, earthSpinRate(1))
     fillAir(carry, carried, state, earth, earthSpinRate(1))
     expect(carried.air.density).toBeCloseTo(Math.exp(-10 / SCALE_HEIGHT_KM), 6)
+  })
+})
+
+describe('the air without the carry (tides-d9f.1)', () => {
+  it("reads Earth's velocity as its move over the second either side", () => {
+    const { earth } = carriers(T0)
+    const v = shipBodyVelocity(earth, T0, new THREE.Vector3())
+    const before = new THREE.Vector3(...earth.positionAt!(T0 - 500))
+    const after = new THREE.Vector3(...earth.positionAt!(T0 + 500))
+    expect(v.distanceTo(after.sub(before))).toBeLessThan(1e-12)
+    // ~29.8 km/s true, far slower at the flight scale but not still.
+    expect(v.length()).toBeGreaterThan(0)
+    const sun = createShipBodies('high', true).find((b) => b.key === 'sun')!
+    expect(shipBodyVelocity(sun, T0, new THREE.Vector3()).length()).toBe(0)
+  })
+
+  it("reads the speed over the ground: none for a ship moving with it, Earth's orbit and spin taken out", () => {
+    const { earth } = carriers(T0)
+    const state = shipOver(earth, 0, -150, 20000)
+    const spinRate = earthSpinRate(1)
+    const orbit = shipBodyVelocity(earth, T0, new THREE.Vector3())
+    const omega = new THREE.Vector3(0, 1, 0).applyQuaternion(earth.spin!).multiplyScalar(spinRate)
+    const ground = omega.clone().cross(state.position.clone().sub(earth.position)).add(orbit)
+    const telemetry = createShipTelemetry()
+    state.velocity.copy(ground)
+    fillAirUncarried(telemetry, state, earth, orbit, spinRate)
+    expect(telemetry.air.speed / ground.length()).toBeLessThan(1e-9)
+    expect(telemetry.air.coupling).toBe(0)
+    expect(telemetry.air.density).toBeCloseTo(Math.exp(-20 / SCALE_HEIGHT_KM), 6)
+    // 650 m/s east over the ground, on top of it: the HUD reads 650 m/s, not the frame's speed.
+    const east = omega.clone().normalize().cross(state.position.clone().sub(earth.position)).normalize()
+    state.velocity.copy(ground).addScaledVector(east, 650 * M)
+    fillAirUncarried(telemetry, state, earth, orbit, spinRate)
+    expect(telemetry.air.speed / M).toBeCloseTo(650, 6)
+    expect(state.velocity.length() / M).not.toBeCloseTo(650, 0)
+  })
+
+  it("takes out none of Earth's orbit outside its sphere of influence", () => {
+    const earth: Carrier = { position: new THREE.Vector3(), radius: EARTH_RADIUS }
+    const state = createShipState()
+    state.position.set(EARTH_SOI[1] + 1, 0, 0)
+    state.velocity.set(0, 0.5, 0)
+    const telemetry = createShipTelemetry()
+    fillAirUncarried(telemetry, state, earth, new THREE.Vector3(0, 0.5, 0), 0)
+    expect(telemetry.air.speed).toBeCloseTo(0.5, 12)
   })
 })
