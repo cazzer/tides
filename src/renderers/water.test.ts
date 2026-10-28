@@ -1,6 +1,8 @@
-// Open water that reads as water (tides-07z): the TypeScript mirrors' physics
-// (Beckmann's normalisation, the glint at grazing, the waves' variance and
-// phases, the body's floor) and where the GLSL lands on the globe's Phong.
+// Open water that reads as water (tides-07z, tides-d9f.5): the TypeScript
+// mirrors' physics (Beckmann's normalisation, isotropic and along the sea's
+// axis, the glint at grazing and unaliased at sunset, the waves' variance,
+// gain and phases, the body's floor) and where the GLSL lands on the globe's
+// Phong.
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { createCloudLayer } from './cloudShaders'
@@ -13,6 +15,7 @@ import { phongShader } from './surface/tile-test-fixtures'
 import { WATER_DEPTH_SAMPLE, WATER_KEEP, waterTinted } from './waterDepth'
 import {
   beckmann,
+  beckmannAniso,
   BLINN_PHONG_DIRECT,
   createWater,
   SKY_DAY,
@@ -24,10 +27,13 @@ import {
   WATER_MSS_BASE,
   WATER_FADE_END,
   WATER_FADE_START,
+  WATER_GLINT_HARMONIC,
   WATER_PRELUDE,
   WATER_WAVE_TABLE,
   WATER_WAVES,
   WATER_WAVES_LOW,
+  isotropicSlope,
+  medianSea,
   waterBaseMss,
   waterBody,
   waterGlint,
@@ -35,8 +41,15 @@ import {
   waterMss,
   waterPatch,
   waterPhases,
+  waterSeaVariance,
+  waterSlopeVariance,
+  waterVisibleVariance,
   waterWaves,
+  waveGain,
+  waveStep,
   waveWeight,
+  type WaterSea,
+  type WaterWave,
 } from './water'
 
 type V = [number, number, number]
@@ -46,6 +59,19 @@ const norm = (v: V): V => {
   return [v[0] / l, v[1] / l, v[2] / l]
 }
 const TAU = 2 * Math.PI
+/** A level axis under UP, and an isotropic slope of variance `mss` on it. */
+const AXIS: V = [0, 0, 1]
+const iso = (mss: number) => isotropicSlope(mss, AXIS)
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1)
+  return t * t * (3 - 2 * t)
+}
+/** A level axis at `up`, turned `turn` radians round it. */
+const levelAxis = (up: V, turn: number): V => {
+  const e = norm(Math.abs(up[0]) < 0.9 ? [0, -up[2], up[1]] : [-up[1], up[0], 0])
+  const c: V = [up[1] * e[2] - up[2] * e[1], up[2] * e[0] - up[0] * e[2], up[0] * e[1] - up[1] * e[0]]
+  return [0, 1, 2].map((i) => e[i] * Math.cos(turn) + c[i] * Math.sin(turn)) as V
+}
 /** Distance between two angles, mod 2 pi. */
 const angleGap = (a: number, b: number) => {
   const d = (((a - b) % TAU) + TAU) % TAU
@@ -73,27 +99,148 @@ describe('the glint (tides-07z)', () => {
       for (const vv of level) {
         const l = norm([1, lv, 0])
         const v = norm([-1, vv, 0])
-        const g = waterGlint(l, v, UP, UP, WATER_MSS)
+        const g = waterGlint(l, v, UP, UP, iso(WATER_MSS))
         expect(Number.isFinite(g)).toBe(true)
         expect(g).toBeGreaterThanOrEqual(0)
       }
     }
     // l = -v: no half vector.
     const l = norm([1, 0.5, 0])
-    expect(waterGlint(l, [-l[0], -l[1], -l[2]], UP, UP, WATER_MSS)).toBe(0)
+    expect(waterGlint(l, [-l[0], -l[1], -l[2]], UP, UP, iso(WATER_MSS))).toBe(0)
     // The Sun under the level horizon: out, whatever the facet.
-    expect(waterGlint(norm([1, -0.05, 0]), norm([-1, 0.05, 0]), norm([0.1, 1, 0]), UP, WATER_MSS)).toBe(0)
+    expect(waterGlint(norm([1, -0.05, 0]), norm([-1, 0.05, 0]), norm([0.1, 1, 0]), UP, iso(WATER_MSS))).toBe(0)
   })
 
   it('is brightest at the mirror direction, and the road widens as the sea roughens', () => {
     const l = norm([1, 0.3, 0])
     const mirror = norm([-1, 0.3, 0])
     const off = norm([-1, 0.3, 0.3])
-    const smooth = waterGlint(l, mirror, UP, UP, WATER_MSS_BASE)
-    expect(smooth).toBeGreaterThan(waterGlint(l, off, UP, UP, WATER_MSS_BASE))
-    expect(waterGlint(l, off, UP, UP, WATER_MSS) / waterGlint(l, mirror, UP, UP, WATER_MSS)).toBeGreaterThan(
-      waterGlint(l, off, UP, UP, WATER_MSS_BASE) / smooth
+    const smooth = waterGlint(l, mirror, UP, UP, iso(WATER_MSS_BASE))
+    expect(smooth).toBeGreaterThan(waterGlint(l, off, UP, UP, iso(WATER_MSS_BASE)))
+    expect(waterGlint(l, off, UP, UP, iso(WATER_MSS)) / waterGlint(l, mirror, UP, UP, iso(WATER_MSS))).toBeGreaterThan(
+      waterGlint(l, off, UP, UP, iso(WATER_MSS_BASE)) / smooth
     )
+  })
+})
+
+describe('the glint along the sea\'s axis (tides-d9f.5)', () => {
+  it('is Beckmann\'s own when the two variances are equal, whatever the axis', () => {
+    for (const mss of [WATER_MSS_BASE, WATER_MSS, 0.1]) {
+      for (const nh2 of [1, 0.99, 0.95, 0.8, 0.5]) {
+        for (const turn of [0, 0.4, 1.3]) {
+          const t = Math.sqrt(1 - nh2)
+          const d = beckmannAniso(nh2, t * Math.cos(turn), t * Math.sin(turn), mss / 2, mss / 2)
+          expect(d / beckmann(nh2, mss)).toBeCloseTo(1, 9)
+        }
+      }
+      const l = norm([1, 0.3, 0.2])
+      const v = norm([-1, 0.4, -0.1])
+      const n = norm([0.05, 1, -0.03])
+      const g = waterGlint(l, v, n, UP, iso(mss))
+      expect(waterGlint(l, v, n, UP, isotropicSlope(mss, [1, 0, 0]))).toBeCloseTo(g, 9)
+      expect(waterGlint(l, v, n, UP, isotropicSlope(mss, norm([1, 0, 1])))).toBeCloseTo(g, 9)
+    }
+  })
+
+  it('stays normalised over the projected facets when the variances differ', () => {
+    const [va, vc] = [0.03, 0.006]
+    const n = 400
+    let sum = 0
+    for (let i = 0; i < n; i++) {
+      const theta = ((i + 0.5) / n) * (Math.PI / 2)
+      for (let j = 0; j < n; j++) {
+        const phi = ((j + 0.5) / n) * TAU
+        const c = Math.cos(theta)
+        const s = Math.sin(theta)
+        sum += beckmannAniso(c * c, s * Math.cos(phi), s * Math.sin(phi), va, vc) * c * s * (Math.PI / 2 / n) * (TAU / n)
+      }
+    }
+    expect(Math.abs(sum - 1)).toBeLessThan(0.02)
+  })
+
+  it('stretches the Sun\'s road along the axis, and stays finite at grazing', () => {
+    const l = norm([1, 0.3, 0])
+    const slope = { along: 0.03, cross: 0.005 }
+    // The same tilt off the mirror, along the axis and across it.
+    const offAlong = norm([-1, 0.3, 0.25])
+    const alongZ = waterGlint(l, offAlong, UP, UP, { ...slope, axis: [0, 0, 1] })
+    const acrossZ = waterGlint(l, offAlong, UP, UP, { ...slope, axis: [1, 0, 0] })
+    expect(alongZ).toBeGreaterThan(acrossZ * 2)
+    for (const lv of [0, 0.001, 0.01]) {
+      for (const vv of [0, 0.001, 0.01]) {
+        for (const axis of [[0, 0, 1], [1, 0, 0], [0, 1, 0]] as V[]) {
+          const g = waterGlint(norm([1, lv, 0]), norm([-1, vv, 0]), UP, UP, { ...slope, axis })
+          expect(Number.isFinite(g)).toBe(true)
+          expect(g).toBeGreaterThanOrEqual(0)
+        }
+      }
+    }
+    const lh = norm([1, 0.5, 0])
+    expect(waterGlint(lh, [-lh[0], -lh[1], -lh[2]], UP, UP, { ...slope, axis: AXIS })).toBe(0)
+  })
+})
+
+describe('the glint unaliased at sunset (tides-d9f.5)', () => {
+  // One row of pixels on a level sea, the Sun 2 deg up dead ahead (at 0 deg
+  // a level facet sees none of it, Smith's term going to 0 for both
+  // samplings alike) and the eye 20 deg down toward it, the longest wave
+  // crossing the view at 45 deg: what made the stripes. A pixel steps s
+  // across and s / sin 20 deg along the view. Each pixel's one sample at its
+  // centre against the mean of 4 x 4 over its footprint, of the same drawn
+  // sea (its wave at weight W, the glint at what the fade left it): the gap
+  // is the aliasing, measured over pixel sizes from 64 pixels a wavelength
+  // to 1.
+  const el = (20 * Math.PI) / 180
+  const sun = (2 * Math.PI) / 180
+  const l: V = [Math.cos(sun), Math.sin(sun), 0]
+  const v: V = [-Math.cos(el), Math.sin(el), 0]
+  const wave: WaterWave = { ...WATER_WAVE_TABLE[0], dir: norm([1, 0, 1]) }
+  const base = waterBaseMss(WATER_WAVE_TABLE)
+  const v0 = 0.5 * wave.slope * wave.slope
+  const tone = (x: number) => x / (1 + x)
+  const shade = (phase: number, amplitude: number, along: number, cross: number) => {
+    const g = amplitude * Math.sin(phase)
+    return tone(waterGlint(l, v, norm([-g * wave.dir[0], 1, -g * wave.dir[2]]), UP, { along, cross, axis: wave.dir }))
+  }
+  type Fade = (step: number, s: number) => { w: number; along: number; cross: number }
+  const worstAliasing = (fade: Fade) => {
+    let worst = 0
+    for (let px = 64; px >= 1; px /= 1.25) {
+      const s = wave.lambda / px
+      const kx = wave.k * wave.dir[2] * s
+      const ky = (wave.k * wave.dir[0] * s) / Math.sin(el)
+      const { w, along, cross } = fade(Math.hypot(kx, ky), s)
+      let gap = 0
+      let sum = 0
+      for (let j = 0; j < 128; j++) {
+        const p = 0.37 + j * kx
+        let mean = 0
+        for (let a = 0; a < 4; a++) {
+          for (let b = 0; b < 4; b++) mean += shade(p + ((a + 0.5) / 4 - 0.5) * kx + ((b + 0.5) / 4 - 0.5) * ky, w, along, cross) / 16
+        }
+        gap += Math.abs(shade(p, w, along, cross) - mean)
+        sum += mean
+      }
+      worst = Math.max(worst, gap / sum)
+    }
+    return worst
+  }
+
+  it('keeps each pixel within a quarter of its supersampled value, where the old fade let the wave\'s glint lines alias', () => {
+    const now = worstAliasing((step) => {
+      const w = waveWeight(step)
+      const lost = (1 - w * w) * v0
+      return { w, along: base / 2 + lost, cross: base / 2 }
+    })
+    // Before: faded from 12 to 6 pixels a wavelength on the wavelength
+    // alone, W of the variance taken off the glint's.
+    const before = worstAliasing((_, s) => {
+      const w = 1 - smoothstep(WATER_FADE_START, WATER_FADE_END, s / wave.lambda)
+      const lost = (1 - w) * v0
+      return { w, along: (base + lost) / 2, cross: (base + lost) / 2 }
+    })
+    expect(now).toBeLessThan(0.25)
+    expect(before).toBeGreaterThan(0.25)
   })
 })
 
@@ -114,33 +261,107 @@ describe('the waves (tides-07z)', () => {
     }
   })
 
-  it('fades a wave out from WATER_FADE_START to WATER_FADE_END of its wavelength', () => {
-    expect(waveWeight(0, 1)).toBe(1)
-    expect(waveWeight(WATER_FADE_START, 1)).toBe(1)
-    expect(waveWeight(WATER_FADE_END, 1)).toBe(0)
+  it('fades a wave out on its phase step across the pixel, WATER_GLINT_HARMONIC sooner than its wavelength, a rougher wave sooner still', () => {
+    const at = (cycles: number) => (TAU * cycles) / WATER_GLINT_HARMONIC
+    expect(waveWeight(0)).toBe(1)
+    expect(waveWeight(at(WATER_FADE_START))).toBe(1)
+    expect(waveWeight(at(WATER_FADE_END))).toBe(0)
+    const mid = at((WATER_FADE_START + WATER_FADE_END) / 2)
+    expect(waveWeight(mid, 2)).toBeLessThan(waveWeight(mid))
+    expect(waveWeight(mid, 0.5)).toBeGreaterThan(waveWeight(mid))
     let last = 1
-    for (let x = 0; x <= 0.5; x += 0.01) {
-      const w = waveWeight(x, 1)
+    for (let x = 0; x <= 2; x += 0.01) {
+      const w = waveWeight(x)
       expect(w).toBeLessThanOrEqual(last)
       last = w
     }
+    // The step is the wave's level wavenumber across the pixel.
+    const w = WATER_WAVE_TABLE[3]
+    expect(waveStep(w, UP, 1e-5)).toBeCloseTo(w.k * Math.hypot(w.dir[0], w.dir[2]) * 1e-5, 12)
   })
 
-  it('hands every faded wave\'s slope variance to the glint: the whole sea\'s at full fade, on either tier', () => {
-    const ups: V[] = [UP, [1, 0, 0], norm([0.3, 0.5, -0.8]), norm([-0.6, -0.2, 0.4])]
+  const ups: V[] = [UP, [1, 0, 0], norm([0.3, 0.5, -0.8]), norm([-0.6, -0.2, 0.4])]
+  const seas = (up: V): WaterSea[] => [
+    medianSea(levelAxis(up, 0)),
+    { windScale: 1.8, swellScale: 0.5, noise: 1.3, settled: 0.9, axis: levelAxis(up, 0.7) },
+    { windScale: 0.6, swellScale: 1.9, noise: 0.5, settled: 0.4, axis: levelAxis(up, 2.1) },
+  ]
+  /** A wave's drawn slope variance, from the amplitude the GLSL draws it at
+   * (W sqrt(F) times its slope, along its level direction). */
+  const drawn = (w: WaterWave, up: V, sea: WaterSea, footprint: number) => {
+    const along = w.dir[0] * up[0] + w.dir[1] * up[1] + w.dir[2] * up[2]
+    const gain = waveGain(w, up, sea)
+    const amplitude = waveWeight(waveStep(w, up, footprint), gain) * Math.sqrt(gain) * w.slope
+    return 0.5 * amplitude * amplitude * (1 - along * along)
+  }
+
+  it('keeps the sea\'s slope variance whole, mid-fade too: what the waves draw and what the glint takes add up to the sea\'s, on either tier', () => {
     for (const low of [false, true]) {
       const waves = waterWaves(low)
       for (const up of ups) {
-        expect(waterLostVariance(1e9, up, waves) + waterBaseMss(waves)).toBeCloseTo(WATER_MSS, 12)
-        expect(waterMss(1e9, up, waves)).toBeCloseTo(WATER_MSS, 12)
-        // With every wave drawn, the tier's base, give or take how the
-        // waves' directions lie against this up (the long waves, carrying
-        // more of the slope, swing it most).
-        expect(Math.abs(waterLostVariance(0, up, waves))).toBeLessThan(low ? 0.008 : 0.003)
+        for (const sea of seas(up)) {
+          const whole = waterSeaVariance(up, waves, sea)
+          // Across every wave's fade band (a pixel from a millimetre to a kilometre on the sea).
+          for (let footprint = 1e-9; footprint < 1e-3; footprint *= 1.3) {
+            const shown = waves.reduce((sum, w) => sum + drawn(w, up, sea, footprint), 0)
+            expect(waterVisibleVariance(footprint, up, waves, sea)).toBeCloseTo(shown, 12)
+            expect(shown + waterMss(footprint, up, waves, sea)).toBeCloseTo(whole, 12)
+            expect(waterLostVariance(footprint, up, waves, sea) + waterBaseMss(waves) * sea.windScale * sea.noise).toBeCloseTo(
+              waterMss(footprint, up, waves, sea),
+              12
+            )
+          }
+          // All faded: the glint holds the whole sea.
+          expect(waterMss(1e9, up, waves, sea)).toBeCloseTo(whole, 12)
+        }
+        // The median sea's whole is the sea's, give or take how the waves'
+        // directions lie against this up (the long waves, carrying more of
+        // the slope, swing it most).
+        expect(Math.abs(waterSeaVariance(up, waves, medianSea(levelAxis(up, 0))) - WATER_MSS)).toBeLessThan(low ? 0.008 : 0.003)
       }
     }
     expect(waterBaseMss(waterWaves(false))).toBeCloseTo(WATER_MSS_BASE, 12)
     expect(waterBaseMss(waterWaves(true))).toBeGreaterThan(WATER_MSS_BASE)
+  })
+
+  it('lays a faded wave\'s variance on the glint along its own direction', () => {
+    const w = WATER_WAVE_TABLE.find((x) => Math.abs(x.dir[1]) < 0.5)!
+    const dir = norm([w.dir[0], 0, w.dir[2]])
+    for (const [axis, share] of [[dir, 1], [norm([-dir[2], 0, dir[0]]), 0]] as [V, number][]) {
+      const sea = medianSea(axis)
+      const slope = waterSlopeVariance(1e9, UP, [w], sea)
+      const base = 0.5 * waterBaseMss([w])
+      const lost = waterLostVariance(1e9, UP, [w], sea)
+      expect(slope.along - base).toBeCloseTo(share * lost, 12)
+      expect(slope.cross - base).toBeCloseTo((1 - share) * lost, 12)
+    }
+  })
+
+  it('pulls each wave\'s slope toward the climate\'s axis, its mean gain over directions the sea\'s own', () => {
+    const base = WATER_WAVE_TABLE[0]
+    const n = 720
+    for (const settled of [0, 0.5, 1]) {
+      const sea: WaterSea = { windScale: 1, swellScale: 1, noise: 1, settled, axis: AXIS }
+      let sum = 0
+      for (let i = 0; i < n; i++) {
+        const a = ((i + 0.5) / n) * TAU
+        sum += waveGain({ ...base, dir: [Math.cos(a), 0, Math.sin(a)] }, UP, sea)
+      }
+      expect(Math.abs(sum / n - 1)).toBeLessThan(0.01)
+      const aligned = waveGain({ ...base, dir: AXIS }, UP, sea)
+      const crossing = waveGain({ ...base, dir: [1, 0, 0] }, UP, sea)
+      if (settled === 0) {
+        expect(aligned).toBeCloseTo(1, 12)
+        expect(crossing).toBeCloseTo(1, 12)
+      } else expect(aligned).toBeGreaterThan(crossing)
+    }
+    // The swell takes the swell's scale, squared; the wind sea the wind's;
+    // the noise scales both.
+    const sea: WaterSea = { windScale: 1.5, swellScale: 0.5, noise: 1.2, settled: 0, axis: AXIS }
+    const swell = { ...base, dir: [1, 0, 0] as const, metres: 120 }
+    const wind = { ...base, dir: [1, 0, 0] as const, metres: 5 }
+    expect(waveGain(swell, UP, sea)).toBeCloseTo(1.2 * 0.25, 12)
+    expect(waveGain(wind, UP, sea)).toBeCloseTo(1.2 * 1.5, 12)
   })
 
   it('keeps its phases fixed to the Earth: the eye\'s phase plus k.ray is the phase at eye + ray', () => {
@@ -180,6 +401,15 @@ describe('the waves (tides-07z)', () => {
     const expected = new Float32Array(WATER_WAVES)
     waterPhases([0.4, 2.9, 0.1], 5, expected)
     for (let i = 0; i < WATER_WAVES; i++) expect(angleGap(water.uniforms.uWavePhase.value[i], expected[i])).toBeLessThan(1e-5)
+    // The climate is a still texture: the same one, unchanged, however the clock runs.
+    const climate = water.uniforms.uWaterClimate.value
+    const version = climate.version
+    water.advance(5, true)
+    water.update()
+    water.advance(5, false)
+    water.update()
+    expect(water.uniforms.uWaterClimate.value).toBe(climate)
+    expect(climate.version).toBe(version)
   })
 })
 
@@ -306,6 +536,9 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(WATER_PRELUDE.globe.body.endsWith(WATER_DEPTH_SAMPLE.globe)).toBe(true)
     expect(WATER_DEPTH_SAMPLE.globe).toContain('texture2D(uWaterDepth, vSpecularMapUv).r')
     expect(at(WATER_DEPTH_SAMPLE.globe)).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
+    // The wave climate: one more sampler, the water's own texture.
+    expect(shader.uniforms.uWaterClimate).toBe(water.uniforms.uWaterClimate)
+    expect(f.split('uniform sampler2D uWaterClimate;').length - 1).toBe(1)
     // No varyings of its own, nothing in the vertex stage.
     const base = phongShader()
     composePatches(eclipse.material, clouds.groundPatch, groundDetailPatch(false), groundShadowPatch(sun, earthHorizon('horizon.bin')), haze.patch)
@@ -326,10 +559,29 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     for (const w of waterWaves(true)) expect(low).toContain(`uWavePhase[${w.index}]`)
   })
 
-  it('takes its derivatives before any branch, and skips the waves where the strength is 0', () => {
-    const normal = WATER_GLSL(WATER_WAVE_TABLE).normal
-    expect(normal.indexOf('dFdx(')).toBeLessThan(normal.indexOf('if ('))
-    expect(normal).toContain('if (specularStrength > 0.0 && waterFootprint < ')
+  it('takes its derivatives before any branch, and skips the water where the strength is 0 and each wave where it has faded', () => {
+    for (const low of [false, true]) {
+      const glsl = WATER_GLSL(waterWaves(low))
+      const normal = glsl.normal
+      const firstBranch = Math.min(normal.indexOf('if ('), normal.indexOf('?'))
+      expect(normal.indexOf('dFdx(waterRay)')).toBeGreaterThan(-1)
+      expect(normal.indexOf('dFdy(waterRay)')).toBeLessThan(firstBranch)
+      expect(normal.split('dFd').length - 1).toBe(2)
+      // Nothing in the glint, the noise or the climate's lookup asks for derivatives.
+      expect(glsl.head).not.toMatch(/dFd|fwidth|texture2D|texture\(/)
+      expect(glsl.head).toContain('textureLod(uWaterClimate')
+      expect(normal).toContain('if (specularStrength > 0.0) {')
+      // Each wave's sine only where it's drawn; its variance everywhere on water.
+      const count = low ? WATER_WAVES_LOW : WATER_WAVES
+      expect(normal.split('if (waterW > 0.0) {').length - 1).toBe(count)
+      expect(normal.split('waterLost = ').length - 1).toBe(count)
+      for (const chunk of normal.split('if (waterW > 0.0) {').slice(1)) {
+        expect(chunk.indexOf('sin(')).toBeLessThan(chunk.indexOf('}'))
+      }
+      // The old eye-spread footprint and its ring are gone.
+      expect(normal).not.toContain('waterFootprint')
+      expect(normal).not.toContain('isOrthographic')
+    }
     expect(WATER_GLSL(WATER_WAVE_TABLE).sky).toContain('if (material.specularStrength > 0.0) {')
   })
 })

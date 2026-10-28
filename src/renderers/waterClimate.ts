@@ -216,7 +216,8 @@ const f = (x: number) => x.toFixed(6)
 
 /** The texture's lookup: waterClimateAt(up) is the raw texel at a local unit
  * direction, waterClimateDecode() its wind-wave and swell heights (m) and
- * doubled-angle axis (cos 2θ, sin 2θ; θ clockwise from north toward east). */
+ * doubled-angle axis (cos 2θ, sin 2θ; θ clockwise from north toward east);
+ * waterMssScale() and waterSwellScale() the scales of those heights. */
 export const WATER_CLIMATE_GLSL = /* glsl */ `
 uniform sampler2D uWaterClimate;
 
@@ -224,7 +225,8 @@ uniform sampler2D uWaterClimate;
 vec4 waterClimateAt(vec3 up) {
   float u = atan(up.z, -up.x) / 6.283185307179586;
   float v = 0.5 - asin(clamp(up.y, -1.0, 1.0)) / 3.141592653589793;
-  return texture2D(uWaterClimate, vec2(fract(u), v));
+  // No mipmaps, and fract(u) jumps at the antimeridian: no derivatives.
+  return textureLod(uWaterClimate, vec2(fract(u), v), 0.0);
 }
 
 vec4 waterClimateDecode(vec4 texel) {
@@ -233,5 +235,14 @@ vec4 waterClimateDecode(vec4 texel) {
     ${f(SWELL_MAX_M)} * texel.a * texel.a,
     texel.gb * 2.0 - 1.0
   );
+}
+
+// mssScale() and swellScale() (./waterClimate.ts).
+float waterMssScale(float windWaveM) {
+  float mss = 0.003 + 0.00512 * sqrt(${f(GRAVITY / 0.21)} * max(windWaveM, 0.0));
+  return clamp(mss / ${f(coxMunkMss(WIND_WAVE_REF_M))}, 0.5, 2.0);
+}
+float waterSwellScale(float swellM) {
+  return clamp(swellM / ${f(SWELL_REF_M)}, 0.4, 2.0);
 }
 `
