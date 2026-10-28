@@ -512,3 +512,14 @@ export function updateShipBody(body: ShipBody, t: number): void {
   if (body.positionAt) body.position.fromArray(body.positionAt(t))
   body.turnTo?.(t)
 }
+
+/**
+ * Into `out`: `body`'s velocity at `t`, scene units per sim second, over the
+ * second either side of it; zero for the Sun, which stays put.
+ */
+export function shipBodyVelocity(body: ShipBody, t: number, out: THREE.Vector3): THREE.Vector3 {
+  if (!body.positionAt) return out.set(0, 0, 0)
+  const [x, y, z] = body.positionAt(t - 500)
+  const after = body.positionAt(t + 500)
+  return out.set(after[0] - x, after[1] - y, after[2] - z)
+}

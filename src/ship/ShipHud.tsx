@@ -218,7 +218,8 @@ export function ShipHud() {
       textAt = now
 
       // Through the air below it, true to scale near the ground over the
-      // tiles (tides-zmw.9.18); the frame speed without them.
+      // tiles (tides-zmw.9.18); without them, with Earth's orbit and spin
+      // taken out of the frame speed the same way (tides-d9f.1).
       const [speed, unit] = speedParts(formatSpeed(shipTelemetry.air.speed * shipNav.kmPerUnit, SURFACE_TILES_ON))
       set(r.speed, speed)
       set(r.speedUnit, unit && ` ${unit}`)
