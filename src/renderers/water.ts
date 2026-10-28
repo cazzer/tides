@@ -19,12 +19,11 @@
 //   Sun's road widens and brightens toward the horizon and at a low Sun as
 //   the real sea's does; under the level horizon (the tilted wave facets
 //   could see a Sun the sea can't) it goes out;
-// - the body (in normal): the day map's ocean is near black (its deep water a
-//   few thousandths), darker than water's own colour; anything darker than
-//   the floor for the sea's depth there (./waterDepth.ts waterFloor: the
-//   shallows' turquoise to the trenches' navy, WATER_DEEP over most of the
-//   open ocean) is lifted to it, the lighter shelves, lagoons and silt left
-//   as the map has them; by day only (SKY_DAY), so the night fill and the
+// - the body (in normal): the day map's ocean, tinted by the depth under it
+//   (./waterDepth.ts waterTinted: lighter and greener over the banks and
+//   shelves, darker over deep water and the trenches, the map's own lighter
+//   banks and silt left as they are); anything still darker than WATER_DEEP
+//   is lifted to it; by day only (SKY_DAY), so the night fill and the
 //   Moon's light find the night sea as dark as they did;
 // - the waves (normal): WATER_WAVES fixed sinusoids in the Earth's frame
 //   (Earth-fixed, so the swell stays put under a moving eye), deep-water
@@ -54,7 +53,7 @@ import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
 import { SKY_DAY, SKY_RADIANCE_GLSL } from './skyRadiance'
-import { WATER_DEEP, WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterFloor } from './waterDepth'
+import { WATER_DEEP, WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterTinted } from './waterDepth'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
 export const WATER_WAVES = 12
@@ -201,9 +200,9 @@ export function waterPhases(eye: Vec3, time: number, out: Float32Array | number[
 /** The body's colour for a map colour `c` (linear), at `strength` water
  * over `depth` m of it, as the GLSL mixes it. */
 export function waterBody(c: Vec3, strength: number, depth = WATER_DEPTH_NEUTRAL): [number, number, number] {
-  const floor = waterFloor(depth)
-  const lift = Math.min(Math.max(1 - luma(c) / luma(floor), 0), 1)
-  return [0, 1, 2].map((i) => c[i] + strength * floor[i] * lift) as [number, number, number]
+  const tinted = waterTinted(c, depth)
+  const lift = Math.min(Math.max(1 - luma(tinted) / WATER_DEEP_LUMA, 0), 1)
+  return [0, 1, 2].map((i) => c[i] + strength * (tinted[i] + WATER_DEEP[i] * lift - c[i])) as [number, number, number]
 }
 
 /** The glint's reflected radiance over the light's colour, for unit vectors
@@ -286,12 +285,11 @@ float waterGlint(vec3 l, vec3 v, vec3 n) {
   return smoothstep(-0.02, 0.02, dot(waterUpView, l)) * fresnel * d * waterG1(nl, a2) * waterG1(nv, a2) / (4.0 * max(nv, 1e-3));
 }
 ${WATER_DEPTH_GLSL}
-// The map's ocean darker than the floor at this depth lifted to it
-// (waterBody() mirrors it).
+// The map's ocean tinted for its depth, then lifted to deep water if still
+// darker (waterBody() mirrors it).
 vec3 waterBody(vec3 c) {
-  vec3 f = waterFloor(waterDepth);
-  vec3 luma = vec3(${LUMA.map(f).join(', ')});
-  return c + f * saturate(1.0 - dot(c, luma) / dot(f, luma));
+  c = waterTinted(c);
+  return c + ${v3(WATER_DEEP)} * saturate(1.0 - dot(c, vec3(${LUMA.map(f).join(', ')})) / ${f(WATER_DEEP_LUMA)});
 }
 `
 

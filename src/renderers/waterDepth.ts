@@ -1,10 +1,10 @@
-// The sea's depth under the water's body (tides-d9f.6): the floor its colour
-// is lifted to (./water.ts waterBody) goes from turquoise over the shallow
-// banks, through the shelf's blue, to deep water's navy and darker again
-// over the trenches, so the Bahamas, the North Sea and the Grand Banks read
-// as shallow from orbit and from low down, as they do in photographs.
-// Before it every sea took the one floor, WATER_DEEP, the shelves showing
-// only where the day map's own colour happened to be lighter.
+// The sea's depth under the water's body (tides-d9f.6): the day map's ocean
+// is one mid blue from the Bahamas' banks to the Mariana Trench (linear luma
+// 0.05-0.08 over shelf and abyss alike), so from orbit and from low down the
+// sea read flat. The body (./water.ts waterBody) now tints it by the depth
+// under it: lighter and greener over the shallow banks and reefs, the
+// shelf's blue a little lighter than the map's, deep water darker and the
+// trenches darker again, as the sea looks in photographs.
 //
 // The depth map, src/assets/earth-bathy-4k.png (high tier) and
 // earth-bathy-2k.png (low tier, the 4k map's 2 x 2 means), is built by
@@ -16,36 +16,47 @@
 // the shelf's first hundred metres get as many levels as the abyss's
 // thousands. Land (above sea level in the elevation map) and the lakes over
 // it take their wet neighbours' depth near the coast and
-// WATER_DEPTH_NEUTRAL beyond, whose floor is WATER_DEEP: a lake, or a coast
-// the mask and the elevation map draw a texel apart, keeps the floor it had.
+// WATER_DEPTH_NEUTRAL beyond: a lake takes deep water's tint.
 //
-// The model: waterFloor(depth), three smoothsteps between four colours, the
-// ramp from WATER_SHALLOW to WATER_SHELF over the shelf's first
-// WATER_DEPTH_SHELF metres, to WATER_DEEP down the continental slope
-// (WATER_DEPTH_SLOPE), and to WATER_TRENCH from the abyssal plain
-// (WATER_DEPTH_ABYSS) to the trenches (WATER_DEPTH_TRENCH). Between the slope
-// and the abyss, most of the open ocean, it is exactly WATER_DEEP, the floor
-// every sea had before. Each stop darker than the last, so a deeper sea is
-// never lighter. No imports: ./water.ts and the build script both read it.
+// The model: waterTint(depth), a gain on the map's colour by channel, three
+// smoothsteps between four gains: from WATER_TINT_SHALLOW over sand a few
+// metres down to WATER_TINT_SHELF by WATER_DEPTH_SHOAL, held over the shelf
+// to its edge (WATER_DEPTH_SHELF), down the continental slope to
+// WATER_TINT_DEEP (WATER_DEPTH_SLOPE), and to WATER_TINT_TRENCH from the
+// abyssal plain (WATER_DEPTH_ABYSS) to the trenches (WATER_DEPTH_TRENCH).
+// Each gain darker than the last, so a deeper sea is never lighter. A gain,
+// not a colour, so the map's own variation (silt plumes, its lighter
+// lagoons) shows through; and where the map is already well lighter than
+// the open sea (WATER_KEEP: the Bahamas' banks, river mouths) the tint fades
+// out and the map's own shelf colour stays. No imports: ./water.ts and the
+// build script both read it.
 
 /** The deepest depth the map encodes (m): Challenger Deep is ~10,920. */
 export const WATER_DEPTH_MAX = 11000
-/** The depth land and lakes take far from the sea (m): WATER_DEEP's. */
+/** The depth land and lakes take far from the sea (m): deep water's. */
 export const WATER_DEPTH_NEUTRAL = 3000
-/** The ramp's stops (m): the shelf's shallows, the foot of the slope, the
- * abyssal plain and the trenches. */
+/** The ramp's stops (m): the banks' foot, the shelf's edge, the foot of the
+ * slope, the abyssal plain and the trenches. */
+export const WATER_DEPTH_SHOAL = 50
 export const WATER_DEPTH_SHELF = 200
 export const WATER_DEPTH_SLOPE = 2000
 export const WATER_DEPTH_ABYSS = 5500
 export const WATER_DEPTH_TRENCH = 9000
 
 type Rgb = readonly [number, number, number]
-/** The floor's colours (linear): over sand a few metres down, the shelf,
- * deep water, and the trenches. */
-export const WATER_SHALLOW: Rgb = [0.02, 0.085, 0.075]
-export const WATER_SHELF: Rgb = [0.01, 0.04, 0.065]
+/** The tint's gains on the map's colour (linear, by channel): over sand a
+ * few metres down, the shelf, deep water, and the trenches. */
+export const WATER_TINT_SHALLOW: Rgb = [1.5, 1.9, 1.25]
+export const WATER_TINT_SHELF: Rgb = [1.0, 1.2, 1.0]
+export const WATER_TINT_DEEP: Rgb = [0.6, 0.6, 0.78]
+export const WATER_TINT_TRENCH: Rgb = [0.4, 0.4, 0.6]
+/** The map's luma over which the tint fades out (from the first to the
+ * second): the open sea's is 0.05-0.08, the Bahamas' banks 0.13. */
+export const WATER_KEEP: readonly [number, number] = [0.1, 0.16]
+
+/** Deep water's body colour (linear): the map's ocean darker than it is
+ * lifted to it (./water.ts waterBody). */
 export const WATER_DEEP: Rgb = [0.008, 0.022, 0.045]
-export const WATER_TRENCH: Rgb = [0.003, 0.008, 0.022]
 
 /** A depth (m, positive down) as the map's grey level. */
 export function encodeWaterDepth(metres: number): number {
@@ -61,29 +72,43 @@ const smoothstep = (a: number, b: number, x: number) => {
   const t = Math.min(Math.max((x - a) / (b - a), 0), 1)
   return t * t * (3 - 2 * t)
 }
-// GLSL's mix: exactly `b` at t = 1, so the open ocean's floor is WATER_DEEP.
+// GLSL's mix: exactly `b` at t = 1.
 const mix = (a: Rgb, b: Rgb, t: number): Rgb => [0, 1, 2].map((i) => a[i] * (1 - t) + b[i] * t) as unknown as Rgb
+const luma = (c: Rgb) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 
-/** The floor at `depth` m, as the GLSL's waterFloor(). */
-export function waterFloor(depth: number): [number, number, number] {
-  let c = mix(WATER_SHALLOW, WATER_SHELF, smoothstep(0, WATER_DEPTH_SHELF, depth))
-  c = mix(c, WATER_DEEP, smoothstep(WATER_DEPTH_SHELF, WATER_DEPTH_SLOPE, depth))
-  return [...mix(c, WATER_TRENCH, smoothstep(WATER_DEPTH_ABYSS, WATER_DEPTH_TRENCH, depth))] as [number, number, number]
+/** The gain at `depth` m, as the GLSL's waterTint(). */
+export function waterTint(depth: number): [number, number, number] {
+  let c = mix(WATER_TINT_SHALLOW, WATER_TINT_SHELF, smoothstep(0, WATER_DEPTH_SHOAL, depth))
+  c = mix(c, WATER_TINT_DEEP, smoothstep(WATER_DEPTH_SHELF, WATER_DEPTH_SLOPE, depth))
+  return [...mix(c, WATER_TINT_TRENCH, smoothstep(WATER_DEPTH_ABYSS, WATER_DEPTH_TRENCH, depth))] as [number, number, number]
+}
+
+/** The map's colour `c` (linear) tinted for `depth` m of water under it, as
+ * the GLSL's waterTinted(). */
+export function waterTinted(c: Rgb, depth: number): [number, number, number] {
+  const gain = mix(waterTint(depth), [1, 1, 1], smoothstep(WATER_KEEP[0], WATER_KEEP[1], luma(c)))
+  return [0, 1, 2].map((i) => c[i] * gain[i]) as [number, number, number]
 }
 
 const f = (x: number) => x.toFixed(6)
 const v3 = (c: readonly number[]) => `vec3(${c.map(f).join(', ')})`
 
-/** The depth's uniform, the global the samples set, and the floor (after
+/** The depth's uniform, the global the samples set, and the tint (after
  * common; ./water.ts puts it in its head). */
 export const WATER_DEPTH_GLSL = /* glsl */ `
 uniform sampler2D uWaterDepth;
 float waterDepth;
-// The floor at depth d m (waterFloor() mirrors it).
-vec3 waterFloor(float d) {
-  vec3 c = mix(${v3(WATER_SHALLOW)}, ${v3(WATER_SHELF)}, smoothstep(0.0, ${f(WATER_DEPTH_SHELF)}, d));
-  c = mix(c, ${v3(WATER_DEEP)}, smoothstep(${f(WATER_DEPTH_SHELF)}, ${f(WATER_DEPTH_SLOPE)}, d));
-  return mix(c, ${v3(WATER_TRENCH)}, smoothstep(${f(WATER_DEPTH_ABYSS)}, ${f(WATER_DEPTH_TRENCH)}, d));
+// The gain at depth d m (waterTint() mirrors it).
+vec3 waterTint(float d) {
+  vec3 c = mix(${v3(WATER_TINT_SHALLOW)}, ${v3(WATER_TINT_SHELF)}, smoothstep(0.0, ${f(WATER_DEPTH_SHOAL)}, d));
+  c = mix(c, ${v3(WATER_TINT_DEEP)}, smoothstep(${f(WATER_DEPTH_SHELF)}, ${f(WATER_DEPTH_SLOPE)}, d));
+  return mix(c, ${v3(WATER_TINT_TRENCH)}, smoothstep(${f(WATER_DEPTH_ABYSS)}, ${f(WATER_DEPTH_TRENCH)}, d));
+}
+// The map's colour tinted for the depth here, unless it is already well
+// lighter than the open sea (waterTinted() mirrors it).
+vec3 waterTinted(vec3 c) {
+  float keep = smoothstep(${f(WATER_KEEP[0])}, ${f(WATER_KEEP[1])}, dot(c, vec3(0.2126, 0.7152, 0.0722)));
+  return c * mix(waterTint(waterDepth), vec3(1.0), keep);
 }
 `
 

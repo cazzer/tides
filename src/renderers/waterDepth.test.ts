@@ -1,21 +1,25 @@
 // The sea's depth under the water's body (tides-d9f.6): the encoding, the
-// floor's ramp (the open ocean's exactly the old WATER_DEEP), and the
-// shipped maps (scripts/build-earth-bathy.mjs) on the right grid.
+// tint's ramp and the map colours it leaves alone, and the shipped maps (scripts/build-earth-bathy.mjs) on the right grid.
 import { readFileSync, statSync } from 'node:fs'
 import { inflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import {
   decodeWaterDepth,
   encodeWaterDepth,
-  WATER_DEEP,
   WATER_DEPTH_GLSL,
   WATER_DEPTH_MAX,
   WATER_DEPTH_NEUTRAL,
   WATER_DEPTH_SAMPLE,
-  WATER_SHALLOW,
-  WATER_SHELF,
-  WATER_TRENCH,
-  waterFloor,
+  WATER_DEPTH_SHELF,
+  WATER_DEPTH_SHOAL,
+  WATER_DEPTH_SLOPE,
+  WATER_KEEP,
+  WATER_TINT_DEEP,
+  WATER_TINT_SHALLOW,
+  WATER_TINT_SHELF,
+  WATER_TINT_TRENCH,
+  waterTint,
+  waterTinted,
 } from './waterDepth'
 
 const luma = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
@@ -41,31 +45,45 @@ describe('the depth\'s encoding', () => {
   })
 })
 
-describe('the floor', () => {
-  it('runs turquoise, shelf blue, deep water, trench navy', () => {
-    waterFloor(0).forEach((x, i) => expect(x).toBeCloseTo(WATER_SHALLOW[i], 12))
-    waterFloor(200).forEach((x, i) => expect(x).toBeCloseTo(WATER_SHELF[i], 12))
-    waterFloor(9000).forEach((x, i) => expect(x).toBeCloseTo(WATER_TRENCH[i], 12))
-    waterFloor(11000).forEach((x, i) => expect(x).toBeCloseTo(WATER_TRENCH[i], 12))
+describe('the tint', () => {
+  it('runs from the shallows\' gain through the shelf\'s and deep water\'s to the trenches\'', () => {
+    waterTint(0).forEach((x, i) => expect(x).toBeCloseTo(WATER_TINT_SHALLOW[i], 12))
+    for (const d of [WATER_DEPTH_SHOAL, WATER_DEPTH_SHELF]) waterTint(d).forEach((x, i) => expect(x).toBeCloseTo(WATER_TINT_SHELF[i], 12))
+    waterTint(9000).forEach((x, i) => expect(x).toBeCloseTo(WATER_TINT_TRENCH[i], 12))
+    waterTint(11000).forEach((x, i) => expect(x).toBeCloseTo(WATER_TINT_TRENCH[i], 12))
   })
 
-  it('is exactly the old deep water over the open ocean, and the neutral fill', () => {
-    for (let d = 2000; d <= 5500; d += 250) expect(waterFloor(d)).toEqual([...WATER_DEEP])
-    expect(waterFloor(decodeWaterDepth(encodeWaterDepth(WATER_DEPTH_NEUTRAL)))).toEqual([...WATER_DEEP])
+  it('gives the open ocean and the neutral fill deep water\'s gain', () => {
+    for (let d = WATER_DEPTH_SLOPE; d <= 5500; d += 250) expect(waterTint(d)).toEqual([...WATER_TINT_DEEP])
+    expect(waterTint(decodeWaterDepth(encodeWaterDepth(WATER_DEPTH_NEUTRAL)))).toEqual([...WATER_TINT_DEEP])
   })
 
-  it('never lightens with depth', () => {
+  it('never lightens with depth, and turns greener toward the shallows', () => {
     let last = Infinity
     for (let d = 0; d <= WATER_DEPTH_MAX; d += 25) {
-      const l = luma(waterFloor(d))
+      const l = luma(waterTint(d))
       expect(l).toBeLessThanOrEqual(last + 1e-15)
       last = l
     }
+    const greenOverBlue = (g: readonly number[]) => g[1] / g[2]
+    expect(greenOverBlue(WATER_TINT_SHALLOW)).toBeGreaterThan(greenOverBlue(WATER_TINT_SHELF))
+    expect(greenOverBlue(WATER_TINT_SHELF)).toBeGreaterThan(greenOverBlue(WATER_TINT_DEEP))
+  })
+
+  it('tints the map\'s open-sea blue, and leaves map colour well lighter than it alone', () => {
+    const sea = [0.012, 0.09, 0.16] as const
+    waterTinted(sea, 3000).forEach((x, i) => expect(x).toBeCloseTo(sea[i] * WATER_TINT_DEEP[i], 12))
+    expect(luma(waterTinted(sea, 20))).toBeGreaterThan(luma(sea))
+    expect(luma(waterTinted(sea, 8000))).toBeLessThan(luma(waterTinted(sea, 3000)))
+    const bank = [0.15, 0.2, 0.16] as const
+    expect(luma(bank)).toBeGreaterThan(WATER_KEEP[1])
+    for (const d of [0, 100, 3000, 10000]) waterTinted(bank, d).forEach((x, i) => expect(x).toBeCloseTo(bank[i], 12))
   })
 
   it('has its GLSL twin and each chain\'s sample', () => {
     expect(WATER_DEPTH_GLSL).toContain('uniform sampler2D uWaterDepth;')
-    expect(WATER_DEPTH_GLSL).toContain('vec3 waterFloor(float d)')
+    expect(WATER_DEPTH_GLSL).toContain('vec3 waterTint(float d)')
+    expect(WATER_DEPTH_GLSL).toContain('vec3 waterTinted(vec3 c)')
     expect(WATER_DEPTH_SAMPLE.globe).toContain('#ifdef USE_SPECULARMAP')
     expect(WATER_DEPTH_SAMPLE.globe).toContain('texture2D(uWaterDepth, vSpecularMapUv).r')
     expect(WATER_DEPTH_SAMPLE.tiles).toContain('surfaceGlobeTex(uWaterDepth, surfaceGlobeUv).r')

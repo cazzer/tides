@@ -10,7 +10,7 @@ import { createGroundHaze } from './groundHaze'
 import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
 import { phongShader } from './surface/tile-test-fixtures'
-import { WATER_DEPTH_SAMPLE, WATER_SHALLOW, WATER_TRENCH } from './waterDepth'
+import { WATER_DEPTH_SAMPLE, WATER_KEEP, waterTinted } from './waterDepth'
 import {
   beckmann,
   BLINN_PHONG_DIRECT,
@@ -182,19 +182,19 @@ describe('the waves (tides-07z)', () => {
 })
 
 describe('the body (tides-07z)', () => {
-  it('leaves colour at or above deep water\'s, and the land, as it is', () => {
-    for (const c of [[0.03, 0.05, 0.08], [0.2, 0.3, 0.1], [0.008, 0.022, 0.045]] as V[]) {
-      waterBody(c, 1).forEach((x, i) => expect(x).toBeCloseTo(c[i], 12))
+  it('leaves colour well lighter than the open sea, and the land, as it is', () => {
+    for (const c of [[0.15, 0.2, 0.15], [0.2, 0.3, 0.1]] as V[]) {
+      for (const depth of [0, 50, 500, 3000, 10000]) waterBody(c, 1, depth).forEach((x, i) => expect(x).toBeCloseTo(c[i], 12))
     }
     const dark: V = [0.001, 0.002, 0.004]
-    expect(waterBody(dark, 0)).toEqual(dark)
+    for (const depth of [0, 3000]) expect(waterBody(dark, 0, depth)).toEqual(dark)
   })
 
   it('lifts darker water to deep water\'s floor, monotonically', () => {
     waterBody([0, 0, 0], 1).forEach((x, i) => expect(x).toBeCloseTo(WATER_DEEP[i], 12))
     const lum = (c: readonly number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
     let last = 0
-    for (let g = 0; g <= 0.05; g += 0.001) {
+    for (let g = 0; g <= WATER_KEEP[0]; g += 0.001) {
       const out = lum(waterBody([g, g, g], 1))
       expect(out).toBeGreaterThanOrEqual(last - 1e-12)
       expect(out).toBeGreaterThanOrEqual(WATER_DEEP_LUMA - 1e-12)
@@ -202,15 +202,12 @@ describe('the body (tides-07z)', () => {
     }
   })
 
-  it('lifts it to the floor for the sea\'s depth (tides-d9f.6), lighter water left as it is', () => {
-    waterBody([0, 0, 0], 1, 0).forEach((x, i) => expect(x).toBeCloseTo(WATER_SHALLOW[i], 12))
-    waterBody([0, 0, 0], 1, 10000).forEach((x, i) => expect(x).toBeCloseTo(WATER_TRENCH[i], 12))
-    waterBody([0, 0, 0], 1, 3000).forEach((x, i) => expect(x).toBeCloseTo(WATER_DEEP[i], 12))
+  it('tints the map\'s sea for its depth (tides-d9f.6), in step with strength', () => {
+    const sea: V = [0.012, 0.09, 0.16]
     for (const depth of [0, 50, 500, 3000, 10000]) {
-      const light: V = [0.05, 0.12, 0.1]
-      waterBody(light, 1, depth).forEach((x, i) => expect(x).toBeCloseTo(light[i], 12))
-      const dark: V = [0.001, 0.002, 0.004]
-      expect(waterBody(dark, 0, depth)).toEqual(dark)
+      const tinted = waterTinted(sea, depth)
+      waterBody(sea, 1, depth).forEach((x, i) => expect(x).toBeCloseTo(tinted[i], 12))
+      waterBody(sea, 0.5, depth).forEach((x, i) => expect(x).toBeCloseTo((sea[i] + tinted[i]) / 2, 12))
     }
   })
 })
@@ -282,7 +279,7 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     // The depth's uniform with the globals, its sample at the prelude's end,
     // before the body reads it.
     expect(at('uniform sampler2D uWaterDepth;')).toBeLessThan(at('void main'))
-    expect(at('vec3 waterFloor(float d)')).toBeLessThan(at('vec3 waterBody(vec3 c)'))
+    expect(at('vec3 waterTinted(vec3 c)')).toBeLessThan(at('vec3 waterBody(vec3 c)'))
     expect(WATER_PRELUDE.globe.body.endsWith(WATER_DEPTH_SAMPLE.globe)).toBe(true)
     expect(WATER_DEPTH_SAMPLE.globe).toContain('texture2D(uWaterDepth, vSpecularMapUv).r')
     expect(at(WATER_DEPTH_SAMPLE.globe)).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
