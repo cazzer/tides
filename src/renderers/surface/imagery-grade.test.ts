@@ -151,7 +151,7 @@ describe('the overlay matches USGS tiles (tides-zmw.9.11)', () => {
     const regrade = vi.fn(async () => graded)
     overlay.regrade = regrade
     const res = await overlay.fetch(imageryUrl(EOX_URL, canyon), {})
-    expect(regrade).toHaveBeenLastCalledWith(expect.any(ArrayBuffer), canyon, undefined)
+    expect(regrade).toHaveBeenLastCalledWith(expect.any(ArrayBuffer), canyon, undefined, expect.any(Function))
     expect(res.headers.get('Content-Type')).toBe('image/bmp')
     expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([1, 2, 3])
     // USGS had nothing (EOX answers), and EOX abroad: as they came.

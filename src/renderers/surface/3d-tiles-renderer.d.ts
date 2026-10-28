@@ -33,3 +33,14 @@ declare module '3d-tiles-renderer/src/three/plugins/images/ImageOverlayPlugin.js
     fetch(url: string, options?: RequestInit): Promise<Response>
   }
 }
+
+// The tiles a composed overlay region draws (imagery.test.ts holds
+// SurfaceImageryOverlay's composedFrom to it).
+declare module '3d-tiles-renderer/src/three/plugins/images/overlays/utils.js' {
+  export function forEachTileInBounds(
+    range: readonly number[],
+    level: number,
+    tiling: unknown,
+    callback: (x: number, y: number, level: number) => void
+  ): void
+}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ImageOverlay } from '3d-tiles-renderer/three/plugins'
 import { inflateSync } from 'node:zlib'
 import {
@@ -16,7 +16,20 @@ import {
   USGS_URL,
   type ImageryTile,
 } from './imagery'
-import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
+import { composedFrom, MATCH_DEADLINE_MS, regradeUsgs, SurfaceImageryOverlay } from './SurfaceImageryOverlay'
+import { forEachTileInBounds } from '3d-tiles-renderer/src/three/plugins/images/overlays/utils.js'
+import { CanvasTexture, Texture, type Source } from 'three'
+
+// regradeUsgs's field and grader (the rest of both modules as they are).
+const match = vi.hoisted(() => ({ params: vi.fn(), grade: vi.fn() }))
+vi.mock('./imagery-match', async (original) => ({
+  ...(await original<typeof import('./imagery-match')>()),
+  matchField: () => ({ params: match.params }),
+}))
+vi.mock('./imagery-grade', async (original) => ({
+  ...(await original<typeof import('./imagery-grade')>()),
+  imageryGrader: () => ({ grade: match.grade }),
+}))
 
 /** The z tile holding (lat, lon) degrees. */
 function tileAt(lat: number, lon: number, z: number): ImageryTile {
@@ -280,5 +293,270 @@ describe('which source served a US tile (tides-zmw.9.2)', () => {
     const alps = tileAt(46.5, 8, 12)
     await overlay.fetch(imageryUrl(EOX_URL, alps), {})
     expect(overlay.servedByEox(alps)).toBe(false)
+  })
+})
+
+describe('a late match regrades the tile (tides-zmw.9.26)', () => {
+  /** A stand-in for a decoded bitmap (node has none), whose real close is
+   * spied (protectOverlayBitmaps's patch doesn't run here). */
+  class FakeImageBitmap {
+    readonly closed = vi.fn()
+    constructor(
+      readonly width = 256,
+      readonly height = width
+    ) {}
+    close() {
+      this.closed()
+    }
+  }
+  beforeEach(() => vi.stubGlobal('ImageBitmap', FakeImageBitmap))
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+  const canyon = { z: 16, y: 25721, x: 12355 }
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+  const bitmap = (size = 256) => new FakeImageBitmap(size) as unknown as ImageBitmap
+  const closes = (texture: Texture) => (texture.image as unknown as FakeImageBitmap).closed.mock.calls.length
+
+  interface Internals {
+    imageSource: {
+      tiling: { getTileBounds(x: number, y: number, z: number, normalized: boolean, clamp: boolean): number[] }
+      setData(x: number, y: number, z: number, texture: unknown): void
+      release(x: number, y: number, z: number): void
+      processBufferToTexture(buffer: ArrayBuffer): Promise<Texture>
+    }
+    regionImageSource: {
+      fetchItem(args: number[]): unknown
+      lock(...args: number[]): unknown
+      tileComposer: { setTarget: ReturnType<typeof vi.fn>; draw: ReturnType<typeof vi.fn> }
+    }
+  }
+
+  /** An overlay holding the canyon tile's texture, whose next USGS fetch
+   * misses the deadline: `late` hands it the matched image. */
+  async function lateOverlay(signal?: AbortSignal) {
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async () => response(200))
+    const overlay = new SurfaceImageryOverlay()
+    await (overlay as unknown as { init(): Promise<void> }).init()
+    const internals = overlay as unknown as Internals
+    const texture = new Texture(bitmap())
+    internals.imageSource.setData(canyon.x, canyon.y, canyon.z, texture)
+    const decoded = new Texture(bitmap())
+    const decode = vi.fn(async () => decoded)
+    internals.imageSource.processBufferToTexture = decode
+    internals.regionImageSource.tileComposer = { setTarget: vi.fn(), draw: vi.fn() }
+    let late: ((image: ArrayBuffer) => void) | undefined
+    overlay.regrade = vi.fn(async (_b, _t, _s, l) => ((late = l), null))
+    const reported: Source[][] = []
+    overlay.onLateMatch = (sources) => reported.push([...sources])
+    await overlay.fetch(imageryUrl(EOX_URL, canyon), { signal })
+    return { overlay, internals, texture, decoded, decode, late: late!, reported }
+  }
+
+  it('swaps the matched image into the cached texture and reports its source', async () => {
+    const { overlay, texture, decoded, late, reported } = await lateOverlay()
+    const version = texture.version
+    const old = texture.image as unknown as FakeImageBitmap
+    late(new ArrayBuffer(4))
+    await settle()
+    expect(texture.image).toBe(decoded.image)
+    // The old image closed for real; never the live one every clone shares.
+    expect(old.closed).toHaveBeenCalledTimes(1)
+    expect(closes(texture)).toBe(0)
+    expect(texture.version).toBeGreaterThan(version)
+    expect(reported).toEqual([[texture.source]])
+    expect(overlay.lateMatches).toBe(1)
+  })
+
+  it('leaves the tile be once its fetch aborts, before or after the decode', async () => {
+    const before = new AbortController()
+    const a = await lateOverlay(before.signal)
+    before.abort()
+    a.late(new ArrayBuffer(4))
+    await settle()
+    expect(a.decode).not.toHaveBeenCalled()
+    expect(a.texture.image).not.toBe(a.decoded.image)
+
+    const between = new AbortController()
+    const b = await lateOverlay(between.signal)
+    b.decode.mockImplementation(async () => (between.abort(), b.decoded))
+    b.late(new ArrayBuffer(4))
+    await settle()
+    expect(b.texture.image).not.toBe(b.decoded.image)
+    expect([closes(b.decoded), closes(b.texture)]).toEqual([1, 0]) // the decoded bitmap, for real
+    expect(b.overlay.lateMatches + a.overlay.lateMatches).toBe(0)
+    expect([...a.reported, ...b.reported]).toEqual([])
+  })
+
+  it('leaves the tile be when its entry is gone or replaced, or the image is another size', async () => {
+    const gone = await lateOverlay()
+    gone.internals.imageSource.release(canyon.x, canyon.y, canyon.z)
+    gone.late(new ArrayBuffer(4))
+    await settle()
+    expect(gone.overlay.lateMatches).toBe(0)
+
+    const replaced = await lateOverlay()
+    let closedByRelease = -1
+    replaced.decode.mockImplementation(async () => {
+      replaced.internals.imageSource.release(canyon.x, canyon.y, canyon.z)
+      await settle() // the library drops the entry a microtask later, closing its image
+      closedByRelease = closes(replaced.texture)
+      replaced.internals.imageSource.setData(canyon.x, canyon.y, canyon.z, new Texture(bitmap()))
+      return replaced.decoded
+    })
+    replaced.late(new ArrayBuffer(4))
+    await settle()
+    await settle()
+    expect(replaced.texture.image).not.toBe(replaced.decoded.image)
+    expect(replaced.decode).toHaveBeenCalledTimes(1)
+    expect([closes(replaced.decoded), closes(replaced.texture)]).toEqual([1, closedByRelease])
+    expect(replaced.overlay.lateMatches).toBe(0)
+
+    const resized = await lateOverlay()
+    resized.decoded.image = bitmap(1)
+    resized.late(new ArrayBuffer(4))
+    await settle()
+    expect(resized.texture.image).not.toBe(resized.decoded.image)
+    expect([closes(resized.decoded), closes(resized.texture)]).toEqual([1, 0])
+    expect(resized.overlay.lateMatches).toBe(0)
+    expect([...gone.reported, ...replaced.reported, ...resized.reported]).toEqual([])
+  })
+
+  it('redraws the tile into the regions composed from it, now or once composed while it stays', async () => {
+    const { internals, texture, late, reported } = await lateOverlay()
+    const { tiling } = internals.imageSource
+    const regions = internals.regionImageSource
+    const quarter = ([x0, y0, x1, y1]: number[]) => [x0, y0, (x0 + x1) / 2, (y0 + y1) / 2]
+    const bounds = tiling.getTileBounds(canyon.x, canyon.y, canyon.z, true, false)
+    // A z17 terrain tile's range (the imagery's deepest level is 16), and a
+    // neighbour's.
+    const child = [...quarter(bounds), canyon.z + 1]
+    const other = [...quarter(tiling.getTileBounds(canyon.x + 1, canyon.y, canyon.z, true, false)), canyon.z + 1]
+    const composed = new CanvasTexture(bitmap())
+    const unrelated = new CanvasTexture(bitmap())
+    // Two z18 ranges still composing (the second finishes after the tile is dropped).
+    const pendingRange = [...quarter(quarter(bounds)), canyon.z + 2]
+    const [x0, y0, x1, y1] = quarter(bounds)
+    const droppedRange = [(x0 + x1) / 2, (y0 + y1) / 2, x1, y1, canyon.z + 2]
+    const pending = new CanvasTexture(bitmap())
+    const dropped = new CanvasTexture(bitmap())
+    const composers: ((t: CanvasTexture) => void)[] = []
+    regions.fetchItem = vi.fn((args: number[]) => {
+      if (args[4] === canyon.z + 2) return new Promise<CanvasTexture>((r) => composers.push(r))
+      return args[0] === child[0] ? composed : unrelated
+    })
+    regions.lock(...child)
+    regions.lock(...other)
+    regions.lock(...pendingRange)
+    regions.lock(...droppedRange)
+    const [compose, composeDropped] = composers
+    const versions = [composed.version, unrelated.version]
+    late(new ArrayBuffer(4))
+    await settle()
+    expect(regions.tileComposer.draw).toHaveBeenCalledTimes(1)
+    expect(regions.tileComposer.setTarget).toHaveBeenLastCalledWith(composed, child.slice(0, 4))
+    expect(regions.tileComposer.draw).toHaveBeenLastCalledWith(texture, bounds)
+    expect([composed.version > versions[0], unrelated.version > versions[1]]).toEqual([true, false])
+    expect(reported).toEqual([[texture.source, composed.source]])
+
+    compose(pending)
+    await settle()
+    expect(regions.tileComposer.draw).toHaveBeenCalledTimes(2)
+    expect(regions.tileComposer.setTarget).toHaveBeenLastCalledWith(pending, pendingRange.slice(0, 4))
+    expect(reported).toEqual([[texture.source, composed.source], [pending.source]])
+
+    // Its image closed with it: nothing to draw from.
+    internals.imageSource.release(canyon.x, canyon.y, canyon.z)
+    composeDropped(dropped)
+    await settle()
+    expect(regions.tileComposer.draw).toHaveBeenCalledTimes(2)
+    expect(regions.tileComposer.setTarget).not.toHaveBeenCalledWith(dropped, expect.anything())
+    expect(reported).toHaveLength(2)
+  })
+
+  it('reckons the tiles a composed region draws as the library does (composedFrom)', async () => {
+    const overlay = new SurfaceImageryOverlay()
+    await (overlay as unknown as { init(): Promise<void> }).init()
+    const { tiling } = (overlay as unknown as Internals).imageSource as unknown as {
+      tiling: Parameters<typeof composedFrom>[0] & { maxLevel: number }
+    }
+    expect(tiling.maxLevel).toBe(canyon.z)
+    const tileSpan = (x: number, y: number, z: number) => tiling.getTileBounds(x, y, z, true, false)
+    const sub = ([x0, y0, x1, y1]: number[], i: number, j: number, n: number) => {
+      const w = (x1 - x0) / n
+      const h = (y1 - y0) / n
+      return [x0 + i * w, y0 + j * h, x0 + (i + 1) * w, y0 + (j + 1) * h]
+    }
+    const bounds = tileSpan(canyon.x, canyon.y, canyon.z)
+    const [bx0, by0, bx1, by1] = bounds
+    const w = bx1 - bx0
+    const h = by1 - by0
+    const ranges: number[][] = [
+      // The tile's own bounds, at its level and finer.
+      [...bounds, 14],
+      [...bounds, 15],
+      [...bounds, 16],
+      [...bounds, 17],
+      // Its z15 parent.
+      [...tileSpan(canyon.x >> 1, canyon.y >> 1, 15), 15],
+      [...tileSpan(canyon.x >> 1, canyon.y >> 1, 15), 16],
+      // Straddling it and its neighbours.
+      [bx0 - w / 2, by0 - h / 2, bx1 - w / 2, by1 - h / 2, 16],
+      [bx0 + w / 3, by0, bx1 + w / 3, by1, 18],
+      [bx0 - w * 1e-6, by0, bx1 - w * 1e-6, by1, 16],
+      // A neighbour's.
+      [...tileSpan(canyon.x + 1, canyon.y, canyon.z), 16],
+      [...tileSpan(canyon.x, canyon.y - 1, canyon.z), 20],
+    ]
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) ranges.push([...sub(bounds, i, j, 2), 17])
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j += 3) ranges.push([...sub(bounds, i, j, 4), 18], [...sub(bounds, i, j, 4), 22])
+    const neighbours = [canyon, { ...canyon, x: canyon.x + 1 }, { ...canyon, y: canyon.y - 1 }, { ...canyon, x: canyon.x - 1, y: canyon.y - 1 }]
+    let drawn = 0
+    for (const args of ranges) {
+      const visited = new Set<string>()
+      forEachTileInBounds(args.slice(0, 4), args[4], tiling, (x, y, z) => visited.add(`${z}/${x}/${y}`))
+      for (const tile of neighbours) {
+        const expected = visited.has(`${tile.z}/${tile.x}/${tile.y}`)
+        expect(composedFrom(tiling, args, tile), `${args} draws ${tile.x}/${tile.y}`).toBe(expected)
+        drawn += expected ? 1 : 0
+      }
+      // A coarser tile under it never counts as drawn (only the clamped level is).
+      expect(composedFrom(tiling, args, { z: 15, x: canyon.x >> 1, y: canyon.y >> 1 })).toBe(
+        Math.max(Math.min(args[4], 16), 0) === 15
+      )
+    }
+    expect(drawn).toBeGreaterThan(ranges.length / 2) // the sweep isn't vacuous
+  })
+
+  it('regradeUsgs hands a match that missed the deadline to late, unless the tile aborts', async () => {
+    vi.useFakeTimers()
+    const graded = new Uint8Array([1, 2, 3])
+    match.grade.mockImplementation(async () => graded)
+    const params = { gain: 1 }
+    let give!: (p: unknown) => void
+    match.params.mockImplementation(() => new Promise((r) => (give = r)))
+    const body = new ArrayBuffer(8)
+    const late = vi.fn()
+    const signal = new AbortController().signal
+    const answer = regradeUsgs(body, canyon, signal, late)
+    await vi.advanceTimersByTimeAsync(MATCH_DEADLINE_MS)
+    await expect(answer).resolves.toBeNull()
+    expect(late).not.toHaveBeenCalled()
+    give(params)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(match.grade).toHaveBeenLastCalledWith(body, 'match', 'bmp', signal, params)
+    expect(late).toHaveBeenCalledWith(graded.buffer)
+
+    const aborts = new AbortController()
+    const never = vi.fn()
+    const missed = regradeUsgs(body, canyon, aborts.signal, never)
+    await vi.advanceTimersByTimeAsync(MATCH_DEADLINE_MS)
+    await expect(missed).resolves.toBeNull()
+    aborts.abort()
+    give(params)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(never).not.toHaveBeenCalled()
   })
 })

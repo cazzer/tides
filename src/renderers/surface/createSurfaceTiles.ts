@@ -58,6 +58,7 @@ import {
   installSurfaceGridCache,
   protectOverlayBitmaps,
   quietTilesetVersion,
+  refreshOverlayMaps,
   shareGridBytes,
   startFailedTileRetry,
   type SurfaceGridCache,
@@ -256,6 +257,11 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
   // the plugin's tree and wouldn't reload them (retryFailedTiles).
   const stopRetry = startFailedTileRetry(tiles, RETRY_FAILED_MS)
 
+  // A USGS tile matched after it was drawn (SurfaceImageryOverlay) changes
+  // its cached texture in place; the tiles drape clones of it, which upload
+  // again only when told.
+  overlay.onLateMatch = (sources) => refreshOverlayMaps(tiles, sources)
+
   const syncCounters = () => {
     const data = tiles.group.userData
     data.flatTiles = grids.flatTiles
@@ -266,6 +272,7 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     data.underEyeViews = viewError.underEye
     data.maxViewError = viewError.maxError
     data.imageryFallbacks = overlay.fallbacks
+    data.imageryLateMatches = overlay.lateMatches
     data.errorTarget = tiles.errorTarget
     data.edgeUploads = edges?.stats ?? null
   }
@@ -305,6 +312,7 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
       grids.shutDown()
       budget.dispose()
       decoder.dispose()
+      overlay.onLateMatch = null
       tiles.dispose()
     },
   }

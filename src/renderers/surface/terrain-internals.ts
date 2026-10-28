@@ -1115,3 +1115,20 @@ export function forEachCachedModel(tiles: TilesRenderer, callback: (scene: Objec
     if (scene) callback(scene, tile)
   }
 }
+
+/**
+ * Marks for upload every cached tile's map drawn from one of `sources`. The
+ * terrain plugin drapes a clone of the overlay's texture, and a clone keeps
+ * its own version: raising the overlay texture's leaves the clone's GPU copy
+ * as it was (SurfaceImageryOverlay's late match, tides-zmw.9.26).
+ */
+export function refreshOverlayMaps(tiles: TilesRenderer, sources: ReadonlySet<Source>): void {
+  forEachCachedModel(tiles, (scene) =>
+    scene.traverse((object) => {
+      const material = (object as Mesh).material
+      if (!material || Array.isArray(material)) return
+      const map = (material as MeshStandardMaterial).map
+      if (map && sources.has(map.source)) map.needsUpdate = true
+    })
+  )
+}
