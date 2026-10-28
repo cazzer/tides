@@ -253,7 +253,8 @@ describe('night lights in flight', () => {
   )
   function groundHazeSkyText(fragment: string) {
     const start = fragment.indexOf('\n// The sky over the sea at up')
-    const end = fragment.indexOf('\n  return sky;\n}\n', start)
+    // Through groundHazeSkyAt() (tides-d9f.11), the water's too.
+    const end = fragment.indexOf('\n  return sky;\n}\n', fragment.indexOf('vec3 groundHazeSkyAt(', start))
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
     return fragment.slice(start, end + '\n  return sky;\n}\n'.length)

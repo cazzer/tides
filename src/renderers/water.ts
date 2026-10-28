@@ -66,12 +66,14 @@
 //
 // The wave phases come from the CPU in double (update(): k.eye, which is
 // thousands of radians at Earth's radius, minus w t, both mod 2 pi), so the
-// GPU adds only k.ray, which is small near the eye and smooth (the ray from
-// view space through the ground's frame, as the haze's and the tiles'
-// base's). The frame is the ground haze's (GroundHaze.frame), filled per
-// camera before anything draws; update() runs after it.
+// GPU adds only k.ray, which is small near the eye and smooth (the globe's
+// from its vertices less the eye split in double, WATER_GLOBE_VERTEX; the
+// tiles' from view space through their base's frame). The frame is the
+// ground haze's (GroundHaze.frame), filled per camera before anything draws;
+// update() runs after it.
 //
-// No varyings; two samplers (the climate and the noise, the depth). The globe's pieces go in at: the body and the waves just
+// One varying on the globe (its ray: few vertices), none on the tiles; two
+// samplers (the climate and the noise, the depth). The globe's pieces go in at: the body and the waves just
 // before emissivemap_fragment (after
 // every patch's normal_fragment_maps code, so the ground detail's groundUp
 // stays the unbent normal), the glint after lights_phong_pars_fragment
@@ -335,6 +337,15 @@ export function waveStep(w: WaterWave, up: Vec3, footprint: number): number {
 /** A wave's weight at a phase `step` per pixel for its `gain`. */
 export function waveWeight(step: number, gain = 1): number {
   return 1 - smoothstep(WATER_FADE_START * TAU, WATER_FADE_END * TAU, step * WATER_GLINT_HARMONIC * gain ** 0.25)
+}
+
+/** A wave's slope as the GLSL draws it (its part of waterGrad, the height's
+ * gradient in the ground's frame) at its `phase` here, in `sea` at
+ * `footprint`, with no swell groups or bend. */
+export function waveSlope(w: WaterWave, up: Vec3, sea: WaterSea, footprint: number, phase: number): Vec3 {
+  const { dt } = levelPart(w, up)
+  const s = weightAt(w, up, sea, footprint) * Math.sqrt(waveGain(w, up, sea)) * w.slope * Math.sin(phase)
+  return [-s * dt[0], -s * dt[1], -s * dt[2]]
 }
 
 /** A wave's slope variance in `sea` at `gain`. */
@@ -703,7 +714,9 @@ const waveFaded = (w: WaterWave) => /* glsl */ `
 /** A pixel's narrower step on the sea past which every wave has faded: the
  * longest's fade end, for any wave with a level share over WATER_FADED_LEVEL
  * and a gain over WATER_FADED_GAIN (those under have next to no slope to
- * draw). */
+ * draw). The GLSL scales the step by the pixel's least gain (a wave fades on
+ * its step times its gain's fourth root): where every wave's gain is over
+ * WATER_FADED_GAIN, the cheaper paths come in that much nearer the eye. */
 const WATER_FADED_LEVEL = 0.3
 const WATER_FADED_GAIN = 0.02
 const fadedStep = (waves: readonly WaterWave[]) =>
@@ -720,23 +733,24 @@ const noiseTap = (i: number) => {
   return `waterNoiseAt(${f(n / TAU)} * ${turned} + ${v2([((i * 0.618) % 1) * 64, ((i * 0.382 + 0.25) % 1) * 64])}, waterLod + ${f(Math.log2(n))})`
 }
 
-// The waves where some have not faded, longest first: on the full tier, in
-// steps of WATER_WAVE_TIER, where the shorter ones all have (fadedStep() of
-// theirs), only the longer drawn and the shorter's variance; else every
-// wave drawn.
+// The waves, longest first, in groups of WATER_WAVE_TIER on the full tier
+// (the low tier's in one): each group drawn, or where it and every shorter
+// wave have faded (fadedStep() of theirs), only its variance. So a pixel
+// draws the longer waves and sums the shorter's variance, with each wave's
+// code once either way.
 const WATER_WAVE_TIER = 4
 const wavesByStep = (waves: readonly WaterWave[]) => {
   const sorted = [...waves].sort((a, b) => b.lambda - a.lambda)
+  const size = waves.length > WATER_WAVES_LOW ? WATER_WAVE_TIER : sorted.length
   let code = ''
-  if (waves.length > WATER_WAVES_LOW) {
-    for (let keep = WATER_WAVE_TIER; keep < sorted.length; keep += WATER_WAVE_TIER) {
-      const short = sorted.slice(keep)
-      code += ` else if (waterNarrow > ${e(fadedStep(short))}) {${sorted.slice(0, keep).map(wave).join('')}${short.map(waveFaded).join('')}
+  for (let start = 0; start < sorted.length; start += size) {
+    const group = sorted.slice(start, start + size)
+    code += `
+    if (waterFadedNarrow > ${e(fadedStep(sorted.slice(start)))}) {${group.map(waveFaded).join('')}
+    } else {${group.map(wave).join('')}
     }`
-    }
   }
-  return `${code} else {${sorted.map(wave).join('')}
-    }`
+  return code
 }
 
 // After the prelude (waterRay, waterUpGround, waterUpView and
@@ -796,12 +810,18 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
       waterGroups = ${f(WATER_SWELL_GROUPS)} * (1.0 - smoothstep(${f(WATER_SWELL_KM[1] / 16)}, ${f(WATER_SWELL_KM[1] / 8)}, waterPx * ${f(EARTH_KM_PER_UNIT)}));
     }
     // The narrower of the pixel's two steps (the smaller singular value of
-    // the pair): past fadedStep every wave has faded, so the cheap path;
-    // on the full tier, past the shorter waves', theirs.
+    // the pair): past a group's fadedStep it and every shorter wave have
+    // faded, so only their variance (wavesByStep()). The groups take it
+    // times the fourth root of the least gain any wave has here (each wave's
+    // waterF at its weakest: the lesser of the wind's and the swell's, its
+    // groups' and its pull off the axis'), over WATER_FADED_GAIN's.
     float waterGa = dot(waterRx, waterRx);
     float waterGb = dot(waterRx, waterRy);
     float waterGc = dot(waterRy, waterRy);
     float waterNarrow = sqrt(max(0.5 * (waterGa + waterGc) - sqrt(0.25 * (waterGa - waterGc) * (waterGa - waterGc) + waterGb * waterGb), 0.0));
+    float waterGroupsMin = max(1.0 - waterGroups * length(waterGroupNoise), 0.2);
+    float waterGainMin = min(waterWindF, waterSwellF) * waterGroupsMin * waterGroupsMin * (1.0 - ${f(WATER_ALIGN)} * waterSettled);
+    float waterFadedNarrow = waterNarrow * sqrt(sqrt(max(waterGainMin, ${f(WATER_FADED_GAIN)}) / ${f(WATER_FADED_GAIN)}));
     // The sparkle's cell: Earth-fixed, a power of two in metres under the
     // narrower step, so each pixel draws its own; and the facets it spans.
     float waterCellLevel = clamp(floor(log2(max(waterNarrow * ${f(METRES_PER_UNIT)}, 1e-3))), -2.0, 10.0);
@@ -822,8 +842,7 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterS;
     float waterWarp = 0.0;
     float waterWarpK = 0.0;
-    if (waterNarrow > ${e(fadedStep(waves))}) {${waves.map(waveFaded).join('')}
-    }${wavesByStep(waves)}
+${wavesByStep(waves)}
     waterVarAlong = max(waterAlong, ${f(WATER_MSS_FLOOR / 2)});
     waterVarCross = max(waterCross, ${f(WATER_MSS_FLOOR / 2)});
     waterMss = waterVarAlong + waterVarCross;
@@ -842,6 +861,11 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
 // (waterSkyBody) dim it, not the Sun's shadow. The ground's own sky fill
 // (groundDetail.ts) leaves the water to this.
 const SKY_LIGHT_EL = (WATER_SKY_LIGHT_ELEVATION * Math.PI) / 180
+/** The skylight's direction in the sky-view table (haze.glsl skyViewTexel():
+ * u the azimuth from the Sun's over pi, v the elevation squeezed toward the
+ * horizon): 90 deg round from the Sun, at WATER_SKY_LIGHT_ELEVATION, one
+ * texel wherever the sea is. */
+export const WATER_SKY_LIGHT_UV = [0.5, 0.5 + 0.5 * Math.sqrt(SKY_LIGHT_EL / (Math.PI / 2))] as const
 const SKY = /* glsl */ `
 #if NUM_DIR_LIGHTS > 0
 if (material.specularStrength > 0.0) {
@@ -878,8 +902,8 @@ if (material.specularStrength > 0.0) {
     // seen: without this it took Fresnel 1 and the horizon's sky.
     vec3 waterReflection = waterFresnel * smoothstep(0.0, 0.05, waterNv) * groundHazeSky(waterUpGround, waterReflected);
     // The skylight's irradiance, pi times the sky's mean, from the one
-    // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION),
-    // into the body through Lambert, less what the surface reflects on the
+    // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION; on
+    // the table one texel, WATER_SKY_LIGHT_UV), into the body through Lambert, less what the surface reflects on the
     // way out, on deep water's own colour (the maps under the globe and the
     // tiles differ, and the sky's light on them showed the seam) under the
     // depth's tint over deep water's (./waterDepth.ts: lighter and greener
@@ -888,8 +912,8 @@ if (material.specularStrength > 0.0) {
     float waterSide2 = dot(waterSide, waterSide);
     waterSide = waterSide2 > 1e-10 ? waterSide * inversesqrt(waterSide2)
       : normalize(cross(waterUpGround, abs(waterUpGround.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
-    vec3 waterSkyLight = PI * groundHazeSky(waterUpGround,
-      waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))});
+    vec3 waterSkyLight = PI * groundHazeSkyAt(waterUpGround,
+      waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))}, ${v2(WATER_SKY_LIGHT_UV)});
     vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(${v3(WATER_DEEP)} * waterTint(waterDepth) / ${v3(WATER_TINT_DEEP)});
     reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;
     waterSkyBody = ${f(WATER_BODY_SKY)} * material.specularStrength * waterDay * waterBodyLight;
@@ -909,17 +933,18 @@ export function WATER_GLSL(waves: readonly WaterWave[]) {
 }
 
 /** Each chain's prelude, run first in the normal piece: the ray, the level
- * up in both frames and the frame. The globe's from view space through the
- * haze's frame; the tiles' from their base's (tile-material.ts). */
+ * up in both frames and the frame. The globe's ray from its own varying
+ * (WATER_GLOBE_VERTEX); the tiles' from their base's (tile-material.ts). */
 export const WATER_PRELUDE = {
   globe: {
     head: /* glsl */ `
 uniform mat3 uWaterViewToGround;
 uniform vec3 uWaterEyeGround;
+varying vec3 vWaterRay;
 `,
     body: /* glsl */ `
 waterViewToGround = uWaterViewToGround;
-waterRay = uWaterViewToGround * -vViewPosition;
+waterRay = vWaterRay;
 waterUpGround = normalize(uWaterEyeGround + waterRay);
 waterUpView = waterUpGround * uWaterViewToGround;
 ${WATER_DEPTH_SAMPLE.globe}`,
@@ -935,6 +960,30 @@ ${WATER_DEPTH_SAMPLE.tiles}`,
   },
 } as const
 
+// The globe's ray, per vertex (tides-rlj): its point in the ground's frame
+// (fixed to the Earth) less the eye, from the CPU in double as two floats
+// (uWaterEyeHi + uWaterEyeLo), the near ones' difference exact. Phong's
+// vViewPosition, through modelViewMatrix in float, carried ~0.4 m of error
+// at Earth's radius that changed with every move of the camera, so the
+// shorter waves and the sparkle's cells swam under a moving eye. The tiles'
+// view space is the tile's own, small and exact.
+export const WATER_GLOBE_VERTEX = {
+  head: /* glsl */ `
+uniform vec3 uWaterEyeHi;
+uniform vec3 uWaterEyeLo;
+varying vec3 vWaterRay;
+`,
+  body: /* glsl */ `
+vWaterRay = (transformed - uWaterEyeHi) - uWaterEyeLo;
+`,
+}
+
+/** `x` as two floats, the second what the first rounds off. */
+export function splitDouble(x: number): [number, number] {
+  const hi = Math.fround(x)
+  return [hi, x - hi]
+}
+
 export interface Water {
   /** The phases, by wave index, and the wave climate (shared by every
    * program that takes the water). */
@@ -943,11 +992,14 @@ export interface Water {
     uWaterSea: THREE.IUniform<THREE.DataArrayTexture>
     uWaterSparkleEye: THREE.IUniform<THREE.Vector3>
     uWaterTwinkle: THREE.IUniform<number>
+    /** The eye in the ground's frame, split (WATER_GLOBE_VERTEX). */
+    uWaterEyeHi: THREE.IUniform<THREE.Vector3>
+    uWaterEyeLo: THREE.IUniform<THREE.Vector3>
   }
   /** Moves the waves on by `dt` seconds, unless `reduced` (prefers-reduced-motion). */
   advance(dt: number, reduced: boolean): void
   /** For each camera before anything draws, after the frame's update
-   * (GroundHaze.update): the phases at its eye. */
+   * (GroundHaze.update): the phases at its eye, and the eye split. */
   update(): void
 }
 
@@ -958,6 +1010,8 @@ export function createWater(frame: GroundHaze['frame']): Water {
     uWaterSea: { value: waterSeaTexture() },
     uWaterSparkleEye: { value: new THREE.Vector3() },
     uWaterTwinkle: { value: 0 },
+    uWaterEyeHi: { value: new THREE.Vector3() },
+    uWaterEyeLo: { value: new THREE.Vector3() },
   }
   const eye: [number, number, number] = [0, 0, 0]
   let time = 0
@@ -971,6 +1025,9 @@ export function createWater(frame: GroundHaze['frame']): Water {
       waterPhases(eye, time, uniforms.uWavePhase.value)
       waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)
       uniforms.uWaterTwinkle.value = (time * WATER_TWINKLE_HZ) % 65536
+      const split = eye.map(splitDouble)
+      uniforms.uWaterEyeHi.value.set(split[0][0], split[1][0], split[2][0])
+      uniforms.uWaterEyeLo.value.set(split[0][1], split[1][1], split[2][1])
     },
   }
 }
@@ -1005,6 +1062,11 @@ export function waterPatch(
   return {
     onBeforeCompile(shader) {
       Object.assign(shader.uniforms, uniforms)
+      shader.vertexShader = injectWater(
+        injectWater(shader.vertexShader, 'common', WATER_GLOBE_VERTEX.head),
+        'project_vertex',
+        WATER_GLOBE_VERTEX.body
+      )
       let fragment = injectWater(shader.fragmentShader, 'common', WATER_PRELUDE.globe.head + glsl.head)
       fragment = injectWater(fragment, 'lights_phong_pars_fragment', glsl.direct)
       fragment = injectWater(fragment, 'emissivemap_fragment', WATER_PRELUDE.globe.body + glsl.normal, true)
