@@ -5,9 +5,9 @@ import sunVertex from '../shaders/sun/vertex.glsl'
 import sunFragment from '../shaders/sun/fragment.frag'
 import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
-import { meshBounds } from '@react-three/drei'
 import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE } from './corona-geometry'
 import { SunGlare } from './SunGlare'
+import { sunRaycast } from './sun-pick'
 import { useStore } from '../store'
 import { isLowQuality } from '../quality'
 import { sunSurface } from './sun-surface'
@@ -177,7 +177,7 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
       <mesh
         ref={mesh}
         geometry={sphere}
-        raycast={meshBounds}
+        raycast={sunRaycast}
         onBeforeRender={onBeforeRender}
       >
         <primitive
