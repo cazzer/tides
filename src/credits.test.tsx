@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import { COPERNICUS_DEM_NOTICE, Credits, ETOPO_URL, GIBS_ACKNOWLEDGEMENT } from './Credits'
+import { COPERNICUS_DEM_NOTICE, COPERNICUS_MARINE_WAVES_URL, Credits, ETOPO_URL, GIBS_ACKNOWLEDGEMENT } from './Credits'
 import { OPEN_METEO_SITE } from './forecast-clouds'
 
 // The credits the views used to draw over the scene, now in settings (tides-1qv).
@@ -38,6 +38,15 @@ describe('Credits', () => {
     expect(line).toContain('Weather data by Open-Meteo.com')
     expect(line).toContain('href="https://creativecommons.org/licenses/by/4.0/"')
     expect(line).toMatch(/CC BY 4.0<\/a>, adapted\)/)
+  })
+
+  test('credits the wave climate to Open-Meteo, adapted, and its Copernicus Marine source', () => {
+    const line = html.match(/<li>Sea state \(wave climate\):.*?<\/li>/)?.[0] ?? ''
+    expect(line).toContain(`href="${OPEN_METEO_SITE}"`)
+    expect(line).toContain('href="https://creativecommons.org/licenses/by/4.0/"')
+    expect(line).toMatch(/CC BY 4.0<\/a>, adapted: seasonal means resampled to 7.5°\)/)
+    expect(line).toContain(`href="${COPERNICUS_MARINE_WAVES_URL}"`)
+    expect(line).toContain('generated using E.U. Copernicus Marine Service Information')
   })
 
   test("credits Mapterhorn's terrain with the Copernicus notice and its per-source attribution", () => {
