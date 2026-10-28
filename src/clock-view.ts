@@ -41,6 +41,17 @@ export function leaveClock(ride: ClockRide): void {
   ride.entryEase = CLOCK_FRAMING_EASE
 }
 
+/**
+ * Whether the clock ride may move the eye this frame: not while the Earth
+ * pivot's `tilt` eases out after leaving Earth focus (tides-oyd). tiltControls
+ * takes any outside write to the camera as a new untilted pose and tilts it
+ * again, so riding then would compound the tilt every frame and spin the
+ * view; until it reaches 0 the view only turns to the clock.
+ */
+export function clockRideAllowed(tilt: number): boolean {
+  return tilt === 0
+}
+
 export function rideWithClock(
   position: Vector3,
   orbitTarget: Vector3,

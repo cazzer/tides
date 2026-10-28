@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { OrthographicCamera, Spherical, Vector3 } from 'three'
+import { OrthographicCamera, PerspectiveCamera, Spherical, Vector3 } from 'three'
+import { OrbitControls } from 'three-stdlib'
 import {
   CLOCK_FRAMING_EASE,
   CLOCK_VIEW,
+  clockRideAllowed,
   clockViewOffset,
   leaveClock,
   rideWithClock,
   type ClockRide,
 } from './clock-view'
 import { EARTH_ORBIT_RADIUS, earthAngle } from './ephemeris'
+import { turnTarget } from './main-view'
+import { settlePivot, tiltControls, type Pivot } from './pivot'
 
 const DEG = Math.PI / 180
 const CLOCK_RADIUS = 29
@@ -263,5 +267,54 @@ describe('rideWithClock', () => {
     expect(position.clone().sub(target).distanceTo(expected)).toBeLessThan(
       1e-9
     )
+  })
+})
+
+describe('the clock ride after a tilted Earth close-up (tides-oyd)', () => {
+  // camera.tsx's frame: OrbitControls' update (drei, priority -1) through
+  // tiltControls, then CameraProvider's ride or turn, then the pivot settles.
+  function switchToClock(guarded: boolean) {
+    const camera = new PerspectiveCamera(30)
+    camera.position.set(0, 0, 8)
+    const controls = new OrbitControls(camera)
+    const pivot: Pivot = { tilt: 0.7, heading: 0.3, depth: 1 }
+    tiltControls(controls, camera, pivot, () => 3)
+    controls.update()
+    const clock = clockAt(0.5)
+    const target = controls.target.clone()
+    const ride: ClockRide = { angle: null, ease: 0, entryEase: CLOCK_FRAMING_EASE }
+    let swept = 0
+    let firstRide = -1
+    const previous = new Vector3().subVectors(camera.position, controls.target).normalize()
+    const direction = new Vector3()
+    for (let frame = 0; frame < 600; frame++) {
+      controls.update()
+      if (!guarded || clockRideAllowed(pivot.tilt)) {
+        if (firstRide < 0) firstRide = frame
+        rideWithClock(camera.position, controls.target, target, clock, ride, 0.05)
+      } else {
+        leaveClock(ride)
+        turnTarget(target, camera.position, clock, 0.05)
+      }
+      camera.lookAt(target)
+      controls.target.copy(target)
+      settlePivot(pivot, null)
+      direction.subVectors(camera.position, controls.target).normalize()
+      swept += previous.angleTo(direction)
+      previous.copy(direction)
+    }
+    const framing = clockViewOffset(0.5).normalize()
+    return { swept: swept / DEG, firstRide, offFraming: direction.angleTo(framing) / DEG }
+  }
+
+  it('waits for the tilt to ease out, then eases into the framing without a spin', () => {
+    const { swept, firstRide, offFraming } = switchToClock(true)
+    expect(firstRide).toBeGreaterThan(60)
+    expect(swept).toBeLessThan(200)
+    expect(offFraming).toBeLessThan(0.1)
+  })
+
+  it('would spin if it rode through the ease-out', () => {
+    expect(switchToClock(false).swept).toBeGreaterThan(600)
   })
 })
