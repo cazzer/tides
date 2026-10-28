@@ -123,7 +123,7 @@ void main() {
 // (../cloud-types.ts, tides-tvr.4.4), so mixed as they are they are weighted
 // by it, as the heights are by trust above: a frame without types lowers the
 // confidence without pulling the shares towards nothing.
-const typeFragmentShader = /* glsl */ `
+export const TYPE_FRAGMENT_SHADER = /* glsl */ `
 uniform sampler2D uPrev;
 uniform sampler2D uA;
 uniform sampler2D uB;
@@ -288,7 +288,7 @@ export function createCloudBlender() {
         uFade: { value: 0 },
       },
       vertexShader,
-      fragmentShader: typeFragmentShader,
+      fragmentShader: TYPE_FRAGMENT_SHADER,
       depthTest: false,
       depthWrite: false,
       blending: THREE.NoBlending,

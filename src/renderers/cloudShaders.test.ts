@@ -1472,6 +1472,10 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
     const fn = src.slice(src.indexOf('vec4 cloudTypeShares('), src.indexOf('void cloudLook('))
     const f = (x: number) => x.toFixed(6)
+    // The grid's shares, premultiplied by its confidence, divided back
+    // (tides-tvr.4.4); its callers read it only where that is over 0.
+    expect(fn).toContain('vec3 shares = min(t.rgb / t.a, vec3(1.0));')
+    expect(fn).toContain('vec4 s = vec4(shares, max(1.0 - shares.r - shares.g - shares.b, 0.0));')
     // Each rule's edges, from ../cloud-types.ts, and the rule itself.
     for (const line of [
       `float w = ${f(IR_WEIGHT)} * raw.b;`,
@@ -1644,6 +1648,19 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     ['CLOUD_FLAT', 'FLIP_SIDED'],
     ['FLIP_SIDED', 'FOG_EASE'],
   ]
+  it("never tops an untyped column over the map's tallest, so the typed column needs no branch for it (tides-tvr.4.8)", () => {
+    for (const measured of [0, 1]) {
+      for (let k = 0; k <= 20; k++) {
+        for (const r of [0, 0.5, 1]) {
+          for (const coverage of [0, 0.5, 1]) {
+            const alpha = k / 20
+            expect(cloudTopKm(r, coverage, alpha, measured) * cloudShape(alpha)).toBeLessThanOrEqual(maxTopKm(measured === 1))
+          }
+        }
+      }
+    }
+  })
+
   const columnOf = (src: string) => src.slice(src.indexOf('vec4 cloudColumn('), src.indexOf('float cloudShade('))
   for (const variant of variants) {
     const name = variant.join('+') || 'relief'
@@ -1685,18 +1702,8 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         }
         // With no branch for an untyped texel (tides-tvr.4.8): B 0 lifts
         // nothing, and the min against the map's tallest leaves the untyped
-        // top as it is, measured or not.
+        // top as it is (the test after these).
         expect(column).not.toMatch(/if \(typedTop\.b/)
-        for (const measured of [0, 1]) {
-          for (let k = 0; k <= 20; k++) {
-            for (const r of [0, 0.5, 1]) {
-              for (const coverage of [0, 0.5, 1]) {
-                const alpha = k / 20
-                expect(cloudTopKm(r, coverage, alpha, measured) * cloudShape(alpha)).toBeLessThanOrEqual(maxTopKm(measured === 1))
-              }
-            }
-          }
-        }
         expect(src).toContain('uniform sampler2D uCloudTops;')
         expect(src).toContain(TYPED_TOPS_GLSL)
         expect(src).toContain(`#define TYPED_TOPS_KM ${TYPED_TOPS_KM.toFixed(6)}`)
