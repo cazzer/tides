@@ -109,7 +109,7 @@ describe('typeGridImage', () => {
     expect(typeGridImage({ ...uniform(0, 0, 0), layers: null }, () => START)).toBeNull()
   })
 
-  test('TYPE_W x TYPE_H RGBA: cirrus, cumulus, alto, confidence', () => {
+  test('TYPE_W x TYPE_H RGBA: cirrus, cumulus, alto (times confidence), confidence', () => {
     const image = typeGridImage(uniform(0, 1, 0), () => START)!
     expect(image).toHaveLength(TYPE_W * TYPE_H * 4)
     expect(texel(image, 10, 10)).toEqual([0, 0, 255, 255])
@@ -166,7 +166,25 @@ describe('typeGridImage', () => {
     expect(texel(image, 20, TYPE_H - 1)).toEqual(texel(image, 20, TYPE_H - 2))
     expect(texel(image, 20, TYPE_H - 1)[3]).toBe(Math.round(255 * smoothstep(0.02, 0.15, 0.08)))
     expect(texel(image, 20, 0)).toEqual(texel(image, 20, 1))
-    expect(texel(image, 20, 0)[1]).toBe(255)
+    // All cumulus, premultiplied by its confidence.
+    expect(texel(image, 20, 0)[1]).toBe(texel(image, 20, 0)[3])
+    expect(texel(image, 20, 0)[3]).toBeGreaterThan(0)
+  })
+
+  test('shares premultiplied by confidence: filtered toward a clear texel, a type fades toward untyped (tides-tvr.4.4)', () => {
+    // Thin high cloud, a third of the way to full confidence.
+    const thin = texel(typeGridImage(uniform(0, 0, 0.04), () => START)!, 10, 10)
+    const confidence = smoothstep(0.02, 0.15, 0.04)
+    expect(thin).toEqual([Math.round(255 * confidence), 0, 0, Math.round(255 * confidence)])
+    // Halfway from a confident cumulus texel to a clear one, as a bilinear
+    // filter reads it: the shares, divided back (cloudLook()), are still all
+    // cumulus, at half the confidence; not half stratus.
+    const cumulus = texel(typeGridImage(uniform(0.3, 0, 0), () => START)!, 10, 10)
+    const clear = texel(typeGridImage(uniform(0, 0, 0), () => START)!, 10, 10)
+    expect(clear).toEqual([0, 0, 0, 0])
+    const half = cumulus.map((v, i) => (v + clear[i]) / 2)
+    expect(half.slice(0, 3).map((v) => v / half[3])).toEqual([0, 1, 0])
+    expect(half[3] / 255).toBe(0.5)
   })
 
   test('linear in time between hours', () => {
