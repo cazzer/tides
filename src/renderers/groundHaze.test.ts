@@ -495,7 +495,7 @@ describe('the sky the sea mirrors (tides-d9f.4)', () => {
       'float column = columnAhead(point, rd, sqrt(6.2831853 * uSurface * uScaleHeight), at);',
       'return hazeSky(column, at, uGroundHazeSun, rd, point);',
       'if (table > 0.0) sky = mix(sky, skyViewGlow(rd, up * uSeaLevel, uGroundHazeSun), table);',
-      // The water's skylight: the same sky, its table texel given.
+      // The water's skylight: the same sky, its table texel given, addressed as skyViewTexel() addresses it.
       'if (table > 0.0) sky = mix(sky, textureLod(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize, 0.0).rgb, table);',
     ]) {
       expect(shader.fragmentShader).toContain(line)
@@ -504,6 +504,8 @@ describe('the sky the sea mirrors (tides-d9f.4)', () => {
     const f = shader.fragmentShader
     expect(f.indexOf('vec3 groundHazeSky(')).toBeLessThan(f.indexOf('#undef uSeaLevel'))
     expect(f.indexOf('vec3 groundHazeSkyAt(')).toBeLessThan(f.indexOf('#undef uSeaLevel'))
+    // The skylight's texel addressed as haze.glsl's skyViewTexel() addresses it.
+    expect(hazeGlsl).toContain('return textureLod(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize, 0.0);')
     // The water lifts its reflected ray as the port does.
     expect(WATER_GLSL(WATER_WAVE_TABLE).sky).toContain(
       'waterReflected = normalize(waterReflected - waterUpGround * min(dot(waterReflected, waterUpGround), 0.0) + waterUpGround * 1e-4);'

@@ -262,16 +262,19 @@ vec3 groundHazeAnalytic(vec3 up, vec3 rd) {
 }
 vec3 groundHazeSky(vec3 up, vec3 rd) {
   float table = groundHazeTable();
-  vec3 sky = table < 1.0 ? groundHazeAnalytic(up, rd) : vec3(0.0);
+  vec3 sky = vec3(0.0);
+  if (table < 1.0) sky = groundHazeAnalytic(up, rd);
   if (table > 0.0) sky = mix(sky, skyViewGlow(rd, up * uSeaLevel, uGroundHazeSun), table);
   return sky;
 }
 // The same where the caller knows rd's coordinate in the table, uv,
 // wherever the sea is (the water's skylight: 90 deg round from the Sun at
-// one elevation is one texel): the table's texel there, without the trig.
+// one elevation is one texel): the table's texel there, without the trig
+// (its addressing skyViewTexel()'s in haze.glsl; groundHaze.test.ts pins both).
 vec3 groundHazeSkyAt(vec3 up, vec3 rd, vec2 uv) {
   float table = groundHazeTable();
-  vec3 sky = table < 1.0 ? groundHazeAnalytic(up, rd) : vec3(0.0);
+  vec3 sky = vec3(0.0);
+  if (table < 1.0) sky = groundHazeAnalytic(up, rd);
   if (table > 0.0) sky = mix(sky, textureLod(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize, 0.0).rgb, table);
   return sky;
 }

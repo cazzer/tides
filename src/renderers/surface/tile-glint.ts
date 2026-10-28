@@ -33,7 +33,7 @@
 // salt marsh, a beach the DEM flattens to 0) under the coarse mask's spill
 // glints as water, since at 0 m the DEM can't tell it from the sea.
 //
-// No varyings, no feature defines: one tap of the mask (filtered for the
+// No varyings, no defines of its own: one tap of the mask (filtered for the
 // pixel, no implicit derivatives) and one of the grid, after the base's
 // anchor (below three's specularmap_fragment and the base's
 // specularStrength = 0), skipped on tiles with no water under them
@@ -42,7 +42,9 @@
 // for Phong's and its sky after lights_fragment_end, each skipped where the
 // strength is 0 (the land, as it was). The water's prelude takes the
 // base's ray, up and frame; its phases are the globe's (link.water), its
-// depth the globe's map (link.maps.depth) at surfaceGlobeUv. No
+// depth the globe's map (link.maps.depth) at surfaceGlobeUv; over deep
+// open water its body the globe's day map (DEEP_DAY, the colour feature's
+// map, behind its TILE_COLOUR_DAY: one more tap there). No
 // longer gated on the Sun: the sky's reflection lights the sea through
 // twilight, and the glint goes out under the level horizon by itself. The
 // sky reads the ground haze's groundHazeSky(), so the haze (after the glint
@@ -80,6 +82,8 @@ const WATER = WATER_GLSL(WATER_WAVE_TABLE)
 const HEAD = /* glsl */ `
 uniform sampler2D uTileSpecularMap;
 uniform float uTileWet;
+// The globe's mask here, for the deep water's colour too.
+float glintMask = 0.0;
 `
 
 // The library's tiles always bind the grid as the bump map; without one
@@ -88,7 +92,7 @@ uniform float uTileWet;
 // mips, so the same texel texture2D read).
 const SPECULAR = /* glsl */ `
 if (uTileWet > 0.5) {
-  float glintMask = surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r;
+  glintMask = surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r;
   #ifdef USE_BUMPMAP
     float glintSea = 1.0 - smoothstep(${f(GLINT_SEA_LEVEL[0])}, ${f(GLINT_SEA_LEVEL[1])}, abs(textureLod(bumpMap, vBumpMapUv, 0.0).x));
   #else
@@ -143,17 +147,26 @@ export function regionHasWater(grid: Uint8Array, region: readonly number[]): boo
 /** The depths (m) over which the water's body goes from the imagery's
  * colour to the globe's day map's (tides-d9f.8). */
 export const TILE_DAY_DEPTH = [30, 200] as const
+/** The globe's mask over which it does: open water only. */
+export const TILE_DAY_MASK = [0.9, 1.0] as const
 
 // Over deep water the body takes the globe's day map (tides-d9f.8): the
 // imagery's open sea (EOX's mosaic) is darker than the day map and changes
 // from tile to tile, so the tiles' sea met the globe's (where tiles were
 // still streaming in, or ran out) and its own neighbours at straight seams.
-// The banks, shelves and lagoons keep the imagery's. The day map is the
-// colour feature's (tile-colour.ts uColourDay: no texture unit of its own).
+// The banks, shelves and lagoons keep the imagery's, and so does water
+// within a texel of the globe's mask of the shore (TILE_DAY_MASK: its
+// coarse texels, and the day map's, take in the land where a deep fjord or
+// a steep island's drop-off meets the coast). The day map is the colour
+// feature's (tile-colour.ts uColourDay: no texture unit of its own), read
+// only where it is mixed in.
 const DEEP_DAY = /* glsl */ `
 #ifdef TILE_COLOUR_DAY
-if (uTileWet > 0.5) diffuseColor.rgb = mix(diffuseColor.rgb, surfaceGlobeTex(uColourDay, surfaceGlobeUv).rgb,
-  specularStrength * smoothstep(${f(TILE_DAY_DEPTH[0])}, ${f(TILE_DAY_DEPTH[1])}, waterDepth));
+{
+  float glintDeep = specularStrength * smoothstep(${f(TILE_DAY_DEPTH[0])}, ${f(TILE_DAY_DEPTH[1])}, waterDepth)
+    * smoothstep(${f(TILE_DAY_MASK[0])}, ${f(TILE_DAY_MASK[1])}, glintMask);
+  if (glintDeep > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, surfaceGlobeTex(uColourDay, surfaceGlobeUv).rgb, glintDeep);
+}
 #endif
 `
 

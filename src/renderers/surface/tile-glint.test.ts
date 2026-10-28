@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
-import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_DAY_DEPTH, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
+import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_DAY_DEPTH, TILE_DAY_MASK, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
 import { createTileComposer, SURFACE_ANCHORS, type TerrainPhongMaterial } from './tile-material'
 import { compiled, fakeLink, tileMesh } from './tile-test-fixtures'
 import { TILE_FEATURES } from './tile-features'
@@ -62,6 +62,11 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(deep).toContain('#ifdef TILE_COLOUR_DAY')
     expect(deep).toContain('surfaceGlobeTex(uColourDay, surfaceGlobeUv)')
     expect(deep).toContain(`specularStrength * smoothstep(${TILE_DAY_DEPTH.map((d) => d.toFixed(6)).join(', ')}, waterDepth)`)
+    // Open water only, by the globe's mask (the tap set in the strength's branch), and the map read only where it's mixed.
+    expect(deep).toContain(`smoothstep(${TILE_DAY_MASK.map((d) => d.toFixed(6)).join(', ')}, glintMask)`)
+    expect(deep).toMatch(/if \(glintDeep > 0\.0\) diffuseColor\.rgb = mix\(/)
+    expect(TILE_GLINT_GLSL.head).toContain('float glintMask = 0.0;')
+    expect(TILE_GLINT_GLSL.specular).toContain('  glintMask = surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r;')
     // After the prelude's depth, before the body tints the colour.
     const f = TILE_GLINT_GLSL.normal
     expect(f.indexOf('waterDepth = ')).toBeLessThan(f.indexOf(deep))

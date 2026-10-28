@@ -673,7 +673,11 @@ describe('the waves (tides-07z)', () => {
       expect(Math.fround(hi)).toBe(hi)
       expect(hi + lo).toBe(x)
     }
-    expect(WATER_GLOBE_VERTEX.body).toContain('(transformed - uWaterEyeHi) - uWaterEyeLo')
+    // The shader's own line: the split eye's halves taken off the point in turn.
+    const eye: V = [1.2003, 2.1002, -1.6001]
+    const split = eye.map(splitDouble)
+    const out = runGlsl(WATER_GLOBE_VERTEX.body, { transformed: point, uWaterEyeHi: split.map((h) => h[0]), uWaterEyeLo: split.map((h) => h[1]) })
+    for (let i = 0; i < 3; i++) expect((out.vWaterRay as number[])[i]).toBeCloseTo(point[i] - eye[i], 12)
     expect(WATER_PRELUDE.globe.body).toContain('waterRay = vWaterRay;')
   })
 
