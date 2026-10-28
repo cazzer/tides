@@ -16,8 +16,9 @@
 //
 // The grid is the elevation map's (scripts/build-earth-dem.mjs, run it
 // first): rows north to south, columns from longitude −180° east, each
-// texel the mean of max(0, −elevation) over the ETOPO cells whose centres
-// fall in it. Wet or dry is the shipped elevation map's call, not ETOPO's,
+// texel the mean depth of the ETOPO cells under the sea whose centres fall
+// in it (the land's cells left out, so a coast texel mostly land reads the
+// sea off it, not a few metres; none under the sea, 0 m). Wet or dry is the shipped elevation map's call, not ETOPO's,
 // so the two agree texel for texel: a texel above 0 m there is dry (land,
 // and the lakes above sea level, the Great Lakes among them). The Caspian,
 // whose surface (−28 m) that map clamps to 0, is wet, and takes ETOPO's
@@ -101,6 +102,7 @@ const rowOf = (r) => Math.floor(((r + 0.5) * HEIGHT) / SOURCE_H);
 
 const sum = new Float64Array(WIDTH * HEIGHT);
 const count = new Uint32Array(WIDTH * HEIGHT);
+const seaCount = new Uint32Array(WIDTH * HEIGHT);
 const BLOCK = 200;
 const buffer = Buffer.alloc(BLOCK * SOURCE_W * 4);
 for (let r0 = 0; r0 < SOURCE_H; r0 += BLOCK) {
@@ -112,8 +114,12 @@ for (let r0 = 0; r0 < SOURCE_H; r0 += BLOCK) {
     const row = rowOf(r0 + i) * WIDTH;
     for (let c = 0; c < SOURCE_W; c++) {
       const k = row + columnOf[c];
-      sum[k] += Math.max(0, -values[i * SOURCE_W + c]);
+      const elevationHere = values[i * SOURCE_W + c];
       count[k]++;
+      if (elevationHere < 0) {
+        sum[k] -= elevationHere;
+        seaCount[k]++;
+      }
     }
   }
 }
@@ -132,7 +138,7 @@ let wet = 0;
 for (let k = 0; k < WIDTH * HEIGHT; k++) {
   if (!count[k]) throw new Error(`No ETOPO cell in texel ${k % WIDTH}, ${Math.floor(k / WIDTH)}`);
   if (elevation.metres[k] > 0) continue;
-  metres[k] = sum[k] / count[k];
+  metres[k] = seaCount[k] ? sum[k] / seaCount[k] : 0;
   filled[k] = 1;
   wet++;
 }

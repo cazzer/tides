@@ -53,7 +53,7 @@ import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
 import { SKY_DAY, SKY_RADIANCE_GLSL } from './skyRadiance'
-import { WATER_DEEP, WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterTinted } from './waterDepth'
+import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterTinted } from './waterDepth'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
 export const WATER_WAVES = 12
@@ -72,8 +72,9 @@ export const WATER_MSS = 0.034
 export const WATER_MSS_BASE = 0.012
 /** Water's reflectance looking straight down. */
 export const WATER_F0 = 0.02
-/** Deep water's body colour (linear), the open ocean's floor. */
-export { WATER_DEEP }
+/** Deep water's body colour (linear): the map's ocean darker than it is
+ * lifted to it. */
+export const WATER_DEEP: readonly [number, number, number] = [0.008, 0.022, 0.045]
 
 const G = 9.81
 const TAU = 2 * Math.PI

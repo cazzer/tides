@@ -15,8 +15,8 @@
 // ETOPO cells whose centres fall in it, sqrt-encoded (encodeWaterDepth) so
 // the shelf's first hundred metres get as many levels as the abyss's
 // thousands. Land (above sea level in the elevation map) and the lakes over
-// it take their wet neighbours' depth near the coast and
-// WATER_DEPTH_NEUTRAL beyond: a lake takes deep water's tint.
+// it take their wet neighbours' depth within three texels of the coast and
+// WATER_DEPTH_NEUTRAL beyond: a lake further inland takes deep water's tint.
 //
 // The model: waterTint(depth), a gain on the map's colour by channel, three
 // smoothsteps between four gains: from WATER_TINT_SHALLOW over sand a few
@@ -54,10 +54,6 @@ export const WATER_TINT_TRENCH: Rgb = [0.4, 0.4, 0.6]
  * second): the open sea's is 0.05-0.08, the Bahamas' banks 0.13. */
 export const WATER_KEEP: readonly [number, number] = [0.1, 0.16]
 
-/** Deep water's body colour (linear): the map's ocean darker than it is
- * lifted to it (./water.ts waterBody). */
-export const WATER_DEEP: Rgb = [0.008, 0.022, 0.045]
-
 /** A depth (m, positive down) as the map's grey level. */
 export function encodeWaterDepth(metres: number): number {
   return Math.round(255 * Math.sqrt(Math.min(Math.max(metres, 0), WATER_DEPTH_MAX) / WATER_DEPTH_MAX))
@@ -74,7 +70,9 @@ const smoothstep = (a: number, b: number, x: number) => {
 }
 // GLSL's mix: exactly `b` at t = 1.
 const mix = (a: Rgb, b: Rgb, t: number): Rgb => [0, 1, 2].map((i) => a[i] * (1 - t) + b[i] * t) as unknown as Rgb
-const luma = (c: Rgb) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+/** Rec. 709 luma weights, as ./water.ts LUMA. */
+const WATER_LUMA: Rgb = [0.2126, 0.7152, 0.0722]
+const luma = (c: Rgb) => WATER_LUMA[0] * c[0] + WATER_LUMA[1] * c[1] + WATER_LUMA[2] * c[2]
 
 /** The gain at `depth` m, as the GLSL's waterTint(). */
 export function waterTint(depth: number): [number, number, number] {
@@ -107,7 +105,7 @@ vec3 waterTint(float d) {
 // The map's colour tinted for the depth here, unless it is already well
 // lighter than the open sea (waterTinted() mirrors it).
 vec3 waterTinted(vec3 c) {
-  float keep = smoothstep(${f(WATER_KEEP[0])}, ${f(WATER_KEEP[1])}, dot(c, vec3(0.2126, 0.7152, 0.0722)));
+  float keep = smoothstep(${f(WATER_KEEP[0])}, ${f(WATER_KEEP[1])}, dot(c, ${v3(WATER_LUMA)}));
   return c * mix(waterTint(waterDepth), vec3(1.0), keep);
 }
 `
@@ -116,7 +114,9 @@ const decode = (tap: string) => `${f(WATER_DEPTH_MAX)} * ${tap} * ${tap}`
 
 /** Each chain's sample, ending its water prelude: the globe's at its
  * specular map's uv (the depth is on the mask's grid; with no mask there is
- * no water, and the neutral depth), the tiles' at the base's globe uv. */
+ * no water, and the neutral depth), the tiles' at the base's globe uv, and
+ * only on tiles with water (../surface/tile-glint.ts uTileWet; textureGrad,
+ * so it can branch). */
 export const WATER_DEPTH_SAMPLE = {
   globe: /* glsl */ `
 #ifdef USE_SPECULARMAP
@@ -129,7 +129,8 @@ waterDepth = ${f(WATER_DEPTH_NEUTRAL)};
 #endif
 `,
   tiles: /* glsl */ `
-{
+waterDepth = ${f(WATER_DEPTH_NEUTRAL)};
+if (uTileWet > 0.5) {
   float waterDepthTap = surfaceGlobeTex(uWaterDepth, surfaceGlobeUv).r;
   waterDepth = ${decode('waterDepthTap')};
 }
