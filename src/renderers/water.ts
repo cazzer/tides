@@ -59,8 +59,10 @@
 //   (WATER_NOISE_KM), so from a few kilometres up the sea isn't one
 //   roughness everywhere: in the glint, and in the sky's reflection, read
 //   off facets the undrawn roughness tilts toward the eye (WATER_SKY_ROUGH).
-//   Still under prefers-reduced-motion (advance(): the climate is a texture,
-//   the noise fixed to the Earth).
+//   Both noises are baked (./waterNoise.ts: a texture, one tap an octave on
+//   the Mercator plane, its mips each octave's fade), sharing one texture
+//   array with the climate. Still under prefers-reduced-motion (advance():
+//   the climate and the noise are a texture, fixed to the Earth).
 //
 // The wave phases come from the CPU in double (update(): k.eye, which is
 // thousands of radians at Earth's radius, minus w t, both mod 2 pi), so the
@@ -69,7 +71,7 @@
 // base's). The frame is the ground haze's (GroundHaze.frame), filled per
 // camera before anything draws; update() runs after it.
 //
-// No varyings; two samplers (the climate, the depth). The globe's pieces go in at: the body and the waves just
+// No varyings; two samplers (the climate and the noise, the depth). The globe's pieces go in at: the body and the waves just
 // before emissivemap_fragment (after
 // every patch's normal_fragment_maps code, so the ground detail's groundUp
 // stays the unbent normal), the glint after lights_phong_pars_fragment
@@ -81,7 +83,8 @@ import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
 import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, WATER_TINT_DEEP, waterTinted } from './waterDepth'
-import { climateTexture, WATER_CLIMATE_GLSL } from './waterClimate'
+import { waterSeaTexture, WATER_CLIMATE_GLSL } from './waterClimate'
+import { NOISE_CELL_TEXELS, NOISE_LAT_MAX, noiseCellsAround } from './waterNoise'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
@@ -212,8 +215,8 @@ export const WATER_ALIGN = 0.8
  * height, squared). */
 export const WATER_SWELL_FROM = 15
 export const WATER_SWELL_TO = 60
-/** The sea's large-scale noise, fixed to the Earth: its octaves (km), each
- * faded where a pixel spans an eighth of it; how far it scales the sea's
+/** The sea's large-scale noise, fixed to the Earth: its octaves (km, a
+ * tap each of the baked noise, faded by its mips as a pixel grows); how far it scales the sea's
  * slope variance (2^(WATER_NOISE_SCALE n), n the octaves' weighted mean,
  * its spread about 0.25, clamped to 0.3 to 3: calm and rough patches a few
  * times apart, as a 4 m/s and a 12 m/s wind's) and turns its axis
@@ -414,15 +417,9 @@ export function waterPhases(eye: Vec3, time: number, out: Float32Array | number[
   }
 }
 
-/** The eye's place (`eye` from the centre, the ground's frame) in each swell
- * noise octave's cells, mod 289 (the noise's period), into `out`. */
-export function waterSwellEye(eye: Vec3, out: readonly THREE.Vector3[]): void {
-  WATER_SWELL_KM.forEach((km, i) => {
-    const s = EARTH_KM_PER_UNIT / km
-    const m = (x: number) => x * s - 289 * Math.floor((x * s) / 289)
-    out[i].set(m(eye[0]), m(eye[1]), m(eye[2]))
-  })
-}
+/** Each noise octave's cells round the equator (./waterNoise.ts): the
+ * sea's (WATER_NOISE_KM), then the swell's (WATER_SWELL_KM). */
+export const WATER_NOISE_CELLS = [...WATER_NOISE_KM, ...WATER_SWELL_KM].map((km) => noiseCellsAround(km, EARTH_RADIUS_KM))
 
 /** The body's colour for a map colour `c` (linear), at `strength` water
  * over `depth` m of it, as the GLSL mixes it. */
@@ -548,10 +545,6 @@ const DIRECT = `${BLINN_PHONG_DIRECT.replace('RE_Direct_BlinnPhong(', 'RE_Direct
 // climate and noise.
 const head = () => /* glsl */ `
 uniform float uWavePhase[${WATER_WAVES}];
-// The eye's place in each swell noise octave's cells, mod 289 (the noise's
-// period), from the CPU in double: the GPU adds the ray, so the noise stays
-// on the Earth under a moving eye.
-uniform vec3 uWaterSwellEye[2];
 // The eye's place in metres mod WATER_SPARKLE_PERIOD_M (from the CPU in
 // double), and the water's clock in sparkle draws.
 uniform vec3 uWaterSparkleEye;
@@ -660,33 +653,6 @@ vec3 waterBody(vec3 c) {
   c = waterTinted(c);
   return c + ${v3(WATER_DEEP)} * saturate(1.0 - dot(c, vec3(${LUMA.map(f).join(', ')})) / ${f(WATER_DEEP_LUMA)});
 }
-// Value noise, two channels, on a sine-free hash (mod 289: exact in float).
-vec4 waterPermute(vec4 x) {
-  return mod((x * 34.0 + 1.0) * x, 289.0);
-}
-vec2 waterValueNoise(vec3 p) {
-  vec3 i = mod(floor(p), 289.0);
-  vec3 t = fract(p);
-  t = t * t * (3.0 - 2.0 * t);
-  vec4 xy = waterPermute(waterPermute(i.xxxx + vec4(0.0, 1.0, 0.0, 1.0)) + i.yyyy + vec4(0.0, 0.0, 1.0, 1.0));
-  vec4 h0 = waterPermute(xy + i.z);
-  vec4 h1 = waterPermute(xy + i.z + 1.0);
-  vec4 a = mix(fract(h0 * ${f(1 / 41)}), fract(h1 * ${f(1 / 41)}), t.z);
-  vec4 b = mix(fract(waterPermute(h0) * ${f(1 / 41)}), fract(waterPermute(h1) * ${f(1 / 41)}), t.z);
-  vec4 ab = mix(vec4(a.xz, b.xz), vec4(a.yw, b.yw), t.x);
-  return mix(ab.xz, ab.yw, t.y) * 2.0 - 1.0;
-}
-// The sea's large-scale noise at a level up, Earth-fixed, each octave faded
-// where a pixel (km) spans an eighth of it; 0 where all have.
-vec2 waterSeaNoise(vec3 up, float pixelKm) {
-  vec2 n = vec2(0.0);
-  float w;${WATER_NOISE_KM.map(
-    (km, i) => `
-  w = ${f(WATER_NOISE_WEIGHT[i] / NOISE_WEIGHT_SUM)} * (1.0 - smoothstep(${f(km / 16)}, ${f(km / 8)}, pixelKm));
-  if (w > 0.0) n += w * waterValueNoise(up * ${f(EARTH_RADIUS_KM / km)});`
-  ).join('')}
-  return n;
-}
 `
 
 // One wave, unrolled (no arrays indexed in the loop: those spill on some
@@ -744,6 +710,35 @@ const fadedStep = (waves: readonly WaterWave[]) =>
   (WATER_FADE_END * TAU) /
   (Math.min(...waves.map((w) => w.k)) * WATER_FADED_LEVEL * WATER_GLINT_HARMONIC * WATER_FADED_GAIN ** 0.25)
 
+// A tap of noise octave i (WATER_NOISE_CELLS) at the pixel's waterMerc and
+// waterLod: its cells, turned by a quarter turn or more (whole tiles either
+// way at the antimeridian) and offset, so the octaves' tiles don't line up.
+const NOISE_TURNS = ['m', 'vec2(-m.y, m.x)', 'vec2(m.y, -m.x)', '-m', 'vec2(-m.y, m.x)']
+const noiseTap = (i: number) => {
+  const n = WATER_NOISE_CELLS[i]
+  const turned = NOISE_TURNS[i].replace(/m/g, 'waterMerc')
+  return `waterNoiseAt(${f(n / TAU)} * ${turned} + ${v2([((i * 0.618) % 1) * 64, ((i * 0.382 + 0.25) % 1) * 64])}, waterLod + ${f(Math.log2(n))})`
+}
+
+// The waves where some have not faded, longest first: on the full tier, in
+// steps of WATER_WAVE_TIER, where the shorter ones all have (fadedStep() of
+// theirs), only the longer drawn and the shorter's variance; else every
+// wave drawn.
+const WATER_WAVE_TIER = 4
+const wavesByStep = (waves: readonly WaterWave[]) => {
+  const sorted = [...waves].sort((a, b) => b.lambda - a.lambda)
+  let code = ''
+  if (waves.length > WATER_WAVES_LOW) {
+    for (let keep = WATER_WAVE_TIER; keep < sorted.length; keep += WATER_WAVE_TIER) {
+      const short = sorted.slice(keep)
+      code += ` else if (waterNarrow > ${e(fadedStep(short))}) {${sorted.slice(0, keep).map(wave).join('')}${short.map(waveFaded).join('')}
+    }`
+    }
+  }
+  return `${code} else {${sorted.map(wave).join('')}
+    }`
+}
+
 // After the prelude (waterRay, waterUpGround, waterUpView and
 // waterViewToGround set). A pixel's two steps on the sea (waterRx, waterRy:
 // the ray's derivatives, exact and anisotropic, the orthographic system
@@ -765,8 +760,14 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
   vec3 waterRy = dFdy(waterRay);
   if (specularStrength > 0.0) {
     float waterPx = max(length(waterRx), length(waterRy));
-    vec4 waterClimate = waterClimateDecode(waterClimateAt(waterUpGround));
-    vec2 waterNoise = waterSeaNoise(waterUpGround, waterPx * ${f(EARTH_KM_PER_UNIT)});
+    vec2 waterLL = waterLonLat(waterUpGround);
+    vec4 waterClimate = waterClimateDecode(waterClimateAt(waterLL));
+    // The baked noise's plane (Mercator) and each octave's level: its
+    // texels over the pixel's km (WATER_NOISE_CELLS round the equator).
+    float waterLat = clamp(waterLL.y, ${f(-NOISE_LAT_MAX)}, ${f(NOISE_LAT_MAX)});
+    vec2 waterMerc = vec2(waterLL.x, log(tan(${f(Math.PI / 4)} + 0.5 * waterLat)));
+    float waterLod = log2(max(waterPx * ${e((EARTH_KM_PER_UNIT * NOISE_CELL_TEXELS) / (2 * Math.PI * EARTH_RADIUS_KM))} / cos(waterLat), 1e-20));
+    vec2 waterNoise = ${WATER_NOISE_KM.map((_, i) => `${f(WATER_NOISE_WEIGHT[i] / NOISE_WEIGHT_SUM)} * ${noiseTap(i)}.${i === 1 ? 'zw' : 'xy'}`).join('\n      + ')};
     float waterNs = clamp(exp2(${f(WATER_NOISE_SCALE)} * waterNoise.x), 0.3, 3.0);
     float waterWindF = waterNs * waterMssScale(waterClimate.x);
     float waterSwellF = waterNs * waterSwellScale(waterClimate.y) * waterSwellScale(waterClimate.y);
@@ -787,15 +788,16 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterBendK = 0.0;
     float waterGroups = 0.0;
     if (waterPx < ${e(3 * Math.max(...waves.map((w) => w.lambda)))}) {
-      vec2 waterSwellA = waterValueNoise(uWaterSwellEye[0] + waterRay * ${f(EARTH_KM_PER_UNIT / WATER_SWELL_KM[0])});
-      vec2 waterSwellB = waterValueNoise(uWaterSwellEye[1] + waterRay * ${f(EARTH_KM_PER_UNIT / WATER_SWELL_KM[1])});
+      vec2 waterSwellA = ${noiseTap(WATER_NOISE_KM.length)}.zw;
+      vec2 waterSwellB = ${noiseTap(WATER_NOISE_KM.length + 1)}.xy;
       waterBendNoise = waterSwellA + 0.5 * waterSwellB;
       waterGroupNoise = vec2(waterSwellB.y, waterSwellA.x);
       waterBendK = ${e(WATER_SWELL_BEND_K * EARTH_KM_PER_UNIT)};
       waterGroups = ${f(WATER_SWELL_GROUPS)} * (1.0 - smoothstep(${f(WATER_SWELL_KM[1] / 16)}, ${f(WATER_SWELL_KM[1] / 8)}, waterPx * ${f(EARTH_KM_PER_UNIT)}));
     }
     // The narrower of the pixel's two steps (the smaller singular value of
-    // the pair): past fadedStep every wave has faded, so the cheap path.
+    // the pair): past fadedStep every wave has faded, so the cheap path;
+    // on the full tier, past the shorter waves', theirs.
     float waterGa = dot(waterRx, waterRx);
     float waterGb = dot(waterRx, waterRy);
     float waterGc = dot(waterRy, waterRy);
@@ -821,8 +823,7 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterWarp = 0.0;
     float waterWarpK = 0.0;
     if (waterNarrow > ${e(fadedStep(waves))}) {${waves.map(waveFaded).join('')}
-    } else {${[...waves].sort((a, b) => b.lambda - a.lambda).map(wave).join('')}
-    }
+    }${wavesByStep(waves)}
     waterVarAlong = max(waterAlong, ${f(WATER_MSS_FLOOR / 2)});
     waterVarCross = max(waterCross, ${f(WATER_MSS_FLOOR / 2)});
     waterMss = waterVarAlong + waterVarCross;
@@ -939,8 +940,7 @@ export interface Water {
    * program that takes the water). */
   uniforms: {
     uWavePhase: THREE.IUniform<Float32Array>
-    uWaterClimate: THREE.IUniform<THREE.Texture>
-    uWaterSwellEye: THREE.IUniform<THREE.Vector3[]>
+    uWaterSea: THREE.IUniform<THREE.DataArrayTexture>
     uWaterSparkleEye: THREE.IUniform<THREE.Vector3>
     uWaterTwinkle: THREE.IUniform<number>
   }
@@ -955,8 +955,7 @@ export interface Water {
 export function createWater(frame: GroundHaze['frame']): Water {
   const uniforms = {
     uWavePhase: { value: new Float32Array(WATER_WAVES) },
-    uWaterClimate: { value: climateTexture() },
-    uWaterSwellEye: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+    uWaterSea: { value: waterSeaTexture() },
     uWaterSparkleEye: { value: new THREE.Vector3() },
     uWaterTwinkle: { value: 0 },
   }
@@ -970,7 +969,6 @@ export function createWater(frame: GroundHaze['frame']): Water {
     update() {
       frame.uGroundHazeEyeLocal.value.toArray(eye)
       waterPhases(eye, time, uniforms.uWavePhase.value)
-      waterSwellEye(eye, uniforms.uWaterSwellEye.value)
       waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)
       uniforms.uWaterTwinkle.value = (time * WATER_TWINKLE_HZ) % 65536
     },

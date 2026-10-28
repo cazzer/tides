@@ -56,14 +56,14 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(f.split('varying ').length).toBe(THREE.ShaderLib.phong.fragmentShader.split('varying ').length)
   })
 
-  it('stays within 16 texture units with every feature on (the water\'s climate among them)', () => {
+  it('stays within 16 texture units with every feature on (the water\'s climate and noise among them)', () => {
     const mesh = tileMesh()
     createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
     const f = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
     // The features' own samplers, plus three's own the tile's Phong uses
     // (measured in the browser: 15 active of 16, 5 of them three's).
     const own = f.match(/uniform\s+sampler\w+\s+\w+/g) ?? []
-    expect(own).toContain('uniform sampler2D uWaterClimate')
+    expect(own).toContain('uniform sampler2DArray uWaterSea')
     expect(own.length + 5, own.join(', ')).toBeLessThanOrEqual(16)
   })
 
