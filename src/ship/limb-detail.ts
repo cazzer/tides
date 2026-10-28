@@ -284,10 +284,17 @@ let buildHandle: (() => void) | null = null
 export function whenIdle(callback: () => void): () => void {
   if (typeof requestIdleCallback === 'function') {
     let handle = 0
+    // The timeout runs from the first request: each re-wait asking a fresh
+    // one would never time out where every idle period is short (120 Hz).
+    const start = performance.now()
     const wait = () => {
+      const left = BUILD_TIMEOUT_MS - (performance.now() - start)
       handle = requestIdleCallback(
-        (deadline) => (deadline.didTimeout || deadline.timeRemaining() >= BUILD_BUDGET_MS ? callback() : wait()),
-        { timeout: BUILD_TIMEOUT_MS }
+        (deadline) =>
+          deadline.didTimeout || deadline.timeRemaining() >= BUILD_BUDGET_MS || performance.now() - start >= BUILD_TIMEOUT_MS
+            ? callback()
+            : wait(),
+        { timeout: Math.max(left, 1) }
       )
     }
     wait()

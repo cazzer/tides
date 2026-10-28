@@ -4,36 +4,26 @@ import * as THREE from 'three'
 import vertexShader from '../shaders/sun-spicule/vertex.glsl'
 import fragmentShader from '../shaders/sun-spicule/fragment.frag'
 import { whenIdle } from '../ship/limb-detail'
-import { createSpiculeGeometry, SPICULE_FADE_PX, spiculeInstanceCount, SUN_FRINGE } from './sun-spicules'
+import { createSpiculeGeometry, SPICULE_FADE_PX, spiculeInstanceCount, SUN_FRINGE, SUN_FRINGE_FADE_PX } from './sun-spicules'
 
 const viewport = new THREE.Vector4()
 
 // One blade geometry (~4 MB) for every view that draws the Sun, built in an
-// idle period rather than during a render (its layout takes ~50 ms) and
-// dropped when the last view lets it go.
+// idle period rather than during a render (its layout takes ~50 ms) and then
+// kept for the session, as the Sun's baked surface is (sun-surface.ts):
+// entering or leaving ship mode would otherwise rebuild it each time.
 let shared: { geometry: THREE.InstancedBufferGeometry; blades: number } | null = null
-let users = 0
-let cancelBuild: (() => void) | null = null
+let building = false
 const listeners = new Set<() => void>()
 
-function retainSpicules(): () => void {
-  users++
-  if (!shared && !cancelBuild) {
-    cancelBuild = whenIdle(() => {
-      cancelBuild = null
-      const geometry = createSpiculeGeometry()
-      shared = { geometry, blades: geometry.instanceCount }
-      listeners.forEach((listener) => listener())
-    })
-  }
-  return () => {
-    users--
-    if (users > 0) return
-    cancelBuild?.()
-    cancelBuild = null
-    shared?.geometry.dispose()
-    shared = null
-  }
+function buildSpicules() {
+  if (shared || building) return
+  building = true
+  whenIdle(() => {
+    const geometry = createSpiculeGeometry()
+    shared = { geometry, blades: geometry.instanceCount }
+    listeners.forEach((listener) => listener())
+  })
 }
 
 function subscribe(listener: () => void) {
@@ -64,6 +54,7 @@ function createMaterial() {
       uViewHeight: { value: 1 },
       uFadePx: { value: new THREE.Vector2(...SPICULE_FADE_PX) },
       uFringe: { value: SUN_FRINGE },
+      uFringeFadePx: { value: new THREE.Vector2() },
     },
   })
 }
@@ -87,6 +78,7 @@ function prepare(
   renderer.getCurrentViewport(viewport)
   const viewHeight = viewport.w / renderer.getPixelRatio()
   material.uniforms.uViewHeight.value = viewHeight
+  material.uniforms.uFringeFadePx.value.set(...SUN_FRINGE_FADE_PX).multiplyScalar(renderer.getPixelRatio())
   shared.geometry.instanceCount = spiculeInstanceCount(camera, mesh, viewHeight, shared.blades)
 }
 
@@ -96,7 +88,7 @@ function prepare(
  * oriented group, so they turn with it.
  */
 export function SunSpicules({ radius }: { radius: number }) {
-  useEffect(() => retainSpicules(), [])
+  useEffect(buildSpicules, [])
   const spicules = useSyncExternalStore(subscribe, sharedSpicules)
   const material = useMemo(() => createMaterial(), [])
   useEffect(() => () => material.dispose(), [material])

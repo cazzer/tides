@@ -2,7 +2,8 @@
 // off the limb a strand glows (emission, no cover); across the disc a
 // prominence is a dark filament (cover, little emission), as in H-alpha.
 uniform float time;
-uniform float uFringe; // SUN_FRINGE
+uniform float uFringe;       // SUN_FRINGE
+uniform vec2 uFringeFadePx;  // SUN_FRINGE_FADE_PX, device px
 varying vec3 vView;
 varying vec3 vCentre;
 varying float vRadius;
@@ -31,9 +32,11 @@ void main() {
   float across = 1.0 - smoothstep(1.0 - edge, 1.0 + edge, miss);
   // b > 0: the Sun is between the eye and the strand.
   if (b > 0.0 && across > 0.99) discard;
-  // The limb's traced fringe (SUN_FRINGE) counts as disc, as for the
-  // spicules: a filament's foot in front of it reads dark, not glowing.
-  float onDisc = b < 0.0 ? 1.0 - smoothstep(1.0 - edge, 1.0 + uFringe, miss) : 0.0;
+  // The limb's traced fringe counts as disc, as high as it stands: it
+  // sinks as the Sun shrinks on screen (sun/fragment.frag), and so does
+  // this, or a filament over the disc's last pixel would glow.
+  float fringe = uFringe * smoothstep(uFringeFadePx.x, uFringeFadePx.y, uFringe / edge);
+  float onDisc = b < 0.0 ? 1.0 - smoothstep(1.0 - edge, 1.0 + max(edge, fringe), miss) : 0.0;
 
   float density;
   vec3 glow;

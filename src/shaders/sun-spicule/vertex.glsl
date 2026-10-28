@@ -56,8 +56,9 @@ void main() {
   }
   // Against the disc, only blades seen side-on and wide, close in, where
   // they stand in parallax: looked down on, or from further out, the tufts
-  // would pepper the disc like dirt.
-  vDisc = smoothstep(0.55, 0.9, sideLength) * smoothstep(2.0, 5.0, px);
+  // would pepper the disc like dirt, and right under the eye, tens of px
+  // wide, they would stack into dark smudges.
+  vDisc = smoothstep(0.55, 0.9, sideLength) * smoothstep(2.0, 5.0, px) * (1.0 - smoothstep(10.0, 18.0, px));
 
   // Each blade rises and falls on its own, over ~16 s.
   float life = 0.5 + 0.5 * sin(time * 0.4 + aSpicule.w * 6.283);

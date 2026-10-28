@@ -6,7 +6,8 @@ varying float vRadius;
 varying vec2 vUv;
 varying float vFade;
 varying float vDisc;
-uniform float uFringe; // SUN_FRINGE
+uniform float uFringe;       // SUN_FRINGE
+uniform vec2 uFringeFadePx;  // SUN_FRINGE_FADE_PX, device px
 
 // [TUNE] How much a blade dims the disc behind it: thousands overlap there.
 const float ON_DISC_COVER = 0.12;
@@ -19,11 +20,15 @@ void main() {
   vec3 rel = vView - vCentre;
   float b = dot(rel, ray);
   float miss = sqrt(max(dot(rel, rel) - b * b, 0.0)) / vRadius;
+  // Before any discard: a derivative.
+  float edge = max(fwidth(miss), 1e-4);
   // b > 0: the Sun is between the eye and the blade.
   if (b > 0.0 && miss < 0.999) discard;
-  // The limb's traced fringe (SUN_FRINGE) counts as disc: a blade in
-  // front of it shows dark, not as a glow piled on its gold.
-  float onDisc = b < 0.0 ? 1.0 - smoothstep(0.999, 1.0 + uFringe, miss) : 0.0;
+  // The limb's traced fringe counts as disc, as high as it stands: it
+  // sinks as the Sun shrinks on screen (sun/fragment.frag), and so does
+  // this, or a filament over the disc's last pixel would glow.
+  float fringe = uFringe * smoothstep(uFringeFadePx.x, uFringeFadePx.y, uFringe / edge);
+  float onDisc = b < 0.0 ? 1.0 - smoothstep(1.0 - edge, 1.0 + max(edge, fringe), miss) : 0.0;
 
   float core = 1.0 - abs(vUv.x);
   float density = core * core * (1.0 - vUv.y * 0.6) * vFade;
