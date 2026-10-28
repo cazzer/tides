@@ -33,9 +33,11 @@ import type { EarthHorizonUniforms } from './earthHorizonTexture'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 
 /** Footprints (in horizon texels at the equator) over which the shadows fade
- * out: with the relief on the high tier (./groundRelief.ts, 2-4 of its 4k
- * texels), so no shadow shows without the slopes that cast it. Kept, they
- * speckled the terminator once a pixel spanned a texel or so. */
+ * out: with the elevation map's finer relief on the high tier
+ * (./groundRelief.ts, 2-4 of its 4k texels). The drawn mesh's own slope
+ * (tides-zmw.3) outlasts both, so further out the slopes stay shaded but
+ * cast no shadow. Kept, the shadows speckled the terminator once a pixel
+ * spanned a texel or so. */
 export const HORIZON_FADE_START = 0.5
 export const HORIZON_FADE_END = 1
 /** The sky's visible share is taken to this power: occlusion's strength.
