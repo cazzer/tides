@@ -62,7 +62,7 @@ class FakeAudioContext {
     return this.source({ type: 'sine', frequency: this.param(), detune: this.param() })
   }
   createBufferSource() {
-    return this.source({ buffer: null, loop: false })
+    return this.source({ buffer: null, loop: false, playbackRate: this.param() })
   }
   createBuffer(_channels: number, length: number) {
     this.buffers++
@@ -172,7 +172,7 @@ describe('ship voices (tides-a4j.2)', () => {
     expect(lastTarget(voices().windGain.gain)).toBeGreaterThan(0)
   })
 
-  it('hisses for a throttle change, then settles', () => {
+  it('puffs for a throttle change, then settles', () => {
     const { audio, telemetry, frame, voices } = setup()
     audio.activate()
     audio.gesture()
@@ -199,8 +199,8 @@ describe('ship voices (tides-a4j.2)', () => {
       expect(fake(saw.frequency).setTargetAtTime).not.toHaveBeenCalled()
     }
     const windHz = windParams(windLevel(20_000), { gain: 0, hz: 0 }).hz
-    expect(fake(v.windBand.frequency).setValueAtTime).toHaveBeenCalledWith(windHz, expect.any(Number))
-    expect(fake(v.windBand.frequency).setTargetAtTime).not.toHaveBeenCalled()
+    expect(fake(v.windFilter.frequency).setValueAtTime).toHaveBeenCalledWith(windHz, expect.any(Number))
+    expect(fake(v.windFilter.frequency).setTargetAtTime).not.toHaveBeenCalled()
     expect(fake(v.windGain.gain).setTargetAtTime).toHaveBeenCalled()
     expect(fake(v.oscGain.gain).setValueAtTime).not.toHaveBeenCalled()
   })

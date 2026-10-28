@@ -1,8 +1,9 @@
 // The one-shot cues' sounds (tides-a4j.3), built for playShipCue: short,
 // procedural, modest. Each is a few nodes made for the one event and freed
 // when it ends. The blips tell themselves apart by shape: the lock is two
-// pips on one high note, Flight Assist a two-note step, up for on and down
-// for off.
+// pips on one note, Flight Assist a two-note step, up for on and down for
+// off. They sit an octave under where they started (tides-d9f.7), low but
+// still clear of the engine's rumble on a phone's speaker.
 
 import type { ShipAudioOutput, ShipCue } from './ship-audio'
 import type { ShipCueKind } from './ship-cues'
@@ -13,20 +14,20 @@ export const IMPACT_HZ: readonly [number, number] = [90, 38]
 export const IMPACT_SECONDS = 0.35
 export const IMPACT_GAIN = 0.3
 /** [TUNE] The crunch over the thud: lowpassed noise, its corner, Hz, length, s, and level. */
-export const IMPACT_NOISE_HZ = 500
+export const IMPACT_NOISE_HZ = 300
 export const IMPACT_NOISE_SECONDS = 0.12
 export const IMPACT_NOISE_GAIN = 0.2
 
 /** [TUNE] The approach klaxon: a lowpassed square alternating these notes, Hz. */
-export const KLAXON_NOTES: readonly number[] = [660, 520, 660, 520]
+export const KLAXON_NOTES: readonly number[] = [330, 260, 330, 260]
 export const KLAXON_NOTE_SECONDS = 0.16
-export const KLAXON_CUTOFF = 2000
+export const KLAXON_CUTOFF = 1000
 export const KLAXON_GAIN = 0.06
 
 /** [TUNE] The blips: sine notes, Hz, each this long, s, at this level. */
-export const LOCK_NOTES: readonly number[] = [1320, 1320]
-export const ASSIST_ON_NOTES: readonly number[] = [660, 990]
-export const ASSIST_OFF_NOTES: readonly number[] = [990, 660]
+export const LOCK_NOTES: readonly number[] = [660, 660]
+export const ASSIST_ON_NOTES: readonly number[] = [330, 495]
+export const ASSIST_OFF_NOTES: readonly number[] = [495, 330]
 export const BLIP_NOTE_SECONDS = 0.06
 export const BLIP_GAP_SECONDS = 0.04
 export const BLIP_GAIN = 0.08
