@@ -163,3 +163,25 @@ export function compileSide(
     })
   }
 }
+
+/**
+ * The programs `object`'s materials turn their userData.warmDefines to
+ * (compileSide()), compiled once a material (by `materialKey`, kept in
+ * `done`): for views the ship's warm-up doesn't run in, such as the
+ * overview's panels, whose Earth turns its clouds typed (CLOUD_TYPED) on
+ * the first frame the forecast's types reach (tides-tvr.4.5).
+ */
+export function warmDefinesOnce(
+  renderer: Pick<THREE.WebGLRenderer, 'compile'>,
+  object: THREE.Object3D,
+  camera: THREE.Camera,
+  scene: THREE.Scene,
+  done: WeakSet<object>,
+  materialKey: (material: THREE.Material) => object
+): void {
+  const cold = materialsOf(object).filter((material) => !done.has(materialKey(material)))
+  if (cold.length === 0) return
+  for (const material of cold) done.add(materialKey(material))
+  const defines = [...new Set(cold.flatMap(warmDefines))]
+  if (defines.length > 0) compileSide(renderer, object, undefined, camera, scene, createWarmed(), materialKey, defines)
+}

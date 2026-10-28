@@ -30,6 +30,7 @@ import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
+import { warmDefinesOnce } from '../ship/ship-warmup'
 import { EarthDemLoader } from './earthDemTexture'
 import { earthHorizon } from './earthHorizonTexture'
 import {
@@ -119,6 +120,12 @@ export default function EarthRenderer({
     [eclipseShadow, textureSet.low]
   )
   useEffect(() => () => clouds.dispose(), [clouds])
+  // The clouds' programs warmed for the defines they turn to (tides-tvr.4.5),
+  // by three's record of the material, which a dispose replaces (as React
+  // StrictMode's replayed effects do in dev); and whether the shell has
+  // been faced to a camera yet, which sets the defines it draws with.
+  const warmedDefines = useMemo(() => new WeakSet<object>(), [])
+  const cloudsFaced = useRef(false)
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
@@ -188,6 +195,7 @@ export default function EarthRenderer({
   useEffect(
     () =>
       cloudsFaceEachCamera(scene, clouds, cloudRef, (renderer, camera) => {
+        cloudsFaced.current = true
         // The tiles' handover marks (surface-scale.ts), cleared within this
         // View's scissor.
         if (SURFACE_TILES_ON) renderer.clearStencil()
@@ -259,7 +267,7 @@ export default function EarthRenderer({
   // offsets the texture rather than turning the mesh, so the ground's shadows
   // drift with them. The waves move on by the wall clock, still under
   // prefers-reduced-motion.
-  useFrame(({ clock, gl }, delta) => {
+  useFrame(({ clock, gl, camera, scene }, delta) => {
     water.advance(delta, prefersReducedMotion())
     if (!real) {
       drift.current += STATIC_DRIFT_PER_FRAME
@@ -284,6 +292,13 @@ export default function EarthRenderer({
       wallMs
     )
     clouds.setMap(out?.texture ?? cloudsTexture, out?.measured ?? false, out?.typed ? { grid: out.typeTexture, tops: out.topsTexture } : null)
+    // The typed program (or, typed already, the untyped), compiled ahead of
+    // the frame that turns to it: else that frame links it, tens of ms, in
+    // each View the ship's warm-up (ShipWarmup) doesn't run in, the
+    // overview's panels. Here, as three's compile must not run mid-render.
+    if (cloudsFaced.current && cloudRef.current?.parent) {
+      warmDefinesOnce(gl, cloudRef.current, camera, scene, warmedDefines, (material) => gl.properties.get(material))
+    }
   })
 
   return (
