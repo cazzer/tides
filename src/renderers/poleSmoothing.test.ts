@@ -5,6 +5,7 @@ import {
   POLE_SMOOTH_FROM,
   poleSmoothing,
   poleSmoothingGlsl,
+  poleSmoothingPairGlsl,
   poleSmoothingLod,
   poleSmoothingPatch,
   poleSmoothingSpanU,
@@ -41,6 +42,17 @@ describe('pole smoothing', () => {
     const glsl = poleSmoothingGlsl('smoothed', 6)
     expect(glsl).toContain('vec4 smoothed(sampler2D map')
     expect(glsl).toContain('i < 6;')
+  })
+
+  it('emits the pair, each map read at the same taps (tides-tvr.4.11)', () => {
+    const one = poleSmoothingGlsl('smoothed', 6)
+    const pair = poleSmoothingPairGlsl('smoothedPair', 6)
+    expect(pair).toContain('void smoothedPair(sampler2D a, sampler2D b, vec2 uv, float lod, inout vec4 colourA, inout vec4 colourB)')
+    expect(pair).toContain('i < 6;')
+    // The weight, the span and each tap's offset as the single read has them.
+    for (const line of one.split('\n').filter((l) => /float (lat|w|span|o) = /.test(l))) expect(pair).toContain(line)
+    expect(pair).toContain('sumA += textureLod(a, q, lod);')
+    expect(pair).toContain('sumB += textureLod(b, q, lod);')
   })
 
   it("patches the ground's day-map sample", () => {
