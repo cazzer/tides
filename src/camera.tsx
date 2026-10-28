@@ -44,7 +44,7 @@ import {
 } from './main-view'
 import { LABEL_KEYS } from './system-aids/label-visibility'
 import { CLOCK_HALF_WIDTH } from './clock-size'
-import { mainCameraPose } from './main-camera-session'
+import { mainCameraPose, takeMainCameraRestore } from './main-camera-session'
 import {
   canPivot,
   clampTilt,
@@ -446,6 +446,20 @@ export const CameraProvider = ({ children }: { children: any }) => {
   )
 
   useFrame((state) => {
+    // Leaving a demo: back to the pose saved on entry, once. tiltControls
+    // takes it as a move from outside, which ends any framing ease.
+    if (controls) {
+      const restore = takeMainCameraRestore()
+      if (restore) {
+        camera.position.fromArray(restore.position)
+        camera.up.fromArray(restore.up)
+        // @ts-ignore
+        controls.target.fromArray(restore.target)
+        cameraTarget.current.fromArray(restore.target)
+        outsideMoveRef.current = true
+      }
+    }
+
     const target = new Vector3()
     let hasTarget = false
     // What the target is on, for followMotion.

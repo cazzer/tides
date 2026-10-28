@@ -5,6 +5,16 @@ import { enterShipPatch, exitShipPatch, type ShipSaved } from './ship/ship-sessi
 import { resetShipInput } from './ship/ship-input'
 import { resetShipTelemetry, setShipTarget } from './ship/ship-telemetry'
 import { MOON_KEYS, isMoonKey, type MoonKey } from './moons/moon-keys'
+import {
+  demoPlayScale,
+  enterDemoPatch,
+  exitDemoPatch,
+  goToDemoStepPatch,
+  type DemoRun,
+  type DemoSaved,
+} from './demo/demo-session'
+import { findDemo } from './demo/demos'
+import { requestMainCameraRestore } from './main-camera-session'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
 export const PLANET_FOCUS_KEYS = [
@@ -257,6 +267,16 @@ export const useStore = create<{
   shipSaved: ShipSaved | null
   enterShip: () => void
   exitShip: () => void
+  /** The demo running (tides-zec.5) and its step; null outside one. Demos
+   * start only from the menu, never from the URL or on load. */
+  demo: DemoRun | null
+  /** The view the demo overrode, restored on exit; null outside one. */
+  demoSaved: DemoSaved | null
+  startDemo: (id: string) => void
+  goToDemoStep: (index: number) => void
+  exitDemo: () => void
+  /** Play pauses the clock, or runs it at the step's speed. */
+  toggleDemoPlaying: () => void
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
@@ -301,6 +321,7 @@ export const useStore = create<{
   shipMode: false,
   shipSaved: null,
   enterShip: () => {
+    if (get().demo) return
     const patch = enterShipPatch(get())
     if (!patch) return
     resetShipInput()
@@ -313,6 +334,31 @@ export const useStore = create<{
     resetShipTelemetry()
     setShipTarget(null)
     set(patch)
+  },
+  demo: null,
+  demoSaved: null,
+  startDemo: (id: string) => {
+    const demo = findDemo(id)
+    const patch = demo && enterDemoPatch(get(), demo)
+    if (patch) set(patch)
+  },
+  goToDemoStep: (index: number) => {
+    const run = get().demo
+    const demo = run && findDemo(run.id)
+    const patch = demo && goToDemoStepPatch(get(), demo, index)
+    if (patch) set(patch)
+  },
+  exitDemo: () => {
+    const patch = exitDemoPatch(get())
+    if (!patch) return
+    requestMainCameraRestore()
+    set(patch)
+  },
+  toggleDemoPlaying: () => {
+    const s = get()
+    const demo = s.demo && findDemo(s.demo.id)
+    if (!demo) return
+    set({ timeScale: s.timeScale !== 0 ? 0 : demoPlayScale(s, demo) })
   },
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),

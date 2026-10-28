@@ -19,6 +19,9 @@ export type MainCameraPose = CameraPoseBase & (
 // MainCamera and MainControls unmount in ship mode. Their last pose stays here
 // until the next entry overwrites it, including when the main panel remounts.
 let saved: MainCameraPose | null = null
+// Leaving a demo puts the saved pose back once, on the main view's next frame
+// (camera.tsx CameraProvider), even where the main view stayed mounted.
+let restorePending = false
 
 export function mainCameraPose(): MainCameraPose | null {
   return saved
@@ -34,4 +37,16 @@ export function rememberMainCameraPose(camera: OrthographicCamera | PerspectiveC
   saved = camera instanceof OrthographicCamera
     ? { ...base, projection: 'orthographic', zoom: camera.zoom, visibleHeight: camera.top - camera.bottom }
     : { ...base, projection: 'perspective', zoom: camera.zoom, fov: camera.fov }
+}
+
+/** Asks the main view to return to the saved pose on its next frame. */
+export function requestMainCameraRestore(): void {
+  restorePending = true
+}
+
+/** The pose a restore was requested to, once; null otherwise or with none saved. */
+export function takeMainCameraRestore(): MainCameraPose | null {
+  if (!restorePending) return null
+  restorePending = false
+  return saved
 }

@@ -35,6 +35,9 @@ import { mainCameraPose, rememberMainCameraPose } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
 import type { DistanceScale } from './distance-scale'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import { DemoBar } from './demo/DemoBar'
+import { DemoClock } from './demo/DemoClock'
+import { DemoPlayer } from './demo/DemoPlayer'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -64,6 +67,7 @@ export default function App() {
   const showZodiac = useStore((s) => s.showZodiac)
   const systemAids = useStore((s) => s.systemAids)
   const shipMode = useStore((s) => s.shipMode)
+  const demo = useStore((s) => s.demo)
 
   // Read ?focus=, ?speed=, and ?panel= from URL on mount (before writing)
   useEffect(() => {
@@ -87,6 +91,9 @@ export default function App() {
       isFirstWrite.current = false
       return
     }
+    // A demo's view is never written: the URL keeps the user's own, and
+    // leaving the demo (demo in the deps) writes the view it restores.
+    if (useStore.getState().demo) return
     // Ship mode forces planets and speed: the URL keeps the user's own view,
     // so leaving ship mode leaves it as it was. The deps below cover it:
     // shipSaved changes only with shipMode.
@@ -137,7 +144,7 @@ export default function App() {
     }
     const url = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState(null, '', url)
-  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, systemAids, shipMode])
+  }, [cameraFocus, timeScale, location, mainPanel, weatherSource, layout, showPlanets, showConstellations, showConstellationArt, showLunar, showZodiac, systemAids, shipMode, demo])
 
   const handlePanelSwap = (panelKey: PanelKey) => {
     if (panelKey !== mainPanel) {
@@ -169,7 +176,8 @@ export default function App() {
     <div className="container">
       <LoadingOverlay sceneReady={sceneReady} />
       <DepthInfo />
-      {!shipMode && <Controls />}
+      {!shipMode && !demo && <Controls />}
+      {demo && <DemoBar />}
       <div className={single || shipMode ? 'viewports viewports--single' : 'viewports'}>
         <Canvas
           shadows
@@ -187,6 +195,7 @@ export default function App() {
           }}
         >
           <SimClock running={sceneReady} />
+          <DemoClock />
           <RenderDiagnostics />
           <DepthPrecisionProbe />
           <View.Port />
@@ -213,7 +222,7 @@ export default function App() {
               panelProps('main').gridArea === 'main' ? (
                 <>
                   {showPlanets && systemAids.scale && <ScaleReadout />}
-                  <ShipButton />
+                  {!demo && <ShipButton />}
                 </>
               ) : undefined
             }
@@ -229,6 +238,7 @@ export default function App() {
             />
             <MainControls />
             <MainCameraSession />
+            <DemoPlayer />
           </Panel>
         )}
         {!shipMode && showPanel('top') && (
@@ -259,14 +269,15 @@ export default function App() {
           </Panel>
         )}
         {/* Outside the panels, so it (and its focus) survives the view switch. */}
-        {single && !shipMode && (
+        {/* A demo picks the view itself, and its bar covers this corner. */}
+        {single && !shipMode && !demo && (
           <ViewMenu
             value={mainPanel}
             options={PANEL_OPTIONS}
             onChange={setMainPanel}
           />
         )}
-        {single && !shipMode && mainPanel === 'top' && <CompassButton />}
+        {single && !shipMode && !demo && mainPanel === 'top' && <CompassButton />}
       </div>
     </div>
   )
@@ -413,7 +424,7 @@ function MainCameraSession() {
   useEffect(() => {
     if (!(camera instanceof THREE.OrthographicCamera || camera instanceof THREE.PerspectiveCamera) || !controls) return
     return useStore.subscribe((state, previous) => {
-      if (!previous.shipMode && state.shipMode) {
+      if ((!previous.shipMode && state.shipMode) || (!previous.demo && state.demo)) {
         rememberMainCameraPose(camera, controls as OrbitControlsImpl)
       }
     })
