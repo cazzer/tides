@@ -17,20 +17,21 @@
 // of the haze along the eye's own ray, added, which is what the atmosphere
 // draws over the ground above it.
 //
-// The amount, from the segment alone (tides-zmw.16). Under the haze's base
-// the density is the base's (columnAhead()'s convention), so there tau is
-// the distance; above it the segment thins (Simpson's rule over the
-// exponential density, three samples), so high ground and the air between
-// it and a high eye clear. L is set by the nearest the sea horizon comes:
-// from the stop over the sea (EARTH_GROUND_CLEARANCE up) it lies sqrt(2 R g)
-// off, all under the base, at (tau / L)^P = GROUND_HAZE_E (95% of the haze);
-// every other horizon lies further. (The model's own reach, the column ahead
-// of a level ray from the base over the base's density, grazing / 2 =
-// sqrt(pi R H / 2), about 0.12 R, would leave that horizon a third of its
-// haze, a step under the sky's.) The power, GROUND_HAZE_POWER, keeps the
-// near ground clearer than a plain exponential that reaches the same share
-// at the horizon: 1.3% of the haze 0.01 units off, 5% at 0.02 (that one 18%
-// and 32%).
+// The amount, from the segment alone (tides-zmw.16): its optical depth tau
+// through the true air (the sunlight's scale height, cloud-layer.ts
+// SCALE_HEIGHT_KM, from the sea up: tides-d9f.3), by Simpson's rule over
+// the exponential density, three samples, so high ground and the air
+// between it and a high eye clear. (It took the shell's density, held at
+// the base's under the base, 76 km up: every eye under it saw through the
+// same thick air, so from 20 to 50 km the near sea and land paled as at
+// the stop.) L is set by the nearest the sea horizon comes: from the stop
+// over the sea (EARTH_GROUND_CLEARANCE up) it lies sqrt(2 R g) off, at
+// (tau / L)^P = GROUND_HAZE_E (95% of the haze); every other horizon lies
+// further, through more of the dense air low down. The power,
+// GROUND_HAZE_POWER, keeps the near ground clearer than a plain exponential
+// that reaches the same share at the horizon. From higher the haze gathers
+// toward the horizon: from 20 km ground 100 km off takes a few percent,
+// where the base's density laid a quarter.
 //
 // The colour, from the sky at the horizon that ground at the point's height
 // would make: the column ahead of the ray from the eye tangent to the sphere
@@ -76,6 +77,7 @@ import {
   insideShell,
 } from './earth-shells'
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
+import { EARTH_RADIUS_KM, SCALE_HEIGHT_KM } from '../cloud-layer'
 import type { MaterialPatch } from './eclipseShadow'
 import { SKY_VIEW_GLSL, SKY_VIEW_UNIFORMS } from './skyView'
 
@@ -88,21 +90,28 @@ export const GROUND_HAZE_E = 3
  * (groundHaze()): a change here must change it too (the test checks). */
 export const GROUND_HAZE_POWER = 2
 
-/** The haze's reach L (scene units) over a sea level of this radius. */
+/** The true air's scale height over the sea level's radius: the ground
+ * haze's density (groundHazeDensity()). */
+export const GROUND_HAZE_AIR = SCALE_HEIGHT_KM / EARTH_RADIUS_KM
+
+/** The haze's reach L (scene units) over a sea level of this radius: the
+ * depth to the sea horizon from the stop, at GROUND_HAZE_E. */
 export function groundHazeLength(seaLevel: number): number {
-  return Math.sqrt(2 * seaLevel * EARTH_GROUND_CLEARANCE) / GROUND_HAZE_E ** (1 / GROUND_HAZE_POWER)
+  const eye = new THREE.Vector3(0, seaLevel + EARTH_GROUND_CLEARANCE, 0)
+  const cos = seaLevel / eye.y
+  const horizon = new THREE.Vector3(seaLevel * Math.sqrt(1 - cos * cos), seaLevel * cos, 0)
+  return groundHazeDepth(eye, horizon.sub(eye), seaLevel) / GROUND_HAZE_E ** (1 / GROUND_HAZE_POWER)
 }
 
-/** The haze's density at radius r, the base's below it (groundHazeDensity()). */
+/** The true air's density at radius r over the sea's (groundHazeDensity()). */
 function hazeDensity(r: number, seaLevel: number): number {
-  const base = seaLevel * ATMOSPHERE_SURFACE
-  return Math.exp(-Math.max(r - base, 0) / (seaLevel * ATMOSPHERE_SCALE_HEIGHT))
+  return Math.exp(-Math.max(r - seaLevel, 0) / (seaLevel * GROUND_HAZE_AIR))
 }
 
 /**
- * The segment's optical depth over the base's density, as the shader takes
- * it (groundHaze(); the test pins the two together): from `eye` (from the
- * centre) along `ray`, to the ground.
+ * The segment's optical depth over the sea level's density, as the shader
+ * takes it (groundHaze(); the test pins the two together): from `eye` (from
+ * the centre) along `ray`, to the ground.
  */
 export function groundHazeDepth(eye: THREE.Vector3, ray: THREE.Vector3, seaLevel: number): number {
   const mid = eye.clone().addScaledVector(ray, 0.5).length()
@@ -121,21 +130,23 @@ export function groundHazeDepth(eye: THREE.Vector3, ray: THREE.Vector3, seaLevel
  * the grazing line's: `cover`, the share of the ground's colour the haze
  * hides, `haze`, the share of the haze laid over it, and `own`, the share of
  * that haze's colour taken from the eye's own ray (the ease to the
- * atmosphere's draw at the cloud shell's top).
+ * atmosphere's draw at the cloud shell's top, where the cover eases to
+ * `ownCover`, the own ray's haze.glsl hazeCover()).
  */
 export function groundHazeWeights(
   eye: number,
   depth: number,
   columnShare: number,
   seaLevel: number,
-  flat: boolean
+  flat: boolean,
+  ownCover = 0
 ): { cover: number; haze: number; own: number } {
   const share = 1 - Math.exp(-((depth / groundHazeLength(seaLevel)) ** GROUND_HAZE_POWER))
   const top = seaLevel + groundHazeTop(flat)
   const ease = THREE.MathUtils.smoothstep(eye, top - 2 * seaLevel * ATMOSPHERE_SCALE_HEIGHT, top)
   const haze = share + (1 - share) * ease
   return {
-    cover: share * Math.min(2 * columnShare, 1) * (1 - ease),
+    cover: THREE.MathUtils.lerp(share * Math.min(2 * columnShare, 1), ownCover, ease),
     haze,
     own: ease > 0 ? ease / haze : 0,
   }
@@ -177,9 +188,9 @@ ${SKY_VIEW_GLSL}
 #define uDusk ${v3(ATMOSPHERE_DUSK)}
 ${hazeGlsl}
 
-// The haze's density, the base's below it, as columnAhead() counts an eye.
+// The true air's density, the sea level's 1 (GROUND_HAZE_AIR).
 float groundHazeDensity(float r) {
-  return exp(-max(r - uSurface, 0.0) / uScaleHeight);
+  return exp(-max(r - uSeaLevel, 0.0) / (uSeaLevel * ${f(GROUND_HAZE_AIR)}));
 }
 
 // From the eye along ray (eye to ground, in the mesh's frame). rgb: the haze
@@ -188,7 +199,9 @@ float groundHazeDensity(float r) {
 // of it laid over the ground, from the segment's optical depth; cover: the
 // share of the ground it hides, as much as the haze is a horizon's (its
 // column next to a level ray's from the base, hazeAbove(), half the grazing
-// line). Mirrored by groundHazeDepth() and groundHazeWeights().
+// line), easing to the eye's own ray's cover (hazeCover(), what the
+// atmosphere hides over the ground at the shell's top; tides-d9f.3).
+// Mirrored by groundHazeDepth() and groundHazeWeights().
 vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   float grazing = sqrt(6.2831853 * uSurface * uScaleHeight);
   float s = length(ray);
@@ -220,12 +233,14 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   // haze under the ship into sectors.
   vec3 look = normalize(mix(tangent, dir, down * down));
   vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun, look, eye);
+  float ownCover = 0.0;
   if (ease > 0.0) {
     vec3 atOwn;
     float own = columnAheadOverSea(eye, dir, grazing, atOwn);
     glow = mix(glow, hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye), ease / haze);
+    ownCover = hazeCover(own, dir, eye, uGroundHazeSun);
   }
-  cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);
+  cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);
   return vec4(glow, haze);
 }
 #undef uSeaLevel

@@ -75,6 +75,8 @@ void main() {
   float g = SKY_MIE_G;
   float pR = 0.0596831 * (1.0 + c * c);
   float pM = 0.0795775 * (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * c, 1.5);
+  // a: the path's transmittance (the green's), what of the sea or the
+  // ground at its end shows through (haze.glsl hazeCover(); tides-d9f.3).
   gl_FragColor = vec4(SKY_SUN * (single * (SKY_RAYLEIGH * pR + SKY_MIE * pM)
-    + SKY_MULTI * multi * SKY_RAYLEIGH * 0.0795775), 1.0);
+    + SKY_MULTI * multi * SKY_RAYLEIGH * 0.0795775), exp(-tauView.g));
 }

@@ -224,8 +224,9 @@ describe('night lights in flight', () => {
 
   // The sky's light on the ground (the sky fill, the Sun's tint), the
   // haze's colour from inside and the sky-view table's uniforms, as
-  // tides-34q changed them: put back as they were, so that the pins still
-  // hold the rest of the chain.
+  // tides-34q changed them, and the haze's cover from inside (tides-d9f.3):
+  // put back as they were, so that the pins still hold the rest of the
+  // chain.
   const OLD_SKY_FILL = `
 #if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0
 {
@@ -266,6 +267,28 @@ describe('night lights in flight', () => {
         '  vec3 glow = hazeGlow(column, grazing, at, uGroundHazeSun);',
       ],
       ['hazeGlow(own, grazing, atOwn, uGroundHazeSun, dir, eye)', 'hazeGlow(own, grazing, atOwn, uGroundHazeSun)'],
+      // tides-d9f.3: the ground's cover eases to the eye's own ray's.
+      [
+        "// line), easing to the eye's own ray's cover (hazeCover(), what the\n" +
+          "// atmosphere hides over the ground at the shell's top; tides-d9f.3).\n" +
+          '// Mirrored by',
+        '// line). Mirrored by',
+      ],
+      ['  float ownCover = 0.0;\n  if (ease > 0.0) {', '  if (ease > 0.0) {'],
+      ['\n    ownCover = hazeCover(own, dir, eye, uGroundHazeSun);', ''],
+      [
+        'cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);',
+        'cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);',
+      ],
+      // tides-d9f.3: the ground haze's density is the true air's.
+      [
+        "// The true air's density, the sea level's 1 (GROUND_HAZE_AIR).\n" +
+          'float groundHazeDensity(float r) {\n' +
+          '  return exp(-max(r - uSeaLevel, 0.0) / (uSeaLevel * 0.001256));',
+        "// The haze's density, the base's below it, as columnAhead() counts an eye.\n" +
+          'float groundHazeDensity(float r) {\n' +
+          '  return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
+      ],
     ]
     for (const [now, before] of swaps) {
       expect(fragment.split(now).length).toBe(2)
@@ -302,12 +325,12 @@ describe('night lights in flight', () => {
 
   // What skyAsBefore() swaps out, pinned as tides-34q left it, so that a
   // change to it fails here too.
-  it("pins tides-34q's sky light and haze, which the pins below take out", () => {
+  it("pins tides-34q's sky light and haze (and tides-d9f's glint and cover), which the pins below take out", () => {
     const sha = (text: string) => createHash('sha256').update(text).digest('hex')
     expect(sha(GROUND_DETAIL_GLSL.lightBody)).toBe('2f6f8a716ac3f104c5a5ded8dc62499ce46fbdadd96e7dab400cb0bf7389c137')
-    expect(sha(GROUND_DETAIL_GLSL.sunTintBody)).toBe('0f437dff1b138b14d5532c045a1f98f28bd2f9196d1d48c2f20ba8459b3bf9d4')
+    expect(sha(GROUND_DETAIL_GLSL.sunTintBody)).toBe('9782c8fe17499969afff34075dc56240299e9062473d4daaec7f20a4899361c6')
     expect(sha(hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb(')))).toBe(
-      'c428cccb41c9c63cf015e5e03cfb0d19faa64371ecf937a51a83b1a3c9c18fae'
+      '8e20cdd0404f9c1f2db2620cc65356626ac871c33098001de540c063a1d90eea'
     )
   })
 

@@ -159,9 +159,10 @@ vec3 skyViewDir(vec2 uv) {
 }
 
 #ifndef SKY_VIEW_BUILD
-// The table's radiance along rd from eye with the Sun along sun (the
-// includer declares uSkyView and uSkyViewSize).
-vec3 skyViewGlow(vec3 rd, vec3 eye, vec3 sun) {
+// The table's texel along rd from eye with the Sun along sun (the includer
+// declares uSkyView and uSkyViewSize): rgb, the radiance; a, the path's
+// transmittance.
+vec4 skyViewTexel(vec3 rd, vec3 eye, vec3 sun) {
   vec3 up = normalize(eye);
   float y = clamp(dot(rd, up), -1.0, 1.0);
   vec3 across = rd - up * y;
@@ -170,7 +171,10 @@ vec3 skyViewGlow(vec3 rd, vec3 eye, vec3 sun) {
   float phi = a2 > 1e-14 ? acos(clamp(dot(across, sunAcross) * inversesqrt(a2), -1.0, 1.0)) : 0.0;
   float e = asin(y);
   vec2 uv = vec2(phi / 3.14159265, 0.5 + 0.5 * sign(e) * sqrt(abs(e) / SKY_VIEW_HALF_PI));
-  return texture(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize).rgb;
+  return texture(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize);
+}
+vec3 skyViewGlow(vec3 rd, vec3 eye, vec3 sun) {
+  return skyViewTexel(rd, eye, sun).rgb;
 }
 #endif
 
@@ -188,4 +192,22 @@ vec3 hazeGlow(float column, float grazing, vec3 at, vec3 sun, vec3 rd, vec3 eye)
   if (uSkyViewOn > 0.5) return mix(limb, skyViewGlow(rd, eye, sun), inside);
 #endif
   return mix(limb, hazeSky(column, at, sun, rd, eye), inside);
+}
+
+// How much of the ground a ray from inside meets the haze hides (tides-
+// d9f.3): one less the path's transmittance, the table's on the high tier
+// (marched to the sea with its glow), else the column's, grey (the green's
+// extinction, with which hazeSky()'s glow saturates). Eased in over the base
+// as hazeGlow() eases to the sky, so from outside (and on the planets,
+// uSeaLevel 0) the haze only adds, as ever; from inside, ground seen
+// through a thick haze takes its colour instead of whitening under it.
+float hazeCover(float column, vec3 rd, vec3 eye, vec3 sun) {
+  if (uSeaLevel <= 0.0) return 0.0;
+  float inside = 1.0 - smoothstep(uSurface + uScaleHeight, uSurface + 4.0 * uScaleHeight, length(eye));
+  if (inside <= 0.0) return 0.0;
+  float through = exp(-(SKY_RAYLEIGH.g + SKY_MIE * 1.1) * column / uScaleHeight);
+#ifndef SKY_VIEW_BUILD
+  if (uSkyViewOn > 0.5) through = skyViewTexel(rd, eye, sun).a;
+#endif
+  return inside * (1.0 - through);
 }

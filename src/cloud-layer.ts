@@ -644,7 +644,7 @@ export function airMass(mu: number): number {
 /** Vertical optical depth (red, green, blue) at sea level: Rayleigh plus a
  * little haze, softened a touch for taste. */
 export const SUNLIGHT_EXTINCTION: Vec3 = [0.045, 0.1, 0.22]
-const SCALE_HEIGHT_KM = 8
+export const SCALE_HEIGHT_KM = 8
 
 /** Sunset light keeps at least this much of its red's brightness: the low
  * Sun's light on cloud still glows a little, but dimmer than noon (at 1 it
@@ -698,6 +698,15 @@ export function sunlightTint(mu: number, heightKm: number): Vec3 {
   const t = SUNLIGHT_EXTINCTION.map((tau) => Math.exp(-tau * m))
   const norm = Math.max(t[0], SUNSET_FLOOR)
   return t.map((c) => c / norm) as Vec3
+}
+
+/** The Sun itself seen through the air at `mu` (sine of its elevation) from
+ * an eye `heightKm` up: the plain extinction, unlifted, so a low Sun's disc
+ * and its glint dim and redden as well as warm (tides-34q.4). Mirrored per
+ * pixel by shaders/sun/air.glsl. */
+export function sunDiscTint(mu: number, heightKm: number): Vec3 {
+  const m = sunbeamAirMass(mu, heightKm)
+  return SUNLIGHT_EXTINCTION.map((tau) => Math.exp(-tau * m)) as Vec3
 }
 
 // Fine detail where the cloud map is magnified (tides-01v.2): octaves of noise

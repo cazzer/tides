@@ -12,6 +12,7 @@ import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import { CLOUD_AMBIENT } from '../lighting'
+import { EARTH_RADIUS_KM } from '../cloud-layer'
 import { moonOffset } from '../ephemeris'
 import { GIBS_GROUND_WIDTH } from '../gibs-patch'
 import {
@@ -353,6 +354,8 @@ export function createNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbie
       const height = up.length() / radius
       const sunSin = up.normalize().dot(sun.value)
       eyeSky.daylight = skyDaylight(sunSin, height)
+      eyeSky.up.copy(up).transformDirection(ground.matrixWorld)
+      eyeSky.heightKm = (height - 1) * EARTH_RADIUS_KM
       return dayExposure(sunSin, height - 1)
     },
   }

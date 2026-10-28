@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { activeRegions } from './sun-activity'
+import { EARTH_RADIUS_KM, SCALE_HEIGHT_KM, SUNLIGHT_EXTINCTION, sunDiscTint } from '../cloud-layer'
+import { EYE_AIRLESS_KM } from '../night-flight'
 import { surfaceBakeUniforms } from './sun-surface'
 import * as THREE from 'three'
 import { COLLISION_MARGIN } from '../ship/flight'
@@ -90,7 +92,7 @@ describe('the photosphere', () => {
     expect(fragment).toMatch(/gl_FragDepth = depth;\n#endif/)
     // Not before the lookups, whose mip level needs their neighbours.
     expect(fragment.indexOf('discard')).toBeGreaterThan(fragment.lastIndexOf('textureCube('))
-    expect(fragment).toMatch(/gl_FragColor = vec4\(gold\(I\), solid\)/)
+    expect(fragment).toMatch(/gl_FragColor = vec4\(gold\(I\) \* sunAir\(d\), solid\)/)
     expect(fragment).toMatch(/if \(solid <= 0\.0\) discard;/)
     expect(renderer).toMatch(/alphaToCoverage: true/)
   })
@@ -315,5 +317,35 @@ describe('the Sun\'s per-view set-up', () => {
     camera.zoom = 200
     camera.updateProjectionMatrix()
     expect(spiculeInstanceCount(camera, mesh, viewHeight, BLADES)).toBe(BLADES)
+  })
+})
+
+describe("the Sun through Earth's air (tides-34q.4)", () => {
+  const air = read('../shaders/sun/air.glsl')
+  const define = (name: string) => {
+    const m = air.match(new RegExp(`#define ${name} (.+)`))
+    expect(m, name).not.toBeNull()
+    return m![1].trim()
+  }
+  const num = (name: string) => Number(define(name))
+
+  it("takes sunDiscTint()'s constants, so the disc, its corona and the glint agree", () => {
+    expect(define('AIR_EXTINCTION')).toBe(`vec3(${SUNLIGHT_EXTINCTION.join(', ')})`)
+    expect(num('AIR_SCALE_KM')).toBe(SCALE_HEIGHT_KM)
+    expect(num('AIR_EARTH_KM')).toBe(EARTH_RADIUS_KM)
+    // The placeholder for no air sits over the cut, real heights under it.
+    expect(num('AIR_NONE_KM')).toBeLessThan(EYE_AIRLESS_KM)
+    expect(num('AIR_NONE_KM')).toBeGreaterThan(1e4)
+    expect(air).toMatch(/if \(uAirKm >= AIR_NONE_KM\) return vec3\(1\.0\);/)
+  })
+
+  it('leaves an overhead Sun white and reddens and dims a setting one', () => {
+    for (const c of sunDiscTint(1, 0)) expect(c).toBeCloseTo(1, 3)
+    const low = sunDiscTint(Math.sin((3 * Math.PI) / 180), 0.6)
+    expect(low[0]).toBeGreaterThan(low[1])
+    expect(low[1]).toBeGreaterThan(low[2])
+    expect(low[0]).toBeLessThan(0.8)
+    // From high up, thinner air.
+    expect(sunDiscTint(Math.sin((3 * Math.PI) / 180), 13)[2]).toBeGreaterThan(low[2])
   })
 })
