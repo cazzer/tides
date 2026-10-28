@@ -19,7 +19,7 @@ type View = DemoSessionState & { jumpDate: Date | null }
 
 function view(overrides: Partial<View> = {}): View {
   return {
-    jumpDate: new Date('2030-01-01T00:00:00Z'),
+    jumpDate: null,
     timestamp: Date.parse('2025-06-01T12:00:00Z'),
     timeScale: 3600,
     cameraFocus: 'mars',
@@ -90,8 +90,8 @@ function saved(s: View): DemoSaved {
 describe('enterDemoPatch', () => {
   it('saves the view, turns compass mode off and applies the first step', () => {
     const s = view()
-    const patch = enterDemoPatch(s, demo)!
-    expect(patch.demoSaved).toEqual(saved(s))
+    const patch = enterDemoPatch(s, demo, 1234)!
+    expect(patch.demoSaved).toEqual({ ...saved(s), enteredAt: 1234 })
     expect(patch).toMatchObject({
       demo: { id: 'test', step: 0 },
       compass: false,
@@ -108,6 +108,13 @@ describe('enterDemoPatch', () => {
       showLunar: true,
     })
     expect(patch.systemAids).toEqual({ ...DEFAULT_SYSTEM_AIDS, grid: false })
+  })
+
+  it('saves the date a jump under way lands on', () => {
+    const jumpDate = new Date('2030-01-01T00:00:00Z')
+    const patch = enterDemoPatch(view({ jumpDate }), demo)!
+    expect(patch.demoSaved.timestamp).toBe(jumpDate.getTime())
+    expect(patch.jumpDate).toBeNull()
   })
 
   it('returns null while a demo or ship mode runs', () => {
@@ -187,6 +194,22 @@ describe('exitDemoPatch', () => {
 
   it('returns null outside a demo', () => {
     expect(exitDemoPatch(view())).toBeNull()
+  })
+
+  it('brings someone following real time back to now', () => {
+    const before = view({ timeScale: 1 })
+    const s = { ...before, ...enterDemoPatch(before, demo, 10_000)! }
+    const after = exitDemoPatch(s, 70_000)!
+    expect(after.timestamp).toBe(before.timestamp! + 60_000)
+    expect(after.timeScale).toBe(1)
+  })
+
+  it('brings any other clock back exactly as it was', () => {
+    for (const timeScale of [0, 3600]) {
+      const before = view({ timeScale })
+      const s = { ...before, ...enterDemoPatch(before, demo, 10_000)! }
+      expect(exitDemoPatch(s, 70_000)!.timestamp).toBe(before.timestamp)
+    }
   })
 })
 

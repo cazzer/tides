@@ -1,8 +1,9 @@
 import type { Demo } from '../demo-script'
 
 // The total lunar eclipse of 3 March 2026. Contact times are astronomy-engine's
-// (SearchLunarEclipse): penumbra from 08:44 UT, umbra 09:50, totality
-// 11:04-12:03, greatest 11:33:40, umbra left 13:17.
+// (SearchLunarEclipse), UTC: penumbra from 08:44:02, umbra 09:49:45, totality
+// 11:03:58-12:03:23, greatest 11:33:40, umbra left 13:17:35, penumbra left
+// 14:23:19. Each step's `until` keeps Play within what its caption describes.
 //
 // Step 4's skyLook is the Moon's place in Honolulu's sky at greatest eclipse,
 // from astronomy-engine's Horizon (refracted): altitude 70.3, azimuth 221.5.
@@ -14,6 +15,7 @@ export const lunarEclipse: Demo = {
   steps: [
     {
       date: '2026-03-03T08:30:00Z',
+      until: '2026-03-03T09:49:45Z',
       timeScale: 0,
       layout: 'single',
       mainPanel: 'main',
@@ -30,7 +32,7 @@ export const lunarEclipse: Demo = {
       camera: { focus: 'moon', azimuth: 40, elevation: 15, distance: 6 },
       caption: {
         title: 'Into the shadow',
-        body: 'First the Moon crosses the faint outer shadow, the penumbra. From 09:50 UT the dark inner shadow, the umbra, starts to cover it.',
+        body: 'First the Moon crosses the faint outer shadow, the penumbra. From 09:50 UTC the dark inner shadow, the umbra, starts to cover it.',
       },
     },
     {
@@ -40,11 +42,12 @@ export const lunarEclipse: Demo = {
       camera: { focus: 'moon', azimuth: 30, elevation: 10, distance: 3.5 },
       caption: {
         title: 'Why the Moon turns copper',
-        body: 'No sunlight reaches the Moon directly now. What does is bent and reddened through Earth’s atmosphere: every sunrise and sunset on Earth at once.',
+        body: 'No sunlight reaches the Moon directly now. The only light that reaches it is bent and reddened by Earth’s atmosphere: every sunrise and sunset on Earth at once.',
       },
     },
     {
       date: '2026-03-03T11:33:46Z',
+      until: '2026-03-03T12:03:23Z',
       timeScale: 0,
       mainPanel: 'top',
       location: { lat: 21.31, lon: -157.86 },
@@ -56,6 +59,7 @@ export const lunarEclipse: Demo = {
     },
     {
       date: '2026-03-03T13:17:22Z',
+      until: '2026-03-03T14:23:19Z',
       timeScale: 0,
       mainPanel: 'main',
       camera: { focus: 'earth', azimuth: 90, elevation: 25, distance: 120 },

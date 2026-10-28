@@ -1,5 +1,5 @@
 import styled from 'styled-components'
-import { useEffect, useRef, type Ref } from 'react'
+import { useEffect, useId, useRef, useState, type Ref } from 'react'
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -10,13 +10,17 @@ import {
 import { useStore } from '../store'
 import { glassButton, glassPanel, PHONE } from '../glass-styles'
 import { findDemo } from './demos'
-import type { Demo } from './demo-script'
+import { formatDemoTime, type Demo } from './demo-script'
 
-// After the exit has rendered, focus the demo button the dock came back with.
+// After the exit has rendered, focus the demo button the dock came back
+// with, or the dock's toggle while the phone dock is folded and hides it.
 function focusDemoButton() {
-  setTimeout(() =>
-    document.querySelector<HTMLElement>('[data-demo-button]')?.focus({ preventScroll: true })
-  )
+  setTimeout(() => {
+    const button = document.querySelector<HTMLElement>('[data-demo-button]')
+    const shown = button && getComputedStyle(button).visibility === 'visible'
+    const target = shown ? button : document.querySelector<HTMLElement>('[data-dock-toggle]')
+    target?.focus({ preventScroll: true })
+  })
 }
 
 function typingInto(target: EventTarget | null): boolean {
@@ -26,6 +30,8 @@ function typingInto(target: EventTarget | null): boolean {
   )
 }
 
+const MINUTE = 60_000
+
 /**
  * The running demo's caption and controls, in place of the dock (tides-zec.5).
  * Escape leaves the demo and the arrow keys step through it.
@@ -33,6 +39,8 @@ function typingInto(target: EventTarget | null): boolean {
 export function DemoBar() {
   const run = useStore((s) => s.demo)
   const playing = useStore((s) => s.timeScale !== 0)
+  // By the minute: the whole timestamp changes every frame.
+  const minute = useStore((s) => (s.timestamp == null ? null : Math.floor(s.timestamp / MINUTE)))
   const goToDemoStep = useStore((s) => s.goToDemoStep)
   const exitDemo = useStore((s) => s.exitDemo)
   const toggleDemoPlaying = useStore((s) => s.toggleDemoPlaying)
@@ -51,7 +59,7 @@ export function DemoBar() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || typingInto(e.target)) return
+      if (e.defaultPrevented || e.repeat || e.altKey || e.ctrlKey || e.metaKey || typingInto(e.target)) return
       if ((e.target as Element | null)?.closest?.('dialog')) return
       if (e.key === 'Escape') exitDemo()
       else if (e.key === 'ArrowLeft' && step > 0) goToDemoStep(step - 1)
@@ -69,6 +77,7 @@ export function DemoBar() {
       demo={demo}
       step={step}
       playing={playing}
+      time={minute == null ? null : minute * MINUTE}
       nextRef={nextRef}
       onStep={goToDemoStep}
       onTogglePlaying={toggleDemoPlaying}
@@ -81,6 +90,8 @@ export interface DemoBarViewProps {
   demo: Demo
   step: number
   playing: boolean
+  /** The sim time (epoch ms), or null before the clock starts. */
+  time: number | null
   nextRef?: Ref<HTMLButtonElement>
   onStep: (index: number) => void
   onTogglePlaying: () => void
@@ -92,31 +103,62 @@ export function DemoBarView({
   demo,
   step,
   playing,
+  time,
   nextRef,
   onStep,
   onTogglePlaying,
   onExit,
 }: DemoBarViewProps) {
   const count = demo.steps.length
+  const first = step === 0
   const last = step === count - 1
   const { caption } = demo.steps[step]
+  const captionId = useId()
+  const bodyRef = useRef<HTMLParagraphElement>(null)
+  const [overflowing, setOverflowing] = useState(false)
+
+  // A caption that scrolls has to be reachable by keyboard to scroll it.
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!body) return
+    const measure = () => setOverflowing(body.scrollHeight > body.clientHeight + 1)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [caption.body])
 
   return (
     <Bar aria-label={`Demo: ${demo.title}`}>
-      <Caption aria-live="polite">
+      {/* Read out on each step; the ticking clock stays out of it. */}
+      <Caption id={captionId} aria-live="polite">
         <Heading>
           <Title>{caption.title}</Title>
-          <Count>
-            {step + 1} / {count}
-          </Count>
+          <Meta aria-hidden="true">
+            {time != null && <span>{formatDemoTime(time)}</span>}
+            <span>
+              {step + 1} / {count}
+            </span>
+          </Meta>
         </Heading>
-        <Body>{caption.body}</Body>
+        <VisuallyHidden>
+          Step {step + 1} of {count}.
+        </VisuallyHidden>
+        <Body
+          ref={bodyRef}
+          tabIndex={overflowing ? 0 : undefined}
+        >
+          {caption.body}
+        </Body>
       </Caption>
       <Buttons>
+        {/* aria-disabled, not disabled, so focus stays on it at step 1. */}
         <Button
           type="button"
-          onClick={() => onStep(step - 1)}
-          disabled={step === 0}
+          onClick={() => {
+            if (!first) onStep(step - 1)
+          }}
+          aria-disabled={first || undefined}
           aria-label="Previous step"
           title="Previous step"
         >
@@ -125,8 +167,8 @@ export function DemoBarView({
         <Button
           type="button"
           onClick={onTogglePlaying}
-          aria-label={playing ? 'Pause' : 'Play'}
-          title={playing ? 'Pause' : 'Play'}
+          aria-label={playing ? 'Pause time' : 'Play time'}
+          title={playing ? 'Pause time' : 'Play time'}
         >
           {playing ? <IconPlayerPause size={20} stroke={2} /> : <IconPlayerPlay size={20} stroke={2} />}
         </Button>
@@ -135,6 +177,7 @@ export function DemoBarView({
           ref={nextRef}
           type="button"
           onClick={() => (last ? onExit() : onStep(step + 1))}
+          aria-describedby={captionId}
         >
           {last ? 'Done' : 'Next'}
           {!last && <IconChevronRight size={18} stroke={2} />}
@@ -175,9 +218,10 @@ const Caption = styled.div`
 
 const Heading = styled.div`
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  column-gap: 12px;
+  row-gap: 2px;
 `
 
 const Title = styled.h2`
@@ -187,11 +231,26 @@ const Title = styled.h2`
   color: #fff;
 `
 
-const Count = styled.span`
-  flex: none;
+const Meta = styled.span`
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   color: rgba(255, 255, 255, 0.6);
+`
+
+const VisuallyHidden = styled.span`
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 `
 
 const Body = styled.p`
@@ -202,6 +261,12 @@ const Body = styled.p`
   line-height: 1.45;
   color: rgba(255, 255, 255, 0.8);
 
+  &:focus-visible {
+    outline: 2px solid #4c9ffe;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
   ${PHONE} {
     font-size: 13px;
   }
@@ -210,7 +275,7 @@ const Body = styled.p`
 const Buttons = styled.div`
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
 `
 
 const Spacer = styled.div`
@@ -219,8 +284,10 @@ const Spacer = styled.div`
 
 const Button = styled.button`
   ${glassButton}
+  width: 44px;
+  height: 44px;
 
-  &:disabled {
+  &[aria-disabled='true'] {
     opacity: 0.35;
     cursor: default;
     background-color: transparent;
@@ -230,8 +297,9 @@ const Button = styled.button`
 const TextButton = styled.button`
   ${glassButton}
   width: auto;
+  height: 44px;
   gap: 2px;
-  padding: 0 12px 0 14px;
+  padding: 0 14px 0 16px;
   font: inherit;
   font-size: 14px;
   font-weight: 600;

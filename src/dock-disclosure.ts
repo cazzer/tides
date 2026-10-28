@@ -60,6 +60,19 @@ export const phoneDock = `
 
     &[data-expanded='true'] {
       width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
+      /* What doesn't fit wraps to a second row, once the dock has widened:
+       * wrapping while it widens would stack the controls in a column. */
+      flex-wrap: wrap;
+      /* A short second row starts at the left, not spread to both ends. */
+      justify-content: flex-start;
+      height: auto;
+      min-height: var(--dock-height);
+      padding-block: calc((var(--dock-height) - var(--dock-button-size, 40px)) / 2);
+      border-radius: calc(var(--dock-height) / 2);
+      transition:
+        width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        flex-wrap 0s linear 240ms;
+      transition-behavior: allow-discrete;
     }
 
     & > :not([data-dock-toggle]) {

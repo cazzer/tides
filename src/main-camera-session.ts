@@ -50,3 +50,18 @@ export function takeMainCameraRestore(): MainCameraPose | null {
   restorePending = false
   return saved
 }
+
+// A one-shot request that the main view's target land on the focus at once,
+// instead of turning to it over FOCUS_EASE frames.
+let snapPending = false
+
+export function requestFocusSnap(): void {
+  snapPending = true
+}
+
+/** Whether a snap was requested, once. */
+export function takeFocusSnap(): boolean {
+  const pending = snapPending
+  snapPending = false
+  return pending
+}

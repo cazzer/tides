@@ -100,3 +100,18 @@ export function easeProgress(elapsed: number, duration: number): number {
   const t = Math.min(1, Math.max(0, elapsed / duration))
   return t * t * (3 - 2 * t)
 }
+
+const timeFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'UTC',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+/** The sim time as the captions quote it: "3 Mar 2026, 11:33 UTC". */
+export function formatDemoTime(timestamp: number): string {
+  return `${timeFormat.format(timestamp)} UTC`
+}

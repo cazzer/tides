@@ -37,11 +37,16 @@ export interface DemoRun {
   step: number
 }
 
+/** DemoSaved as it was on entry, and when (wall-clock epoch ms) that was. */
+export type DemoSnapshot = DemoSaved & { enteredAt: number }
+
 export interface DemoSessionState extends DemoSaved {
   demo: DemoRun | null
   /** What DemoSaved held on entry; null outside a demo. */
-  demoSaved: DemoSaved | null
+  demoSaved: DemoSnapshot | null
   shipMode: boolean
+  /** A date jump under way, landing on this date. */
+  jumpDate: Date | null
 }
 
 /** The fields a step sets: all of DemoSaved but compass mode. */
@@ -107,9 +112,14 @@ export function demoStepPatch(saved: DemoSaved, demo: Demo, index: number) {
  * ship mode runs, so a second entry never saves the demo's view over the
  * user's own.
  */
-export function enterDemoPatch(s: DemoSessionState, demo: Demo) {
+export function enterDemoPatch(s: DemoSessionState, demo: Demo, now = Date.now()) {
   if (s.demo || s.shipMode || demo.steps.length === 0) return null
-  const saved = pickSaved(s)
+  // Mid-jump, the date picked is the one to come back to.
+  const saved: DemoSnapshot = {
+    ...pickSaved(s),
+    timestamp: s.jumpDate?.getTime() ?? s.timestamp,
+    enteredAt: now,
+  }
   return { demoSaved: saved, compass: false, ...demoStepPatch(saved, demo, 0) }
 }
 
@@ -123,11 +133,17 @@ export function goToDemoStepPatch(s: DemoSessionState, demo: Demo, index: number
 /**
  * The store patch that leaves the demo, putting back everything saved on
  * entry in one go (setShowPlanets and setLocation would move the focus).
- * Null outside a demo.
+ * Someone following real time comes back to now, the time the demo took
+ * included; any other clock comes back as it was. Null outside a demo.
  */
-export function exitDemoPatch(s: DemoSessionState) {
+export function exitDemoPatch(s: DemoSessionState, now = Date.now()) {
   if (!s.demo || !s.demoSaved) return null
-  return { demo: null, demoSaved: null, jumpDate: null, ...s.demoSaved }
+  const { enteredAt, ...saved } = s.demoSaved
+  const timestamp =
+    saved.timeScale === 1 && saved.timestamp != null
+      ? saved.timestamp + (now - enteredAt)
+      : saved.timestamp
+  return { demo: null, demoSaved: null, jumpDate: null, ...saved, timestamp }
 }
 
 /** The speed Play runs a step at: its own, or an hour a second where it pauses. */

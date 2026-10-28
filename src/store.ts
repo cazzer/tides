@@ -11,7 +11,7 @@ import {
   exitDemoPatch,
   goToDemoStepPatch,
   type DemoRun,
-  type DemoSaved,
+  type DemoSnapshot,
 } from './demo/demo-session'
 import { findDemo } from './demo/demos'
 import { requestMainCameraRestore } from './main-camera-session'
@@ -271,7 +271,7 @@ export const useStore = create<{
    * start only from the menu, never from the URL or on load. */
   demo: DemoRun | null
   /** The view the demo overrode, restored on exit; null outside one. */
-  demoSaved: DemoSaved | null
+  demoSaved: DemoSnapshot | null
   startDemo: (id: string) => void
   goToDemoStep: (index: number) => void
   exitDemo: () => void

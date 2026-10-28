@@ -221,7 +221,7 @@ export default function App() {
             overlay={
               panelProps('main').gridArea === 'main' ? (
                 <>
-                  {showPlanets && systemAids.scale && <ScaleReadout />}
+                  {!demo && showPlanets && systemAids.scale && <ScaleReadout />}
                   {!demo && <ShipButton />}
                 </>
               ) : undefined
@@ -269,7 +269,7 @@ export default function App() {
           </Panel>
         )}
         {/* Outside the panels, so it (and its focus) survives the view switch. */}
-        {/* A demo picks the view itself, and its bar covers this corner. */}
+        {/* A demo picks the view itself (and on a phone its bar would cover these). */}
         {single && !shipMode && !demo && (
           <ViewMenu
             value={mainPanel}

@@ -19,11 +19,12 @@ export function DemoMenu() {
 
   useEffect(() => {
     if (!open) return
-    const onOutside = (e: MouseEvent) => {
+    // Capture: the canvas's orbit controls take the pointer for drags.
+    const onOutside = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', onOutside)
-    return () => document.removeEventListener('mousedown', onOutside)
+    document.addEventListener('pointerdown', onOutside, true)
+    return () => document.removeEventListener('pointerdown', onOutside, true)
   }, [open])
 
   return (
@@ -43,8 +44,9 @@ export function DemoMenu() {
         onClick={() => setOpen((o) => !o)}
         aria-label="Demos"
         title="Demos"
+        aria-haspopup="true"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         data-demo-button
       >
         <IconPresentation size={20} stroke={2} />
