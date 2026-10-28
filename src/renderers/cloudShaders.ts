@@ -296,9 +296,10 @@ ${typed ? `#ifdef CLOUD_TYPED
   // reads a top between theirs. w is where the untyped base stands, the
   // clearance over the ground, for what is reckoned from the ground rather
   // than the cloud's own base. Untyped (a texel the types leave alone, of
-  // confidence 0), the untyped column exactly.
+  // confidence 0, B 0), the untyped column exactly, with no branch for it
+  // (tides-tvr.4.8): the lift is 0, and the untyped top is never over the
+  // map's tallest (maxTopKm()), so the min leaves it as it is.
   vec3 typedTop = tops.rgb;
-  if (typedTop.b <= 0.0) return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, base);
   float topKm = min(mix(km * shape, typedTop.r * TYPED_TOPS_KM, typedTop.b), uCloudMaxKm);
   float liftKm = min(typedTop.b * typedTop.g * TYPED_TOPS_KM, topKm);
   return vec4(c.g, base + CLOUD_UNITS_PER_KM * liftKm, base + CLOUD_UNITS_PER_KM * topKm, base);

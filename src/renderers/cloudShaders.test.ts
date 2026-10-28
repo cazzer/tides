@@ -62,6 +62,9 @@ import {
   shadePlace,
   TERRAIN_DISPLACEMENT,
   type Vec3,
+  cloudShape,
+  cloudTopKm,
+  maxTopKm,
 } from '../cloud-layer'
 import {
   CIRRUS_STRETCH,
@@ -1674,12 +1677,25 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         // toward it by how far the texel is untyped, under the map's
         // tallest, and the base lifted, never over it.
         for (const line of [
-          'if (typedTop.b <= 0.0) return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, base);',
           'float topKm = min(mix(km * shape, typedTop.r * TYPED_TOPS_KM, typedTop.b), uCloudMaxKm);',
           'float liftKm = min(typedTop.b * typedTop.g * TYPED_TOPS_KM, topKm);',
           'return vec4(c.g, base + CLOUD_UNITS_PER_KM * liftKm, base + CLOUD_UNITS_PER_KM * topKm, base);',
         ]) {
           expect(column).toContain(line)
+        }
+        // With no branch for an untyped texel (tides-tvr.4.8): B 0 lifts
+        // nothing, and the min against the map's tallest leaves the untyped
+        // top as it is, measured or not.
+        expect(column).not.toMatch(/if \(typedTop\.b/)
+        for (const measured of [0, 1]) {
+          for (let k = 0; k <= 20; k++) {
+            for (const r of [0, 0.5, 1]) {
+              for (const coverage of [0, 0.5, 1]) {
+                const alpha = k / 20
+                expect(cloudTopKm(r, coverage, alpha, measured) * cloudShape(alpha)).toBeLessThanOrEqual(maxTopKm(measured === 1))
+              }
+            }
+          }
         }
         expect(src).toContain('uniform sampler2D uCloudTops;')
         expect(src).toContain(TYPED_TOPS_GLSL)
