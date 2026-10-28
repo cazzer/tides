@@ -22,6 +22,7 @@ import {
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
 import { createSkyView, SKY_VIEW_UNIFORMS, type SkyView } from './skyView'
+import { eyeSky } from '../night-flight'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
 // thins out with an (exaggerated, for visibility) ~60 km scale height.
@@ -39,6 +40,16 @@ const noRaycast = () => null
 const SKY_VIEW_PRIORITY = 0.9
 const _eye = new THREE.Vector3()
 const _sun = new THREE.Vector3()
+const _toShell = new THREE.Matrix4()
+
+// Per view, at draw time: the Sun's disc, which the sky gives way over
+// from inside (SunRenderer's setSkyOverDisc(), drawn before it), in the
+// shell's frame.
+function setSunDisc(material: THREE.ShaderMaterial, shell: THREE.Object3D) {
+  const { uSunDisc, uSunDiscCos } = material.uniforms
+  uSunDiscCos.value.set(eyeSky.sunDiscCos.x, eyeSky.sunDiscCos.y, eyeSky.sunDiscFade)
+  if (eyeSky.sunDiscFade > 0) uSunDisc.value.copy(eyeSky.sunDisc).transformDirection(_toShell.copy(shell.matrixWorld).invert())
+}
 
 // The table for `camera`'s eye in the shell's frame (sea level `radius`),
 // or off over the haze, where the limb's glow takes over (haze.glsl
@@ -79,6 +90,8 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
           uGain: { value: ATMOSPHERE_GAIN },
           uSky: { value: SKY },
           uDusk: { value: DUSK },
+          uSunDisc: { value: new THREE.Vector3(0, 0, 1) },
+          uSunDiscCos: { value: new THREE.Vector3(1, 1, 0) },
           ...SKY_VIEW_UNIFORMS,
         },
         transparent: true,
@@ -137,9 +150,10 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
       material={material}
       renderOrder={ATMOSPHERE_RENDER_ORDER}
       raycast={noRaycast}
-      onBeforeRender={(_renderer, _scene, camera, _geometry, shader) =>
+      onBeforeRender={(_renderer, _scene, camera, _geometry, shader) => {
         pickShellFaces(mesh.current!, shader, camera, hazeStop)
-      }
+        setSunDisc(shader as THREE.ShaderMaterial, mesh.current!)
+      }}
     />
   )
 }

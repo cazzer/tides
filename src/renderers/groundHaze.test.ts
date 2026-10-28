@@ -5,6 +5,7 @@ import { createCloudLayer } from './cloudShaders'
 import { groundDetailPatch } from './groundDetail'
 import {
   createGroundHaze,
+  GROUND_HAZE_AIR,
   GROUND_HAZE_E,
   GROUND_HAZE_POWER,
   groundHazeDepth,
@@ -18,6 +19,7 @@ import {
   pickShellFaces,
 } from './earth-shells'
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
+import { EARTH_RADIUS_KM } from '../cloud-layer'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 
 // The ship's camera is near Earth (limb-detail's view).
@@ -126,7 +128,7 @@ describe('ground haze', () => {
     // mirror, and the reference ray the tests port: a change to one side
     // fails here.
     for (const line of [
-      'return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
+      'return exp(-max(r - uSeaLevel, 0.0) / (uSeaLevel * 0.001256));',
       'float tau = s * (groundHazeDensity(rE) + 4.0 * groundHazeDensity(length(eye + 0.5 * ray)) + groundHazeDensity(rP)) / 6.0;',
       'float grazing = sqrt(6.2831853 * uSurface * uScaleHeight);',
       'vec3 dir = ray / s;',
@@ -184,24 +186,28 @@ describe('ground haze', () => {
   })
 
   it('clears near ground, keeps the far sea horizon, and adds all the haze at the shell top', () => {
-    const horizon = Math.sqrt(2 * R * EARTH_GROUND_CLEARANCE)
     const top = R + groundHazeTop(false)
     const stop = R + EARTH_GROUND_CLEARANCE
-    // Under the base the depth is the distance. A level ray's column from
-    // the base is half the grazing line's.
-    for (const s of [0.002, 0.01]) {
-      const near = groundHazeWeights(stop, s, 0.5, R, false)
+    // The sea s off from the stop, through the true air. A level ray's column
+    // from the base is half the grazing line's.
+    const fromStop = (s: number, share = 0.5) => {
+      const eye = V(0, stop)
+      return groundHazeWeights(stop, groundHazeDepth(eye, pointAt(stop, R, s).sub(eye), R), share, R, false)
+    }
+    for (const s of [0.005, 0.01]) {
+      const near = fromStop(s)
       expect(near.cover).toBeLessThan(0.015)
       expect(near.haze).toBeLessThan(0.015)
     }
-    expect(groundHazeWeights(stop, 0.02, 0.5, R, false).haze).toBeLessThan(0.05)
-    const sea = groundHazeWeights(stop, horizon, 0.5, R, false)
+    expect(fromStop(0.02).haze).toBeLessThan(0.05)
+    const horizon = Math.sqrt(stop * stop - R * R)
+    const sea = fromStop(horizon)
     expect(sea.haze).toBeCloseTo(1 - Math.exp(-GROUND_HAZE_E), 6)
     expect(sea.cover).toBeCloseTo(sea.haze, 6)
     expect(sea.own).toBe(0)
     // Under a horizon whose column is faint (an eye standing high over the
     // point), little of the ground is hidden.
-    expect(groundHazeWeights(stop, horizon, 0.05, R, false).cover).toBeCloseTo(0.1 * sea.haze, 6)
+    expect(fromStop(horizon, 0.05).cover).toBeCloseTo(0.1 * sea.haze, 6)
     // Through the ease band the haze is at least the ease, and its colour
     // turns to the eye's own ray's.
     const band = top - 2 * R * ATMOSPHERE_SCALE_HEIGHT
@@ -226,23 +232,29 @@ describe('ground haze', () => {
     }
   })
 
-  it("takes the segment's depth: the distance under the base, thinner above, finite straight down", () => {
-    const stop = V(0, R + EARTH_GROUND_CLEARANCE)
-    const low = pointAt(stop.y, R + 0.002, 0.1)
-    expect(groundHazeDepth(stop, low.clone().sub(stop), R)).toBeCloseTo(0.1, 9)
-    // Level, two scale heights over the base: about e^-2 of the distance.
-    const high = V(0, SURFACE + 2 * H)
-    const ray = pointAt(high.y, high.y, 0.05).sub(high)
-    const thin = groundHazeDepth(high, ray, R) / 0.05
-    expect(thin).toBeGreaterThan(Math.exp(-2))
-    expect(thin).toBeLessThan(1.1 * Math.exp(-2))
-    // Straight down to the sea: the base's thickness plus a scale height,
-    // to Simpson's few samples.
-    const eye = V(0, R + 0.2)
-    const down = groundHazeDepth(eye, V(0, -0.2), R)
-    const exact = SURFACE - R + H * (1 - Math.exp(-(R + 0.2 - SURFACE) / H))
-    expect(down).toBeGreaterThan(0.6 * exact)
-    expect(down).toBeLessThan(exact)
+  it("takes the segment's depth through the true air: the distance at the sea, thinner up, gathering at the horizon (tides-d9f.3)", () => {
+    const air = R * GROUND_HAZE_AIR
+    // Level along the sea: the distance.
+    const sea = V(0, R)
+    expect(groundHazeDepth(sea, pointAt(R, R, 0.01).sub(sea), R)).toBeCloseTo(0.01, 4)
+    // Straight down from three of the air's heights: its thickness, to
+    // Simpson's few samples.
+    const eye = V(0, R + 3 * air)
+    const down = groundHazeDepth(eye, V(0, -3 * air), R)
+    const exact = air * (1 - Math.exp(-3))
+    expect(down).toBeGreaterThan(0.9 * exact)
+    expect(down).toBeLessThan(1.25 * exact)
+    // From 20 km and 30 km up the sea well short of the horizon clears to
+    // under a tenth (the base's density laid a quarter 100 km off), while the
+    // horizon keeps all but a little of its haze, as the sky over it has.
+    for (const km of [20, 30]) {
+      const rE = R * (1 + km / EARTH_RADIUS_KM)
+      const from = V(0, rE)
+      const laid = (s: number) =>
+        groundHazeWeights(rE, groundHazeDepth(from, pointAt(rE, R, s).sub(from), R), 0.5, R, false).haze
+      expect(laid(R * (100 / EARTH_RADIUS_KM))).toBeLessThan(0.08)
+      expect(laid(Math.sqrt(rE * rE - R * R))).toBeGreaterThan(0.95)
+    }
   })
 
   it("meets the sky at the sea horizon: the sea's colour is the sky's just above it", () => {
@@ -263,7 +275,9 @@ describe('ground haze', () => {
     }
   })
 
-  it("keeps a fixed ground point's haze as the eye bobs, where the eye's own ray's moved it", () => {
+  // The haze's colour (its reference column) holds; its amount thins as the
+  // eye rises through the true air (tides-d9f.3), with the segment.
+  it("keeps a fixed ground point's haze colour as the eye bobs, where the eye's own ray's moved it", () => {
     const bob = EARTH_GROUND_CLEARANCE
     const oldLength = Math.sqrt(2 * R * EARTH_GROUND_CLEARANCE) / GROUND_HAZE_E
     let oldWorst = 0
@@ -286,12 +300,15 @@ describe('ground haze', () => {
           const w = groundHazeWeights(eye.y, depth, 0, R, false)
           const old = 1 - Math.exp(-ray.length() / oldLength)
           return {
-            now: (w.haze * columnAhead(eye, reference(eye, ray))) / GRAZING,
+            haze: w.haze,
+            now: columnAhead(eye, reference(eye, ray)) / GRAZING,
             old: (old * columnAheadOverSea(eye, ray.normalize())) / GRAZING,
           }
         }
         const [a, b] = [laid(EARTH_GROUND_CLEARANCE), laid(EARTH_GROUND_CLEARANCE + bob)]
         expect(Math.abs(b.now - a.now)).toBeLessThan(0.08)
+        // Over the plateau the higher eye is in the ease to its own ray's.
+        if (ground < 0.01) expect(b.haze).toBeLessThanOrEqual(a.haze)
         oldWorst = Math.max(oldWorst, Math.abs(b.old - a.old))
       }
     }

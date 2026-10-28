@@ -522,7 +522,7 @@ ${ECLIPSE_GLSL.point}
 #define CLOUD_VEILED (veilClear < 1.0)
 #define CLOUD_VEIL { if (sVeil < 0.0) { sVeil = sHit; colVeil = colIn; upVeil = upThrough; } veilClear *= sideClear; side = false; sHit = -1.0; }
 // A ray that meets no cloud past its fog draws the fog alone.
-#define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), FRAG_DEPTH_NEAREST, vec3(0.0), 0.0); return; } discard; }
+#define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), FRAG_DEPTH_NEAREST, vec3(0.0), 0.0, 0.0); return; } discard; }
 #ifdef FOG_EASE
 // With reduced motion, how far the fog has eased in (FOG_EASE_GLSL): the
 // same at every vertex, so the same here but for rounding.
@@ -593,8 +593,11 @@ ${hazeGlsl}
 // haze between the eye and s along d (columnAhead() from each end), from
 // inside a cloud none. Toward the top of the shell (shell), where the
 // order changes, it eases to all of it, the haze past far clouds too, as
-// the clouds looked when they drew first.
-vec3 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
+// the clouds looked when they drew first. a: the share of the cloud's own
+// light the haze hides, the same share of the ray's cover (haze.glsl
+// hazeCover(), tides-d9f.3), so a deck under a thick haze takes its colour
+// as the ground beside it does instead of whitening under it.
+vec4 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
   float grazing = sqrt(2.0 * CLOUD_PI * uSurface * uScaleHeight);
   vec3 at;
   vec3 atPast;
@@ -602,13 +605,14 @@ vec3 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
   float past = columnAhead(eye + d * s, d, grazing, atPast);
   float front = clamp(1.0 - past / max(column, 1e-9), 0.0, 1.0);
   front = mix(front, 1.0, smoothstep(shell - 2.0 * uScaleHeight, shell, length(eye)));
-  return hazeGlow(column, grazing, at, uSunDir, d, eye) * front;
+  return vec4(hazeGlow(column, grazing, at, uSunDir, d, eye), hazeCover(column, d, eye, uSunDir)) * front;
 }
 
 // The fragment, premultiplied, at depth z (the program writes gl_FragDepth
 // on every path), with share of the haze added over it as the atmosphere's
-// additive blend would, after the output transforms.
-void cloudOut(vec4 color, float z, vec3 haze, float share) {
+// additive blend would, after the output transforms, and cover of the
+// cloud's own light (not the fog's in front of it) hidden under it.
+void cloudOut(vec4 color, float z, vec3 haze, float share, float cover) {
   gl_FragColor = vec4(haze, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -616,7 +620,7 @@ void cloudOut(vec4 color, float z, vec3 haze, float share) {
   gl_FragColor = color;
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
-  gl_FragColor.rgb = gl_FragColor.rgb * gl_FragColor.a + share * hazeOut;
+  gl_FragColor.rgb = gl_FragColor.rgb * (gl_FragColor.a - cover * share) + share * hazeOut;
   gl_FragDepth = z;
 }
 #else
@@ -1785,9 +1789,10 @@ void main() {
   // through.
   float fogA = 1.0 - fogClear;
   float a = fogA + fogClear * opacity;
+  vec4 hazeFront = cloudHazeFront(eye, d, length(pShade - eye), shell);
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
-    cloudHazeFront(eye, d, length(pShade - eye), shell), fogClear * opacity);
+    hazeFront.rgb, fogClear * opacity, hazeFront.a);
 #else
   gl_FragColor = vec4(radiance, opacity);
   #include <tonemapping_fragment>

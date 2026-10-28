@@ -105,8 +105,18 @@ export const EYE_AIRLESS_KM = 1e6
  * looks at the Sun through, read by the Sun (its up from Earth's centre in
  * world axes, and its height over the sea): set before its draws
  * (EarthRenderer's per-camera hook); no daylight and no air outside ship
- * mode. */
-export const eyeSky = { daylight: 0, up: new THREE.Vector3(0, 1, 0), heightKm: EYE_AIRLESS_KM }
+ * mode. The Sun's disc, set by the Sun as it draws (SunRenderer), for the
+ * sky drawn after it: the world direction to its centre, the cosines of the
+ * cone the sky gives way across, and how far it gives way there (0, the
+ * hook's, where the Sun didn't draw). */
+export const eyeSky = {
+  daylight: 0,
+  up: new THREE.Vector3(0, 1, 0),
+  heightKm: EYE_AIRLESS_KM,
+  sunDisc: new THREE.Vector3(0, 0, 1),
+  sunDiscCos: new THREE.Vector2(1, 1),
+  sunDiscFade: 0,
+}
 
 /** The Moon's illuminated fraction from Earth, for unit directions from
  * Earth's centre to the Sun and to the Moon. */

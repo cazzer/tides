@@ -202,6 +202,7 @@ export default function EarthRenderer({
         eyeSky.daylight = 0
         eyeSky.heightKm = EYE_AIRLESS_KM
         eyeSky.up.set(0, 1, 0)
+        eyeSky.sunDiscFade = 0
         renderer.toneMappingExposure =
           TONE_MAPPING_EXPOSURE *
           (nightFlight && groundRef.current ? nightFlight.adaptEye(groundRef.current, camera, diameter) : 1)
@@ -360,6 +361,7 @@ function restoreEye(renderer: THREE.WebGLRenderer) {
   eyeSky.daylight = 0
   eyeSky.heightKm = EYE_AIRLESS_KM
   eyeSky.up.set(0, 1, 0)
+  eyeSky.sunDiscFade = 0
 }
 
 function cloudsFaceEachCamera(

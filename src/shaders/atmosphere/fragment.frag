@@ -23,6 +23,13 @@ uniform float uSeaLevel;
 uniform sampler2D uSkyView;
 uniform vec2 uSkyViewSize;
 uniform float uSkyViewOn;
+#ifdef HAZE_COVER
+// The Sun's disc from inside (the Earth's: AtmosphereRenderer): its
+// direction, and the cosines of the cone the sky gives way across, from
+// none to all, and how far (0: not at all).
+uniform vec3 uSunDisc;
+uniform vec3 uSunDiscCos;
+#endif
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
@@ -48,6 +55,7 @@ void main() {
   float column;
   float hs = uSurface * uSurface - c2;
   float cover = 0.0;
+  bool sky = true;
   #ifdef DOUBLE_SIDED
   bool back = shellBackFace(ro, rd, uOuter);
   if (gl_FrontFacing == back) discard;
@@ -55,7 +63,10 @@ void main() {
     column = columnAheadOverSea(ro, rd, grazing, at);
     // Over the ground from inside, the haze hides what it lies over.
     float bSea = dot(ro, rd);
-    if (bSea < 0.0 && bSea * bSea - (dot(ro, ro) - uSeaLevel * uSeaLevel) > 0.0) cover = hazeCover(column, rd, ro, uSun);
+    if (bSea < 0.0 && bSea * bSea - (dot(ro, ro) - uSeaLevel * uSeaLevel) > 0.0) {
+      cover = hazeCover(column, rd, ro, uSun);
+      sky = false;
+    }
   } else
   #endif
   if (hs > 0.0) {
@@ -70,8 +81,12 @@ void main() {
 
   #ifdef HAZE_COVER
   // Blended premultiplied (the Earth's AtmosphereRenderer): added where
-  // cover is 0, as the planets' additive blend adds.
-  gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun, rd, ro), cover);
+  // cover is 0, as the planets' additive blend adds. Over the Sun's disc
+  // the sky gives way as the air reddens it (SunRenderer setSkyOverDisc(),
+  // tides-d9f.2), where the ray meets no sea in front of it.
+  vec3 glow = hazeGlow(column, grazing, at, uSun, rd, ro);
+  if (sky && uSunDiscCos.z > 0.0) glow *= 1.0 - uSunDiscCos.z * smoothstep(uSunDiscCos.x, uSunDiscCos.y, dot(rd, uSunDisc));
+  gl_FragColor = vec4(glow, cover);
   #else
   gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun, rd, ro), 1.0);
   #endif

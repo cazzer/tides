@@ -28,14 +28,23 @@ function tick(surface: ReturnType<typeof sunSurface>, material: THREE.ShaderMate
 // frame, which the photosphere traces its sphere in (sun/fragment.frag),
 // the fringe's fade in device px, which its fwidth measures in, and the
 // air the eye sees the Sun through (night-flight.ts eyeSky), by its up in
-// the Sun's frame (sun/air.glsl).
+// the Sun's frame (sun/air.glsl); and the disc, for the sky (setSkyOverDisc()).
 function setView(material: THREE.ShaderMaterial, renderer: THREE.WebGLRenderer, camera: THREE.Camera, mesh: THREE.Object3D) {
-  const { uEyeObject, uDirObject, uFringeFadePx, uAirUp, uAirKm } = material.uniforms
+  const { uEyeObject, uDirObject, uFringeFadePx, uAirUp, uAirKm, uRadius } = material.uniforms
   eyeInObject(camera, mesh, uEyeObject.value, uDirObject.value)
   uFringeFadePx.value.set(...SUN_FRINGE_FADE_PX).multiplyScalar(renderer.getPixelRatio())
   uAirKm.value = eyeSky.heightKm
   toObject.copy(mesh.matrixWorld).invert()
   uAirUp.value.copy(eyeSky.up).transformDirection(toObject)
+  setSkyOverDisc(camera, mesh, uRadius.value)
+}
+
+// The direction from the eye to the Sun's centre, and its distance.
+function towardSun(camera: THREE.Camera, sun: THREE.Object3D): number {
+  sunWorld.setFromMatrixPosition(sun.matrixWorld)
+  const distance = sunWorld.sub(eyeWorld.setFromMatrixPosition(camera.matrixWorld)).length()
+  sunWorld.divideScalar(distance)
+  return distance
 }
 
 // The corona's, per view: the air's extinction toward the Sun's centre.
@@ -45,10 +54,30 @@ function setCoronaAir(corona: THREE.ShaderMaterial, camera: THREE.Camera, sun: T
     tint.setRGB(1, 1, 1)
     return
   }
-  sunWorld.setFromMatrixPosition(sun.matrixWorld)
-  const toward = sunWorld.sub(eyeWorld.setFromMatrixPosition(camera.matrixWorld)).normalize()
-  tint.setRGB(...sunDiscTint(toward.dot(eyeSky.up), eyeSky.heightKm))
+  towardSun(camera, sun)
+  tint.setRGB(...sunDiscTint(sunWorld.dot(eyeSky.up), eyeSky.heightKm))
 }
+
+// The sky over the disc from inside the air (atmosphere/fragment.frag,
+// tides-d9f.2): the disc is drawn far fainter than the Sun, so the sky in
+// front of it, nothing against the true disc, would pale a setting one to
+// white. It gives way over the disc's inner SKY_GIVES_WAY of its radius,
+// easing to the limb, by as much as the air takes the disc's green (the
+// channel that turns it from gold to red), squared, so it gives way well
+// before the disc is down (79% with the Sun 6 degrees up, 60% at 10) and a
+// high Sun keeps its sky.
+function setSkyOverDisc(camera: THREE.Camera, sun: THREE.Object3D, radius: number) {
+  if (eyeSky.heightKm >= EYE_AIRLESS_KM) return
+  const distance = towardSun(camera, sun)
+  const angle = Math.asin(Math.min((radius * sun.matrixWorld.getMaxScaleOnAxis()) / distance, 1))
+  eyeSky.sunDisc.copy(sunWorld)
+  eyeSky.sunDiscCos.set(Math.cos(angle * SKY_GIVES_WAY[1]), Math.cos(angle * SKY_GIVES_WAY[0]))
+  eyeSky.sunDiscFade = 1 - sunDiscTint(sunWorld.dot(eyeSky.up), eyeSky.heightKm)[1] ** 2
+}
+
+// Over what of the disc's radius the sky gives way: all of it inside the
+// first, none from the second (the limb, which the fringe's jets stand on).
+const SKY_GIVES_WAY: readonly [number, number] = [0.8, 0.97]
 
 const toObject = new THREE.Matrix4()
 const sunWorld = new THREE.Vector3()

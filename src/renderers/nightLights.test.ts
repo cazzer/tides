@@ -280,6 +280,15 @@ describe('night lights in flight', () => {
         'cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);',
         'cover = share * min(2.0 * column / grazing, 1.0) * (1.0 - ease);',
       ],
+      // tides-d9f.3: the ground haze's density is the true air's.
+      [
+        "// The true air's density, the sea level's 1 (GROUND_HAZE_AIR).\n" +
+          'float groundHazeDensity(float r) {\n' +
+          '  return exp(-max(r - uSeaLevel, 0.0) / (uSeaLevel * 0.001256));',
+        "// The haze's density, the base's below it, as columnAhead() counts an eye.\n" +
+          'float groundHazeDensity(float r) {\n' +
+          '  return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
+      ],
     ]
     for (const [now, before] of swaps) {
       expect(fragment.split(now).length).toBe(2)

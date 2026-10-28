@@ -521,7 +521,7 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
       // Both programs premultiply, as the material blends.
       expect(clouds.material.premultipliedAlpha).toBe(true)
       expect(outside).toContain('gl_FragColor.rgb *= gl_FragColor.a')
-      expect(inside).toContain('gl_FragColor.rgb * gl_FragColor.a')
+      expect(inside).toContain('gl_FragColor.rgb * (gl_FragColor.a - cover * share)')
       clouds.dispose()
     })
 
@@ -1550,16 +1550,17 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // typed tops are the typed program's alone. The back faces' (from inside,
   // where a cloud lays the haze in front of it over itself) regenerated at
   // tides-34q, whose haze from inside is the sky's (haze.glsl hazeSky()),
-  // and at tides-d9f.3, which declares its cover (hazeCover()) beside it.
+  // and at tides-d9f.3, which declares its cover (hazeCover()) beside it and
+  // has the clouds take it.
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
     'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-back-noease': '55d65097b047c6c495f6863bcf7eadeea61885e2390f38e7f06a70fa67664760',
-    'relief-full-back-ease': '068d8cc1a57b225a3e46b61911a70c58ba5abe563281e48072312df5c5889494',
+    'relief-full-back-noease': '995d4475f87c5edc16776800d96e06e1c28cb154c9d0f9445068d4ccefe043a7',
+    'relief-full-back-ease': '0e87f869657e3a35cb078ec04b5fbd16d6fac0d533aa0e591626c48aaa9a61fc',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
-    'flat-full-back-noease': 'a4f1503c331cea8887dd95e9bbc0deb5f73588439b309d5cfc334dd0bd0ac1f0',
-    'flat-full-back-ease': '4b2cf9b986829a2c6983150055ecb963170e489b66772a61ed5292d5ddfe7875',
+    'flat-full-back-noease': '3fecab86d341b5309cf095f4e4da6dabd9f03455bb6d94d94f447569baacb34f',
+    'flat-full-back-ease': 'bf2d88f3c1a38a829aa31449bda4af23725f6d8810a6ccc93d29edd829a6b122',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
     'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
