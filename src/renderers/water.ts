@@ -15,8 +15,9 @@
 //   sky), in directSpecular so the cloud shadow, the eclipse and the
 //   terrain shadow (patches whose code lands after it) dim it with the Sun;
 //   and the same sky's light in the water's body, what the near sea shows
-//   (it reflects 2-5% there), as skylight in indirectDiffuse; both by day
-//   only (SKY_DAY);
+//   (it reflects 2-5% there), as skylight in indirectDiffuse on deep
+//   water's colour (not the map's: the globe's and the tiles' differ); both
+//   by day only (SKY_DAY);
 // - the glint (direct): Phong's Blinn-Phong replaced, for every light, by a
 //   Cox-Munk microfacet term: Beckmann's distribution over the sea's slope
 //   variances along and across its axis (waterVarAlong, waterVarCross:
@@ -41,16 +42,22 @@
 //   wide, would alias (WATER_GLINT_HARMONIC: before, the 120 m swell's
 //   lines striped the sunset road near the eye); the slope variance a faded
 //   wave takes with it (1 - W^2 of it, as W^2 is what's drawn) goes into
-//   the glint's roughness on the axis it ran along, so far off the sea
-//   glitters as one rough surface instead of aliasing, and what's drawn and
-//   what's in the glint always add up to the sea's;
+//   the glint's roughness on the axis it ran along, at the wind sea's scale
+//   (Cox-Munk's roughness is the wind's; the swell's height scales only
+//   what's drawn), so far off the sea glitters as one rough surface instead
+//   of aliasing; where every wave has faded only that variance is summed.
+//   The swell's crests bend and its amplitude gathers into groups on
+//   Earth-fixed noise a kilometre or two across (WATER_SWELL_KM), so it
+//   doesn't run as one ruler-straight grating under the eye;
 // - the sea's state (normal): how rough it runs and which way, from the
 //   wave climate (waterClimate.ts: the wind sea's Cox-Munk variance, the
 //   swell's height, the settled axis the waves pull toward, WATER_ALIGN),
 //   broken up by Earth-fixed noise tens of kilometres across
 //   (WATER_NOISE_KM), so from a few kilometres up the sea isn't one
-//   roughness everywhere. Still under prefers-reduced-motion (advance():
-//   the climate is a texture, the noise fixed to the Earth).
+//   roughness everywhere: in the glint, and in the sky's reflection, read
+//   off facets the undrawn roughness tilts toward the eye (WATER_SKY_ROUGH).
+//   Still under prefers-reduced-motion (advance(): the climate is a texture,
+//   the noise fixed to the Earth).
 //
 // The wave phases come from the CPU in double (update(): k.eye, which is
 // thousands of radians at Earth's radius, minus w t, both mod 2 pi), so the
@@ -112,6 +119,10 @@ export const WATER_SKY_LIGHT_ELEVATION = 25
  * Sun stayed navy-black, at 3 it reads blue, by 6 it goes matte. The glint
  * and the Sun's direct light on the body are as they were. */
 export const WATER_BODY_SKY = 3
+/** How far the roughness the waves don't draw tilts the facets the sky's
+ * reflection is read from toward the eye, in standard deviations of its
+ * slope, at a grazing view. */
+export const WATER_SKY_ROUGH = 1.5
 
 const G = 9.81
 const TAU = 2 * Math.PI
@@ -143,7 +154,7 @@ export const WATER_WAVE_SLOPE = Math.sqrt((2 * (WATER_MSS - WATER_MSS_BASE)) / W
 /** How the slope is shared out: each wave's goes as its wavelength to this
  * power (the set's variance unchanged), so the longer waves shape the sea
  * and the shortest, next to the pixel, don't weave it into a fine grid. */
-export const WATER_SLOPE_TILT = 0.35
+export const WATER_SLOPE_TILT = 0.2
 const tiltOf = (i: number) => WATER_WAVE_RATIO ** (WATER_SLOPE_TILT * ((i * 5) % WATER_WAVES))
 const TILT_NORM = Math.sqrt(WATER_WAVES / Array.from({ length: WATER_WAVES }, (_, i) => tiltOf(i) ** 2).reduce((a, b) => a + b))
 
@@ -168,13 +179,26 @@ export const WATER_SWELL_FROM = 15
 export const WATER_SWELL_TO = 60
 /** The sea's large-scale noise, fixed to the Earth: its octaves (km), each
  * faded where a pixel spans an eighth of it; how far it scales the sea's
- * slope variance (1 + WATER_NOISE_SCALE n, within 0.4 to 1.8) and turns its
- * axis (WATER_NOISE_TURN n radians). */
+ * slope variance (2^(WATER_NOISE_SCALE n), n the octaves' weighted mean,
+ * its spread about 0.25, clamped to 0.3 to 3: calm and rough patches a few
+ * times apart, as a 4 m/s and a 12 m/s wind's) and turns its axis
+ * (WATER_NOISE_TURN n radians). */
 export const WATER_NOISE_KM = [40, 13, 4.5] as const
 const WATER_NOISE_WEIGHT = [1, 0.5, 0.25] as const
 const NOISE_WEIGHT_SUM = WATER_NOISE_WEIGHT.reduce((a, b) => a + b, 0)
-export const WATER_NOISE_SCALE = 0.45
+export const WATER_NOISE_SCALE = 2.5
 export const WATER_NOISE_TURN = 0.6
+/** The swell's own irregularity, fixed to the Earth: two octaves of noise
+ * (km) push each wave's crests along by up to about WATER_SWELL_BEND
+ * radians, differently for each wave, so its crests curve and wander
+ * instead of running ruler-straight for kilometres, and gather its
+ * amplitude into groups (1 + WATER_SWELL_GROUPS m). The bend's steepest
+ * pull (WATER_SWELL_BEND_K, rad per km: noise climbs at most about 2 a cell)
+ * counts in each wave's fade. */
+export const WATER_SWELL_KM = [1.6, 0.55] as const
+export const WATER_SWELL_BEND = 6
+export const WATER_SWELL_GROUPS = 0.5
+export const WATER_SWELL_BEND_K = WATER_SWELL_BEND * 2 * (1 / WATER_SWELL_KM[0] + 0.5 / WATER_SWELL_KM[1])
 
 /** The waves: directions on a golden spiral over the northern hemisphere
  * (a plane wave and its opposite are the same pattern, so this covers every
@@ -256,6 +280,13 @@ export function waveGain(w: WaterWave, up: Vec3, sea: WaterSea): number {
   return sea.noise * scale * (1 + WATER_ALIGN * sea.settled * axisCos2(w, up, sea))
 }
 
+/** A wave's gain on the variance it hands the glint when it fades: the wind
+ * sea's (Cox-Munk's slope variance is the wind's), whatever its class; the
+ * swell's height scales only what's drawn. */
+export function waveGlintGain(w: WaterWave, up: Vec3, sea: WaterSea): number {
+  return sea.noise * sea.windScale * (1 + WATER_ALIGN * sea.settled * axisCos2(w, up, sea))
+}
+
 /** A wave's phase step (radians) across a pixel `footprint` wide (scene
  * units, square on the level sea). The GLSL takes the pixel's two steps and
  * adds the longer waves' warp; the mirrors fade on the wavelength alone. */
@@ -268,9 +299,9 @@ export function waveWeight(step: number, gain = 1): number {
   return 1 - smoothstep(WATER_FADE_START * TAU, WATER_FADE_END * TAU, step * WATER_GLINT_HARMONIC * gain ** 0.25)
 }
 
-/** A wave's whole slope variance in `sea`, drawn or not. */
-function waveVariance(w: WaterWave, up: Vec3, sea: WaterSea): number {
-  return waveGain(w, up, sea) * 0.5 * w.slope * w.slope * levelPart(w, up).dt2
+/** A wave's slope variance in `sea` at `gain`. */
+function waveVariance(w: WaterWave, up: Vec3, gain: number): number {
+  return gain * 0.5 * w.slope * w.slope * levelPart(w, up).dt2
 }
 
 const weightAt = (w: WaterWave, up: Vec3, sea: WaterSea, footprint: number) =>
@@ -280,7 +311,7 @@ const weightAt = (w: WaterWave, up: Vec3, sea: WaterSea, footprint: number) =>
  * up is `up` (unit, the ground's frame): a wave drawn at weight W carries
  * W^2 of its variance. */
 export function waterVisibleVariance(footprint: number, up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  return waves.reduce((sum, w) => sum + weightAt(w, up, sea, footprint) ** 2 * waveVariance(w, up, sea), 0)
+  return waves.reduce((sum, w) => sum + weightAt(w, up, sea, footprint) ** 2 * waveVariance(w, up, waveGain(w, up, sea)), 0)
 }
 
 /** The roughness the tier's waves leave in the glint, on average, with
@@ -290,16 +321,18 @@ export function waterBaseMss(waves: readonly WaterWave[]): number {
   return WATER_MSS - waves.reduce((sum, w) => sum + 0.5 * w.slope * w.slope * (2 / 3), 0)
 }
 
-/** The sea's whole slope variance here: its base roughness (scaled as the
- * wind sea) and every wave's. */
+/** The sea's whole slope variance here as the glint sees it, every wave
+ * faded: its base roughness and every wave's, at the wind's scale. Where
+ * the swell's scale squared is the wind's, it is also what the drawn waves
+ * and the glint add up to at any footprint. */
 export function waterSeaVariance(up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  return waterBaseMss(waves) * sea.windScale * sea.noise + waves.reduce((sum, w) => sum + waveVariance(w, up, sea), 0)
+  return waterBaseMss(waves) * sea.windScale * sea.noise + waves.reduce((sum, w) => sum + waveVariance(w, up, waveGlintGain(w, up, sea)), 0)
 }
 
 /** The variance the faded waves hand to the glint at `footprint`: (1 - W^2)
- * of each wave's. */
+ * of each wave's, at the wind's scale. */
 export function waterLostVariance(footprint: number, up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  return waves.reduce((sum, w) => sum + (1 - weightAt(w, up, sea, footprint) ** 2) * waveVariance(w, up, sea), 0)
+  return waves.reduce((sum, w) => sum + (1 - weightAt(w, up, sea, footprint) ** 2) * waveVariance(w, up, waveGlintGain(w, up, sea)), 0)
 }
 
 /** The glint's slope variances along and across the sea's axis. */
@@ -318,7 +351,7 @@ export function waterSlopeVariance(footprint: number, up: Vec3, waves: readonly 
   let along = 0.5 * waterBaseMss(waves) * sea.windScale * sea.noise
   let cross = along
   for (const w of waves) {
-    const lost = (1 - weightAt(w, up, sea, footprint) ** 2) * waveVariance(w, up, sea)
+    const lost = (1 - weightAt(w, up, sea, footprint) ** 2) * waveVariance(w, up, waveGlintGain(w, up, sea))
     const c2 = axisCos2(w, up, sea)
     along += lost * (0.5 + 0.5 * c2)
     cross += lost * (0.5 - 0.5 * c2)
@@ -344,6 +377,16 @@ export function waterPhases(eye: Vec3, time: number, out: Float32Array | number[
     const phase = ((w.k * dot(w.dir, eye)) % TAU) - ((w.omega * time) % TAU)
     out[w.index] = phase - TAU * Math.floor(phase / TAU)
   }
+}
+
+/** The eye's place (`eye` from the centre, the ground's frame) in each swell
+ * noise octave's cells, mod 289 (the noise's period), into `out`. */
+export function waterSwellEye(eye: Vec3, out: readonly THREE.Vector3[]): void {
+  WATER_SWELL_KM.forEach((km, i) => {
+    const s = EARTH_KM_PER_UNIT / km
+    const m = (x: number) => x * s - 289 * Math.floor((x * s) / 289)
+    out[i].set(m(eye[0]), m(eye[1]), m(eye[2]))
+  })
 }
 
 /** The body's colour for a map colour `c` (linear), at `strength` water
@@ -435,6 +478,10 @@ const DIRECT = `${BLINN_PHONG_DIRECT.replace('RE_Direct_BlinnPhong(', 'RE_Direct
 // climate and noise.
 const head = () => /* glsl */ `
 uniform float uWavePhase[${WATER_WAVES}];
+// The eye's place in each swell noise octave's cells, mod 289 (the noise's
+// period), from the CPU in double: the GPU adds the ray, so the noise stays
+// on the Earth under a moving eye.
+uniform vec3 uWaterSwellEye[2];
 ${WATER_CLIMATE_GLSL}
 vec3 waterRay;
 vec3 waterUpGround;
@@ -533,24 +580,51 @@ vec2 waterSeaNoise(vec3 up, float pixelKm) {
 // up to waterWarpK (the warp's steepest pull, level): bent crests sharper
 // than the pixel would bring the speckle back. (The TS mirrors fade on the
 // wavelength alone: the warp only ever fades a wave sooner.)
+const v2 = (c: readonly number[]) => `vec2(${c.map(f).join(', ')})`
+/** Each wave's own mix of the swell noise's two channels. */
+const swellTurn = (i: number) => [Math.cos(i * 2.39996 + 1), Math.sin(i * 2.39996 + 1)]
 const wave = (w: WaterWave) => /* glsl */ `
   waterD = ${v3(w.dir)};
   waterDt = waterD - waterUpGround * dot(waterD, waterUpGround);
   waterDt2 = max(dot(waterDt, waterDt), 1e-8);
   waterDa = dot(waterDt, waterAxis);
   waterC2 = 2.0 * waterDa * waterDa / waterDt2 - 1.0;
-  waterF = mix(waterWindF, waterSwellF, ${f(waveSwell(w))}) * (1.0 + ${f(WATER_ALIGN)} * waterSettled * waterC2);
+  waterA = max(1.0 + waterGroups * dot(waterGroupNoise, ${v2(swellTurn(w.index + 0.5))}), 0.2);
+  waterA = waterA * waterA * (1.0 + ${f(WATER_ALIGN)} * waterSettled * waterC2);
+  waterF = mix(waterWindF, waterSwellF, ${f(waveSwell(w))}) * waterA;
   waterW = 1.0 - smoothstep(${f(WATER_FADE_START * TAU)}, ${f(WATER_FADE_END * TAU)},
-    (${e(w.k)} * length(vec2(dot(waterDt, waterRx), dot(waterDt, waterRy))) + waterWarpK * waterPx) * ${f(WATER_GLINT_HARMONIC)} * sqrt(sqrt(waterF)));
-  waterLost = (1.0 - waterW * waterW) * waterF * ${e(0.5 * w.slope * w.slope)} * waterDt2;
+    (${e(w.k)} * length(vec2(dot(waterDt, waterRx), dot(waterDt, waterRy))) + (waterWarpK + waterBendK) * waterPx) * ${f(WATER_GLINT_HARMONIC)} * sqrt(sqrt(waterF)));
+  waterLost = (1.0 - waterW * waterW) * waterWindF * waterA * ${e(0.5 * w.slope * w.slope)} * waterDt2;
   waterAlong += waterLost * (0.5 + 0.5 * waterC2);
   waterCross += waterLost * (0.5 - 0.5 * waterC2);
   if (waterW > 0.0) {
-    waterS = sin(uWavePhase[${w.index}] + ${e(w.k)} * dot(waterD, waterRay) + waterWarp);
+    waterS = sin(uWavePhase[${w.index}] + ${e(w.k)} * dot(waterD, waterRay) + waterWarp
+      + ${f(WATER_SWELL_BEND)} * dot(waterBendNoise, ${v2(swellTurn(w.index))}));
     waterGrad -= (waterW * sqrt(waterF) * ${f(w.slope)} * waterS) * waterDt;
     waterWarp += waterW * ${f(WATER_WARP)} * waterS;
     waterWarpK += waterW * ${e(WATER_WARP * w.k)} * sqrt(waterDt2);
   }`
+
+// One wave where every wave has faded: only the variance it hands the glint.
+const waveFaded = (w: WaterWave) => /* glsl */ `
+  waterD = ${v3(w.dir)};
+  waterDt = waterD - waterUpGround * dot(waterD, waterUpGround);
+  waterDt2 = max(dot(waterDt, waterDt), 1e-8);
+  waterDa = dot(waterDt, waterAxis);
+  waterC2 = 2.0 * waterDa * waterDa / waterDt2 - 1.0;
+  waterLost = waterWindF * (1.0 + ${f(WATER_ALIGN)} * waterSettled * waterC2) * ${e(0.5 * w.slope * w.slope)} * waterDt2;
+  waterAlong += waterLost * (0.5 + 0.5 * waterC2);
+  waterCross += waterLost * (0.5 - 0.5 * waterC2);`
+
+/** A pixel's narrower step on the sea past which every wave has faded: the
+ * longest's fade end, for any wave with a level share over WATER_FADED_LEVEL
+ * and a gain over WATER_FADED_GAIN (those under have next to no slope to
+ * draw). */
+const WATER_FADED_LEVEL = 0.3
+const WATER_FADED_GAIN = 0.02
+const fadedStep = (waves: readonly WaterWave[]) =>
+  (WATER_FADE_END * TAU) /
+  (Math.min(...waves.map((w) => w.k)) * WATER_FADED_LEVEL * WATER_GLINT_HARMONIC * WATER_FADED_GAIN ** 0.25)
 
 // After the prelude (waterRay, waterUpGround, waterUpView and
 // waterViewToGround set). A pixel's two steps on the sea (waterRx, waterRy:
@@ -574,7 +648,7 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterPx = max(length(waterRx), length(waterRy));
     vec4 waterClimate = waterClimateDecode(waterClimateAt(waterUpGround));
     vec2 waterNoise = waterSeaNoise(waterUpGround, waterPx * ${f(EARTH_KM_PER_UNIT)});
-    float waterNs = clamp(1.0 + ${f(WATER_NOISE_SCALE)} * waterNoise.x, 0.4, 1.8);
+    float waterNs = clamp(exp2(${f(WATER_NOISE_SCALE)} * waterNoise.x), 0.3, 3.0);
     float waterWindF = waterNs * waterMssScale(waterClimate.x);
     float waterSwellF = waterNs * waterSwellScale(waterClimate.y) * waterSwellScale(waterClimate.y);
     float waterSettled = min(length(waterClimate.zw), 1.0);
@@ -588,18 +662,41 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     waterAxisView = waterAxis * waterViewToGround;
     float waterAlong = ${f(0.5 * waterBaseMss(waves))} * waterWindF;
     float waterCross = waterAlong;
+    // The swell's bends and groups, near enough for a wave to be drawn.
+    vec2 waterBendNoise = vec2(0.0);
+    vec2 waterGroupNoise = vec2(0.0);
+    float waterBendK = 0.0;
+    float waterGroups = 0.0;
+    if (waterPx < ${e(3 * Math.max(...waves.map((w) => w.lambda)))}) {
+      vec2 waterSwellA = waterValueNoise(uWaterSwellEye[0] + waterRay * ${f(EARTH_KM_PER_UNIT / WATER_SWELL_KM[0])});
+      vec2 waterSwellB = waterValueNoise(uWaterSwellEye[1] + waterRay * ${f(EARTH_KM_PER_UNIT / WATER_SWELL_KM[1])});
+      waterBendNoise = waterSwellA + 0.5 * waterSwellB;
+      waterGroupNoise = vec2(waterSwellB.y, waterSwellA.x);
+      waterBendK = ${e(WATER_SWELL_BEND_K * EARTH_KM_PER_UNIT)};
+      waterGroups = ${f(WATER_SWELL_GROUPS)} * (1.0 - smoothstep(${f(WATER_SWELL_KM[1] / 16)}, ${f(WATER_SWELL_KM[1] / 8)}, waterPx * ${f(EARTH_KM_PER_UNIT)}));
+    }
+    // The narrower of the pixel's two steps (the smaller singular value of
+    // the pair): past fadedStep every wave has faded, so the cheap path.
+    float waterGa = dot(waterRx, waterRx);
+    float waterGb = dot(waterRx, waterRy);
+    float waterGc = dot(waterRy, waterRy);
+    float waterNarrow = sqrt(max(0.5 * (waterGa + waterGc) - sqrt(0.25 * (waterGa - waterGc) * (waterGa - waterGc) + waterGb * waterGb), 0.0));
     vec3 waterGrad = vec3(0.0);
     vec3 waterD;
     vec3 waterDt;
     float waterDt2;
     float waterDa;
     float waterC2;
+    float waterA;
     float waterF;
     float waterW;
     float waterLost;
     float waterS;
     float waterWarp = 0.0;
-    float waterWarpK = 0.0;${[...waves].sort((a, b) => b.lambda - a.lambda).map(wave).join('')}
+    float waterWarpK = 0.0;
+    if (waterNarrow > ${e(fadedStep(waves))}) {${waves.map(waveFaded).join('')}
+    } else {${[...waves].sort((a, b) => b.lambda - a.lambda).map(wave).join('')}
+    }
     waterVarAlong = max(waterAlong, ${f(WATER_MSS_FLOOR / 2)});
     waterVarCross = max(waterCross, ${f(WATER_MSS_FLOOR / 2)});
     waterMss = waterVarAlong + waterVarCross;
@@ -623,14 +720,28 @@ const SKY = /* glsl */ `
 if (material.specularStrength > 0.0) {
   float waterDay = smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, dot(waterUpView, directionalLights[0].direction));
   if (waterDay > 0.0) {
-    float waterNv = dot(geometryNormal, geometryViewDir);
+    // The roughness the pixel doesn't draw (the glint's slope variance, along
+    // the view's azimuth) tilts the facets it sees toward the eye, more as
+    // the view grazes: a rough sea mirrors higher, deeper sky at less
+    // Fresnel, a calm one the bright horizon, so the sea's state reads off
+    // the Sun's road too.
+    vec3 waterFacet = geometryNormal;
+    vec3 waterToEye = geometryViewDir - waterUpView * dot(geometryViewDir, waterUpView);
+    float waterToEye2 = dot(waterToEye, waterToEye);
+    if (waterToEye2 > 1e-8) {
+      waterToEye *= inversesqrt(waterToEye2);
+      float waterEa = dot(waterToEye, waterAxisView);
+      float waterVar = waterVarAlong * waterEa * waterEa + waterVarCross * (1.0 - waterEa * waterEa);
+      waterFacet = normalize(geometryNormal + ${f(WATER_SKY_ROUGH)} * sqrt(waterVar) * (1.0 - saturate(dot(geometryNormal, geometryViewDir))) * waterToEye);
+    }
+    float waterNv = dot(waterFacet, geometryViewDir);
     float waterCos = 1.0 - saturate(waterNv);
     float waterCos2 = waterCos * waterCos;
     float waterFresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * waterCos2 * waterCos2 * waterCos;
     // The reflected ray in the ground's frame, lifted to the level where a
     // wave's facet sends it under the horizon (the sea there would mirror
     // the sea, about as bright as this sky's foot).
-    vec3 waterReflected = waterViewToGround * reflect(-geometryViewDir, geometryNormal);
+    vec3 waterReflected = waterViewToGround * reflect(-geometryViewDir, waterFacet);
     waterReflected = normalize(waterReflected - waterUpGround * min(dot(waterReflected, waterUpGround), 0.0) + waterUpGround * 1e-4);
     // A facet tilted away from the eye (a wave's back at a grazing view) isn't
     // seen: without this it took Fresnel 1 and the horizon's sky.
@@ -638,14 +749,16 @@ if (material.specularStrength > 0.0) {
     // The skylight's irradiance, pi times the sky's mean, from the one
     // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION),
     // into the body through Lambert, less what the surface reflects on the
-    // way out. A depth term (the shallows' floor) multiplies waterBodyLight.
+    // way out, on deep water's own colour: the maps under the globe and the
+    // tiles differ, and the sky's light on them showed the seam. A depth term
+    // (the shallows' floor, tides-d9f.6) will tint or replace this albedo.
     vec3 waterSide = cross(waterUpGround, uGroundHazeSun);
     float waterSide2 = dot(waterSide, waterSide);
     waterSide = waterSide2 > 1e-10 ? waterSide * inversesqrt(waterSide2)
       : normalize(cross(waterUpGround, abs(waterUpGround.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
     vec3 waterSkyLight = PI * groundHazeSky(waterUpGround,
       waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))});
-    vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(material.diffuseColor);
+    vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(${v3(WATER_DEEP)});
     reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;
     waterSkyBody = ${f(WATER_BODY_SKY)} * material.specularStrength * waterDay * waterBodyLight;
     reflectedLight.indirectDiffuse += waterSkyBody;
@@ -693,7 +806,11 @@ ${WATER_DEPTH_SAMPLE.tiles}`,
 export interface Water {
   /** The phases, by wave index, and the wave climate (shared by every
    * program that takes the water). */
-  uniforms: { uWavePhase: THREE.IUniform<Float32Array>; uWaterClimate: THREE.IUniform<THREE.Texture> }
+  uniforms: {
+    uWavePhase: THREE.IUniform<Float32Array>
+    uWaterClimate: THREE.IUniform<THREE.Texture>
+    uWaterSwellEye: THREE.IUniform<THREE.Vector3[]>
+  }
   /** Moves the waves on by `dt` seconds, unless `reduced` (prefers-reduced-motion). */
   advance(dt: number, reduced: boolean): void
   /** For each camera before anything draws, after the frame's update
@@ -703,7 +820,11 @@ export interface Water {
 
 /** The water's clock and phases on the haze's `frame` (its eye). */
 export function createWater(frame: GroundHaze['frame']): Water {
-  const uniforms = { uWavePhase: { value: new Float32Array(WATER_WAVES) }, uWaterClimate: { value: climateTexture() } }
+  const uniforms = {
+    uWavePhase: { value: new Float32Array(WATER_WAVES) },
+    uWaterClimate: { value: climateTexture() },
+    uWaterSwellEye: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+  }
   const eye: [number, number, number] = [0, 0, 0]
   let time = 0
   return {
@@ -714,6 +835,7 @@ export function createWater(frame: GroundHaze['frame']): Water {
     update() {
       frame.uGroundHazeEyeLocal.value.toArray(eye)
       waterPhases(eye, time, uniforms.uWavePhase.value)
+      waterSwellEye(eye, uniforms.uWaterSwellEye.value)
     },
   }
 }

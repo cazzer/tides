@@ -44,7 +44,7 @@ describe('Credits', () => {
     const line = html.match(/<li>Sea state \(wave climate\):.*?<\/li>/)?.[0] ?? ''
     expect(line).toContain(`href="${OPEN_METEO_SITE}"`)
     expect(line).toContain('href="https://creativecommons.org/licenses/by/4.0/"')
-    expect(line).toMatch(/CC BY 4.0<\/a>, adapted: seasonal means resampled to 7.5°\)/)
+    expect(line).toMatch(/CC BY 4.0<\/a>, adapted: means of four days(?:'|&#x27;|&#39;) maxima, a season apart, at 7\.5°\)/)
     expect(line).toContain(`href="${COPERNICUS_MARINE_WAVES_URL}"`)
     expect(line).toContain('generated using E.U. Copernicus Marine Service Information')
   })

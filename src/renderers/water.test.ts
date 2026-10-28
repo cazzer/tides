@@ -13,6 +13,7 @@ import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
 import { phongShader } from './surface/tile-test-fixtures'
 import { WATER_DEPTH_SAMPLE, WATER_KEEP, waterTinted } from './waterDepth'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import {
   beckmann,
   beckmannAniso,
@@ -42,6 +43,8 @@ import {
   waterPatch,
   waterPhases,
   waterSeaVariance,
+  waterSwellEye,
+  WATER_SWELL_KM,
   waterSlopeVariance,
   waterVisibleVariance,
   waterWaves,
@@ -283,8 +286,8 @@ describe('the waves (tides-07z)', () => {
   const ups: V[] = [UP, [1, 0, 0], norm([0.3, 0.5, -0.8]), norm([-0.6, -0.2, 0.4])]
   const seas = (up: V): WaterSea[] => [
     medianSea(levelAxis(up, 0)),
-    { windScale: 1.8, swellScale: 0.5, noise: 1.3, settled: 0.9, axis: levelAxis(up, 0.7) },
-    { windScale: 0.6, swellScale: 1.9, noise: 0.5, settled: 0.4, axis: levelAxis(up, 2.1) },
+    { windScale: 1.8, swellScale: Math.sqrt(1.8), noise: 1.3, settled: 0.9, axis: levelAxis(up, 0.7) },
+    { windScale: 0.6, swellScale: Math.sqrt(0.6), noise: 0.5, settled: 0.4, axis: levelAxis(up, 2.1) },
   ]
   /** A wave's drawn slope variance, from the amplitude the GLSL draws it at
    * (W sqrt(F) times its slope, along its level direction). */
@@ -295,7 +298,7 @@ describe('the waves (tides-07z)', () => {
     return 0.5 * amplitude * amplitude * (1 - along * along)
   }
 
-  it('keeps the sea\'s slope variance whole, mid-fade too: what the waves draw and what the glint takes add up to the sea\'s, on either tier', () => {
+  it('keeps the sea\'s slope variance whole, mid-fade too: what the waves draw and what the glint takes add up to the sea\'s (the swell at the wind\'s scale), on either tier', () => {
     for (const low of [false, true]) {
       const waves = waterWaves(low)
       for (const up of ups) {
@@ -322,6 +325,18 @@ describe('the waves (tides-07z)', () => {
     }
     expect(waterBaseMss(waterWaves(false))).toBeCloseTo(WATER_MSS_BASE, 12)
     expect(waterBaseMss(waterWaves(true))).toBeGreaterThan(WATER_MSS_BASE)
+  })
+
+  it('roughens the glint with the wind, not the swell: the swell\'s height scales only what\'s drawn', () => {
+    const swell = WATER_WAVE_TABLE.find((w) => w.metres > 100)!
+    for (const up of ups) {
+      const calm: WaterSea = { windScale: 1.2, swellScale: 0.5, noise: 1, settled: 0.5, axis: levelAxis(up, 0.3) }
+      const heavy = { ...calm, swellScale: 2 }
+      for (const footprint of [1e9, 0]) {
+        expect(waterMss(footprint, up, WATER_WAVE_TABLE, heavy)).toBeCloseTo(waterMss(footprint, up, WATER_WAVE_TABLE, calm), 12)
+      }
+      expect(drawn(swell, up, heavy, 0)).toBeGreaterThan(drawn(swell, up, calm, 0) * 10)
+    }
   })
 
   it('lays a faded wave\'s variance on the glint along its own direction', () => {
@@ -404,12 +419,40 @@ describe('the waves (tides-07z)', () => {
     // The climate is a still texture: the same one, unchanged, however the clock runs.
     const climate = water.uniforms.uWaterClimate.value
     const version = climate.version
+    const swellEye = water.uniforms.uWaterSwellEye.value.map((v) => v.clone())
     water.advance(5, true)
     water.update()
     water.advance(5, false)
     water.update()
     expect(water.uniforms.uWaterClimate.value).toBe(climate)
     expect(climate.version).toBe(version)
+    // The swell's noise is the eye's, not the clock's.
+    water.uniforms.uWaterSwellEye.value.forEach((v, i) => expect(v.equals(swellEye[i])).toBe(true))
+  })
+
+  it('keeps the swell\'s noise on the Earth: a ground point\'s noise cell is the same from any eye', () => {
+    const at = (eye: V, ray: V) => {
+      const out = [new THREE.Vector3(), new THREE.Vector3()]
+      waterSwellEye(eye, out)
+      return out.map((v, i) => {
+        const s = EARTH_KM_PER_UNIT / WATER_SWELL_KM[i]
+        return [v.x + ray[0] * s, v.y + ray[1] * s, v.z + ray[2] * s]
+      })
+    }
+    const ground: V = [1.2, 2.1, -1.6]
+    const ray: V = [2e-4, -3e-4, 1e-4]
+    const a = at([ground[0] - ray[0], ground[1] - ray[1], ground[2] - ray[2]], ray)
+    const b = at([ground[0] + 3 * ray[0], ground[1] + 3 * ray[1], ground[2] + 3 * ray[2]], [-3 * ray[0], -3 * ray[1], -3 * ray[2]])
+    for (let i = 0; i < 2; i++) {
+      for (let c = 0; c < 3; c++) {
+        const gap = (((a[i][c] - b[i][c]) % 289) + 289) % 289
+        expect(Math.min(gap, 289 - gap)).toBeLessThan(1e-6)
+        // Within the noise's period, small enough for float.
+        const eye = at([ground[0], ground[1], ground[2]], [0, 0, 0])[i][c]
+        expect(eye).toBeGreaterThanOrEqual(0)
+        expect(eye).toBeLessThan(289)
+      }
+    }
   })
 })
 
@@ -443,6 +486,10 @@ describe('the body (tides-07z)', () => {
     }
   })
 })
+
+/** three's own samplers the globe's Phong program uses (its maps and the
+ * Sun's shadow), measured in the browser. */
+const GLOBE_THREE_SAMPLERS = 5
 
 describe('the water\'s GLSL on the globe (tides-07z)', () => {
   const sun = { value: new THREE.Vector3(1, 0, 0) }
@@ -539,6 +586,11 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     // The wave climate: one more sampler, the water's own texture.
     expect(shader.uniforms.uWaterClimate).toBe(water.uniforms.uWaterClimate)
     expect(f.split('uniform sampler2D uWaterClimate;').length - 1).toBe(1)
+    // Within the 16 texture units WebGL promises: the patches' own samplers
+    // plus three's own Phong ones the globe uses (measured in the browser:
+    // 15 active with the climate, of 16).
+    const own = f.match(/uniform\s+sampler\w+\s+\w+/g) ?? []
+    expect(own.length + GLOBE_THREE_SAMPLERS, own.join(', ')).toBeLessThanOrEqual(16)
     // No varyings of its own, nothing in the vertex stage.
     const base = phongShader()
     composePatches(eclipse.material, clouds.groundPatch, groundDetailPatch(false), groundShadowPatch(sun, earthHorizon('horizon.bin')), haze.patch)
@@ -574,7 +626,11 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       // Each wave's sine only where it's drawn; its variance everywhere on water.
       const count = low ? WATER_WAVES_LOW : WATER_WAVES
       expect(normal.split('if (waterW > 0.0) {').length - 1).toBe(count)
-      expect(normal.split('waterLost = ').length - 1).toBe(count)
+      // Every wave twice: drawn or faded, and where all have faded (a pixel
+      // wider than the longest wave's fade) only their variance.
+      expect(normal.split('waterLost = ').length - 1).toBe(2 * count)
+      expect(normal.indexOf('if (waterNarrow > ')).toBeLessThan(normal.indexOf('if (waterW > 0.0) {'))
+      expect(normal.split('} else {')[0].split('if (waterNarrow > ')[1]).not.toContain('sin(')
       for (const chunk of normal.split('if (waterW > 0.0) {').slice(1)) {
         expect(chunk.indexOf('sin(')).toBeLessThan(chunk.indexOf('}'))
       }

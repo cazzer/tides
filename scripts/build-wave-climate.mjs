@@ -22,6 +22,7 @@ const MODEL = "meteofrance_wave";
 const DAILY = ["wave_height_max", "wind_wave_height_max", "swell_wave_height_max", "wave_direction_dominant"];
 const BATCH = 96;
 const PACE_MS = 11_000;
+const TIMEOUT_MS = 60_000;
 const MAX_REQUESTS = 50;
 
 const root = process.cwd();
@@ -30,8 +31,10 @@ const cacheArg = process.argv.indexOf("--cache");
 const cache = cacheArg >= 0 ? path.resolve(process.argv[cacheArg + 1]) : path.join(os.tmpdir(), "tides-wave-climate");
 fs.mkdirSync(cache, { recursive: true });
 
-// waterClimate.ts is TypeScript; Vite (6.1 or later) transforms it for Node.
-const { module: climate } = await runnerImport("/src/renderers/waterClimate.ts", {
+// waterClimateLayout.ts is TypeScript; Vite (6.1 or later) transforms it for
+// Node. It's the layout alone, not the asset this script makes, so a clean
+// checkout bootstraps.
+const { module: climate } = await runnerImport("/src/renderers/waterClimateLayout.ts", {
   configFile: false,
   logLevel: "error",
 });
@@ -55,9 +58,11 @@ async function fetchBatch(day, points) {
     if (++requests > MAX_REQUESTS) throw new Error(`more than ${MAX_REQUESTS} requests; stopping`);
     await sleep(Math.max(0, lastRequest + PACE_MS - Date.now()));
     lastRequest = Date.now();
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (response.status === 429 && attempt < 4) {
-      const wait = 60_000 * 2 ** attempt;
+      // Retry-After in seconds when the API gives one, else back off.
+      const after = Number(response.headers.get("retry-after"));
+      const wait = Number.isFinite(after) && after > 0 ? after * 1000 : 60_000 * 2 ** attempt;
       console.warn(`429 from Open-Meteo; waiting ${wait / 1000} s`);
       await sleep(wait);
       continue;
@@ -78,10 +83,13 @@ async function batch(day, start, points) {
     body = cached.body;
   } else {
     body = await fetchBatch(day, points);
+    // One location comes back as an object, more as an array.
+    if (!Array.isArray(body)) body = [body];
     fs.writeFileSync(file, JSON.stringify({ key, body }));
     console.log(`fetched ${day} #${start} (${points.length} points)`);
   }
-  if (!Array.isArray(body) || body.length !== points.length) {
+  if (!Array.isArray(body)) body = [body];
+  if (body.length !== points.length) {
     throw new Error(`${day} #${start}: ${body?.length} locations, expected ${points.length}`);
   }
   return body.map((location, k) => {

@@ -96,7 +96,7 @@ export function Credits({ children }: { children?: ReactNode }) {
       <li>
         {/* Open-Meteo asks for its providers too: its Marine API's waves here
             are Météo-France MFWAM, credited as Copernicus Marine requires.
-            Adapted: four days' means resampled to 7.5° (tides-d9f.5). */}
+            Adapted: means of four days' maxima, a season apart, at 7.5° (tides-d9f.5). */}
         Sea state (wave climate): <Link href={OPEN_METEO_SITE}>Weather data by Open-Meteo.com</Link> (
         <Link
           href={CC_BY_URL}
@@ -104,7 +104,7 @@ export function Credits({ children }: { children?: ReactNode }) {
         >
           CC BY 4.0
         </Link>
-        , adapted: seasonal means resampled to 7.5°), from Météo-France MFWAM,{' '}
+        , adapted: means of four days' maxima, a season apart, at 7.5°), from Météo-France MFWAM,{' '}
         <Link href={COPERNICUS_MARINE_WAVES_URL}>generated using E.U. Copernicus Marine Service Information</Link>
       </li>
       <li>
