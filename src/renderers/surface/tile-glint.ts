@@ -1,8 +1,10 @@
 // The water on the streamed tiles (tides-zmw.9.14, tides-07z): the globe's
-// water (../water.ts: the sky it mirrors, the Cox-Munk glint, the deep
-// body's floor and the moving waves), its strength (specularStrength) from
-// the globe's specular (water) mask, as the globe's specularmap_fragment
-// takes it, sharpened at the coasts by the tile's own elevation.
+// water (../water.ts: the sky it mirrors and its light in the body, from the
+// ground haze's sky as the tile-haze adapter composes it, the Cox-Munk
+// glint, the deep body's floor and the moving waves), its strength
+// (specularStrength) from the globe's specular (water) mask, as the globe's
+// specularmap_fragment takes it, sharpened at the coasts by the tile's own
+// elevation.
 //
 // The mask is the globe's map (link.maps.specular, through a uniform: a
 // slot would be freed with each tile), read at the base's surfaceGlobeUv
@@ -42,7 +44,9 @@
 // base's ray, up and frame; its phases are the globe's (link.water), its
 // depth the globe's map (link.maps.depth) at surfaceGlobeUv. No
 // longer gated on the Sun: the sky's reflection lights the sea through
-// twilight, and the glint goes out under the level horizon by itself.
+// twilight, and the glint goes out under the level horizon by itself. The
+// sky reads the ground haze's groundHazeSky(), so the haze (after the glint
+// in TILE_FEATURES) must be composed too.
 import type * as THREE from 'three'
 import { injectWater, WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
 import { injectAfterChunk, surfaceInject, type TileAdapter } from './tile-material'

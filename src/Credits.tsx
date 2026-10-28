@@ -12,6 +12,8 @@ export const EOX_URL = 'https://s2maps.eu/'
 const CC_BY_NC_SA_URL = 'https://creativecommons.org/licenses/by-nc-sa/4.0/'
 const SOLAR_SYSTEM_SCOPE_URL = 'https://www.solarsystemscope.com/textures/'
 const CC_BY_URL = 'https://creativecommons.org/licenses/by/4.0/'
+// The MFWAM global analysis and forecast product the Marine API serves.
+export const COPERNICUS_MARINE_WAVES_URL = 'https://doi.org/10.48670/moi-00017'
 const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/skycultures/modern'
 const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
 export const MAPTERHORN_URL = 'https://mapterhorn.com/'
@@ -90,6 +92,20 @@ export function Credits({ children }: { children?: ReactNode }) {
           CC BY 4.0
         </Link>
         , adapted)
+      </li>
+      <li>
+        {/* Open-Meteo asks for its providers too: its Marine API's waves here
+            are Météo-France MFWAM, credited as Copernicus Marine requires.
+            Adapted: means of four days' maxima, a season apart, at 7.5° (tides-d9f.5). */}
+        Sea state (wave climate): <Link href={OPEN_METEO_SITE}>Weather data by Open-Meteo.com</Link> (
+        <Link
+          href={CC_BY_URL}
+          title="Creative Commons Attribution 4.0 International"
+        >
+          CC BY 4.0
+        </Link>
+        , adapted: means of four days' maxima, a season apart, at 7.5°), from Météo-France MFWAM,{' '}
+        <Link href={COPERNICUS_MARINE_WAVES_URL}>generated using E.U. Copernicus Marine Service Information</Link>
       </li>
       <li>
         Planet textures: <Link href={SOLAR_SYSTEM_SCOPE_URL}>Solar System Scope</Link> (

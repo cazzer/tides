@@ -41,7 +41,7 @@ describe('ground shadow patch', () => {
   it('shades the Sun after the lights, before the sky fill splits it off and the clouds dim it', () => {
     const shadow = at('reflectedLight.directDiffuse *= sunLit;')
     expect(at('#include <lights_fragment_end>')).toBeLessThan(shadow)
-    expect(shadow).toBeLessThan(at('reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL)'))
+    expect(shadow).toBeLessThan(at('reflectedLight.directDiffuse = (1.0 - groundSkyFill)'))
     expect(shadow).toBeLessThan(at('reflectedLight.directDiffuse *= cloudLit;'))
     expect(at('reflectedLight.directSpecular *= sunLit;')).toBeGreaterThan(0)
     expect(at('reflectedLight.indirectDiffuse *= groundHorizonSky;')).toBeGreaterThan(0)
@@ -51,7 +51,7 @@ describe('ground shadow patch', () => {
     const declared = at('#define GROUND_HORIZON\nfloat groundHorizonSky = 1.0;')
     const used = at('#ifdef GROUND_HORIZON\n  groundSkyView = min(groundSkyView, groundHorizonSky);')
     expect(declared).toBeLessThan(used)
-    expect(used).toBeLessThan(at('reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL)'))
+    expect(used).toBeLessThan(at('reflectedLight.directDiffuse = (1.0 - groundSkyFill)'))
     // Under the same guard as the sky fill, so wherever that compiles this does.
     expect(frag).toContain(
       '#if defined(USE_MAP) && defined(USE_SPECULARMAP) && NUM_DIR_LIGHTS > 0\n#define GROUND_HORIZON'

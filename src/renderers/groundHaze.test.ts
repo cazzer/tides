@@ -21,6 +21,7 @@ import {
 import { EARTH_GROUND_CLEARANCE } from '../ship/ship-bodies'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
+import { SKY_DAY, WATER_GLSL, WATER_SKY_LIGHT_ELEVATION, WATER_WAVE_TABLE } from './water'
 
 // The ship's camera is near Earth (limb-detail's view).
 vi.mock('../ship/limb-detail', async (original) => ({
@@ -395,5 +396,177 @@ describe('ground haze', () => {
     const view = point.clone().applyMatrix4(groundMesh.matrixWorld).applyMatrix4(camera.matrixWorldInverse.copy(camera.matrixWorld).invert())
     const ray = view.applyMatrix3(tile.uniforms.uGroundHazeViewToLocal.value as THREE.Matrix3)
     expect(ray.distanceTo(point.clone().sub(local))).toBeLessThan(1e-9)
+  })
+})
+
+// haze.glsl's analytic sky (hazeSky()), ported for the sea's sky (the first
+// test below pins the lines it copies).
+const SKY_RAYLEIGH = [0.058, 0.135, 0.331]
+const SKY_MIE = 0.008
+const SKY_MIE_G = 0.85
+const SKY_OZONE = [0.03, 0.07, 0.003]
+const SKY_SUN = 7
+const SKY_MULTI = 0.3
+const SKY_AIRMASS = 1.2
+const smoothstep = THREE.MathUtils.smoothstep
+
+function hazeSky(column: number, at: THREE.Vector3, sun: THREE.Vector3, rd: THREE.Vector3, eye: THREE.Vector3): number[] {
+  const up = at.clone().normalize()
+  const mu = up.dot(sun)
+  const lit = smoothstep(mu, -0.12, 0.04)
+  const r = Math.max(at.length(), SURFACE)
+  const m = hazeAbove(r, Math.max(mu, 0)) / (H * Math.exp(-Math.max(r - SURFACE, 0) / H))
+  const rE = eye.length()
+  const dip = Math.sqrt(Math.max(1 - (R * R) / (rE * rE), 0))
+  const climb = THREE.MathUtils.clamp((rd.dot(eye.clone().divideScalar(rE)) + dip) / (1 + dip), 0, 1)
+  const c = rd.dot(sun)
+  const g = SKY_MIE_G
+  const pR = 0.0596831 * (1 + c * c)
+  const pM = (0.0795775 * (1 - g * g)) / Math.pow(1 + g * g - 2 * g * c, 1.5)
+  return [0, 1, 2].map((i) => {
+    const k = (SKY_RAYLEIGH[i] + SKY_MIE + SKY_OZONE[i]) * m * SKY_AIRMASS
+    const climbing = (1 - Math.exp(-k)) / Math.max(k, 1e-4)
+    const sunT = THREE.MathUtils.lerp(Math.exp(-k), climbing, Math.pow(climb, 0.4))
+    const ext = SKY_RAYLEIGH[i] + SKY_MIE * 1.1
+    const depth = 1 - Math.exp(-ext * (column / H))
+    const single = (sunT * (SKY_RAYLEIGH[i] * pR + SKY_MIE * pM)) / ext
+    const multi = ((SKY_MULTI * climbing * SKY_RAYLEIGH[i]) / ext) * 0.0795775
+    return SKY_SUN * lit * (single + multi) * depth
+  })
+}
+
+// The sea's sky as water.ts reads it on the low tier (groundHazeSky()'s
+// analytic sky): from the sea at the pole, the Sun `sun` degrees up along +X,
+// along a ray `elevation` degrees up at `azimuth` degrees round from the
+// Sun's, by day only (SKY_DAY).
+function seaSky(sun: number, elevation: number, azimuth: number): number[] {
+  const rad = THREE.MathUtils.degToRad
+  const up = V(0, 1)
+  const toSun = V(Math.cos(rad(sun)), Math.sin(rad(sun)))
+  const rd = V(Math.cos(rad(elevation)) * Math.cos(rad(azimuth)), Math.sin(rad(elevation)), Math.cos(rad(elevation)) * Math.sin(rad(azimuth)))
+  rd.addScaledVector(up, -Math.min(rd.dot(up), 0) + 1e-4).normalize()
+  const point = up.clone().multiplyScalar(R)
+  // A ray over the level: columnAhead()'s light at the eye, lifted to the base.
+  const at = point.clone().setLength(SURFACE)
+  const day = smoothstep(toSun.y, SKY_DAY[0], SKY_DAY[1])
+  return hazeSky(columnAhead(point, rd), at, toSun, rd, point).map((x) => day * x)
+}
+
+const luma = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+describe('the sky the sea mirrors (tides-d9f.4)', () => {
+  it("ports haze.glsl's sky and the ground haze's as the shaders have them", () => {
+    for (const line of [
+      '#define SKY_RAYLEIGH vec3(0.058, 0.135, 0.331)',
+      '#define SKY_MIE 0.008',
+      '#define SKY_MIE_G 0.85',
+      '#define SKY_OZONE vec3(0.03, 0.07, 0.003)',
+      '#define SKY_SUN 7.0',
+      '#define SKY_MULTI 0.3',
+      '#define SKY_AIRMASS 1.2',
+      'float m = hazeAbove(max(r, uSurface), max(mu, 0.0)) / (uScaleHeight * exp(-max(r - uSurface, 0.0) / uScaleHeight));',
+      'return (SKY_RAYLEIGH + SKY_MIE + SKY_OZONE) * m * SKY_AIRMASS;',
+      'float lit = smoothstep(-0.12, 0.04, mu);',
+      'vec3 k = hazeSunDepth(mu, length(at));',
+      'vec3 climbing = (1.0 - exp(-k)) / max(k, vec3(1e-4));',
+      'float dip = sqrt(max(1.0 - uSeaLevel * uSeaLevel / (rE * rE), 0.0));',
+      'float climb = clamp((dot(rd, eye / rE) + dip) / (1.0 + dip), 0.0, 1.0);',
+      'vec3 sunT = mix(exp(-k), climbing, pow(climb, 0.4));',
+      'float pR = 0.0596831 * (1.0 + c * c);',
+      'float pM = 0.0795775 * (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * c, 1.5);',
+      'vec3 ext = SKY_RAYLEIGH + SKY_MIE * 1.1;',
+      'vec3 depth = 1.0 - exp(-ext * (column / uScaleHeight));',
+      'vec3 single = sunT * (SKY_RAYLEIGH * pR + SKY_MIE * pM) / ext;',
+      'vec3 multi = SKY_MULTI * climbing * SKY_RAYLEIGH / ext * 0.0795775;',
+      'return SKY_SUN * lit * (single + multi) * depth;',
+      'if (mu >= 0.0) {\n    at = eye;\n    return hazeAbove(r, mu);',
+    ]) {
+      expect(hazeGlsl).toContain(line)
+    }
+    const sun = { value: new THREE.Vector3(1, 0, 0) }
+    const shader = {
+      uniforms: {},
+      vertexShader: '#include <common>\nvoid main() {\n#include <project_vertex>\n}',
+      fragmentShader: '#include <common>\nvoid main() {\n#include <colorspace_fragment>\n}',
+    } as unknown as THREE.WebGLProgramParametersWithUniforms
+    createGroundHaze(sun, R, false).patch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+    for (const line of [
+      'vec3 point = up * uSeaLevel;',
+      'float column = columnAhead(point, rd, sqrt(6.2831853 * uSurface * uScaleHeight), at);',
+      'sky = hazeSky(column, at, uGroundHazeSun, rd, point);',
+      'if (table > 0.0) sky = mix(sky, skyViewGlow(rd, point, uGroundHazeSun), table);',
+    ]) {
+      expect(shader.fragmentShader).toContain(line)
+    }
+    // Its macros still defined where it is.
+    const f = shader.fragmentShader
+    expect(f.indexOf('vec3 groundHazeSky(')).toBeLessThan(f.indexOf('#undef uSeaLevel'))
+    // The water lifts its reflected ray as the port does.
+    expect(WATER_GLSL(WATER_WAVE_TABLE).sky).toContain(
+      'waterReflected = normalize(waterReflected - waterUpGround * min(dot(waterReflected, waterUpGround), 0.0) + waterUpGround * 1e-4);'
+    )
+  })
+
+  it('goes out with the day, so the night sea is as it was', () => {
+    for (const sun of [-6, -10, -20]) {
+      for (const elevation of [1, 30, 90]) expect(luma(seaSky(sun, elevation, 90))).toBe(0)
+    }
+    expect(luma(seaSky(-5, 30, 90))).toBeGreaterThan(0)
+  })
+
+  it('is bluer overhead than at the horizon by day, and brightens as the Sun climbs', () => {
+    for (const sun of [20, 60]) {
+      const zenith = seaSky(sun, 90, 0)
+      const horizon = seaSky(sun, 3, 90)
+      expect(zenith[2] / zenith[0]).toBeGreaterThan(horizon[2] / horizon[0])
+    }
+    // Overhead and across the Sun (away from it the Rayleigh lobe's own
+    // swing outweighs the light's climb past ~40 deg, as in the real sky).
+    for (const [elevation, azimuth] of [[90, 0], [25, 90], [3, 90], [45, 90]]) {
+      let last = 0
+      for (const sun of [-5, 0, 5, 10, 20, 40, 60, 85]) {
+        const now = luma(seaSky(sun, elevation, azimuth))
+        expect(now, `sun ${sun}, ${elevation}/${azimuth}`).toBeGreaterThan(last)
+        last = now
+      }
+    }
+  })
+
+  it('warms toward a low Sun at the horizon', () => {
+    const toward = seaSky(4, 3, 0)
+    const away = seaSky(4, 3, 180)
+    expect(toward[0] / toward[2]).toBeGreaterThan(away[0] / away[2])
+  })
+
+  it('mirrors a brighter grazing sky than the old local model did', () => {
+    // skyRadiance() (removed) times the Sun's light (SUNLIGHT_INTENSITY 5),
+    // 3 deg up, 90 deg round from the Sun: 0.06 day (0.25 + 0.75 sqrt(s))
+    // of mix(ATMOSPHERE_SKY, its horizon, (1 - e)^3), in luma.
+    const old = { 20: 0.1639, 60: 0.22562 }
+    for (const sun of [20, 60] as const) expect(luma(seaSky(sun, 3, 90))).toBeGreaterThanOrEqual(1.3 * old[sun])
+  })
+
+  it('lights the body from the one direction whose sky is the dome\'s mean (WATER_SKY_LIGHT_ELEVATION)', () => {
+    for (const sun of [-3, 2, 5, 10, 20, 40, 60, 85]) {
+      // The sky's cosine-weighted mean over the dome: the irradiance over pi.
+      const mean = [0, 0, 0]
+      let weight = 0
+      for (let i = 0; i < 45; i++) {
+        const elevation = ((i + 0.5) / 45) * 90
+        const w = Math.sin(THREE.MathUtils.degToRad(elevation)) * Math.cos(THREE.MathUtils.degToRad(elevation))
+        for (let j = 0; j < 36; j++) {
+          const sky = seaSky(sun, elevation, ((j + 0.5) / 36) * 360)
+          for (let c = 0; c < 3; c++) mean[c] += w * sky[c]
+          weight += w
+        }
+      }
+      const sample = seaSky(sun, WATER_SKY_LIGHT_ELEVATION, 90)
+      const at = mean.map((x) => x / weight)
+      expect(luma(sample) / luma(at), `sun ${sun}`).toBeGreaterThan(0.9)
+      expect(luma(sample) / luma(at), `sun ${sun}`).toBeLessThan(1.1)
+      const tint = sample[2] / sample[0] / (at[2] / at[0])
+      expect(tint, `sun ${sun}`).toBeGreaterThan(0.85)
+      expect(tint, `sun ${sun}`).toBeLessThan(1.2)
+    }
   })
 })

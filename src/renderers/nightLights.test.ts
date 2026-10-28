@@ -5,7 +5,7 @@ import { useStore } from '../store'
 import { earthPosition } from '../ephemeris'
 import { CLOUD_AMBIENT } from '../lighting'
 import { MOONLIGHT_RGB, NIGHT_FILL_RGB } from '../night-flight'
-import { composePatches, createEclipseShadow, type MaterialPatch } from './eclipseShadow'
+import { composePatches, createEclipseShadow, ECLIPSE_GLSL, type MaterialPatch } from './eclipseShadow'
 import { createCloudLayer, GROUND_SHADOW } from './cloudShaders'
 import { earthHorizon } from './earthHorizonTexture'
 import { createGibsNightPatch } from './gibsNightPatch'
@@ -81,7 +81,7 @@ describe('night lights in flight', () => {
     const night = at('vec3 nightUp = normalize(vNightLightsDir);')
     expect(at('#include <lights_fragment_end>')).toBeLessThan(night)
     expect(at('reflectedLight.indirectDiffuse *= groundHorizonSky;')).toBeLessThan(night)
-    expect(at('reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL)')).toBeLessThan(night)
+    expect(at('reflectedLight.directDiffuse = (1.0 - groundSkyFill)')).toBeLessThan(night)
     expect(night).toBeLessThan(at('float cloudLit = cloudGroundShadow('))
     const code = frag.slice(night, at('float cloudLit = cloudGroundShadow('))
     expect(code).toContain('reflectedLight.indirectDiffuse +=')
@@ -247,6 +247,17 @@ describe('night lights in flight', () => {
     '  float lit = smoothstep(-0.18, 0.12, mu);\n  \n  float dusk = 1.0 - smoothstep(0.0, 0.35, mu);\n' +
     '  float glow = (column / grazing) * lit * uGain;\n  \n' +
     '  return mix(uSky, uDusk, dusk * 0.6) * (glow / (1.0 + glow));\n}'
+  const ECLIPSE_WATER_SKY = ECLIPSE_GLSL.fragmentLight.slice(
+    ECLIPSE_GLSL.fragmentLight.indexOf('#ifdef WATER_SKY_BODY'),
+    ECLIPSE_GLSL.fragmentLight.lastIndexOf('#endif\n') + '#endif\n'.length
+  )
+  function groundHazeSkyText(fragment: string) {
+    const start = fragment.indexOf('\n// The sky over the sea at up')
+    const end = fragment.indexOf('\n  return sky;\n}\n', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return fragment.slice(start, end + '\n  return sky;\n}\n'.length)
+  }
   function skyAsBefore(fragment: string) {
     const sky = hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb('))
     const swaps: [string, string][] = [
@@ -289,6 +300,10 @@ describe('night lights in flight', () => {
           'float groundHazeDensity(float r) {\n' +
           '  return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
       ],
+      // The sky the sea reads (tides-d9f.4), unused here, and the eclipse's
+      // dimming of the water's skylit body, out here (no water).
+      [groundHazeSkyText(fragment), ''],
+      [ECLIPSE_WATER_SKY, ''],
     ]
     for (const [now, before] of swaps) {
       expect(fragment.split(now).length).toBe(2)
@@ -324,13 +339,14 @@ describe('night lights in flight', () => {
   }
 
   // What skyAsBefore() swaps out, pinned as tides-34q left it, so that a
-  // change to it fails here too.
+  // change to it fails here too (since tides-d9f.4 the haze reads the
+  // table at level 0 and the sky fill leaves the water out).
   it("pins tides-34q's sky light and haze (and tides-d9f's glint and cover), which the pins below take out", () => {
     const sha = (text: string) => createHash('sha256').update(text).digest('hex')
-    expect(sha(GROUND_DETAIL_GLSL.lightBody)).toBe('2f6f8a716ac3f104c5a5ded8dc62499ce46fbdadd96e7dab400cb0bf7389c137')
+    expect(sha(GROUND_DETAIL_GLSL.lightBody)).toBe('cfdbac3680d86159ab5b80716b193a52c74dca8521ec5a2a3d3a2001af49adae')
     expect(sha(GROUND_DETAIL_GLSL.sunTintBody)).toBe('9782c8fe17499969afff34075dc56240299e9062473d4daaec7f20a4899361c6')
     expect(sha(hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb(')))).toBe(
-      '8e20cdd0404f9c1f2db2620cc65356626ac871c33098001de540c063a1d90eea'
+      '4d550f3f157841f34d6b63028da14ed7faaac7065184077d529c810e4093fcdf'
     )
   })
 

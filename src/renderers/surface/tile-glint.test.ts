@@ -7,6 +7,7 @@ import { WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
 import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
 import { createTileComposer, SURFACE_ANCHORS, type TerrainPhongMaterial } from './tile-material'
 import { compiled, fakeLink, tileMesh } from './tile-test-fixtures'
+import { TILE_FEATURES } from './tile-features'
 
 function glintTile() {
   const link = fakeLink()
@@ -55,6 +56,17 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(f.split('varying ').length).toBe(THREE.ShaderLib.phong.fragmentShader.split('varying ').length)
   })
 
+  it('stays within 16 texture units with every feature on (the water\'s climate and noise among them)', () => {
+    const mesh = tileMesh()
+    createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
+    const f = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
+    // The features' own samplers, plus three's own the tile's Phong uses
+    // (measured in the browser: 15 active of 16, 5 of them three's).
+    const own = f.match(/uniform\s+sampler\w+\s+\w+/g) ?? []
+    expect(own).toContain('uniform sampler2DArray uWaterSea')
+    expect(own.length + 5, own.join(', ')).toBeLessThanOrEqual(16)
+  })
+
   it('replaces Phong\'s direct light with the water\'s, and lands the waves and the sky in order', () => {
     const { shader } = glintTile()
     const f = shader.fragmentShader
@@ -64,6 +76,29 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(f.indexOf('#include <normal_fragment_maps>')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.normal))
     expect(f.indexOf(TILE_GLINT_GLSL.normal)).toBeLessThan(f.indexOf('#include <emissivemap_fragment>'))
     expect(f.indexOf('#include <lights_fragment_end>')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.sky))
+  })
+
+  it('reads the ground haze\'s sky, composed with every feature, before the shadow dims the light', () => {
+    const mesh = tileMesh()
+    createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
+    const f = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
+    const at = (text: string) => {
+      const i = f.indexOf(text)
+      expect(i, text.slice(0, 60)).toBeGreaterThan(-1)
+      return i
+    }
+    expect(TILE_GLINT_GLSL.sky).toContain('groundHazeSky(')
+    expect(at('vec3 groundHazeSky(vec3 up, vec3 rd) {')).toBeLessThan(at('void main'))
+    const sky = at(TILE_GLINT_GLSL.sky)
+    expect(at('#include <lights_fragment_end>')).toBeLessThan(sky)
+    expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= surfaceSunLit;'))
+    expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse *= groundHorizonSky;'))
+    // The eclipse dims the skylit body after the terrain's view of the sky,
+    // and the ground's sky fill leaves the water out.
+    expect(at('#define WATER_SKY_BODY')).toBeLessThan(at('void main'))
+    expect(at('reflectedLight.indirectDiffuse *= groundHorizonSky;')).toBeLessThan(at('waterSkyBody *= groundHorizonSky;'))
+    expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse -= (1.0 - eclipse.x) * waterSkyBody;'))
+    expect(at('float groundSkyFill = GROUND_SKY_FILL * (1.0 - specularStrength);')).toBeGreaterThan(at('void main'))
   })
 
   it('binds the globe\'s wave phases, and no longer the Sun', () => {

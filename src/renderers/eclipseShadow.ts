@@ -86,6 +86,14 @@ if (uEclipseActive > 0.5) {
   vec3 glow = uEclipseGlow * shade * shade * shade * shade * (1.0 - 0.6 * eclipse.y);
   reflectedLight.directDiffuse *= vec3(eclipse.x) + glow;
   reflectedLight.directSpecular *= eclipse.x;
+#ifdef WATER_SKY_BODY
+  // The water's skylit body (water.ts) dims as the sky does, after the
+  // terrain's view of the sky has scaled it.
+#ifdef GROUND_HORIZON
+  waterSkyBody *= groundHorizonSky;
+#endif
+  reflectedLight.indirectDiffuse -= (1.0 - eclipse.x) * waterSkyBody;
+#endif
 }
 `
 

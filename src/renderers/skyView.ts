@@ -1,8 +1,9 @@
 // The sky-view table (tides-34q.2): on the high tier, the sky from inside
 // the haze is marched once a frame into a small table (sky-view.frag) for
 // the eye's height and the Sun's elevation, and the atmosphere, the ground's
-// haze (groundHaze.ts, the tiles' too) and the clouds' haze in front of a
-// cloud (cloudShaders.ts) all read their colour from it (haze.glsl
+// haze (groundHaze.ts, the tiles' too), the sky the sea mirrors and lights
+// its body with (groundHazeSky(), water.ts) and the clouds' haze in front
+// of a cloud (cloudShaders.ts) all read their colour from it (haze.glsl
 // skyViewGlow()), so the sea meets the sky with no step. The low tier keeps
 // the analytic sky (hazeSky()); so does every eye over the haze, where the
 // limb's glow takes over.

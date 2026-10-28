@@ -222,8 +222,11 @@ const LIGHT_BODY = /* glsl */ `
   // (about with the root of its sine), into the civil twilight.
   float groundSkyLight = sqrt(max(groundSunSin, 0.0))
     + ${f(GROUND_SKY_TWILIGHT)} * smoothstep(${f(Math.sin((-6 * Math.PI) / 180))}, 0.0, groundSunSin);
-  reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL) * reflectedLight.directDiffuse
-    + GROUND_SKY_FILL * groundSkyLight * groundSkyView * vec3(${GROUND_SKY_COLOUR.map(f).join(', ')}) * directionalLights[0].color
+  // Not on water (specularStrength: the globe's water mask, the tiles'
+  // glint strength): the sea takes its own skylight (water.ts).
+  float groundSkyFill = GROUND_SKY_FILL * (1.0 - specularStrength);
+  reflectedLight.directDiffuse = (1.0 - groundSkyFill) * reflectedLight.directDiffuse
+    + groundSkyFill * groundSkyLight * groundSkyView * vec3(${GROUND_SKY_COLOUR.map(f).join(', ')}) * directionalLights[0].color
       * BRDF_Lambert(material.diffuseColor);
 }
 #endif
