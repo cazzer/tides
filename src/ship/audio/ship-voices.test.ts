@@ -62,7 +62,7 @@ class FakeAudioContext {
     return this.source({ type: 'sine', frequency: this.param(), detune: this.param() })
   }
   createBufferSource() {
-    return this.source({ buffer: null, loop: false })
+    return this.source({ buffer: null, loop: false, playbackRate: this.param() })
   }
   createBuffer(_channels: number, length: number) {
     this.buffers++
@@ -172,7 +172,7 @@ describe('ship voices (tides-a4j.2)', () => {
     expect(lastTarget(voices().windGain.gain)).toBeGreaterThan(0)
   })
 
-  it('hisses for a throttle change, then settles', () => {
+  it('puffs for a throttle change, then settles', () => {
     const { audio, telemetry, frame, voices } = setup()
     audio.activate()
     audio.gesture()

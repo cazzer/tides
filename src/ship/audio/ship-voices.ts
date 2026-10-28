@@ -9,8 +9,10 @@
 //   2 detuned saws ─ oscGain ─┐
 //   brown noise ─ noiseGain ──┴─ lowpass ─────────────┐
 //   brown noise ─ lowpass ─ thrustGain ───────────────┤
-//   brown noise ─ lowpass ─ boostGain ────────────────┼─ mix ─ out.bus
+//   brown noise ─ lowpass ─ boostGain ────────────────┼─ mix
 //   brown noise ─ lowpass ─ windGain ─────────────────┘
+//
+//   mix ─ highpass ─ out.bus
 
 import { MAX_DT } from '../flight'
 import type { ShipInput } from '../ship-input'
@@ -50,8 +52,18 @@ const NOISE_SECONDS = 2
 // The "brown" noise is red-ish: white through a one-pole lowpass at this
 // corner, Hz, which falls 6 dB an octave above it like brown noise but never
 // drifts off. Its leak per sample follows the context's sample rate. Every
-// noise voice is lowpassed under ~400 Hz, so a low corner costs them little.
+// noise voice is lowpassed under BOOST_HZ's top, so a low corner costs them
+// little.
 const BROWN_CORNER_HZ = 90
+// The noise voices all loop one buffer; each plays it at its own rate, so
+// their loops drift apart rather than repeat together, heard as a cycle in
+// the rumble's swells.
+const NOISE_RATES = [0.93, 0.97, 1.03, 1.07] as const
+// The mix's highpass, Hz, and resonance, dB (about Butterworth): it drops
+// the red noise's flat run under hearing, which only spends headroom and
+// drives a small speaker's cone into distortion.
+const SUBSONIC_HZ = 25
+const SUBSONIC_Q = -3
 // A target this close to the last one set is left alone.
 const RELATIVE_STEP = 1e-4
 const ABSOLUTE_STEP = 1e-5
@@ -63,7 +75,7 @@ const RELEASE_SECONDS = 0.06
 // released anyway after this, ms.
 const RELEASE_FALLBACK_MS = (RELEASE_SECONDS + 0.25) * 1000
 // A frame gap longer than this (muted, hidden, a stall) forgets the last
-// throttle, so the change made meanwhile doesn't hiss on the way back, ms.
+// throttle, so the change made meanwhile doesn't puff on the way back, ms.
 const THROTTLE_GAP_MS = 2 * MAX_DT * 1000
 // The throttle's rate is smoothed over this, seconds, so a touch slider's
 // flutter doesn't patter; under RATE_EPSILON it is 0.
@@ -174,10 +186,11 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
   const { brown } = shipNoise(context)
   // Each noise voice starts at its own place in the loop, so two voices on
   // one buffer don't sound as one.
-  const loop = (buffer: AudioBuffer, offset: number) => {
+  const loop = (buffer: AudioBuffer, offset: number, rate: number) => {
     const node = context.createBufferSource()
     node.buffer = buffer
     node.loop = true
+    node.playbackRate.value = rate
     node.start(0, offset * NOISE_SECONDS)
     nodes.push(node)
     sources.push(node)
@@ -186,7 +199,9 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
 
   const mix = gain()
   mix.gain.value = VOICES_GAIN
-  mix.connect(out.bus)
+  const subsonic = filter('highpass', SUBSONIC_HZ, SUBSONIC_Q)
+  mix.connect(subsonic)
+  subsonic.connect(out.bus)
 
   const lowpass = filter('lowpass', ENGINE_CUTOFF[0], 0.7)
   lowpass.connect(mix)
@@ -205,25 +220,25 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
   }) as [OscillatorNode, OscillatorNode]
   const noiseGain = gain()
   noiseGain.connect(lowpass)
-  loop(brown, 0).connect(noiseGain)
+  loop(brown, 0, NOISE_RATES[0]).connect(noiseGain)
 
   const thrustGain = gain()
   thrustGain.connect(mix)
   const thrustFilter = filter('lowpass', THRUST_HZ, THRUST_Q)
   thrustFilter.connect(thrustGain)
-  loop(brown, 0.25).connect(thrustFilter)
+  loop(brown, 0.25, NOISE_RATES[1]).connect(thrustFilter)
 
   const boostGain = gain()
   boostGain.connect(mix)
   const boostFilter = filter('lowpass', BOOST_HZ[0], BOOST_Q)
   boostFilter.connect(boostGain)
-  loop(brown, 0.75).connect(boostFilter)
+  loop(brown, 0.75, NOISE_RATES[2]).connect(boostFilter)
 
   const windGain = gain()
   windGain.connect(mix)
   const windFilter = filter('lowpass', WIND_HZ[0], WIND_Q)
   windFilter.connect(windGain)
-  loop(brown, 0.5).connect(windFilter)
+  loop(brown, 0.5, NOISE_RATES[3]).connect(windFilter)
 
   return {
     context,
