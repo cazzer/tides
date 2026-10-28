@@ -644,7 +644,7 @@ export function airMass(mu: number): number {
 /** Vertical optical depth (red, green, blue) at sea level: Rayleigh plus a
  * little haze, softened a touch for taste. */
 export const SUNLIGHT_EXTINCTION: Vec3 = [0.045, 0.1, 0.22]
-const SCALE_HEIGHT_KM = 8
+export const SCALE_HEIGHT_KM = 8
 
 /** Sunset light keeps at least this much of its red's brightness: the low
  * Sun's light on cloud still glows a little, but dimmer than noon (at 1 it

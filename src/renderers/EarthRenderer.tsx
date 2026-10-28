@@ -201,6 +201,7 @@ export default function EarthRenderer({
         // the stars (night-flight.ts dayExposure(), skyDaylight()).
         eyeSky.daylight = 0
         eyeSky.heightKm = EYE_AIRLESS_KM
+        eyeSky.up.set(0, 1, 0)
         renderer.toneMappingExposure =
           TONE_MAPPING_EXPOSURE *
           (nightFlight && groundRef.current ? nightFlight.adaptEye(groundRef.current, camera, diameter) : 1)
@@ -358,6 +359,7 @@ function restoreEye(renderer: THREE.WebGLRenderer) {
   renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE
   eyeSky.daylight = 0
   eyeSky.heightKm = EYE_AIRLESS_KM
+  eyeSky.up.set(0, 1, 0)
 }
 
 function cloudsFaceEachCamera(

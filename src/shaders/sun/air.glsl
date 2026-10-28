@@ -11,6 +11,8 @@ uniform float uAirKm;
 #define AIR_EXTINCTION vec3(0.045, 0.1, 0.22)
 #define AIR_SCALE_KM 8.0
 #define AIR_EARTH_KM 6371.0
+// Half EYE_AIRLESS_KM: at or over it, no air.
+#define AIR_NONE_KM 5e5
 
 // Kasten & Young's air mass at mu, the horizon's below it.
 float airMass(float mu) {
@@ -25,6 +27,8 @@ float airThin(float km) {
 // The transmittance along unit dir from the eye, white with the Sun
 // overhead (the air masses past the overhead one).
 vec3 sunAir(vec3 dir) {
+  // No air: the system view, and the ship over it (EYE_AIRLESS_KM).
+  if (uAirKm >= AIR_NONE_KM) return vec3(1.0);
   float mu = dot(dir, uAirUp);
   float h = max(uAirKm, 0.0);
   float m;
@@ -33,7 +37,7 @@ vec3 sunAir(vec3 dir) {
   } else {
     // Past the eye's horizon the ray grazes lower and crosses the dense air
     // either side of its lowest point.
-    float tangent = (AIR_EARTH_KM + h) * sqrt(1.0 - mu * mu) - AIR_EARTH_KM;
+    float tangent = (AIR_EARTH_KM + h) * sqrt(max(1.0 - mu * mu, 0.0)) - AIR_EARTH_KM;
     m = (airMass(0.0) - 1.0) * airThin(tangent) * (2.0 - airThin(h - tangent));
   }
   return exp(-AIR_EXTINCTION * m);
