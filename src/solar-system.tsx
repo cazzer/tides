@@ -72,6 +72,7 @@ export default function SolarSystem({
   starRadius,
   distanceScale = 'system',
   ship = false,
+  mainSlot = false,
 }: {
   earthCamera?: boolean
   moonCamera?: boolean
@@ -85,6 +86,8 @@ export default function SolarSystem({
   distanceScale?: DistanceScale
   /** In ship mode, for the parts that look different there. */
   ship?: boolean
+  /** The view holds the main grid slot, where its overlay (the tiles' credits) shows. */
+  mainSlot?: boolean
 }) {
   const earthTexture = getEarthTexture()
   const moonTexture = getMoonTexture()
@@ -104,6 +107,7 @@ export default function SolarSystem({
     systemSurfaceTilesOn({
       tilesOn: SURFACE_TILES_ON,
       interactive,
+      mainSlot,
       closeZoomTiles: s.closeZoomTiles,
       cameraFocus: s.cameraFocus,
     })

@@ -19,15 +19,16 @@ describe('holdRealTime', () => {
 })
 
 describe('systemSurfaceTilesOn', () => {
-  it('mounts the tiles only with them on, in the main view, in their close zoom range, in Earth focus', () => {
-    const on = { tilesOn: true, interactive: true, closeZoomTiles: true, cameraFocus: 'earth' }
+  it('mounts the tiles only with them on, in the main view in the main slot, in their close zoom range, in Earth focus', () => {
+    const on = { tilesOn: true, interactive: true, mainSlot: true, closeZoomTiles: true, cameraFocus: 'earth' }
     expect(systemSurfaceTilesOn(on)).toBe(true)
     expect(systemSurfaceTilesOn({ ...on, tilesOn: false })).toBe(false)
     expect(systemSurfaceTilesOn({ ...on, interactive: false })).toBe(false)
+    expect(systemSurfaceTilesOn({ ...on, mainSlot: false })).toBe(false)
     expect(systemSurfaceTilesOn({ ...on, closeZoomTiles: false })).toBe(false)
     expect(systemSurfaceTilesOn({ ...on, cameraFocus: 'moon' })).toBe(false)
     expect(systemSurfaceTilesOn({ ...on, cameraFocus: null })).toBe(false)
-    expect(systemSurfaceTilesOn({ tilesOn: false, interactive: false, closeZoomTiles: false, cameraFocus: 'sun' })).toBe(false)
+    expect(systemSurfaceTilesOn({ tilesOn: false, interactive: false, mainSlot: false, closeZoomTiles: false, cameraFocus: 'sun' })).toBe(false)
   })
 })
 

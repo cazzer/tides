@@ -35,8 +35,9 @@ import { createRectWriter } from './grid-upload'
 import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { subscribeSurfaceLink, surfaceLink } from './surface-link'
-import { eyeMarginMetres, groundSpeed, smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
+import { EYE_REACH_METRES, eyeMarginMetres, groundSpeed, smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
 import { EARTH_RADIUS, EARTH_UNITS_PER_METRE } from '../../ship/ship-bodies'
+import { closeZoomState, groundAngle } from '../../close-zoom'
 
 // How often the visible tiles are read for the credits line; it only needs to
 // notice tiles arriving and leaving.
@@ -74,7 +75,7 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
   const errorTarget = useRef(NaN)
   const credits = useRef<{ sources: ActiveSources; at: number } | null>(null)
   // The system view's eye last frame, in Earth's frame, for its speed.
-  const previousEye = useMemo(() => ({ has: false, at: new THREE.Vector3() }), [])
+  const previousEye = useRef({ has: false, at: new THREE.Vector3() })
 
   // Created in an effect and hung under the holder by hand (no state, so no
   // extra render), so StrictMode's mount, unmount, mount disposes the first
@@ -83,6 +84,7 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
   // released and every tile, texture and in-flight download with it.
   useEffect(() => {
     const parent = holder.current
+    const previous = previousEye.current
     if (!parent || !link) return
     let created: Tiles
     try {
@@ -110,7 +112,7 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
       ground.current = null
       // The system view's eye goes with the tiles: the globe draws it all.
       if (eye === 'system') setSurfaceEye(Infinity)
-      previousEye.has = false
+      previous.has = false
       if (surfaceGroundSampler() === sampler) setSurfaceGroundSampler(null)
       credits.current = null
       setActiveSurfaceSources([])
@@ -124,7 +126,7 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
         console.error('surface tiles: dispose failed', error)
       }
     }
-  }, [camera, gl, floatLinear, link, eye, previousEye])
+  }, [camera, gl, floatLinear, link, eye])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
   // is in those pixels, and the cache's marks follow them (surface-lod.ts).
@@ -148,28 +150,39 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
     tiles.group.updateWorldMatrix(true, false)
     let speed: number
     let nearest: { key: string | null; surfaceDistance: number }
+    let margin: number
     if (eye === 'system') {
       // The holder sits in Earth's spinning body, centred on it: the camera
       // there is its height over the sea-level sphere, and its motion over
       // the ground, which close zoom's turn with Earth leaves still.
       const local = holderGroup.worldToLocal(camera.getWorldPosition(systemEye))
-      const altitude = local.length() - EARTH_RADIUS
+      const eyeR = local.length()
+      const altitude = eyeR - EARTH_RADIUS
       setSurfaceEye(altitude)
-      speed = groundSpeed(previousEye.has ? previousEye.at : null, local, delta)
-      previousEye.at.copy(local)
-      previousEye.has = true
-      systemNearest.surfaceDistance = Math.max(altitude, 0)
+      const previous = previousEye.current
+      speed = groundSpeed(previous.has ? previous.at : null, local, delta)
+      previous.at.copy(local)
+      previous.has = true
+      // The gap to the ground close zoom's floor read this frame under the
+      // eye (the sea-level sphere until it has).
+      systemNearest.surfaceDistance = Math.max(eyeR - (closeZoomState.groundUnderEye ?? EARTH_RADIUS), 0)
       nearest = systemNearest
+      // Rest detail over the floor's window around the eye, not a second's
+      // travel ahead: the camera looks straight down, so a drag's second
+      // (several altitudes) would cover the whole view and cancel the sweep's
+      // coarsening.
+      margin = Math.max(EYE_REACH_METRES, (groundAngle(altitude, EARTH_RADIUS) * EARTH_RADIUS) / EARTH_UNITS_PER_METRE)
     } else {
       speed = shipTelemetry.air.speed
       nearest = shipTelemetry.nearest
+      margin = eyeMarginMetres(speed / EARTH_UNITS_PER_METRE)
     }
     // Less detail the faster the ground sweeps past (surface-lod.ts), but
-    // the rest detail under and around the eye (a second's flight ahead),
-    // set before update() picks this frame's tiles.
+    // the rest detail under and around the eye (in flight, a second's
+    // flight ahead), set before update() picks this frame's tiles.
     const target = surfaceErrorTarget(sweepRate(speed, nearest), touch)
     errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
-    current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch), eyeMarginMetres(speed / EARTH_UNITS_PER_METRE))
+    current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch), margin)
     tiles.update()
     ground.current?.invalidate()
     // None of the ground is the tiles' above the handover's top (ShipController,

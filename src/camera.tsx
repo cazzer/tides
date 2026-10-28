@@ -342,6 +342,8 @@ export function updateMainNearFar(
   if (close) {
     const radius = state.earthRadius as number
     const eyeR = eye.distanceTo(nearBodies[EARTH_NEAR_INDEX].centre)
+    // Over the streamed tiles, last frame's share and tiles: this frame
+    // runs before SurfaceTiles' (0.5), the lag ship mode's floor has too.
     const ground = earthGroundRadius(earth, eye, radius, groundAngle(eyeR - radius, radius))
     surface = Math.min(surface, eyeR - ground, shellGap(eyeR, EARTH_SHELL_RADII))
     nearMin = shipNearFloor(reversedFloatDepth(gl))

@@ -30,20 +30,25 @@ export function isTileRange(altitude: number, top: number, wasInRange: boolean):
 
 /**
  * Whether the system view mounts the streamed surface tiles (tides-tvr.7.2):
- * with them on (high tier, not ?surface=0), in the main view, in close zoom
- * within the tiles' range (`closeZoomTiles`, isTileRange) and in Earth
- * focus. Leaving any of these releases them, every download with them.
+ * with them on (high tier, not ?surface=0), in the main view while it holds
+ * the main grid slot (`mainSlot`: swapped to a side slot, the panel keeps
+ * its close zoom but not the credits line, which only the main slot shows),
+ * in close zoom within the tiles' range (`closeZoomTiles`, isTileRange) and
+ * in Earth focus. Leaving any of these releases them, every download with
+ * them.
  */
 export function systemSurfaceTilesOn({
   tilesOn,
   interactive,
+  mainSlot,
   closeZoomTiles,
   cameraFocus,
 }: {
   tilesOn: boolean
   interactive: boolean
+  mainSlot: boolean
   closeZoomTiles: boolean
   cameraFocus: string | null | undefined
 }): boolean {
-  return tilesOn && interactive && closeZoomTiles && cameraFocus === 'earth'
+  return tilesOn && interactive && mainSlot && closeZoomTiles && cameraFocus === 'earth'
 }

@@ -16,11 +16,8 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { MIN_DISTANCE_FACTOR } from './main-view'
 import type { Pivot } from './pivot'
 import { useStore } from './store'
-import { EARTH_KM_PER_UNIT, SURFACE_TOP, surfaceOpacityUniform } from './surface-handover'
+import { EARTH_KM_PER_UNIT, SURFACE_TOP, tileGroundRadius } from './surface-handover'
 import { isTileRange } from './close-zoom-rules'
-import { earthLatLon, surfaceGroundSampler } from './surface-ground'
-import { RELIEF } from './relief'
-import { EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
 import { TERRAIN_DISPLACEMENT } from './cloud-layer'
 import { NEAR_MIN as SHIP_NEAR_MIN } from './ship/ship-session'
 import {
@@ -100,7 +97,14 @@ export function groundAngle(altitude: number, radius: number): number {
 }
 
 const _local = new Vector3()
-const _latLon: [number, number] = [0, 0]
+
+/** The globe's ground around `at` (unit, Earth's frame), highest within `reach`. */
+function globeGroundRadius(at: Vector3, reach: number, radius: number): number {
+  const floor = earthTerrain()
+  return floor
+    ? radius + (TERRAIN_DISPLACEMENT * terrainFloorGreyAround(floor, at, reach / radius)) / 255
+    : terrainFloorRadius(null, radius, at)
+}
 
 /**
  * How far from Earth's centre the drawn ground stands under the world point
@@ -111,10 +115,11 @@ const _latLon: [number, number] = [0, 0]
  * The globe's ground is the base 128 × 128 sphere's floor (before it loads,
  * the fixed sphere over any ground); once tides-tvr.7.3 draws the limb
  * sphere in the system view, this must read earthLimbTerrain(). Where the
- * streamed tiles draw (tides-tvr.7.2), their ground, as the ship's floor
- * reads it (ship/ship-bodies.ts attachEarthStop's drawn()): the tiles' alone
- * where they cover the window at full opacity, else the higher of the two,
- * since the globe shows through the dissolve and wherever no tile has loaded.
+ * streamed tiles draw (tides-tvr.7.2), theirs, as the ship's floor reads it
+ * (surface-handover.ts tileGroundRadius). Called from useCloseZoom's frame,
+ * before SurfaceTiles' (SURFACE_FRAME_PRIORITY): the floor and near plane see
+ * the previous frame's tile share and tiles, the one-frame lag ship mode's
+ * floor has between the handover and the tiles' update.
  */
 export function earthGroundRadius(
   earth: Object3D,
@@ -124,32 +129,22 @@ export function earthGroundRadius(
 ): number {
   _local.copy(p)
   earth.worldToLocal(_local).normalize()
-  const floor = earthTerrain()
-  const globe = floor
-    ? radius + (TERRAIN_DISPLACEMENT * terrainFloorGreyAround(floor, _local, angle)) / 255
-    : terrainFloorRadius(null, radius, _local)
-  const sampler = surfaceGroundSampler()
-  const opacity = surfaceOpacityUniform.value
-  if (!sampler || !(opacity > 0)) return globe
-  const [lat, lon] = earthLatLon(_local, _latLon)
-  const tiles = sampler.maxElevation(lat, lon, (angle * radius) / EARTH_UNITS_PER_METRE)
-  if (!tiles) return globe
-  const ground =
-    radius + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * EARTH_UNITS_PER_METRE
-  return opacity < 1 || !tiles.covered ? Math.max(ground, globe) : ground
+  return tileGroundRadius(_local, radius, angle * radius, globeGroundRadius)
 }
 
 /**
  * Close zoom's per-frame state for CameraProvider, written only by the
  * instance with controls (the main view's). `floor` is useEyeDistance's
  * lower limit in Earth focus, null until one has been worked out;
- * `groundUnderTarget` the pivot's radius, null while not in close zoom in
- * Earth focus; `guard` that the shown eye is within half the clearance of
+ * `groundUnderTarget` the pivot's radius and `groundUnderEye` the highest
+ * ground in the eye's window (the tiles' sweep reads it), null while not in
+ * close zoom in Earth focus; `guard` that the shown eye is within half the clearance of
  * the ground, so the floor must hold at once rather than be eased to.
  */
 export const closeZoomState = {
   floor: null as number | null,
   groundUnderTarget: null as number | null,
+  groundUnderEye: null as number | null,
   guard: false,
 }
 
@@ -180,6 +175,7 @@ function leaveCloseZoom(
   owner.hasPrevious = false
   spin.identity()
   closeZoomState.groundUnderTarget = null
+  closeZoomState.groundUnderEye = null
   closeZoomState.guard = false
   if (controls && controls.zoomSpeed !== 1) controls.zoomSpeed = 1
   if (useStore.getState().closeZoom) useStore.getState().setCloseZoom(false)
@@ -244,6 +240,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
       owner.hasPrevious = false
       spin.identity()
       closeZoomState.groundUnderTarget = null
+      closeZoomState.groundUnderEye = null
       closeZoomState.guard = false
       if (controls.zoomSpeed !== 1) controls.zoomSpeed = 1
       // Over any ground, unsampled: the eye only crosses the barrier on it,
@@ -264,6 +261,8 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
       .set(0, 0, 1)
       .applyQuaternion(camera.quaternion)
       .applyAxisAngle(_right, -pivot.tilt)
+    // Over the streamed tiles, last frame's share and tiles: this runs before
+    // SurfaceTiles' frame (0.5), the lag ship mode's floor has too.
     const gT = earthGroundRadius(earth, _point.addVectors(_centre, _normal), radius, 0)
     const gE = earthGroundRadius(
       earth,
@@ -273,6 +272,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
     )
     closeZoomState.floor = closeZoomFloor(gT, gE, clearance, pivot.tilt)
     closeZoomState.groundUnderTarget = gT
+    closeZoomState.groundUnderEye = gE
     closeZoomState.guard = eyeR < gE + clearance / 2
 
     const speed = closeZoomSpeed(controls.getDistance(), gT)

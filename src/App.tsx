@@ -237,6 +237,7 @@ export default function App() {
               background="black"
               matrix={matrix}
               interactive
+              mainSlot={panelProps('main').gridArea === 'main'}
               showOrbitLabels
               onReady={readyHandler('main')}
             />
@@ -294,6 +295,7 @@ function Scene({
   interactive = false,
   distanceScale = 'system',
   ship = false,
+  mainSlot = false,
   onReady,
   ...props
 }: {
@@ -303,6 +305,7 @@ function Scene({
   interactive?: boolean
   distanceScale?: DistanceScale
   ship?: boolean
+  mainSlot?: boolean
   onReady?: () => void
   [key: string]: any
 }) {
@@ -324,6 +327,7 @@ function Scene({
             interactive={interactive}
             distanceScale={distanceScale}
             ship={ship}
+            mainSlot={mainSlot}
             {...props}
           />
           {onReady ? <SceneReadySignal onReady={onReady} /> : null}
