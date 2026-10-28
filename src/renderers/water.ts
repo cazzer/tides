@@ -66,12 +66,14 @@
 //
 // The wave phases come from the CPU in double (update(): k.eye, which is
 // thousands of radians at Earth's radius, minus w t, both mod 2 pi), so the
-// GPU adds only k.ray, which is small near the eye and smooth (the ray from
-// view space through the ground's frame, as the haze's and the tiles'
-// base's). The frame is the ground haze's (GroundHaze.frame), filled per
-// camera before anything draws; update() runs after it.
+// GPU adds only k.ray, which is small near the eye and smooth (the globe's
+// from its vertices less the eye split in double, WATER_GLOBE_VERTEX; the
+// tiles' from view space through their base's frame). The frame is the
+// ground haze's (GroundHaze.frame), filled per camera before anything draws;
+// update() runs after it.
 //
-// No varyings; two samplers (the climate and the noise, the depth). The globe's pieces go in at: the body and the waves just
+// One varying on the globe (its ray: few vertices), none on the tiles; two
+// samplers (the climate and the noise, the depth). The globe's pieces go in at: the body and the waves just
 // before emissivemap_fragment (after
 // every patch's normal_fragment_maps code, so the ground detail's groundUp
 // stays the unbent normal), the glint after lights_phong_pars_fragment
@@ -335,6 +337,15 @@ export function waveStep(w: WaterWave, up: Vec3, footprint: number): number {
 /** A wave's weight at a phase `step` per pixel for its `gain`. */
 export function waveWeight(step: number, gain = 1): number {
   return 1 - smoothstep(WATER_FADE_START * TAU, WATER_FADE_END * TAU, step * WATER_GLINT_HARMONIC * gain ** 0.25)
+}
+
+/** A wave's slope as the GLSL draws it (its part of waterGrad, the height's
+ * gradient in the ground's frame) at its `phase` here, in `sea` at
+ * `footprint`, with no swell groups or bend. */
+export function waveSlope(w: WaterWave, up: Vec3, sea: WaterSea, footprint: number, phase: number): Vec3 {
+  const { dt } = levelPart(w, up)
+  const s = weightAt(w, up, sea, footprint) * Math.sqrt(waveGain(w, up, sea)) * w.slope * Math.sin(phase)
+  return [-s * dt[0], -s * dt[1], -s * dt[2]]
 }
 
 /** A wave's slope variance in `sea` at `gain`. */
@@ -909,17 +920,18 @@ export function WATER_GLSL(waves: readonly WaterWave[]) {
 }
 
 /** Each chain's prelude, run first in the normal piece: the ray, the level
- * up in both frames and the frame. The globe's from view space through the
- * haze's frame; the tiles' from their base's (tile-material.ts). */
+ * up in both frames and the frame. The globe's ray from its own varying
+ * (WATER_GLOBE_VERTEX); the tiles' from their base's (tile-material.ts). */
 export const WATER_PRELUDE = {
   globe: {
     head: /* glsl */ `
 uniform mat3 uWaterViewToGround;
 uniform vec3 uWaterEyeGround;
+varying vec3 vWaterRay;
 `,
     body: /* glsl */ `
 waterViewToGround = uWaterViewToGround;
-waterRay = uWaterViewToGround * -vViewPosition;
+waterRay = vWaterRay;
 waterUpGround = normalize(uWaterEyeGround + waterRay);
 waterUpView = waterUpGround * uWaterViewToGround;
 ${WATER_DEPTH_SAMPLE.globe}`,
@@ -935,6 +947,30 @@ ${WATER_DEPTH_SAMPLE.tiles}`,
   },
 } as const
 
+// The globe's ray, per vertex (tides-rlj): its point in the ground's frame
+// (fixed to the Earth) less the eye, from the CPU in double as two floats
+// (uWaterEyeHi + uWaterEyeLo), the near ones' difference exact. Phong's
+// vViewPosition, through modelViewMatrix in float, carried ~0.4 m of error
+// at Earth's radius that changed with every move of the camera, so the
+// shorter waves and the sparkle's cells swam under a moving eye. The tiles'
+// view space is the tile's own, small and exact.
+export const WATER_GLOBE_VERTEX = {
+  head: /* glsl */ `
+uniform vec3 uWaterEyeHi;
+uniform vec3 uWaterEyeLo;
+varying vec3 vWaterRay;
+`,
+  body: /* glsl */ `
+vWaterRay = (transformed - uWaterEyeHi) - uWaterEyeLo;
+`,
+}
+
+/** `x` as two floats, the second what the first rounds off. */
+export function splitDouble(x: number): [number, number] {
+  const hi = Math.fround(x)
+  return [hi, x - hi]
+}
+
 export interface Water {
   /** The phases, by wave index, and the wave climate (shared by every
    * program that takes the water). */
@@ -943,11 +979,14 @@ export interface Water {
     uWaterSea: THREE.IUniform<THREE.DataArrayTexture>
     uWaterSparkleEye: THREE.IUniform<THREE.Vector3>
     uWaterTwinkle: THREE.IUniform<number>
+    /** The eye in the ground's frame, split (WATER_GLOBE_VERTEX). */
+    uWaterEyeHi: THREE.IUniform<THREE.Vector3>
+    uWaterEyeLo: THREE.IUniform<THREE.Vector3>
   }
   /** Moves the waves on by `dt` seconds, unless `reduced` (prefers-reduced-motion). */
   advance(dt: number, reduced: boolean): void
   /** For each camera before anything draws, after the frame's update
-   * (GroundHaze.update): the phases at its eye. */
+   * (GroundHaze.update): the phases at its eye, and the eye split. */
   update(): void
 }
 
@@ -958,6 +997,8 @@ export function createWater(frame: GroundHaze['frame']): Water {
     uWaterSea: { value: waterSeaTexture() },
     uWaterSparkleEye: { value: new THREE.Vector3() },
     uWaterTwinkle: { value: 0 },
+    uWaterEyeHi: { value: new THREE.Vector3() },
+    uWaterEyeLo: { value: new THREE.Vector3() },
   }
   const eye: [number, number, number] = [0, 0, 0]
   let time = 0
@@ -971,6 +1012,9 @@ export function createWater(frame: GroundHaze['frame']): Water {
       waterPhases(eye, time, uniforms.uWavePhase.value)
       waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)
       uniforms.uWaterTwinkle.value = (time * WATER_TWINKLE_HZ) % 65536
+      const split = eye.map(splitDouble)
+      uniforms.uWaterEyeHi.value.set(split[0][0], split[1][0], split[2][0])
+      uniforms.uWaterEyeLo.value.set(split[0][1], split[1][1], split[2][1])
     },
   }
 }
@@ -1005,6 +1049,11 @@ export function waterPatch(
   return {
     onBeforeCompile(shader) {
       Object.assign(shader.uniforms, uniforms)
+      shader.vertexShader = injectWater(
+        injectWater(shader.vertexShader, 'common', WATER_GLOBE_VERTEX.head),
+        'project_vertex',
+        WATER_GLOBE_VERTEX.body
+      )
       let fragment = injectWater(shader.fragmentShader, 'common', WATER_PRELUDE.globe.head + glsl.head)
       fragment = injectWater(fragment, 'lights_phong_pars_fragment', glsl.direct)
       fragment = injectWater(fragment, 'emissivemap_fragment', WATER_PRELUDE.globe.body + glsl.normal, true)

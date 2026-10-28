@@ -31,6 +31,7 @@ import {
   WATER_FADE_END,
   WATER_FADE_START,
   WATER_GLINT_HARMONIC,
+  WATER_GLOBE_VERTEX,
   WATER_PRELUDE,
   WATER_WAVE_TABLE,
   WATER_WAVES,
@@ -47,6 +48,8 @@ import {
   waterSeaVariance,
   WATER_NOISE_CELLS,
   WATER_NOISE_KM,
+  splitDouble,
+  waveSlope,
   waterSparkle,
   waterSparkleEye,
   waterSparkleMean,
@@ -85,6 +88,103 @@ const levelAxis = (up: V, turn: number): V => {
   const c: V = [up[1] * e[2] - up[2] * e[1], up[2] * e[0] - up[0] * e[2], up[0] * e[1] - up[1] * e[0]]
   return [0, 1, 2].map((i) => e[i] * Math.cos(turn) + c[i] * Math.sin(turn)) as V
 }
+// A GLSL subset run in JS, for the water's own lines (tides-rlj): floats,
+// vec2/vec3 and mat3 (column-major, as GLSL), + - * /, unary -, calls,
+// indexing, declarations, = += -=, and if blocks. Enough to test what the
+// waves do to the normal in a known frame, not text.
+type G = number | number[] | { m: number[] }
+const isMat = (x: G): x is { m: number[] } => typeof x === 'object' && !Array.isArray(x)
+const zip = (a: G, b: G, f: (x: number, y: number) => number): G => {
+  if (typeof a === 'number' && typeof b === 'number') return f(a, b)
+  if (typeof a === 'number') return (b as number[]).map((y) => f(a, y))
+  if (typeof b === 'number') return (a as number[]).map((x) => f(x, b))
+  return (a as number[]).map((x, i) => f(x, (b as number[])[i]))
+}
+const gDot = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i], 0)
+const col = (m: number[], j: number) => m.slice(3 * j, 3 * j + 3)
+const gMul = (a: G, b: G): G => {
+  if (isMat(a) && Array.isArray(b)) return [0, 1, 2].map((i) => gDot([a.m[i], a.m[3 + i], a.m[6 + i]], b))
+  if (Array.isArray(a) && isMat(b)) return [0, 1, 2].map((j) => gDot(a, col(b.m, j)))
+  return zip(a, b, (x, y) => x * y)
+}
+const FNS: Record<string, (...a: G[]) => G> = {
+  vec2: (...a) => a as number[],
+  vec3: (...a) => (a.length === 1 ? [a[0], a[0], a[0]] : a) as number[],
+  dot: (a, b) => gDot(a as number[], b as number[]),
+  length: (a) => Math.hypot(...(a as number[])),
+  normalize: (a) => (a as number[]).map((x) => x / Math.hypot(...(a as number[]))),
+  sqrt: (a) => zip(a, 0, Math.sqrt),
+  sin: (a) => zip(a, 0, Math.sin),
+  max: (a, b) => zip(a, b, Math.max),
+  mix: (a, b, t) => zip(a, zip(b, a, (y, x) => y - x), (x, d) => x + d * (t as number)),
+  smoothstep: (a, b, x) => smoothstep(a as number, b as number, x as number),
+}
+function runGlsl(code: string, vars: Record<string, G>): Record<string, G> {
+  const toks = code.match(/\d+\.?\d*(?:e[-+]?\d+)?|[A-Za-z_]\w*|[-+*/]=|[<>]=?|[-+*/=(),;{}[\]]/g) ?? []
+  let i = 0
+  const peek = () => toks[i]
+  const take = (t?: string) => {
+    if (t && toks[i] !== t) throw new Error(`glsl: expected ${t}, got ${toks[i]}`)
+    return toks[i++]
+  }
+  const atom = (): G => {
+    const t = take()
+    if (t === '(') { const v = expr(); take(')'); return v }
+    if (t === '-') return gMul(-1, atom())
+    if (/^\d/.test(t)) return parseFloat(t)
+    let v: G
+    if (peek() === '(') {
+      take('(')
+      const args: G[] = []
+      while (peek() !== ')') { args.push(expr()); if (peek() === ',') take(',') }
+      take(')')
+      if (!FNS[t]) throw new Error(`glsl: no ${t}()`)
+      v = FNS[t](...args)
+    } else {
+      if (!(t in vars)) throw new Error(`glsl: no ${t}`)
+      v = vars[t]
+    }
+    while (peek() === '[') { take('['); v = (v as number[])[expr() as number]; take(']') }
+    return v
+  }
+  const term = (): G => {
+    let v = atom()
+    while (peek() === '*' || peek() === '/') v = take() === '*' ? gMul(v, atom()) : zip(v, atom(), (x, y) => x / y)
+    return v
+  }
+  const expr = (): G => {
+    let v = term()
+    while (peek() === '+' || peek() === '-') v = take() === '+' ? zip(v, term(), (x, y) => x + y) : zip(v, term(), (x, y) => x - y)
+    if (peek() === '>' || peek() === '<') { const op = take(); const w = term(); v = (op === '>' ? (v as number) > (w as number) : (v as number) < (w as number)) ? 1 : 0 }
+    return v
+  }
+  const block = (run: boolean) => {
+    while (i < toks.length && peek() !== '}') {
+      if (peek() === 'if') {
+        take('if'); take('(')
+        const c = expr()
+        take(')'); take('{')
+        block(run && c !== 0)
+        take('}')
+        continue
+      }
+      if (['float', 'vec2', 'vec3', 'mat3'].includes(peek()) && /^[A-Za-z_]/.test(toks[i + 1])) take()
+      const name = take()
+      const op = take()
+      if (op === ';') { if (run) vars[name] = 0; continue }
+      if (!run) { while (take() !== ';'); continue }
+      const v = expr()
+      take(';')
+      vars[name] = op === '=' ? v : zip(vars[name], v, op === '+=' ? (x, y) => x + y : (x, y) => x - y)
+    }
+  }
+  block(true)
+  return vars
+}
+/** A rotation's mat3 (column-major) from its rows, and its action. */
+const mat3 = (rows: number[][]): { m: number[] } => ({ m: [0, 1, 2].flatMap((j) => rows.map((r) => r[j])) })
+const apply = (rows: number[][], v: number[]) => rows.map((r) => gDot(r, v))
+const transpose = (rows: number[][]) => rows.map((_, i) => rows.map((r) => r[i]))
 /** Distance between two angles, mod 2 pi. */
 const angleGap = (a: number, b: number) => {
   const d = (((a - b) % TAU) + TAU) % TAU
@@ -467,6 +567,57 @@ describe('the waves (tides-07z)', () => {
     expect(waveGain(wind, UP, sea)).toBeCloseTo(1.2 * 1.5, 12)
   })
 
+  it('tilts the view-space normal against the waves\' slope, the frame changed both ways (tides-rlj)', () => {
+    // A frame that isn't its own transpose: view space to the ground's.
+    const c = Math.cos(0.7), sn = Math.sin(0.7), c2 = Math.cos(-1.1), s2 = Math.sin(-1.1)
+    const rx = [[1, 0, 0], [0, c, -sn], [0, sn, c]]
+    const rz = [[c2, -s2, 0], [s2, c2, 0], [0, 0, 1]]
+    const toGround = rz.map((r) => [0, 1, 2].map((j) => gDot(r, rx.map((q) => q[j]))))
+    const toView = transpose(toGround)
+    const up = norm([0.3, 0.9, -0.2])
+    const glsl = WATER_GLSL(WATER_WAVE_TABLE)
+    // The prelude's up in view space, on either chain: the ground's up seen
+    // from view space.
+    for (const [body, name, frame] of [
+      [WATER_PRELUDE.globe.body, 'waterUpGround', 'uWaterViewToGround'],
+      [WATER_PRELUDE.tiles.body, 'surfaceUp', 'uSurfaceViewToGround'],
+    ] as const) {
+      const line = body.split('\n').find((l) => l.startsWith('waterUpView ='))!
+      const out = runGlsl(line, { [name]: up, [frame]: mat3(toGround) })
+      expect(apply(toGround, out.waterUpView as number[]).map((x, i) => x - up[i]).every((d) => Math.abs(d) < 1e-12), body).toBe(true)
+    }
+    // One wave's block from the normal piece, at a pixel that draws it,
+    // against waveSlope(), the TS mirror of its slope and fade.
+    const sea: WaterSea = { windScale: 1.3, swellScale: 0.8, noise: 1.1, settled: 0.5, axis: levelAxis(up, 0.4) }
+    const footprint = 2e-8 // ~4 cm: every wave drawn
+    const e1 = levelAxis(up, 0)
+    const e2 = levelAxis(up, Math.PI / 2)
+    for (const w of [WATER_WAVE_TABLE[0], WATER_WAVE_TABLE[7]]) {
+      const drawn = glsl.normal.indexOf(`uWavePhase[${w.index}]`)
+      const start = glsl.normal.lastIndexOf(`waterD = vec3(${w.dir.map((x) => x.toFixed(6)).join(', ')});`, drawn)
+      const end = glsl.normal.indexOf('}', drawn)
+      const ray = [1.5e-4, -2e-5, 3e-5]
+      const phases = new Array(WATER_WAVES).fill(0.9)
+      const out = runGlsl(glsl.normal.slice(start, end + 1), {
+        waterUpGround: up, waterAxis: [...sea.axis], waterSettled: sea.settled, waterGroups: 0, waterGroupNoise: [0, 0],
+        waterWindF: sea.noise * sea.windScale, waterSwellF: sea.noise * sea.swellScale ** 2,
+        waterRx: e1.map((x) => x * footprint), waterRy: e2.map((x) => x * footprint),
+        waterWarpK: 0, waterBendK: 0, waterPx: footprint, waterAlong: 0, waterCross: 0, waterWarp: 0,
+        waterBendNoise: [0, 0], waterRay: ray, uWavePhase: phases, waterGrad: [0, 0, 0],
+      })
+      const want = waveSlope(w, up, sea, footprint, 0.9 + w.k * gDot([...w.dir], ray))
+      expect(Math.hypot(...want)).toBeGreaterThan(1e-3)
+      for (let k = 0; k < 3; k++) expect((out.waterGrad as number[])[k]).toBeCloseTo(want[k], 5)
+    }
+    // The bent normal: the ground's up less the slope, seen from view space.
+    const grad = [0.05, 0.02, -0.04]
+    const line = glsl.normal.split('\n').find((l) => l.trim().startsWith('normal = normalize(normal -'))!
+    const out = runGlsl(line, { normal: apply(toView, up), specularStrength: 1, waterGrad: grad, waterViewToGround: mat3(toGround) })
+    const bent = apply(toGround, out.normal as number[])
+    const expected = norm(up.map((x, i) => x - grad[i]) as V)
+    for (let k = 0; k < 3; k++) expect(bent[k]).toBeCloseTo(expected[k], 9)
+  })
+
   it('keeps its phases fixed to the Earth: the eye\'s phase plus k.ray is the phase at eye + ray', () => {
     const eye: V = [1.2, 2.1, -1.6] // ~2.9 units out, the ground's radius
     const ray: V = [3e-4, -1e-4, 2e-4]
@@ -489,6 +640,40 @@ describe('the waves (tides-07z)', () => {
     for (const w of WATER_WAVE_TABLE) expect(angleGap(at[w.index] + w.omega * 2, here[w.index])).toBeLessThan(1e-5)
   })
 
+  it('takes the globe\'s ray in float from the eye split in double, so a ground point holds still under a moving eye (tides-rlj)', () => {
+    // The GPU's arithmetic: every operation rounded to float32.
+    const r = Math.fround
+    const point: V = [r(1.2), r(2.1), r(-1.6)] // a vertex, fixed to the Earth
+    const ray = (eye: V, split: boolean) =>
+      point.map((p, i) => {
+        if (!split) return r(p - r(eye[i])) // as from a float eye (modelViewMatrix's translation)
+        const [hi, lo] = splitDouble(eye[i])
+        return r(r(p - r(hi)) - r(lo))
+      })
+    const metres = EARTH_KM_PER_UNIT * 1000
+    let worst = 0
+    let naive = 0
+    // The eye drifting a centimetre at a time, ~2 km over that point.
+    for (let step = 0; step < 200; step++) {
+      const eye: V = [1.2003 + step * 4.6e-9, 2.1002, -1.6001 + step * 2.3e-9]
+      for (const split of [true, false]) {
+        const at = ray(eye, split)
+        const gap = Math.hypot(...[0, 1, 2].map((i) => eye[i] + at[i] - point[i])) * metres
+        if (split) worst = Math.max(worst, gap)
+        else naive = Math.max(naive, gap)
+      }
+    }
+    expect(worst).toBeLessThan(0.002)
+    expect(naive).toBeGreaterThan(0.1)
+    for (const x of [2.95, -1.6000001234, 1e-9]) {
+      const [hi, lo] = splitDouble(x)
+      expect(Math.fround(hi)).toBe(hi)
+      expect(hi + lo).toBe(x)
+    }
+    expect(WATER_GLOBE_VERTEX.body).toContain('(transformed - uWaterEyeHi) - uWaterEyeLo')
+    expect(WATER_PRELUDE.globe.body).toContain('waterRay = vWaterRay;')
+  })
+
   it('stands still under prefers-reduced-motion, and follows the frame\'s eye', () => {
     const haze = createGroundHaze({ value: new THREE.Vector3(1, 0, 0) }, 2.95, false)
     haze.frame.uGroundHazeEyeLocal.value.set(0.4, 2.9, 0.1)
@@ -504,6 +689,10 @@ describe('the waves (tides-07z)', () => {
     const expected = new Float32Array(WATER_WAVES)
     waterPhases([0.4, 2.9, 0.1], 5, expected)
     for (let i = 0; i < WATER_WAVES; i++) expect(angleGap(water.uniforms.uWavePhase.value[i], expected[i])).toBeLessThan(1e-5)
+    // The eye split for the globe's ray: the two halves add up to it.
+    const hi = water.uniforms.uWaterEyeHi.value
+    const lo = water.uniforms.uWaterEyeLo.value
+    expect([hi.x + lo.x, hi.y + lo.y, hi.z + lo.z]).toEqual([0.4, 2.9, 0.1])
     // The climate is a still texture: the same one, unchanged, however the clock runs.
     const climate = water.uniforms.uWaterSea.value
     const version = climate.version
@@ -666,13 +855,18 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     // 15 active with the climate, of 16).
     const own = f.match(/uniform\s+sampler\w+\s+\w+/g) ?? []
     expect(own.length + GLOBE_THREE_SAMPLERS, own.join(', ')).toBeLessThanOrEqual(16)
-    // No varyings of its own, nothing in the vertex stage.
+    // One varying of its own, the ray (tides-rlj), set after the vertex is
+    // displaced and projected.
     const base = phongShader()
     composePatches(eclipse.material, clouds.groundPatch, groundDetailPatch(false), groundShadowPatch(sun, earthHorizon('horizon.bin')), haze.patch)
       .onBeforeCompile(base, {} as THREE.WebGLRenderer)
-    expect(f.split('varying ').length).toBe(base.fragmentShader.split('varying ').length)
-    expect(shader.vertexShader).toBe(base.vertexShader)
-    expect(shader.vertexShader).not.toContain('water')
+    expect(f.split('varying ').length).toBe(base.fragmentShader.split('varying ').length + 1)
+    expect(shader.vertexShader.split('varying ').length).toBe(base.vertexShader.split('varying ').length + 1)
+    const v = shader.vertexShader
+    expect(v.indexOf(WATER_GLOBE_VERTEX.body)).toBeGreaterThan(v.indexOf('#include <project_vertex>'))
+    expect(v.indexOf('#include <displacementmap_vertex>')).toBeLessThan(v.indexOf('#include <project_vertex>'))
+    expect(shader.uniforms.uWaterEyeHi).toBe(water.uniforms.uWaterEyeHi)
+    expect(shader.uniforms.uWaterEyeLo).toBe(water.uniforms.uWaterEyeLo)
   })
 
   it('takes the tier\'s waves, keyed by their count', () => {
