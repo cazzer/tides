@@ -588,8 +588,9 @@ ${SKY_VIEW_GLSL}
 ${hazeGlsl}
 
 // Within reach the atmosphere draws its haze before the clouds
-// (earth-shells.ts CLOUD_REACH_RENDER_ORDER), each ray's as a whole, so a
-// cloud would hide the haze in front of it too. This is that share: the
+// (earth-shells.ts CLOUD_REACH_RENDER_ORDER), each ray's as a whole (none
+// over the ground under the shell's top: the ground lays its own,
+// groundHaze.ts), so a cloud would hide the haze in front of it too. This is that share: the
 // haze between the eye and s along d (columnAhead() from each end), from
 // inside a cloud none. Toward the top of the shell (shell), where the
 // order changes, it eases to all of it, the haze past far clouds too, as
