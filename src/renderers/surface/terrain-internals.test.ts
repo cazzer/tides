@@ -15,6 +15,7 @@ import {
   NearestFilter,
   Object3D,
   RedFormat,
+  Texture,
 } from 'three'
 import { TilesRenderer } from '3d-tiles-renderer/three'
 import { TerrariumMeshPlugin } from '3d-tiles-renderer/three/plugins'
@@ -36,6 +37,7 @@ import {
   protectOverlayBitmaps,
   shareGridBytes,
   quietTilesetVersion,
+  refreshOverlayMaps,
   FailedTileBackoff,
   RETRY_BACKOFF_MAX_MS,
   retryFailedTiles,
@@ -1483,6 +1485,25 @@ describe('protectOverlayBitmaps (tides-zmw.9.2)', () => {
     expect(realClose).not.toHaveBeenCalled()
     source.disposeItem(texture)
     expect(realClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('refreshOverlayMaps (tides-zmw.9.26)', () => {
+  it('marks for upload the cached tiles\' maps drawn from a late-matched source, and no others', () => {
+    const matched = new Texture()
+    const other = new Texture()
+    const draped = matched.clone()
+    const elsewhere = other.clone()
+    const material = (map: Texture) => {
+      const m = new MeshLambertMaterial()
+      m.map = map
+      return m
+    }
+    const scene = new Group().add(new Mesh(new BufferGeometry(), material(draped)))
+    scene.add(new Group().add(new Mesh(new BufferGeometry(), material(elsewhere))))
+    const before = [draped.version, elsewhere.version]
+    refreshOverlayMaps({ lruCache: { itemList: [{ engineData: { scene } }, {}] } } as unknown as TilesRenderer, new Set([matched.source]))
+    expect([draped.version > before[0], elsewhere.version > before[1]]).toEqual([true, false])
   })
 })
 

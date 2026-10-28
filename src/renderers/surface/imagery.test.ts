@@ -16,7 +16,19 @@ import {
   USGS_URL,
   type ImageryTile,
 } from './imagery'
-import { SurfaceImageryOverlay } from './SurfaceImageryOverlay'
+import { MATCH_DEADLINE_MS, regradeUsgs, SurfaceImageryOverlay } from './SurfaceImageryOverlay'
+import { CanvasTexture, Texture, type Source } from 'three'
+
+// regradeUsgs's field and grader (the rest of both modules as they are).
+const match = vi.hoisted(() => ({ params: vi.fn(), grade: vi.fn() }))
+vi.mock('./imagery-match', async (original) => ({
+  ...(await original<typeof import('./imagery-match')>()),
+  matchField: () => ({ params: match.params }),
+}))
+vi.mock('./imagery-grade', async (original) => ({
+  ...(await original<typeof import('./imagery-grade')>()),
+  imageryGrader: () => ({ grade: match.grade }),
+}))
 
 /** The z tile holding (lat, lon) degrees. */
 function tileAt(lat: number, lon: number, z: number): ImageryTile {
@@ -280,5 +292,190 @@ describe('which source served a US tile (tides-zmw.9.2)', () => {
     const alps = tileAt(46.5, 8, 12)
     await overlay.fetch(imageryUrl(EOX_URL, alps), {})
     expect(overlay.servedByEox(alps)).toBe(false)
+  })
+})
+
+describe('a late match regrades the tile (tides-zmw.9.26)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+  const canyon = { z: 16, y: 25721, x: 12355 }
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+  /** A stand-in for a decoded bitmap (node has none). */
+  const bitmap = (size = 256) => ({ width: size, height: size }) as unknown as ImageBitmap
+
+  interface Internals {
+    imageSource: {
+      tiling: { getTileBounds(x: number, y: number, z: number, normalized: boolean, clamp: boolean): number[] }
+      setData(x: number, y: number, z: number, texture: unknown): void
+      release(x: number, y: number, z: number): void
+      processBufferToTexture(buffer: ArrayBuffer): Promise<Texture>
+    }
+    regionImageSource: {
+      fetchItem(args: number[]): unknown
+      lock(...args: number[]): unknown
+      tileComposer: { setTarget: ReturnType<typeof vi.fn>; draw: ReturnType<typeof vi.fn> }
+    }
+  }
+
+  /** An overlay holding the canyon tile's texture, whose next USGS fetch
+   * misses the deadline: `late` hands it the matched image. */
+  async function lateOverlay(signal?: AbortSignal) {
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockImplementation(async () => response(200))
+    const overlay = new SurfaceImageryOverlay()
+    await (overlay as unknown as { init(): Promise<void> }).init()
+    const internals = overlay as unknown as Internals
+    const texture = new Texture(bitmap())
+    internals.imageSource.setData(canyon.x, canyon.y, canyon.z, texture)
+    const decoded = new Texture(bitmap())
+    const decode = vi.fn(async () => decoded)
+    internals.imageSource.processBufferToTexture = decode
+    internals.regionImageSource.tileComposer = { setTarget: vi.fn(), draw: vi.fn() }
+    let late: ((image: ArrayBuffer) => void) | undefined
+    overlay.regrade = vi.fn(async (_b, _t, _s, l) => ((late = l), null))
+    const reported: Source[][] = []
+    overlay.onLateMatch = (sources) => reported.push([...sources])
+    await overlay.fetch(imageryUrl(EOX_URL, canyon), { signal })
+    return { overlay, internals, texture, decoded, decode, late: late!, reported }
+  }
+
+  it('swaps the matched image into the cached texture and reports its source', async () => {
+    const { overlay, texture, decoded, late, reported } = await lateOverlay()
+    const version = texture.version
+    late(new ArrayBuffer(4))
+    await settle()
+    expect(texture.image).toBe(decoded.image)
+    expect(texture.version).toBeGreaterThan(version)
+    expect(reported).toEqual([[texture.source]])
+    expect(overlay.lateMatches).toBe(1)
+  })
+
+  it('leaves the tile be once its fetch aborts, before or after the decode', async () => {
+    const realClose = vi.fn()
+    class FakeImageBitmap {
+      width = 256
+      height = 256
+      close() {
+        realClose()
+      }
+    }
+    vi.stubGlobal('ImageBitmap', FakeImageBitmap)
+    const before = new AbortController()
+    const a = await lateOverlay(before.signal)
+    before.abort()
+    a.late(new ArrayBuffer(4))
+    await settle()
+    expect(a.decode).not.toHaveBeenCalled()
+    expect(a.texture.image).not.toBe(a.decoded.image)
+
+    const between = new AbortController()
+    const b = await lateOverlay(between.signal)
+    b.decoded.image = new FakeImageBitmap()
+    b.decode.mockImplementation(async () => (between.abort(), b.decoded))
+    b.late(new ArrayBuffer(4))
+    await settle()
+    expect(b.texture.image).not.toBe(b.decoded.image)
+    expect(realClose).toHaveBeenCalledTimes(1) // the decoded bitmap, for real
+    expect(b.overlay.lateMatches + a.overlay.lateMatches).toBe(0)
+    expect([...a.reported, ...b.reported]).toEqual([])
+  })
+
+  it('leaves the tile be when its entry is gone or replaced, or the image is another size', async () => {
+    vi.stubGlobal('ImageBitmap', class {}) // the library's dispose of a released tile asks
+    const gone = await lateOverlay()
+    gone.internals.imageSource.release(canyon.x, canyon.y, canyon.z)
+    gone.late(new ArrayBuffer(4))
+    await settle()
+    expect(gone.overlay.lateMatches).toBe(0)
+
+    const replaced = await lateOverlay()
+    replaced.decode.mockImplementation(async () => {
+      replaced.internals.imageSource.release(canyon.x, canyon.y, canyon.z)
+      replaced.internals.imageSource.setData(canyon.x, canyon.y, canyon.z, new Texture(bitmap()))
+      return replaced.decoded
+    })
+    replaced.late(new ArrayBuffer(4))
+    await settle()
+    expect(replaced.texture.image).not.toBe(replaced.decoded.image)
+    expect(replaced.overlay.lateMatches).toBe(0)
+
+    const resized = await lateOverlay()
+    resized.decoded.image = bitmap(1)
+    resized.late(new ArrayBuffer(4))
+    await settle()
+    expect(resized.texture.image).not.toBe(resized.decoded.image)
+    expect(resized.overlay.lateMatches).toBe(0)
+    expect([...gone.reported, ...replaced.reported, ...resized.reported]).toEqual([])
+  })
+
+  it('redraws the tile into the regions composed from it, now or once composed', async () => {
+    const { internals, texture, late, reported } = await lateOverlay()
+    const { tiling } = internals.imageSource
+    const regions = internals.regionImageSource
+    const quarter = ([x0, y0, x1, y1]: number[]) => [x0, y0, (x0 + x1) / 2, (y0 + y1) / 2]
+    const bounds = tiling.getTileBounds(canyon.x, canyon.y, canyon.z, true, false)
+    // A z17 terrain tile's range (the imagery's deepest level is 16), and a
+    // neighbour's.
+    const child = [...quarter(bounds), canyon.z + 1]
+    const other = [...quarter(tiling.getTileBounds(canyon.x + 1, canyon.y, canyon.z, true, false)), canyon.z + 1]
+    const composed = new CanvasTexture(bitmap())
+    const unrelated = new CanvasTexture(bitmap())
+    // A z18 range still composing.
+    const pendingRange = [...quarter(quarter(bounds)), canyon.z + 2]
+    const pending = new CanvasTexture(bitmap())
+    let compose!: (t: CanvasTexture) => void
+    regions.fetchItem = vi.fn((args: number[]) => {
+      if (args[4] === canyon.z + 2) return new Promise<CanvasTexture>((r) => (compose = r))
+      return args[0] === child[0] ? composed : unrelated
+    })
+    regions.lock(...child)
+    regions.lock(...other)
+    regions.lock(...pendingRange)
+    const versions = [composed.version, unrelated.version]
+    late(new ArrayBuffer(4))
+    await settle()
+    expect(regions.tileComposer.draw).toHaveBeenCalledTimes(1)
+    expect(regions.tileComposer.setTarget).toHaveBeenLastCalledWith(composed, child.slice(0, 4))
+    expect(regions.tileComposer.draw).toHaveBeenLastCalledWith(texture, bounds)
+    expect([composed.version > versions[0], unrelated.version > versions[1]]).toEqual([true, false])
+    expect(reported).toEqual([[texture.source, composed.source]])
+
+    compose(pending)
+    await settle()
+    expect(regions.tileComposer.draw).toHaveBeenCalledTimes(2)
+    expect(regions.tileComposer.setTarget).toHaveBeenLastCalledWith(pending, pendingRange.slice(0, 4))
+    expect(reported).toEqual([[texture.source, composed.source], [pending.source]])
+  })
+
+  it('regradeUsgs hands a match that missed the deadline to late, unless the tile aborts', async () => {
+    vi.useFakeTimers()
+    const graded = new Uint8Array([1, 2, 3])
+    match.grade.mockImplementation(async () => graded)
+    const params = { gain: 1 }
+    let give!: (p: unknown) => void
+    match.params.mockImplementation(() => new Promise((r) => (give = r)))
+    const body = new ArrayBuffer(8)
+    const late = vi.fn()
+    const signal = new AbortController().signal
+    const answer = regradeUsgs(body, canyon, signal, late)
+    await vi.advanceTimersByTimeAsync(MATCH_DEADLINE_MS)
+    await expect(answer).resolves.toBeNull()
+    expect(late).not.toHaveBeenCalled()
+    give(params)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(match.grade).toHaveBeenLastCalledWith(body, 'match', 'bmp', signal, params)
+    expect(late).toHaveBeenCalledWith(graded.buffer)
+
+    const aborts = new AbortController()
+    const never = vi.fn()
+    const missed = regradeUsgs(body, canyon, aborts.signal, never)
+    await vi.advanceTimersByTimeAsync(MATCH_DEADLINE_MS)
+    await expect(missed).resolves.toBeNull()
+    aborts.abort()
+    give(params)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(never).not.toHaveBeenCalled()
   })
 })
