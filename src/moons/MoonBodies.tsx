@@ -144,7 +144,12 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // when each moon first comes into view, so maps that arrive or come into
   // view together never stack their uploads into one long frame
   // (tides-2hv.18). Every moon's map is resident once loaded: 154 MB on
-  // desktop, 53 MB at 1k on phones.
+  // desktop, 53 MB at 1k on phones. The queue holds `looks`' materials, which
+  // a change of distanceScale would replace, but no mounted MoonBodies sees
+  // one (tides-sq9): every Scene in App.tsx passes a fixed scale ('flight'
+  // for ship mode's own Scene, the 'system' default for the rest), and ship
+  // mode unmounts the main panel's. Were it to happen, the new materials
+  // still take every map (loadedMaps, and this effect re-queues the rest).
   const arrived = useRef<{ material: THREE.ShaderMaterial; map: THREE.Texture }[]>([])
   const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
   useEffect(() => {
