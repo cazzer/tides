@@ -88,9 +88,16 @@ export const SKY_DAY = [-0.1, 0.05] as const
 /** The elevation (deg) the sky's light on the body is read at, 90 deg round
  * from the Sun: there hazeSky()'s radiance is its cosine-weighted mean over
  * the dome (the skylight's irradiance over pi) within a few percent from
- * twilight to noon (groundHaze.test.ts checks it), so one read stands in for
- * the dome. */
+ * twilight to noon (groundHaze.test.ts checks it, for the analytic sky
+ * only: the high tier's table is taken to share its shape), so one read
+ * stands in for the dome. */
 export const WATER_SKY_LIGHT_ELEVATION = 25
+/** The skylit body's gain. The day map's deep ocean and WATER_DEEP are
+ * calibrated for the Sun's Lambert light on the map, and under the sky alone
+ * they undershoot the sea's upwelling light: at 1 the near sea under a low
+ * Sun stayed navy-black, at 3 it reads blue, by 6 it goes matte. The glint
+ * and the Sun's direct light on the body are as they were. */
+export const WATER_BODY_SKY = 3
 
 const G = 9.81
 const TAU = 2 * Math.PI
@@ -280,6 +287,10 @@ vec3 waterUpGround;
 vec3 waterUpView;
 mat3 waterViewToGround;
 float waterMss;
+// The skylit body as the sky piece adds it to indirectDiffuse, for the
+// eclipse (eclipseShadow.ts) to dim with the Sun.
+#define WATER_SKY_BODY
+vec3 waterSkyBody = vec3(0.0);
 // Smith's shadowing for a facet slope variance a2.
 float waterG1(float x, float a2) {
   return 2.0 * x / (x + sqrt(a2 + (1.0 - a2) * x * x));
@@ -365,8 +376,9 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
 // The sky is scene radiance, not over the Sun's colour: no light colour on
 // it. The reflection in directSpecular, so the terrain, the clouds and the
 // eclipse dim it with the Sun; the body in indirectDiffuse, as skylight:
-// only the terrain's view of the sky (groundHorizonSky) dims it, not the
-// Sun's shadow.
+// the terrain's view of the sky (groundHorizonSky) and the eclipse
+// (waterSkyBody) dim it, not the Sun's shadow. The ground's own sky fill
+// (groundDetail.ts) leaves the water to this.
 const SKY_LIGHT_EL = (WATER_SKY_LIGHT_ELEVATION * Math.PI) / 180
 const SKY = /* glsl */ `
 #if NUM_DIR_LIGHTS > 0
@@ -389,8 +401,7 @@ if (material.specularStrength > 0.0) {
     // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION),
     // into the body through Lambert, less what the surface reflects on the
     // way out. A depth term (the shallows' floor) multiplies waterBodyLight.
-    vec3 waterSunGround = waterViewToGround * directionalLights[0].direction;
-    vec3 waterSide = cross(waterUpGround, waterSunGround);
+    vec3 waterSide = cross(waterUpGround, uGroundHazeSun);
     float waterSide2 = dot(waterSide, waterSide);
     waterSide = waterSide2 > 1e-10 ? waterSide * inversesqrt(waterSide2)
       : normalize(cross(waterUpGround, abs(waterUpGround.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
@@ -398,7 +409,8 @@ if (material.specularStrength > 0.0) {
       waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))});
     vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(material.diffuseColor);
     reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;
-    reflectedLight.indirectDiffuse += material.specularStrength * waterDay * waterBodyLight;
+    waterSkyBody = ${f(WATER_BODY_SKY)} * material.specularStrength * waterDay * waterBodyLight;
+    reflectedLight.indirectDiffuse += waterSkyBody;
   }
 }
 #endif

@@ -57,7 +57,7 @@ describe('ground detail patch', () => {
     expect(frag.split('vec4 detailNoise(vec3 p)')).toHaveLength(2)
     // The skylight's up is the normal before any tilt; it is lit with the
     // sunlight, which the cloud shadow and eclipse then dim.
-    const sky = at('reflectedLight.directDiffuse = (1.0 - GROUND_SKY_FILL)')
+    const sky = at('reflectedLight.directDiffuse = (1.0 - groundSkyFill)')
     expect(at('vec3 groundUp = normal;')).toBeLessThan(at('groundLand > 0.0'))
     expect(at('#include <lights_fragment_end>')).toBeLessThan(sky)
     expect(sky).toBeLessThan(at('reflectedLight.directDiffuse *= cloudLit;'))

@@ -16,6 +16,7 @@ import {
   BLINN_PHONG_DIRECT,
   createWater,
   SKY_DAY,
+  WATER_BODY_SKY,
   WATER_DEEP,
   WATER_DEEP_LUMA,
   WATER_GLSL,
@@ -277,7 +278,16 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(glsl.sky).not.toContain('skyRadiance')
     expect(glsl.sky).not.toContain('directionalLights[0].color')
     expect(glsl.sky).toContain('reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;')
-    expect(glsl.sky).toContain('reflectedLight.indirectDiffuse += material.specularStrength * waterDay * waterBodyLight;')
+    expect(glsl.sky).toContain(`waterSkyBody = ${WATER_BODY_SKY.toFixed(6)} * material.specularStrength * waterDay * waterBodyLight;`)
+    expect(glsl.sky).toContain('reflectedLight.indirectDiffuse += waterSkyBody;')
+    // One Sun for the sky and the side it's read from.
+    expect(glsl.sky).toContain('cross(waterUpGround, uGroundHazeSun)')
+    // The eclipse dims the skylit body, after the terrain's view of the sky.
+    expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse -= (1.0 - eclipse.x) * waterSkyBody;'))
+    expect(at('reflectedLight.indirectDiffuse *= groundHorizonSky;')).toBeLessThan(at('waterSkyBody *= groundHorizonSky;'))
+    expect(at('#define WATER_SKY_BODY')).toBeLessThan(at('void main'))
+    // The ground's sky fill leaves the water to its own skylight.
+    expect(at('float groundSkyFill = GROUND_SKY_FILL * (1.0 - specularStrength);')).toBeGreaterThan(at('void main'))
     expect(glsl.sky).toContain(`smoothstep(${SKY_DAY[0].toFixed(6)}, ${SKY_DAY[1].toFixed(6)}, dot(waterUpView, directionalLights[0].direction))`)
     // The body after the strength, before the lights take the colour, by
     // day only (the Sun over this sea's level).

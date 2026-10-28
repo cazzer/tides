@@ -82,6 +82,12 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(at('#include <lights_fragment_end>')).toBeLessThan(sky)
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= surfaceSunLit;'))
     expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse *= groundHorizonSky;'))
+    // The eclipse dims the skylit body after the terrain's view of the sky,
+    // and the ground's sky fill leaves the water out.
+    expect(at('#define WATER_SKY_BODY')).toBeLessThan(at('void main'))
+    expect(at('reflectedLight.indirectDiffuse *= groundHorizonSky;')).toBeLessThan(at('waterSkyBody *= groundHorizonSky;'))
+    expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse -= (1.0 - eclipse.x) * waterSkyBody;'))
+    expect(at('float groundSkyFill = GROUND_SKY_FILL * (1.0 - specularStrength);')).toBeGreaterThan(at('void main'))
   })
 
   it('binds the globe\'s wave phases, and no longer the Sun', () => {
