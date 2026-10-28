@@ -523,7 +523,11 @@ ${ECLIPSE_GLSL.point}
 #define CLOUD_VEILED (veilClear < 1.0)
 #define CLOUD_VEIL { if (sVeil < 0.0) { sVeil = sHit; colVeil = colIn; upVeil = upThrough; } veilClear *= sideClear; side = false; sHit = -1.0; }
 // A ray that meets no cloud past its fog draws the fog alone.
+#ifdef FOG_EASE
+#define CLOUD_MISS { if (fogged) { vec4 hazeFog = cloudFogHaze(eye, d, fogDist, fogClear, fogEase, shell); cloudOut(vec4(fogLight, 1.0 - fogClear), FRAG_DEPTH_NEAREST, hazeFog.rgb, (1.0 - fogEase) * (1.0 - fogClear), hazeFog.a); return; } discard; }
+#else
 #define CLOUD_MISS { if (fogged) { cloudOut(vec4(fogLight, 1.0 - fogClear), FRAG_DEPTH_NEAREST, vec3(0.0), 0.0, 0.0); return; } discard; }
+#endif
 #ifdef FOG_EASE
 // With reduced motion, how far the fog has eased in (FOG_EASE_GLSL): the
 // same at every vertex, so the same here but for rounding.
@@ -609,6 +613,14 @@ vec4 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
   front = mix(front, 1.0, smoothstep(shell - 2.0 * uScaleHeight, shell, length(eye)));
   return vec4(hazeGlow(column, grazing, at, uSunDir, d, eye), hazeCover(column, d, eye, uSunDir)) * front;
 }
+#ifdef FOG_EASE
+// With reduced motion, the haze over the fog while it eases in: the side
+// it eases from was seen through the haze in front of it, to where its
+// light came from (dist, summed by the light's share, cleared of clear).
+vec4 cloudFogHaze(vec3 eye, vec3 d, float dist, float clear, float ease, float shell) {
+  return ease < 1.0 ? cloudHazeFront(eye, d, dist / max(1.0 - clear, 1e-6), shell) : vec4(0.0);
+}
+#endif
 
 // The fragment, premultiplied, at depth z (the program writes gl_FragDepth
 // on every path), with share of the haze added over it as the atmosphere's
@@ -984,6 +996,7 @@ void main() {
   vec3 fogLight = vec3(0.0);
 #ifdef FOG_EASE
   float fogEase = 1.0;
+  float fogDist = 0.0;
 #endif
 #endif
 
@@ -1285,6 +1298,9 @@ void main() {
 #endif
         groundPrev = alt - cloudGround(uvq);
         fogClear = exp(-sigmaPrev * (s - sOrigin));
+#ifdef FOG_EASE
+        fogDist = (1.0 - fogClear) * 0.5 * (sOrigin + s);
+#endif
         fogShade = (1.0 - fogClear)
           * vec2(clamp(-gap / max(colq.z - colq.y, 1e-6), 0.0, 1.0), colq.x);
       }
@@ -1306,6 +1322,9 @@ void main() {
           float clear = exp(-0.5 * (sigmaPrev + sigma) * clip * stepLen / float(FOG_SUBSTEPS));
           fogShade += fogClear * (1.0 - clear)
             * vec2(clamp((colk.z - altk) / max(colk.z - colk.y, 1e-6), 0.0, 1.0), colk.x);
+#ifdef FOG_EASE
+          fogDist += fogClear * (1.0 - clear) * (sPrev + (w - 0.5 * clip / float(FOG_SUBSTEPS)) * stepLen);
+#endif
           fogClear *= clear;
           sigmaPrev = sigma;
         }
@@ -1414,6 +1433,13 @@ void main() {
     // above, as far down its column and as thick as the fog it crossed.
     vec3 upEye = normalize(eye);
     vec2 shade = fogShade / max(1.0 - fogClear, 1e-6);
+#ifdef FOG_EASE
+    // As it eases in, as opaque as the side it eases from showed, as clouds
+    // do (uOpacity).
+    float fogShow = mix(uOpacity, 1.0, fogEase);
+    fogClear = 1.0 - (1.0 - fogClear) * fogShow;
+    fogDist *= fogShow;
+#endif
 #ifdef CLOUD_TYPED
     // Heights over the sea from the ground's base, not the cloud's.
     fogLight = cloudRadiance(upEye, upEye, d, shade.y, shade.x,
@@ -1795,9 +1821,20 @@ void main() {
   float fogA = 1.0 - fogClear;
   float a = fogA + fogClear * opacity;
   vec4 hazeFront = cloudHazeFront(eye, d, length(pShade - eye), shell);
+#ifdef FOG_EASE
+  // And over the fog while it eases in (cloudFogHaze()).
+  vec4 hazeFog = cloudFogHaze(eye, d, fogDist, fogClear, fogEase, shell);
+  float shareFog = (1.0 - fogEase) * fogA;
+  float share = fogClear * opacity + shareFog;
+  cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
+    fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
+    (hazeFront.rgb * fogClear * opacity + hazeFog.rgb * shareFog) / max(share, 1e-6), share,
+    (hazeFront.a * fogClear * opacity + hazeFog.a * shareFog) / max(share, 1e-6));
+#else
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
     hazeFront.rgb, fogClear * opacity, hazeFront.a);
+#endif
 #else
   gl_FragColor = vec4(radiance, opacity);
   #include <tonemapping_fragment>
