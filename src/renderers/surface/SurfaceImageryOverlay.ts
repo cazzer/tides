@@ -248,9 +248,9 @@ export class SurfaceImageryOverlay extends XYZTilesOverlay {
  * forEachTileInBounds visits (3d-tiles-renderer's
  * src/three/plugins/images/overlays/utils.js, not exported from the
  * package): the range pulled in by 1e-4 of its span, the level clamped to the
- * tiling's.
+ * tiling's. Exported for the test that holds it to the library's.
  */
-function composedFrom(tiling: Tiling, args: readonly number[], tile: ImageryTile): boolean {
+export function composedFrom(tiling: Tiling, args: readonly number[], tile: ImageryTile): boolean {
   let [minX, minY, maxX, maxY] = args
   const level = args[4]
   const epsX = (maxX - minX) * 1e-4
