@@ -15,6 +15,7 @@ const CC_BY_URL = 'https://creativecommons.org/licenses/by/4.0/'
 const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/skycultures/modern'
 const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
 export const MAPTERHORN_URL = 'https://mapterhorn.com/'
+export const ETOPO_URL = 'https://www.ncei.noaa.gov/products/etopo-global-relief-model'
 // Zoom 4 mixes Copernicus GLO-30 with national CC BY DEMs, each listed there.
 export const MAPTERHORN_ATTRIBUTION_URL = 'https://mapterhorn.com/attribution/'
 // Wording required by the Copernicus DEM licence.
@@ -60,6 +61,9 @@ export function Credits({ children }: { children?: ReactNode }) {
         >
           {COPERNICUS_DEM_NOTICE}
         </span>
+      </li>
+      <li>
+        Ocean depth: <Link href={ETOPO_URL}>NOAA NCEI ETOPO 2022</Link> (public domain)
       </li>
       <li>
         Ground imagery in the US: <Link href={USGS_URL}>{USGS_CREDIT}</Link> (public domain)

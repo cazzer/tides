@@ -39,7 +39,8 @@
 // emissivemap_fragment (after the library's bump), the water's direct light
 // for Phong's and its sky after lights_fragment_end, each skipped where the
 // strength is 0 (the land, as it was). The water's prelude takes the
-// base's ray, up and frame; its phases are the globe's (link.water). No
+// base's ray, up and frame; its phases are the globe's (link.water), its
+// depth the globe's map (link.maps.depth) at surfaceGlobeUv. No
 // longer gated on the Sun: the sky's reflection lights the sea through
 // twilight, and the glint goes out under the level horizon by itself.
 import type * as THREE from 'three'
@@ -146,7 +147,7 @@ export const TILE_GLINT_GLSL = {
 }
 
 export const tileGlint: TileAdapter = (link) => {
-  const uniforms = { uTileSpecularMap: link.maps.specular, ...link.water.uniforms }
+  const uniforms = { uTileSpecularMap: link.maps.specular, uWaterDepth: link.maps.depth, ...link.water.uniforms }
   return {
     patch: {
       onBeforeCompile(shader) {

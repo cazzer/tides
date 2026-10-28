@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import { COPERNICUS_DEM_NOTICE, Credits, GIBS_ACKNOWLEDGEMENT } from './Credits'
+import { COPERNICUS_DEM_NOTICE, Credits, ETOPO_URL, GIBS_ACKNOWLEDGEMENT } from './Credits'
 import { OPEN_METEO_SITE } from './forecast-clouds'
 
 // The credits the views used to draw over the scene, now in settings (tides-1qv).
@@ -13,6 +13,11 @@ describe('Credits', () => {
     expect(html).toContain(GIBS_ACKNOWLEDGEMENT.replace(/'/g, '&#x27;'))
     expect(html).toContain('Blue Marble Next Generation')
     expect(html).toContain('VIIRS City Lights 2012')
+  })
+
+  test('credits NOAA NCEI\'s ETOPO 2022 for the ocean\'s depth', () => {
+    expect(hrefs).toContain(ETOPO_URL)
+    expect(html).toContain('ETOPO 2022')
   })
 
   test('credits Open-Meteo, Solar System Scope and Stellarium with their licences', () => {

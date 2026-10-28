@@ -49,6 +49,8 @@ import earthNightTextureHigh from '../assets/earth-night.jpg'
 import earthNightTextureLow from '../assets/earth-night-2k.jpg'
 import earthDemHigh from '../assets/earth-dem-4k.bin?url'
 import earthDemLow from '../assets/earth-dem-2k.bin?url'
+import earthBathyHigh from '../assets/earth-bathy-4k.png'
+import earthBathyLow from '../assets/earth-bathy-2k.png'
 import earthHorizonCurvedUrl from '../assets/earth-horizon-1k.bin?url'
 import earthHorizonTrueUrl from '../assets/earth-horizon-1k-true.bin?url'
 import { HORIZON_TRUE_CURVE_RELIEF, horizonCurveRelief } from '../earth-horizon'
@@ -72,6 +74,7 @@ export default function EarthRenderer({
   useTexture.preload(textureSet.specular)
   useTexture.preload(textureSet.clouds)
   useTexture.preload(textureSet.night)
+  useTexture.preload(textureSet.bathy)
   useLoader.preload(EarthDemLoader, textureSet.dem)
 
   const cloudRef = useRef<THREE.Mesh>(null)
@@ -83,13 +86,21 @@ export default function EarthRenderer({
   const specularMap = useLoader(THREE.TextureLoader, textureSet.specular)
   const cloudsTexture = useLoader(THREE.TextureLoader, textureSet.clouds)
   const nightTexture = useLoader(THREE.TextureLoader, textureSet.night)
+  // The sea's depth under the water's body (waterDepth.ts, tides-d9f.6).
+  const depthMap = useLoader(THREE.TextureLoader, textureSet.bathy)
   const { relief: demTexture, ground: groundTexture } = useLoader(EarthDemLoader, textureSet.dem)
   const gl = useThree((s) => s.gl)
   prepareMaps(
     gl.capabilities.getMaxAnisotropy(),
     [earthTexture, nightTexture, cloudsTexture],
-    [specularMap, demTexture]
+    [specularMap, demTexture, depthMap]
   )
+  // Its columns run on round the date line, as the globe's uv does.
+  depthMap.wrapS = THREE.RepeatWrapping
+  // A uniform whose value follows the texture, so a new one keeps the
+  // patch (and the tiles' link) as they are.
+  const waterDepth = useMemo(() => ({ value: NO_TEXTURE }), [])
+  waterDepth.value = depthMap
   const real = useStore((s) => s.weatherSource) === 'real'
   useRealCloudsActive(real)
   // A lost context comes back with blank render targets, and nothing redraws
@@ -132,8 +143,11 @@ export default function EarthRenderer({
   // The maps as uniforms whose values follow the textures (set below), so a
   // new texture keeps the link.
   const surfaceMaps = useMemo<GlobeLink['maps'] | null>(
-    () => (SURFACE_TILES_ON ? { day: { value: NO_TEXTURE }, specular: { value: NO_TEXTURE }, night: { value: NO_TEXTURE } } : null),
-    []
+    () =>
+      SURFACE_TILES_ON
+        ? { day: { value: NO_TEXTURE }, specular: { value: NO_TEXTURE }, night: { value: NO_TEXTURE }, depth: waterDepth }
+        : null,
+    [waterDepth]
   )
   if (surfaceMaps) {
     surfaceMaps.day.value = earthTexture
@@ -210,12 +224,12 @@ export default function EarthRenderer({
         groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
         // After the shadows in the list, so its sky lands before they dim
         // directSpecular.
-        waterPatch(water, groundHaze.frame, textureSet.low),
+        waterPatch(water, groundHaze.frame, textureSet.low, waterDepth),
         gibsPatch,
         gibsNightPatch,
         groundHaze.patch
       ),
-    [eclipseShadow, clouds, textureSet.low, gibsPatch, gibsNightPatch, nightFlight, groundHaze, water]
+    [eclipseShadow, clouds, textureSet.low, gibsPatch, gibsNightPatch, nightFlight, groundHaze, water, waterDepth]
   )
   // The mesh's displacement, at its vertex spacing (tides-zmw.2).
   const displacement = useMemo(() => createGroundDisplacement(EARTH_BASE_SEGMENTS), [])
@@ -376,8 +390,9 @@ function sunInEarthFrame(earth: THREE.Object3D | null | undefined, target: THREE
 /**
  * Sets what three reads at a map's first upload (tides-01v.1): the full
  * anisotropy, which grazing views of the ground need, and one channel for
- * the grey data maps (the specular mask and the elevation map), a quarter of the
- * VRAM. The material and the cloud shader read their red channel.
+ * the grey data maps (the specular mask, the elevation map and the sea's
+ * depth), a quarter of the VRAM. The material, the cloud shader and the
+ * water read their red channel.
  */
 function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Texture[]) {
   for (const map of colour) map.anisotropy = anisotropy
@@ -434,6 +449,7 @@ function getEarthTextureSet(baseTexture: string) {
       clouds: earthCloudsTextureHigh,
       night: earthNightTextureHigh,
       dem: earthDemHigh,
+      bathy: earthBathyHigh,
       low: false,
     }
   }
@@ -444,6 +460,7 @@ function getEarthTextureSet(baseTexture: string) {
     clouds: earthCloudsTextureLow,
     night: earthNightTextureLow,
     dem: earthDemLow,
+    bathy: earthBathyLow,
     low: true,
   }
 }

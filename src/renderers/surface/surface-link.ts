@@ -50,10 +50,15 @@ export interface GlobeLink {
   gibs: GlobeStream
   gibsNight: GlobeStream
   /** The globe's maps as uniforms (day colour, specular (water) mask, city
-   * lights): bind them to the GLSL, never to a material slot, which
+   * lights, the sea's depth, ../waterDepth.ts): bind them to the GLSL, never to a material slot, which
    * TilesRenderer disposes with each tile (tile-material.ts). EarthRenderer
    * keeps their values current, so the link stays the same object. */
-  maps: { day: THREE.IUniform<THREE.Texture>; specular: THREE.IUniform<THREE.Texture>; night: THREE.IUniform<THREE.Texture> }
+  maps: {
+    day: THREE.IUniform<THREE.Texture>
+    specular: THREE.IUniform<THREE.Texture>
+    night: THREE.IUniform<THREE.Texture>
+    depth: THREE.IUniform<THREE.Texture>
+  }
   /** The globe's horizon map for its terrain shadows (groundShadow.ts). */
   horizon: EarthHorizonUniforms
   /** The ground sphere's radius, scene units. */

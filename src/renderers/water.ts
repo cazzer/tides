@@ -21,7 +21,9 @@
 //   could see a Sun the sea can't) it goes out;
 // - the body (in normal): the day map's ocean is near black (its deep water a
 //   few thousandths), darker than water's own colour; anything darker than
-//   WATER_DEEP is lifted to it, the lighter shelves, lagoons and silt left
+//   the floor for the sea's depth there (./waterDepth.ts waterFloor: the
+//   shallows' turquoise to the trenches' navy, WATER_DEEP over most of the
+//   open ocean) is lifted to it, the lighter shelves, lagoons and silt left
 //   as the map has them; by day only (SKY_DAY), so the night fill and the
 //   Moon's light find the night sea as dark as they did;
 // - the waves (normal): WATER_WAVES fixed sinusoids in the Earth's frame
@@ -52,6 +54,7 @@ import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
 import { SKY_DAY, SKY_RADIANCE_GLSL } from './skyRadiance'
+import { WATER_DEEP, WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterFloor } from './waterDepth'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
 export const WATER_WAVES = 12
@@ -70,9 +73,8 @@ export const WATER_MSS = 0.034
 export const WATER_MSS_BASE = 0.012
 /** Water's reflectance looking straight down. */
 export const WATER_F0 = 0.02
-/** Deep water's body colour (linear): the map's ocean darker than it is
- * lifted to it. */
-export const WATER_DEEP: readonly [number, number, number] = [0.008, 0.022, 0.045]
+/** Deep water's body colour (linear), the open ocean's floor. */
+export { WATER_DEEP }
 
 const G = 9.81
 const TAU = 2 * Math.PI
@@ -196,11 +198,12 @@ export function waterPhases(eye: Vec3, time: number, out: Float32Array | number[
   }
 }
 
-/** The body's colour for a map colour `c` (linear), at `strength` water,
- * as the GLSL mixes it. */
-export function waterBody(c: Vec3, strength: number): [number, number, number] {
-  const lift = Math.min(Math.max(1 - luma(c) / WATER_DEEP_LUMA, 0), 1)
-  return [0, 1, 2].map((i) => c[i] + strength * WATER_DEEP[i] * lift) as [number, number, number]
+/** The body's colour for a map colour `c` (linear), at `strength` water
+ * over `depth` m of it, as the GLSL mixes it. */
+export function waterBody(c: Vec3, strength: number, depth = WATER_DEPTH_NEUTRAL): [number, number, number] {
+  const floor = waterFloor(depth)
+  const lift = Math.min(Math.max(1 - luma(c) / luma(floor), 0), 1)
+  return [0, 1, 2].map((i) => c[i] + strength * floor[i] * lift) as [number, number, number]
 }
 
 /** The glint's reflected radiance over the light's colour, for unit vectors
@@ -282,9 +285,13 @@ float waterGlint(vec3 l, vec3 v, vec3 n) {
   float fresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * vh2 * vh2 * vh;
   return smoothstep(-0.02, 0.02, dot(waterUpView, l)) * fresnel * d * waterG1(nl, a2) * waterG1(nv, a2) / (4.0 * max(nv, 1e-3));
 }
-// The map's ocean darker than deep water lifted to it (waterBody() mirrors it).
+${WATER_DEPTH_GLSL}
+// The map's ocean darker than the floor at this depth lifted to it
+// (waterBody() mirrors it).
 vec3 waterBody(vec3 c) {
-  return c + ${v3(WATER_DEEP)} * saturate(1.0 - dot(c, vec3(${LUMA.map(f).join(', ')})) / ${f(WATER_DEEP_LUMA)});
+  vec3 f = waterFloor(waterDepth);
+  vec3 luma = vec3(${LUMA.map(f).join(', ')});
+  return c + f * saturate(1.0 - dot(c, luma) / dot(f, luma));
 }
 `
 
@@ -378,7 +385,7 @@ waterViewToGround = uWaterViewToGround;
 waterRay = uWaterViewToGround * -vViewPosition;
 waterUpGround = normalize(uWaterEyeGround + waterRay);
 waterUpView = waterUpGround * uWaterViewToGround;
-`,
+${WATER_DEPTH_SAMPLE.globe}`,
   },
   tiles: {
     head: '',
@@ -387,7 +394,7 @@ waterViewToGround = uSurfaceViewToGround;
 waterRay = surfaceRay;
 waterUpGround = surfaceUp;
 waterUpView = surfaceUp * uSurfaceViewToGround;
-`,
+${WATER_DEPTH_SAMPLE.tiles}`,
   },
 } as const
 
@@ -429,14 +436,21 @@ export function injectWater(source: string, chunk: string, code: string, before 
 }
 
 /** The water on the globe's ground, on `water`'s phases and the haze's
- * `frame`; `low`, the low tier's waves. */
-export function waterPatch(water: Water, frame: GroundHaze['frame'], low: boolean): MaterialPatch {
+ * `frame`; `low`, the low tier's waves; `depth`, the sea's depth map
+ * (./waterDepth.ts). */
+export function waterPatch(
+  water: Water,
+  frame: GroundHaze['frame'],
+  low: boolean,
+  depth: THREE.IUniform<THREE.Texture>
+): MaterialPatch {
   const waves = waterWaves(low)
   const glsl = WATER_GLSL(waves)
   const uniforms = {
     ...water.uniforms,
     uWaterViewToGround: frame.uGroundHazeViewToLocal,
     uWaterEyeGround: frame.uGroundHazeEyeLocal,
+    uWaterDepth: depth,
   }
   return {
     onBeforeCompile(shader) {

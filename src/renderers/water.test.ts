@@ -10,6 +10,7 @@ import { createGroundHaze } from './groundHaze'
 import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
 import { phongShader } from './surface/tile-test-fixtures'
+import { WATER_DEPTH_SAMPLE, WATER_SHALLOW, WATER_TRENCH } from './waterDepth'
 import {
   beckmann,
   BLINN_PHONG_DIRECT,
@@ -200,11 +201,24 @@ describe('the body (tides-07z)', () => {
       last = out
     }
   })
+
+  it('lifts it to the floor for the sea\'s depth (tides-d9f.6), lighter water left as it is', () => {
+    waterBody([0, 0, 0], 1, 0).forEach((x, i) => expect(x).toBeCloseTo(WATER_SHALLOW[i], 12))
+    waterBody([0, 0, 0], 1, 10000).forEach((x, i) => expect(x).toBeCloseTo(WATER_TRENCH[i], 12))
+    waterBody([0, 0, 0], 1, 3000).forEach((x, i) => expect(x).toBeCloseTo(WATER_DEEP[i], 12))
+    for (const depth of [0, 50, 500, 3000, 10000]) {
+      const light: V = [0.05, 0.12, 0.1]
+      waterBody(light, 1, depth).forEach((x, i) => expect(x).toBeCloseTo(light[i], 12))
+      const dark: V = [0.001, 0.002, 0.004]
+      expect(waterBody(dark, 0, depth)).toEqual(dark)
+    }
+  })
 })
 
 describe('the water\'s GLSL on the globe (tides-07z)', () => {
   const sun = { value: new THREE.Vector3(1, 0, 0) }
   const haze = createGroundHaze(sun, 2.95, false)
+  const depth = { value: new THREE.Texture() }
 
   it('replaces three\'s own direct light, the glint for its specular line only', () => {
     // A three upgrade that changes RE_Direct_BlinnPhong fails here, not on screen.
@@ -230,7 +244,7 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       clouds.groundPatch,
       groundDetailPatch(false),
       groundShadowPatch(sun, earthHorizon('horizon.bin')),
-      waterPatch(water, haze.frame, false)
+      waterPatch(water, haze.frame, false, depth)
     )
     const shader = phongShader()
     patch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
@@ -264,6 +278,14 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(shader.uniforms.uWavePhase).toBe(water.uniforms.uWavePhase)
     expect(shader.uniforms.uWaterViewToGround).toBe(haze.frame.uGroundHazeViewToLocal)
     expect(shader.uniforms.uWaterEyeGround).toBe(haze.frame.uGroundHazeEyeLocal)
+    expect(shader.uniforms.uWaterDepth).toBe(depth)
+    // The depth's uniform with the globals, its sample at the prelude's end,
+    // before the body reads it.
+    expect(at('uniform sampler2D uWaterDepth;')).toBeLessThan(at('void main'))
+    expect(at('vec3 waterFloor(float d)')).toBeLessThan(at('vec3 waterBody(vec3 c)'))
+    expect(WATER_PRELUDE.globe.body.endsWith(WATER_DEPTH_SAMPLE.globe)).toBe(true)
+    expect(WATER_DEPTH_SAMPLE.globe).toContain('texture2D(uWaterDepth, vSpecularMapUv).r')
+    expect(at(WATER_DEPTH_SAMPLE.globe)).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
     // No varyings of its own, nothing in the vertex stage.
     const base = phongShader()
     composePatches(eclipse.material, clouds.groundPatch, groundDetailPatch(false), groundShadowPatch(sun, earthHorizon('horizon.bin')))
@@ -275,8 +297,8 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
 
   it('takes the tier\'s waves, keyed by their count', () => {
     const water = createWater(haze.frame)
-    expect(waterPatch(water, haze.frame, false).customProgramCacheKey()).toBe('water-12')
-    expect(waterPatch(water, haze.frame, true).customProgramCacheKey()).toBe('water-6')
+    expect(waterPatch(water, haze.frame, false, depth).customProgramCacheKey()).toBe('water-12')
+    expect(waterPatch(water, haze.frame, true, depth).customProgramCacheKey()).toBe('water-6')
     const full = WATER_GLSL(waterWaves(false)).normal
     const low = WATER_GLSL(waterWaves(true)).normal
     expect(full.split('waterGrad -=').length - 1).toBe(WATER_WAVES)
