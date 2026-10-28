@@ -4,26 +4,57 @@ import * as THREE from 'three'
 import vertexShader from '../shaders/sun-spicule/vertex.glsl'
 import fragmentShader from '../shaders/sun-spicule/fragment.frag'
 import { whenIdle } from '../ship/limb-detail'
-import { createSpiculeGeometry, SPICULE_FADE_PX, spiculeInstanceCount, SUN_FRINGE, SUN_FRINGE_FADE_PX } from './sun-spicules'
+import {
+  createSpiculeGeometry,
+  SPICULE_FADE_PX,
+  spiculeArrays,
+  spiculeInstanceCount,
+  SUN_FRINGE,
+  SUN_FRINGE_FADE_PX,
+  type SpiculeArrays,
+} from './sun-spicules'
 
 const viewport = new THREE.Vector4()
 
-// One blade geometry (~4 MB) for every view that draws the Sun, built in an
-// idle period rather than during a render (its layout takes ~50 ms) and then
-// kept for the session, as the Sun's baked surface is (sun-surface.ts):
-// entering or leaving ship mode would otherwise rebuild it each time.
+// One blade geometry (~4 MB) for every view that draws the Sun, laid out in a
+// worker (its layout takes ~50 ms, tides-9yw), or in an idle period where
+// one can't start, rather than during a render, and then kept for the
+// session, as the Sun's baked surface is (sun-surface.ts): entering or
+// leaving ship mode would otherwise rebuild it each time.
 let shared: { geometry: THREE.InstancedBufferGeometry; blades: number } | null = null
 let building = false
 const listeners = new Set<() => void>()
 
+function shareSpicules(arrays: SpiculeArrays) {
+  const geometry = createSpiculeGeometry(arrays)
+  shared = { geometry, blades: geometry.instanceCount }
+  listeners.forEach((listener) => listener())
+}
+
+function startWorker(): Worker | null {
+  if (typeof Worker !== 'function') return null
+  try {
+    return new Worker(new URL('./sun-spicules.worker.ts', import.meta.url), { type: 'module', name: 'sun-spicules' })
+  } catch {
+    return null
+  }
+}
+
 function buildSpicules() {
   if (shared || building) return
   building = true
-  whenIdle(() => {
-    const geometry = createSpiculeGeometry()
-    shared = { geometry, blades: geometry.instanceCount }
-    listeners.forEach((listener) => listener())
-  })
+  const inThread = () => whenIdle(() => shareSpicules(spiculeArrays()))
+  const worker = startWorker()
+  if (!worker) return inThread()
+  worker.onmessage = (event: MessageEvent<SpiculeArrays>) => {
+    worker.terminate()
+    shareSpicules(event.data)
+  }
+  worker.onerror = () => {
+    worker.terminate()
+    inThread()
+  }
+  worker.postMessage(null)
 }
 
 function subscribe(listener: () => void) {

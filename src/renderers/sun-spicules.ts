@@ -266,12 +266,12 @@ export function spiculeArrays(): SpiculeArrays {
 }
 
 /**
- * The blades as one instanced quad (SunSpicules; sun-spicule/vertex.glsl
- * stands each one up and turns it to the eye): aSpicule (foot xyz, seed),
- * aLean (xyz), aSize (height, width).
+ * The blades (`arrays`, from spiculeArrays) as one instanced quad
+ * (SunSpicules; sun-spicule/vertex.glsl stands each one up and turns it to
+ * the eye): aSpicule (foot xyz, seed), aLean (xyz), aSize (height, width).
  */
-export function createSpiculeGeometry(): THREE.InstancedBufferGeometry {
-  const { spicule, lean, size, count } = spiculeArrays()
+export function createSpiculeGeometry(arrays: SpiculeArrays = spiculeArrays()): THREE.InstancedBufferGeometry {
+  const { spicule, lean, size, count } = arrays
   const geometry = new THREE.InstancedBufferGeometry()
   geometry.setAttribute(
     'position',
