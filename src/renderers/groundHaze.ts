@@ -243,6 +243,26 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);
   return vec4(glow, haze);
 }
+
+// The sky over the sea at up (unit, the ground's frame) along rd, as the
+// atmosphere draws it from just over the sea: the high tier's table while
+// the eye is under the shell's top (eased out over its last two scale
+// heights, as the haze's own colour), else the analytic sky. Scene radiance
+// before tone mapping. The water's reflection and its skylit body
+// (water.ts) read it.
+vec3 groundHazeSky(vec3 up, vec3 rd) {
+  vec3 point = up * uSeaLevel;
+  float table = uSkyViewOn * uGroundHaze
+    * (1.0 - smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, length(vGroundHazeEye)));
+  vec3 sky = vec3(0.0);
+  if (table < 1.0) {
+    vec3 at;
+    float column = columnAhead(point, rd, sqrt(6.2831853 * uSurface * uScaleHeight), at);
+    sky = hazeSky(column, at, uGroundHazeSun, rd, point);
+  }
+  if (table > 0.0) sky = mix(sky, skyViewGlow(rd, point, uGroundHazeSun), table);
+  return sky;
+}
 #undef uSeaLevel
 #undef uSurface
 #undef uScaleHeight

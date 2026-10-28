@@ -247,6 +247,13 @@ describe('night lights in flight', () => {
     '  float lit = smoothstep(-0.18, 0.12, mu);\n  \n  float dusk = 1.0 - smoothstep(0.0, 0.35, mu);\n' +
     '  float glow = (column / grazing) * lit * uGain;\n  \n' +
     '  return mix(uSky, uDusk, dusk * 0.6) * (glow / (1.0 + glow));\n}'
+  function groundHazeSkyText(fragment: string) {
+    const start = fragment.indexOf('\n// The sky over the sea at up')
+    const end = fragment.indexOf('\n  return sky;\n}\n', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return fragment.slice(start, end + '\n  return sky;\n}\n'.length)
+  }
   function skyAsBefore(fragment: string) {
     const sky = hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb('))
     const swaps: [string, string][] = [
@@ -289,6 +296,8 @@ describe('night lights in flight', () => {
           'float groundHazeDensity(float r) {\n' +
           '  return exp(-max(r - uSurface, 0.0) / uScaleHeight);',
       ],
+      // The sky the sea reads (tides-d9f.4), unused here.
+      [groundHazeSkyText(fragment), ''],
     ]
     for (const [now, before] of swaps) {
       expect(fragment.split(now).length).toBe(2)
@@ -324,7 +333,8 @@ describe('night lights in flight', () => {
   }
 
   // What skyAsBefore() swaps out, pinned as tides-34q left it, so that a
-  // change to it fails here too.
+  // change to it fails here too (the haze's since tides-d9f.4 read the
+  // table at level 0).
   it("pins tides-34q's sky light and haze (and tides-d9f's glint and cover), which the pins below take out", () => {
     const sha = (text: string) => createHash('sha256').update(text).digest('hex')
     expect(sha(GROUND_DETAIL_GLSL.lightBody)).toBe('2f6f8a716ac3f104c5a5ded8dc62499ce46fbdadd96e7dab400cb0bf7389c137')

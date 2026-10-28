@@ -10,9 +10,13 @@
 // tiles' glint strength), so the land is exactly as it was:
 // - the sky (sky): what the sea mostly shows, the sky it mirrors, Fresnel
 //   weighted (Schlick, F0 WATER_F0: 2% looking down, all of it at grazing),
-//   from a small local sky model (./skyRadiance.ts) along the reflected ray,
-//   in directSpecular so the cloud shadow, the eclipse and the terrain
-//   shadow (patches whose code lands after it) dim it with the Sun;
+//   along the reflected ray as the atmosphere draws it (the ground haze's
+//   groundHazeSky(): the high tier's sky-view table, else the analytic
+//   sky), in directSpecular so the cloud shadow, the eclipse and the
+//   terrain shadow (patches whose code lands after it) dim it with the Sun;
+//   and the same sky's light in the water's body, what the near sea shows
+//   (it reflects 2-5% there), as skylight in indirectDiffuse; both by day
+//   only (SKY_DAY);
 // - the glint (direct): Phong's Blinn-Phong replaced, for every light, by a
 //   Cox-Munk microfacet term: Beckmann's distribution over the sea's slope
 //   variance (waterMss), Schlick's Fresnel and Smith's shadowing, so the
@@ -47,12 +51,13 @@
 // before emissivemap_fragment (after
 // every patch's normal_fragment_maps code, so the ground detail's groundUp
 // stays the unbent normal), the glint after lights_phong_pars_fragment
-// (RE_Direct redefined), the sky after lights_fragment_end.
+// (RE_Direct redefined), the sky after lights_fragment_end. The sky calls
+// the ground haze's groundHazeSky(), so every program with the water takes
+// the ground haze too (its head, like the water's, before main()).
 import * as THREE from 'three'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
-import { SKY_DAY, SKY_RADIANCE_GLSL } from './skyRadiance'
 import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterTinted } from './waterDepth'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
@@ -75,6 +80,17 @@ export const WATER_F0 = 0.02
 /** Deep water's body colour (linear): the map's ocean darker than it is
  * lifted to it. */
 export const WATER_DEEP: readonly [number, number, number] = [0.008, 0.022, 0.045]
+/** sin(the Sun's elevation) over which the sea's day terms (the body's
+ * floor, the sky's reflection and its light in the body) come in: none at
+ * -0.10 (the night fill and the Moon have the night sea as they did), all
+ * at 0.05. */
+export const SKY_DAY = [-0.1, 0.05] as const
+/** The elevation (deg) the sky's light on the body is read at, 90 deg round
+ * from the Sun: there hazeSky()'s radiance is its cosine-weighted mean over
+ * the dome (the skylight's irradiance over pi) within a few percent from
+ * twilight to noon (groundHaze.test.ts checks it), so one read stands in for
+ * the dome. */
+export const WATER_SKY_LIGHT_ELEVATION = 25
 
 const G = 9.81
 const TAU = 2 * Math.PI
@@ -264,7 +280,6 @@ vec3 waterUpGround;
 vec3 waterUpView;
 mat3 waterViewToGround;
 float waterMss;
-${SKY_RADIANCE_GLSL}
 // Smith's shadowing for a facet slope variance a2.
 float waterG1(float x, float a2) {
   return 2.0 * x / (x + sqrt(a2 + (1.0 - a2) * x * x));
@@ -344,20 +359,47 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
 }
 `
 
-// After lights_fragment_end, before the shadows dim directSpecular: the sky
-// along the reflected ray, Fresnel weighted, over the Sun's colour.
+// After lights_fragment_end, before the shadows dim directSpecular: by day,
+// the sky (the ground haze's groundHazeSky(), the atmosphere's own) along
+// the reflected ray, Fresnel weighted, and its light in the water's body.
+// The sky is scene radiance, not over the Sun's colour: no light colour on
+// it. The reflection in directSpecular, so the terrain, the clouds and the
+// eclipse dim it with the Sun; the body in indirectDiffuse, as skylight:
+// only the terrain's view of the sky (groundHorizonSky) dims it, not the
+// Sun's shadow.
+const SKY_LIGHT_EL = (WATER_SKY_LIGHT_ELEVATION * Math.PI) / 180
 const SKY = /* glsl */ `
 #if NUM_DIR_LIGHTS > 0
 if (material.specularStrength > 0.0) {
-  float waterNv = dot(geometryNormal, geometryViewDir);
-  float waterCos = 1.0 - saturate(waterNv);
-  float waterCos2 = waterCos * waterCos;
-  float waterFresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * waterCos2 * waterCos2 * waterCos;
-  // A facet tilted away from the eye (a wave's back at a grazing view) isn't
-  // seen: without this it took Fresnel 1 and the horizon's sky.
-  reflectedLight.directSpecular += material.specularStrength * waterFresnel * smoothstep(0.0, 0.05, waterNv)
-    * skyRadiance(reflect(-geometryViewDir, geometryNormal), waterUpView, directionalLights[0].direction)
-    * directionalLights[0].color;
+  float waterDay = smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, dot(waterUpView, directionalLights[0].direction));
+  if (waterDay > 0.0) {
+    float waterNv = dot(geometryNormal, geometryViewDir);
+    float waterCos = 1.0 - saturate(waterNv);
+    float waterCos2 = waterCos * waterCos;
+    float waterFresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * waterCos2 * waterCos2 * waterCos;
+    // The reflected ray in the ground's frame, lifted to the level where a
+    // wave's facet sends it under the horizon (the sea there would mirror
+    // the sea, about as bright as this sky's foot).
+    vec3 waterReflected = waterViewToGround * reflect(-geometryViewDir, geometryNormal);
+    waterReflected = normalize(waterReflected - waterUpGround * min(dot(waterReflected, waterUpGround), 0.0) + waterUpGround * 1e-4);
+    // A facet tilted away from the eye (a wave's back at a grazing view) isn't
+    // seen: without this it took Fresnel 1 and the horizon's sky.
+    vec3 waterReflection = waterFresnel * smoothstep(0.0, 0.05, waterNv) * groundHazeSky(waterUpGround, waterReflected);
+    // The skylight's irradiance, pi times the sky's mean, from the one
+    // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION),
+    // into the body through Lambert, less what the surface reflects on the
+    // way out. A depth term (the shallows' floor) multiplies waterBodyLight.
+    vec3 waterSunGround = waterViewToGround * directionalLights[0].direction;
+    vec3 waterSide = cross(waterUpGround, waterSunGround);
+    float waterSide2 = dot(waterSide, waterSide);
+    waterSide = waterSide2 > 1e-10 ? waterSide * inversesqrt(waterSide2)
+      : normalize(cross(waterUpGround, abs(waterUpGround.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
+    vec3 waterSkyLight = PI * groundHazeSky(waterUpGround,
+      waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))});
+    vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(material.diffuseColor);
+    reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;
+    reflectedLight.indirectDiffuse += material.specularStrength * waterDay * waterBodyLight;
+  }
 }
 #endif
 `
@@ -365,7 +407,8 @@ if (material.specularStrength > 0.0) {
 /** The water's GLSL for `waves` (the test checks it; the tiles reuse it):
  * head (globals, after common), normal (the body and the waves, after a
  * prelude), direct (after lights_phong_pars_fragment), sky (after
- * lights_fragment_end). */
+ * lights_fragment_end; the reflection and the skylit body, from the ground
+ * haze's groundHazeSky()). */
 export function WATER_GLSL(waves: readonly WaterWave[]) {
   return { head: head(), normal: normal(waves), direct: DIRECT, sky: SKY }
 }

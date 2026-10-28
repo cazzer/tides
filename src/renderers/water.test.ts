@@ -15,6 +15,7 @@ import {
   beckmann,
   BLINN_PHONG_DIRECT,
   createWater,
+  SKY_DAY,
   WATER_DEEP,
   WATER_DEEP_LUMA,
   WATER_GLSL,
@@ -241,7 +242,8 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       clouds.groundPatch,
       groundDetailPatch(false),
       groundShadowPatch(sun, earthHorizon('horizon.bin')),
-      waterPatch(water, haze.frame, false, depth)
+      waterPatch(water, haze.frame, false, depth),
+      haze.patch
     )
     const shader = phongShader()
     patch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
@@ -266,6 +268,17 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= sunLit;'))
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= cloudLit;'))
     expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= eclipse.x;'))
+    // The skylit body before the terrain's view of the sky dims it.
+    expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse *= groundHorizonSky;'))
+    // The sky is the ground haze's (its head before main), scene radiance,
+    // not over the Sun's colour.
+    expect(at('vec3 groundHazeSky(vec3 up, vec3 rd) {')).toBeLessThan(at('void main'))
+    expect(glsl.sky.split('groundHazeSky(').length - 1).toBe(2)
+    expect(glsl.sky).not.toContain('skyRadiance')
+    expect(glsl.sky).not.toContain('directionalLights[0].color')
+    expect(glsl.sky).toContain('reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;')
+    expect(glsl.sky).toContain('reflectedLight.indirectDiffuse += material.specularStrength * waterDay * waterBodyLight;')
+    expect(glsl.sky).toContain(`smoothstep(${SKY_DAY[0].toFixed(6)}, ${SKY_DAY[1].toFixed(6)}, dot(waterUpView, directionalLights[0].direction))`)
     // The body after the strength, before the lights take the colour, by
     // day only (the Sun over this sea's level).
     expect(at('#include <specularmap_fragment>')).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
@@ -285,7 +298,7 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(at(WATER_DEPTH_SAMPLE.globe)).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
     // No varyings of its own, nothing in the vertex stage.
     const base = phongShader()
-    composePatches(eclipse.material, clouds.groundPatch, groundDetailPatch(false), groundShadowPatch(sun, earthHorizon('horizon.bin')))
+    composePatches(eclipse.material, clouds.groundPatch, groundDetailPatch(false), groundShadowPatch(sun, earthHorizon('horizon.bin')), haze.patch)
       .onBeforeCompile(base, {} as THREE.WebGLRenderer)
     expect(f.split('varying ').length).toBe(base.fragmentShader.split('varying ').length)
     expect(shader.vertexShader).toBe(base.vertexShader)

@@ -161,7 +161,8 @@ vec3 skyViewDir(vec2 uv) {
 #ifndef SKY_VIEW_BUILD
 // The table's texel along rd from eye with the Sun along sun (the includer
 // declares uSkyView and uSkyViewSize): rgb, the radiance; a, the path's
-// transmittance.
+// transmittance. At level 0: the table has no mips, and the sea
+// (groundHazeSky()) reads it inside a branch.
 vec4 skyViewTexel(vec3 rd, vec3 eye, vec3 sun) {
   vec3 up = normalize(eye);
   float y = clamp(dot(rd, up), -1.0, 1.0);
@@ -171,7 +172,7 @@ vec4 skyViewTexel(vec3 rd, vec3 eye, vec3 sun) {
   float phi = a2 > 1e-14 ? acos(clamp(dot(across, sunAcross) * inversesqrt(a2), -1.0, 1.0)) : 0.0;
   float e = asin(y);
   vec2 uv = vec2(phi / 3.14159265, 0.5 + 0.5 * sign(e) * sqrt(abs(e) / SKY_VIEW_HALF_PI));
-  return texture(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize);
+  return textureLod(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize, 0.0);
 }
 vec3 skyViewGlow(vec3 rd, vec3 eye, vec3 sun) {
   return skyViewTexel(rd, eye, sun).rgb;

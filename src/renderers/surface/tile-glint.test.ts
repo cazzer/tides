@@ -7,6 +7,7 @@ import { WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
 import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
 import { createTileComposer, SURFACE_ANCHORS, type TerrainPhongMaterial } from './tile-material'
 import { compiled, fakeLink, tileMesh } from './tile-test-fixtures'
+import { TILE_FEATURES } from './tile-features'
 
 function glintTile() {
   const link = fakeLink()
@@ -64,6 +65,23 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(f.indexOf('#include <normal_fragment_maps>')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.normal))
     expect(f.indexOf(TILE_GLINT_GLSL.normal)).toBeLessThan(f.indexOf('#include <emissivemap_fragment>'))
     expect(f.indexOf('#include <lights_fragment_end>')).toBeLessThan(f.indexOf(TILE_GLINT_GLSL.sky))
+  })
+
+  it('reads the ground haze\'s sky, composed with every feature, before the shadow dims the light', () => {
+    const mesh = tileMesh()
+    createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
+    const f = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
+    const at = (text: string) => {
+      const i = f.indexOf(text)
+      expect(i, text.slice(0, 60)).toBeGreaterThan(-1)
+      return i
+    }
+    expect(TILE_GLINT_GLSL.sky).toContain('groundHazeSky(')
+    expect(at('vec3 groundHazeSky(vec3 up, vec3 rd) {')).toBeLessThan(at('void main'))
+    const sky = at(TILE_GLINT_GLSL.sky)
+    expect(at('#include <lights_fragment_end>')).toBeLessThan(sky)
+    expect(sky).toBeLessThan(at('reflectedLight.directSpecular *= surfaceSunLit;'))
+    expect(sky).toBeLessThan(at('reflectedLight.indirectDiffuse *= groundHorizonSky;'))
   })
 
   it('binds the globe\'s wave phases, and no longer the Sun', () => {

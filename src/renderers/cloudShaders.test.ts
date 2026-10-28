@@ -1568,11 +1568,15 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
   // The sky-view table's uniforms (tides-34q.2), declared with the haze in
-  // the programs from inside: taken out, so the rest is pinned.
+  // the programs from inside: taken out, and its read at level 0
+  // (tides-d9f.4: the sea reads it inside a branch) put back as it was, so
+  // the rest is pinned.
+  const TABLE_READ = ['textureLod(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize, 0.0)', 'texture(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize)']
   const withoutSkyView = (fragment: string) => {
     const declared = preprocess(SKY_VIEW_GLSL, new Set()) + '\n'
     expect(fragment.split(declared).length).toBeLessThanOrEqual(2)
-    return fragment.replace(declared, '')
+    expect(fragment.split(TABLE_READ[0]).length).toBe(fragment.split(declared).length)
+    return fragment.replace(declared, '').replace(TABLE_READ[0], TABLE_READ[1])
   }
   const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
 
