@@ -511,7 +511,8 @@ export const CameraProvider = ({ children }: { children: any }) => {
           cameraTarget.current,
           target,
           rideRef.current,
-          smoothness
+          smoothness,
+          'aspect' in camera ? (camera as PerspectiveCamera).aspect : Infinity
         )
       } else {
         leaveClock(rideRef.current)

@@ -15,6 +15,10 @@ export const CLOCK_VIEW = {
   distance: MAIN_DISTANCE,
 } as const
 export const CLOCK_FRAMING_EASE = 0.05
+// Earth sits off to the right of the clock: in a view narrower than this
+// (width / height), a portrait phone's, the eye backs off until the view is
+// as wide at the clock as here, or Earth ran off the edge (tides-3bc).
+export const CLOCK_MIN_ASPECT = 0.8
 
 export type ClockRide = { angle: number | null; ease: number; entryEase: number }
 
@@ -27,10 +31,11 @@ function wrapToPi(a: number): number {
   return a - 2 * Math.PI * Math.round(a / (2 * Math.PI))
 }
 
-export function clockViewOffset(angle: number, out = new Vector3()): Vector3 {
+/** The eye's offset from the clock at `angle`, in a view of `aspect`. */
+export function clockViewOffset(angle: number, out = new Vector3(), aspect = Infinity): Vector3 {
   const { azimuth, elevation, distance } = CLOCK_VIEW
   return out.setFromSphericalCoords(
-    distance,
+    distance * Math.max(1, CLOCK_MIN_ASPECT / aspect),
     Math.PI / 2 - elevation,
     angle + azimuth
   )
@@ -58,7 +63,8 @@ export function rideWithClock(
   target: Vector3,
   clock: Vector3,
   ride: ClockRide,
-  smoothness: number
+  smoothness: number,
+  aspect = Infinity
 ): void {
   const angle = Math.atan2(-clock.z, clock.x)
   if (ride.angle === null) {
@@ -76,7 +82,7 @@ export function rideWithClock(
 
   if (ride.ease > 0) {
     spherical.setFromVector3(offset)
-    framed.setFromVector3(clockViewOffset(angle, canonical))
+    framed.setFromVector3(clockViewOffset(angle, canonical, aspect))
     const dTheta = wrapToPi(framed.theta - spherical.theta)
     const dPhi = framed.phi - spherical.phi
     const dRadius = framed.radius - spherical.radius

@@ -3,6 +3,7 @@ import { OrthographicCamera, PerspectiveCamera, Spherical, Vector3 } from 'three
 import { OrbitControls } from 'three-stdlib'
 import {
   CLOCK_FRAMING_EASE,
+  CLOCK_MIN_ASPECT,
   CLOCK_VIEW,
   clockRideAllowed,
   clockViewOffset,
@@ -316,5 +317,21 @@ describe('the clock ride after a tilted Earth close-up (tides-oyd)', () => {
 
   it('would spin if it rode through the ease-out', () => {
     expect(switchToClock(false).swept).toBeGreaterThan(600)
+  })
+})
+
+describe('the clock framing at phone width (tides-3bc)', () => {
+  it('keeps its distance in views at least CLOCK_MIN_ASPECT wide', () => {
+    for (const aspect of [CLOCK_MIN_ASPECT, 1, 16 / 9, Infinity]) {
+      expect(clockViewOffset(0.4, new Vector3(), aspect).length()).toBeCloseTo(CLOCK_VIEW.distance, 9)
+    }
+  })
+
+  it('backs off in narrower views, so the view is as wide at the clock', () => {
+    for (const aspect of [0.4, 0.52, 0.65]) {
+      const offset = clockViewOffset(0.4, new Vector3(), aspect)
+      expect(offset.length() * aspect).toBeCloseTo(CLOCK_VIEW.distance * CLOCK_MIN_ASPECT, 9)
+      expect(offset.clone().normalize().distanceTo(clockViewOffset(0.4).normalize())).toBeLessThan(1e-12)
+    }
   })
 })
