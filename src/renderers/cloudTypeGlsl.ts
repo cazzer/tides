@@ -58,14 +58,16 @@ const L_KEYS = ['stretch', 'occ', 'under', 'alpha'] as const
 // The shares refined by the infrared (refineWithIr()): the look's at the hit,
 // and the typed tops' in the blend (CLOUD_TYPED_TOP_GLSL).
 export const CLOUD_TYPE_SHARES_GLSL = /* glsl */ `
-// The shares in t (a type texel) refined by the infrared in raw (the cloud
-// map's texel: top height over MAX_CLOUD_TOP_KM, opacity, trust):
+// The shares in t (a type texel, of confidence t.a over 0: its shares are
+// premultiplied by it, tides-tvr.4.4) refined by the infrared in raw (the
+// cloud map's texel: top height over MAX_CLOUD_TOP_KM, opacity, trust):
 // refineWithIr(). Cold, thin tops toward cirrus, deep, opaque ones toward
 // cumulus, warm opaque ones toward low cloud: a deck where the top is near
 // opaque, else split as the model splits it. raw is all 0 where the map has
 // no measured heights (cloudLook()), so its trust needs no other gate.
 vec4 cloudTypeShares(vec4 t, vec3 raw) {
-  vec4 s = vec4(t.rgb, max(1.0 - t.r - t.g - t.b, 0.0));
+  vec3 shares = min(t.rgb / t.a, vec3(1.0));
+  vec4 s = vec4(shares, max(1.0 - shares.r - shares.g - shares.b, 0.0));
   float w = ${f(IR_WEIGHT)} * raw.b;
   float km = raw.r * ${f(MAX_CLOUD_TOP_KM)};
   float cold = smoothstep(${f(IR_COLD_KM[0])}, ${f(IR_COLD_KM[1])}, km);
@@ -84,8 +86,8 @@ vec4 cloudTypeShares(vec4 t, vec3 raw) {
 `
 
 export const CLOUD_LOOK_GLSL = /* glsl */ `
-// The blended type grid (R cirrus, G cumulus, B alto, A confidence), and
-// whether the map shown has one at all.
+// The blended type grid (R cirrus, G cumulus, B alto, each times A, the
+// confidence), and whether the map shown has one at all.
 uniform sampler2D uCloudType;
 uniform float uCloudTyped;
 

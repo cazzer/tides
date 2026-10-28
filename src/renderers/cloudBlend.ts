@@ -119,10 +119,11 @@ void main() {
 `
 
 // The type grids, texel for texel (inputs and output are all TYPE_W x
-// TYPE_H, or the neutral 1x1). The shares are weighted by confidence, as the
-// heights are by trust above, so a frame without types lowers the confidence
-// without pulling the shares towards nothing.
-const typeFragmentShader = /* glsl */ `
+// TYPE_H, or the neutral 1x1). The shares are premultiplied by confidence
+// (../cloud-types.ts, tides-tvr.4.4), so mixed as they are they are weighted
+// by it, as the heights are by trust above: a frame without types lowers the
+// confidence without pulling the shares towards nothing.
+export const TYPE_FRAGMENT_SHADER = /* glsl */ `
 uniform sampler2D uPrev;
 uniform sampler2D uA;
 uniform sampler2D uB;
@@ -134,19 +135,12 @@ uniform float uFade;
 varying vec2 vUv;
 
 vec4 typeTexel(sampler2D t, float typed) {
-  vec4 c = textureLod(t, vUv, 0.0);
-  return vec4(c.rgb, c.a * typed);
-}
-
-vec4 blendTypes(vec4 x, vec4 y, float t) {
-  float a = mix(x.a, y.a, t);
-  vec3 rgb = a > 0.0 ? ((1.0 - t) * x.a * x.rgb + t * y.a * y.rgb) / a : vec3(0.0);
-  return vec4(rgb, a);
+  return textureLod(t, vUv, 0.0) * typed;
 }
 
 void main() {
-  vec4 frames = blendTypes(typeTexel(uA, uATyped), typeTexel(uB, uBTyped), uMix);
-  gl_FragColor = blendTypes(typeTexel(uPrev, uPrevTyped), frames, uFade);
+  vec4 frames = mix(typeTexel(uA, uATyped), typeTexel(uB, uBTyped), uMix);
+  gl_FragColor = mix(typeTexel(uPrev, uPrevTyped), frames, uFade);
 }
 `
 
@@ -294,7 +288,7 @@ export function createCloudBlender() {
         uFade: { value: 0 },
       },
       vertexShader,
-      fragmentShader: typeFragmentShader,
+      fragmentShader: TYPE_FRAGMENT_SHADER,
       depthTest: false,
       depthWrite: false,
       blending: THREE.NoBlending,

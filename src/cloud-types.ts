@@ -13,7 +13,10 @@
 // cell's leftover type never decides anything.
 //
 // The grid is TYPE_W x TYPE_H RGBA8, bottom row first like a CloudImage: R
-// cirrus, G cumulus, B alto, A confidence, stratus the rest of RGB's share.
+// cirrus, G cumulus, B alto, A confidence, stratus the rest of RGB's share,
+// the shares premultiplied by the confidence (tides-tvr.4.4): a filter
+// between a typed texel and one of no confidence then fades the type toward
+// untyped, its shares as they were, not toward the stratus of shares 0.
 // Pure; the build is renderers/cloudPipeline.ts.
 import { gridCovers, layersAt, sampleCoverSmooth, type CoverGrid, type CoverLayers } from './forecast-clouds'
 import { DAY_MS, HOUR_MS, smoothstep } from './real-clouds'
@@ -105,9 +108,9 @@ export function typeGridImage(
         sampleCoverSmooth(layers.high, lat, lon)
       )
       const i = (y * TYPE_W + x) * 4
-      out[i] = Math.round(255 * s.cirrus)
-      out[i + 1] = Math.round(255 * s.cumulus)
-      out[i + 2] = Math.round(255 * s.alto)
+      out[i] = Math.round(255 * s.cirrus * s.confidence)
+      out[i + 1] = Math.round(255 * s.cumulus * s.confidence)
+      out[i + 2] = Math.round(255 * s.alto * s.confidence)
       out[i + 3] = Math.round(255 * s.confidence)
     }
   }

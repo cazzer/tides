@@ -62,6 +62,9 @@ import {
   shadePlace,
   TERRAIN_DISPLACEMENT,
   type Vec3,
+  cloudShape,
+  cloudTopKm,
+  maxTopKm,
 } from '../cloud-layer'
 import {
   CIRRUS_STRETCH,
@@ -1469,6 +1472,10 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
     const fn = src.slice(src.indexOf('vec4 cloudTypeShares('), src.indexOf('void cloudLook('))
     const f = (x: number) => x.toFixed(6)
+    // The grid's shares, premultiplied by its confidence, divided back
+    // (tides-tvr.4.4); its callers read it only where that is over 0.
+    expect(fn).toContain('vec3 shares = min(t.rgb / t.a, vec3(1.0));')
+    expect(fn).toContain('vec4 s = vec4(shares, max(1.0 - shares.r - shares.g - shares.b, 0.0));')
     // Each rule's edges, from ../cloud-types.ts, and the rule itself.
     for (const line of [
       `float w = ${f(IR_WEIGHT)} * raw.b;`,
@@ -1552,16 +1559,20 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // tides-34q, whose haze from inside is the sky's (haze.glsl hazeSky()),
   // and at tides-d9f.3, which declares its cover (hazeCover()) beside it and
   // has the clouds take it, and at tides-zmw.17, which only reworded a comment
-  // in cloudHazeFront().
+  // in cloudHazeFront(). The back faces' with reduced motion (FOG_EASE)
+  // regenerated at tides-tvr.10, whose easing fog shows as the side it
+  // eases from did: at uOpacity, under the haze in front of it (the flat
+  // sheet's fog never eases, so only its text changed); the programs
+  // without FOG_EASE are as they were.
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
     'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
     'relief-full-back-noease': 'b1d2b7ee205e6d69d0f20ffbab8168fad93446b3e690fdd6b200020438edcea5',
-    'relief-full-back-ease': '468dabe81b5333d9dc262a0ddaf99626512beb63aee29becb806463aa0057385',
+    'relief-full-back-ease': '521d40ea88539405da36a0be8c7dc84247a421496d960d34d0e44296237684f6',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-back-noease': '3a79db74cfaf67b5d9e8669562c686a9a09d1d8cea9c02036d6cd8de28049129',
-    'flat-full-back-ease': 'beab07aed7f1da213b478fe24a5bd5a5e2fda0d6bb953e1da86a95a494941fd2',
+    'flat-full-back-ease': '87b1586468186a76d84a8a944b70ea30effd6801014ce53242a31bece750311a',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
     'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
@@ -1580,6 +1591,23 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     return fragment.replace(declared, '').replace(TABLE_READ[0], TABLE_READ[1])
   }
   const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
+  // The low tier's flat sheet from inside, entered as decided at the eye
+  // (tides-tvr.11): put back as it was, so the rest is pinned.
+  const FLAT_ENTRY = [
+    `  // where the ray leaves: decided at the eye, not the near plane
+  // (tides-tvr.11), whose edge would otherwise cut a line between the two
+  // that moves as the camera turns. A hit short of the near plane is drawn
+  // at it (below).
+  float sFlat = sIn > 0.0 ? sIn : sOut;
+  if (sFlat <= 0.0) CLOUD_MISS;`,
+    `  // where the ray leaves.
+  float sFlat = sIn >= sNear ? sIn : sOut;
+  if (sFlat < sNear) CLOUD_MISS;`,
+  ]
+  const asBeforeFlatEntry = (fragment: string) => {
+    expect(fragment.split(FLAT_ENTRY[0]).length).toBeLessThanOrEqual(2)
+    return fragment.replace(FLAT_ENTRY[0], FLAT_ENTRY[1])
+  }
 
   for (const flat of [false, true]) {
     const name = `${flat ? 'flat' : 'relief'}-full`
@@ -1594,7 +1622,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
             ...(ease === 'ease' ? ['FOG_EASE'] : []),
           ])
           const vertex = preprocess(vertexShader, defines)
-          const fragment = withoutSkyView(preprocess(fragmentShader, defines))
+          const fragment = asBeforeFlatEntry(withoutSkyView(preprocess(fragmentShader, defines)))
           expect(vertex + fragment).not.toMatch(TYPED_WORDS)
           expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
             UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]
@@ -1624,6 +1652,19 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     ['CLOUD_FLAT', 'FLIP_SIDED'],
     ['FLIP_SIDED', 'FOG_EASE'],
   ]
+  it("never tops an untyped column over the map's tallest, so the typed column needs no branch for it (tides-tvr.4.8)", () => {
+    for (const measured of [0, 1]) {
+      for (let k = 0; k <= 20; k++) {
+        for (const r of [0, 0.5, 1]) {
+          for (const coverage of [0, 0.5, 1]) {
+            const alpha = k / 20
+            expect(cloudTopKm(r, coverage, alpha, measured) * cloudShape(alpha)).toBeLessThanOrEqual(maxTopKm(measured === 1))
+          }
+        }
+      }
+    }
+  })
+
   const columnOf = (src: string) => src.slice(src.indexOf('vec4 cloudColumn('), src.indexOf('float cloudShade('))
   for (const variant of variants) {
     const name = variant.join('+') || 'relief'
@@ -1648,13 +1689,16 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         // toward it by how far the texel is untyped, under the map's
         // tallest, and the base lifted, never over it.
         for (const line of [
-          'if (typedTop.b <= 0.0) return vec4(c.g, base, base + CLOUD_UNITS_PER_KM * km * shape, base);',
           'float topKm = min(mix(km * shape, typedTop.r * TYPED_TOPS_KM, typedTop.b), uCloudMaxKm);',
           'float liftKm = min(typedTop.b * typedTop.g * TYPED_TOPS_KM, topKm);',
           'return vec4(c.g, base + CLOUD_UNITS_PER_KM * liftKm, base + CLOUD_UNITS_PER_KM * topKm, base);',
         ]) {
           expect(column).toContain(line)
         }
+        // With no branch for an untyped texel (tides-tvr.4.8): B 0 lifts
+        // nothing, and the min against the map's tallest leaves the untyped
+        // top as it is (the test after these).
+        expect(column).not.toMatch(/if \(typedTop\.b/)
         expect(src).toContain('uniform sampler2D uCloudTops;')
         expect(src).toContain(TYPED_TOPS_GLSL)
         expect(src).toContain(`#define TYPED_TOPS_KM ${TYPED_TOPS_KM.toFixed(6)}`)

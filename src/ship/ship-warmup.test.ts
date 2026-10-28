@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import * as THREE from 'three'
-import { coldWork, compileSide, createWarmed } from './ship-warmup'
+import { coldWork, compileSide, createWarmed, warmDefinesOnce } from './ship-warmup'
 
 function loaded(): THREE.Texture {
   const texture = new THREE.Texture()
@@ -152,5 +152,33 @@ describe('coldWork', () => {
     material.defines = { CLOUD_TYPED: '', FOG_EASE: '' }
     compileSide(renderer, mesh, undefined, camera, scene, warmed, byMaterial, ['CLOUD_TYPED'])
     expect(Object.keys(material.defines)).toEqual(['CLOUD_TYPED', 'FOG_EASE'])
+  })
+
+  test('warms the programs a material turns its defines to once, for views without the warm-up (tides-tvr.4.5)', () => {
+    const material = new THREE.ShaderMaterial({ defines: { CLOUD_FLAT: '', FOG_EASE: '' } })
+    material.userData.warmDefines = ['CLOUD_TYPED']
+    const mesh = new THREE.Mesh(undefined, material)
+    const scene = new THREE.Scene().add(mesh)
+    const camera = new THREE.PerspectiveCamera()
+    const compiled: { side: THREE.Side; defines: string[] }[] = []
+    const renderer = {
+      compile: () => compiled.push({ side: material.side, defines: Object.keys(material.defines) }),
+    } as unknown as THREE.WebGLRenderer
+    const done = new WeakSet<object>()
+    let record = {}
+
+    warmDefinesOnce(renderer, mesh, camera, scene, done, () => record)
+    warmDefinesOnce(renderer, mesh, camera, scene, done, () => record)
+    expect(compiled).toEqual([{ side: THREE.FrontSide, defines: ['CLOUD_FLAT', 'FOG_EASE', 'CLOUD_TYPED'] }])
+    // Turned back, in their order, for the draw to pick its own program.
+    expect(Object.keys(material.defines)).toEqual(['CLOUD_FLAT', 'FOG_EASE'])
+    // Once more under a new record, as after a dispose drops the programs.
+    record = {}
+    warmDefinesOnce(renderer, mesh, camera, scene, done, () => record)
+    expect(compiled).toHaveLength(2)
+    // A material with nothing to turn compiles nothing.
+    const plain = new THREE.Mesh(undefined, new THREE.ShaderMaterial())
+    warmDefinesOnce(renderer, plain, camera, scene.add(plain), done, byMaterial)
+    expect(compiled).toHaveLength(2)
   })
 })

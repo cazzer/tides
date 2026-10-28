@@ -8,6 +8,7 @@ import {
   planBlendPass,
   typesOf,
   type BlendPassState,
+  TYPE_FRAGMENT_SHADER,
 } from './cloudBlend'
 import { CLOUD_TYPED_TOP_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import {
@@ -90,6 +91,12 @@ describe('planBlendPass', () => {
 
 // The cloud-type grids (tides-tvr.4.1) blended alongside the frames.
 describe('type grids', () => {
+  test('mixes the grids as they are: their shares premultiplied by confidence (tides-tvr.4.4)', () => {
+    expect(TYPE_FRAGMENT_SHADER).toContain('return textureLod(t, vUv, 0.0) * typed;')
+    expect(TYPE_FRAGMENT_SHADER).toContain('vec4 frames = mix(typeTexel(uA, uATyped), typeTexel(uB, uBTyped), uMix);')
+    expect(TYPE_FRAGMENT_SHADER).toContain('gl_FragColor = mix(typeTexel(uPrev, uPrevTyped), frames, uFade);')
+  })
+
   const frame = (geo: boolean, typed: boolean) => ({ geo, typed })
   const none = { measured: false, typed: false }
 
