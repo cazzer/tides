@@ -12,11 +12,19 @@
 // tides-zmw.9.8: the ship's floor reads the tiles it draws (surface-ground.ts,
 // registered in ../../surface-ground.ts while mounted), refreshed after each
 // update.
+//
+// tides-tvr.7.2: the system view mounts them too (eye="system"), in the main
+// view's close zoom over Earth on the high tier (../../close-zoom-rules.ts
+// systemSurfaceTilesOn). With no ship there, they set the handover's eye
+// (setSurfaceEye) and read the sweep from the camera's own height and motion
+// over the ground, in Earth's frame; close zoom's floor then reads their
+// ground as the ship's does (../../close-zoom.ts earthGroundRadius). Leaving
+// ship mode, close zoom or Earth focus unmounts them.
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
-import { surfaceOpacityUniform } from '../../surface-handover'
+import { setSurfaceEye, surfaceOpacityUniform } from '../../surface-handover'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
 import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import type { ImageryTile } from './imagery'
@@ -27,15 +35,28 @@ import { createRectWriter } from './grid-upload'
 import { setSurfaceGroundSampler, surfaceGroundSampler } from '../../surface-ground'
 import { SURFACE_FRAME_PRIORITY } from './surface-frame'
 import { subscribeSurfaceLink, surfaceLink } from './surface-link'
-import { eyeMarginMetres, smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
-import { EARTH_UNITS_PER_METRE } from '../../ship/ship-bodies'
+import { eyeMarginMetres, groundSpeed, smoothErrorTarget, surfaceErrorTarget, sweepRate } from './surface-lod'
+import { EARTH_RADIUS, EARTH_UNITS_PER_METRE } from '../../ship/ship-bodies'
 
 // How often the visible tiles are read for the credits line; it only needs to
 // notice tiles arriving and leaving.
 const CREDIT_INTERVAL_MS = 250
 const creditEye = new THREE.Vector3()
+// The system view's eye this frame, in Earth's frame, and the nearest
+// surface it gives sweepRate.
+const systemEye = new THREE.Vector3()
+const systemNearest = { key: 'earth', surfaceDistance: Infinity }
 
-export default function SurfaceTiles() {
+export interface SurfaceTilesProps {
+  /**
+   * Whose eye the tiles are drawn for: the ship's (ShipController sets the
+   * handover and the telemetry the detail reads), or the system view's
+   * camera in close zoom, which sets both here.
+   */
+  eye?: 'ship' | 'system'
+}
+
+export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
@@ -52,12 +73,14 @@ export default function SurfaceTiles() {
   const ground = useRef<SurfaceGround | null>(null)
   const errorTarget = useRef(NaN)
   const credits = useRef<{ sources: ActiveSources; at: number } | null>(null)
+  // The system view's eye last frame, in Earth's frame, for its speed.
+  const previousEye = useMemo(() => ({ has: false, at: new THREE.Vector3() }), [])
 
   // Created in an effect and hung under the holder by hand (no state, so no
   // extra render), so StrictMode's mount, unmount, mount disposes the first
-  // instance whole and draws only the second. Leaving ship mode unmounts
-  // this: the camera is released and every tile, texture and in-flight
-  // download with it.
+  // instance whole and draws only the second. Leaving ship mode (or, in the
+  // system view, close zoom or Earth focus) unmounts this: the camera is
+  // released and every tile, texture and in-flight download with it.
   useEffect(() => {
     const parent = holder.current
     if (!parent || !link) return
@@ -85,6 +108,9 @@ export default function SurfaceTiles() {
     return () => {
       surface.current = null
       ground.current = null
+      // The system view's eye goes with the tiles: the globe draws it all.
+      if (eye === 'system') setSurfaceEye(Infinity)
+      previousEye.has = false
       if (surfaceGroundSampler() === sampler) setSurfaceGroundSampler(null)
       credits.current = null
       setActiveSurfaceSources([])
@@ -98,7 +124,7 @@ export default function SurfaceTiles() {
         console.error('surface tiles: dispose failed', error)
       }
     }
-  }, [camera, gl, floatLinear, link])
+  }, [camera, gl, floatLinear, link, eye, previousEye])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
   // is in those pixels, and the cache's marks follow them (surface-lod.ts).
@@ -109,26 +135,46 @@ export default function SurfaceTiles() {
 
   useFrame((_, delta) => {
     const current = surface.current
-    if (!current?.tiles.group.parent) return
+    const holderGroup = current?.tiles.group.parent
+    if (!current || !holderGroup) return
     const { tiles, budget } = current
     budget.tick()
+    // ShipController (or the system view's controls) has moved the camera
+    // and OrbitingBody turned Earth this frame, but neither world matrix is
+    // refreshed until the render: do it here, so the tiles pick their detail
+    // and cull against where the camera and ground are drawn this frame, not
+    // last frame (and the system view's eye below reads them).
+    camera.updateWorldMatrix(true, false)
+    tiles.group.updateWorldMatrix(true, false)
+    let speed: number
+    let nearest: { key: string | null; surfaceDistance: number }
+    if (eye === 'system') {
+      // The holder sits in Earth's spinning body, centred on it: the camera
+      // there is its height over the sea-level sphere, and its motion over
+      // the ground, which close zoom's turn with Earth leaves still.
+      const local = holderGroup.worldToLocal(camera.getWorldPosition(systemEye))
+      const altitude = local.length() - EARTH_RADIUS
+      setSurfaceEye(altitude)
+      speed = groundSpeed(previousEye.has ? previousEye.at : null, local, delta)
+      previousEye.at.copy(local)
+      previousEye.has = true
+      systemNearest.surfaceDistance = Math.max(altitude, 0)
+      nearest = systemNearest
+    } else {
+      speed = shipTelemetry.air.speed
+      nearest = shipTelemetry.nearest
+    }
     // Less detail the faster the ground sweeps past (surface-lod.ts), but
     // the rest detail under and around the eye (a second's flight ahead),
     // set before update() picks this frame's tiles.
-    const speed = shipTelemetry.air.speed
-    const target = surfaceErrorTarget(sweepRate(speed, shipTelemetry.nearest), touch)
+    const target = surfaceErrorTarget(sweepRate(speed, nearest), touch)
     errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
     current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch), eyeMarginMetres(speed / EARTH_UNITS_PER_METRE))
-    // ShipController has moved the camera and OrbitingBody turned Earth this
-    // frame, but neither world matrix is refreshed until the render: do it
-    // here, so the tiles pick their detail and cull against where the camera
-    // and ground are drawn this frame, not last frame.
-    camera.updateWorldMatrix(true, false)
-    tiles.group.updateWorldMatrix(true, false)
     tiles.update()
     ground.current?.invalidate()
-    // None of the ground is the tiles' above the handover's top (ShipController
-    // has written this frame's share): the globe draws it all.
+    // None of the ground is the tiles' above the handover's top (ShipController,
+    // or the system view's eye above, has written this frame's share): the
+    // globe draws it all.
     tiles.group.visible = surfaceOpacityUniform.value > 0
     current.syncCounters()
     const now = performance.now()

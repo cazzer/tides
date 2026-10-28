@@ -16,7 +16,10 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { MIN_DISTANCE_FACTOR } from './main-view'
 import type { Pivot } from './pivot'
 import { useStore } from './store'
-import { EARTH_KM_PER_UNIT } from './surface-handover'
+import { EARTH_KM_PER_UNIT, surfaceOpacityUniform } from './surface-handover'
+import { earthLatLon, surfaceGroundSampler } from './surface-ground'
+import { RELIEF } from './relief'
+import { EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
 import { TERRAIN_DISPLACEMENT } from './cloud-layer'
 import { NEAR_MIN as SHIP_NEAR_MIN } from './ship/ship-session'
 import {
@@ -96,14 +99,21 @@ export function groundAngle(altitude: number, radius: number): number {
 }
 
 const _local = new Vector3()
+const _latLon: [number, number] = [0, 0]
 
 /**
  * How far from Earth's centre the drawn ground stands under the world point
  * `p`, highest within `angle` of it, scene units, for Earth's sphere of
  * `radius` (`earth` its spinning object, whose own frame is the terrain
- * floor's: lon 0 on +X, east toward −Z). Before the floor loads, the fixed
- * sphere over any ground. The base 128 × 128 sphere's floor: once tides-tvr.7.3
- * draws the limb sphere in the system view, this must read earthLimbTerrain().
+ * floor's: lon 0 on +X, east toward −Z).
+ *
+ * The globe's ground is the base 128 × 128 sphere's floor (before it loads,
+ * the fixed sphere over any ground); once tides-tvr.7.3 draws the limb
+ * sphere in the system view, this must read earthLimbTerrain(). Where the
+ * streamed tiles draw (tides-tvr.7.2), their ground, as the ship's floor
+ * reads it (ship/ship-bodies.ts attachEarthStop's drawn()): the tiles' alone
+ * where they cover the window at full opacity, else the higher of the two,
+ * since the globe shows through the dissolve and wherever no tile has loaded.
  */
 export function earthGroundRadius(
   earth: Object3D,
@@ -114,9 +124,18 @@ export function earthGroundRadius(
   _local.copy(p)
   earth.worldToLocal(_local).normalize()
   const floor = earthTerrain()
-  return floor
+  const globe = floor
     ? radius + (TERRAIN_DISPLACEMENT * terrainFloorGreyAround(floor, _local, angle)) / 255
     : terrainFloorRadius(null, radius, _local)
+  const sampler = surfaceGroundSampler()
+  const opacity = surfaceOpacityUniform.value
+  if (!sampler || !(opacity > 0)) return globe
+  const [lat, lon] = earthLatLon(_local, _latLon)
+  const tiles = sampler.maxElevation(lat, lon, (angle * radius) / EARTH_UNITS_PER_METRE)
+  if (!tiles) return globe
+  const ground =
+    radius + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * EARTH_UNITS_PER_METRE
+  return opacity < 1 || !tiles.covered ? Math.max(ground, globe) : ground
 }
 
 /**

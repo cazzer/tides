@@ -27,6 +27,7 @@ import { SURFACE_TILES_ON } from './surface'
 import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
+import { SurfaceCredit } from './ship/SurfaceCredit'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { DepthInfo } from './renderers/DepthInfo'
@@ -223,6 +224,9 @@ export default function App() {
                 <>
                   {!demo && showPlanets && systemAids.scale && <ScaleReadout />}
                   {!demo && <ShipButton />}
+                  {/* The close zoom tiles' credits (tides-tvr.7.2): none
+                      without tiles on screen. */}
+                  {SURFACE_TILES_ON && <SurfaceCredit />}
                 </>
               ) : undefined
             }

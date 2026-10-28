@@ -13,3 +13,23 @@ export function holdRealTime(
     ? { timeScale: Math.sign(requested), cue: true }
     : { timeScale: requested, cue: false }
 }
+
+/**
+ * Whether the system view mounts the streamed surface tiles (tides-tvr.7.2):
+ * with them on (high tier, not ?surface=0), in the main view, and in close
+ * zoom over Earth. Leaving any of these releases them, every download with
+ * them.
+ */
+export function systemSurfaceTilesOn({
+  tilesOn,
+  interactive,
+  closeZoom,
+  cameraFocus,
+}: {
+  tilesOn: boolean
+  interactive: boolean
+  closeZoom: boolean
+  cameraFocus: string | null | undefined
+}): boolean {
+  return tilesOn && interactive && closeZoom && cameraFocus === 'earth'
+}

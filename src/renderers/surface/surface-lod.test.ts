@@ -7,6 +7,7 @@ import {
   EYE_LEAD_SECONDS,
   EYE_REACH_METRES,
   eyeMarginMetres,
+  groundSpeed,
   CACHE_BYTES_FLOOR,
   DETAIL_PIXELS_MAX,
   FALL_SECONDS,
@@ -170,5 +171,18 @@ describe('the cache marks as the view changes (tides-zmw.9.24)', () => {
     marks.dispose()
     vi.advanceTimersByTime(2 * CACHE_LOWER_DELAY_MS)
     expect(apply).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('groundSpeed', () => {
+  it('is the distance between frames over the frame time', () => {
+    expect(groundSpeed({ x: 1, y: 2, z: 3 }, { x: 4, y: 6, z: 3 }, 0.5)).toBeCloseTo(10, 12)
+    expect(groundSpeed({ x: 1, y: 2, z: 3 }, { x: 1, y: 2, z: 3 }, 0.016)).toBe(0)
+  })
+
+  it('is 0 without a previous position or a positive frame time', () => {
+    expect(groundSpeed(null, { x: 4, y: 6, z: 3 }, 0.016)).toBe(0)
+    expect(groundSpeed({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 0)).toBe(0)
+    expect(groundSpeed({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, -1)).toBe(0)
   })
 })

@@ -71,6 +71,21 @@ export function sweepRate(speed: number, nearest: { key: string | null; surfaceD
   return speed / Math.max(nearest.surfaceDistance, 1e-9)
 }
 
+/**
+ * The eye's speed over the ground (units/s) from its position a frame ago
+ * and now, both in Earth's own frame so the spin carries none (the system
+ * view's close zoom, tides-tvr.7.2, has no ship telemetry to read); 0 without
+ * a previous position or a positive `dt`.
+ */
+export function groundSpeed(
+  previous: { x: number; y: number; z: number } | null,
+  current: { x: number; y: number; z: number },
+  dt: number
+): number {
+  if (!previous || !(dt > 0)) return 0
+  return Math.hypot(current.x - previous.x, current.y - previous.y, current.z - previous.z) / dt
+}
+
 /** The floor's window around the eye (ship-bodies.ts floorReach at the fine stop), metres. */
 export const EYE_REACH_METRES = floorReach(FINE_GROUND_CLEARANCE) / EARTH_UNITS_PER_METRE
 /** How far ahead (seconds of flight) the tiles around the eye keep their rest detail. */

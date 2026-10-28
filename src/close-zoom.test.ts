@@ -10,7 +10,10 @@ import {
   isCloseZoom,
 } from './close-zoom'
 import { MIN_DISTANCE_FACTOR, NEAR_MIN, mainNearFar } from './main-view'
-import { EARTH_KM_PER_UNIT } from './surface-handover'
+import { EARTH_KM_PER_UNIT, surfaceOpacityUniform } from './surface-handover'
+import { setSurfaceGroundSampler, type SurfaceGroundQuery } from './surface-ground'
+import { RELIEF } from './relief'
+import { EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
 import { NEAR_MIN as SHIP_NEAR_MIN, NEAR_MIN_REVERSED } from './ship/ship-session'
 import {
   EARTH_BASE_SEGMENTS,
@@ -125,6 +128,84 @@ describe('earthGroundRadius', () => {
     expect(pacific - R).toBeLessThan(0.1 * (tibet - R))
     // Reading round a disc never lowers the ground.
     expect(earthGroundRadius(earth, at(earth, 30, 88), R, 0.05)).toBeGreaterThanOrEqual(tibet)
+  })
+})
+
+describe('earthGroundRadius over the streamed tiles', () => {
+  afterEach(() => {
+    setSurfaceGroundSampler(null)
+    surfaceOpacityUniform.value = 0
+  })
+  const earth = new Object3D()
+  earth.position.set(50, 0, 0)
+  earth.rotation.set(0.4, 1.3, 0)
+  earth.updateMatrixWorld()
+  const p = (() => {
+    const { position } = calculateLocationAndRotationForLatLng(30, 88, 1.2 * R)
+    return earth.localToWorld(new Vector3(position.x, position.y, position.z))
+  })()
+  const angle = 0.01
+  // The globe's ground there with no tiles: the fixed sphere (no floor loaded).
+  const globe = earthGroundRadius(earth, p, R, angle)
+  const tileGround = (metres: number) =>
+    R + (metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * EARTH_UNITS_PER_METRE
+  // Metres that stand the tiles above the globe's ground there.
+  const above = (globe - R) / (RELIEF * EARTH_UNITS_PER_METRE) + 1000
+  const fake = (answer: SurfaceGroundQuery | null) => {
+    const calls: [number, number, number][] = []
+    setSurfaceGroundSampler({
+      maxElevation(lat, lon, radiusM) {
+        calls.push([lat, lon, radiusM])
+        return answer
+      },
+    })
+    return calls
+  }
+
+  it('reads the globe without a sampler, or with the tiles dissolved out', () => {
+    surfaceOpacityUniform.value = 1
+    expect(earthGroundRadius(earth, p, R, angle)).toBe(globe)
+    const calls = fake({ metres: 100, covered: true })
+    surfaceOpacityUniform.value = 0
+    expect(earthGroundRadius(earth, p, R, angle)).toBe(globe)
+    expect(calls).toHaveLength(0)
+  })
+
+  it("takes the tiles' ground alone where they cover the window at full opacity, even below the globe's", () => {
+    fake({ metres: 100, covered: true })
+    surfaceOpacityUniform.value = 1
+    expect(tileGround(100)).toBeLessThan(globe)
+    expect(earthGroundRadius(earth, p, R, angle)).toBeCloseTo(tileGround(100), 12)
+  })
+
+  it('takes the higher of the two through the dissolve or where tiles are missing', () => {
+    fake({ metres: 100, covered: true })
+    surfaceOpacityUniform.value = 0.5
+    expect(earthGroundRadius(earth, p, R, angle)).toBe(globe)
+    fake({ metres: 100, covered: false })
+    surfaceOpacityUniform.value = 1
+    expect(earthGroundRadius(earth, p, R, angle)).toBe(globe)
+    fake({ metres: above, covered: false })
+    expect(earthGroundRadius(earth, p, R, angle)).toBeCloseTo(tileGround(above), 12)
+    surfaceOpacityUniform.value = 0.5
+    expect(earthGroundRadius(earth, p, R, angle)).toBeCloseTo(tileGround(above), 12)
+  })
+
+  it('reads the globe where no loaded tile reaches the window', () => {
+    fake(null)
+    surfaceOpacityUniform.value = 1
+    expect(earthGroundRadius(earth, p, R, angle)).toBe(globe)
+  })
+
+  it("asks the sampler at the point's lat/lon in Earth's spun frame, over the window in metres", () => {
+    const calls = fake({ metres: 0, covered: true })
+    surfaceOpacityUniform.value = 1
+    earthGroundRadius(earth, p, R, angle)
+    expect(calls).toHaveLength(1)
+    const [lat, lon, radiusM] = calls[0]
+    expect(lat).toBeCloseTo((30 * Math.PI) / 180, 9)
+    expect(lon).toBeCloseTo((88 * Math.PI) / 180, 9)
+    expect(radiusM).toBeCloseTo((angle * R) / EARTH_UNITS_PER_METRE, 6)
   })
 })
 
