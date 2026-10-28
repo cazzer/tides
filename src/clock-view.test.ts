@@ -290,7 +290,7 @@ describe('the clock ride after a tilted Earth close-up (tides-oyd)', () => {
     const direction = new Vector3()
     for (let frame = 0; frame < 600; frame++) {
       controls.update()
-      if (!guarded || clockRideAllowed(pivot.tilt)) {
+      if (!guarded || clockRideAllowed(pivot)) {
         if (firstRide < 0) firstRide = frame
         rideWithClock(camera.position, controls.target, target, clock, ride, 0.05)
       } else {
@@ -310,7 +310,9 @@ describe('the clock ride after a tilted Earth close-up (tides-oyd)', () => {
 
   it('waits for the tilt to ease out, then eases into the framing without a spin', () => {
     const { swept, firstRide, offFraming } = switchToClock(true)
+    // The tilt from 0.7 is under CLOCK_RIDE_TILT after ~83 frames.
     expect(firstRide).toBeGreaterThan(60)
+    expect(firstRide).toBeLessThan(100)
     expect(swept).toBeLessThan(200)
     expect(offFraming).toBeLessThan(0.1)
   })
@@ -323,6 +325,12 @@ describe('the clock ride after a tilted Earth close-up (tides-oyd)', () => {
 describe('the clock framing at phone width (tides-3bc)', () => {
   it('keeps its distance in views at least CLOCK_MIN_ASPECT wide', () => {
     for (const aspect of [CLOCK_MIN_ASPECT, 1, 16 / 9, Infinity]) {
+      expect(clockViewOffset(0.4, new Vector3(), aspect).length()).toBeCloseTo(CLOCK_VIEW.distance, 9)
+    }
+  })
+
+  it('keeps its distance in a view with no size yet', () => {
+    for (const aspect of [NaN, 0]) {
       expect(clockViewOffset(0.4, new Vector3(), aspect).length()).toBeCloseTo(CLOCK_VIEW.distance, 9)
     }
   })

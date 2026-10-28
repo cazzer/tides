@@ -503,7 +503,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
 
     if (hasTarget && controls) {
       const smoothness = FOCUS_EASE
-      if (cameraFocus === 'clock' && ref?.current && clockRideAllowed(pivot.current.tilt)) {
+      if (cameraFocus === 'clock' && ref?.current && clockRideAllowed(pivot.current)) {
         rideWithClock(
           camera.position,
           // @ts-ignore
@@ -512,7 +512,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
           target,
           rideRef.current,
           smoothness,
-          'aspect' in camera ? (camera as PerspectiveCamera).aspect : Infinity
+          (camera as PerspectiveCamera).isPerspectiveCamera ? (camera as PerspectiveCamera).aspect : Infinity
         )
       } else {
         leaveClock(rideRef.current)

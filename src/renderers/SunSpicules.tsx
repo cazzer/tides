@@ -50,7 +50,9 @@ function buildSpicules() {
     worker.terminate()
     shareSpicules(event.data)
   }
-  worker.onerror = () => {
+  worker.onerror = (event) => {
+    // Handled: the layout falls back to this thread.
+    event.preventDefault()
     worker.terminate()
     inThread()
   }

@@ -35,7 +35,8 @@ function wrapToPi(a: number): number {
 export function clockViewOffset(angle: number, out = new Vector3(), aspect = Infinity): Vector3 {
   const { azimuth, elevation, distance } = CLOCK_VIEW
   return out.setFromSphericalCoords(
-    distance * Math.max(1, CLOCK_MIN_ASPECT / aspect),
+    // A view with no size yet (aspect NaN or 0) keeps the default.
+    distance * (aspect > 0 ? Math.max(1, CLOCK_MIN_ASPECT / aspect) : 1),
     Math.PI / 2 - elevation,
     angle + azimuth
   )
@@ -46,15 +47,21 @@ export function leaveClock(ride: ClockRide): void {
   ride.entryEase = CLOCK_FRAMING_EASE
 }
 
+// Under this tilt (~0.6°) the clock ride drops what is left of it rather than
+// wait out the ease's tail (~1.5 s more from here).
+export const CLOCK_RIDE_TILT = 0.01
+
 /**
  * Whether the clock ride may move the eye this frame: not while the Earth
- * pivot's `tilt` eases out after leaving Earth focus (tides-oyd). tiltControls
+ * pivot's tilt eases out after leaving Earth focus (tides-oyd). tiltControls
  * takes any outside write to the camera as a new untilted pose and tilts it
  * again, so riding then would compound the tilt every frame and spin the
- * view; until it reaches 0 the view only turns to the clock.
+ * view; until then the view only turns to the clock. Under CLOCK_RIDE_TILT
+ * it sets the tilt to 0 and lets the ride start.
  */
-export function clockRideAllowed(tilt: number): boolean {
-  return tilt === 0
+export function clockRideAllowed(pivot: { tilt: number }): boolean {
+  if (Math.abs(pivot.tilt) < CLOCK_RIDE_TILT) pivot.tilt = 0
+  return pivot.tilt === 0
 }
 
 export function rideWithClock(
