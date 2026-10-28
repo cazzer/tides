@@ -26,7 +26,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
 import { setSurfaceEye, surfaceOpacityUniform } from '../../surface-handover'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
-import { ActiveSources, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
+import { ActiveSources, creditsShown, NO_SOURCES, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import type { ImageryTile } from './imagery'
 import { setActiveSurfaceSources } from './surface-credits'
 import { createSurfaceGround, type SurfaceGround } from './surface-ground'
@@ -179,15 +179,20 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
     current.syncCounters()
     const now = performance.now()
     const credit = credits.current
-    if (credit && now - credit.at >= CREDIT_INTERVAL_MS) {
+    if (credit && !creditsShown(eye, tiles.group.visible)) {
+      // The system view's tiles, mounted but not drawing yet: no credits,
+      // and a fresh read the frame they start to.
+      credit.at = -Infinity
+      setActiveSurfaceSources(NO_SOURCES)
+    } else if (credit && now - credit.at >= CREDIT_INTERVAL_MS) {
       credit.at = now
       const seen = new Set<SurfaceSource>()
       const servedByEox = (tile: ImageryTile) => current.overlay.servedByEox(tile)
       // The camera in the tiles' own frame (ECEF metres), for the horizon.
-      const eye = tiles.group.worldToLocal(camera.getWorldPosition(creditEye))
+      const viewer = tiles.group.worldToLocal(camera.getWorldPosition(creditEye))
       for (const tile of tiles.visibleTiles) {
         const bounds = tileRadianBounds(tile)
-        if (bounds && tileOnNearSide(bounds, eye)) sourcesForTile(bounds, servedByEox).forEach((s) => seen.add(s))
+        if (bounds && tileOnNearSide(bounds, viewer)) sourcesForTile(bounds, servedByEox).forEach((s) => seen.add(s))
       }
       setActiveSurfaceSources(credit.sources.update(seen, now))
     }

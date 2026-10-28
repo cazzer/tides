@@ -16,7 +16,8 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { MIN_DISTANCE_FACTOR } from './main-view'
 import type { Pivot } from './pivot'
 import { useStore } from './store'
-import { EARTH_KM_PER_UNIT, surfaceOpacityUniform } from './surface-handover'
+import { EARTH_KM_PER_UNIT, SURFACE_TOP, surfaceOpacityUniform } from './surface-handover'
+import { isTileRange } from './close-zoom-rules'
 import { earthLatLon, surfaceGroundSampler } from './surface-ground'
 import { RELIEF } from './relief'
 import { EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
@@ -182,6 +183,7 @@ function leaveCloseZoom(
   closeZoomState.guard = false
   if (controls && controls.zoomSpeed !== 1) controls.zoomSpeed = 1
   if (useStore.getState().closeZoom) useStore.getState().setCloseZoom(false)
+  if (useStore.getState().closeZoomTiles) useStore.getState().setCloseZoomTiles(false)
 }
 
 /**
@@ -219,7 +221,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
     const earth = state.earth?.current as Object3D | null | undefined
     const radius = state.earthRadius
     if (!earth || radius == null || state.shipMode) {
-      if (owner.wasClose || state.closeZoom) leaveCloseZoom(owner, controls, spin)
+      if (owner.wasClose || state.closeZoom || state.closeZoomTiles) leaveCloseZoom(owner, controls, spin)
       return
     }
     earth.getWorldPosition(_centre)
@@ -227,6 +229,10 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
     const close = isCloseZoom(eyeR, radius, owner.wasClose)
     if (close !== state.closeZoom) state.setCloseZoom(close)
     owner.wasClose = close
+    // The tiles' range (tides-tvr.7.2): only in close zoom, from the eye's
+    // height over the sea-level sphere.
+    const tiles = close && isTileRange(eyeR - radius, SURFACE_TOP, state.closeZoomTiles)
+    if (tiles !== state.closeZoomTiles) state.setCloseZoomTiles(tiles)
 
     const earthFocus = state.cameraFocus === 'earth'
     // Not while zoomed out: the fallback floor covers it until it lands.

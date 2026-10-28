@@ -236,6 +236,9 @@ export const useStore = create<{
   /** The main view's eye is below Earth's close-zoom barrier (close-zoom.ts):
    * time runs no faster than real time there. */
   closeZoom: boolean
+  /** In close zoom, the eye is low enough for the streamed surface tiles
+   * (close-zoom-rules.ts isTileRange, tides-tvr.7.2). */
+  closeZoomTiles: boolean
   /** Bumped each time close zoom holds time at real time, for a brief cue. */
   realTimeCue: number
   initialTimestamp: number | null
@@ -287,6 +290,7 @@ export const useStore = create<{
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
   setCloseZoom: (closeZoom: boolean) => void
+  setCloseZoomTiles: (closeZoomTiles: boolean) => void
   setCameraFocus: (focus: CameraFocus) => void
   setMainPanel: (panel: PanelKey) => void
   setWeatherSource: (weatherSource: WeatherSource) => void
@@ -310,6 +314,7 @@ export const useStore = create<{
   earthRadius: undefined,
   timeScale: getInitialTimeScale(),
   closeZoom: false,
+  closeZoomTiles: false,
   realTimeCue: 0,
   initialTimestamp: getInitialTimestamp(),
   timestamp: null,
@@ -388,6 +393,8 @@ export const useStore = create<{
         ? { closeZoom, timeScale, realTimeCue: s.realTimeCue + 1 }
         : { closeZoom }
     }),
+  setCloseZoomTiles: (closeZoomTiles: boolean) =>
+    set((s) => (closeZoomTiles === s.closeZoomTiles ? s : { closeZoomTiles })),
   setCameraFocus: (cameraFocus: CameraFocus) => set({ cameraFocus }),
   setMainPanel: (mainPanel: PanelKey) => set({ mainPanel }),
   setWeatherSource: (weatherSource: WeatherSource) => set({ weatherSource }),

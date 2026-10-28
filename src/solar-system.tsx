@@ -104,7 +104,7 @@ export default function SolarSystem({
     systemSurfaceTilesOn({
       tilesOn: SURFACE_TILES_ON,
       interactive,
-      closeZoom: s.closeZoom,
+      closeZoomTiles: s.closeZoomTiles,
       cameraFocus: s.cameraFocus,
     })
   )

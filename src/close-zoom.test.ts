@@ -218,7 +218,18 @@ describe('mainNearFar nearMin', () => {
 })
 
 describe('store close zoom', () => {
-  afterEach(() => useStore.setState({ closeZoom: false, timeScale: 1 }))
+  afterEach(() => useStore.setState({ closeZoom: false, closeZoomTiles: false, timeScale: 1 }))
+
+  it("writes the tiles' range only on a change", () => {
+    useStore.getState().setCloseZoomTiles(true)
+    const state = useStore.getState()
+    expect(state.closeZoomTiles).toBe(true)
+    useStore.getState().setCloseZoomTiles(true)
+    expect(useStore.getState()).toBe(state)
+    useStore.getState().setCloseZoomTiles(false)
+    expect(useStore.getState().closeZoomTiles).toBe(false)
+  })
+
 
   it('drops to real time on entering faster, with the cue', () => {
     useStore.setState({ timeScale: 3600, closeZoom: false })
