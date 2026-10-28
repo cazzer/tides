@@ -1580,6 +1580,24 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     return fragment.replace(declared, '').replace(TABLE_READ[0], TABLE_READ[1])
   }
   const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
+  // The low tier's flat sheet from inside, entered as decided at the eye
+  // (tides-tvr.11): put back as it was, so the rest is pinned.
+  const FLAT_ENTRY = [
+    `  // where the ray leaves: decided at the eye, not the near plane
+  // (tides-tvr.11), whose edge would otherwise cut a line between the two
+  // that moves as the camera turns. A hit short of the near plane is drawn
+  // at it (below).
+  float sFlat = sIn > 0.0 ? sIn : sOut;
+  if (sFlat <= 0.0) CLOUD_MISS;`,
+    `  // where the ray leaves.
+  float sFlat = sIn >= sNear ? sIn : sOut;
+  if (sFlat < sNear) CLOUD_MISS;`,
+  ]
+  const asBeforeFlatEntry = (fragment: string) => {
+    expect(fragment.split(FLAT_ENTRY[0]).length).toBeLessThanOrEqual(2)
+    return fragment.replace(FLAT_ENTRY[0], FLAT_ENTRY[1])
+  }
+
   for (const flat of [false, true]) {
     const name = `${flat ? 'flat' : 'relief'}-full`
     it(`leaves the untyped programs exactly as tides-tvr.4.2 left them (${name})`, () => {
@@ -1593,7 +1611,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
             ...(ease === 'ease' ? ['FOG_EASE'] : []),
           ])
           const vertex = preprocess(vertexShader, defines)
-          const fragment = withoutSkyView(preprocess(fragmentShader, defines))
+          const fragment = asBeforeFlatEntry(withoutSkyView(preprocess(fragmentShader, defines)))
           expect(vertex + fragment).not.toMatch(TYPED_WORDS)
           expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
             UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]

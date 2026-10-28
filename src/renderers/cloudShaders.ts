@@ -997,9 +997,12 @@ void main() {
 
 #if defined(CLOUD_FLAT) && defined(FLIP_SIDED)
   // The flat shell where the ray enters it, or from inside it, its underside
-  // where the ray leaves.
-  float sFlat = sIn >= sNear ? sIn : sOut;
-  if (sFlat < sNear) CLOUD_MISS;
+  // where the ray leaves: decided at the eye, not the near plane
+  // (tides-tvr.11), whose edge would otherwise cut a line between the two
+  // that moves as the camera turns. A hit short of the near plane is drawn
+  // at it (below).
+  float sFlat = sIn > 0.0 ? sIn : sOut;
+  if (sFlat <= 0.0) CLOUD_MISS;
   vec3 p = eye + d * sFlat;
   float terrain = 0.0;
 #elif defined(CLOUD_FLAT)
