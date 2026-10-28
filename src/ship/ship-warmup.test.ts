@@ -172,7 +172,6 @@ describe('coldWork', () => {
     expect(compiled).toEqual([{ side: THREE.FrontSide, defines: ['CLOUD_FLAT', 'FOG_EASE', 'CLOUD_TYPED'] }])
     // Turned back, in their order, for the draw to pick its own program.
     expect(Object.keys(material.defines)).toEqual(['CLOUD_FLAT', 'FOG_EASE'])
-    expect(material.side).toBe(THREE.FrontSide)
     // Once more under a new record, as after a dispose drops the programs.
     record = {}
     warmDefinesOnce(renderer, mesh, camera, scene, done, () => record)

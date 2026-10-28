@@ -124,7 +124,7 @@ export default function EarthRenderer({
   // by three's record of the material, which a dispose replaces (as React
   // StrictMode's replayed effects do in dev); and whether the shell has
   // been faced to a camera yet, which sets the defines it draws with.
-  const warmedDefines = useMemo(() => new WeakSet<object>(), [])
+  const warmedDefines = useRef(new WeakSet<object>())
   const cloudsFaced = useRef(false)
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
@@ -192,35 +192,35 @@ export default function EarthRenderer({
   // haze's camera and frame, for each camera before anything draws (the
   // tiles draw before the ground); one wrapper, so its cleanup restores the
   // scene's.
-  useEffect(
-    () =>
-      cloudsFaceEachCamera(scene, clouds, cloudRef, (renderer, camera) => {
-        cloudsFaced.current = true
-        // The tiles' handover marks (surface-scale.ts), cleared within this
-        // View's scissor.
-        if (SURFACE_TILES_ON) renderer.clearStencil()
-        if (groundRef.current) {
-          groundHaze.update(groundRef.current, camera)
-          // At the haze's eye, just set.
-          water.update()
-        }
-        // The eye for this camera: its exposure, up a little under a low
-        // Sun near the ground in flight, and how much the daylit sky hides
-        // the stars (night-flight.ts dayExposure(), skyDaylight()).
-        eyeSky.daylight = 0
-        eyeSky.heightKm = EYE_AIRLESS_KM
-        eyeSky.up.set(0, 1, 0)
-        eyeSky.sunDiscFade = 0
-        renderer.toneMappingExposure =
-          TONE_MAPPING_EXPOSURE *
-          (nightFlight && groundRef.current ? nightFlight.adaptEye(groundRef.current, camera, diameter) : 1)
-        // After the Sun, which it reads; as the ground's onBeforeRender.
-        if (tileNightFlight && groundRef.current && cloudRef.current?.parent) {
-          tileNightFlight.update(groundRef.current, camera, diameter)
-        }
-      }),
-    [scene, clouds, groundHaze, water, tileNightFlight, nightFlight, diameter]
-  )
+  useEffect(() => {
+    // A new layer (a new tier) is faced afresh.
+    cloudsFaced.current = false
+    return cloudsFaceEachCamera(scene, clouds, cloudRef, (renderer, camera) => {
+      cloudsFaced.current = true
+      // The tiles' handover marks (surface-scale.ts), cleared within this
+      // View's scissor.
+      if (SURFACE_TILES_ON) renderer.clearStencil()
+      if (groundRef.current) {
+        groundHaze.update(groundRef.current, camera)
+        // At the haze's eye, just set.
+        water.update()
+      }
+      // The eye for this camera: its exposure, up a little under a low
+      // Sun near the ground in flight, and how much the daylit sky hides
+      // the stars (night-flight.ts dayExposure(), skyDaylight()).
+      eyeSky.daylight = 0
+      eyeSky.heightKm = EYE_AIRLESS_KM
+      eyeSky.up.set(0, 1, 0)
+      eyeSky.sunDiscFade = 0
+      renderer.toneMappingExposure =
+        TONE_MAPPING_EXPOSURE *
+        (nightFlight && groundRef.current ? nightFlight.adaptEye(groundRef.current, camera, diameter) : 1)
+      // After the Sun, which it reads; as the ground's onBeforeRender.
+      if (tileNightFlight && groundRef.current && cloudRef.current?.parent) {
+        tileNightFlight.update(groundRef.current, camera, diameter)
+      }
+    })
+  }, [scene, clouds, groundHaze, water, tileNightFlight, nightFlight, diameter])
   // Out of flight, the eye as the day's at once, for a View with no Earth of
   // its own to set it (the 'top' panel).
   useEffect(() => () => restoreEye(gl), [nightFlight, gl])
@@ -267,7 +267,7 @@ export default function EarthRenderer({
   // offsets the texture rather than turning the mesh, so the ground's shadows
   // drift with them. The waves move on by the wall clock, still under
   // prefers-reduced-motion.
-  useFrame(({ clock, gl, camera, scene }, delta) => {
+  useFrame(({ clock, gl, camera }, delta) => {
     water.advance(delta, prefersReducedMotion())
     if (!real) {
       drift.current += STATIC_DRIFT_PER_FRAME
@@ -297,7 +297,7 @@ export default function EarthRenderer({
     // each View the ship's warm-up (ShipWarmup) doesn't run in, the
     // overview's panels. Here, as three's compile must not run mid-render.
     if (cloudsFaced.current && cloudRef.current?.parent) {
-      warmDefinesOnce(gl, cloudRef.current, camera, scene, warmedDefines, (material) => gl.properties.get(material))
+      warmDefinesOnce(gl, cloudRef.current, camera, scene, warmedDefines.current, (material) => gl.properties.get(material))
     }
   })
 
