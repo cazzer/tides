@@ -24,6 +24,7 @@ import {
 import { truncateLatLon } from './utils'
 import { isMoonKey } from './moons/moon-keys'
 import DateTimePicker from './DateTimePicker'
+import { DemoMenu } from './demo/DemoMenu'
 import { glassButton, glassPanel, PHONE } from './glass-styles'
 import DockToggle from './DockToggle'
 import { opensDownOnPhone, phoneDock, useDockDisclosure } from './dock-disclosure'
@@ -125,6 +126,7 @@ export default function Controls() {
       </IconButton>
       {locationError && <LocationError>{locationError}</LocationError>}
       <DateTimePicker />
+      <DemoMenu />
       <IconButton
         type="button"
         onClick={() => setSettingsOpen(true)}

@@ -44,7 +44,7 @@ import {
 } from './main-view'
 import { LABEL_KEYS } from './system-aids/label-visibility'
 import { CLOCK_HALF_WIDTH } from './clock-size'
-import { mainCameraPose } from './main-camera-session'
+import { mainCameraPose, takeFocusSnap, takeMainCameraRestore } from './main-camera-session'
 import {
   canPivot,
   clampTilt,
@@ -290,37 +290,40 @@ const sunCentre = new Vector3()
  * eye.
  */
 function useMainNearFar() {
-  useFrame(({ camera, controls }) => {
-    const perspective = camera as PerspectiveCamera
-    if (!controls || !perspective.isPerspectiveCamera) return
-    const state = useStore.getState()
-    for (let i = 0; i < LABEL_KEYS.length; i++) {
-      const key = LABEL_KEYS[i]
-      const object = (state[key] as { current?: Object3D | null } | undefined)
-        ?.current
-      nearBodies[i].reach = object ? nearReach(key) : 0
-      object?.getWorldPosition(nearBodies[i].centre)
-    }
-    const clock = nearBodies[LABEL_KEYS.length]
-    clock.reach = state.clock?.current ? CLOCK_HALF_WIDTH : 0
-    state.clock?.current?.getWorldPosition(clock.centre)
-    const eye = perspective.position
-    const surface = nearestSurface(
-      eye,
-      (controls as OrbitControlsImpl).target,
-      nearBodies
-    )
-    const sun = state.sun?.current
-    const eyeFromSun = sun
-      ? sun.getWorldPosition(sunCentre).distanceTo(eye)
-      : eye.length()
-    const { near, far } = mainNearFar(surface, eyeFromSun, nearPlanes)
-    if (near !== perspective.near || far !== perspective.far) {
-      perspective.near = near
-      perspective.far = far
-      perspective.updateProjectionMatrix()
-    }
-  })
+  useFrame(({ camera, controls }) => updateMainNearFar(camera, controls))
+}
+
+/** One frame of useMainNearFar, for anything that moves the main eye later in the frame. */
+export function updateMainNearFar(camera: Camera, controls: unknown) {
+  const perspective = camera as PerspectiveCamera
+  if (!controls || !perspective.isPerspectiveCamera) return
+  const state = useStore.getState()
+  for (let i = 0; i < LABEL_KEYS.length; i++) {
+    const key = LABEL_KEYS[i]
+    const object = (state[key] as { current?: Object3D | null } | undefined)
+      ?.current
+    nearBodies[i].reach = object ? nearReach(key) : 0
+    object?.getWorldPosition(nearBodies[i].centre)
+  }
+  const clock = nearBodies[LABEL_KEYS.length]
+  clock.reach = state.clock?.current ? CLOCK_HALF_WIDTH : 0
+  state.clock?.current?.getWorldPosition(clock.centre)
+  const eye = perspective.position
+  const surface = nearestSurface(
+    eye,
+    (controls as OrbitControlsImpl).target,
+    nearBodies
+  )
+  const sun = state.sun?.current
+  const eyeFromSun = sun
+    ? sun.getWorldPosition(sunCentre).distanceTo(eye)
+    : eye.length()
+  const { near, far } = mainNearFar(surface, eyeFromSun, nearPlanes)
+  if (near !== perspective.near || far !== perspective.far) {
+    perspective.near = near
+    perspective.far = far
+    perspective.updateProjectionMatrix()
+  }
 }
 
 /** The distance framing eases toward, or null while a planet or moon hasn't registered. */
@@ -449,6 +452,19 @@ export const CameraProvider = ({ children }: { children: any }) => {
   )
 
   useFrame((state) => {
+    // Leaving a demo: back to the pose saved on entry, once. tiltControls
+    // takes it as a move from outside, which ends any framing ease.
+    if (controls) {
+      const restore = takeMainCameraRestore()
+      if (restore) {
+        camera.position.fromArray(restore.position)
+        camera.up.fromArray(restore.up)
+        ;(controls as OrbitControlsImpl).target.fromArray(restore.target)
+        cameraTarget.current.fromArray(restore.target)
+        outsideMoveRef.current = true
+      }
+    }
+
     const target = new Vector3()
     let hasTarget = false
     // What the target is on, for followMotion.
@@ -516,7 +532,8 @@ export const CameraProvider = ({ children }: { children: any }) => {
         )
       } else {
         leaveClock(rideRef.current)
-        turnTarget(cameraTarget.current, camera.position, target, smoothness)
+        // A demo under reduced motion has the target jump to the focus.
+        turnTarget(cameraTarget.current, camera.position, target, takeFocusSnap() ? 1 : smoothness)
       }
       camera.lookAt(cameraTarget.current)
       // @ts-ignore
