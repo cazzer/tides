@@ -156,6 +156,9 @@ describe('the shipped depth maps', () => {
       expect(at(0, -150), 'mid-Pacific').toBeGreaterThanOrEqual(encodeWaterDepth(3500))
       expect(at(0, -150), 'mid-Pacific').toBeLessThanOrEqual(encodeWaterDepth(6000))
       expect(at(47.7, -87.5), 'Lake Superior').toBe(encodeWaterDepth(WATER_DEPTH_NEUTRAL))
+      // The Caspian's depths below its own surface, not sea level's.
+      expect(at(45.5, 50), 'north Caspian').toBeLessThanOrEqual(encodeWaterDepth(10))
+      expect(at(38.5, 51.5), 'south Caspian').toBeGreaterThan(encodeWaterDepth(300))
     })
   }
 })

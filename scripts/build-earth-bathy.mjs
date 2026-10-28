@@ -21,9 +21,11 @@
 // sea off it, not a few metres; none under the sea, 0 m). Wet or dry is the shipped elevation map's call, not ETOPO's,
 // so the two agree texel for texel: a texel above 0 m there is dry (land,
 // and the lakes above sea level, the Great Lakes among them). The Caspian,
-// whose surface (−28 m) that map clamps to 0, is wet, and takes ETOPO's
-// depth of its bed below sea level, 28 m more than the lake's own: it has
-// shelves and a deep south basin as a sea does. Dry texels take the mean of
+// whose surface (CASPIAN_SURFACE) that map clamps to 0, is wet, and its
+// depth is its bed's below that surface, not below sea level: its north a
+// few metres deep, its south basin a kilometre, as a sea's shelf and deep
+// (ETOPO's cells there under the surface; CASPIAN, wet texels in a box no
+// other water in the map shares). Dry texels take the mean of
 // their filled 8 neighbours (columns wrapping), FILL_PASSES times, so the
 // coast the coarser water mask draws a texel off still has its sea's depth;
 // the rest take WATER_DEPTH_NEUTRAL, whose floor is the open ocean's.
@@ -53,6 +55,10 @@ const WIDTH = 4096;
 const HEIGHT = 2048;
 const FILL_PASSES = 3;
 const PNG_BUDGET = 2.5e6;
+// The Caspian's surface (m; about −28 these decades) and a box around it
+// (latitude, longitude) clear of the Black Sea, Lake Urmia and the Aral Sea.
+const CASPIAN_SURFACE = -28;
+const CASPIAN = { north: 47.5, south: 36, west: 46, east: 55.5 };
 
 // TypeScript; Vite (6.1 or later) transforms them for Node.
 const options = { configFile: false, logLevel: "error" };
@@ -99,6 +105,16 @@ for (const [name, lat, lon, ok] of RAW_CHECKS) {
 const columnOf = new Int32Array(SOURCE_W);
 for (let c = 0; c < SOURCE_W; c++) columnOf[c] = Math.floor(((c + 0.5) * WIDTH) / SOURCE_W);
 const rowOf = (r) => Math.floor(((r + 0.5) * HEIGHT) / SOURCE_H);
+// Each cell's surface: sea level, or the Caspian's in its box (whose wet
+// texels are all the Caspian's).
+const inCaspianRow = (r) => {
+  const lat = 90 - (r + 0.5) / 60;
+  return lat > CASPIAN.south && lat < CASPIAN.north;
+};
+const inCaspianColumn = (c) => {
+  const lon = (c + 0.5) / 60 - 180;
+  return lon > CASPIAN.west && lon < CASPIAN.east;
+};
 
 const sum = new Float64Array(WIDTH * HEIGHT);
 const count = new Uint32Array(WIDTH * HEIGHT);
@@ -112,12 +128,14 @@ for (let r0 = 0; r0 < SOURCE_H; r0 += BLOCK) {
   const values = new Float32Array(buffer.buffer, buffer.byteOffset, rows * SOURCE_W);
   for (let i = 0; i < rows; i++) {
     const row = rowOf(r0 + i) * WIDTH;
+    const caspianRow = inCaspianRow(r0 + i);
     for (let c = 0; c < SOURCE_W; c++) {
       const k = row + columnOf[c];
+      const surface = caspianRow && inCaspianColumn(c) ? CASPIAN_SURFACE : 0;
       const elevationHere = values[i * SOURCE_W + c];
       count[k]++;
-      if (elevationHere < 0) {
-        sum[k] -= elevationHere;
+      if (elevationHere < surface) {
+        sum[k] += surface - elevationHere;
         seaCount[k]++;
       }
     }
@@ -244,7 +262,8 @@ const SPOTS = {
   "Mid-Pacific": [0, -150],
   "North Pole": [89.9, 0],
   "Lake Superior": [47.7, -87.5],
-  Caspian: [42, 50],
+  "Caspian, south": [38.5, 51.5],
+  "Caspian, north": [45.5, 50],
 };
 for (const [name, [lat, lon]] of Object.entries(SPOTS)) {
   const level = at(lat, lon);

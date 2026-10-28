@@ -17,6 +17,7 @@
 // thousands. Land (above sea level in the elevation map) and the lakes over
 // it take their wet neighbours' depth within three texels of the coast and
 // WATER_DEPTH_NEUTRAL beyond: a lake further inland takes deep water's tint.
+// The Caspian is wet, with its own depths below its own surface.
 //
 // The model: waterTint(depth), a gain on the map's colour by channel, three
 // smoothsteps between four gains: from WATER_TINT_SHALLOW over sand a few
@@ -45,11 +46,13 @@ export const WATER_DEPTH_TRENCH = 9000
 
 type Rgb = readonly [number, number, number]
 /** The tint's gains on the map's colour (linear, by channel): over sand a
- * few metres down, the shelf, deep water, and the trenches. */
-export const WATER_TINT_SHALLOW: Rgb = [1.5, 1.9, 1.25]
-export const WATER_TINT_SHELF: Rgb = [1.0, 1.2, 1.0]
-export const WATER_TINT_DEEP: Rgb = [0.6, 0.6, 0.78]
-export const WATER_TINT_TRENCH: Rgb = [0.4, 0.4, 0.6]
+ * few metres down, the shelf, deep water, and the trenches. Playtested at 70%
+ * of [1.5, 1.9, 1.25], [1, 1.2, 1], [0.6, 0.6, 0.78], [0.4, 0.4, 0.6]'s
+ * distance from 1. */
+export const WATER_TINT_SHALLOW: Rgb = [1.35, 1.63, 1.175]
+export const WATER_TINT_SHELF: Rgb = [1.0, 1.14, 1.0]
+export const WATER_TINT_DEEP: Rgb = [0.72, 0.72, 0.846]
+export const WATER_TINT_TRENCH: Rgb = [0.58, 0.58, 0.72]
 /** The map's luma over which the tint fades out (from the first to the
  * second): the open sea's is 0.05-0.08, the Bahamas' banks 0.13. */
 export const WATER_KEEP: readonly [number, number] = [0.1, 0.16]
