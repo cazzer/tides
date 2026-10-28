@@ -8,34 +8,40 @@
 // many times light's between planets, and a drone that tracked them would
 // either never move or always scream. The wind follows the log of the
 // dynamic pressure (telemetry.air), which is 0 in space.
+//
+// All of it sits low (tides-d9f.7): a rumble, not a whine. The engine's saws
+// are lowpassed to little more than their first few partials, and the
+// thrusters, boost and wind are red noise through lowpasses, so their energy
+// stays mostly under ~300 Hz.
 
 import { clamp01, speedFraction } from '../dust'
 
 /** [TUNE] The throttle's share of the engine's drive; the rest is speed over cap. */
 export const ENGINE_THROTTLE_SHARE = 0.6
 /** [TUNE] The engine's fundamental at idle and full drive, Hz. */
-export const ENGINE_HZ: readonly [number, number] = [42, 96]
+export const ENGINE_HZ: readonly [number, number] = [32, 64]
 /** [TUNE] The two oscillators' detune either way, cents: a slow beat, not a chord. */
 export const ENGINE_DETUNE_CENTS = 7
 /** [TUNE] The oscillators' level at idle and full drive. */
-export const ENGINE_GAIN: readonly [number, number] = [0.035, 0.09]
+export const ENGINE_GAIN: readonly [number, number] = [0.04, 0.1]
 /** [TUNE] The engine's lowpass at idle and full drive, Hz: it opens up as it works. */
-export const ENGINE_CUTOFF: readonly [number, number] = [220, 900]
+export const ENGINE_CUTOFF: readonly [number, number] = [120, 320]
 /** [TUNE] The engine's brown-noise rumble at idle and full drive. */
 export const ENGINE_NOISE_GAIN: readonly [number, number] = [0.02, 0.05]
 
-/** [TUNE] The thrusters' hiss at full demand, and its band. */
+/** [TUNE] The thrusters' puff at full demand, and its lowpass's corner, Hz, and Q. */
 export const THRUST_GAIN = 0.06
-export const THRUST_HZ = 900
-export const THRUST_Q = 1.2
+export const THRUST_HZ = 260
+export const THRUST_Q = 0.9
 /** [TUNE] How much strafing and changing the throttle (per second) each call for. */
 const THRUST_STRAFE_SHARE = 0.7
 const THRUST_THROTTLE_RATE_SHARE = 0.5
 
-/** [TUNE] The boost's roar at full spool, and its band's centre at no and full spool, Hz. */
+/** [TUNE] The boost's roar at full spool, and its lowpass's corner at no and full spool, Hz. */
 export const BOOST_GAIN = 0.1
-export const BOOST_HZ: readonly [number, number] = [180, 1800]
-export const BOOST_Q = 1
+export const BOOST_HZ: readonly [number, number] = [70, 420]
+/** [TUNE] The boost lowpass's resonance: a little peak at the corner, so the sweep is heard. */
+export const BOOST_Q = 1.4
 /**
  * [TUNE] The roar's share where the boost raises nothing (space, the Moon,
  * high up): it still spools, so it still sounds, but plainly less.
@@ -45,10 +51,10 @@ export const BOOST_IDLE_SHARE = 0.35
 /** [TUNE] No wind at or under this dynamic pressure, Pa; full at Q_FULL. */
 export const WIND_Q_MIN = 20
 export const WIND_Q_FULL = 100_000
-/** [TUNE] The wind's level at full, and its band's centre at none and full, Hz. */
+/** [TUNE] The wind's level at full, and its lowpass's corner at none and full, Hz. */
 export const WIND_GAIN = 0.1
-export const WIND_HZ: readonly [number, number] = [250, 1400]
-export const WIND_Q = 0.8
+export const WIND_HZ: readonly [number, number] = [110, 380]
+export const WIND_Q = 1
 
 /** [TUNE] Time constants of the eases toward the targets, seconds. */
 export const ENGINE_TAU = 0.12
@@ -105,7 +111,7 @@ export interface BoostParams {
 }
 
 /**
- * Fills `out` with the roar's targets for the boost's spool (0..1): its band
+ * Fills `out` with the roar's targets for the boost's spool (0..1): its corner
  * sweeps up exponentially, so the sweep sounds even. Plainly quieter where
  * the boost raises nothing (telemetry.boosted false).
  */

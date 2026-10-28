@@ -8,9 +8,9 @@
 //
 //   2 detuned saws ─ oscGain ─┐
 //   brown noise ─ noiseGain ──┴─ lowpass ─────────────┐
-//   white noise ─ bandpass ─ thrustGain ──────────────┤
-//   white noise ─ bandpass ─ boostGain ───────────────┼─ mix ─ out.bus
-//   brown noise ─ bandpass ─ windGain ────────────────┘
+//   brown noise ─ lowpass ─ thrustGain ───────────────┤
+//   brown noise ─ lowpass ─ boostGain ────────────────┼─ mix ─ out.bus
+//   brown noise ─ lowpass ─ windGain ─────────────────┘
 
 import { MAX_DT } from '../flight'
 import type { ShipInput } from '../ship-input'
@@ -49,9 +49,9 @@ import {
 const NOISE_SECONDS = 2
 // The "brown" noise is red-ish: white through a one-pole lowpass at this
 // corner, Hz, which falls 6 dB an octave above it like brown noise but never
-// drifts off. Its leak per sample follows the context's sample rate. A lower
-// corner would rumble deeper but leave the wind's band (WIND_HZ) quieter.
-const BROWN_CORNER_HZ = 150
+// drifts off. Its leak per sample follows the context's sample rate. Every
+// noise voice is lowpassed under ~400 Hz, so a low corner costs them little.
+const BROWN_CORNER_HZ = 90
 // A target this close to the last one set is left alone.
 const RELATIVE_STEP = 1e-4
 const ABSOLUTE_STEP = 1e-5
@@ -92,9 +92,9 @@ export interface ShipVoices {
   noiseGain: GainNode
   lowpass: BiquadFilterNode
   thrustGain: GainNode
-  boostBand: BiquadFilterNode
+  boostFilter: BiquadFilterNode
   boostGain: GainNode
-  windBand: BiquadFilterNode
+  windFilter: BiquadFilterNode
   windGain: GainNode
   sources: AudioScheduledSourceNode[]
   nodes: AudioNode[]
@@ -171,7 +171,7 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
     nodes.push(node)
     return node
   }
-  const { brown, white } = shipNoise(context)
+  const { brown } = shipNoise(context)
   // Each noise voice starts at its own place in the loop, so two voices on
   // one buffer don't sound as one.
   const loop = (buffer: AudioBuffer, offset: number) => {
@@ -209,21 +209,21 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
 
   const thrustGain = gain()
   thrustGain.connect(mix)
-  const thrustBand = filter('bandpass', THRUST_HZ, THRUST_Q)
-  thrustBand.connect(thrustGain)
-  loop(white, 0).connect(thrustBand)
+  const thrustFilter = filter('lowpass', THRUST_HZ, THRUST_Q)
+  thrustFilter.connect(thrustGain)
+  loop(brown, 0.25).connect(thrustFilter)
 
   const boostGain = gain()
   boostGain.connect(mix)
-  const boostBand = filter('bandpass', BOOST_HZ[0], BOOST_Q)
-  boostBand.connect(boostGain)
-  loop(white, 0.5).connect(boostBand)
+  const boostFilter = filter('lowpass', BOOST_HZ[0], BOOST_Q)
+  boostFilter.connect(boostGain)
+  loop(brown, 0.75).connect(boostFilter)
 
   const windGain = gain()
   windGain.connect(mix)
-  const windBand = filter('bandpass', WIND_HZ[0], WIND_Q)
-  windBand.connect(windGain)
-  loop(brown, 0.5).connect(windBand)
+  const windFilter = filter('lowpass', WIND_HZ[0], WIND_Q)
+  windFilter.connect(windGain)
+  loop(brown, 0.5).connect(windFilter)
 
   return {
     context,
@@ -233,9 +233,9 @@ export function buildShipVoices(out: ShipAudioOutput): ShipVoices {
     noiseGain,
     lowpass,
     thrustGain,
-    boostBand,
+    boostFilter,
     boostGain,
-    windBand,
+    windFilter,
     windGain,
     sources,
     nodes,
@@ -315,11 +315,11 @@ export function updateShipVoices(
 
   const boost = boostParams(telemetry.boost, telemetry.boosted, v.boost)
   ease(v, SLOT.boostGain, boost.gain, now, BOOST_TAU, false, v.boostGain.gain)
-  ease(v, SLOT.boostHz, boost.hz, now, BOOST_TAU, true, v.boostBand.frequency)
+  ease(v, SLOT.boostHz, boost.hz, now, BOOST_TAU, true, v.boostFilter.frequency)
 
   const wind = windParams(windLevel(telemetry.air.dynamicPressure), v.wind)
   ease(v, SLOT.windGain, wind.gain, now, WIND_TAU, false, v.windGain.gain)
-  ease(v, SLOT.windHz, wind.hz, now, WIND_TAU, true, v.windBand.frequency)
+  ease(v, SLOT.windHz, wind.hz, now, WIND_TAU, true, v.windFilter.frequency)
 }
 
 /**
