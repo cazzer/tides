@@ -44,6 +44,13 @@ import {
   waterPhases,
   waterSeaVariance,
   waterSwellEye,
+  waterSparkle,
+  waterSparkleEye,
+  waterSparkleMean,
+  WATER_SPARKLE_GLOW,
+  WATER_SPARKLE_GLOW_DEG,
+  WATER_SPARKLE_PERIOD_M,
+  WATER_TWINKLE_HZ,
   WATER_SWELL_KM,
   waterSlopeVariance,
   waterVisibleVariance,
@@ -180,6 +187,84 @@ describe('the glint along the sea\'s axis (tides-d9f.5)', () => {
     }
     const lh = norm([1, 0.5, 0])
     expect(waterGlint(lh, [-lh[0], -lh[1], -lh[2]], UP, UP, { ...slope, axis: AXIS })).toBe(0)
+  })
+})
+
+describe('the glint\'s sparkle (tides-d9f.5)', () => {
+  it('scales the glint by a facet count over its mean: 1 on average, from a few facets to many', () => {
+    const N = 400
+    for (const lambda of [0.05, 0.5, 3, 11, 13, 80]) {
+      let sum = 0
+      let lit = 0
+      for (let i = 0; i < N; i++) for (let j = 0; j < 8; j++) {
+        const s = waterSparkle(lambda, (i + 0.5) / N, (j + 0.5) / 8)
+        sum += s
+        if (s > 0) lit++
+      }
+      expect(sum / (N * 8), `lambda ${lambda}`).toBeCloseTo(1, 1)
+      // Few facets: most pixels dark, the few lit far brighter than the mean.
+      if (lambda < 1) expect(lit / (N * 8)).toBeCloseTo(1 - Math.exp(-lambda), 1)
+    }
+    expect(waterSparkle(0.05, 0.99, 0.5)).toBeGreaterThan(10)
+  })
+
+  it('expects facets in proportion to their count and the glint\'s distribution', () => {
+    expect(waterSparkleMean(200, 3, 0.9, 0.4)).toBeCloseTo(2 * waterSparkleMean(100, 3, 0.9, 0.4), 10)
+    expect(waterSparkleMean(100, 6, 0.9, 0.4)).toBeCloseTo(2 * waterSparkleMean(100, 3, 0.9, 0.4), 10)
+    expect(Number.isFinite(waterSparkleMean(100, 3, 1, 0))).toBe(true)
+  })
+
+  it('keeps its cells on the Earth: a ground point\'s place mod the period is the same from any eye', () => {
+    const scale = EARTH_KM_PER_UNIT * 1000
+    const place = (eye: V, ray: V) => {
+      const out = new THREE.Vector3()
+      waterSparkleEye(eye, out)
+      return out.toArray().map((x, i) => {
+        const m = x + ray[i] * scale
+        return m - WATER_SPARKLE_PERIOD_M * Math.floor(m / WATER_SPARKLE_PERIOD_M)
+      })
+    }
+    const point: V = [0.31, 2.93, -0.42]
+    for (const eye of [[0.3, 2.94, -0.41], [0.312, 2.931, -0.4205]] as V[]) {
+      const ray: V = [point[0] - eye[0], point[1] - eye[1], point[2] - eye[2]]
+      const got = place(eye, ray)
+      const want = place([0, 0, 0], point)
+      for (let i = 0; i < 3; i++) {
+        const gap = Math.abs(got[i] - want[i])
+        expect(Math.min(gap, WATER_SPARKLE_PERIOD_M - gap)).toBeLessThan(1e-3)
+      }
+    }
+  })
+
+  it('twinkles on the water\'s clock, still under prefers-reduced-motion', () => {
+    const haze = createGroundHaze({ value: new THREE.Vector3(1, 0, 0) }, 2.95, false)
+    const water = createWater(haze.frame)
+    water.advance(2, false)
+    water.update()
+    expect(water.uniforms.uWaterTwinkle.value).toBeCloseTo(2 * WATER_TWINKLE_HZ, 6)
+    water.advance(5, true)
+    water.update()
+    expect(water.uniforms.uWaterTwinkle.value).toBeCloseTo(2 * WATER_TWINKLE_HZ, 6)
+  })
+
+  it('draws it in the glint from the pixel\'s cell, set before any branch the glint reads', () => {
+    const glsl = WATER_GLSL(WATER_WAVE_TABLE)
+    expect(glsl.head).toContain('waterSparkle(waterFacets * d * nh')
+    expect(glsl.normal).toContain('waterFacets = 0.0;')
+    expect(glsl.normal.indexOf('waterFacets = 0.0;')).toBeLessThan(glsl.normal.indexOf('if (specularStrength > 0.0)'))
+    expect(glsl.normal).toContain('waterSparkleKey = uvec4(')
+  })
+
+  it('keeps a smooth share under a low Sun only, so the sunset road stays gold and a higher Sun\'s is all sparkle', () => {
+    const head = WATER_GLSL(WATER_WAVE_TABLE).head
+    const sin = (deg: number) => Math.sin((deg * Math.PI) / 180).toFixed(6)
+    expect(WATER_SPARKLE_GLOW).toBeGreaterThan(0)
+    expect(WATER_SPARKLE_GLOW).toBeLessThan(0.5)
+    expect(WATER_SPARKLE_GLOW_DEG[1]).toBeLessThan(20)
+    expect(head).toContain(
+      `float glow = ${WATER_SPARKLE_GLOW.toFixed(6)} * (1.0 - smoothstep(${sin(WATER_SPARKLE_GLOW_DEG[0])}, ${sin(WATER_SPARKLE_GLOW_DEG[1])}, sunSin));`
+    )
+    expect(head).toContain('sparkle = mix(waterSparkle(')
   })
 })
 

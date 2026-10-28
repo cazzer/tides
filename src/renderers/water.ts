@@ -25,7 +25,10 @@
 //   Fresnel and Smith's shadowing, so the
 //   Sun's road widens and brightens toward the horizon and at a low Sun as
 //   the real sea's does; under the level horizon (the tilted wave facets
-//   could see a Sun the sea can't) it goes out;
+//   could see a Sun the sea can't) it goes out; and broken into sparkle,
+//   the facets a pixel spans that catch the Sun drawn as a count over its
+//   mean (WATER_FACET_M), so the road is points of sunlight round a narrow
+//   core rather than one smooth lobe;
 // - the body (in normal): the day map's ocean, tinted by the depth under it
 //   (./waterDepth.ts waterTinted: lighter and greener over the banks and
 //   shelves, darker over deep water and the trenches, the map's own lighter
@@ -66,7 +69,7 @@
 // base's). The frame is the ground haze's (GroundHaze.frame), filled per
 // camera before anything draws; update() runs after it.
 //
-// No varyings; one sampler (the climate). The globe's pieces go in at: the body and the waves just
+// No varyings; two samplers (the climate, the depth). The globe's pieces go in at: the body and the waves just
 // before emissivemap_fragment (after
 // every patch's normal_fragment_maps code, so the ground detail's groundUp
 // stays the unbent normal), the glint after lights_phong_pars_fragment
@@ -77,7 +80,7 @@ import * as THREE from 'three'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
-import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, waterTinted } from './waterDepth'
+import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, WATER_TINT_DEEP, waterTinted } from './waterDepth'
 import { climateTexture, WATER_CLIMATE_GLSL } from './waterClimate'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 
@@ -116,9 +119,11 @@ export const WATER_SKY_LIGHT_ELEVATION = 25
 /** The skylit body's gain. The day map's deep ocean and WATER_DEEP are
  * calibrated for the Sun's Lambert light on the map, and under the sky alone
  * they undershoot the sea's upwelling light: at 1 the near sea under a low
- * Sun stayed navy-black, at 3 it reads blue, by 6 it goes matte. The glint
- * and the Sun's direct light on the body are as they were. */
-export const WATER_BODY_SKY = 3
+ * Sun stayed navy-black; at 3 the low tier's sea under a 4 deg Sun read
+ * darker than the day map's had (lighter than deep water, under the old sky
+ * fill); 5 meets it, and by 6 the sea goes matte. The glint and the Sun's
+ * direct light on the body are as they were. */
+export const WATER_BODY_SKY = 5
 /** How far the roughness the waves don't draw tilts the facets the sky's
  * reflection is read from, in standard deviations of its slope over the
  * median sea's (WATER_SKY_ROUGH_MEDIAN), at a grazing view: toward the eye
@@ -128,6 +133,31 @@ export const WATER_BODY_SKY = 3
 export const WATER_SKY_ROUGH = 1.5
 /** The median sea's slope deviation along one axis (half of WATER_MSS). */
 export const WATER_SKY_ROUGH_MEDIAN = Math.sqrt(WATER_MSS / 2)
+/** The glint's sparkle. A pixel spans its area over WATER_FACET_M^2 of the
+ * sea's facets, each catching the Sun (its disc, WATER_SUN_SR) with the
+ * chance the glint's own slope distribution gives its half vector; the
+ * count it catches is drawn (Poisson, from a hash of its Earth-fixed cell, a
+ * power of two in metres under the pixel's narrower step, and of the half
+ * vector's slope cell, WATER_SPARKLE_SLOPE wide, so a glint moves with the
+ * waves' normals and the eye) and the glint scaled by it over its mean. The
+ * mean is the smooth lobe; where a pixel expects few facets the road breaks
+ * into points of sunlight and the core narrows to where it expects many.
+ * Each cell redraws WATER_TWINKLE_HZ times a second at its own phase, on the
+ * water's clock (still under prefers-reduced-motion). The cells repeat every
+ * WATER_SPARKLE_PERIOD_M (the eye passes the GPU its place mod that, in
+ * double). */
+export const WATER_FACET_M = 1.5
+/** Under a low Sun a share of the glint stays smooth, the glow the finest
+ * facets give, so the sunset road keeps its gold (lit points clip to white):
+ * WATER_SPARKLE_GLOW of it at the Sun's elevation WATER_SPARKLE_GLOW_DEG[0]
+ * (deg) and under, none from WATER_SPARKLE_GLOW_DEG[1], so a higher Sun's
+ * road stays all sparkle. */
+export const WATER_SPARKLE_GLOW = 0.25
+export const WATER_SPARKLE_GLOW_DEG = [5, 12] as const
+export const WATER_SUN_SR = 6.8e-5
+export const WATER_SPARKLE_SLOPE = 0.005
+export const WATER_TWINKLE_HZ = 6
+export const WATER_SPARKLE_PERIOD_M = 4096
 
 const G = 9.81
 const TAU = 2 * Math.PI
@@ -438,6 +468,41 @@ export function waterGlint(l: Vec3, v: Vec3, n: Vec3, up: Vec3, slope: WaterSlop
   return (smoothstep(-0.02, 0.02, dot(up, l)) * fresnel * d * g1(nl, projected(l)) * g1(nv, projected(v))) / (4 * Math.max(nv, 1e-3))
 }
 
+/** A pixel's expected count of facets catching the Sun: `facets` of them,
+ * the glint's distribution `d` at the half vector, n.h and v.h. */
+export function waterSparkleMean(facets: number, d: number, nh: number, vh: number): number {
+  return (facets * d * nh * WATER_SUN_SR) / (4 * Math.max(vh, 1e-3))
+}
+
+/** The sparkle's scale on the glint for an expected count `lambda` and
+ * uniforms `u`, `u2` in [0, 1): a Poisson count over its mean (the normal
+ * approximation past 12), as the GLSL draws it. Its mean is 1. */
+export function waterSparkle(lambda: number, u: number, u2: number): number {
+  let k = 0
+  if (lambda > 12) {
+    k = Math.max(Math.floor(lambda + Math.sqrt(lambda) * Math.sqrt(-2 * Math.log(Math.max(u, 1e-7))) * Math.cos(TAU * u2) + 0.5), 0)
+  } else {
+    let p = Math.exp(-lambda)
+    let s = p
+    for (let i = 0; i < 24 && u > s; i++) {
+      k++
+      p *= lambda / k
+      s += p
+    }
+  }
+  return k / Math.max(lambda, 1e-6)
+}
+
+/** The eye's place in metres (`eye` from the centre, the ground's frame),
+ * mod WATER_SPARKLE_PERIOD_M, into `out`. */
+export function waterSparkleEye(eye: Vec3, out: THREE.Vector3): void {
+  const m = (x: number) => {
+    const metres = x * METRES_PER_UNIT
+    return metres - WATER_SPARKLE_PERIOD_M * Math.floor(metres / WATER_SPARKLE_PERIOD_M)
+  }
+  out.set(m(eye[0]), m(eye[1]), m(eye[2]))
+}
+
 /** Beckmann's distribution of facet normals at cos^2 `nh2` off the mean,
  * for slope variance `mss`. */
 export function beckmann(nh2: number, mss: number): number {
@@ -487,6 +552,10 @@ uniform float uWavePhase[${WATER_WAVES}];
 // period), from the CPU in double: the GPU adds the ray, so the noise stays
 // on the Earth under a moving eye.
 uniform vec3 uWaterSwellEye[2];
+// The eye's place in metres mod WATER_SPARKLE_PERIOD_M (from the CPU in
+// double), and the water's clock in sparkle draws.
+uniform vec3 uWaterSparkleEye;
+uniform float uWaterTwinkle;
 ${WATER_CLIMATE_GLSL}
 vec3 waterRay;
 vec3 waterUpGround;
@@ -498,6 +567,10 @@ float waterMss;
 float waterVarAlong;
 float waterVarCross;
 vec3 waterAxisView;
+// The pixel's sparkle cell (its Earth-fixed cell, the cell's level) and how
+// many facets it spans (0: no sparkle).
+uvec4 waterSparkleKey;
+float waterFacets;
 // The skylit body as the sky piece adds it to indirectDiffuse, for the
 // eclipse (eclipseShadow.ts) to dim with the Sun.
 #define WATER_SKY_BODY
@@ -514,7 +587,40 @@ float waterProjected(vec3 x, vec3 a, vec3 c) {
   float s = xa * xa + xc * xc;
   return s > 1e-12 ? 2.0 * (waterVarAlong * xa * xa + waterVarCross * xc * xc) / s : waterVarAlong + waterVarCross;
 }
-// The glint over the light's colour (waterGlint() mirrors it): anisotropic
+// A hash (PCG, 4 lanes: Jarzynski and Olano).
+uvec4 waterPcg4(uvec4 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * v.w; v.y += v.z * v.x; v.z += v.x * v.y; v.w += v.y * v.z;
+  v ^= v >> 16u;
+  v.x += v.y * v.w; v.y += v.z * v.x; v.z += v.x * v.y; v.w += v.y * v.z;
+  return v;
+}
+// The sparkle's scale on the glint (waterSparkle() mirrors the draw): the
+// count of the pixel's facets catching the Sun, from the hash of its cell,
+// the half vector's slope cell and its own twinkle, over its mean lambda.
+float waterSparkle(float lambda, vec2 slope) {
+  uvec2 s = uvec2(ivec2(floor(slope * ${f(1 / WATER_SPARKLE_SLOPE)})) + 32768);
+  uvec4 h = waterPcg4(waterSparkleKey ^ uvec4(0u, 0u, 0u, (s.x << 16u) ^ s.y ^ (waterSparkleKey.w << 28u)));
+  uint tick = uint(floor(uWaterTwinkle + float(h.w) * ${e(1 / 2 ** 32)}));
+  h = waterPcg4(h ^ uvec4(tick, tick * 747796405u, 0u, 0u));
+  float u = float(h.x) * ${e(1 / 2 ** 32)};
+  float k = 0.0;
+  if (lambda > 12.0) {
+    float u2 = float(h.y) * ${e(1 / 2 ** 32)};
+    k = max(floor(lambda + sqrt(lambda) * sqrt(-2.0 * log(max(u, 1e-7))) * cos(${f(TAU)} * u2) + 0.5), 0.0);
+  } else {
+    float p = exp(-lambda);
+    float c = p;
+    for (int i = 0; i < 24; i++) {
+      if (u <= c) break;
+      k += 1.0;
+      p *= lambda / k;
+      c += p;
+    }
+  }
+  return k / max(lambda, 1e-6);
+}
+// The glint over the light's colour (waterGlint() mirrors it, the sparkle aside): anisotropic
 // Beckmann in a frame round the bent normal (Beckmann's own when the two
 // variances are equal), Schlick, Smith, out under the level horizon. No NaN
 // with l = -v (h 0).
@@ -534,10 +640,17 @@ float waterGlint(vec3 l, vec3 v, vec3 n) {
   float t2 = ha * ha + hc * hc;
   float q = t2 > 1e-12 ? (ha * ha / waterVarAlong + hc * hc / waterVarCross) / t2 : 0.5 * (1.0 / waterVarAlong + 1.0 / waterVarCross);
   float d = exp(0.5 * q * (nh2 - 1.0) / nh2) / (2.0 * PI * sqrt(waterVarAlong * waterVarCross) * nh2 * nh2);
-  float vh = 1.0 - saturate(dot(v, h));
+  float vdh = saturate(dot(v, h));
+  float vh = 1.0 - vdh;
   float vh2 = vh * vh;
   float fresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * vh2 * vh2 * vh;
-  return smoothstep(-0.02, 0.02, dot(waterUpView, l)) * fresnel * d
+  float sunSin = dot(waterUpView, l);
+  float sparkle = 1.0;
+  if (waterFacets > 0.0) {
+    float glow = ${f(WATER_SPARKLE_GLOW)} * (1.0 - smoothstep(${f(Math.sin((WATER_SPARKLE_GLOW_DEG[0] * Math.PI) / 180))}, ${f(Math.sin((WATER_SPARKLE_GLOW_DEG[1] * Math.PI) / 180))}, sunSin));
+    sparkle = mix(waterSparkle(waterFacets * d * nh * ${e(WATER_SUN_SR / 4)} / max(vdh, 1e-3), vec2(ha, hc) / max(nh, 1e-3)), 1.0, glow);
+  }
+  return smoothstep(-0.02, 0.02, sunSin) * fresnel * d * sparkle
     * waterG1(nl, waterProjected(l, a, c)) * waterG1(nv, waterProjected(v, a, c)) / (4.0 * max(nv, 1e-3));
 }
 ${WATER_DEPTH_GLSL}
@@ -642,6 +755,7 @@ waterMss = ${f(WATER_MSS)};
 waterVarAlong = ${f(WATER_MSS / 2)};
 waterVarCross = ${f(WATER_MSS / 2)};
 waterAxisView = vec3(0.0);
+waterFacets = 0.0;
 #if NUM_DIR_LIGHTS > 0
 diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
   specularStrength * smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, dot(waterUpView, directionalLights[0].direction)));
@@ -686,6 +800,13 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterGb = dot(waterRx, waterRy);
     float waterGc = dot(waterRy, waterRy);
     float waterNarrow = sqrt(max(0.5 * (waterGa + waterGc) - sqrt(0.25 * (waterGa - waterGc) * (waterGa - waterGc) + waterGb * waterGb), 0.0));
+    // The sparkle's cell: Earth-fixed, a power of two in metres under the
+    // narrower step, so each pixel draws its own; and the facets it spans.
+    float waterCellLevel = clamp(floor(log2(max(waterNarrow * ${f(METRES_PER_UNIT)}, 1e-3))), -2.0, 10.0);
+    float waterCellM = exp2(waterCellLevel);
+    vec3 waterCell = mod(floor((uWaterSparkleEye + waterRay * ${f(METRES_PER_UNIT)}) / waterCellM), ${f(WATER_SPARKLE_PERIOD_M)} / waterCellM);
+    waterSparkleKey = uvec4(uvec3(waterCell), uint(waterCellLevel + 2.0));
+    waterFacets = length(cross(waterRx, waterRy)) * ${e(METRES_PER_UNIT ** 2 / WATER_FACET_M ** 2)};
     vec3 waterGrad = vec3(0.0);
     vec3 waterD;
     vec3 waterDt;
@@ -758,16 +879,17 @@ if (material.specularStrength > 0.0) {
     // The skylight's irradiance, pi times the sky's mean, from the one
     // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION),
     // into the body through Lambert, less what the surface reflects on the
-    // way out, on deep water's own colour: the maps under the globe and the
-    // tiles differ, and the sky's light on them showed the seam. A depth term
-    // (the shallows' floor, tides-d9f.6) will tint or replace this albedo.
+    // way out, on deep water's own colour (the maps under the globe and the
+    // tiles differ, and the sky's light on them showed the seam) under the
+    // depth's tint over deep water's (./waterDepth.ts: lighter and greener
+    // over the banks and shelves, darker over the trenches).
     vec3 waterSide = cross(waterUpGround, uGroundHazeSun);
     float waterSide2 = dot(waterSide, waterSide);
     waterSide = waterSide2 > 1e-10 ? waterSide * inversesqrt(waterSide2)
       : normalize(cross(waterUpGround, abs(waterUpGround.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
     vec3 waterSkyLight = PI * groundHazeSky(waterUpGround,
       waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))});
-    vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(${v3(WATER_DEEP)});
+    vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(${v3(WATER_DEEP)} * waterTint(waterDepth) / ${v3(WATER_TINT_DEEP)});
     reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;
     waterSkyBody = ${f(WATER_BODY_SKY)} * material.specularStrength * waterDay * waterBodyLight;
     reflectedLight.indirectDiffuse += waterSkyBody;
@@ -819,6 +941,8 @@ export interface Water {
     uWavePhase: THREE.IUniform<Float32Array>
     uWaterClimate: THREE.IUniform<THREE.Texture>
     uWaterSwellEye: THREE.IUniform<THREE.Vector3[]>
+    uWaterSparkleEye: THREE.IUniform<THREE.Vector3>
+    uWaterTwinkle: THREE.IUniform<number>
   }
   /** Moves the waves on by `dt` seconds, unless `reduced` (prefers-reduced-motion). */
   advance(dt: number, reduced: boolean): void
@@ -833,6 +957,8 @@ export function createWater(frame: GroundHaze['frame']): Water {
     uWavePhase: { value: new Float32Array(WATER_WAVES) },
     uWaterClimate: { value: climateTexture() },
     uWaterSwellEye: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+    uWaterSparkleEye: { value: new THREE.Vector3() },
+    uWaterTwinkle: { value: 0 },
   }
   const eye: [number, number, number] = [0, 0, 0]
   let time = 0
@@ -845,6 +971,8 @@ export function createWater(frame: GroundHaze['frame']): Water {
       frame.uGroundHazeEyeLocal.value.toArray(eye)
       waterPhases(eye, time, uniforms.uWavePhase.value)
       waterSwellEye(eye, uniforms.uWaterSwellEye.value)
+      waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)
+      uniforms.uWaterTwinkle.value = (time * WATER_TWINKLE_HZ) % 65536
     },
   }
 }

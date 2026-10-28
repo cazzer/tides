@@ -344,9 +344,9 @@ describe('night lights in flight', () => {
   it("pins tides-34q's sky light and haze (and tides-d9f's glint and cover), which the pins below take out", () => {
     const sha = (text: string) => createHash('sha256').update(text).digest('hex')
     expect(sha(GROUND_DETAIL_GLSL.lightBody)).toBe('cfdbac3680d86159ab5b80716b193a52c74dca8521ec5a2a3d3a2001af49adae')
-    expect(sha(GROUND_DETAIL_GLSL.sunTintBody)).toBe('0f437dff1b138b14d5532c045a1f98f28bd2f9196d1d48c2f20ba8459b3bf9d4')
+    expect(sha(GROUND_DETAIL_GLSL.sunTintBody)).toBe('9782c8fe17499969afff34075dc56240299e9062473d4daaec7f20a4899361c6')
     expect(sha(hazeGlsl.slice(hazeGlsl.indexOf('vec3 hazeLimb(')))).toBe(
-      '8e20cdd0404f9c1f2db2620cc65356626ac871c33098001de540c063a1d90eea'
+      '4d550f3f157841f34d6b63028da14ed7faaac7065184077d529c810e4093fcdf'
     )
   })
 
