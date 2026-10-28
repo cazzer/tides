@@ -52,6 +52,8 @@ export const lunarEclipse: Demo = {
       mainPanel: 'top',
       location: { lat: 21.31, lon: -157.86 },
       skyLook: { azimuth: 221.5, altitude: 70.3 },
+      // Zoomed in (SKY_FOV_MIN is 20) so the copper Moon reads on a phone.
+      skyFov: 30,
       caption: {
         title: 'Seen from Honolulu',
         body: 'Greatest eclipse, 01:33 local time. The red Moon stands high in the south-west sky over Hawaii.',

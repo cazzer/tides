@@ -153,22 +153,44 @@ describe('total solar eclipse 2024-04-08', () => {
   })
 })
 
-describe('total lunar eclipse 2025-03-14', () => {
-  // NASA: P1 03:57:28, U1 05:09:40, U2 06:26:06, greatest 06:58:43,
-  // U3 07:31:26, U4 08:47:59, P4 10:00:09 UTC.
-  const expected = {
-    P1: '03:57:28',
-    U1: '05:09:40',
-    U2: '06:26:06',
-    U3: '07:31:26',
-    U4: '08:47:59',
-    P4: '10:00:09',
-  }
+// NASA contacts (UTC): 2025-03-14 from Espenak's site; 2026-03-03 from
+// LE2026Mar03T.pdf, whose 2009 prediction took ΔT = 75 s, about 6 s more
+// than the app's, so its UT contacts run a few seconds early.
+describe.each([
+  {
+    date: '2025-03-14',
+    from: '03:30:00',
+    to: '10:30:00',
+    greatest: '06:58:43',
+    expected: {
+      P1: '03:57:28',
+      U1: '05:09:40',
+      U2: '06:26:06',
+      U3: '07:31:26',
+      U4: '08:47:59',
+      P4: '10:00:09',
+    },
+  },
+  {
+    date: '2026-03-03',
+    from: '08:15:00',
+    to: '14:50:00',
+    greatest: '11:33:37',
+    expected: {
+      P1: '08:44:22',
+      U1: '09:50:00',
+      U2: '11:04:26',
+      U3: '12:02:45',
+      U4: '13:17:10',
+      P4: '14:22:59',
+    },
+  },
+])('total lunar eclipse $date', ({ date, from, to, greatest, expected }) => {
   const found: Record<string, number> = {}
   let previous = { penumbra: false, someUmbra: false, allUmbra: false }
   for (
-    let t = Date.parse('2025-03-14T03:30:00Z');
-    t < Date.parse('2025-03-14T10:30:00Z');
+    let t = Date.parse(`${date}T${from}Z`);
+    t < Date.parse(`${date}T${to}Z`);
     t += 2 * SECOND
   ) {
     const visible = moonLimb(t).map((p) => shadingAt(moon, p))
@@ -184,18 +206,18 @@ describe('total lunar eclipse 2025-03-14', () => {
   }
 
   test.each(Object.entries(expected))('%s at %s', (contact, time) => {
-    const want = Date.parse(`2025-03-14T${time}Z`)
+    const want = Date.parse(`${date}T${time}Z`)
     expect(found[contact]).toBeDefined()
     const error = (found[contact] - want) / SECOND
-    report.push({ case: `lunar ${contact}`, NASA: time, scene: fmt(found[contact]), 'err s': error })
+    report.push({ case: `lunar ${date} ${contact}`, NASA: time, scene: fmt(found[contact]), 'err s': error })
     // The penumbral contacts are the softest to time.
     expect(Math.abs(error)).toBeLessThan(contact.startsWith('P') ? 45 : 20)
   })
 
   test('the Moon is wholly dark at greatest eclipse and lit after', () => {
-    const greatest = Date.parse('2025-03-14T06:58:43Z')
-    for (const p of moonLimb(greatest)) expect(shadingAt(moon, p)).toBe(0)
-    for (const p of moonLimb(greatest + 4 * 60 * MINUTE)) {
+    const t = Date.parse(`${date}T${greatest}Z`)
+    for (const p of moonLimb(t)) expect(shadingAt(moon, p)).toBe(0)
+    for (const p of moonLimb(t + 4 * 60 * MINUTE)) {
       expect(shadingAt(moon, p)).toBe(1)
     }
   })
