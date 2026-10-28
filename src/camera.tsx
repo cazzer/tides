@@ -434,17 +434,20 @@ function useEyeDistance(
       controls as OrbitControlsImpl,
       anchor,
       framing.current ? framingGoal(cameraFocus) : null,
-      cameraFocus === 'earth' ? closeZoomState.floor : minDistance(cameraFocus),
+      cameraFocus === 'earth'
+        ? (closeZoomState.floor ?? minDistance(cameraFocus))
+        : minDistance(cameraFocus),
       maxDistance(useStore.getState().showPlanets, size)
     )
     if (landed) framing.current = false
     // The shown eye is nearly in the ground: hold the floor now. The scale
     // too, as the next frame's allowDistance would widen minDistance again.
-    if (cameraFocus === 'earth' && closeZoomState.guard) {
+    const floor = closeZoomState.floor
+    if (cameraFocus === 'earth' && closeZoomState.guard && floor !== null) {
       const orbit = controls as OrbitControlsImpl
-      orbit.minDistance = closeZoomState.floor
+      orbit.minDistance = floor
       const distance = orbit.getDistance()
-      if (distance < closeZoomState.floor) orbit.setScale(closeZoomState.floor / distance)
+      if (distance < floor) orbit.setScale(floor / distance)
     }
   })
 }

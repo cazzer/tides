@@ -15,7 +15,7 @@ import {
 } from './demo/demo-session'
 import { findDemo } from './demo/demos'
 import { requestMainCameraRestore } from './main-camera-session'
-import { holdRealTime } from './close-zoom'
+import { holdRealTime } from './close-zoom-rules'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
 export const PLANET_FOCUS_KEYS = [

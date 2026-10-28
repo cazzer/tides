@@ -7,7 +7,6 @@ import {
   closeZoomFloor,
   closeZoomSpeed,
   earthGroundRadius,
-  holdRealTime,
   isCloseZoom,
 } from './close-zoom'
 import { MIN_DISTANCE_FACTOR, NEAR_MIN, mainNearFar } from './main-view'
@@ -97,23 +96,6 @@ describe('closeZoomSpeed', () => {
 
   it('never reverses, with the eye under the ground', () => {
     expect(closeZoomSpeed(gT - 0.01, gT)).toBeGreaterThan(0)
-  })
-})
-
-describe('holdRealTime', () => {
-  it('holds faster speeds either way at real time in close zoom, with a cue', () => {
-    expect(holdRealTime(3600, true)).toEqual({ timeScale: 1, cue: true })
-    expect(holdRealTime(-86400, true)).toEqual({ timeScale: 1, cue: true })
-  })
-
-  it('leaves real time, slower and paused as they are', () => {
-    expect(holdRealTime(1, true)).toEqual({ timeScale: 1, cue: false })
-    expect(holdRealTime(0, true)).toEqual({ timeScale: 0, cue: false })
-    expect(holdRealTime(-1, true)).toEqual({ timeScale: -1, cue: false })
-  })
-
-  it('leaves everything as it is outside close zoom', () => {
-    expect(holdRealTime(3600, false)).toEqual({ timeScale: 3600, cue: false })
   })
 })
 

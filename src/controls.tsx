@@ -127,8 +127,12 @@ export default function Controls() {
           stroke={2}
         />
       </IconButton>
+      {/* Mounted while idle, so the cue's text is announced when it lands. */}
+      <VisuallyHidden role="status">
+        {realTimeCueShown ? REAL_TIME_HOLD : ''}
+      </VisuallyHidden>
       {realTimeCueShown ? (
-        <RealTimeCue role="status">{REAL_TIME_HOLD}</RealTimeCue>
+        <RealTimeCue aria-hidden="true">{REAL_TIME_HOLD}</RealTimeCue>
       ) : (
         locationError && <LocationError>{locationError}</LocationError>
       )}
@@ -724,6 +728,18 @@ const barNote = css`
 const LocationError = styled.span`
   ${barNote}
   color: #f99;
+`
+
+const VisuallyHidden = styled.span`
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 `
 
 const RealTimeCue = styled.span`

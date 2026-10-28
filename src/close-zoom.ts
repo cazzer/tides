@@ -9,7 +9,7 @@
 // ground and Earth's shells as ship mode's does. The store's `closeZoom` is
 // the shared predicate the later beads (tides-tvr.7.2 tiles, 7.3 detail) read.
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { Quaternion, Vector3, type Camera, type Object3D } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
@@ -120,27 +120,15 @@ export function earthGroundRadius(
 }
 
 /**
- * The requested time scale held at real time in close zoom: faster either
- * way becomes 1 with a cue to say so. Paused stays paused.
- */
-export function holdRealTime(
-  requested: number,
-  closeZoom: boolean
-): { timeScale: number; cue: boolean } {
-  return closeZoom && Math.abs(requested) > 1
-    ? { timeScale: 1, cue: true }
-    : { timeScale: requested, cue: false }
-}
-
-/**
- * Close zoom's per-frame state for CameraProvider (only the main view has
- * controls). `floor` is useEyeDistance's lower limit in Earth focus;
+ * Close zoom's per-frame state for CameraProvider, written only by the
+ * instance with controls (the main view's). `floor` is useEyeDistance's
+ * lower limit in Earth focus, null until one has been worked out;
  * `groundUnderTarget` the pivot's radius, null while not in close zoom in
  * Earth focus; `guard` that the shown eye is within half the clearance of
  * the ground, so the floor must hold at once rather than be eased to.
  */
 export const closeZoomState = {
-  floor: 0,
+  floor: null as number | null,
   groundUnderTarget: null as number | null,
   guard: false,
 }
@@ -151,13 +139,25 @@ const _right = new Vector3()
 const _point = new Vector3()
 const _up = new Vector3(0, 1, 0)
 const _now = new Quaternion()
-const _previous = new Quaternion()
-let wasClose = false
-let hasPrevious = false
 
-function leaveCloseZoom(controls: OrbitControlsImpl | null, spin: Quaternion) {
-  wasClose = false
-  hasPrevious = false
+/** One CameraProvider's close zoom: whether it owns the shared state (it has controls), and Earth's last turn. */
+interface CloseZoomOwner {
+  owns: boolean
+  wasClose: boolean
+  hasPrevious: boolean
+  previous: Quaternion
+}
+
+/** Start the terrain floor's fetch and build once the eye is within this many barriers of Earth's centre. */
+const TERRAIN_LOAD_BARRIERS = 2
+
+function leaveCloseZoom(
+  owner: CloseZoomOwner,
+  controls: OrbitControlsImpl | null,
+  spin: Quaternion
+) {
+  owner.wasClose = false
+  owner.hasPrevious = false
   spin.identity()
   closeZoomState.groundUnderTarget = null
   closeZoomState.guard = false
@@ -173,32 +173,50 @@ function leaveCloseZoom(controls: OrbitControlsImpl | null, spin: Quaternion) {
  */
 export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
   const get = useThree((s) => s.get)
-  useEffect(
-    () => () => leaveCloseZoom(get().controls as OrbitControlsImpl | null, spin),
-    [get, spin]
-  )
+  const ownerRef = useRef<CloseZoomOwner>({
+    owns: false,
+    wasClose: false,
+    hasPrevious: false,
+    previous: new Quaternion(),
+  })
+  // Every panel mounts a CameraProvider; only the one with controls clears
+  // the shared state, so closing a panel leaves the main view's close zoom.
+  useEffect(() => {
+    const owner = ownerRef.current
+    return () => {
+      if (!owner.owns) return
+      owner.owns = false
+      closeZoomState.floor = null
+      leaveCloseZoom(owner, get().controls as OrbitControlsImpl | null, spin)
+    }
+  }, [get, spin])
 
   useFrame((frame) => {
     const controls = frame.controls as OrbitControlsImpl | null
     if (!controls) return
+    const owner = ownerRef.current
+    owner.owns = true
     const state = useStore.getState()
     const earth = state.earth?.current as Object3D | null | undefined
     const radius = state.earthRadius
     if (!earth || radius == null || state.shipMode) {
-      if (wasClose || state.closeZoom) leaveCloseZoom(controls, spin)
+      if (owner.wasClose || state.closeZoom) leaveCloseZoom(owner, controls, spin)
       return
     }
     earth.getWorldPosition(_centre)
     const eyeR = camera.position.distanceTo(_centre)
-    const close = isCloseZoom(eyeR, radius, wasClose)
+    const close = isCloseZoom(eyeR, radius, owner.wasClose)
     if (close !== state.closeZoom) state.setCloseZoom(close)
-    wasClose = close
+    owner.wasClose = close
 
     const earthFocus = state.cameraFocus === 'earth'
-    if (earthFocus) loadEarthTerrain()
+    // Not while zoomed out: the fallback floor covers it until it lands.
+    if (earthFocus && eyeR < TERRAIN_LOAD_BARRIERS * MIN_DISTANCE_FACTOR * radius) {
+      loadEarthTerrain()
+    }
     const clearance = closeZoomClearance(reversedFloatDepth(frame.gl))
     if (!close || !earthFocus) {
-      hasPrevious = false
+      owner.hasPrevious = false
       spin.identity()
       closeZoomState.groundUnderTarget = null
       closeZoomState.guard = false
@@ -236,9 +254,9 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
     if (controls.zoomSpeed !== speed) controls.zoomSpeed = speed
 
     earth.getWorldQuaternion(_now)
-    if (hasPrevious) spin.copy(_now).multiply(_previous.invert())
+    if (owner.hasPrevious) spin.copy(_now).multiply(owner.previous.invert())
     else spin.identity()
-    _previous.copy(_now)
-    hasPrevious = true
+    owner.previous.copy(_now)
+    owner.hasPrevious = true
   })
 }
