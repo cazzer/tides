@@ -2,7 +2,7 @@ import styled from 'styled-components'
 import { useEffect, useId, useRef, useState } from 'react'
 import { IconPresentation } from '@tabler/icons-react'
 import { useStore } from '../store'
-import { glassButton, glassPanel } from '../glass-styles'
+import { glassButton, glassPanel, PHONE } from '../glass-styles'
 import { opensDownOnPhone } from '../dock-disclosure'
 import { DEMOS } from './demos'
 
@@ -44,7 +44,6 @@ export function DemoMenu() {
         onClick={() => setOpen((o) => !o)}
         aria-label="Demos"
         title="Demos"
-        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         data-demo-button
@@ -75,6 +74,12 @@ export function DemoMenu() {
 
 const Wrap = styled.div`
   position: relative;
+
+  /* On a phone the button may wrap to the dock's second row, so the menu
+   * hangs from the dock itself, not from the button. */
+  ${PHONE} {
+    position: static;
+  }
 `
 
 const Trigger = styled.button`
@@ -99,6 +104,11 @@ const Menu = styled.ul`
   z-index: 100;
   ${glassPanel}
   ${opensDownOnPhone}
+
+  ${PHONE} {
+    left: 0;
+    right: auto;
+  }
 `
 
 const Option = styled.button`

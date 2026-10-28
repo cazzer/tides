@@ -63,8 +63,6 @@ export const phoneDock = `
       /* What doesn't fit wraps to a second row, once the dock has widened:
        * wrapping while it widens would stack the controls in a column. */
       flex-wrap: wrap;
-      /* A short second row starts at the left, not spread to both ends. */
-      justify-content: flex-start;
       height: auto;
       min-height: var(--dock-height);
       padding-block: calc((var(--dock-height) - var(--dock-button-size, 40px)) / 2);

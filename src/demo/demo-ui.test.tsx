@@ -8,7 +8,7 @@ describe('DemoMenu', () => {
   it('is a named button that opens the list', () => {
     const html = renderToStaticMarkup(<DemoMenu />)
     expect(html).toContain('aria-label="Demos"')
-    expect(html).toContain('aria-haspopup="true"')
+    expect(html).not.toContain('aria-haspopup')
     expect(html).toContain('aria-expanded="false"')
     // Only while open: it would name a list that isn't there.
     expect(html).not.toContain('aria-controls')

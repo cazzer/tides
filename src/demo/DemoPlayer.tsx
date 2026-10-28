@@ -5,7 +5,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore } from '../store'
 import { focusedRef } from '../main-view'
 import { updateMainNearFar } from '../camera'
-import { requestFocusSnap } from '../main-camera-session'
+import { requestFocusSnap, takeFocusSnap } from '../main-camera-session'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { findDemo } from './demos'
 import { easeProgress, eyeDirection, type DemoPose } from './demo-script'
@@ -68,7 +68,12 @@ export function DemoPlayer() {
   useEffect(() => {
     const pose = demo && findDemo(demo.id)?.steps[demo.step]?.camera
     ease.current = pose ? { pose, from: null, elapsed: 0 } : null
+    // A snap left unconsumed (the main view unmounted the next frame) must
+    // not land on the user's restored view after the demo.
+    if (!demo) takeFocusSnap()
   }, [demo])
+
+  useEffect(() => () => void takeFocusSnap(), [])
 
   // The user taking hold of the view ends the ease; the demo's own bar
   // (outside the panels) does not.
