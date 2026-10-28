@@ -43,6 +43,12 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(TILE_GLINT_GLSL.specular).toContain('surfaceGlobeTex(uTileSpecularMap, surfaceGlobeUv).r')
     expect(TILE_GLINT_GLSL.specular).toContain('textureLod(bumpMap, vBumpMapUv, 0.0).x')
     expect(shader.uniforms.uTileSpecularMap).toBe(link.maps.specular)
+    // The sea's depth, the globe's map through the link's uniform, sampled at
+    // the end of the water's prelude (tides-d9f.6).
+    expect(shader.uniforms.uWaterDepth).toBe(link.maps.depth)
+    expect(TILE_GLINT_GLSL.normal).toContain('surfaceGlobeTex(uWaterDepth, surfaceGlobeUv).r')
+    expect(f.indexOf('uniform sampler2D uWaterDepth;')).toBeLessThan(f.indexOf('void main'))
+    expect(f.indexOf('surfaceGlobeTex(uWaterDepth, surfaceGlobeUv)')).toBeLessThan(f.indexOf('waterBody(diffuseColor.rgb)'))
     // The mask stays out of the material's slots (TilesRenderer frees those).
     expect(material.specularMap).toBeNull()
     expect(shader.vertexShader).not.toContain('glint')

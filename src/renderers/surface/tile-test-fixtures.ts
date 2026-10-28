@@ -42,7 +42,12 @@ export function fakeLink(): GlobeLink {
     nightFlight: null,
     gibs: noPatch(),
     gibsNight: noPatch(),
-    maps: { day: { value: new THREE.Texture() }, specular: { value: new THREE.Texture() }, night: { value: new THREE.Texture() } },
+    maps: {
+      day: { value: new THREE.Texture() },
+      specular: { value: new THREE.Texture() },
+      night: { value: new THREE.Texture() },
+      depth: { value: new THREE.Texture() },
+    },
     horizon: { map: { value: new THREE.DataArrayTexture() }, code: { value: new THREE.Vector2() } },
     seaLevel: 2.95,
     water: createWater(haze.frame),
