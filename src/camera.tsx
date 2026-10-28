@@ -5,15 +5,18 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import {
   Vector3,
   Matrix4,
+  Quaternion,
   type Camera,
   type InstancedMesh,
   type Object3D,
   type PerspectiveCamera,
+  type WebGLRenderer,
 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import {
@@ -55,6 +58,10 @@ import {
   wrapAngle,
   type Pivot,
 } from './pivot'
+import { closeZoomState, earthGroundRadius, groundAngle, useCloseZoom } from './close-zoom'
+import { reversedFloatDepth } from './renderers/depth-precision'
+import { shellGap, shipNearFloor } from './ship/ship-session'
+import { EARTH_SHELL_RADII } from './ship/ship-bodies'
 
 const CameraContext = createContext({
   handleFocus: null,
@@ -231,9 +238,10 @@ function useEarthPivot(
   cameraFocus: CameraFocus,
   dom: HTMLElement | undefined,
   carry: Vector3,
-  outsideMoveRef: { current: boolean }
-) {
-  const pivot = useRef<Pivot>({ tilt: 0, heading: 0, depth: 0 })
+  outsideMoveRef: { current: boolean },
+  spin: Quaternion
+): Pivot {
+  const [pivot] = useState<Pivot>(() => ({ tilt: 0, heading: 0, depth: 0 }))
 
   useEffect(
     () =>
@@ -241,15 +249,20 @@ function useEarthPivot(
         ? tiltControls(
             controls,
             camera,
-            pivot.current,
-            () => useStore.getState().earthRadius ?? 0,
+            pivot,
+            // In close zoom the pivot is the ground, not the sphere.
+            () =>
+              closeZoomState.groundUnderTarget ??
+              useStore.getState().earthRadius ??
+              0,
             carry,
             () => {
               outsideMoveRef.current = true
-            }
+            },
+            spin
           )
         : undefined,
-    [camera, controls, carry, outsideMoveRef]
+    [camera, controls, pivot, carry, outsideMoveRef, spin]
   )
 
   useEffect(
@@ -260,14 +273,14 @@ function useEarthPivot(
 
   useEffect(
     () =>
-      controls && dom ? listenForPivot(dom, controls, pivot.current) : undefined,
-    [controls, dom]
+      controls && dom ? listenForPivot(dom, controls, pivot) : undefined,
+    [controls, dom, pivot]
   )
 
   useFrame(() => {
     if (!controls) return
     settlePivot(
-      pivot.current,
+      pivot,
       inEarthFocus() ? pivotDepth(controls.rotateSpeed) : null
     )
   })
@@ -282,19 +295,27 @@ const nearBodies: NearBody[] = [...LABEL_KEYS, 'clock'].map(() => ({
 }))
 const nearPlanes = { near: 0, far: 0 }
 const sunCentre = new Vector3()
+const EARTH_NEAR_INDEX = LABEL_KEYS.indexOf('earth')
 
 /**
  * Sets the main view's near plane short of the nearest body's reach (the
  * clock's text included) and its far plane past the whole system, every
- * frame (mainNearFar). Call it after CameraProvider's frame, which moves the
- * eye.
+ * frame (mainNearFar). In close zoom Earth's reach gives way to its ground
+ * and shells, as ship mode's near plane takes them, down to ship mode's
+ * floor. Call it after CameraProvider's frame, which moves the eye.
  */
 function useMainNearFar() {
-  useFrame(({ camera, controls }) => updateMainNearFar(camera, controls))
+  useFrame(({ camera, controls, gl }) =>
+    updateMainNearFar(camera, controls, gl)
+  )
 }
 
 /** One frame of useMainNearFar, for anything that moves the main eye later in the frame. */
-export function updateMainNearFar(camera: Camera, controls: unknown) {
+export function updateMainNearFar(
+  camera: Camera,
+  controls: unknown,
+  gl: WebGLRenderer
+) {
   const perspective = camera as PerspectiveCamera
   if (!controls || !perspective.isPerspectiveCamera) return
   const state = useStore.getState()
@@ -309,16 +330,27 @@ export function updateMainNearFar(camera: Camera, controls: unknown) {
   clock.reach = state.clock?.current ? CLOCK_HALF_WIDTH : 0
   state.clock?.current?.getWorldPosition(clock.centre)
   const eye = perspective.position
-  const surface = nearestSurface(
+  const earth = state.earth?.current as Object3D | null | undefined
+  const close = state.closeZoom && earth && state.earthRadius != null
+  if (close) nearBodies[EARTH_NEAR_INDEX].reach = 0
+  let surface = nearestSurface(
     eye,
     (controls as OrbitControlsImpl).target,
     nearBodies
   )
+  let nearMin: number | undefined
+  if (close) {
+    const radius = state.earthRadius as number
+    const eyeR = eye.distanceTo(nearBodies[EARTH_NEAR_INDEX].centre)
+    const ground = earthGroundRadius(earth, eye, radius, groundAngle(eyeR - radius, radius))
+    surface = Math.min(surface, eyeR - ground, shellGap(eyeR, EARTH_SHELL_RADII))
+    nearMin = shipNearFloor(reversedFloatDepth(gl))
+  }
   const sun = state.sun?.current
   const eyeFromSun = sun
     ? sun.getWorldPosition(sunCentre).distanceTo(eye)
     : eye.length()
-  const { near, far } = mainNearFar(surface, eyeFromSun, nearPlanes)
+  const { near, far } = mainNearFar(surface, eyeFromSun, nearPlanes, nearMin)
   if (near !== perspective.near || far !== perspective.far) {
     perspective.near = near
     perspective.far = far
@@ -402,10 +434,18 @@ function useEyeDistance(
       controls as OrbitControlsImpl,
       anchor,
       framing.current ? framingGoal(cameraFocus) : null,
-      minDistance(cameraFocus),
+      cameraFocus === 'earth' ? closeZoomState.floor : minDistance(cameraFocus),
       maxDistance(useStore.getState().showPlanets, size)
     )
     if (landed) framing.current = false
+    // The shown eye is nearly in the ground: hold the floor now. The scale
+    // too, as the next frame's allowDistance would widen minDistance again.
+    if (cameraFocus === 'earth' && closeZoomState.guard) {
+      const orbit = controls as OrbitControlsImpl
+      orbit.minDistance = closeZoomState.floor
+      const distance = orbit.getDistance()
+      if (distance < closeZoomState.floor) orbit.setScale(closeZoomState.floor / distance)
+    }
   })
 }
 
@@ -424,6 +464,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
     speed: 0,
   })
   const carry = useMemo(() => new Vector3(), [])
+  const spin = useMemo(() => new Quaternion(), [])
   const outsideMoveRef = useRef(false)
   const rideRef = useClockRide(controls)
   const focusedObject = useRef<{
@@ -448,8 +489,11 @@ export const CameraProvider = ({ children }: { children: any }) => {
     cameraFocus,
     connected || canvas,
     carry,
-    outsideMoveRef
+    outsideMoveRef,
+    spin
   )
+  // Before the frame below, whose update spends the spin.
+  useCloseZoom(camera, pivot, spin)
 
   useFrame((state) => {
     // Leaving a demo: back to the pose saved on entry, once. tiltControls
@@ -519,7 +563,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
 
     if (hasTarget && controls) {
       const smoothness = FOCUS_EASE
-      if (cameraFocus === 'clock' && ref?.current && clockRideAllowed(pivot.current)) {
+      if (cameraFocus === 'clock' && ref?.current && clockRideAllowed(pivot)) {
         rideWithClock(
           camera.position,
           // @ts-ignore
@@ -539,17 +583,19 @@ export const CameraProvider = ({ children }: { children: any }) => {
       // @ts-ignore
       controls.target.copy(cameraTarget.current)
       allowDistance(controls as OrbitControlsImpl)
+      // In close zoom the surface grabbed is the ground's, not the sphere's.
+      const grabRadius = closeZoomState.groundUnderTarget ?? earthRadius
       // @ts-ignore
       controls.rotateSpeed =
-        cameraFocus === 'earth' && earthRadius != null
+        cameraFocus === 'earth' && grabRadius != null
           ? surfaceGrabRotateSpeed(
               targetUnitsPerPixel(
-                (controls as OrbitControlsImpl).getDistance() - earthRadius,
+                (controls as OrbitControlsImpl).getDistance() - grabRadius,
                 state.size.height
               ),
               // @ts-ignore
               controls.domElement.clientHeight,
-              earthRadius
+              grabRadius
             )
           : 1
       // @ts-ignore

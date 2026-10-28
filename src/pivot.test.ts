@@ -368,3 +368,22 @@ describe('tiltControls', () => {
     expect(camera.up).toEqual(new Vector3(0, 1, 0))
   })
 })
+
+describe('tiltControls spin', () => {
+  it('turns the eye about the target once, then is spent', () => {
+    const camera = new OrthographicCamera()
+    camera.position.set(0, 0, 10)
+    const controls = new OrbitControls(camera)
+    const spin = new Quaternion()
+    tiltControls(controls, camera, { tilt: 0, heading: 0, depth: 0 }, () => 3, undefined, undefined, spin)
+    controls.update()
+    spin.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2)
+    controls.update()
+    expect(camera.position.x).toBeCloseTo(10, 9)
+    expect(camera.position.z).toBeCloseTo(0, 9)
+    expect(spin.equals(new Quaternion())).toBe(true)
+    controls.update()
+    expect(camera.position.x).toBeCloseTo(10, 9)
+    expect(camera.position.z).toBeCloseTo(0, 9)
+  })
+})

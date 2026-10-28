@@ -309,14 +309,17 @@ const NEAR_MAX = 10
  * depth buffer usable, so the one cut it allows is of a body whose reach
  * passes within 2 · NEAR_MIN of the eye (or through it): an inner moon
  * sweeping past an eye at the closest distance shows sliced for a frame or
- * two. Far reaches past the whole system and the starfield.
+ * two. Far reaches past the whole system and the starfield. In close zoom
+ * (close-zoom.ts) `nearMin` drops to ship mode's floor, as the eye comes
+ * within a kilometre of the ground.
  */
 export function mainNearFar(
   surface: number,
   eyeFromSun: number,
-  out = { near: 0, far: 0 }
+  out = { near: 0, far: 0 },
+  nearMin = NEAR_MIN
 ): { near: number; far: number } {
-  out.near = MathUtils.clamp(NEAR_SHARE * surface, NEAR_MIN, NEAR_MAX)
+  out.near = MathUtils.clamp(NEAR_SHARE * surface, nearMin, NEAR_MAX)
   out.far = Math.max(eyeFromSun + SYSTEM_EXTENT, 1.1 * PLANETS_STAR_RADIUS)
   return out
 }

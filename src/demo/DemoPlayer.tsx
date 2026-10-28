@@ -90,7 +90,7 @@ export function DemoPlayer() {
     }
   }, [dom])
 
-  useFrame((_, delta) => {
+  useFrame(({ gl }, delta) => {
     const current = ease.current
     if (!current || !controls) return
     const state = useStore.getState()
@@ -130,7 +130,7 @@ export function DemoPlayer() {
       .multiplyScalar(distance)
       .add(target)
     camera.lookAt(target)
-    updateMainNearFar(camera, controls)
+    updateMainNearFar(camera, controls, gl)
 
     const arrived = target.distanceTo(_focus) <= HOLD_SHARE * current.pose.distance
     if (t >= 1 && (arrived || current.elapsed >= duration + HOLD_LIMIT)) ease.current = null

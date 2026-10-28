@@ -1,4 +1,4 @@
-import styled from 'styled-components'
+import styled, { css } from 'styled-components'
 import { useRef, useState, useEffect, useId } from 'react'
 import {
   IconClock,
@@ -58,6 +58,8 @@ export default function Controls() {
   // Per-field selectors: the whole store changes every frame (timestamp).
   const timeScale = useStore((s) => s.timeScale)
   const setTimeScale = useStore((s) => s.setTimeScale)
+  const closeZoom = useStore((s) => s.closeZoom)
+  const realTimeCueShown = useRealTimeCue()
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const setLocation = useStore((s) => s.setLocation)
@@ -112,6 +114,7 @@ export default function Controls() {
         value={timeScale}
         onChange={setTimeScale}
         options={SPEED_OPTIONS}
+        heldAtRealTime={closeZoom}
       />
       <IconButton
         type="button"
@@ -124,7 +127,11 @@ export default function Controls() {
           stroke={2}
         />
       </IconButton>
-      {locationError && <LocationError>{locationError}</LocationError>}
+      {realTimeCueShown ? (
+        <RealTimeCue role="status">{REAL_TIME_HOLD}</RealTimeCue>
+      ) : (
+        locationError && <LocationError>{locationError}</LocationError>
+      )}
       <DateTimePicker />
       <DemoMenu />
       <IconButton
@@ -422,14 +429,45 @@ const SPEED_OPTIONS = [
 
 type SpeedOption = (typeof SPEED_OPTIONS)[number]
 
+const REAL_TIME_HOLD = 'Close zoom runs in real time'
+const REAL_TIME_CUE_MS = 2500
+
+/**
+ * Whether to show the close-zoom real-time cue: for a moment each time the
+ * store's realTimeCue is bumped, not for its value on mount.
+ */
+function useRealTimeCue(): boolean {
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = useStore.subscribe((state, previous) => {
+      if (state.realTimeCue === previous.realTimeCue) return
+      setShown(true)
+      clearTimeout(timer)
+      timer = setTimeout(() => setShown(false), REAL_TIME_CUE_MS)
+    })
+    return () => {
+      unsubscribe()
+      clearTimeout(timer)
+    }
+  }, [])
+  return shown
+}
+
+/**
+ * `heldAtRealTime` (close zoom) marks the faster speeds unavailable; they
+ * stay clickable, so choosing one gets the store's cue saying why.
+ */
 function SpeedDropdown({
   value,
   onChange,
   options,
+  heldAtRealTime,
 }: {
   value: number
   options: readonly SpeedOption[]
   onChange: (value: number) => void
+  heldAtRealTime: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -464,18 +502,23 @@ function SpeedDropdown({
       </FocusTrigger>
       {open && (
         <FocusMenu>
-          {options.map(({ value: v, label: l }) => (
-            <SpeedOptionButton
-              key={v}
-              type="button"
-              onClick={() => {
-                onChange(v)
-                setOpen(false)
-              }}
-            >
-              {l}
-            </SpeedOptionButton>
-          ))}
+          {options.map(({ value: v, label: l }) => {
+            const held = heldAtRealTime && Math.abs(v) > 1
+            return (
+              <SpeedOptionButton
+                key={v}
+                type="button"
+                aria-disabled={held || undefined}
+                title={held ? REAL_TIME_HOLD : undefined}
+                onClick={() => {
+                  onChange(v)
+                  setOpen(false)
+                }}
+              >
+                {l}
+              </SpeedOptionButton>
+            )
+          })}
         </FocusMenu>
       )}
     </FocusDropdownWrap>
@@ -660,7 +703,7 @@ const IconButton = styled.button`
 `
 
 // Floats above the bar so a long message never widens it past a phone screen.
-const LocationError = styled.span`
+const barNote = css`
   position: absolute;
   bottom: calc(100% + 8px);
   left: 50%;
@@ -669,7 +712,6 @@ const LocationError = styled.span`
   max-width: calc(100vw - 32px);
   padding: 6px 12px;
   font-size: 12px;
-  color: #f99;
   border-radius: 12px;
   ${glassPanel}
 
@@ -677,6 +719,16 @@ const LocationError = styled.span`
     top: calc(100% + 8px);
     bottom: auto;
   }
+`
+
+const LocationError = styled.span`
+  ${barNote}
+  color: #f99;
+`
+
+const RealTimeCue = styled.span`
+  ${barNote}
+  color: rgba(255, 255, 255, 0.85);
 `
 
 // Opens upward: the bar sits on the bottom edge. The margin clears the bar's rim.
@@ -753,6 +805,10 @@ const SpeedOptionButton = styled.button`
   &:hover {
     background-color: rgba(255, 255, 255, 0.14);
     color: #fff;
+  }
+
+  &[aria-disabled='true'] {
+    opacity: 0.45;
   }
 `
 
