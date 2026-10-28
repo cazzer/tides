@@ -909,8 +909,10 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     expect(waterPatch(water, haze.frame, true, depth).customProgramCacheKey()).toBe('water-6')
     const full = WATER_GLSL(waterWaves(false)).normal
     const low = WATER_GLSL(waterWaves(true)).normal
-    // The full tier draws its waves in three steps (the longest 4, 8, all).
-    expect(full.split('waterGrad -=').length - 1).toBe(WATER_WAVES + 4 + 8)
+    // Each wave's code once, the full tier's in three groups of four.
+    expect(full.split('waterGrad -=').length - 1).toBe(WATER_WAVES)
+    expect(full.split('if (waterFadedNarrow > ').length - 1).toBe(3)
+    expect(low.split('if (waterFadedNarrow > ').length - 1).toBe(1)
     for (const w of waterWaves(false)) expect(full).toContain(`uWavePhase[${w.index}]`)
     expect(low.split('waterGrad -=').length - 1).toBe(WATER_WAVES_LOW)
     for (const w of waterWaves(true)) expect(low).toContain(`uWavePhase[${w.index}]`)
@@ -930,13 +932,10 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       expect(normal).toContain('if (specularStrength > 0.0) {')
       // Each wave's sine only where it's drawn; its variance everywhere on water.
       const count = low ? WATER_WAVES_LOW : WATER_WAVES
-      // Every wave in each step: where all have faded (a pixel wider than
-      // the longest wave's fade) only their variance; on the full tier, where
-      // the shorter ones have, the longer drawn (4, 8) and the rest faded;
-      // else all drawn.
-      const kept = low ? [] : [4, 8]
-      expect(normal.split('if (waterW > 0.0) {').length - 1).toBe(count + kept.reduce((a, b) => a + b, 0))
-      expect(normal.split('waterLost = ').length - 1).toBe((2 + kept.length) * count)
+      // Each wave twice: drawn, or where it and every shorter wave have
+      // faded (on the full tier by groups, longest first), only its variance.
+      expect(normal.split('if (waterW > 0.0) {').length - 1).toBe(count)
+      expect(normal.split('waterLost = ').length - 1).toBe(2 * count)
       expect(normal.indexOf('if (waterFadedNarrow > ')).toBeLessThan(normal.indexOf('if (waterW > 0.0) {'))
       expect(normal.split('} else')[0].split('if (waterFadedNarrow > ')[1]).not.toContain('sin(')
       for (const chunk of normal.split('if (waterW > 0.0) {').slice(1)) {

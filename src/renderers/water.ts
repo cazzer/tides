@@ -733,23 +733,24 @@ const noiseTap = (i: number) => {
   return `waterNoiseAt(${f(n / TAU)} * ${turned} + ${v2([((i * 0.618) % 1) * 64, ((i * 0.382 + 0.25) % 1) * 64])}, waterLod + ${f(Math.log2(n))})`
 }
 
-// The waves where some have not faded, longest first: on the full tier, in
-// steps of WATER_WAVE_TIER, where the shorter ones all have (fadedStep() of
-// theirs), only the longer drawn and the shorter's variance; else every
-// wave drawn.
+// The waves, longest first, in groups of WATER_WAVE_TIER on the full tier
+// (the low tier's in one): each group drawn, or where it and every shorter
+// wave have faded (fadedStep() of theirs), only its variance. So a pixel
+// draws the longer waves and sums the shorter's variance, with each wave's
+// code once either way.
 const WATER_WAVE_TIER = 4
 const wavesByStep = (waves: readonly WaterWave[]) => {
   const sorted = [...waves].sort((a, b) => b.lambda - a.lambda)
+  const size = waves.length > WATER_WAVES_LOW ? WATER_WAVE_TIER : sorted.length
   let code = ''
-  if (waves.length > WATER_WAVES_LOW) {
-    for (let keep = WATER_WAVE_TIER; keep < sorted.length; keep += WATER_WAVE_TIER) {
-      const short = sorted.slice(keep)
-      code += ` else if (waterFadedNarrow > ${e(fadedStep(short))}) {${sorted.slice(0, keep).map(wave).join('')}${short.map(waveFaded).join('')}
+  for (let start = 0; start < sorted.length; start += size) {
+    const group = sorted.slice(start, start + size)
+    code += `
+    if (waterFadedNarrow > ${e(fadedStep(sorted.slice(start)))}) {${group.map(waveFaded).join('')}
+    } else {${group.map(wave).join('')}
     }`
-    }
   }
-  return `${code} else {${sorted.map(wave).join('')}
-    }`
+  return code
 }
 
 // After the prelude (waterRay, waterUpGround, waterUpView and
@@ -809,8 +810,8 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
       waterGroups = ${f(WATER_SWELL_GROUPS)} * (1.0 - smoothstep(${f(WATER_SWELL_KM[1] / 16)}, ${f(WATER_SWELL_KM[1] / 8)}, waterPx * ${f(EARTH_KM_PER_UNIT)}));
     }
     // The narrower of the pixel's two steps (the smaller singular value of
-    // the pair): past fadedStep every wave has faded, so the cheap path;
-    // on the full tier, past the shorter waves', theirs. The paths take it
+    // the pair): past a group's fadedStep it and every shorter wave have
+    // faded, so only their variance (wavesByStep()). The groups take it
     // times the fourth root of the least gain any wave has here (each wave's
     // waterF at its weakest: the lesser of the wind's and the swell's, its
     // groups' and its pull off the axis'), over WATER_FADED_GAIN's.
@@ -841,8 +842,7 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterS;
     float waterWarp = 0.0;
     float waterWarpK = 0.0;
-    if (waterFadedNarrow > ${e(fadedStep(waves))}) {${waves.map(waveFaded).join('')}
-    }${wavesByStep(waves)}
+${wavesByStep(waves)}
     waterVarAlong = max(waterAlong, ${f(WATER_MSS_FLOOR / 2)});
     waterVarCross = max(waterCross, ${f(WATER_MSS_FLOOR / 2)});
     waterMss = waterVarAlong + waterVarCross;
