@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { createCloudLayer } from './cloudShaders'
+import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import { earthHorizon } from './earthHorizonTexture'
 import { createGroundHaze } from './groundHaze'
@@ -33,6 +34,8 @@ import {
   WATER_GLINT_HARMONIC,
   WATER_GLOBE_VERTEX,
   WATER_PRELUDE,
+  WATER_SKY_LIGHT_ELEVATION,
+  WATER_SKY_LIGHT_UV,
   WATER_WAVE_TABLE,
   WATER_WAVES,
   WATER_WAVES_LOW,
@@ -717,6 +720,36 @@ describe('the waves (tides-07z)', () => {
       expect(glsl.normal).toContain(`waterLod + ${Math.log2(n).toFixed(6)})`)
     })
   })
+
+  it('reads the skylight off one texel of the sky-view table, wherever the sea and the Sun are (tides-d9f.11)', () => {
+    // haze.glsl skyViewTexel()'s coordinate, mirrored: the azimuth from the
+    // Sun's over pi, the elevation squeezed toward the horizon.
+    expect(hazeGlsl).toContain('vec2 uv = vec2(phi / 3.14159265, 0.5 + 0.5 * sign(e) * sqrt(abs(e) / SKY_VIEW_HALF_PI));')
+    const uvOf = (rd: V, up: V, sun: V) => {
+      const y = gDot(rd, up)
+      const across = rd.map((x, i) => x - up[i] * y)
+      const sunAcross = sun.map((x, i) => x - up[i] * gDot(sun, up))
+      const phi = Math.acos(gDot(across, sunAcross) / Math.sqrt(gDot(across, across) * gDot(sunAcross, sunAcross)))
+      const e = Math.asin(y)
+      return [phi / Math.PI, 0.5 + 0.5 * Math.sign(e) * Math.sqrt(Math.abs(e) / (Math.PI / 2))]
+    }
+    const el = (WATER_SKY_LIGHT_ELEVATION * Math.PI) / 180
+    for (const [up, sun] of [
+      [norm([0.3, 0.9, -0.2]), norm([1, 0.2, 0.1])],
+      [norm([-0.7, 0.1, 0.7]), norm([0.1, -0.3, 1])],
+      [[0, 1, 0], norm([0.2, 0.05, -1])],
+    ] as [V, V][]) {
+      // The sky piece's direction: the side, cross(up, sun), lifted to the elevation.
+      const side = norm([up[1] * sun[2] - up[2] * sun[1], up[2] * sun[0] - up[0] * sun[2], up[0] * sun[1] - up[1] * sun[0]])
+      const rd = side.map((x, i) => x * Math.cos(el) + up[i] * Math.sin(el)) as V
+      const uv = uvOf(rd, up, sun)
+      expect(uv[0]).toBeCloseTo(WATER_SKY_LIGHT_UV[0], 9)
+      expect(uv[1]).toBeCloseTo(WATER_SKY_LIGHT_UV[1], 9)
+    }
+    const glsl = WATER_GLSL(WATER_WAVE_TABLE)
+    expect(glsl.sky).toContain(`${WATER_SKY_LIGHT_UV.map((x) => x.toFixed(6)).join(', ')})`)
+    expect(glsl.sky).toContain(`waterSide * ${Math.cos(el).toFixed(6)} + waterUpGround * ${Math.sin(el).toFixed(6)}, vec2(`)
+  })
 })
 
 describe('the body (tides-07z)', () => {
@@ -814,7 +847,8 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     // The sky is the ground haze's (its head before main), scene radiance,
     // not over the Sun's colour.
     expect(at('vec3 groundHazeSky(vec3 up, vec3 rd) {')).toBeLessThan(at('void main'))
-    expect(glsl.sky.split('groundHazeSky(').length - 1).toBe(2)
+    expect(glsl.sky.split('groundHazeSky(').length - 1).toBe(1)
+    expect(glsl.sky.split('groundHazeSkyAt(').length - 1).toBe(1)
     expect(glsl.sky).not.toContain('skyRadiance')
     expect(glsl.sky).not.toContain('directionalLights[0].color')
     expect(glsl.sky).toContain('reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;')

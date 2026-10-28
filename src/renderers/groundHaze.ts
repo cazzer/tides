@@ -250,17 +250,29 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
 // heights, as the haze's own colour), else the analytic sky. Scene radiance
 // before tone mapping. The water's reflection and its skylit body
 // (water.ts) read it.
-vec3 groundHazeSky(vec3 up, vec3 rd) {
-  vec3 point = up * uSeaLevel;
-  float table = uSkyViewOn * uGroundHaze
+float groundHazeTable() {
+  return uSkyViewOn * uGroundHaze
     * (1.0 - smoothstep(uGroundHazeTop - 2.0 * uScaleHeight, uGroundHazeTop, length(vGroundHazeEye)));
-  vec3 sky = vec3(0.0);
-  if (table < 1.0) {
-    vec3 at;
-    float column = columnAhead(point, rd, sqrt(6.2831853 * uSurface * uScaleHeight), at);
-    sky = hazeSky(column, at, uGroundHazeSun, rd, point);
-  }
-  if (table > 0.0) sky = mix(sky, skyViewGlow(rd, point, uGroundHazeSun), table);
+}
+vec3 groundHazeAnalytic(vec3 up, vec3 rd) {
+  vec3 point = up * uSeaLevel;
+  vec3 at;
+  float column = columnAhead(point, rd, sqrt(6.2831853 * uSurface * uScaleHeight), at);
+  return hazeSky(column, at, uGroundHazeSun, rd, point);
+}
+vec3 groundHazeSky(vec3 up, vec3 rd) {
+  float table = groundHazeTable();
+  vec3 sky = table < 1.0 ? groundHazeAnalytic(up, rd) : vec3(0.0);
+  if (table > 0.0) sky = mix(sky, skyViewGlow(rd, up * uSeaLevel, uGroundHazeSun), table);
+  return sky;
+}
+// The same where the caller knows rd's coordinate in the table, uv,
+// wherever the sea is (the water's skylight: 90 deg round from the Sun at
+// one elevation is one texel): the table's texel there, without the trig.
+vec3 groundHazeSkyAt(vec3 up, vec3 rd, vec2 uv) {
+  float table = groundHazeTable();
+  vec3 sky = table < 1.0 ? groundHazeAnalytic(up, rd) : vec3(0.0);
+  if (table > 0.0) sky = mix(sky, textureLod(uSkyView, (0.5 + uv * (uSkyViewSize - 1.0)) / uSkyViewSize, 0.0).rgb, table);
   return sky;
 }
 #undef uSeaLevel

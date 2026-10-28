@@ -861,6 +861,11 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
 // (waterSkyBody) dim it, not the Sun's shadow. The ground's own sky fill
 // (groundDetail.ts) leaves the water to this.
 const SKY_LIGHT_EL = (WATER_SKY_LIGHT_ELEVATION * Math.PI) / 180
+/** The skylight's direction in the sky-view table (haze.glsl skyViewTexel():
+ * u the azimuth from the Sun's over pi, v the elevation squeezed toward the
+ * horizon): 90 deg round from the Sun, at WATER_SKY_LIGHT_ELEVATION, one
+ * texel wherever the sea is. */
+export const WATER_SKY_LIGHT_UV = [0.5, 0.5 + 0.5 * Math.sqrt(SKY_LIGHT_EL / (Math.PI / 2))] as const
 const SKY = /* glsl */ `
 #if NUM_DIR_LIGHTS > 0
 if (material.specularStrength > 0.0) {
@@ -897,8 +902,8 @@ if (material.specularStrength > 0.0) {
     // seen: without this it took Fresnel 1 and the horizon's sky.
     vec3 waterReflection = waterFresnel * smoothstep(0.0, 0.05, waterNv) * groundHazeSky(waterUpGround, waterReflected);
     // The skylight's irradiance, pi times the sky's mean, from the one
-    // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION),
-    // into the body through Lambert, less what the surface reflects on the
+    // direction whose radiance is that mean (WATER_SKY_LIGHT_ELEVATION; on
+    // the table one texel, WATER_SKY_LIGHT_UV), into the body through Lambert, less what the surface reflects on the
     // way out, on deep water's own colour (the maps under the globe and the
     // tiles differ, and the sky's light on them showed the seam) under the
     // depth's tint over deep water's (./waterDepth.ts: lighter and greener
@@ -907,8 +912,8 @@ if (material.specularStrength > 0.0) {
     float waterSide2 = dot(waterSide, waterSide);
     waterSide = waterSide2 > 1e-10 ? waterSide * inversesqrt(waterSide2)
       : normalize(cross(waterUpGround, abs(waterUpGround.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
-    vec3 waterSkyLight = PI * groundHazeSky(waterUpGround,
-      waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))});
+    vec3 waterSkyLight = PI * groundHazeSkyAt(waterUpGround,
+      waterSide * ${f(Math.cos(SKY_LIGHT_EL))} + waterUpGround * ${f(Math.sin(SKY_LIGHT_EL))}, ${v2(WATER_SKY_LIGHT_UV)});
     vec3 waterBodyLight = (1.0 - waterFresnel) * waterSkyLight * BRDF_Lambert(${v3(WATER_DEEP)} * waterTint(waterDepth) / ${v3(WATER_TINT_DEEP)});
     reflectedLight.directSpecular += material.specularStrength * waterDay * waterReflection;
     waterSkyBody = ${f(WATER_BODY_SKY)} * material.specularStrength * waterDay * waterBodyLight;
