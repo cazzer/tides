@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
 import { ATMOSPHERE_OUTER } from '../renderers/earth-shells'
@@ -7,6 +7,7 @@ import { createShipBodies, EARTH_COLLISION_RADIUS, EARTH_GROUND_CLEARANCE, EARTH
 import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
 import { SHIP_FOV } from './ship-session'
 import {
+  whenIdle,
   LIMB_FACET_PX,
   LIMB_SEGMENTS,
   builtLimbSphere,
@@ -330,5 +331,35 @@ describe('the limb spheres', () => {
     disposeLimbSpheres()
     expect(watched.disposed).toBe(true)
     expect(limbSphere(10)).not.toBe(sphere)
+  })
+})
+
+describe('whenIdle', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('times out from the first request, though every idle period is too short (120 Hz)', () => {
+    let now = 0
+    vi.stubGlobal('performance', { now: () => now })
+    const timeouts: number[] = []
+    vi.stubGlobal('cancelIdleCallback', () => {})
+    let ran = false
+    // Every idle period ~3 ms, every 8.3 ms, never timed out by the browser.
+    const pending: IdleRequestCallback[] = []
+    vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback, options: IdleRequestOptions) => {
+      timeouts.push(options.timeout!)
+      pending.push(callback)
+      return pending.length
+    })
+    whenIdle(() => (ran = true))
+    for (let frame = 0; frame < 120 && !ran; frame++) {
+      now += 8.3
+      pending.shift()!({ didTimeout: false, timeRemaining: () => 3 })
+    }
+    expect(ran).toBe(true)
+    // Ran once 500 ms had passed, not later: ~61 frames at 8.3 ms.
+    expect(now).toBeGreaterThanOrEqual(500)
+    expect(now).toBeLessThan(510)
+    // Each re-wait asked only for what was left of the first timeout.
+    expect(timeouts[1]).toBeLessThan(timeouts[0])
   })
 })
