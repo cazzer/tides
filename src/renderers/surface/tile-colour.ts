@@ -92,6 +92,8 @@ const UNITS_PER_METRE = 1 / (EARTH_KM_PER_UNIT * 1000)
 
 const FRAGMENT_HEAD = /* glsl */ `
 uniform sampler2D uColourDay;
+// The day map for the glint's deep water too (tile-glint.ts), no unit of its own.
+#define TILE_COLOUR_DAY
 uniform sampler2D uColourRef;
 // Per tile (fitTileGlobe()): the globe's u = x + y s and the reference's
 // column z + w s; the globe's v = x + t (y + t z); the reference's row

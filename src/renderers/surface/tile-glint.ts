@@ -140,12 +140,29 @@ export function regionHasWater(grid: Uint8Array, region: readonly number[]): boo
   return false
 }
 
+/** The depths (m) over which the water's body goes from the imagery's
+ * colour to the globe's day map's (tides-d9f.8). */
+export const TILE_DAY_DEPTH = [30, 200] as const
+
+// Over deep water the body takes the globe's day map (tides-d9f.8): the
+// imagery's open sea (EOX's mosaic) is darker than the day map and changes
+// from tile to tile, so the tiles' sea met the globe's (where tiles were
+// still streaming in, or ran out) and its own neighbours at straight seams.
+// The banks, shelves and lagoons keep the imagery's. The day map is the
+// colour feature's (tile-colour.ts uColourDay: no texture unit of its own).
+const DEEP_DAY = /* glsl */ `
+#ifdef TILE_COLOUR_DAY
+if (uTileWet > 0.5) diffuseColor.rgb = mix(diffuseColor.rgb, surfaceGlobeTex(uColourDay, surfaceGlobeUv).rgb,
+  specularStrength * smoothstep(${f(TILE_DAY_DEPTH[0])}, ${f(TILE_DAY_DEPTH[1])}, waterDepth));
+#endif
+`
+
 /** The adapter's GLSL (the test checks it): the strength (specular, the
  * water's body inside its branch), and the water's pieces. */
 export const TILE_GLINT_GLSL = {
   head: HEAD + WATER.head,
   specular: SPECULAR,
-  normal: WATER_PRELUDE.tiles.body + WATER.normal,
+  normal: WATER_PRELUDE.tiles.body + DEEP_DAY + WATER.normal,
   direct: WATER.direct,
   sky: WATER.sky,
 }

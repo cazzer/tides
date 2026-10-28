@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { WATER_GLSL, WATER_PRELUDE, WATER_WAVE_TABLE } from '../water'
-import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
+import { GLINT_INLAND, GLINT_SEA, GLINT_SEA_LEVEL, glintStrength, regionHasWater, tileGlint, TILE_DAY_DEPTH, TILE_GLINT_GLSL, WATER_GRID } from './tile-glint'
 import { createTileComposer, SURFACE_ANCHORS, type TerrainPhongMaterial } from './tile-material'
 import { compiled, fakeLink, tileMesh } from './tile-test-fixtures'
 import { TILE_FEATURES } from './tile-features'
@@ -22,7 +22,8 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
   it('lays the globe\'s water on, with all its waves and its body', () => {
     const water = WATER_GLSL(WATER_WAVE_TABLE)
     expect(TILE_GLINT_GLSL.head).toContain(water.head)
-    expect(TILE_GLINT_GLSL.normal).toBe(WATER_PRELUDE.tiles.body + water.normal)
+    expect(TILE_GLINT_GLSL.normal.startsWith(WATER_PRELUDE.tiles.body)).toBe(true)
+    expect(TILE_GLINT_GLSL.normal.endsWith(water.normal)).toBe(true)
     expect(TILE_GLINT_GLSL.direct).toBe(water.direct)
     expect(TILE_GLINT_GLSL.sky).toBe(water.sky)
     // The body comes with the waves (after the strength's anchor, by day).
@@ -54,6 +55,26 @@ describe('the glint on the tiles (tides-zmw.9.14)', () => {
     expect(material.specularMap).toBeNull()
     expect(shader.vertexShader).not.toContain('glint')
     expect(f.split('varying ').length).toBe(THREE.ShaderLib.phong.fragmentShader.split('varying ').length)
+  })
+
+  it('takes the day map\'s colour over deep water, the imagery\'s over the shelves, on the colour feature\'s map (tides-d9f.8)', () => {
+    const deep = TILE_GLINT_GLSL.normal.slice(WATER_PRELUDE.tiles.body.length, TILE_GLINT_GLSL.normal.indexOf(WATER_GLSL(WATER_WAVE_TABLE).normal))
+    expect(deep).toContain('#ifdef TILE_COLOUR_DAY')
+    expect(deep).toContain('surfaceGlobeTex(uColourDay, surfaceGlobeUv)')
+    expect(deep).toContain(`specularStrength * smoothstep(${TILE_DAY_DEPTH.map((d) => d.toFixed(6)).join(', ')}, waterDepth)`)
+    // After the prelude's depth, before the body tints the colour.
+    const f = TILE_GLINT_GLSL.normal
+    expect(f.indexOf('waterDepth = ')).toBeLessThan(f.indexOf(deep))
+    expect(f.indexOf(deep)).toBeLessThan(f.indexOf('waterBody(diffuseColor.rgb)'))
+    // With every feature on, the colour feature declares the map and the macro ahead of main.
+    const mesh = tileMesh()
+    createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
+    const all = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
+    const main = all.indexOf('void main')
+    expect(all.indexOf('#define TILE_COLOUR_DAY')).toBeGreaterThan(-1)
+    expect(all.indexOf('#define TILE_COLOUR_DAY')).toBeLessThan(main)
+    expect(all.split('uniform sampler2D uColourDay;').length - 1).toBe(1)
+    expect(all.indexOf(deep)).toBeGreaterThan(main)
   })
 
   it('stays within 16 texture units with every feature on (the water\'s climate and noise among them)', () => {
