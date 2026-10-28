@@ -120,9 +120,14 @@ export const WATER_SKY_LIGHT_ELEVATION = 25
  * and the Sun's direct light on the body are as they were. */
 export const WATER_BODY_SKY = 3
 /** How far the roughness the waves don't draw tilts the facets the sky's
- * reflection is read from toward the eye, in standard deviations of its
- * slope, at a grazing view. */
+ * reflection is read from, in standard deviations of its slope over the
+ * median sea's (WATER_SKY_ROUGH_MEDIAN), at a grazing view: toward the eye
+ * where the sea is rougher, away where it is calmer. Tilting every facet
+ * toward the eye by its whole roughness darkened the sea as a whole, back
+ * toward the black this sky reflection was there to lift. */
 export const WATER_SKY_ROUGH = 1.5
+/** The median sea's slope deviation along one axis (half of WATER_MSS). */
+export const WATER_SKY_ROUGH_MEDIAN = Math.sqrt(WATER_MSS / 2)
 
 const G = 9.81
 const TAU = 2 * Math.PI
@@ -721,10 +726,10 @@ if (material.specularStrength > 0.0) {
   float waterDay = smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, dot(waterUpView, directionalLights[0].direction));
   if (waterDay > 0.0) {
     // The roughness the pixel doesn't draw (the glint's slope variance, along
-    // the view's azimuth) tilts the facets it sees toward the eye, more as
-    // the view grazes: a rough sea mirrors higher, deeper sky at less
-    // Fresnel, a calm one the bright horizon, so the sea's state reads off
-    // the Sun's road too.
+    // the view's azimuth), over the median sea's, tilts the facets it sees
+    // toward the eye, more as the view grazes: a rougher sea mirrors higher,
+    // deeper sky at less Fresnel, a calmer one more of the bright horizon, so
+    // the sea's state reads off the Sun's road too.
     vec3 waterFacet = geometryNormal;
     vec3 waterToEye = geometryViewDir - waterUpView * dot(geometryViewDir, waterUpView);
     float waterToEye2 = dot(waterToEye, waterToEye);
@@ -732,7 +737,11 @@ if (material.specularStrength > 0.0) {
       waterToEye *= inversesqrt(waterToEye2);
       float waterEa = dot(waterToEye, waterAxisView);
       float waterVar = waterVarAlong * waterEa * waterEa + waterVarCross * (1.0 - waterEa * waterEa);
-      waterFacet = normalize(geometryNormal + ${f(WATER_SKY_ROUGH)} * sqrt(waterVar) * (1.0 - saturate(dot(geometryNormal, geometryViewDir))) * waterToEye);
+      float waterNv0 = saturate(dot(geometryNormal, geometryViewDir));
+      // A calm sea's facets turn toward the mirror, never as far as edge-on
+      // (the horizon would take a dark rim).
+      float waterTilt = max(${f(WATER_SKY_ROUGH)} * (sqrt(waterVar) - ${f(WATER_SKY_ROUGH_MEDIAN)}) * (1.0 - waterNv0), -0.5 * waterNv0);
+      waterFacet = normalize(geometryNormal + waterTilt * waterToEye);
     }
     float waterNv = dot(waterFacet, geometryViewDir);
     float waterCos = 1.0 - saturate(waterNv);
