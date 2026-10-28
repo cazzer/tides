@@ -9,6 +9,7 @@ import starsMeta from '../assets/stars.meta.json'
 import { eclipticToScene } from '../ephemeris'
 import { useStore } from '../store'
 import { eyeSky } from '../night-flight'
+import { eclipseSkyVeil } from '../eclipse-sky'
 import { depthAmount, shellDepth, shellPointVertex, shellScale, shellVertex } from './starDepth'
 
 type StarfieldProps = {
@@ -134,8 +135,10 @@ function fadeShell(
 
 // The daylit sky's veil for the camera drawing (night-flight.ts eyeSky).
 // Module level, as fadeShell.
-function veilStars(uDaylight: { value: number }) {
-  uDaylight.value = eyeSky.daylight
+function veilStars(uDaylight: { value: number }, fromSurface: boolean) {
+  uDaylight.value = fromSurface
+    ? Math.max(eyeSky.daylight, eclipseSkyVeil.daylight)
+    : eyeSky.daylight
 }
 
 // The surface camera's parent is the observer, whose +Y is the zenith.
@@ -244,7 +247,7 @@ export default function Starfield({
         centreStarfieldOn(stars.current, camera, shellTarget.current, uniforms.uDepth.value)
         if (fromSurface) zenithOf(camera, uniforms.uZenith.value)
         // From inside the daylit atmosphere in flight, the sky hides them.
-        veilStars(uniforms.uDaylight)
+        veilStars(uniforms.uDaylight, fromSurface)
       }}
       frustumCulled={false}
       scale={radius}

@@ -37,6 +37,19 @@ export interface DemoOverlays {
 }
 
 /**
+ * Demo-only drawing aids (tides-zec.1). Unlike DemoOverlays they are never
+ * written to the store, so they can't reach the URL or outlast the demo: the
+ * scene reads them from the running step through demoAidOn (demo-aids.ts).
+ */
+export interface DemoAids {
+  /** View from Earth: the Moon at the Sun's scale, a daylit sky that dims
+   * with the Sun and the corona only once the Sun is hidden. */
+  solarEclipseSky?: boolean
+  /** Main view: the Moon's tilted orbit, the ecliptic and the node line. */
+  moonNodes?: boolean
+}
+
+/**
  * One stop. Every field but `date` and `caption` carries over to the steps
  * after it until one sets it again; before the first step to set it, the
  * user's own setting stands.
@@ -55,6 +68,8 @@ export interface DemoStep {
   /** null is View from Earth's default field of view. */
   skyFov?: number | null
   overlays?: DemoOverlays
+  /** Carries over like the rest; false turns one off again. */
+  aids?: DemoAids
   caption: { title: string; body: string }
 }
 

@@ -58,6 +58,11 @@ function setCoronaAir(corona: THREE.ShaderMaterial, camera: THREE.Camera, sun: T
   tint.setRGB(...sunDiscTint(sunWorld.dot(eyeSky.up), eyeSky.heightKm))
 }
 
+function fadeCorona(corona: THREE.ShaderMaterial, fade: number) {
+  const tint = corona.uniforms.uAirTint.value as THREE.Color
+  tint.multiplyScalar(fade)
+}
+
 // The sky over the disc from inside the air (atmosphere/fragment.frag,
 // tides-d9f.2): the disc is drawn far fainter than the Sun, so the sky in
 // front of it, nothing against the true disc, would pale a setting one to
@@ -87,9 +92,11 @@ interface SunRendererProps {
   diameter: number
   /** The main view (not a panel or ship mode), whose corona reaches further. */
   interactive?: boolean
+  /** Scales the corona each draw, 0..1 (the solar eclipse demo's sky). */
+  coronaFade?: () => number
 }
 
-export default function SunRenderer({ diameter, interactive = false }: SunRendererProps) {
+export default function SunRenderer({ diameter, interactive = false, coronaFade }: SunRendererProps) {
   // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
   const shipMode = useStore((s) => s.shipMode)
   // A plain sphere: the trace makes the limb exact, so no limb sphere.
@@ -167,9 +174,11 @@ export default function SunRenderer({ diameter, interactive = false }: SunRender
   )
   const onBeforeCoronaRender = useCallback(
     (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
-      if (mesh.current) setCoronaAir(coronaMaterial, camera, mesh.current)
+      if (!mesh.current) return
+      setCoronaAir(coronaMaterial, camera, mesh.current)
+      if (coronaFade) fadeCorona(coronaMaterial, coronaFade())
     },
-    [coronaMaterial]
+    [coronaMaterial, coronaFade]
   )
 
   return (

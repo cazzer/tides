@@ -33,8 +33,13 @@ import {
   DEFAULT_SURFACE_LOCATION,
   MOON_SKY_DISTANCE,
   SUN_SKY_DISTANCE,
+  eclipseMoonSkyPositionAt,
   skyPositionAt,
 } from './sky'
+import { useDemoAid } from './demo/demo-aids'
+import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
+import { EclipseDaylight } from './EclipseDaylight'
+import { coronaFade, eclipseSkyAt } from './eclipse-sky'
 
 import earthTextureHigh from './assets/earth-day.jpg'
 import earthTextureLow from './assets/earth-day-2k.jpg'
@@ -96,6 +101,9 @@ export default function SolarSystem({
   const showZodiac = useStore((s) => s.showZodiac)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
   const positions = positionsFor(distanceScale)
+  // The solar eclipse demo's aids (demo-aids.ts); off outside it.
+  const eclipseSky = useDemoAid('solarEclipseSky') && earthCamera
+  const moonNodes = useDemoAid('moonNodes')
 
   // From the surface, the Sun and Moon move to their true directions on a sky
   // around the observer (see sky.ts).
@@ -108,10 +116,22 @@ export default function SolarSystem({
   )
   const moonPositionAt = useMemo(
     () =>
-      earthCamera
-        ? skyPositionAt(Body.Moon, MOON_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
-        : positions.positionAt.moon,
-    [earthCamera, lat, lon, positions]
+      eclipseSky
+        ? eclipseMoonSkyPositionAt(lat, lon, EARTH_DIAMETER, positions.radius.sun, positions.radius.moon)
+        : earthCamera
+          ? skyPositionAt(Body.Moon, MOON_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
+          : positions.positionAt.moon,
+    [eclipseSky, earthCamera, lat, lon, positions]
+  )
+  const coronaFadeAt = useMemo(
+    () =>
+      eclipseSky
+        ? () => {
+            const t = useStore.getState().timestamp
+            return t == null ? 1 : coronaFade(eclipseSkyAt(t, lat, lon).visible)
+          }
+        : undefined,
+    [eclipseSky, lat, lon]
   )
 
   // Only the main panel's CameraProvider (the one with OrbitControls) uses these.
@@ -135,6 +155,12 @@ export default function SolarSystem({
       {earthCamera && showConstellations && showConstellationArt && <ConstellationArt />}
       {earthCamera && showConstellations && <ConstellationLines />}
       {earthCamera && <RoundSkyDiscs bodies={skyDiscs} />}
+      {eclipseSky && (
+        <EclipseDaylight
+          lat={lat}
+          lon={lon}
+        />
+      )}
       {earthCamera && <SkyLookControls />}
 
       <OrbitingBody
@@ -147,6 +173,7 @@ export default function SolarSystem({
         <SunRenderer
           diameter={positions.radius.sun}
           interactive={interactive}
+          coronaFade={coronaFadeAt}
         />
       </OrbitingBody>
       <OrbitingBody
@@ -205,6 +232,9 @@ export default function SolarSystem({
           texture={moonTexture}
         />
       </OrbitingBody>
+      {moonNodes && interactive && !earthCamera && !moonCamera && distanceScale === 'system' && (
+        <MoonOrbitTilt />
+      )}
       {/* Orbital views only; their textures must not suspend the scene. */}
       {showPlanets && !earthCamera && !moonCamera && (
         <>

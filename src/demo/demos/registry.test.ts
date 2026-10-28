@@ -1,4 +1,4 @@
-import { Body, Equator, Horizon, Observer } from 'astronomy-engine'
+import { Body, Equator, Horizon, MakeTime, Observer, SearchLocalSolarEclipse } from 'astronomy-engine'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SYSTEM_AIDS, isPlanetFocus } from '../../store'
 import { minDistance } from '../../main-view'
@@ -79,6 +79,10 @@ describe('DEMOS', () => {
       // A planet focus needs the planets shown, whatever the user had on.
       const patch = demoStepPatch(bare, demo, i)
       if (isPlanetFocus(patch.cameraFocus)) expect(patch.showPlanets).toBe(true)
+
+      // Only what exit puts back: nothing else (demo-only aids) is stored.
+      const restored = new Set([...Object.keys(bare).filter((k) => k !== 'compass'), 'jumpDate', 'demo'])
+      for (const key of Object.keys(patch)) expect(restored).toContain(key)
     })
   })
 })
@@ -97,5 +101,48 @@ describe('lunar eclipse', () => {
     const moon = Horizon(date, observer, eq.ra, eq.dec, 'normal')
     expect(moon.altitude).toBeGreaterThan(45)
     expect(separation(patch.skyLook!, moon)).toBeLessThan(15)
+  })
+})
+
+describe('solar eclipse', () => {
+  const demo = findDemo('solar-eclipse')!
+  const torreon = new Observer(25.54, -103.41, 0)
+  const local = SearchLocalSolarEclipse(MakeTime(new Date('2024-04-01T00:00:00Z')), torreon)
+  const totalBegin = local.total_begin!.time.date.getTime()
+  const totalEnd = local.total_end!.time.date.getTime()
+
+  function sunAt(iso: string) {
+    const date = new Date(iso)
+    const eq = Equator(Body.Sun, date, torreon, true, true)
+    return Horizon(date, torreon, eq.ra, eq.dec, 'normal')
+  }
+
+  it('matches the contacts its header quotes', () => {
+    // To the nearest second.
+    const fmt = (t: number) => new Date(Math.round(t / 1000) * 1000).toISOString().slice(11, 19)
+    expect(fmt(local.partial_begin.time.date.getTime())).toBe('17:00:03')
+    expect(fmt(totalBegin)).toBe('18:17:01')
+    expect(fmt(totalEnd)).toBe('18:21:13')
+    expect(fmt(local.peak.time.date.getTime())).toBe('18:19:07')
+    expect(fmt(local.partial_end.time.date.getTime())).toBe('19:41:32')
+  })
+
+  it.each([1, 2])('step %i looks at the high Sun from Torreón', (i) => {
+    const patch = demoStepPatch(bare, demo, i)
+    expect(patch.mainPanel).toBe('top')
+    expect(patch.location).toEqual({ lat: 25.54, lon: -103.41 })
+    const sun = sunAt(demo.steps[i].date)
+    expect(sun.altitude).toBeGreaterThan(45)
+    expect(separation(patch.skyLook!, sun)).toBeLessThan(i === 1 ? 30 : 5)
+  })
+
+  it('stops the partial phase at second contact and plays totality inside it', () => {
+    expect(Date.parse(demo.steps[1].until!)).toBeLessThanOrEqual(totalBegin)
+    expect(Date.parse(demo.steps[2].date)).toBeGreaterThan(totalBegin)
+    expect(Date.parse(demo.steps[2].until!)).toBeLessThan(totalEnd)
+  })
+
+  it('stops the shadow’s track as the umbra leaves Earth', () => {
+    expect(Date.parse(demo.steps[3].until!)).toBeLessThanOrEqual(Date.parse('2024-04-08T19:56:00Z'))
   })
 })
