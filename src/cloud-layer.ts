@@ -250,8 +250,15 @@ export function shadePlace(
 
 /** The path over which fog in opaque cloud stops its opacity's share of
  * the light, whatever the column's height: under a march step, as real
- * cloud is far denser inside than its opacity from above suggests. */
+ * cloud is far denser inside than its opacity from above suggests. The deck
+ * from orbit's: another deck's is as much shorter as its km are
+ * (fogPath(), tides-d9f.10), so a column of so many km fogs as it did. */
 export const FOG_PATH = 0.004
+
+/** FOG_PATH for `deck`: at its km scale. */
+export function fogPath(deck: CloudDeck = EXAGGERATED_DECK): number {
+  return FOG_PATH * (deck.unitsPerKm / CLOUD_UNITS_PER_KM)
+}
 
 /** How far into its column (as a share of its thickness) fog thickens from
  * nothing at the top and base: a soft edge (tides-01v.8.6). */
@@ -275,14 +282,21 @@ export const FOG_EASE_SAMPLES = 6
  * FOG_PATH, and as patchy as the cloud is thin (times its opacity), so
  * dense cloud whites out and thin cloud only veils. It thins to nothing at
  * the column's top and base over `soft` of its thickness. None outside it,
- * or where it is a gap.
+ * or where it is a gap. Over fogPath() of `deck` (the one from orbit unless
+ * given).
  */
-export function fogExtinction(alpha: number, base: number, top: number, altitude: number): number {
+export function fogExtinction(
+  alpha: number,
+  base: number,
+  top: number,
+  altitude: number,
+  deck: CloudDeck = EXAGGERATED_DECK
+): number {
   const inside = Math.min(altitude - base, top - altitude)
   if (alpha < CLOUD_MIN_ALPHA || inside <= 0) return 0
   const thickness = top - base
   return (
-    ((alpha * -Math.log(1 - Math.min(alpha, 0.995))) / FOG_PATH) *
+    ((alpha * -Math.log(1 - Math.min(alpha, 0.995))) / fogPath(deck)) *
     smoothstep(0, FOG_SOFT * thickness, inside)
   )
 }
@@ -296,9 +310,10 @@ export function easedFogExtinction(
   base: number,
   top: number,
   altitude: number,
-  ease: number
+  ease: number,
+  deck: CloudDeck = EXAGGERATED_DECK
 ): number {
-  const fog = fogExtinction(alpha, base, top, altitude)
+  const fog = fogExtinction(alpha, base, top, altitude, deck)
   const inside = Math.min(altitude - base, top - altitude)
   if (ease >= 1 || alpha < CLOUD_MIN_ALPHA || inside <= 0) return fog
   const side = -Math.log(1 - Math.min(alpha, 0.995)) / Math.max(top - base, 1e-4)

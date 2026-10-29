@@ -223,12 +223,22 @@ uniform float uCloudUnitsPerKm;
 #define CLOUD_CLEARANCE uCloudClearance
 #define CLOUD_UNITS_PER_KM uCloudUnitsPerKm
 `
+  // And the relief shadow's softness, a constant until tides-d9f.10 B scaled
+  // it with the deck's km: put back too.
+  const DECK_SOFT = [
+    `    float soft = 0.008 * (CLOUD_UNITS_PER_KM / ${CLOUD_UNITS_PER_KM.toFixed(6)});
+    occ = max(occ, cloudShade(col.x) * smoothstep(-soft, soft, col.z - alt));`,
+    '    occ = max(occ, cloudShade(col.x) * smoothstep(-0.008, 0.008, col.z - alt));',
+  ]
   function deckAsDefines(fragment: string) {
     expect(fragment.split(DECK_UNIFORMS).length).toBeLessThanOrEqual(2)
-    return fragment.replace(
-      DECK_UNIFORMS,
-      `#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}\n#define CLOUD_UNITS_PER_KM ${CLOUD_UNITS_PER_KM.toFixed(6)}\n`
-    )
+    expect(fragment.split(DECK_SOFT[0]).length).toBe(fragment.split(DECK_UNIFORMS).length)
+    return fragment
+      .replace(
+        DECK_UNIFORMS,
+        `#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}\n#define CLOUD_UNITS_PER_KM ${CLOUD_UNITS_PER_KM.toFixed(6)}\n`
+      )
+      .replace(DECK_SOFT[0], DECK_SOFT[1])
   }
 
   const SHADOW_UNIFORM = '// groundShadowStrength() for the camera drawn (faceCamera()).\nuniform float uGroundShadow;'

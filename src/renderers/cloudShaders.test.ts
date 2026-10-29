@@ -18,6 +18,7 @@ import {
   detailErosion,
   detailFall,
   detailPixelScale,
+  GROUND_FADE,
   GROUND_SHADOW,
   GROUND_SHADOW_ADAPT_FROM,
   GROUND_SHADOW_ADAPT_SUN,
@@ -30,12 +31,16 @@ import {
   MARCH_STEPS,
   marchPhaseAfter,
   marchPhaseShare,
+  marchStepFor,
 } from './cloudShaders'
 import {
   MAX_CLOUD_TOP_KM,
   CLOUD_CLEARANCE,
   cloudDeckAt,
+  CLOUD_DECK_BAND_KM,
   EXAGGERATED_DECK,
+  fogPath,
+  TERRAIN_MAX_GREY,
   TRUE_DECK,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
@@ -1269,7 +1274,8 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
         for (const v of [vertex, preprocess(clouds.material.vertexShader, new Set([...defines, 'FOG_EASE']))]) {
           expect(v).toContain(`* (1.0 - smoothstep(${a}, ${b}, cloudFogStep(vEye)));`)
           expect(v).toContain('cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv))')
-          expect(v).toContain(`cloudFogDensity(col) * cloudFogEdge(col, r - uSeaLevel) * ${MARCH_STEP.toFixed(6)}`)
+          // The live step (uMarchStep, tides-d9f.10).
+          expect(v).toContain('cloudFogDensity(col) * cloudFogEdge(col, r - uSeaLevel) * uMarchStep;')
         }
       }
       // From outside the reach the vertex stage reads nothing.
@@ -1570,18 +1576,20 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // without FOG_EASE are as they were. The relief programs' and the relief
   // ground shadow's regenerated at tides-d9f.10: the deck's clearance and km
   // scale are uniforms on the relief path; the flat ones are as they were.
+  // tides-d9f.10 B: deck-sized lengths (fog path, ground fade, shadow steps,
+  // march step) follow the live deck; again only the relief ones regenerated.
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
-    'relief-full-front-noease': '748be0e051b1d727c3278147fe50d045870f95cbdfefd0cdd2ae00c507808e5d',
-    'relief-full-front-ease': '748be0e051b1d727c3278147fe50d045870f95cbdfefd0cdd2ae00c507808e5d',
-    'relief-full-back-noease': '1e2919ba1258c3dde6930c05d205f7c517598ba3fdac8d07f17f1f835825dede',
-    'relief-full-back-ease': 'a2cc59ed4ace5989e62ad419b04839fd62116507f0e4d5483f098133e04f361c',
+    'relief-full-front-noease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
+    'relief-full-front-ease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
+    'relief-full-back-noease': '3ff559ef65df13010feb6ebe629b8a6f11296618911258de344ca3c209466355',
+    'relief-full-back-ease': '1a785b6610c3600d38fa903e10c1852fe12870dcd7aafec6df6d604772bc7049',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-back-noease': '3a79db74cfaf67b5d9e8669562c686a9a09d1d8cea9c02036d6cd8de28049129',
     'flat-full-back-ease': '87b1586468186a76d84a8a944b70ea30effd6801014ce53242a31bece750311a',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
-    'relief-full': 'b98df55f5a715ba1a44c85e4a5ac2ab0a4f2dbb01bec5ec7bf9304b1c31deffe',
+    'relief-full': '3cee3553208d7322e96f5507d89d81fa32e04bf000460b8126a86f7295576768',
     'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -1919,6 +1927,118 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
       } finally {
         clouds.dispose()
       }
+    }
+  })
+
+  // The longest path from inside through `deck`: under the tallest top
+  // over the highest ground, grazing the sea.
+  const deckOuter = (deck: typeof TRUE_DECK) =>
+    TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + deck.clearance + deck.unitsPerKm * MAX_CLOUD_TOP_KM
+  const chord = (top: number) => 2 * Math.sqrt((sea + top) ** 2 - sea ** 2)
+
+  it('steps the march as much shorter as the deck\'s longest path, and as it was from orbit', () => {
+    expect(deckOuter(EXAGGERATED_DECK)).toBe(CLOUD_LAYER_TOP)
+    expect(marchStepFor(EXAGGERATED_DECK)).toBe(MARCH_STEP)
+    const ratio = chord(deckOuter(TRUE_DECK)) / chord(CLOUD_LAYER_TOP)
+    expect(marchStepFor(TRUE_DECK)).toBeCloseTo(MARCH_STEP * ratio, 15)
+    // A little over a third of the step from orbit.
+    expect(ratio).toBeGreaterThan(0.3)
+    expect(ratio).toBeLessThan(0.4)
+    for (const flat of [false, true]) {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      clouds.uniforms.uSeaLevel.value = sea
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+      const camera = new THREE.PerspectiveCamera(60, 1.6, 0.0001, 100)
+      const stepAt = (km: number) => {
+        camera.position.set(0, sea + km / EARTH_KM_PER_UNIT, 0)
+        camera.updateMatrixWorld()
+        clouds.faceCamera(mesh, camera, true)
+        return clouds.material.uniforms.uMarchStep.value
+      }
+      try {
+        expect(clouds.material.uniforms.uMarchStep.value).toBe(MARCH_STEP)
+        expect(stepAt(5)).toBe(flat ? MARCH_STEP : marchStepFor(TRUE_DECK))
+        expect(stepAt(36000)).toBe(MARCH_STEP)
+      } finally {
+        clouds.dispose()
+      }
+    }
+  })
+
+  it('scales the relief programs\' deck-sized lengths with the live deck, and leaves the flat sheet\'s literal', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    try {
+      const vertex = preprocess(clouds.material.vertexShader, new Set(['FLIP_SIDED']))
+      const fragment = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+      for (const v of [vertex, fragment]) {
+        expect(v).toContain('uniform float uMarchStep;')
+        expect(v).toContain(`#define CLOUD_DECK_SCALE (CLOUD_UNITS_PER_KM / ${CLOUD_UNITS_PER_KM.toFixed(6)})`)
+        expect(v).toContain(`/ (${(0.004).toFixed(6)} * CLOUD_DECK_SCALE);`)
+      }
+      expect(fragment).toContain('#define MARCH_STEP uMarchStep')
+      expect(fragment).toContain('#define WALL_DEPTH (MARCH_STEP * 0.5)')
+      expect(fragment).toContain('#define SIDE_REST (MARCH_STEP * 4.0)')
+      expect(fragment).toContain('#define SHADOW_STEP (0.0065 * CLOUD_DECK_SCALE)')
+      expect(fragment).toContain('#define SHADOW_SOFT (0.02 * CLOUD_DECK_SCALE)')
+      expect(fragment).toContain(
+        `#define GROUND_FADE (${GROUND_FADE.toFixed(6)} * (CLOUD_CLEARANCE / ${CLOUD_CLEARANCE.toFixed(6)}))`
+      )
+      const flatFragment = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_FLAT', 'FLIP_SIDED']))
+      expect(flatFragment).not.toMatch(/uMarchStep|CLOUD_DECK_SCALE/)
+      expect(flatFragment).toContain(`#define MARCH_STEP ${MARCH_STEP.toFixed(6)}`)
+      expect(flatFragment).toContain(`#define GROUND_FADE ${GROUND_FADE.toFixed(6)}`)
+      expect(CLOUD_GROUND_GLSL.head(false)).toContain(
+        `float soft = 0.008 * (CLOUD_UNITS_PER_KM / ${CLOUD_UNITS_PER_KM.toFixed(6)});`
+      )
+      expect(CLOUD_GROUND_GLSL.head(true)).toContain('smoothstep(-0.008, 0.008, col.z - alt)')
+    } finally {
+      clouds.dispose()
+    }
+  })
+
+  it('fogs a column of so many km as it did, at any deck', () => {
+    expect(fogPath(EXAGGERATED_DECK)).toBe(fogPath())
+    // The opacity through the whole thickness of a column of km km, at the
+    // deck's own scale: the true deck's, some nine times thinner in scene
+    // units, as dense per unit as it is thinner.
+    const through = (deck: typeof TRUE_DECK, alpha: number, km: number) => {
+      const base = deck.clearance
+      const top = base + deck.unitsPerKm * km
+      const n = 4000
+      let depth = 0
+      for (let i = 0; i < n; i++) depth += fogExtinction(alpha, base, top, base + ((i + 0.5) / n) * (top - base), deck)
+      return 1 - Math.exp((-depth * (top - base)) / n)
+    }
+    for (const alpha of [0.05, 0.3, 0.8])
+      for (const km of [0.5, 2, 9]) expect(through(TRUE_DECK, alpha, km)).toBeCloseTo(through(EXAGGERATED_DECK, alpha, km), 12)
+    // And over a step: the eye's share of the phase reads the same fog
+    // over the live step as the shader's cloudFogStep().
+    const fog = fogExtinction(0.5, TRUE_DECK.clearance, TRUE_DECK.clearance + 0.003, TRUE_DECK.clearance + 0.0015, TRUE_DECK)
+    expect(fog * marchStepFor(TRUE_DECK)).toBeCloseTo(
+      ((0.5 * -Math.log(0.5)) / (0.004 * (TRUE_DECK.unitsPerKm / CLOUD_UNITS_PER_KM))) * marchStepFor(TRUE_DECK),
+      9
+    )
+  })
+
+  it('keeps every march from inside within the step budget at every deck in the band', () => {
+    // From under the deck's base to above its reach, at each step's own deck.
+    for (let km = 0; km <= CLOUD_DECK_BAND_KM[1] + 20; km += 5) {
+      const deck = cloudDeckAt(km, true)
+      const step = marchStepFor(deck)
+      const outer = sea + deckOuter(deck)
+      let longest = 0
+      let most = 0
+      for (let alt = deck.clearance / 2; alt <= deckOuter(deck) + 0.01; alt += deckOuter(deck) / 20) {
+        for (let deg = -90; deg <= 90; deg += 0.5) {
+          const a = (deg * Math.PI) / 180
+          const span = marchSpanFromEye([0, sea + alt, 0], [Math.cos(a), Math.sin(a), 0], sea, outer, deck)
+          if (!span) continue
+          longest = Math.max(longest, span.end - span.origin)
+          most = Math.max(most, marchSteps(span, step, MARCH_STEPS, 0.999).length)
+        }
+      }
+      expect(longest / MARCH_STEPS, `${km} km`).toBeLessThanOrEqual(step * 1.02)
+      expect(most, `${km} km`).toBeLessThanOrEqual(MARCH_STEPS + 2)
     }
   })
 })
