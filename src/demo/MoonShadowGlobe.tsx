@@ -25,8 +25,9 @@ const PENUMBRA_LINE_OPACITY = 0.5
 const LINE_PX = 1
 // After the air, aurora and cloud shells (the clouds' latest, from under
 // their tops, is CLOUD_UNDER_AURORA_RENDER_ORDER), which write no depth: it
-// draws over them, and the ground's depth still hides the far side.
-const RENDER_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 1
+// draws over them, and the ground's depth still hides the far side. Under
+// the labels (LABEL_RENDER_ORDER, 4), which must stay unshaded.
+const RENDER_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.5
 
 const eye = new THREE.Vector3()
 
@@ -91,8 +92,11 @@ void main() {
   // masked out at the end.
   vec3 ray = normalize(vLocal - uEye);
   float b = dot(uEye, ray);
-  float h = b * b - dot(uEye, uEye) + uSeaLevel * uSeaLevel;
-  float hit = step(0.0, h);
+  // From the closest approach, not b² - |eye|²: that cancels in float32.
+  vec3 closest = uEye - b * ray;
+  float h = uSeaLevel * uSeaLevel - dot(closest, closest);
+  // Antialiased like the ground's silhouette beside it.
+  float hit = clamp(h / max(fwidth(h), 1e-12) + 0.5, 0.0, 1.0);
   vec3 p = eclipsePoint(uEye + (-b - sqrt(max(h, 0.0))) * ray);
   vec3 a = moonShadowAngles(p);
   float visible = eclipseSunlight(p).x;
