@@ -5,6 +5,7 @@ import {
   IconChevronRight,
   IconPlayerPause,
   IconPlayerPlay,
+  IconRepeat,
   IconX,
 } from '@tabler/icons-react'
 import { useStore } from '../store'
@@ -41,6 +42,7 @@ export function DemoBar() {
   const goToDemoStep = useStore((s) => s.goToDemoStep)
   const exitDemo = useStore((s) => s.exitDemo)
   const toggleDemoPlaying = useStore((s) => s.toggleDemoPlaying)
+  const replayDemoStep = useStore((s) => s.replayDemoStep)
   const nextRef = useRef<HTMLButtonElement>(null)
   const timeText = useRef('')
   const timeEl = useRef<HTMLSpanElement | null>(null)
@@ -97,6 +99,7 @@ export function DemoBar() {
       nextRef={nextRef}
       onStep={goToDemoStep}
       onTogglePlaying={toggleDemoPlaying}
+      onReplay={replayDemoStep}
       onExit={exitDemo}
     />
   )
@@ -111,6 +114,8 @@ export interface DemoBarViewProps {
   nextRef?: Ref<HTMLButtonElement>
   onStep: (index: number) => void
   onTogglePlaying: () => void
+  /** Plays the step's loop again; the button shows only on a step with one. */
+  onReplay?: () => void
   onExit: () => void
 }
 
@@ -123,12 +128,13 @@ export function DemoBarView({
   nextRef,
   onStep,
   onTogglePlaying,
+  onReplay,
   onExit,
 }: DemoBarViewProps) {
   const count = demo.steps.length
   const first = step === 0
   const last = step === count - 1
-  const { caption } = demo.steps[step]
+  const { caption, loop } = demo.steps[step]
   const captionId = useId()
   const bodyRef = useRef<HTMLParagraphElement>(null)
   const [overflowing, setOverflowing] = useState(false)
@@ -189,6 +195,11 @@ export function DemoBarView({
         >
           {playing ? <IconPlayerPause size={20} stroke={2} /> : <IconPlayerPlay size={20} stroke={2} />}
         </Button>
+        {loop && onReplay && (
+          <Button type="button" onClick={onReplay} aria-label="Replay" title="Replay">
+            <IconRepeat size={20} stroke={2} />
+          </Button>
+        )}
         {/* One button for both, so focus stays on it into the last step. */}
         <TextButton
           ref={nextRef}

@@ -11,8 +11,9 @@ import type {
   SystemAids,
 } from '../store'
 import type { SkyLook } from '../sky-look'
-import type { Demo } from './demo-script'
+import type { Demo, DemoStep } from './demo-script'
 import {
+  DEMO_MAX_DELTA,
   shownEarthSpin,
   stepTravel,
   travelRun,
@@ -171,8 +172,66 @@ export const DEMO_PLAY_SCALE = 3600
 
 export function demoPlayScale(s: DemoSessionState, demo: Demo): number {
   if (!s.demo || !s.demoSaved) return DEMO_PLAY_SCALE
-  const { timeScale } = demoStepPatch(s.demoSaved, demo, s.demo.step)
+  const step = demo.steps[s.demo.step]
+  const at = s.timestamp ?? Date.parse(step.date)
+  return stepSpeedAt(step, stepPlayScale(s.demoSaved, demo, s.demo.step), at)
+}
+
+/** Step `index`'s own speed, or an hour a second where it pauses. */
+function stepPlayScale(saved: DemoSaved, demo: Demo, index: number): number {
+  const { timeScale } = demoStepPatch(saved, demo, index)
   return timeScale > 0 ? timeScale : DEMO_PLAY_SCALE
+}
+
+/** The step's speed at `t`: the last of its `speeds` at or before t, else `base`. */
+export function stepSpeedAt(step: DemoStep, base: number, t: number): number {
+  let scale = base
+  let latest = -Infinity
+  for (const speed of step.speeds ?? []) {
+    const at = Date.parse(speed.at)
+    if (at <= t && at >= latest) {
+      latest = at
+      scale = speed.timeScale
+    }
+  }
+  return scale
+}
+
+/** A step's loop and speed changes, parsed for DemoClock (tides-zec.15). */
+export interface DemoSpan {
+  loop: { from: number; to: number; times: number; holdSeconds: number } | null
+  speeds: { at: number; timeScale: number }[]
+  /** The speed a pass starts again at, from loop.from. */
+  restartScale: number
+}
+
+/** Step `index`'s span, or null if it has neither; one pass, no rest, under reduced motion. */
+export function demoStepSpan(saved: DemoSaved, demo: Demo, index: number, reduced = false): DemoSpan | null {
+  const step = demo.steps[index]
+  if (!step?.loop && !step?.speeds?.length) return null
+  const loop = step.loop && {
+    from: Date.parse(step.loop.from),
+    to: Date.parse(step.loop.to),
+    times: reduced ? 1 : step.loop.times,
+    holdSeconds: reduced ? 0 : (step.loop.holdMs ?? 0) / 1000,
+  }
+  const base = stepPlayScale(saved, demo, index)
+  return {
+    loop: loop || null,
+    speeds: (step.speeds ?? []).map((s) => ({ at: Date.parse(s.at), timeScale: s.timeScale })),
+    restartScale: loop ? stepSpeedAt(step, base, loop.from) : base,
+  }
+}
+
+/**
+ * The store patch that plays the running step's loop again from its start,
+ * every pass (DemoClock sees `demoReplay` change). Null if it has no loop.
+ */
+export function replayDemoStepPatch(s: DemoSessionState, demo: Demo, replays: number) {
+  if (!s.demo || !s.demoSaved || s.demo.id !== demo.id) return null
+  const span = demoStepSpan(s.demoSaved, demo, s.demo.step)
+  if (!span?.loop) return null
+  return { timestamp: span.loop.from, timeScale: span.restartScale, demoTravel: null, demoReplay: replays + 1 }
 }
 
 /**
@@ -191,10 +250,30 @@ export interface DemoClockTrack {
   spinFrom: number
   /** The clock as last seen, for reachedUntil; null after a step change. */
   previous: number | null
+  /** The step's loop: passes finished, and the rest left on `to` (s). */
+  passes: number
+  rest: number | null
+  /** The demoReplay last seen. */
+  replay: number
 }
 
 export function demoClockTrack(): DemoClockTrack {
-  return { travel: null, elapsed: 0, spinFrom: 0, previous: null }
+  return { travel: null, elapsed: 0, spinFrom: 0, previous: null, passes: 0, rest: null, replay: 0 }
+}
+
+/** A new step, or Replay: the loop starts over, and no crossing is counted
+ * from the clock's jump. */
+export function restartDemoClockTrack(track: DemoClockTrack): void {
+  track.previous = null
+  track.passes = 0
+  track.rest = null
+}
+
+/** The running step's loop and speeds, as DemoClock passes them. */
+export interface DemoClockSpan {
+  span: DemoSpan | null
+  replay: number
+  timeScale: number
 }
 
 /**
@@ -202,18 +281,24 @@ export function demoClockTrack(): DemoClockTrack {
  * (null for none) and Earth's spin hold. A travel carries the clock and
  * checks no stop on the way: a travel back past `until` isn't reaching it,
  * and the step's date is short of it anyway. Once landed, the clock runs on
- * from the step's date and stops at `until`. Updates `track`.
+ * from the step's date and stops at `until`, playing its loop and taking
+ * its speed changes on the way (`clock`). Updates `track`.
  */
 export function demoClockFrame(
   track: DemoClockTrack,
   travel: TravelRun | null,
   timestamp: number | null,
   until: number | null,
-  delta: number
+  delta: number,
+  clock: DemoClockSpan = { span: null, replay: track.replay, timeScale: 1 }
 ): {
   write: { timestamp: number; timeScale?: number; demoTravel?: null } | null
   hold: EarthSpinHold | null
 } {
+  if (clock.replay !== track.replay) {
+    track.replay = clock.replay
+    restartDemoClockTrack(track)
+  }
   if (travel !== track.travel) {
     // Read before the hold moves on: a travel begun mid-travel (Prev, say)
     // turns on from the angle shown, not the true one.
@@ -228,10 +313,45 @@ export function demoClockFrame(
     const write = step.done ? { timestamp: step.timestamp, demoTravel: null } : { timestamp: step.timestamp }
     return { write, hold: step.hold }
   }
+  const { span } = clock
+  const loop = span?.loop
+  if (loop && track.rest != null) {
+    // Paused, the rest waits too.
+    if (clock.timeScale !== 0) track.rest -= Math.min(delta, DEMO_MAX_DELTA)
+    if (track.rest > 0) {
+      track.previous = loop.to
+      return { write: { timestamp: loop.to }, hold: null }
+    }
+    return restartPass(track, span!)
+  }
+  if (loop && timestamp != null && reachedUntil(track.previous, timestamp, loop.to)) {
+    track.passes += 1
+    track.previous = loop.to
+    if (track.passes >= loop.times) return { write: { timestamp: loop.to, timeScale: 0 }, hold: null }
+    if (loop.holdSeconds > 0) {
+      track.rest = loop.holdSeconds
+      return { write: { timestamp: loop.to }, hold: null }
+    }
+    return restartPass(track, span!)
+  }
   if (until != null && timestamp != null && reachedUntil(track.previous, timestamp, until)) {
     track.previous = until
     return { write: { timestamp: until, timeScale: 0 }, hold: null }
   }
+  // The last change crossed this frame wins.
+  let timeScale: number | undefined
+  if (span && timestamp != null) {
+    for (const speed of span.speeds) {
+      if (reachedUntil(track.previous, timestamp, speed.at)) timeScale = speed.timeScale
+    }
+  }
   track.previous = timestamp
+  if (timeScale !== undefined && timestamp != null) return { write: { timestamp, timeScale }, hold: null }
   return { write: null, hold: null }
+}
+
+function restartPass(track: DemoClockTrack, span: DemoSpan) {
+  track.rest = null
+  track.previous = span.loop!.from
+  return { write: { timestamp: span.loop!.from, timeScale: span.restartScale }, hold: null }
 }

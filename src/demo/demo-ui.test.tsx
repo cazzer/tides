@@ -52,4 +52,14 @@ describe('DemoBarView', () => {
     expect(html).toContain('Done')
     expect(html).toContain(`${demo.steps.length} / ${demo.steps.length}`)
   })
+
+  it('offers Replay only on a step with a loop', () => {
+    expect(renderToStaticMarkup(<DemoBarView {...props({ onReplay: () => {} })} />)).not.toContain('aria-label="Replay"')
+    const looped = {
+      ...demo,
+      steps: [{ ...demo.steps[0], loop: { from: demo.steps[0].date, to: demo.steps[0].date, times: 2 } }],
+    }
+    const html = renderToStaticMarkup(<DemoBarView {...props({ demo: looped, onReplay: () => {} })} />)
+    expect(html).toContain('aria-label="Replay"')
+  })
 })

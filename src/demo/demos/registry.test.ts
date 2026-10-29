@@ -89,6 +89,20 @@ describe('DEMOS', () => {
       if (step.until !== undefined) {
         expect(Date.parse(step.until)).toBeGreaterThan(date)
       }
+      if (step.loop) {
+        const from = Date.parse(step.loop.from)
+        const to = Date.parse(step.loop.to)
+        expect(from).toBeGreaterThanOrEqual(date)
+        expect(to).toBeGreaterThan(from)
+        expect(Number.isInteger(step.loop.times) && step.loop.times >= 1).toBe(true)
+        expect(step.loop.holdMs ?? 0).toBeGreaterThanOrEqual(0)
+        // A stop short of `to` would end the first pass there.
+        if (step.until !== undefined) expect(Date.parse(step.until)).toBeGreaterThanOrEqual(to)
+      }
+      for (const speed of step.speeds ?? []) {
+        expect(Date.parse(speed.at)).toBeGreaterThanOrEqual(date)
+        expect(speed.timeScale).toBeGreaterThan(0)
+      }
       if (step.timeScale !== undefined) {
         expect(Number.isFinite(step.timeScale)).toBe(true)
         expect(step.timeScale).toBeGreaterThanOrEqual(0)

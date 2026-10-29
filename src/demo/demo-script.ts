@@ -58,6 +58,26 @@ export type DemoTravel = ({ seconds: number; rate?: never } | { rate: number; se
   camera?: Omit<DemoPose, 'focus'>
 }
 
+/**
+ * A span of a step's time played over and over (tides-zec.15): the clock
+ * runs from `from` to `to` (ISO 8601) at the step's speed, rests `holdMs` on
+ * `to`, then starts again from `from`; after `times` passes it stops on `to`.
+ * Forward only. Reduced motion plays one pass; the bar's Replay starts it
+ * again.
+ */
+export interface DemoLoop {
+  from: string
+  to: string
+  times: number
+  holdMs?: number
+}
+
+/** The clock's speed from `at` (ISO 8601) on, within a step. */
+export interface DemoSpeed {
+  at: string
+  timeScale: number
+}
+
 export interface DemoOverlays {
   showPlanets?: boolean
   showConstellations?: boolean
@@ -103,12 +123,15 @@ export interface DemoAids {
   /** With `moonShadow`: the path of totality darkened behind the umbra, from
    * landfall up to the sim time (tides-zec.12). */
   totalityPath?: boolean
+  /** Main view: the month names round Earth's orbit, hidden in a demo
+   * otherwise (the 3D clock always is: the caption's is the only one). */
+  monthLabels?: boolean
 }
 
 /**
- * One stop. Every field but `date`, `travel` and `caption` carries over to
- * the steps after it until one sets it again; before the first step to set
- * it, the user's own setting stands.
+ * One stop. Every field but `date`, `travel`, `loop`, `speeds` and `caption`
+ * carries over to the steps after it until one sets it again; before the
+ * first step to set it, the user's own setting stands.
  */
 export interface DemoStep {
   /** ISO 8601, UTC. */
@@ -119,6 +142,11 @@ export interface DemoStep {
    * than cutting to it. Entering the demo always cuts. */
   travel?: DemoTravel
   timeScale?: number
+  /** The first pass runs from `date`, the rest from `loop.from`. */
+  loop?: DemoLoop
+  /** Speed changes as the clock passes each `at`; on a loop, each pass
+   * starts again at the speed for `loop.from`. */
+  speeds?: DemoSpeed[]
   camera?: DemoPose
   mainPanel?: PanelKey
   layout?: Layout

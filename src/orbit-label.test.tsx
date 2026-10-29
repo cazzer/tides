@@ -3,7 +3,7 @@ import type * as THREE from 'three'
 import { describe, expect, test, vi } from 'vitest'
 
 const { state, texts } = vi.hoisted(() => ({
-  state: { showPlanets: false, demo: null as { id: string; step: number } | null },
+  state: { showPlanets: false, demo: null as { id: string; step: number } | null, months: false },
   texts: [] as Record<string, unknown>[],
 }))
 vi.mock('@react-three/fiber', () => ({ useFrame: () => {} }))
@@ -13,6 +13,7 @@ vi.mock('@react-three/drei', () => ({
     return null
   },
 }))
+vi.mock('./demo/demo-aids', () => ({ useDemoAid: () => state.months }))
 vi.mock('./camera', () => ({ useCamera: () => ({ handleFocus: () => {} }) }))
 vi.mock('./store', () => {
   const store = Object.assign(
@@ -45,18 +46,30 @@ describe('OrbitLabel clock', () => {
 })
 
 describe('OrbitLabel in a demo', () => {
-  // The caption's clock is the only one (tides-zec.15).
-  test.each([
-    [null, true],
-    [{ id: 'seasons', step: 0 }, false],
-  ])('demo %o shows the clock and months: %s', (demo, shown) => {
+  function shown(demo: typeof state.demo, months = false) {
     state.demo = demo
+    state.months = months
     texts.length = 0
     renderToStaticMarkup(<OrbitLabel radius={100} />)
     state.demo = null
-    expect(texts).toHaveLength(13)
-    for (const text of texts) expect(text.visible).toBe(shown)
+    state.months = false
     const clock = texts.find((t) => t['userData-focus'] === 'clock')!
-    expect(clock.onClick === undefined).toBe(!shown)
+    const monthTexts = texts.filter((t) => t !== clock)
+    expect(monthTexts).toHaveLength(12)
+    expect(new Set(monthTexts.map((t) => t.visible)).size).toBe(1)
+    return { clock: clock.visible, clickable: clock.onClick !== undefined, months: monthTexts[0].visible }
+  }
+
+  // The caption's clock is the only one (tides-zec.15).
+  test('outside a demo shows the clock and months', () => {
+    expect(shown(null)).toEqual({ clock: true, clickable: true, months: true })
+  })
+
+  test('in a demo hides the clock and months', () => {
+    expect(shown({ id: 'seasons', step: 0 })).toEqual({ clock: false, clickable: false, months: false })
+  })
+
+  test('a step with monthLabels shows the months, not the clock', () => {
+    expect(shown({ id: 'seasons', step: 0 }, true)).toEqual({ clock: false, clickable: false, months: true })
   })
 })

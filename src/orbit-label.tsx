@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
 import { useCamera } from './camera'
 import { useStore } from './store'
+import { useDemoAid } from './demo/demo-aids'
 import { earthAngle, monthStartAngles } from './ephemeris'
 import { CLOCK_HALF_WIDTH } from './clock-size'
 
@@ -78,8 +79,9 @@ function smoothstep(x: number, edge0: number, edge1: number): number {
  * Earth's orbit line, with the clock riding it and the month names around it
  * unless `calendar` is false (ship mode), which leaves just the line: no
  * 'clock' focus ref is registered and nothing is clickable. While a demo runs
- * the clock and months are hidden, the caption's clock the only one
- * (tides-zec.15), but the 'clock' focus stays for the user's view to return to.
+ * the clock is hidden, the caption's clock the only one (tides-zec.15), and
+ * the months too unless the step's monthLabels aid shows them; the 'clock'
+ * focus stays for the user's view to return to.
  */
 export function OrbitLabel({
   radius,
@@ -94,6 +96,7 @@ export function OrbitLabel({
   const { handleFocus } = useCamera()
   const setPlanet = useStore((s) => s.setPlanet)
   const inDemo = useStore((s) => s.demo != null)
+  const showMonths = useDemoAid('monthLabels') || !inDemo
 
   useEffect(() => {
     if (calendar) setPlanet('clock', clockRef)
@@ -204,7 +207,7 @@ export function OrbitLabel({
               ref={(text: TroikaText | null) => {
                 monthRefs.current[m] = text
               }}
-              visible={!inDemo}
+              visible={showMonths}
               material={labelMaterial}
               scale={[MONTH_SCALE, MONTH_SCALE, MONTH_SCALE]}
               color={MONTH_COLOR}
