@@ -166,16 +166,15 @@ function follow(shadow: Shadow, group: THREE.Group | null, t: number, state: Roo
     group.quaternion.setFromRotationMatrix(basis.makeBasis(east, north, axis))
     shadow.placedT = t
   }
-  // PointsMaterial sizes are device pixels.
-  const pixelRatio = state.gl.getPixelRatio()
-  const camera = state.camera as THREE.PerspectiveCamera
-  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2)
+  // PointsMaterial sizes are CSS pixels: three scales them by the pixel
+  // ratio itself. The Moon's diameter on screen comes from the projection,
+  // so the camera's zoom and any aspect handling count.
+  const { camera } = state
+  const depth = -moonAt.applyMatrix4(camera.matrixWorldInverse).z
   const moonDiameter =
-    (system.radius.moon / (camera.position.distanceTo(moonAt) * Math.tan(halfFov))) *
-    state.size.height *
-    pixelRatio
-  shadow.pointMaterials[0].size = Math.min(TRACK_SIZE * pixelRatio, TRACK_SHARE * moonDiameter)
-  shadow.pointMaterials[1].size = Math.min(TICK_SIZE * pixelRatio, TICK_SHARE * moonDiameter)
+    depth > 0 ? ((system.radius.moon * camera.projectionMatrix.elements[5]) / depth) * state.size.height : 0
+  shadow.pointMaterials[0].size = Math.min(TRACK_SIZE, TRACK_SHARE * moonDiameter)
+  shadow.pointMaterials[1].size = Math.min(TICK_SIZE, TICK_SHARE * moonDiameter)
 }
 
 interface EarthShadowProps {
