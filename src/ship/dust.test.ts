@@ -1,17 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import { OVERSPEED_MAX, V_NORMAL, V_TOP } from './flight'
 import { SHIP_FOV } from './ship-session'
-import { EARTH_KM_PER_UNIT } from '../surface-handover'
+import { airDensity, densityAltitudeKm } from './frame-carry'
 import {
-  AIR_DUST_BAND_KM,
-  AIR_DUST_MIN_HALF,
-  AIR_DUST_OPACITY,
-  AIR_DUST_SECONDS,
-  AIR_STREAK_TIME,
-  airDustLevel,
-  airDustShare,
-  fieldLevel,
-  fieldOpacity,
+  DUST_AIR_BAND_KM,
+  airDustFade,
   DUST_HALF_SIZE,
   DUST_SIZE_BASE,
   DUST_SPEED_BASE,
@@ -306,9 +299,7 @@ describe('dustAnchor (tides-zmw.9.18)', () => {
   })
 })
 
-describe('the air (tides-d9f.1)', () => {
-  const MPS = 1 / (EARTH_KM_PER_UNIT * 1000)
-
+describe('the air (tides-d9f.1, tides-tcd)', () => {
   test('the slots pick both layers either side of a negative level, odd ones too', () => {
     for (const level of [-0.5, -1, -6.3, -7.9, -8]) {
       const a = slotLayer(level, 0)
@@ -335,35 +326,29 @@ describe('the air (tides-d9f.1)', () => {
     }
   })
 
-  test('is whole under the band, gone over it, and gone with no air', () => {
-    expect(airDustShare(1)).toBe(1)
-    expect(airDustShare(AIR_DUST_BAND_KM[0])).toBe(1)
-    expect(airDustShare(AIR_DUST_BAND_KM[1])).toBe(0)
-    expect(airDustShare(Infinity)).toBe(0)
-    expect(airDustShare(NaN)).toBe(0)
+  test('none in the air, all of it over the band, and all of it with no air (tides-tcd)', () => {
+    expect(airDustFade(1)).toBe(0)
+    expect(airDustFade(DUST_AIR_BAND_KM[0])).toBe(0)
+    expect(airDustFade(DUST_AIR_BAND_KM[1])).toBe(1)
+    expect(airDustFade(400)).toBe(1)
+    expect(airDustFade(Infinity)).toBe(1)
+    expect(airDustFade(NaN)).toBe(1)
+    // A fade, not a pop: rising through the band.
+    const mid = airDustFade((DUST_AIR_BAND_KM[0] + DUST_AIR_BAND_KM[1]) / 2)
+    expect(mid).toBeCloseTo(0.5, 12)
+    let previous = 0
+    for (let km = DUST_AIR_BAND_KM[0]; km <= DUST_AIR_BAND_KM[1]; km += 1) {
+      const fade = airDustFade(km)
+      expect(fade).toBeGreaterThanOrEqual(previous)
+      expect(fade - previous).toBeLessThan(0.04)
+      previous = fade
+    }
   })
 
-  test('sizes its box to be crossed in AIR_DUST_SECONDS, never under the floor', () => {
-    const speed = 212 * MPS // 764 km/h
-    expect(layerHalfSize(airDustLevel(speed))).toBeCloseTo(speed * AIR_DUST_SECONDS, 12)
-    expect(layerHalfSize(airDustLevel(0))).toBeCloseTo(AIR_DUST_MIN_HALF, 12)
-    expect(airDustLevel(speed)).toBeLessThan(-7)
+  test('reads the altitude from the air density the telemetry carries', () => {
+    for (const km of [5, 30, 70, 90, 150]) expect(airDustFade(densityAltitudeKm(airDensity(km)))).toBeCloseTo(airDustFade(km), 9)
+    // Away from Earth the density is 0: space's dust.
+    expect(airDustFade(densityAltitudeKm(0))).toBe(1)
   })
 
-  test("blends with space's level across the band, and leaves space's alone", () => {
-    const speed = 300 * MPS
-    expect(fieldLevel(speed, 0)).toBe(dustLevel(speed))
-    expect(fieldLevel(speed, 1)).toBeCloseTo(airDustLevel(speed), 12)
-    expect(fieldLevel(speed, 0.5)).toBeCloseTo(airDustLevel(speed) / 2, 12)
-    expect(fieldOpacity(5, 0)).toBe(motionOpacity(5))
-    expect(fieldOpacity(speed, 1)).toBeCloseTo(AIR_DUST_OPACITY, 12)
-  })
-
-  test("streaks forward at the air's shutter, never backward below layer 0", () => {
-    const speed = 212 * MPS
-    const level = airDustLevel(speed)
-    const half = layerHalfSize(level)
-    expect(streakLength(speed, level, half)).toBeGreaterThan(0)
-    expect(streakLength(speed, level, half, 1)).toBeCloseTo(speed * AIR_STREAK_TIME, 12)
-  })
 })

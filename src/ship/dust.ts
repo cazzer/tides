@@ -20,7 +20,6 @@
 
 import { V_NORMAL, V_TOP } from './flight'
 import { SHIP_FOV } from './ship-session'
-import { EARTH_KM_PER_UNIT } from '../surface-handover'
 
 /** Speed ratio between adjacent dust layers. */
 export const DUST_SPEED_BASE = 4
@@ -61,29 +60,16 @@ export const REDUCED_MOTION_OPACITY = 0.5
 /** A streak's brightness never falls below this share of a dot's. */
 export const STREAK_ENERGY_FLOOR = 0.45
 
-// The air (tides-d9f.1). Near the ground the ship flies ~1e-4 units/s, far
-// under V_NORMAL, where layer 0's box is 2,159 km across: its motes never
-// move, and over open sea nothing else in view does either, so 760 km/h at
-// 1 km read as a crawl. Low in the air the level runs on below 0 through the
-// same layers instead, to the box the ship crosses in AIR_DUST_SECONDS (never
-// under AIR_DUST_MIN_HALF), so motes tens to hundreds of metres off stream
-// past. Across AIR_DUST_BAND_KM it blends with the space level, so a slot
-// still changes layer only at zero weight, and its shutter with the air's
-// (AIR_STREAK_TIME), open far longer than layer 0's so the motes streak.
-// Fainter than in space (AIR_DUST_OPACITY): haze in the air, not a starfield.
+// The air (tides-tcd): no dust inside Earth's atmosphere, where the sky
+// stands in for space's empty dark and motes read as debris whizzing past
+// (tides-d9f.1's streaks in the air went with it). It fades in across the
+// atmosphere's top, DUST_AIR_BAND_KM, so climbing out it comes in rather
+// than popping. The planets' hazes need none: the ship's stop stays outside
+// them (ship-bodies.ts planetCollisionRadius).
 
-/** Altitudes, km over the sea, the air's dust is whole under and gone over. [TUNE] */
-export const AIR_DUST_BAND_KM: readonly [number, number] = [20, 30]
-/** Seconds the ship takes to cross the air's box (its half-size). [TUNE] */
-export const AIR_DUST_SECONDS = 1.5
-/** The air's smallest box half-size, scene units (50 m): a hover's. */
-export const AIR_DUST_MIN_HALF = 0.05 / EARTH_KM_PER_UNIT
-/** Speed, scene units/s (30 m/s), by which the air's dust is fully moving. */
-export const AIR_MOVING_SPEED = 0.03 / EARTH_KM_PER_UNIT
-/** The air's dust at full strength, as a share of space's. [TUNE] */
-export const AIR_DUST_OPACITY = 0.5
-/** The air's streak shutter, seconds: streaks of ~10 m at 760 km/h. [TUNE] */
-export const AIR_STREAK_TIME = 0.05
+/** Altitudes, km over the sea, the dust is gone under and whole over: up to
+ * the Karman line. [TUNE] */
+export const DUST_AIR_BAND_KM: readonly [number, number] = [60, 100]
 
 /** Extra vertical FOV at the cruise cap, degrees. */
 export const FOV_KICK = 10
@@ -165,21 +151,10 @@ export function speedDepth(speed: number): number {
   return clamp01(Math.log(speed / V_NORMAL) / Math.log(V_TOP / V_NORMAL))
 }
 
-/** How much of the field is the air's at `km` over the sea: 1 low down, 0 above AIR_DUST_BAND_KM. */
-export function airDustShare(km: number): number {
-  return Number.isNaN(km) ? 0 : 1 - smoothstep(AIR_DUST_BAND_KM[0], AIR_DUST_BAND_KM[1], km)
-}
-
-/** The air's level at `speed`: the layer whose half-size the ship crosses in AIR_DUST_SECONDS. */
-export function airDustLevel(speed: number): number {
-  const half = Math.max(Number.isFinite(speed) ? speed * AIR_DUST_SECONDS : 0, AIR_DUST_MIN_HALF)
-  return Math.log(half / DUST_HALF_SIZE) / Math.log(DUST_SIZE_BASE)
-}
-
-/** The field's level at `speed`, `airShare` (airDustShare) of the way from space's to the air's. */
-export function fieldLevel(speed: number, airShare: number): number {
-  const space = dustLevel(speed)
-  return airShare > 0 ? space + (airDustLevel(speed) - space) * airShare : space
+/** How much of space's dust is drawn at `km` over the sea: none in the air,
+ * all of it over DUST_AIR_BAND_KM, and all of it with no air (NaN). */
+export function airDustFade(km: number): number {
+  return Number.isNaN(km) ? 1 : smoothstep(DUST_AIR_BAND_KM[0], DUST_AIR_BAND_KM[1], km)
 }
 
 export function layerHalfSize(layer: number): number {
@@ -212,14 +187,11 @@ export function streakTime(level: number): number {
 
 /**
  * World length of the streaks at `speed`, for a layer of `halfSize`: the
- * distance covered while the shutter is open (`airShare` of the way from
- * streakTime's to AIR_STREAK_TIME), capped at MAX_STREAK_SHARE of the
- * layer's half-size.
+ * distance covered while the shutter is open, capped at MAX_STREAK_SHARE of
+ * the layer's half-size.
  */
-export function streakLength(speed: number, level: number, halfSize: number, airShare = 0): number {
-  const shutter = streakTime(level)
-  const time = airShare > 0 ? shutter + (AIR_STREAK_TIME - shutter) * airShare : shutter
-  return Math.min(speed * time, MAX_STREAK_SHARE * halfSize)
+export function streakLength(speed: number, level: number, halfSize: number): number {
+  return Math.min(speed * streakTime(level), MAX_STREAK_SHARE * halfSize)
 }
 
 /**
@@ -250,15 +222,6 @@ export function motionOpacity(speed: number): number {
   const cruise =
     1 - CRUISE_DIM * smoothstep(CRUISE_DIM_DEPTH[0], CRUISE_DIM_DEPTH[1], speedDepth(speed))
   return moving * cruise
-}
-
-/** The field's opacity, `airShare` (airDustShare) of the way from space's to the air's. */
-export function fieldOpacity(speed: number, airShare: number): number {
-  const space = motionOpacity(speed)
-  if (!(airShare > 0)) return space
-  const air =
-    AIR_DUST_OPACITY * (STOPPED_OPACITY + (1 - STOPPED_OPACITY) * smoothstep(0, AIR_MOVING_SPEED, speed))
-  return space + (air - space) * airShare
 }
 
 /** Exponential ease of `current` toward `target` over `dt` with time constant `tau`. */

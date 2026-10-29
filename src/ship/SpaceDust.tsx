@@ -8,11 +8,11 @@ import {
   NEAR_FADE,
   REDUCED_MOTION_OPACITY,
   STREAK_ENERGY_FLOOR,
-  airDustShare,
+  airDustFade,
   dustAnchor,
-  fieldLevel,
-  fieldOpacity,
+  dustLevel,
   layerHalfSize,
+  motionOpacity,
   slotLayer,
   streakLength,
   wrapOffset,
@@ -217,13 +217,13 @@ export function SpaceDust() {
       const uniforms = materials[slot].uniforms
       mesh.onBeforeRender = (renderer, _scene, camera) => {
         const { speed, velocity } = shipTelemetry
-        // Low in Earth's air, a box sized to the ship's speed (dust.ts, tides-d9f.1).
-        const airShare = airDustShare(densityAltitudeKm(shipTelemetry.air.density))
-        const level = fieldLevel(speed, airShare)
+        const level = dustLevel(speed)
         const { layer, weight } = slotLayer(level, slot)
         const half = layerHalfSize(layer)
         const reduced = prefersReducedMotion() ? REDUCED_MOTION_OPACITY : 1
-        const opacity = weight * fieldOpacity(speed, airShare) * DUST_OPACITY * reduced
+        // None in Earth's air, fading in across its top (dust.ts, tides-tcd).
+        const air = airDustFade(densityAltitudeKm(shipTelemetry.air.density))
+        const opacity = weight * motionOpacity(speed) * air * DUST_OPACITY * reduced
         uniforms.uOpacity.value = opacity
         if (opacity <= 0) return
         // The View's live viewport, in CSS pixels, so resizes and rotation
@@ -234,7 +234,7 @@ export function SpaceDust() {
         const p = dustAnchor(camera.position, shipCarry.carried, anchor)
         uniforms.uHalf.value = half
         uniforms.uOffset.value.set(wrapOffset(p.x, half), wrapOffset(p.y, half), wrapOffset(p.z, half))
-        const length = streakLength(speed, level, half, airShare)
+        const length = streakLength(speed, level, half)
         const streak = uniforms.uStreak.value as THREE.Vector3
         if (speed > 0) streak.copy(velocity).multiplyScalar(length / speed)
         else streak.set(0, 0, 0)
