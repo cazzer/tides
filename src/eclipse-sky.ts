@@ -13,15 +13,23 @@ import {
 import { eclipticToScene } from './ephemeris'
 import { MOON_RADIUS_KM, SUN_RADIUS_KM, sunVisibleFraction } from './eclipse'
 
-// The solar eclipse demo's View from Earth (tides-zec.1). The sky Sun is ~43×
-// its true size (sky.ts); at its usual size and true direction the Moon would
-// overlap it whenever they are within ~17°, and at the Sun's scale but its
-// true direction a 57% partial would look 98% covered. So, demo only, the
-// Moon is drawn at the Sun's scale k and its offset from the Sun is scaled by
-// k too, up to first contact: coveredFraction depends only on the radii and
-// the separation over the Sun's radius, so every phase looks as it truly
-// does. Past contact the offset grows at its true rate, so the Moon never
-// jumps.
+// View from Earth draws the Sun and Moon both at k times their true angular
+// size: SKY_SCALE everywhere, the solar eclipse demo its own k ≈ 43 (its sky
+// Sun keeps its scene radius at the system Sun's distance, sky.ts). At k× size
+// but true directions the discs would overlap whenever they are within k× the
+// sum of their radii, and a 57% partial would look far deeper. So the Moon's
+// offset from the Sun is scaled by k too, up to first contact: coveredFraction
+// depends only on the radii and the separation over the Sun's radius, so every
+// phase looks as it truly does. Past contact the offset grows at its true
+// rate, so the Moon never jumps, and it is never more than (k − 1)× the sum of
+// the radii from its true direction.
+
+/**
+ * How many times their true angular size View from Earth draws the Sun and
+ * Moon outside the demos: big enough to see, small enough that the Sun's
+ * upper limb leads sunrise by only (k − 1) × 0.27°. [TUNE]
+ */
+export const SKY_SCALE = 6
 
 /** The Sun and Moon from a place on Earth at one moment. */
 export interface EclipseSky {
@@ -61,8 +69,8 @@ function length(v: Vector): number {
 }
 
 /**
- * The Sun and Moon from lat/lon at t, as skyPositionAt places them (apparent,
- * topocentric, equator of date). One shared object, recomputed only when t
+ * The Sun and Moon from lat/lon at t (apparent, topocentric, equator of
+ * date), as skyDiscPositionsAt places them. One shared object, recomputed only when t
  * or the place changes: read it, don't keep it.
  */
 export function eclipseSkyAt(t: number, lat: number, lon: number): EclipseSky {
@@ -95,7 +103,7 @@ export function eclipseSkyAt(t: number, lat: number, lon: number): EclipseSky {
   return sky
 }
 
-/** How many times its true angular size the sky Sun is drawn. */
+/** How many times its true angular size a Sun of sunSceneRadius at sunDistance looks. */
 export function eclipseSkyScale(e: EclipseSky, sunSceneRadius: number, sunDistance: number): number {
   return Math.asin(sunSceneRadius / sunDistance) / e.sunRadius
 }
@@ -120,9 +128,9 @@ export function eclipseMoonDirection(e: EclipseSky, k: number, out = new THREE.V
   return out.copy(e.sun).applyAxisAngle(axis, offset)
 }
 
-/** How far from the eye a Moon of moonSceneRadius looks k times its true size. */
-export function matchedMoonDistance(moonSceneRadius: number, k: number, moonRadius: number): number {
-  return moonSceneRadius / Math.sin(k * moonRadius)
+/** How far from the eye a body of sceneRadius looks k times its true angular radius. */
+export function matchedSkyDistance(sceneRadius: number, k: number, trueRadius: number): number {
+  return sceneRadius / Math.sin(k * trueRadius)
 }
 
 function smoothstep(edge0: number, edge1: number, x: number): number {

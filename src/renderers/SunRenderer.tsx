@@ -92,7 +92,7 @@ interface SunRendererProps {
   diameter: number
   /** The main view (not a panel or ship mode), whose corona reaches further. */
   interactive?: boolean
-  /** Scales the corona each draw, 0..1 (the solar eclipse demo's sky). */
+  /** Scales the corona each draw, 0..1 (View from Earth's sky: full only in totality). */
   coronaFade?: () => number
 }
 

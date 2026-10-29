@@ -11,7 +11,6 @@ import Starfield from './renderers/Starfield'
 import ConstellationLines from './renderers/ConstellationLines'
 import ConstellationArt from './renderers/ConstellationArt'
 import SceneLights from './renderers/SceneLights'
-import { Body } from 'astronomy-engine'
 import { CameraProvider } from './camera'
 import { PLANETS_STAR_RADIUS } from './main-view'
 import { OrbitLabel } from './orbit-label'
@@ -32,10 +31,9 @@ import { SURFACE_TILES_ON } from './surface'
 import { systemSurfaceTilesOn } from './close-zoom-rules'
 import {
   DEFAULT_SURFACE_LOCATION,
-  MOON_SKY_DISTANCE,
-  SUN_SKY_DISTANCE,
-  eclipseMoonSkyPositionAt,
-  skyPositionAt,
+  eclipseDemoSkyScale,
+  everydaySkyScale,
+  skyDiscPositionsAt,
 } from './sky'
 import { useDemoAid } from './demo/demo-aids'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
@@ -126,34 +124,34 @@ export default function SolarSystem({
   const tides = useDemoAid('tides')
   const moonShadow = useDemoAid('moonShadow')
 
-  // From the surface, the Sun and Moon move to their true directions on a sky
-  // around the observer (see sky.ts).
-  const sunPositionAt = useMemo(
+  // From the surface, the Sun and Moon move to a sky around the observer, both
+  // at one scale (see sky.ts): SKY_SCALE, or the solar eclipse demo's own.
+  const skyPositions = useMemo(
     () =>
       earthCamera
-        ? skyPositionAt(Body.Sun, SUN_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
+        ? skyDiscPositionsAt(
+            lat,
+            lon,
+            EARTH_DIAMETER,
+            positions.radius,
+            eclipseSky ? eclipseDemoSkyScale(positions.radius.sun) : everydaySkyScale
+          )
         : undefined,
-    [earthCamera, lat, lon]
+    [earthCamera, eclipseSky, lat, lon, positions]
   )
-  const moonPositionAt = useMemo(
-    () =>
-      eclipseSky
-        ? eclipseMoonSkyPositionAt(lat, lon, EARTH_DIAMETER, positions.radius.sun, positions.radius.moon)
-        : earthCamera
-          ? skyPositionAt(Body.Moon, MOON_SKY_DISTANCE, lat, lon, EARTH_DIAMETER)
-          : positions.positionAt.moon,
-    [eclipseSky, earthCamera, lat, lon, positions]
-  )
+  const sunPositionAt = skyPositions?.sun
+  const moonPositionAt = skyPositions?.moon ?? positions.positionAt.moon
+  // The corona shows only while the Moon hides the Sun, in every View from Earth.
   const coronaFadeAt = useMemo(
     () =>
-      eclipseSky
+      earthCamera
         ? () => {
-            // The clock EclipseDaylight reads, so both hit eclipseSkyAt's cache.
+            // The clock OrbitingBody and EclipseDaylight read, so all hit eclipseSkyAt's cache.
             const t = useStore.getState().timestamp ?? Date.now()
             return coronaFade(eclipseSkyAt(t, lat, lon).visible)
           }
         : undefined,
-    [eclipseSky, lat, lon]
+    [earthCamera, lat, lon]
   )
 
   // Only the main panel's CameraProvider (the one with OrbitControls) uses these.

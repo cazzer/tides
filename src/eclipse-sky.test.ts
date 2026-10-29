@@ -9,7 +9,8 @@ import {
   eclipseSkyAt,
   eclipseSkyBrightness,
   eclipseStarVeil,
-  matchedMoonDistance,
+  matchedSkyDistance,
+  SKY_SCALE,
   skyOffset,
   TOTALITY_SKY,
 } from './eclipse-sky'
@@ -123,14 +124,20 @@ describe('eclipseMoonDirection', () => {
   })
 })
 
-describe('matchedMoonDistance', () => {
+describe('matchedSkyDistance', () => {
   it('draws the Moon to the Sun’s scale', () => {
     const sunScene = Math.asin(10 / 50)
     const sunTrue = 0.2662 * DEG
     const moonTrue = 0.2813 * DEG
     const k = sunScene / sunTrue
-    const moonScene = Math.asin(1.5 / matchedMoonDistance(1.5, k, moonTrue))
+    const moonScene = Math.asin(1.5 / matchedSkyDistance(1.5, k, moonTrue))
     expect(Math.abs(moonScene / sunScene - moonTrue / sunTrue)).toBeLessThan(1e-6)
+  })
+
+  it('draws a Sun of scene radius 10 at SKY_SCALE times its true size', () => {
+    const sunTrue = 0.2662 * DEG
+    const sunScene = Math.asin(10 / matchedSkyDistance(10, SKY_SCALE, sunTrue))
+    expect(Math.abs(sunScene / sunTrue - SKY_SCALE)).toBeLessThan(1e-9)
   })
 })
 
