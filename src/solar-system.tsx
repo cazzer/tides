@@ -127,8 +127,9 @@ export default function SolarSystem({
     () =>
       eclipseSky
         ? () => {
-            const t = useStore.getState().timestamp
-            return t == null ? 1 : coronaFade(eclipseSkyAt(t, lat, lon).visible)
+            // The clock EclipseDaylight reads, so both hit eclipseSkyAt's cache.
+            const t = useStore.getState().timestamp ?? Date.now()
+            return coronaFade(eclipseSkyAt(t, lat, lon).visible)
           }
         : undefined,
     [eclipseSky, lat, lon]

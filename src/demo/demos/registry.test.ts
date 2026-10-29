@@ -83,6 +83,7 @@ describe('DEMOS', () => {
       // Only what exit puts back: nothing else (demo-only aids) is stored.
       const restored = new Set([...Object.keys(bare).filter((k) => k !== 'compass'), 'jumpDate', 'demo'])
       for (const key of Object.keys(patch)) expect(restored).toContain(key)
+      for (const key of Object.keys(patch.systemAids)) expect(Object.keys(DEFAULT_SYSTEM_AIDS)).toContain(key)
     })
   })
 })

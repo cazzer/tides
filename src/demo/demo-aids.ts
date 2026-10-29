@@ -7,17 +7,23 @@ import type { Demo, DemoAids } from './demo-script'
 import type { DemoRun } from './demo-session'
 import { findDemo } from './demos'
 
-/** Steps 0..step's aids folded, each step's over the ones before. */
-export function demoAidsAt(demo: Demo, step: number): DemoAids {
-  const aids: DemoAids = {}
-  for (const s of demo.steps.slice(0, step + 1)) Object.assign(aids, s.aids)
-  return aids
+/**
+ * Whether `key` is on at `step`: as the latest step up to it that sets it
+ * left it. A plain loop, no allocation: the store selector runs on every
+ * clock tick.
+ */
+export function demoAidAt(demo: Demo, step: number, key: keyof DemoAids): boolean {
+  for (let i = Math.min(step, demo.steps.length - 1); i >= 0; i--) {
+    const on = demo.steps[i].aids?.[key]
+    if (on !== undefined) return on
+  }
+  return false
 }
 
 export function demoAidOn(s: { demo: DemoRun | null }, key: keyof DemoAids): boolean {
   if (!s.demo) return false
   const demo = findDemo(s.demo.id)
-  return demo ? demoAidsAt(demo, s.demo.step)[key] === true : false
+  return demo ? demoAidAt(demo, s.demo.step, key) : false
 }
 
 /** Whether the running step has `key` on; re-renders only when that changes. */

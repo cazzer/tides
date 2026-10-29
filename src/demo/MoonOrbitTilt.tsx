@@ -16,8 +16,8 @@ import {
 import { eclipticCirclePoints, moonOrbitPlane, nodeLinePoints } from './moon-orbit-tilt'
 
 const ORBIT_COLOR = '#BFBBDA'
-const ORBIT_OPACITY = 0.6 // [TUNE]
-const ECLIPTIC_OPACITY = 0.3 // [TUNE]
+const ORBIT_OPACITY = 0.85 // [TUNE]
+const ECLIPTIC_OPACITY = 0.45 // [TUNE]
 const NODE_COLOR = '#E8C25A'
 const NODE_OPACITY = 1 // [TUNE]
 
@@ -112,7 +112,9 @@ export function MoonOrbitTilt() {
         material={eclipticMaterial}
         raycast={noRaycast}
       />
+      {/* Last, so it shows over the ecliptic lines it lies along edge on. */}
       <lineSegments
+        renderOrder={1}
         geometry={lines.node}
         material={nodeMaterial}
         raycast={noRaycast}

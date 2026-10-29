@@ -5,11 +5,13 @@ import { coveredFraction } from './eclipse'
 import {
   CORONA_SHOW_VISIBLE,
   coronaFade,
-  eclipseDaylight,
   eclipseMoonDirection,
   eclipseSkyAt,
+  eclipseSkyBrightness,
+  eclipseStarVeil,
   matchedMoonDistance,
   skyOffset,
+  TOTALITY_SKY,
 } from './eclipse-sky'
 
 // The 2024-04-08 total solar eclipse from Torreón and Dallas. The contacts
@@ -132,11 +134,35 @@ describe('matchedMoonDistance', () => {
   })
 })
 
-describe('eclipseDaylight', () => {
-  it('is full under a high whole Sun, gone when it is hidden or set', () => {
-    expect(eclipseDaylight(1, Math.sin(60 * DEG))).toBe(1)
-    expect(eclipseDaylight(0, Math.sin(60 * DEG))).toBe(0)
-    expect(eclipseDaylight(1, Math.sin(-10 * DEG))).toBe(0)
+describe('eclipseSkyBrightness', () => {
+  const high = Math.sin(60 * DEG)
+
+  it('is full under a high whole Sun and gone once it has set', () => {
+    expect(eclipseSkyBrightness(1, high)).toBe(1)
+    expect(eclipseSkyBrightness(1, Math.sin(-10 * DEG))).toBe(0)
+  })
+
+  it('dims slower than the light falls, to a night-blue floor at totality', () => {
+    expect(eclipseSkyBrightness(0.43, high)).toBeGreaterThan(0.7)
+    expect(eclipseSkyBrightness(0, high)).toBe(TOTALITY_SKY)
+    let previous = -1
+    for (let v = 0; v <= 1; v += 0.01) {
+      expect(eclipseSkyBrightness(v, high)).toBeGreaterThanOrEqual(previous)
+      previous = eclipseSkyBrightness(v, high)
+    }
+  })
+})
+
+describe('eclipseStarVeil', () => {
+  const high = Math.sin(60 * DEG)
+
+  it('hides the stars until the last 1% of the Sun, and not after sunset', () => {
+    expect(eclipseStarVeil(0.43, high)).toBe(1)
+    expect(eclipseStarVeil(0.01, high)).toBe(1)
+    expect(eclipseStarVeil(0.005, high)).toBeGreaterThan(0)
+    expect(eclipseStarVeil(0.005, high)).toBeLessThan(1)
+    expect(eclipseStarVeil(0, high)).toBe(0)
+    expect(eclipseStarVeil(1, Math.sin(-10 * DEG))).toBe(0)
   })
 })
 

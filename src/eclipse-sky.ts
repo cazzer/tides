@@ -47,7 +47,10 @@ const sky: EclipseSky = {
   visible: 1,
   sunSinAltitude: 0,
 }
-let cached: { t: number; lat: number; lon: number } | null = null
+// The cache's key: the moment and place `sky` was last computed for.
+let cachedT = NaN
+let cachedLat = NaN
+let cachedLon = NaN
 
 const origin = new THREE.Vector3()
 const sunKm = new THREE.Vector3()
@@ -63,7 +66,7 @@ function length(v: Vector): number {
  * or the place changes: read it, don't keep it.
  */
 export function eclipseSkyAt(t: number, lat: number, lon: number): EclipseSky {
-  if (cached && cached.t === t && cached.lat === lat && cached.lon === lon) return sky
+  if (t === cachedT && lat === cachedLat && lon === cachedLon) return sky
   const site = new Observer(lat, lon, 0)
   const time = MakeTime(new Date(t))
   const sunEqd = Equator(Body.Sun, time, site, true, true).vec
@@ -86,7 +89,9 @@ export function eclipseSkyAt(t: number, lat: number, lon: number): EclipseSky {
   const up = ObserverVector(time, site, true)
   sky.sunSinAltitude =
     (sunEqd.x * up.x + sunEqd.y * up.y + sunEqd.z * up.z) / (sunAu * length(up))
-  cached = { t, lat, lon }
+  cachedT = t
+  cachedLat = lat
+  cachedLon = lon
   return sky
 }
 
@@ -125,9 +130,28 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t)
 }
 
-/** 0..1 daylight: the uncovered Sun, gone as it sets. */
-export function eclipseDaylight(visible: number, sunSinAltitude: number): number {
-  return visible * smoothstep(-0.05, 0.1, sunSinAltitude)
+/** 1 with the Sun up, easing to 0 as it sets. */
+function sunUp(sunSinAltitude: number): number {
+  return smoothstep(-0.05, 0.1, sunSinAltitude)
+}
+
+/**
+ * The sky's share of full daylight while the Sun is up: never below this,
+ * so totality reads as a deep night-blue, not black. [TUNE]
+ */
+export const TOTALITY_SKY = 0.04
+
+/**
+ * 0..1 sky brightness. The eye adapts, so the sky dims far slower than the
+ * light falls (the power) until the last sliver of Sun; gone as it sets.
+ */
+export function eclipseSkyBrightness(visible: number, sunSinAltitude: number): number {
+  return Math.max(visible ** 0.4, TOTALITY_SKY) * sunUp(sunSinAltitude)
+}
+
+/** 0..1 how much the daylit sky hides the stars: all of them until the last ~1% of the Sun. */
+export function eclipseStarVeil(visible: number, sunSinAltitude: number): number {
+  return smoothstep(0, 0.01, visible) * sunUp(sunSinAltitude)
 }
 
 /**
@@ -141,8 +165,8 @@ export function coronaFade(visible: number): number {
   return 1 - smoothstep(0, CORONA_SHOW_VISIBLE, visible)
 }
 
-/** The full-daylight sky colour (linear), dimmed by eclipseDaylight. [TUNE] */
+/** The full-daylight sky colour (linear), dimmed by eclipseSkyBrightness. [TUNE] */
 export const DAY_SKY = new THREE.Color().setRGB(0.08, 0.22, 0.58)
 
-/** The eclipse sky's current daylight, for the stars' veil (as eyeSky). */
-export const eclipseSkyVeil = { daylight: 0 }
+/** Whether the eclipse sky is drawn, and its eclipseStarVeil, read by the stars (as eyeSky). */
+export const eclipseSkyVeil = { active: false, daylight: 0 }

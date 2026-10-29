@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Demo } from './demo-script'
-import { demoAidOn, demoAidsAt } from './demo-aids'
+import { demoAidAt, demoAidOn } from './demo-aids'
 import { exitDemoPatch, type DemoSessionState } from './demo-session'
 import { findDemo } from './demos'
 
@@ -10,7 +10,7 @@ const step = (aids?: Demo['steps'][number]['aids']) => ({
   caption: { title: 't', body: 'b' },
 })
 
-describe('demoAidsAt', () => {
+describe('demoAidAt', () => {
   const demo: Demo = {
     id: 'aids',
     title: 'Aids',
@@ -19,9 +19,8 @@ describe('demoAidsAt', () => {
   }
 
   it('carries each aid over until a step turns it off', () => {
-    expect(demoAidsAt(demo, 0)).toEqual({ solarEclipseSky: true })
-    expect(demoAidsAt(demo, 1)).toEqual({ solarEclipseSky: true })
-    expect(demoAidsAt(demo, 2)).toEqual({ solarEclipseSky: false, moonNodes: true })
+    expect([0, 1, 2].map((i) => demoAidAt(demo, i, 'solarEclipseSky'))).toEqual([true, true, false])
+    expect([0, 1, 2].map((i) => demoAidAt(demo, i, 'moonNodes'))).toEqual([false, false, true])
   })
 })
 
@@ -33,11 +32,12 @@ describe('demoAidOn', () => {
 
   it('follows the solar eclipse’s steps', () => {
     const demo = findDemo('solar-eclipse')!
-    demo.steps.forEach((_, i) => {
-      const s = { demo: { id: demo.id, step: i } }
-      expect(demoAidOn(s, 'solarEclipseSky')).toBe(true)
-      expect(demoAidOn(s, 'moonNodes')).toBe(i === demo.steps.length - 1)
-    })
+    // The Torreón sky only for the steps that look at it, so the enlarged
+    // Moon never stays on to be seen through the ground.
+    const on = (key: 'solarEclipseSky' | 'moonNodes') =>
+      demo.steps.map((_, i) => demoAidOn({ demo: { id: demo.id, step: i } }, key))
+    expect(on('solarEclipseSky')).toEqual([false, true, true, false, false])
+    expect(on('moonNodes')).toEqual([false, false, false, false, true])
   })
 
   it('is off once the demo is left', () => {
