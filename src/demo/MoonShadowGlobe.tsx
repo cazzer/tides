@@ -7,12 +7,17 @@
 // ray on to sea level and shades the point it meets there, so the marks sit
 // on the geography seen behind them, not on the ground straight below the
 // shell, which at a slant is well off to one side.
+// With `totalityPath` (tides-zec.12) it also leaves the umbra's path of
+// totality darkened behind it: the ground the axis has crossed since landfall
+// up to the sim time (totality-path.ts), so it is right after any jump.
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { CLOUD_UNDER_AURORA_RENDER_ORDER } from '../renderers/earth-shells'
 import { ECLIPSE_GLSL, useEclipseShadowState } from '../renderers/eclipseShadow'
 import { TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY } from '../cloud-layer'
 import { SUN_RADIUS_KM } from '../eclipse'
+import { useStore } from '../store'
+import { LANDFALL_MS, TRAIL_ROWS, trailTable } from './totality-path'
 
 // × Earth's radius over the highest ground, clear of the sphere's facets.
 const LIFT = 0.001
@@ -23,6 +28,17 @@ const UMBRA_LINE_OPACITY = 0.7
 const PENUMBRA_LINE_OPACITY = 0.5
 // Each line's half width, in CSS pixels.
 const LINE_PX = 1
+// The path of totality: lighter than the umbra, so the dot stays its head.
+const TRAIL_FILL = 0.55
+const TRAIL_LINE_OPACITY = 0.35
+// Half the path's width (~200 km across mid-path), km; at least TRAIL_MIN_PX
+// CSS pixels so it reads from afar, but never past TRAIL_MAX_WIDEN times
+// itself, where at the limb pixels span thousands of km.
+const TRAIL_HALF_KM = 100
+const TRAIL_MIN_PX = 2
+const TRAIL_MAX_WIDEN = 3
+// Mean radius: the cross-track distance is only for the path's width.
+const EARTH_MEAN_RADIUS_KM = 6371
 // After the air, aurora and cloud shells (the clouds' latest, from under
 // their tops, is CLOUD_UNDER_AURORA_RENDER_ORDER), which write no depth: it
 // draws over them, and the ground's depth still hides the far side. Under
@@ -45,6 +61,15 @@ function placeEye(
   shader.uniforms.uLinePx.value = LINE_PX * renderer.getPixelRatio()
 }
 
+// The path of totality up to the sim time, read as each frame draws.
+function placeTrail(material: THREE.Material | THREE.Material[], on: boolean) {
+  const shader = material as THREE.ShaderMaterial
+  const { timestamp } = useStore.getState()
+  shader.uniforms.uTrailOn.value = on ? 1 : 0
+  shader.uniforms.uTrailNow.value =
+    typeof timestamp === 'number' ? (timestamp - LANDFALL_MS) / 1000 : -1
+}
+
 function noRaycast() {}
 
 const vertexShader = /* glsl */ `
@@ -64,6 +89,13 @@ ${ECLIPSE_GLSL.point}
 uniform float uLinePx;
 uniform vec3 uEye;
 uniform float uSeaLevel;
+// totality-path.ts's trailTable(): per row of longitude, the centre's
+// latitude, seconds after landfall it passed, and cos of the track's angle
+// from east; uTrailLon is row 0's longitude and the step, rad.
+uniform vec4 uTrail[${TRAIL_ROWS}];
+uniform vec2 uTrailLon;
+uniform float uTrailNow;
+uniform float uTrailOn;
 varying vec3 vLocal;
 
 // Mirrors eclipseSunlight()'s first lines: the Sun's and the occluder's
@@ -89,6 +121,30 @@ float edgeLine(float t, float outside) {
   return 1.0 - smoothstep(0.0, width, abs(t - 1.0 - outside * width));
 }
 
+// The path of totality at the sea-level point \`local\` (Earth's frame): x its
+// fill, y its edge lines; 0 off the path and where the axis hasn't yet been.
+vec2 totalityPath(vec3 local) {
+  vec3 n = normalize(local);
+  float lat = asin(clamp(n.y, -1.0, 1.0));
+  float lon = -atan(n.z, n.x);
+  float f = (lon - uTrailLon.x) / uTrailLon.y;
+  float row = clamp(floor(f), 0.0, ${(TRAIL_ROWS - 2).toFixed(1)});
+  int i = int(row);
+  vec4 r = mix(uTrail[i], uTrail[i + 1], clamp(f - row, 0.0, 1.0));
+  float onTable = step(0.0, f) * step(f, ${(TRAIL_ROWS - 1).toFixed(1)});
+  // Across a locally straight track, from the offset due north.
+  float crossKm = (lat - r.x) * ${EARTH_MEAN_RADIUS_KM.toFixed(1)} * r.z;
+  // Antialiased at the head, under the umbra's dot.
+  float since = uTrailNow - r.y;
+  float passed = clamp(since / max(fwidth(since), 1e-6) + 0.5, 0.0, 1.0);
+  float halfKm = clamp(${TRAIL_MIN_PX.toFixed(1)} * uLinePx * fwidth(crossKm),
+    ${TRAIL_HALF_KM.toFixed(1)}, ${(TRAIL_HALF_KM * TRAIL_MAX_WIDEN).toFixed(1)});
+  float t = abs(crossKm) / halfKm;
+  float fill = 1.0 - smoothstep(1.0 - fwidth(t), 1.0, t);
+  float on = uTrailOn * onTable * passed;
+  return vec2(fill, edgeLine(t, 0.0)) * on;
+}
+
 void main() {
   if (uEclipseActive < 0.5) discard;
   // Where the eye's ray through this fragment meets sea level (the shell's
@@ -101,7 +157,8 @@ void main() {
   float h = uSeaLevel * uSeaLevel - dot(closest, closest);
   // Antialiased like the ground's silhouette beside it.
   float hit = clamp(h / max(fwidth(h), 1e-12) + 0.5, 0.0, 1.0);
-  vec3 p = eclipsePoint(uEye + (-b - sqrt(max(h, 0.0))) * ray);
+  vec3 local = uEye + (-b - sqrt(max(h, 0.0))) * ray;
+  vec3 p = eclipsePoint(local);
   vec3 a = moonShadowAngles(p);
   float visible = eclipseSunlight(p).x;
   // 1 on the umbra's edge (none where the Moon looks smaller than the Sun),
@@ -117,20 +174,33 @@ void main() {
   float line = umbraLine + penumbraLine * (1.0 - umbraLine);
   float umbra = 1.0 - smoothstep(1.0 - fwidth(tU), 1.0, tU);
   float shade = 1.0 - visible;
-  float fill = max(${UMBRA_FILL.toFixed(2)} * umbra, ${PENUMBRA_DEEPEN.toFixed(2)} * shade * shade);
-  float mask = day * hit;
-  float alpha = (line + fill * (1.0 - line)) * mask;
+  float fill = max(${UMBRA_FILL.toFixed(2)} * umbra, ${PENUMBRA_DEEPEN.toFixed(2)} * shade * shade) * day;
+  line *= day;
+  // Ground the shadow has crossed, so not only the sunward side; its lines
+  // stop at the umbra, which they would otherwise cross to the dot's centre.
+  vec2 path = totalityPath(local);
+  float pathLine = path.y * ${TRAIL_LINE_OPACITY.toFixed(2)} * (1.0 - umbra * day);
+  line += pathLine * (1.0 - line);
+  fill = max(fill, ${TRAIL_FILL.toFixed(2)} * path.x);
+  float alpha = (line + fill * (1.0 - line)) * hit;
   if (alpha <= 0.0) discard;
 
   // Premultiplied: the lines are white, the fill only darkens.
-  gl_FragColor = vec4(vec3(line * mask), alpha);
+  gl_FragColor = vec4(vec3(line * hit), alpha);
 }
 `
 
-export function MoonShadowGlobe({ radius }: { radius: number }) {
+interface MoonShadowGlobeProps {
+  radius: number
+  /** Leave the path of totality behind the umbra (aids.totalityPath). */
+  totalityPath: boolean
+}
+
+export function MoonShadowGlobe({ radius, totalityPath }: MoonShadowGlobeProps) {
   const shadow = useEclipseShadowState('earth')
   const shellRadius = radius + TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + LIFT * radius
   const geometry = useMemo(() => new THREE.SphereGeometry(shellRadius, 128, 64), [shellRadius])
+  const trail = useMemo(() => trailTable(), [])
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -142,6 +212,10 @@ export function MoonShadowGlobe({ radius }: { radius: number }) {
           uLinePx: { value: LINE_PX },
           uEye: { value: new THREE.Vector3() },
           uSeaLevel: { value: radius },
+          uTrail: { value: trail.rows },
+          uTrailLon: { value: new THREE.Vector2(trail.lon0, trail.dLon) },
+          uTrailNow: { value: -1 },
+          uTrailOn: { value: 0 },
         },
         transparent: true,
         depthWrite: false,
@@ -153,7 +227,7 @@ export function MoonShadowGlobe({ radius }: { radius: number }) {
         blendSrc: THREE.OneFactor,
         blendDst: THREE.OneMinusSrcAlphaFactor,
       }),
-    [shadow, radius]
+    [shadow, radius, trail]
   )
 
   useEffect(() => () => geometry.dispose(), [geometry])
@@ -169,6 +243,7 @@ export function MoonShadowGlobe({ radius }: { radius: number }) {
       raycast={noRaycast}
       onBeforeRender={(renderer, _scene, camera, _geometry, mat) => {
         if (mesh.current) placeEye(mesh.current, renderer, camera, mat)
+        placeTrail(mat, totalityPath)
       }}
     />
   )

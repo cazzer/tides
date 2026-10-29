@@ -15,7 +15,8 @@ import type { Demo } from '../demo-script'
 // a daylit sky (aids.solarEclipseSky, eclipse-sky.ts); step 5 adds the Moon's
 // tilted orbit and node line (aids.moonNodes). In steps 1 and 4 the main view
 // darkens and rings the shadow on Earth (aids.moonShadow, MoonShadowGlobe.tsx),
-// which at true scale is a faint smudge; step 5 turns it off.
+// which at true scale is a faint smudge, and leaves the path of totality
+// behind it (aids.totalityPath, totality-path.ts); step 5 turns both off.
 export const solarEclipse: Demo = {
   id: 'solar-eclipse',
   title: 'Total solar eclipse',
@@ -31,7 +32,7 @@ export const solarEclipse: Demo = {
       // Moon stands just over Earth's top limb, above its own shadow, on a
       // phone as well as on desktop. It is seen full: the side facing us is lit.
       camera: { focus: 'earth', azimuth: -10, elevation: -22, distance: 40 },
-      aids: { moonShadow: true },
+      aids: { moonShadow: true, totalityPath: true },
       caption: {
         title: 'Shadow reaches Mexico',
         body: 'Seen from the Sun’s side, past the Moon: total eclipse in the dark dot, partial inside the ring.',
@@ -85,7 +86,7 @@ export const solarEclipse: Demo = {
       // circle, Earth's orbit and the month labels collapse to one line, and
       // the Moon's orbit crosses it at its ~5° tilt.
       camera: { focus: 'earth', azimuth: -25, elevation: 0, distance: 55 },
-      aids: { moonNodes: true, moonShadow: false },
+      aids: { moonNodes: true, moonShadow: false, totalityPath: false },
       caption: {
         title: 'Why not every month?',
         body: 'The Moon’s orbit (lilac) tilts 5°, so most new moons miss the Sun. Eclipses need a node (gold).',

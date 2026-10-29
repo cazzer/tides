@@ -134,6 +134,7 @@ export default function SolarSystem({
   const travelHidesMoon = useStore((s) => s.demoTravel?.hideMoon ?? false)
   const aidHidesMoon = useDemoAid('hideMoon') && interactive && !earthCamera
   const moonHidden = travelHidesMoon || aidHidesMoon
+  const totalityPath = useDemoAid('totalityPath')
 
   // From the surface, the Sun and Moon move to a sky around the observer, both
   // at one scale (see sky.ts): SKY_SCALE, or the solar eclipse demo's own.
@@ -233,7 +234,7 @@ export default function SolarSystem({
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
           <TidesSpot radius={EARTH_DIAMETER} />
         )}
-        {moonShadowShown && !earthCamera && <MoonShadowGlobe radius={EARTH_DIAMETER} />}
+        {moonShadowShown && !earthCamera && <MoonShadowGlobe radius={EARTH_DIAMETER} totalityPath={totalityPath} />}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
         {(ship ? SURFACE_TILES_ON : systemTiles) && (

@@ -100,6 +100,9 @@ export interface DemoAids {
   /** With earthShadow: the previous and next full Moons' places beside the
    * shadow, which they miss. Not drawn without it. */
   fullMoonGhosts?: boolean
+  /** With `moonShadow`: the path of totality darkened behind the umbra, from
+   * landfall up to the sim time (tides-zec.12). */
+  totalityPath?: boolean
 }
 
 /**
