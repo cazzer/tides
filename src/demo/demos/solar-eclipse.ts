@@ -33,8 +33,8 @@ export const solarEclipse: Demo = {
       camera: { focus: 'earth', azimuth: -10, elevation: -22, distance: 40 },
       aids: { moonShadow: true },
       caption: {
-        title: 'The Moon’s shadow reaches Mexico',
-        body: 'Seen from the Sun’s side, past the Moon: in the dark dot the eclipse is total, inside the ring partial.',
+        title: 'Shadow reaches Mexico',
+        body: 'Seen from the Sun’s side, past the Moon: total eclipse in the dark dot, partial inside the ring.',
       },
     },
     {
@@ -48,7 +48,7 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: true },
       caption: {
         title: 'Partial eclipse from Torreón',
-        body: 'From Torreón the Moon slides over the Sun and the sky dims. Both are drawn larger, true to each other.',
+        body: 'The Moon slides over the Sun; the sky dims. Both drawn larger, true to each other.',
       },
     },
     {
@@ -59,7 +59,7 @@ export const solarEclipse: Demo = {
       skyFov: 70,
       caption: {
         title: 'Totality',
-        body: 'For 4 minutes the Moon just covers the Sun. The sky darkens, stars come out and the corona appears.',
+        body: 'For 4 minutes the Moon just covers the Sun. Stars come out; the corona appears.',
       },
     },
     {
@@ -87,8 +87,8 @@ export const solarEclipse: Demo = {
       camera: { focus: 'earth', azimuth: -25, elevation: 0, distance: 55 },
       aids: { moonNodes: true, moonShadow: false },
       caption: {
-        title: 'Why not every new moon?',
-        body: 'The Moon’s orbit (lilac) tilts 5°, so most new moons pass above or below the Sun. Eclipses need a node (gold).',
+        title: 'Why not every month?',
+        body: 'The Moon’s orbit (lilac) tilts 5°, so most new moons miss the Sun. Eclipses need a node (gold).',
       },
     },
   ],
