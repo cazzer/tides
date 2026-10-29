@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { earthSpin } from '../ephemeris'
 import {
+  DEMO_MAX_DELTA,
   earthSpinLag,
   heldEarthSpin,
   setEarthSpinHold,
   shownEarthSpin,
+  stepTravel,
   TRAVEL_MAX_SECONDS,
   travelRun,
   travelTimestamp,
@@ -149,5 +151,30 @@ describe('shownEarthSpin', () => {
     expect(earthSpinLag(t)).toBeCloseTo(earthSpin(t) - heldEarthSpin(t, hold), 12)
     setEarthSpinHold(null)
     expect(shownEarthSpin(t)).toBe(earthSpin(t))
+  })
+})
+
+describe('stepTravel', () => {
+  const run = travelRun({ seconds: 2, hold: ['spin'] }, from, from + 90 * DAY, false)!
+
+  it('moves on by the frame, holding the spin from the angle given', () => {
+    const step = stepTravel(run, 0.5, 0.05, 1.25)
+    expect(step).toMatchObject({ elapsed: 0.55, done: false, hold: { from, to: run.to, spinFrom: 1.25 } })
+    expect(step.timestamp).toBe(travelTimestamp(run, 0.55))
+  })
+
+  it('counts a stalled frame as DEMO_MAX_DELTA at most', () => {
+    expect(stepTravel(run, 0.5, 3, 0).elapsed).toBeCloseTo(0.5 + DEMO_MAX_DELTA)
+  })
+
+  it('lands exactly on the date, holding nothing', () => {
+    const step = stepTravel(run, 1.95, 0.08, 0)
+    expect(step).toMatchObject({ timestamp: run.to, done: true, hold: null })
+    expect(step.elapsed).toBeCloseTo(2.03)
+  })
+
+  it('holds nothing when the travel holds no spin', () => {
+    const free = travelRun({ seconds: 2 }, from, from + 90 * DAY, false)!
+    expect(stepTravel(free, 0, 0.05, 0).hold).toBeNull()
   })
 })

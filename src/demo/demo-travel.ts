@@ -56,6 +56,30 @@ export function travelTimestamp(run: TravelRun, elapsed: number): number {
   return run.from + (run.to - run.from) * p
 }
 
+/** One frame of a travel: where the clock is, and the spin hold to show. */
+export interface TravelStep {
+  elapsed: number
+  timestamp: number
+  /** Landed: the timestamp is exactly `to`, and nothing is held. */
+  done: boolean
+  hold: EarthSpinHold | null
+}
+
+/**
+ * `run` a frame on, `delta` real seconds (capped at DEMO_MAX_DELTA) past
+ * `elapsed`; the hold turns from spinFrom, the angle shown when it set out.
+ */
+export function stepTravel(run: TravelRun, elapsed: number, delta: number, spinFrom: number): TravelStep {
+  const next = elapsed + Math.min(delta, DEMO_MAX_DELTA)
+  const done = next >= run.seconds
+  return {
+    elapsed: next,
+    timestamp: done ? run.to : travelTimestamp(run, next),
+    done,
+    hold: run.holdSpin && !done ? { from: run.from, to: run.to, spinFrom } : null,
+  }
+}
+
 // --- Spin hold --------------------------------------------------------------
 
 /** A spin hold under way: the travel's span and the angle it set out from. */

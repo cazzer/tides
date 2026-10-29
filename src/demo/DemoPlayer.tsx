@@ -8,7 +8,15 @@ import { updateMainNearFar } from '../camera'
 import { requestFocusSnap, takeFocusSnap } from '../main-camera-session'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { findDemo } from './demos'
-import { easeProgress, easedEye, poseDirection, type DemoFrame, type DemoPose } from './demo-script'
+import {
+  easeProgress,
+  easedEye,
+  intoPoseFrame,
+  outOfPoseFrame,
+  poseDirection,
+  type DemoFrame,
+  type DemoPose,
+} from './demo-script'
 import { DEMO_MAX_DELTA } from './demo-travel'
 
 /** How long the eye takes to reach a step's pose, in seconds. */
@@ -39,24 +47,30 @@ type BodyRef = { current?: Object3D | null } | undefined
 
 interface Ease {
   pose: DemoPose & { frame: DemoFrame }
-  /** Eye minus target when the step began; null until the first frame. */
+  /** Eye minus target when the step began, in the pose frame's own axes,
+   * so the ease runs between two directions that turn together (a goal
+   * turning with Earth could otherwise swing through the opposite of a
+   * world-fixed start, and the arc flip); null until the first frame. */
   from: Vector3 | null
   elapsed: number
-  /** Held while the clock travels to the step; on arrival the eye goes on
-   * to the step's own pose. */
+  /** Followed while the clock travels to the step. */
   travel: boolean
+  /** The travel's own pose (travel.camera), held on the way; on arrival the
+   * eye goes on to the step's pose. */
+  held: boolean
   /** The target is kept on the focus each frame (a followed pose). */
   locked: boolean
 }
 
-function easeTo(pose: DemoPose, travel: boolean): Ease {
-  return { pose: { ...pose, frame: pose.frame ?? 'sun' }, from: null, elapsed: 0, travel, locked: false }
+function easeTo(pose: DemoPose, travel: boolean, held = false): Ease {
+  return { pose: { ...pose, frame: pose.frame ?? 'sun' }, from: null, elapsed: 0, travel, held, locked: false }
 }
 
 const _focus = new Vector3()
 const _sun = new Vector3()
 const _earth = new Vector3()
 const _goal = new Vector3()
+const _from = new Vector3()
 const _earthTurn = new Quaternion()
 const _bodies = { focus: _focus, sun: _sun, earth: _earth, earthTurn: _earthTurn }
 
@@ -88,7 +102,7 @@ export function DemoPlayer() {
     ease.current = !pose
       ? null
       : held
-        ? easeTo({ ...held, focus: pose.focus }, true)
+        ? easeTo({ ...held, focus: pose.focus }, true, true)
         : easeTo(pose, travelling)
     // A snap left unconsumed (the main view unmounted the next frame) must
     // not land on the user's restored view after the demo.
@@ -131,39 +145,44 @@ export function DemoPlayer() {
     earth.getWorldPosition(_earth)
     earth.getWorldQuaternion(_earthTurn)
 
-    // The travel has landed (or Next landed it): on to the step's own pose.
-    // The eye was held on the same focus, so with the same direction this
-    // is a straight push in or pull out.
+    // The travel has landed (or Next landed it). A held pose goes on to the
+    // step's own: the eye was held on the same focus, so with the same
+    // direction this is a straight push in or pull out. The step's own pose
+    // eases on as it was, not braking to start again.
+    let start: Vector3 | null = null
     if (current.travel && !state.demoTravel) {
       const pose = findDemo(state.demo.id)?.steps[state.demo.step]?.camera
       if (!pose) {
         ease.current = null
         return
       }
-      Object.assign(current, easeTo(pose, false), {
-        from: camera.position.clone().sub(_focus),
-        locked: current.locked,
-      })
+      if (current.held) {
+        Object.assign(current, easeTo(pose, false), { locked: current.locked })
+        start = _from.subVectors(camera.position, _focus)
+      } else current.travel = false
     }
 
     const target = controls.target
     const reduced = prefersReducedMotion()
-    const first = !current.from
-    if (!current.from) {
-      current.from = camera.position.clone().sub(target)
+    const first = !current.from && !start
+    if (first) {
+      start = _from.subVectors(camera.position, target)
       if (reduced) requestFocusSnap()
     }
+    const { frame } = current.pose
+    if (start) current.from = intoPoseFrame(start, frame, _bodies)
     current.elapsed += Math.min(delta, DEMO_MAX_DELTA)
     const duration = reduced ? 0 : DEMO_EASE_SECONDS
     const t = easeProgress(current.elapsed, duration)
 
     poseDirection(current.pose, _bodies, _goal)
-    easedEye(current.from, _goal, _focus, t, current.pose.distance, camera.position)
+    outOfPoseFrame(current.from!, frame, _bodies, _from)
+    easedEye(_from, _goal, _focus, t, current.pose.distance, camera.position)
 
     // Followed, the focus can move far in a frame; CameraProvider's target
     // would trail it, so it is put on the focus outright, this frame here
     // and from the next by a snap.
-    const follow = current.travel || current.pose.frame !== 'sun'
+    const follow = current.travel || frame !== 'sun'
     if (follow && !current.locked) {
       const near = target.distanceTo(_focus) <= LOCK_SHARE * camera.position.distanceTo(_focus)
       current.locked = t >= 1 || (first && near)

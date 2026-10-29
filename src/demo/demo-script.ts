@@ -2,7 +2,6 @@
 // and a way of looking at it, with a caption saying what to notice.
 
 import { Quaternion, Vector3 } from 'three'
-import { calculateLocationAndRotationForLatLng } from '../utils'
 import type {
   Layout,
   Location,
@@ -128,6 +127,16 @@ export interface Demo {
 const _ref = new Vector3()
 const _up = new Vector3(0, 1, 0)
 
+// eyeDirection's azimuth 0: the focus-to-Sun direction (Sun-to-Earth for
+// the Sun itself) flattened onto the ecliptic plane, unit.
+function sunReference(focus: Vector3, sun: Vector3, earth: Vector3, out: Vector3): Vector3 {
+  if (focus.distanceToSquared(sun) < 1e-12) out.subVectors(earth, sun)
+  else out.subVectors(sun, focus)
+  out.y = 0
+  if (out.lengthSq() < 1e-12) out.set(1, 0, 0)
+  return out.normalize()
+}
+
 /**
  * The unit direction from the focus to the eye for a DemoPose's azimuth and
  * elevation (degrees). The reference is the focus-to-Sun direction flattened
@@ -141,11 +150,7 @@ export function eyeDirection(
   elevationDeg: number,
   out = new Vector3()
 ): Vector3 {
-  if (focus.distanceToSquared(sun) < 1e-12) _ref.subVectors(earth, sun)
-  else _ref.subVectors(sun, focus)
-  _ref.y = 0
-  if (_ref.lengthSq() < 1e-12) _ref.set(1, 0, 0)
-  _ref.normalize().applyAxisAngle(_up, (azimuthDeg * Math.PI) / 180)
+  sunReference(focus, sun, earth, _ref).applyAxisAngle(_up, (azimuthDeg * Math.PI) / 180)
   const elevation = (elevationDeg * Math.PI) / 180
   return out
     .copy(_ref)
@@ -173,9 +178,15 @@ export function poseDirection(
 ): Vector3 {
   const { azimuth, elevation } = pose
   if (pose.frame === 'earth') {
-    // As the location pin is placed, so a pose over a city sits over its pin.
-    const { position } = calculateLocationAndRotationForLatLng(elevation, azimuth, 1)
-    return out.set(position.x, position.y, position.z).applyQuaternion(bodies.earthTurn).normalize()
+    // As calculateLocationAndRotationForLatLng (utils.ts) places the location
+    // pin, so a pose over a city sits over its pin: longitude 0 on +X, east
+    // toward -Z. Inlined, as it runs every frame.
+    const lat = (elevation * Math.PI) / 180
+    const lon = (azimuth * Math.PI) / 180
+    return out
+      .set(Math.cos(lat) * Math.cos(lon), Math.sin(lat), -Math.cos(lat) * Math.sin(lon))
+      .applyQuaternion(bodies.earthTurn)
+      .normalize()
   }
   if (pose.frame === 'stars') {
     const lift = (elevation * Math.PI) / 180
@@ -187,6 +198,31 @@ export function poseDirection(
       .normalize()
   }
   return eyeDirection(bodies.focus, bodies.sun, bodies.earth, azimuth, elevation, out)
+}
+
+const _frameRef = new Vector3()
+const _frameTurn = new Quaternion()
+
+/**
+ * A pose frame's world orientation: Earth's turn for 'earth', none for
+ * 'stars', and for 'sun' the turn about the ecliptic pole taking +X onto
+ * eyeDirection's reference, which swings round as the focus orbits.
+ */
+export function poseFrameTurn(frame: DemoFrame, bodies: PoseBodies, out = new Quaternion()): Quaternion {
+  if (frame === 'earth') return out.copy(bodies.earthTurn)
+  if (frame === 'stars') return out.identity()
+  const ref = sunReference(bodies.focus, bodies.sun, bodies.earth, _frameRef)
+  return out.setFromAxisAngle(_up, Math.atan2(-ref.z, ref.x))
+}
+
+/** World `v` in a pose frame's own axes, so it can be kept turning with it. */
+export function intoPoseFrame(v: Vector3, frame: DemoFrame, bodies: PoseBodies, out = new Vector3()): Vector3 {
+  return out.copy(v).applyQuaternion(poseFrameTurn(frame, bodies, _frameTurn).invert())
+}
+
+/** `v` in a pose frame's own axes, back in world space as the frame stands now. */
+export function outOfPoseFrame(v: Vector3, frame: DemoFrame, bodies: PoseBodies, out = new Vector3()): Vector3 {
+  return out.copy(v).applyQuaternion(poseFrameTurn(frame, bodies, _frameTurn))
 }
 
 const _fromDir = new Vector3()

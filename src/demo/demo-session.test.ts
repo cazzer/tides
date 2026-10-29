@@ -1,8 +1,18 @@
 import { Quaternion, Vector3 } from 'three'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { earthSpin } from '../ephemeris'
 import { DEFAULT_SYSTEM_AIDS } from '../store'
 import type { Demo } from './demo-script'
-import { easeProgress, easedEye, eyeDirection, poseDirection } from './demo-script'
+import {
+  easeProgress,
+  easedEye,
+  eyeDirection,
+  intoPoseFrame,
+  outOfPoseFrame,
+  poseDirection,
+  type DemoFrame,
+} from './demo-script'
+import { setEarthSpinHold, shownEarthSpin, travelRun } from './demo-travel'
 import {
   DEMO_PLAY_SCALE,
   demoPlayScale,
@@ -10,6 +20,8 @@ import {
   enterDemoPatch,
   exitDemoPatch,
   goToDemoStepPatch,
+  demoClockFrame,
+  demoClockTrack,
   reachedUntil,
   type DemoSaved,
   type DemoSessionState,
@@ -297,6 +309,62 @@ describe('reachedUntil', () => {
   })
 })
 
+describe('demoClockFrame', () => {
+  afterEach(() => setEarthSpinHold(null))
+  const DAY = 86_400_000
+  const from = Date.parse('2026-03-20T14:46:00Z')
+  const to = from + 90 * DAY
+  // The step's stop, a day past its date, as the tours set it.
+  const until = to + DAY
+
+  it('carries the clock, landing exactly on the date, and stops at until only after', () => {
+    const run = travelRun({ seconds: 1, hold: ['spin'] }, from, to, false)!
+    const track = demoClockTrack()
+    let timestamp: number | null = from
+    let travel: typeof run | null = run
+    const seen: number[] = []
+    // A binary fraction of a second, so the frames sum to the travel exactly.
+    for (let i = 0; i < 40 && travel; i++) {
+      const { write, hold } = demoClockFrame(track, travel, timestamp, until, 0.0625)
+      expect(write).not.toBeNull()
+      timestamp = write!.timestamp
+      seen.push(timestamp)
+      if (write!.demoTravel === null) {
+        travel = null
+        expect(hold).toBeNull()
+      } else expect(hold).toEqual({ from, to, spinFrom: earthSpin(from) })
+    }
+    expect(travel).toBeNull()
+    expect(seen[seen.length - 1]).toBe(to)
+    expect(seen.every((t, i) => i === 0 || t >= seen[i - 1])).toBe(true)
+    expect(seen).toHaveLength(16)
+
+    // Landed: the clock runs on (SimClock) and stops at until.
+    expect(demoClockFrame(track, null, to + DAY / 2, until, 0.1).write).toBeNull()
+    expect(demoClockFrame(track, null, until + 1000, until, 0.1).write).toEqual({ timestamp: until, timeScale: 0 })
+  })
+
+  it('checks no stop on the way, even a travel back across until', () => {
+    const run = travelRun({ seconds: 1 }, until + 10 * DAY, to, false)!
+    const track = demoClockTrack()
+    track.previous = until + 10 * DAY
+    for (let i = 0; i < 10; i++) {
+      const { write } = demoClockFrame(track, run, null, until, 0.1)
+      expect(write?.timeScale).toBeUndefined()
+    }
+    expect(track.previous).toBe(to)
+  })
+
+  it('turns a new travel on from the spin shown', () => {
+    // Prev a day into a travel that holds the spin: back from the angle shown.
+    setEarthSpinHold({ from, to, spinFrom: 1 })
+    const shown = shownEarthSpin(from + DAY)
+    expect(shown).not.toBeCloseTo(earthSpin(from + DAY))
+    const run = travelRun({ seconds: 2, hold: ['spin'] }, from + DAY, from, false)!
+    expect(demoClockFrame(demoClockTrack(), run, from + DAY, null, 0.05).hold?.spinFrom).toBe(shown)
+  })
+})
+
 describe('eyeDirection', () => {
   const sun = new Vector3(0, 0, 0)
   const earth = new Vector3(50, 0, 0)
@@ -403,6 +471,49 @@ describe('easedEye', () => {
 
   it('takes the pose outright with no starting offset', () => {
     expect(easedEye(new Vector3(), goal, focus, 0, 20).distanceTo(new Vector3(100, 0, 20))).toBeCloseTo(0)
+  })
+})
+
+describe('an ease in a turning frame', () => {
+  const at = (turn: number) => ({
+    focus: new Vector3(30, 4, -40).applyAxisAngle(new Vector3(0, 1, 0), turn / 50),
+    sun: new Vector3(0, 0, 0),
+    earth: new Vector3(30, 4, -40).applyAxisAngle(new Vector3(0, 1, 0), turn / 50),
+    earthTurn: new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), turn),
+  })
+
+  it('keeps a pose fixed in its own frame however the frame turns', () => {
+    for (const frame of ['sun', 'stars', 'earth'] as DemoFrame[]) {
+      const pose = { frame, azimuth: 40, elevation: 25 }
+      const fixed = intoPoseFrame(poseDirection(pose, at(0)), frame, at(0))
+      for (const turn of [0.7, 3, -5]) {
+        const bodies = at(turn)
+        expect(intoPoseFrame(poseDirection(pose, bodies), frame, bodies).distanceTo(fixed)).toBeCloseTo(0)
+        expect(outOfPoseFrame(fixed, frame, bodies).distanceTo(poseDirection(pose, bodies))).toBeCloseTo(0)
+      }
+    }
+  })
+
+  // A fast travel turns Earth many times over an ease: a start held fixed in
+  // the world meets the goal turning with Earth head on and the arc flips.
+  it('eases smoothly in Earth’s frame while Earth spins under it', () => {
+    const pose = { frame: 'earth' as const, azimuth: 0, elevation: 20 }
+    const focus = new Vector3()
+    const startWorld = new Vector3(-30, 5, 4)
+    const from = intoPoseFrame(startWorld, 'earth', at(0))
+    let last: Vector3 | null = null
+    for (let i = 0; i <= 400; i++) {
+      const t = i / 400
+      const bodies = at(t * 40)
+      const goal = poseDirection(pose, bodies)
+      const eye = easedEye(outOfPoseFrame(from, 'earth', bodies), goal, focus, easeProgress(t, 1), 20)
+      if (i === 0) expect(eye.distanceTo(startWorld)).toBeCloseTo(0)
+      // Seen from Earth, the eye moves a little each sample.
+      const seen = intoPoseFrame(eye, 'earth', bodies)
+      if (last) expect(seen.distanceTo(last)).toBeLessThan(0.5)
+      last = seen
+    }
+    expect(last!.clone().normalize().distanceTo(poseDirection(pose, at(0)))).toBeCloseTo(0)
   })
 })
 
