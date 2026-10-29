@@ -72,9 +72,10 @@ const vertexShader = /* glsl */ `
     mat3 view = mat3(viewMatrix);
     vec3 head = view * rel;
     vec3 tail = head + view * uStreak;
-    // In front of the eye, not the near plane: low in the air the near plane
-    // stands 0.4x the ground gap off (shipNear), past the whole air's box, so
-    // a mote nearer than it draws at it (below): nothing drawn is nearer.
+    // In front of the eye, not the near plane, and a mote nearer than it
+    // drawn at it (below): from tides-d9f.1's dust in the air, kept so space's
+    // dust draws as it did; it only matters for a box smaller than the near
+    // plane's reach, which NEAR_FADE otherwise fades out first.
     float front = -0.01 * uHalf;
     if (fade <= 0.0 || uOpacity <= 0.0 || head.z > front) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);

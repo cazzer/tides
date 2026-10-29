@@ -299,7 +299,7 @@ describe('dustAnchor (tides-zmw.9.18)', () => {
   })
 })
 
-describe('the air (tides-d9f.1, tides-tcd)', () => {
+describe('negative levels (defensive since tides-tcd) and the air (tides-tcd)', () => {
   test('the slots pick both layers either side of a negative level, odd ones too', () => {
     for (const level of [-0.5, -1, -6.3, -7.9, -8]) {
       const a = slotLayer(level, 0)

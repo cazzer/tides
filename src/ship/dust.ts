@@ -68,7 +68,7 @@ export const STREAK_ENERGY_FLOOR = 0.45
 // them (ship-bodies.ts planetCollisionRadius).
 
 /** Altitudes, km over the sea, the dust is gone under and whole over: up to
- * the Karman line. [TUNE] */
+ * the Karman line, as frame-carry.ts RELEASE_BAND_KM's top. [TUNE] */
 export const DUST_AIR_BAND_KM: readonly [number, number] = [60, 100]
 
 /** Extra vertical FOV at the cruise cap, degrees. */
