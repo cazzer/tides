@@ -117,7 +117,7 @@ const Strong = styled.span`
 // The tide at the spot, the payoff, larger than the rest.
 const Lead = styled.p`
   margin: 0 0 2px;
-  font-size: 15px;
+  font-size: 1.25em;
 `
 
 const Moon = styled.span`
