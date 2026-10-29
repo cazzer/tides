@@ -40,6 +40,7 @@ import { DemoBar } from './demo/DemoBar'
 import { DemoClock } from './demo/DemoClock'
 import { DemoPlayer } from './demo/DemoPlayer'
 import { SeasonsReadout } from './demo/SeasonsReadout'
+import { TidesReadout } from './demo/TidesReadout'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -229,6 +230,7 @@ export default function App() {
                       without tiles on screen. */}
                   {SURFACE_TILES_ON && <SurfaceCredit />}
                   {demo && <SeasonsReadout />}
+                  {demo && <TidesReadout />}
                 </>
               ) : undefined
             }

@@ -50,6 +50,10 @@ export interface DemoAids {
   /** Main view: Earth's axis, the subsolar dot and the readout latitude's
    * ring, plus the sunlight readout (tides-zec.3). */
   seasons?: boolean
+  /** Main view: the Moon's and Sun's tidal pull as arrows round Earth, the
+   * sea's equilibrium shape drawn exaggerated, a marked spot and the tide
+   * readout (tides-zec.4). */
+  tides?: boolean
 }
 
 /**

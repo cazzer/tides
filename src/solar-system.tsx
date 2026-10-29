@@ -40,6 +40,8 @@ import {
 import { useDemoAid } from './demo/demo-aids'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { SeasonsGlobe } from './demo/SeasonsGlobe'
+import { TidesField } from './demo/TidesField'
+import { TidesSpot } from './demo/TidesSpot'
 import { EclipseDaylight } from './EclipseDaylight'
 import { coronaFade, eclipseSkyAt } from './eclipse-sky'
 
@@ -120,6 +122,7 @@ export default function SolarSystem({
   const eclipseSky = useDemoAid('solarEclipseSky') && earthCamera
   const moonNodes = useDemoAid('moonNodes')
   const seasons = useDemoAid('seasons')
+  const tides = useDemoAid('tides')
 
   // From the surface, the Sun and Moon move to their true directions on a sky
   // around the observer (see sky.ts).
@@ -215,6 +218,7 @@ export default function SolarSystem({
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
         {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}
+        {tides && interactive && !earthCamera && !ship && <TidesSpot radius={EARTH_DIAMETER} />}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
         {(ship ? SURFACE_TILES_ON : systemTiles) && (
@@ -252,6 +256,9 @@ export default function SolarSystem({
       </OrbitingBody>
       {moonNodes && interactive && !earthCamera && !moonCamera && distanceScale === 'system' && (
         <MoonOrbitTilt />
+      )}
+      {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
+        <TidesField radius={EARTH_DIAMETER} />
       )}
       {/* Orbital views only; their textures must not suspend the scene. */}
       {showPlanets && !earthCamera && !moonCamera && (
