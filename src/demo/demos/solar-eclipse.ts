@@ -13,7 +13,8 @@ import type { Demo } from '../demo-script'
 //
 // In steps 2 and 3 the View from Earth draws the Moon at the Sun's scale with
 // a daylit sky (aids.solarEclipseSky, eclipse-sky.ts); step 5 adds the Moon's
-// tilted orbit and node line (aids.moonNodes). In steps 1 and 4 the main view
+// tilted orbit, node line, true shadow axis near new moon and an arrow to the
+// Sun (aids.moonNodes). In steps 1 and 4 the main view
 // darkens and rings the shadow on Earth (aids.moonShadow, MoonShadowGlobe.tsx),
 // which at true scale is a faint smudge, and leaves the path of totality
 // behind it (aids.totalityPath, totality-path.ts); step 5 turns both off.
@@ -82,14 +83,19 @@ export const solarEclipse: Demo = {
       date: '2024-04-08T18:17:16Z',
       until: '2024-05-08T03:22:29Z',
       timeScale: 43200,
-      // Edge on to the ecliptic, looking near the node line: the ecliptic
-      // circle, Earth's orbit and the month labels collapse to one line, and
-      // the Moon's orbit crosses it at its ~5° tilt.
-      camera: { focus: 'earth', azimuth: -25, elevation: 0, distance: 55 },
+      // Edge on to the ecliptic: the ecliptic circle, Earth's orbit and the
+      // month labels collapse to one line, the Moon's orbit tilted across it.
+      // The pose is set once, against the Sun at the step's start; the Sun
+      // turns ~29° by the 8 May stop, which this frames: the eye ~57° round
+      // from the Sun (to the right) and ~23° off the node line, so the new
+      // Moon is mostly lit, well clear of the node dots, the orbit's tilt
+      // shows, and the shadow axis passing above Earth runs across the view.
+      // Far enough that the whole orbit fits a phone's width.
+      camera: { focus: 'earth', azimuth: -28, elevation: 0, distance: 85 },
       aids: { moonNodes: true, moonShadow: false, totalityPath: false },
       caption: {
         title: 'Why not every month?',
-        body: 'The Moon’s orbit (lilac) tilts 5°, so most new moons miss the Sun. Eclipses need a node (gold).',
+        body: 'The Moon’s orbit (lilac) tilts 5°. In May its shadow (grey line) passes above Earth. Eclipses need a node (gold).',
       },
     },
   ],
