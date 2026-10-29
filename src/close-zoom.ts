@@ -199,14 +199,17 @@ const TERRAIN_LOAD_BARRIERS = 2
 
 /**
  * Stops `owner` feeding the limb view: clears it while it is still the one
- * `owner` fed (never another feeder's, such as the ship's on the frame ship
- * mode starts), and leaves its spheres to be let go (releaseLimbSpheres).
+ * `owner` fed, and leaves its spheres to be let go (releaseLimbSpheres).
+ * Never another feeder's view or spheres, such as the ship's on the frame
+ * ship mode starts.
  */
 function stopFeedingLimb(owner: CloseZoomOwner) {
   if (!owner.fedCamera) return
-  if (limbEye() === owner.fedCamera) clearLimbView()
+  if (limbEye() === owner.fedCamera) {
+    clearLimbView()
+    owner.releasing = true
+  }
   owner.fedCamera = null
-  owner.releasing = true
 }
 
 function leaveCloseZoom(

@@ -337,13 +337,19 @@ export function useStreamedPatch(
 ): MaterialPatch {
   const flight = useFlightDetail()
   const gl = useThree((s) => s.gl)
-  const side = useMemo(
-    () => (flight ? gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)) : 0),
-    [flight, gl]
-  )
+  const side = useMemo(() => gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)), [gl])
+  // One patch for the ground's life, released while flight detail is off:
+  // three binds a material's uniforms when it first compiles a program and
+  // keeps them for that program, so a patch made afresh on each close zoom
+  // would draw with the first one's (tides-tvr.7.3).
   const patch = useMemo(() => create(side), [create, side])
+  const none = useMemo(() => create(0), [create])
   streamed.set(patch.material, patch)
+  streamed.set(none.material, none)
   useEffect(() => () => patch.release(), [patch])
+  useEffect(() => {
+    if (!flight) patch.release()
+  }, [flight, patch])
   // A restored context has lost the texture (as for the cloud blend).
   useEffect(() => {
     const canvas = gl.domElement
@@ -352,7 +358,7 @@ export function useStreamedPatch(
     return () => canvas.removeEventListener('webglcontextrestored', restart)
   }, [gl, patch])
   useFrame(({ camera, gl }) => {
-    if (ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
+    if (flight && ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
   })
-  return patch.material
+  return flight ? patch.material : none.material
 }

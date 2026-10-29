@@ -364,15 +364,17 @@ export function createNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbie
 
 /** The night flight with flight detail (flight-detail.ts: ship mode, or
  * close zoom for this View's camera), else null; the cloud ambient goes
- * back to CLOUD_AMBIENT when the flight ends. */
+ * back to CLOUD_AMBIENT when the flight ends. One flight for the ground's
+ * life: the ground's program keeps the uniforms it first compiled with
+ * (useStreamedPatch). */
 export function useNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbient: THREE.IUniform<number>): NightFlight | null {
   const detail = useFlightDetail()
-  const flight = useMemo(() => (detail ? createNightFlight(sun, cloudAmbient) : null), [detail, sun, cloudAmbient])
+  const flight = useMemo(() => createNightFlight(sun, cloudAmbient), [sun, cloudAmbient])
   useEffect(
     () => () => {
-      if (flight) cloudAmbient.value = CLOUD_AMBIENT
+      if (detail) cloudAmbient.value = CLOUD_AMBIENT
     },
-    [flight, cloudAmbient]
+    [detail, flight, cloudAmbient]
   )
-  return flight
+  return detail ? flight : null
 }
