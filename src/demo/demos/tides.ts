@@ -31,9 +31,10 @@ const HELD = 6 * 60 * MINUTE + 12 * MINUTE
 // real Moon sits above Earth on screen, clear of the caption below; low
 // enough that on a phone it also clears the readout at the top. Azimuth is
 // Sun-relative, so the Moon's own azimuth (0 at New Moon, 90 at first
-// quarter, 180 at Full Moon) plus 180.
+// quarter, 180 at Full Moon) plus 180. `keep` backs the eye off wherever the
+// caption and readout leave too little room for the Moon.
 function camera(moonAzimuth: number): DemoPose {
-  return { focus: 'earth', azimuth: (moonAzimuth + 180) % 360, elevation: 60, distance: 45 }
+  return { focus: 'earth', azimuth: (moonAzimuth + 180) % 360, elevation: 60, distance: 45, keep: ['moon'] }
 }
 
 function held(date: string) {

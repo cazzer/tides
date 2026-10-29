@@ -13,6 +13,7 @@ import { glassButton, glassPanel } from '../glass-styles'
 import { findDemo } from './demos'
 import type { Demo } from './demo-script'
 import { subscribeDemoTime } from './demo-time'
+import { useDemoChromeRef } from './demo-chrome'
 
 // After the exit has rendered, focus the demo button the dock came back
 // with, or the dock's toggle while the phone dock is folded and hides it.
@@ -138,6 +139,8 @@ export function DemoBarView({
   const captionId = useId()
   const bodyRef = useRef<HTMLParagraphElement>(null)
   const [overflowing, setOverflowing] = useState(false)
+  // The main view frames its bodies clear of the bar (DemoPlayer).
+  const chromeRef = useDemoChromeRef<HTMLElement>()
 
   // A caption that scrolls has to be reachable by keyboard to scroll it.
   useEffect(() => {
@@ -151,7 +154,7 @@ export function DemoBarView({
   }, [caption.body])
 
   return (
-    <Bar aria-label={`Demo: ${demo.title}`}>
+    <Bar ref={chromeRef} aria-label={`Demo: ${demo.title}`}>
       {/* Read out on each step; the ticking clock stays out of it. */}
       <Caption id={captionId} aria-live="polite">
         <Heading>

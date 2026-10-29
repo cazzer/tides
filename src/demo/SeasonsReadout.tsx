@@ -9,6 +9,7 @@ import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
+import { useDemoChromeRef } from './demo-chrome'
 import { insolation, seasonsLatitude, SUNRISE_ALTITUDE, sunForSeasons } from './seasons'
 
 const HOUR_MS = 3_600_000
@@ -84,10 +85,12 @@ export interface SeasonsReadoutViewProps {
 }
 
 export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutViewProps) {
+  // The main view frames its bodies clear of the readout (DemoPlayer).
+  const chromeRef = useDemoChromeRef<HTMLElement>()
   const sun = sunForSeasons(timestamp)
   const q = insolation(lat, sun.dec, sun.distanceAu)
   return (
-    <Panel aria-label="Sunlight at this latitude">
+    <Panel ref={chromeRef} aria-label="Sunlight at this latitude">
       <Line>
         Sunlight at {latitudeText(lat)} <Muted>{pinned ? 'your pin' : 'example'}</Muted>
       </Line>

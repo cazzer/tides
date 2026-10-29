@@ -12,6 +12,7 @@ import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
+import { useDemoChromeRef } from './demo-chrome'
 import { moonAlone, rangeMetres, spotTide, TIDE_EXAGGERATION, tidePulls, tidesSpot } from './tides'
 import { TIDES_MOON_COLOR, TIDES_SUN_COLOR } from './tides-field'
 
@@ -52,11 +53,13 @@ export interface TidesReadoutViewProps {
 }
 
 export function TidesReadoutView({ lat, lon, pinned, timestamp, withSun }: TidesReadoutViewProps) {
+  // The main view frames its bodies clear of the readout (DemoPlayer).
+  const chromeRef = useDemoChromeRef<HTMLElement>()
   const all = tidePulls(timestamp)
   const pulls = withSun ? all : moonAlone(all)
   const tide = spotTide(lat, lon, timestamp, withSun)
   return (
-    <Panel aria-label="Tide-raising pull">
+    <Panel ref={chromeRef} aria-label="Tide-raising pull">
       <Lead>
         Tide at the red dot <Strong>{signed(tide * 100)} cm</Strong>
         {pinned && <Muted> · your pin</Muted>}

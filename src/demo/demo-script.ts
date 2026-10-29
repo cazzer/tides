@@ -41,6 +41,10 @@ export interface DemoPose {
   /** Scene units about the focus kept in view: on a view too narrow for
    * them at `distance`, the eye backs off until they fit (poseDistance). */
   fit?: number
+  /** Bodies kept in view with the focus, their whole discs, seen from the
+   * pose's direction (keepDistance, tides-zec.15). Like `fit`, it only ever
+   * backs the eye off. */
+  keep?: DemoFocus[]
 }
 
 /** What a travel holds still on the way: Earth's spin, or the Moon (hidden). */
@@ -278,6 +282,39 @@ export function poseDistance(pose: Pick<DemoPose, 'distance' | 'fit'>, vfovDeg: 
   const halfV = (vfovDeg * Math.PI) / 360
   const half = Math.min(halfV, Math.atan(Math.tan(halfV) * aspect))
   return Math.max(pose.distance, pose.fit / Math.sin(half))
+}
+
+/** A body to keep in view: its centre less the focus's, and its radius. */
+export interface KeptBody {
+  offset: Vector3
+  radius: number
+}
+
+const _right = new Vector3()
+const _upAxis = new Vector3()
+
+/**
+ * The least eye distance, along unit `direction` from the focus (looking
+ * back at it, ecliptic north up), at which every body's disc is inside a
+ * view of vertical field `vfovDeg` and `aspect` centred on the focus; 0 for
+ * none. Each body's extent across the view is its offset across the line of
+ * sight plus its radius, against the half-field at its own depth.
+ */
+export function keepDistance(bodies: readonly KeptBody[], direction: Vector3, vfovDeg: number, aspect: number): number {
+  const tanV = Math.tan((vfovDeg * Math.PI) / 360)
+  const tanH = tanV * aspect
+  _right.crossVectors(_up, direction)
+  if (_right.lengthSq() < 1e-12) _right.set(1, 0, 0)
+  _right.normalize()
+  _upAxis.crossVectors(direction, _right)
+  let distance = 0
+  for (const { offset, radius } of bodies) {
+    const toward = offset.dot(direction)
+    const across = Math.abs(offset.dot(_right)) + radius
+    const up = Math.abs(offset.dot(_upAxis)) + radius
+    distance = Math.max(distance, toward + across / tanH, toward + up / tanV)
+  }
+  return distance
 }
 
 const _fromDir = new Vector3()
