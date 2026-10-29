@@ -47,6 +47,9 @@ export interface DemoAids {
   solarEclipseSky?: boolean
   /** Main view: the Moon's tilted orbit, the ecliptic and the node line. */
   moonNodes?: boolean
+  /** Main view: Earth's axis, the subsolar dot and the readout latitude's
+   * ring, plus the sunlight readout (tides-zec.3). */
+  seasons?: boolean
 }
 
 /**
