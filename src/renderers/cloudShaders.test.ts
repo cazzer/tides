@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
 import { SKY_VIEW_GLSL } from './skyView'
+import { createGroundHaze, GROUND_HAZE_GLSL, groundHazeDepth, groundHazeWeights } from './groundHaze'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
@@ -18,6 +19,7 @@ import {
   detailErosion,
   detailFall,
   detailPixelScale,
+  GROUND_FADE,
   GROUND_SHADOW,
   GROUND_SHADOW_ADAPT_FROM,
   GROUND_SHADOW_ADAPT_SUN,
@@ -30,10 +32,17 @@ import {
   MARCH_STEPS,
   marchPhaseAfter,
   marchPhaseShare,
+  marchStepFor,
 } from './cloudShaders'
 import {
   MAX_CLOUD_TOP_KM,
   CLOUD_CLEARANCE,
+  cloudDeckAt,
+  CLOUD_DECK_BAND_KM,
+  EXAGGERATED_DECK,
+  fogPath,
+  TERRAIN_MAX_GREY,
+  TRUE_DECK,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
@@ -65,6 +74,7 @@ import {
   cloudShape,
   cloudTopKm,
   maxTopKm,
+  EARTH_RADIUS_KM,
 } from '../cloud-layer'
 import {
   CIRRUS_STRETCH,
@@ -80,6 +90,7 @@ import {
   TYPED_TOPS_KM,
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import {
@@ -514,7 +525,12 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
       for (const name of ['cloudFogDensity', 'cloudHazeFront', 'fogged']) {
         expect(outside).not.toContain(name)
       }
-      expect(inside).toContain('cloudHazeFront(eye, d, length(pShade - eye), shell)')
+      // Over the ground the relief's hit takes the ground's haze (tides-d9f.10).
+      expect(inside).toContain(
+        flat
+          ? 'cloudHazeFront(eye, d, length(pShade - eye), shell)'
+          : 'cloudHazeHit(eye, d, length(pShade - eye), shell, hazeScale)'
+      )
       // The atmosphere's own haze, shared with its shader.
       expect(inside).toContain('float columnAhead(')
       // Only the relief march has columns to stand in.
@@ -1265,7 +1281,8 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
         for (const v of [vertex, preprocess(clouds.material.vertexShader, new Set([...defines, 'FOG_EASE']))]) {
           expect(v).toContain(`* (1.0 - smoothstep(${a}, ${b}, cloudFogStep(vEye)));`)
           expect(v).toContain('cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv))')
-          expect(v).toContain(`cloudFogDensity(col) * cloudFogEdge(col, r - uSeaLevel) * ${MARCH_STEP.toFixed(6)}`)
+          // The live step (uMarchStep, tides-d9f.10).
+          expect(v).toContain('cloudFogDensity(col) * cloudFogEdge(col, r - uSeaLevel) * uMarchStep;')
         }
       }
       // From outside the reach the vertex stage reads nothing.
@@ -1563,19 +1580,26 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // regenerated at tides-tvr.10, whose easing fog shows as the side it
   // eases from did: at uOpacity, under the haze in front of it (the flat
   // sheet's fog never eases, so only its text changed); the programs
-  // without FOG_EASE are as they were.
+  // without FOG_EASE are as they were. The relief programs' and the relief
+  // ground shadow's regenerated at tides-d9f.10: the deck's clearance and km
+  // scale are uniforms on the relief path; the flat ones are as they were.
+  // tides-d9f.10 B: deck-sized lengths (fog path, ground fade, shadow steps,
+  // march step) follow the live deck; again only the relief ones regenerated.
+  // tides-d9f.10: a cloud on a ray that ends on the ground takes the ground's
+  // haze for the air in front of it (cloudHazeHit(), the relief back faces'),
+  // the colour mixed by each side's share across the sea horizon's band.
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
-    'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-back-noease': 'b1d2b7ee205e6d69d0f20ffbab8168fad93446b3e690fdd6b200020438edcea5',
-    'relief-full-back-ease': '521d40ea88539405da36a0be8c7dc84247a421496d960d34d0e44296237684f6',
+    'relief-full-front-noease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
+    'relief-full-front-ease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
+    'relief-full-back-noease': 'ee1445c154828932346a69a09697508e5a61b9f13f29bd86ae7da46be88e444a',
+    'relief-full-back-ease': 'cab1e55312942351b72563eb27097c72f076e1ef07221fda107500c6e18443b7',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-back-noease': '3a79db74cfaf67b5d9e8669562c686a9a09d1d8cea9c02036d6cd8de28049129',
     'flat-full-back-ease': '87b1586468186a76d84a8a944b70ea30effd6801014ce53242a31bece750311a',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
-    'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
+    'relief-full': '3cee3553208d7322e96f5507d89d81fa32e04bf000460b8126a86f7295576768',
     'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -1838,6 +1862,246 @@ describe('the ground shadow under the deck (tides-l0z)', () => {
         setEarthTerrain(null)
         clouds.dispose()
       }
+    }
+  })
+})
+
+describe('the deck at true height near the ground (tides-d9f.10)', () => {
+  const sea = sceneRadius(12742000)
+
+  it('reads the clearance and km scale from uniforms on the relief path, constants on the flat one', () => {
+    const relief = createCloudLayer(createEclipseShadow('earth'), false)
+    const flat = createCloudLayer(createEclipseShadow('earth'), true)
+    try {
+      // The shell's one text, as three builds it for each tier, from inside
+      // (FLIP_SIDED), where the vertex shader reads the field too.
+      for (const shader of [relief.material.vertexShader, relief.material.fragmentShader]) {
+        const asRelief = preprocess(shader, new Set(['FLIP_SIDED']))
+        expect(asRelief).toContain('uniform float uCloudClearance;')
+        expect(asRelief).toContain('uniform float uCloudUnitsPerKm;')
+        expect(asRelief).toContain('#define CLOUD_CLEARANCE uCloudClearance')
+        expect(asRelief).toContain('#define CLOUD_UNITS_PER_KM uCloudUnitsPerKm')
+        const asFlat = preprocess(shader, new Set(['CLOUD_FLAT', 'FLIP_SIDED']))
+        expect(asFlat).not.toMatch(/uCloudClearance|uCloudUnitsPerKm/)
+        expect(asFlat).toContain(`#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}`)
+        expect(asFlat).toContain(`#define CLOUD_UNITS_PER_KM ${CLOUD_UNITS_PER_KM.toFixed(6)}`)
+        expect(asRelief.split('uniform float uCloudClearance;').length).toBe(2)
+      }
+      // The ground's shadow, built for its tier.
+      expect(CLOUD_GROUND_GLSL.head(false)).toContain('#define CLOUD_CLEARANCE uCloudClearance')
+      expect(CLOUD_GROUND_GLSL.head(false).split('uniform float uCloudUnitsPerKm;').length).toBe(2)
+      expect(CLOUD_GROUND_GLSL.head(true)).not.toMatch(/uCloudClearance|uCloudUnitsPerKm/)
+      expect(CLOUD_GROUND_GLSL.head(true)).toContain(`#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}`)
+      // The shell, the globe's ground and the streamed tiles share the
+      // uniform objects (tile-clouds.ts assigns the same ones).
+      for (const clouds of [relief, flat]) {
+        expect(clouds.material.uniforms.uCloudClearance).toBe(clouds.uniforms.uCloudClearance)
+        expect(clouds.material.uniforms.uCloudUnitsPerKm).toBe(clouds.uniforms.uCloudUnitsPerKm)
+        const shader = phongShader()
+        clouds.groundPatch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+        expect(shader.uniforms.uCloudClearance).toBe(clouds.uniforms.uCloudClearance)
+        expect(shader.uniforms.uCloudUnitsPerKm).toBe(clouds.uniforms.uCloudUnitsPerKm)
+        // Today's deck until a camera is faced.
+        expect(clouds.uniforms.uCloudClearance.value).toBe(EXAGGERATED_DECK.clearance)
+        expect(clouds.uniforms.uCloudUnitsPerKm.value).toBe(EXAGGERATED_DECK.unitsPerKm)
+      }
+    } finally {
+      relief.dispose()
+      flat.dispose()
+    }
+  })
+
+  it('sets the deck for each camera from its altitude, true near the ground only on a fine depth buffer', () => {
+    for (const flat of [false, true]) {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      clouds.uniforms.uSeaLevel.value = sea
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+      const camera = new THREE.PerspectiveCamera(60, 1.6, 0.0001, 100)
+      const deckAt = (km: number, fine: boolean) => {
+        camera.position.set(0, sea + km / EARTH_KM_PER_UNIT, 0)
+        camera.updateMatrixWorld()
+        clouds.faceCamera(mesh, camera, fine)
+        return { clearance: clouds.uniforms.uCloudClearance.value, unitsPerKm: clouds.uniforms.uCloudUnitsPerKm.value }
+      }
+      try {
+        const near = flat ? EXAGGERATED_DECK : TRUE_DECK
+        expect(deckAt(5, true)).toEqual({ ...near })
+        expect(deckAt(5, false)).toEqual({ ...EXAGGERATED_DECK })
+        expect(deckAt(36000, true)).toEqual({ ...EXAGGERATED_DECK })
+        // Halfway up the band, halfway between (to the float).
+        if (!flat) {
+          const mid = deckAt(60, true)
+          expect(mid.clearance).toBeCloseTo(cloudDeckAt(60, true).clearance, 12)
+          expect(mid.unitsPerKm).toBeCloseTo(cloudDeckAt(60, true).unitsPerKm, 12)
+        }
+      } finally {
+        clouds.dispose()
+      }
+    }
+  })
+
+  // The longest path from inside through `deck`: under the tallest top
+  // over the highest ground, grazing the sea.
+  const deckOuter = (deck: typeof TRUE_DECK) =>
+    TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + deck.clearance + deck.unitsPerKm * MAX_CLOUD_TOP_KM
+  const chord = (top: number) => 2 * Math.sqrt((sea + top) ** 2 - sea ** 2)
+
+  it('steps the march as much shorter as the deck\'s longest path, and as it was from orbit', () => {
+    expect(deckOuter(EXAGGERATED_DECK)).toBe(CLOUD_LAYER_TOP)
+    expect(marchStepFor(EXAGGERATED_DECK)).toBe(MARCH_STEP)
+    const ratio = chord(deckOuter(TRUE_DECK)) / chord(CLOUD_LAYER_TOP)
+    expect(marchStepFor(TRUE_DECK)).toBeCloseTo(MARCH_STEP * ratio, 15)
+    // A little over a third of the step from orbit.
+    expect(ratio).toBeGreaterThan(0.3)
+    expect(ratio).toBeLessThan(0.4)
+    for (const flat of [false, true]) {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      clouds.uniforms.uSeaLevel.value = sea
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+      const camera = new THREE.PerspectiveCamera(60, 1.6, 0.0001, 100)
+      const stepAt = (km: number) => {
+        camera.position.set(0, sea + km / EARTH_KM_PER_UNIT, 0)
+        camera.updateMatrixWorld()
+        clouds.faceCamera(mesh, camera, true)
+        return clouds.material.uniforms.uMarchStep.value
+      }
+      try {
+        expect(clouds.material.uniforms.uMarchStep.value).toBe(MARCH_STEP)
+        expect(stepAt(5)).toBe(flat ? MARCH_STEP : marchStepFor(TRUE_DECK))
+        expect(stepAt(36000)).toBe(MARCH_STEP)
+      } finally {
+        clouds.dispose()
+      }
+    }
+  })
+
+  it('scales the relief programs\' deck-sized lengths with the live deck, and leaves the flat sheet\'s literal', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    try {
+      const vertex = preprocess(clouds.material.vertexShader, new Set(['FLIP_SIDED']))
+      const fragment = preprocess(clouds.material.fragmentShader, new Set(['FLIP_SIDED']))
+      for (const v of [vertex, fragment]) {
+        expect(v).toContain('uniform float uMarchStep;')
+        expect(v).toContain(`#define CLOUD_DECK_SCALE (CLOUD_UNITS_PER_KM / ${CLOUD_UNITS_PER_KM.toFixed(6)})`)
+        expect(v).toContain(`/ (${(0.004).toFixed(6)} * CLOUD_DECK_SCALE);`)
+      }
+      expect(fragment).toContain('#define MARCH_STEP uMarchStep')
+      expect(fragment).toContain('#define WALL_DEPTH (MARCH_STEP * 0.5)')
+      expect(fragment).toContain('#define SIDE_REST (MARCH_STEP * 4.0)')
+      expect(fragment).toContain('#define SHADOW_STEP (0.0065 * CLOUD_DECK_SCALE)')
+      expect(fragment).toContain('#define SHADOW_SOFT (0.02 * CLOUD_DECK_SCALE)')
+      expect(fragment).toContain(
+        `#define GROUND_FADE (${GROUND_FADE.toFixed(6)} * (CLOUD_CLEARANCE / ${CLOUD_CLEARANCE.toFixed(6)}))`
+      )
+      const flatFragment = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_FLAT', 'FLIP_SIDED']))
+      expect(flatFragment).not.toMatch(/uMarchStep|CLOUD_DECK_SCALE/)
+      expect(flatFragment).toContain(`#define MARCH_STEP ${MARCH_STEP.toFixed(6)}`)
+      expect(flatFragment).toContain(`#define GROUND_FADE ${GROUND_FADE.toFixed(6)}`)
+      expect(CLOUD_GROUND_GLSL.head(false)).toContain(
+        `float soft = 0.008 * (CLOUD_UNITS_PER_KM / ${CLOUD_UNITS_PER_KM.toFixed(6)});`
+      )
+      expect(CLOUD_GROUND_GLSL.head(true)).toContain('smoothstep(-0.008, 0.008, col.z - alt)')
+    } finally {
+      clouds.dispose()
+    }
+  })
+
+  it('fogs a column of so many km as it did, at any deck', () => {
+    expect(fogPath(EXAGGERATED_DECK)).toBe(fogPath())
+    // The opacity through the whole thickness of a column of km km, at the
+    // deck's own scale: the true deck's, some nine times thinner in scene
+    // units, as dense per unit as it is thinner.
+    const through = (deck: typeof TRUE_DECK, alpha: number, km: number) => {
+      const base = deck.clearance
+      const top = base + deck.unitsPerKm * km
+      const n = 4000
+      let depth = 0
+      for (let i = 0; i < n; i++) depth += fogExtinction(alpha, base, top, base + ((i + 0.5) / n) * (top - base), deck)
+      return 1 - Math.exp((-depth * (top - base)) / n)
+    }
+    for (const alpha of [0.05, 0.3, 0.8])
+      for (const km of [0.5, 2, 9]) expect(through(TRUE_DECK, alpha, km)).toBeCloseTo(through(EXAGGERATED_DECK, alpha, km), 12)
+    // And over a step: the eye's share of the phase reads the same fog
+    // over the live step as the shader's cloudFogStep().
+    const fog = fogExtinction(0.5, TRUE_DECK.clearance, TRUE_DECK.clearance + 0.003, TRUE_DECK.clearance + 0.0015, TRUE_DECK)
+    expect(fog * marchStepFor(TRUE_DECK)).toBeCloseTo(
+      ((0.5 * -Math.log(0.5)) / (0.004 * (TRUE_DECK.unitsPerKm / CLOUD_UNITS_PER_KM))) * marchStepFor(TRUE_DECK),
+      9
+    )
+  })
+
+  it('keeps every march from inside within the step budget at every deck in the band', () => {
+    // From under the deck's base to above its reach, at each step's own deck.
+    for (let km = 0; km <= CLOUD_DECK_BAND_KM[1] + 20; km += 5) {
+      const deck = cloudDeckAt(km, true)
+      const step = marchStepFor(deck)
+      const outer = sea + deckOuter(deck)
+      let longest = 0
+      let most = 0
+      for (let alt = deck.clearance / 2; alt <= deckOuter(deck) + 0.01; alt += deckOuter(deck) / 20) {
+        for (let deg = -90; deg <= 90; deg += 0.5) {
+          const a = (deg * Math.PI) / 180
+          const span = marchSpanFromEye([0, sea + alt, 0], [Math.cos(a), Math.sin(a), 0], sea, outer, deck)
+          if (!span) continue
+          longest = Math.max(longest, span.end - span.origin)
+          most = Math.max(most, marchSteps(span, step, MARCH_STEPS, 0.999).length)
+        }
+      }
+      expect(longest / MARCH_STEPS, `${km} km`).toBeLessThanOrEqual(step * 1.02)
+      expect(most, `${km} km`).toBeLessThanOrEqual(MARCH_STEPS + 2)
+    }
+  })
+
+  it('lays the ground haze in front of a cloud on a ray that ends on the ground, on the relief path alone', () => {
+    const relief = createCloudLayer(createEclipseShadow('earth'), false)
+    const flat = createCloudLayer(createEclipseShadow('earth'), true)
+    try {
+      const inside = preprocess(relief.material.fragmentShader, new Set(['FLIP_SIDED']))
+      // The ground's own function, once, on the cloud's Sun.
+      expect(inside.split(GROUND_HAZE_GLSL).length).toBe(2)
+      expect(inside).toContain('#define uGroundHazeSun uSunDir')
+      expect(inside).toContain('vec4 haze = groundHaze(eye, d * s, cover);')
+      expect(inside.split('uniform float uGroundHaze;').length).toBe(2)
+      // The ground's program takes the same text.
+      const ground = phongShader()
+      const haze = createGroundHaze(relief.uniforms.uSunDir, sea, false)
+      haze.patch.onBeforeCompile(ground, {} as THREE.WebGLRenderer)
+      expect(ground.fragmentShader).toContain(GROUND_HAZE_GLSL)
+      // Neither the flat tier nor the faces from outside.
+      expect(preprocess(flat.material.fragmentShader, new Set(['CLOUD_FLAT', 'FLIP_SIDED']))).not.toMatch(/groundHaze\(|uGroundHaze/)
+      expect(preprocess(relief.material.fragmentShader, new Set())).not.toMatch(/groundHaze\(|uGroundHaze/)
+      // Off until shared; then the ground's own uniform objects.
+      expect(relief.material.uniforms.uGroundHaze.value).toBe(0)
+      haze.shareWith(relief.material)
+      for (const name of ['uGroundHaze', 'uGroundHazeLength', 'uGroundHazeTop']) {
+        const own = ground.uniforms[name]
+        expect(own).toBeDefined()
+        expect(relief.material.uniforms[name]).toBe(own)
+      }
+    } finally {
+      relief.dispose()
+      flat.dispose()
+    }
+  })
+
+  it('gives a cloud under a low eye no more haze than the ground beside it gets (groundHazeWeights())', () => {
+    const km = sea / EARTH_RADIUS_KM
+    const eye = new THREE.Vector3(0, sea + 5 * km, 0)
+    const share = (to: THREE.Vector3) =>
+      groundHazeWeights(eye.length(), groundHazeDepth(eye, to.clone().sub(eye), sea), 0, sea, false).haze
+    // Straight down onto a top 2 km up: the segment's share, where
+    // cloudHazeFront() laid a quarter of the ray's column.
+    expect(share(new THREE.Vector3(0, sea + 2 * km, 0))).toBeLessThan(1e-3)
+    // Along a slanting ray, a cloud before the ground takes less than the
+    // ground behind it, the ground's own model either side.
+    const d = new THREE.Vector3(1, -0.1, 0).normalize()
+    const b = eye.dot(d)
+    const sSea = -b - Math.sqrt(b * b - (eye.lengthSq() - sea * sea))
+    let last = 0
+    for (const f of [0.25, 0.5, 0.75, 1]) {
+      const next = share(eye.clone().addScaledVector(d, f * sSea))
+      expect(next).toBeGreaterThan(last)
+      last = next
     }
   })
 })

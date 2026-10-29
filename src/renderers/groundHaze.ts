@@ -170,26 +170,13 @@ vGroundHazeRay = transpose(mat3(modelViewMatrix)) * mvPosition.xyz;
 vGroundHazeEye = -(transpose(mat3(modelViewMatrix)) * modelViewMatrix[3].xyz);
 `
 
-// The atmosphere's uniforms, as macros over the haze's own for haze.glsl,
-// dropped after it: other patches declare a uSeaLevel of their own.
-const FRAGMENT_HEAD = /* glsl */ `
-uniform float uGroundHaze;
-uniform float uGroundHazeSeaLevel;
-uniform float uGroundHazeLength;
-uniform float uGroundHazeTop;
-uniform vec3 uGroundHazeSun;
-varying vec3 vGroundHazeRay;
-varying vec3 vGroundHazeEye;
-${SKY_VIEW_GLSL}
-#define uSeaLevel uGroundHazeSeaLevel
-#define uSurface (uGroundHazeSeaLevel * ${f(ATMOSPHERE_SURFACE)})
-#define uScaleHeight (uGroundHazeSeaLevel * ${f(ATMOSPHERE_SCALE_HEIGHT)})
-#define uGain ${f(ATMOSPHERE_GAIN)}
-#define uSky ${v3(ATMOSPHERE_SKY)}
-#define uDusk ${v3(ATMOSPHERE_DUSK)}
-${hazeGlsl}
-
-// The true air's density, the sea level's 1 (GROUND_HAZE_AIR).
+// The ground's haze for a segment (groundHaze()) and its density, over the
+// atmosphere's macros and haze.glsl, which the including program declares
+// first: the ground's own (FRAGMENT_HEAD) and the cloud layer's, which lays
+// the same haze in front of a cloud on a ray that ends on the ground
+// (cloudShaders.ts cloudHazeHit()). Reads uGroundHazeLength,
+// uGroundHazeTop and uGroundHazeSun.
+export const GROUND_HAZE_GLSL = /* glsl */ `// The true air's density, the sea level's 1 (GROUND_HAZE_AIR).
 float groundHazeDensity(float r) {
   return exp(-max(r - uSeaLevel, 0.0) / (uSeaLevel * ${f(GROUND_HAZE_AIR)}));
 }
@@ -244,7 +231,28 @@ vec4 groundHaze(vec3 eye, vec3 ray, out float cover) {
   cover = mix(share * min(2.0 * column / grazing, 1.0), ownCover, ease);
   return vec4(glow, haze);
 }
+`
 
+// The atmosphere's uniforms, as macros over the haze's own for haze.glsl,
+// dropped after it: other patches declare a uSeaLevel of their own.
+const FRAGMENT_HEAD = /* glsl */ `
+uniform float uGroundHaze;
+uniform float uGroundHazeSeaLevel;
+uniform float uGroundHazeLength;
+uniform float uGroundHazeTop;
+uniform vec3 uGroundHazeSun;
+varying vec3 vGroundHazeRay;
+varying vec3 vGroundHazeEye;
+${SKY_VIEW_GLSL}
+#define uSeaLevel uGroundHazeSeaLevel
+#define uSurface (uGroundHazeSeaLevel * ${f(ATMOSPHERE_SURFACE)})
+#define uScaleHeight (uGroundHazeSeaLevel * ${f(ATMOSPHERE_SCALE_HEIGHT)})
+#define uGain ${f(ATMOSPHERE_GAIN)}
+#define uSky ${v3(ATMOSPHERE_SKY)}
+#define uDusk ${v3(ATMOSPHERE_DUSK)}
+${hazeGlsl}
+
+${GROUND_HAZE_GLSL}
 // The sky over the sea at up (unit, the ground's frame) along rd, as the
 // atmosphere draws it from just over the sea: the high tier's table while
 // the eye is under the shell's top (eased out over its last two scale
@@ -337,6 +345,11 @@ export interface GroundHaze {
   /** For each camera before anything draws: whether this camera takes the
    * haze, and the surface variant's frame. */
   update(ground: THREE.Object3D, camera: THREE.Camera): void
+  /** Puts these uniform objects (the switch, the reach and the top) on the
+   * cloud layer's material, whose relief programs lay this haze in front of
+   * a cloud on a ray that ends on the ground (GROUND_HAZE_GLSL); its Sun is
+   * already this one's (uSunDir). */
+  shareWith(clouds: THREE.ShaderMaterial): void
 }
 
 const _toLocal = new THREE.Matrix4()
@@ -388,6 +401,13 @@ export function createGroundHaze(
       customProgramCacheKey: () => 'ground-haze-surface',
     },
     frame,
+    shareWith(clouds) {
+      Object.assign(clouds.uniforms, {
+        uGroundHaze: uniforms.uGroundHaze,
+        uGroundHazeLength: uniforms.uGroundHazeLength,
+        uGroundHazeTop: uniforms.uGroundHazeTop,
+      })
+    },
     update(ground, camera) {
       uniforms.uGroundHaze.value = insideShell(ground, camera, top) ? 1 : 0
       // The ground's frame from the camera's (view space, unscaled: the

@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition, positionsFor } from '../flight-scale'
-import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, cloudColumn } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, TRUE_DECK, cloudColumn, type CloudDeck } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
@@ -328,22 +328,23 @@ describe('ship bodies', () => {
     // the centres of its texels, which are these blocks' corners. (Until
     // tides-zmw.1 this took the 2 × 2 mean of the pooled maxima for that
     // ground, which overstated the share: 0.75 against 0.52 on the 8-bit
-    // map at e27cb87. The 16-bit map gives 0.55, the proxy 0.78.)
-    function underBaseShare(earth: ReturnType<typeof byKey>[string], pooled: Float32Array) {
+    // map at e27cb87. The 16-bit map gives 0.55, the proxy 0.78.) Over the
+    // sea instead where `sea`, and under `deck`'s base where given.
+    function underBaseShare(earth: ReturnType<typeof byKey>[string], pooled: Float32Array, deck?: CloudDeck, sea = false) {
       const [width, height] = TERRAIN_MAP_SIZE
       let land = 0
       let under = 0
       for (let y = 0; y < height; y += 2) {
         for (let x = 0; x < width; x += 2) {
           const grey = (pooled[y * width + x] + pooled[y * width + x + 1] + pooled[(y + 1) * width + x] + pooled[(y + 1) * width + x + 1]) / 4
-          if (grey <= 8) continue
+          if (grey <= 8 !== sea) continue
           const lat = 90 - ((y + 1) / height) * 180
           const lon = ((x + 1) / width) * 360 - 180
           const weight = Math.cos(THREE.MathUtils.degToRad(lat))
           const stop = floorRadius(earth, toWorld(latLonToLocal(lat, lon), T)) - EARTH_RADIUS
           land += weight
           const ground = marchGround.data[(y / 2) * marchGround.width + x / 2]
-          if (stop < cloudColumn(1, 1.5, ground, TERRAIN_DISPLACEMENT).base) under += weight
+          if (stop < cloudColumn(1, 1.5, ground, TERRAIN_DISPLACEMENT, deck).base) under += weight
         }
       }
       return under / land
@@ -371,6 +372,28 @@ describe('ship bodies', () => {
       expect(limbShare).toBeGreaterThan(LIMB_SHARE)
       release()
       expect(underBaseShare(earth, pooled)).toBe(coarseShare)
+    })
+
+    // The fine floor's share of land under the true deck's base, a
+    // regression guard (all of it at tides-d9f.10: the floor stands 30 m
+    // over the drawn ground, the base 1 km over the march's).
+    const FINE_TRUE_SHARE = 0.999
+
+    it('stops the fine floor under the true deck near the ground (tides-d9f.10; a regression guard)', () => {
+      const pooled = pooledTerrain()
+      setEarthTerrain(baseFloor(), limbFloor())
+      onTestFinished(disposeLimbSpheres)
+      const release = retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS))
+      onTestFinished(release)
+      // Over the streamed tiles on a reversed-Z float depth buffer, where the
+      // true deck is drawn (ship-session.ts fineGroundDepth()).
+      const bodies = createShipBodies('high', true)
+      updateShipBodies(bodies, T)
+      const earth = bodies.find((b) => b.key === 'earth')!
+      earth.floor!.beginFrame(true)
+      expect(underBaseShare(earth, pooled, TRUE_DECK, true)).toBe(1)
+      const share = underBaseShare(earth, pooled, TRUE_DECK)
+      expect(share, String(share)).toBeGreaterThanOrEqual(FINE_TRUE_SHARE)
     })
 
     it.each([

@@ -32,9 +32,11 @@ import {
   cloudShape,
   cloudTopKm,
   CLOUD_UNITS_PER_KM,
+  EXAGGERATED_DECK,
   MAX_CLOUD_TOP_KM,
   maxTopKm,
   TERRAIN_DISPLACEMENT,
+  TRUE_DECK,
 } from './cloud-layer'
 import { DETAIL_INTERIOR } from './renderers/cloudShaders'
 import { GRID_LATS, GRID_LONS, GRID_POINTS, type CoverGrid } from './forecast-clouds'
@@ -692,5 +694,33 @@ describe('typed tops (tides-tvr.4.3, tides-tvr.4.9)', () => {
     const edge = forecast([0, 0, 0, 1], 0.1)
     expect(Math.abs(edge.topKm - cloudTopKm(0, 0, 0.1, 0) * cloudShape(0.1))).toBeLessThanOrEqual(HALF_STEP + 1e-9)
     expect(typedTopKm([1, 0, 0, 0], 0.5, 0, 0)).toBeCloseTo(TYPE_TOP_KM.cirrus * typeShape('cirrus', 0.5), 12)
+  })
+})
+
+describe('typed columns on the true deck (tides-d9f.10)', () => {
+  // Relief 1: a true km is 0.117 / 255 units, and the base stands one of
+  // them over the ground.
+  const km = 0.117 / 255
+  const grey = 0.4
+
+  test('untyped, the true cloudColumn()', () => {
+    const c = typedColumn(1, 0, 0, false, [0, 0, 0], grey, TERRAIN_DISPLACEMENT, TRUE_DECK)
+    expect(c).toEqual({ ground: c.base, ...cloudColumn(1, 8.5, grey, TERRAIN_DISPLACEMENT, TRUE_DECK) })
+    expect(c.base).toBeCloseTo(0.0012 + km, 15)
+    // The thickest untyped top: 8.5 km.
+    expect(c.top).toBeCloseTo(0.0012 + 9.5 * km, 15)
+  })
+
+  test('typed, lifted and topped in true km', () => {
+    expect(TYPED_TOPS_KM).toBe(16)
+    // A top of 0.25 of 16 km, lifted 0.1 of it: 4 km, 1.6 km.
+    const c = typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT, TRUE_DECK)
+    expect(c.ground).toBeCloseTo(0.0012 + km, 15)
+    expect(c.base).toBeCloseTo(0.0012 + 2.6 * km, 15)
+    expect(c.top).toBeCloseTo(0.0012 + 5 * km, 15)
+    // Without a deck, the one from orbit.
+    expect(typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT)).toEqual(
+      typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT, EXAGGERATED_DECK)
+    )
   })
 })

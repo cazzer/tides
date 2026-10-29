@@ -12,7 +12,13 @@ import {
   CLOUD_LAYER_TOP,
   CLOUD_UNITS_PER_KM,
   cloudColumn,
+  CLOUD_DECK_BAND_KM,
+  cloudDeckAt,
   cloudFrame,
+  EXAGGERATED_DECK,
+  marchSpanFromEye,
+  TRUE_CLOUD_UNITS_PER_KM,
+  TRUE_DECK,
   DETAIL_OCTAVES,
   DETAIL_OCTAVES_FLAT,
   detailOctaveWeight,
@@ -38,6 +44,7 @@ import {
   TRUE_TERRAIN_DISPLACEMENT,
   type Vec3,
 } from './cloud-layer'
+import { EARTH_KM_PER_UNIT } from './surface-handover'
 import { RELIEF } from './relief'
 import { decodeEarthDem, demLevel } from './earth-dem'
 
@@ -384,5 +391,81 @@ describe('cloud ceiling', () => {
       )
       expect(angle).toBeLessThanOrEqual(CEILING_ARC_DEG * DEG + 1e-12)
     }
+  })
+})
+
+describe('the deck at true height near the ground (tides-d9f.10)', () => {
+  // The eye's altitudes over the sea (true km), through the band and past it.
+  const altitudes = Array.from({ length: 241 }, (_, i) => i * 0.5)
+
+  it('is the deck from orbit at and over the band, and wherever the depth buffer is coarse', () => {
+    // The same object, so the uniforms are bitwise today's.
+    expect(cloudDeckAt(CLOUD_DECK_BAND_KM[1], true)).toBe(EXAGGERATED_DECK)
+    expect(cloudDeckAt(36000, true)).toBe(EXAGGERATED_DECK)
+    expect(cloudDeckAt(1, false)).toBe(EXAGGERATED_DECK)
+    for (const km of altitudes) expect(cloudDeckAt(km, false)).toBe(EXAGGERATED_DECK)
+    expect(EXAGGERATED_DECK).toEqual({ clearance: CLOUD_CLEARANCE, unitsPerKm: CLOUD_UNITS_PER_KM })
+  })
+
+  it('is true near the ground, up to the band', () => {
+    for (const km of [0, 5, CLOUD_DECK_BAND_KM[0]]) expect(cloudDeckAt(km, true)).toBe(TRUE_DECK)
+    // True scale at the default relief: the ground's own km.
+    expect(TRUE_CLOUD_UNITS_PER_KM).toBeCloseTo(TERRAIN_DISPLACEMENT / (255 / 39), 15)
+    expect(TRUE_DECK.unitsPerKm).toBe(TRUE_CLOUD_UNITS_PER_KM)
+    // The base about where low cloud's stands, over the sea.
+    const baseKm = TRUE_DECK.clearance * EARTH_KM_PER_UNIT
+    expect(baseKm).toBeGreaterThanOrEqual(0.5)
+    expect(baseKm).toBeLessThanOrEqual(2)
+  })
+
+  it('rises with the eye across the band, and in proportion', () => {
+    let previous = cloudDeckAt(0, true)
+    for (const km of altitudes) {
+      const deck = cloudDeckAt(km, true)
+      expect(deck.clearance).toBeGreaterThanOrEqual(previous.clearance)
+      expect(deck.unitsPerKm).toBeGreaterThanOrEqual(previous.unitsPerKm)
+      previous = deck
+    }
+    const [low, high] = CLOUD_DECK_BAND_KM
+    const mid = cloudDeckAt((low + high) / 2, true)
+    expect(mid.clearance).toBeCloseTo((TRUE_DECK.clearance + EXAGGERATED_DECK.clearance) / 2, 15)
+    expect(mid.unitsPerKm).toBeCloseTo((TRUE_DECK.unitsPerKm + EXAGGERATED_DECK.unitsPerKm) / 2, 15)
+  })
+
+  it('stays within the shell at every altitude, its tallest default top under the eye', () => {
+    const terrainTop = TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY
+    for (const km of altitudes) {
+      const deck = cloudDeckAt(km, true)
+      // The march's bounds shrink to the live deck; the shell is today's.
+      expect(deck.clearance + deck.unitsPerKm * MAX_CLOUD_TOP_KM).toBeLessThanOrEqual(CLOUD_LAYER_TOP - terrainTop + 1e-12)
+      // The tallest untyped top over the sea is under an eye in the band, so
+      // the deck doesn't sweep up past it on the way down.
+      if (km >= CLOUD_DECK_BAND_KM[0]) {
+        expect(deck.clearance + deck.unitsPerKm * defaultTopKm(1)).toBeLessThan(km / EARTH_KM_PER_UNIT)
+      }
+    }
+  })
+
+  it('stands columns and the march span on the true deck', () => {
+    // Relief 1: 0.003 units at grey 1, 39/255 km a grey level, so a true km
+    // is 0.117 / 255 units, and the base stands one of them over the ground.
+    const km = 0.117 / 255
+    expect(TRUE_DECK.clearance).toBeCloseTo(km, 15)
+    // Full cloud (shape 1), a 5 km top, over grey 0.4 (1.2e-3 units up).
+    const column = cloudColumn(1, 5, 0.4, TERRAIN_DISPLACEMENT, TRUE_DECK)
+    expect(column.base).toBeCloseTo(0.0012 + km, 15)
+    expect(column.top).toBeCloseTo(0.0012 + 6 * km, 15)
+    // Unchanged without a deck.
+    expect(cloudColumn(1, 5, 0.4, TERRAIN_DISPLACEMENT)).toEqual(cloudColumn(1, 5, 0.4, TERRAIN_DISPLACEMENT, EXAGGERATED_DECK))
+    // From two of its clearances over a sea of radius 1, straight down: the
+    // march ends at the lowest base, a clearance on; the deck from orbit's
+    // lowest base is over the eye, so its march goes on to the sea.
+    const eye: [number, number, number] = [0, 1 + 2 * TRUE_DECK.clearance, 0]
+    const down: [number, number, number] = [0, -1, 0]
+    const outer = 1 + CLOUD_LAYER_TOP
+    const fine = marchSpanFromEye(eye, down, 1, outer, TRUE_DECK)!
+    expect(fine.origin).toBe(0)
+    expect(fine.end).toBeCloseTo(TRUE_DECK.clearance, 12)
+    expect(marchSpanFromEye(eye, down, 1, outer)!.end).toBeCloseTo(2 * TRUE_DECK.clearance, 12)
   })
 })

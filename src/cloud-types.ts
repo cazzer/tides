@@ -22,9 +22,10 @@ import { gridCovers, layersAt, sampleCoverSmooth, type CoverGrid, type CoverLaye
 import { DAY_MS, HOUR_MS, smoothstep } from './real-clouds'
 import {
   cloudColumn,
+  type CloudDeck,
   cloudShape,
   cloudTopKm,
-  CLOUD_UNITS_PER_KM,
+  EXAGGERATED_DECK,
   MAX_CLOUD_TOP_KM,
   maxTopKm,
   MIN_MEASURED_TOP_KM,
@@ -440,7 +441,8 @@ export function typedTopsTexel(
  * keeps the top continuous as B goes to 0), no taller than the map's tallest
  * (maxTopKm()), and the base lifted by the lift read, never over the top.
  * ground is where the untyped base stands, the clearance over the ground.
- * Untyped (B 0), cloudColumn() exactly, whatever R and G hold.
+ * Untyped (B 0), cloudColumn() exactly, whatever R and G hold. In `deck`,
+ * as cloudColumn().
  */
 export function typedColumn(
   alpha: number,
@@ -449,14 +451,15 @@ export function typedColumn(
   measured: boolean,
   tops: readonly [top: number, lift: number, typed: number],
   terrainGrey: number,
-  displacement: number
+  displacement: number,
+  deck: CloudDeck = EXAGGERATED_DECK
 ): { ground: number; base: number; top: number } {
   const topKm = cloudTopKm(r, coverage, alpha, measured ? 1 : 0)
-  const untyped = cloudColumn(alpha, topKm, terrainGrey, displacement)
+  const untyped = cloudColumn(alpha, topKm, terrainGrey, displacement, deck)
   const ground = untyped.base
   const [t, g, w] = tops
   if (!(w > 0)) return { ground, base: ground, top: untyped.top }
   const top = Math.min(topKm * cloudShape(alpha) * (1 - w) + t * TYPED_TOPS_KM * w, maxTopKm(measured))
   const lift = Math.min(w * g * TYPED_TOPS_KM, top)
-  return { ground, base: ground + CLOUD_UNITS_PER_KM * lift, top: ground + CLOUD_UNITS_PER_KM * top }
+  return { ground, base: ground + deck.unitsPerKm * lift, top: ground + deck.unitsPerKm * top }
 }

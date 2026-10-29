@@ -30,6 +30,8 @@ import {
   type Vec3,
   airMass,
   ceilingReach,
+  cloudDeckAt,
+  type CloudDeck,
   cloudFrame,
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
@@ -43,6 +45,7 @@ import {
   DETAIL_OCTAVES,
   DETAIL_OCTAVES_FLAT,
   EARTH_RADIUS_KM,
+  EXAGGERATED_DECK,
   eyePastOffsets,
   maxTopKm,
   FOG_EASE_SAMPLES,
@@ -62,6 +65,7 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { smoothstep } from '../night-flight'
 import { sceneRadius } from '../planets'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { neutralTypeTexture } from './cloudBlend'
 import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
@@ -84,6 +88,7 @@ import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terr
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import { SKY_VIEW_GLSL, SKY_VIEW_UNIFORMS } from './skyView'
+import { GROUND_HAZE_GLSL } from './groundHaze'
 import depthGlsl from '../shaders/depth.glsl'
 
 const f = (x: number) => x.toFixed(6)
@@ -171,9 +176,23 @@ export function detailFall(east: number, west: number, north: number, south: num
 // rose to CLOUD_CLEARANCE 0.012 (tides-42p), the sea-grazing chord is 4%
 // longer than the base-grazing one the count was first taken over.
 const SEA_LEVEL = sceneRadius(2000 * EARTH_RADIUS_KM)
-export const MARCH_STEPS = Math.ceil(
-  (2 * Math.sqrt((SEA_LEVEL + CLOUD_LAYER_TOP) ** 2 - SEA_LEVEL ** 2)) / MARCH_STEP
-)
+const seaChord = (top: number) => 2 * Math.sqrt((SEA_LEVEL + top) ** 2 - SEA_LEVEL ** 2)
+const MARCH_CHORD = seaChord(CLOUD_LAYER_TOP)
+export const MARCH_STEPS = Math.ceil(MARCH_CHORD / MARCH_STEP)
+
+/**
+ * The march's step for `deck` (the relief programs' uMarchStep, set by
+ * faceCamera(), tides-d9f.10): MARCH_STEP for the deck from orbit, and as
+ * much shorter for a lower deck as the longest path through it, the chord
+ * under the tallest top over the highest ground, is shorter than the one
+ * under CLOUD_LAYER_TOP. So that path still takes MARCH_STEPS steps (a
+ * loop bound, fixed when the program is built), and a deck at true height,
+ * some nine times thinner, is read in steps under a third as long.
+ */
+export function marchStepFor(deck: CloudDeck): number {
+  const outer = TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + deck.clearance + deck.unitsPerKm * MAX_CLOUD_TOP_KM
+  return MARCH_STEP * (seaChord(outer) / MARCH_CHORD)
+}
 // Reads of the field within the step where the march from inside went down
 // through a top (tides-ndh), once it has stopped there: each halves where in
 // the step the ray meets the top, which is then solved linearly over the
@@ -222,10 +241,39 @@ const columnRead = (map: string) => `cloudPoleSmoothed(${map}, st,
     textureLod(${map}, st, lod))`
 const COLUMN_READ = columnRead('uCloudMap')
 
-// Height field shared by the cloud shell and the ground's shadow. The
-// shell's (typed) also has typed tops (tides-tvr.4.3) under CLOUD_TYPED;
-// the ground's shadow is untyped, its text as it was before types.
-const field = (typed: boolean) => /* glsl */ `
+// The deck's clearance and km scale (../cloud-layer.ts CloudDeck). The flat
+// sheet's are the deck from orbit's, constants, as they always were; the
+// relief programs' are uniforms (tides-d9f.10), which faceCamera() sets for
+// the camera drawn: true near the ground, as from orbit higher up. The
+// shell's one text serves both tiers, so it decides by CLOUD_FLAT; the
+// ground's shadow is built for its tier, so the flat one's text stays as it
+// was.
+const FLAT_DECK_GLSL = /* glsl */ `#define CLOUD_CLEARANCE ${f(CLOUD_CLEARANCE)}
+#define CLOUD_UNITS_PER_KM ${f(CLOUD_UNITS_PER_KM)}
+`
+const RELIEF_DECK_GLSL = /* glsl */ `uniform float uCloudClearance;
+uniform float uCloudUnitsPerKm;
+#define CLOUD_CLEARANCE uCloudClearance
+#define CLOUD_UNITS_PER_KM uCloudUnitsPerKm
+`
+// The shell's lengths sized to the deck (tides-d9f.10): on the relief path,
+// its march step (marchStepFor(), set by faceCamera()), and the deck's km
+// scale over the deck from orbit's, by which the fog's path and the
+// shadow's steps shrink with it. 1 from orbit, so the lengths are as they
+// were there; the flat sheet's are the literals they always were.
+const RELIEF_SHELL_LENGTHS_GLSL = /* glsl */ `uniform float uMarchStep;
+#define CLOUD_DECK_SCALE (CLOUD_UNITS_PER_KM / ${f(CLOUD_UNITS_PER_KM)})
+`
+const EITHER_DECK_GLSL = `#ifdef CLOUD_FLAT
+${FLAT_DECK_GLSL}#else
+${RELIEF_DECK_GLSL}${RELIEF_SHELL_LENGTHS_GLSL}#endif
+`
+
+// Height field shared by the cloud shell and the ground's shadow, with the
+// deck's GLSL above. The shell's (typed) also has typed tops (tides-tvr.4.3)
+// under CLOUD_TYPED; the ground's shadow is untyped, its text as it was
+// before types.
+const field = (typed: boolean, deck: string) => /* glsl */ `
 uniform sampler2D uCloudMap;
 uniform sampler2D uTerrainMap;
 uniform float uCloudShift;
@@ -235,9 +283,7 @@ uniform vec3 uSunDir;
 uniform float uSeaLevel;
 
 #define CLOUD_PI 3.141592653589793
-#define CLOUD_CLEARANCE ${f(CLOUD_CLEARANCE)}
-#define CLOUD_UNITS_PER_KM ${f(CLOUD_UNITS_PER_KM)}
-#define CLOUD_LAYER_TOP ${f(CLOUD_LAYER_TOP)}
+${deck}#define CLOUD_LAYER_TOP ${f(CLOUD_LAYER_TOP)}
 #define CLOUD_FLAT_ALTITUDE ${f(CLOUD_FLAT_ALTITUDE)}
 #define TERRAIN_DISPLACEMENT ${f(TERRAIN_DISPLACEMENT)}
 
@@ -310,14 +356,13 @@ float cloudLod(float footprint) {
   return max(0.0, log2(footprint / texel));
 }
 `
-const FIELD = field(false)
-const SHELL_FIELD = field(true)
+const SHELL_FIELD = field(true, EITHER_DECK_GLSL)
 
 // The mip the march from inside reads at the eye (tides-tvr.1): its own
 // steps' there, a level ray's a step across the map it was tuned to
 // (cloudMarchLod()). The same for every ray, so that all of them agree on
 // whether the eye is in a cloud; the base doesn't depend on it. The shell's
-// alone: the ground's shadow, which shares FIELD, never reads the eye.
+// alone: the ground's shadow, which shares the field, never reads the eye.
 const EYE_LOD_GLSL = /* glsl */ `
 float cloudEyeLod() {
   return max(0.0, log2(float(textureSize(uCloudMap, 0).x) / ${f(MARCH_MAP_WIDTH)}));
@@ -329,7 +374,13 @@ float cloudEyeLod() {
 // base. The march's fog, and (tides-ndh) the vertex stage's phase.
 const FOG_EXTINCTION_GLSL = /* glsl */ `
 float cloudFogDensity(vec4 col) {
+#ifdef CLOUD_FLAT
   return col.x < ${f(CLOUD_MIN_ALPHA)} ? 0.0 : col.x * -log(1.0 - min(col.x, 0.995)) / ${f(FOG_PATH)};
+#else
+  // Over the deck's fog path (cloud-layer.ts fogPath()).
+  return col.x < ${f(CLOUD_MIN_ALPHA)} ? 0.0
+    : col.x * -log(1.0 - min(col.x, 0.995)) / (${f(FOG_PATH)} * CLOUD_DECK_SCALE);
+#endif
 }
 float cloudFogEdge(vec4 col, float alt) {
   float inside = min(alt - col.y, col.z - alt);
@@ -407,7 +458,11 @@ float cloudFogStep(vec3 q) {
   float r = length(q);
   vec2 uv = cloudUv(q / r);
   vec4 col = cloudColumn(uv, cloudEyeLod(), cloudTerrain(uv));
+#ifdef CLOUD_FLAT
   return cloudFogDensity(col) * cloudFogEdge(col, r - uSeaLevel) * ${f(MARCH_STEP)};
+#else
+  return cloudFogDensity(col) * cloudFogEdge(col, r - uSeaLevel) * uMarchStep;
+#endif
 }
 `
 
@@ -503,12 +558,20 @@ ${ECLIPSE_GLSL.point}
 // The highest ground the high tier's elevation map holds (TERRAIN_MAX_GREY).
 #define TERRAIN_TOP ${f(TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY)}
 // How far past a flank its cloud is read, and how many steps past a side.
+#ifdef CLOUD_FLAT
 #define WALL_DEPTH ${f(MARCH_STEP / 2)}
+#else
+#define WALL_DEPTH (MARCH_STEP * 0.5)
+#endif
 // The rest of a side, after those, is taken in one: through the column as
 // it is there, to its top or base, past which the march goes on, but no
 // further than SIDE_REST.
 #define SIDE_STEPS 2
+#ifdef CLOUD_FLAT
 #define SIDE_REST ${f(4 * MARCH_STEP)}
+#else
+#define SIDE_REST (MARCH_STEP * 4.0)
+#endif
 // The mip whose tops stand for those around the camera: about 8 texels.
 #define NEAR_TOPS_LOD 3.0
 
@@ -576,7 +639,12 @@ float cloudGround(vec2 uv) {
 }
 // Over how much height above that ground a cloud thins out, so the depth
 // test cuts it where it is already gone.
+#ifdef CLOUD_FLAT
 #define GROUND_FADE ${f(GROUND_FADE)}
+#else
+// As much less as the deck's clearance (tides-d9f.10), which it stays under.
+#define GROUND_FADE (${f(GROUND_FADE)} * (CLOUD_CLEARANCE / ${f(CLOUD_CLEARANCE)}))
+#endif
 
 // cloudPathClear()
 float cloudPathClear(float alpha, float thickness, float path) {
@@ -621,6 +689,55 @@ vec4 cloudFogHaze(vec3 eye, vec3 d, float dist, float clear, float ease, float s
   return ease < 1.0 ? cloudHazeFront(eye, d, dist / max(1.0 - clear, 1e-6), shell) : vec4(0.0);
 }
 #endif
+#ifndef CLOUD_FLAT
+// The ground's haze (groundHaze.ts, its uniforms shared: shareWith()), for
+// the air in front of a cloud on a ray that ends on the ground (tides-
+// d9f.10, whose deck can lie under a low eye). Under the shell's top the
+// atmosphere draws nothing over such a ray (the ground stops it), so the
+// share cloudHazeFront() re-adds of that ray's column (its column from
+// under the haze's base, a quarter of it around the nadir, none further
+// out) would veil the cloud where the ground beside it is clear. Radii
+// alone and the Sun's direction, the cloud's own, which the ground's is.
+uniform float uGroundHaze;
+uniform float uGroundHazeLength;
+uniform float uGroundHazeTop;
+#define uGroundHazeSun uSunDir
+${GROUND_HAZE_GLSL}#undef uGroundHazeSun
+
+// The haze in front of a hit s along d, as cloudHazeFront() gives it, and
+// the share of it laid (scale): over the ground the ground's haze for the
+// segment (its colour, cover and share), so a cloud's light comes through
+// as the ground's would. Why a blend and not a switch: the two models
+// don't meet at the sea horizon (the ground's is a share of its horizon's
+// haze by the segment's depth, the sky's a fraction of the ray's column),
+// so the ground's weight rises from none at the sea horizon over
+// HAZE_SEA_RAMP of 1 - (dip / depression)^2, the ramp over which the
+// atmosphere's sea rays (columnAheadOverSea()) leave the ray's own column,
+// and goes as the eye nears the shell's top, where cloudHazeFront() eases
+// to the whole column the atmosphere draws there and uGroundHaze turns off.
+// Land standing over the sea horizon is the sky's. The ground's share
+// rides on the share passed to cloudOut() (scale) and its cover is divided
+// by it, so the haze is tone mapped and then scaled, as the ground's.
+vec4 cloudHazeHit(vec3 eye, vec3 d, float s, float shell, out float scale) {
+  float b = dot(eye, d);
+  float h = b * b - (dot(eye, eye) - uSeaLevel * uSeaLevel);
+  float ground = b < 0.0 && h > 0.0
+    ? uGroundHaze * smoothstep(0.0, HAZE_SEA_RAMP, h / (b * b))
+      * (1.0 - smoothstep(shell - 2.0 * uScaleHeight, shell, length(eye)))
+    : 0.0;
+  scale = 1.0;
+  vec4 sky = ground < 1.0 ? cloudHazeFront(eye, d, s, shell) : vec4(0.0);
+  if (ground <= 0.0) return sky;
+  float cover;
+  vec4 haze = groundHaze(eye, d * s, cover);
+  scale = mix(1.0, haze.a, ground);
+  // The colour by each side's share: mixed apart from its share, the sky's
+  // share of 1 lit the ground's full glow mid-band, a bright line under the
+  // horizon far over either side's haze.
+  return vec4(mix(sky.rgb, haze.rgb * haze.a, ground) / max(scale, 1e-6),
+    mix(sky.a, cover, ground) / max(scale, 1e-6));
+}
+#endif
 
 // The fragment, premultiplied, at depth z (the program writes gl_FragDepth
 // on every path), with share of the haze added over it as the atmosphere's
@@ -646,7 +763,11 @@ void cloudOut(vec4 color, float z, vec3 haze, float share, float cover) {
 #define RELIEF 1.2
 #define MAX_SLOPE 0.75
 #define WRAP 0.6
+#ifdef CLOUD_FLAT
 #define MARCH_STEP ${f(MARCH_STEP)}
+#else
+#define MARCH_STEP uMarchStep
+#endif
 #define MARCH_STEPS ${MARCH_STEPS}
 #define MARCH_REFINE ${MARCH_REFINE}
 // How far the ground under a march may rise above the ground at its entry.
@@ -656,9 +777,13 @@ void cloudOut(vec4 color, float z, vec3 haze, float share, float cover) {
 #define SHADOW_STEP 0.012
 #else
 #define SHADOW_STEPS 3
-#define SHADOW_STEP 0.0065
+#define SHADOW_STEP (0.0065 * CLOUD_DECK_SCALE)
 #endif
+#ifdef CLOUD_FLAT
 #define SHADOW_SOFT 0.02
+#else
+#define SHADOW_SOFT (0.02 * CLOUD_DECK_SCALE)
+#endif
 #define SHADOW_DARK 0.5
 #define SKY 0.22
 #define FORWARD 0.6
@@ -1820,20 +1945,42 @@ void main() {
   // through.
   float fogA = 1.0 - fogClear;
   float a = fogA + fogClear * opacity;
+#ifdef CLOUD_FLAT
   vec4 hazeFront = cloudHazeFront(eye, d, length(pShade - eye), shell);
+#else
+  // Over the ground, the ground's (cloudHazeHit()): its share rides on the
+  // cloud's.
+  float hazeScale;
+  vec4 hazeFront = cloudHazeHit(eye, d, length(pShade - eye), shell, hazeScale);
+  float shareFront = fogClear * opacity * hazeScale;
+#endif
 #ifdef FOG_EASE
   // And over the fog while it eases in (cloudFogHaze()).
   vec4 hazeFog = cloudFogHaze(eye, d, fogDist, fogClear, fogEase, shell);
   float shareFog = (1.0 - fogEase) * fogA;
+#ifdef CLOUD_FLAT
   float share = fogClear * opacity + shareFog;
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
     (hazeFront.rgb * fogClear * opacity + hazeFog.rgb * shareFog) / max(share, 1e-6), share,
     (hazeFront.a * fogClear * opacity + hazeFog.a * shareFog) / max(share, 1e-6));
 #else
+  float share = shareFront + shareFog;
+  cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
+    fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
+    (hazeFront.rgb * shareFront + hazeFog.rgb * shareFog) / max(share, 1e-6), share,
+    (hazeFront.a * shareFront + hazeFog.a * shareFog) / max(share, 1e-6));
+#endif
+#else
+#ifdef CLOUD_FLAT
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
     hazeFront.rgb, fogClear * opacity, hazeFront.a);
+#else
+  cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
+    fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
+    hazeFront.rgb, shareFront, hazeFront.a);
+#endif
 #endif
 #else
   gl_FragColor = vec4(radiance, opacity);
@@ -1860,14 +2007,20 @@ export const GROUND_SHADOW = 0.5
  * brightness (at 0.5 the ground under a deck read 0.6 of the sunlit's on
  * screen, the clouds above it light grey); patchy shadows still show. */
 export const GROUND_SHADOW_UNDER = 0.15
+/** The relief layer's band over the ground for the adaptation, in `deck`
+ * (the one drawn for the camera, faceCamera()): from the lowest base, where
+ * the adaptation starts to go out, to the thickest untyped top, where it is
+ * gone (groundShadowStrength()). Over a lower deck but under that, the eye
+ * is partly adapted: the CPU doesn't know the deck under it, and the band is
+ * the layer's. */
+export function groundShadowAdaptBand(deck: CloudDeck): readonly [from: number, top: number] {
+  return [deck.clearance, deck.clearance + deck.unitsPerKm * defaultTopKm(1)]
+}
 /** The eye's height over the ground (scene units) from which the adaptation
- * goes out: the lowest base. It is gone at the layer's top over the ground
- * (groundShadowStrength()). */
-export const GROUND_SHADOW_ADAPT_FROM = CLOUD_CLEARANCE
-/** The relief layer's top over the ground for the adaptation: the thickest
- * untyped top. Over a lower deck but under that, the eye is partly adapted:
- * the CPU doesn't know the deck under it, and the band is the layer's. */
-export const GROUND_SHADOW_ADAPT_TOP = CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * defaultTopKm(1)
+ * goes out under the deck from orbit, and the flat sheet's. */
+export const GROUND_SHADOW_ADAPT_FROM = groundShadowAdaptBand(EXAGGERATED_DECK)[0]
+/** The top of the deck from orbit's band. */
+export const GROUND_SHADOW_ADAPT_TOP = groundShadowAdaptBand(EXAGGERATED_DECK)[1]
 /** sin(elevation) of the Sun at the eye's sub-point over which it comes in:
  * none at dusk, 6 deg and under, all of it from 15 deg up. */
 export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
@@ -1877,17 +2030,29 @@ export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
 
 /** The ground shadow's strength (uGroundShadow) for an eye `height` over
  * the ground under it, the layer's top `top` over that ground
- * (GROUND_SHADOW_ADAPT_TOP, or the flat deck's), and the Sun at `sunSin` at
- * the eye's sub-point. */
-export function groundShadowStrength(height: number, top: number, sunSin: number): number {
+ * (groundShadowAdaptBand(), or the flat deck's), the Sun at `sunSin` at the
+ * eye's sub-point, and the lowest base `from` over that ground. */
+export function groundShadowStrength(
+  height: number,
+  top: number,
+  sunSin: number,
+  from: number = GROUND_SHADOW_ADAPT_FROM
+): number {
   const under =
-    (1 - smoothstep(GROUND_SHADOW_ADAPT_FROM, Math.max(top, GROUND_SHADOW_ADAPT_FROM + 1e-6), height)) *
+    (1 - smoothstep(from, Math.max(top, from + 1e-6), height)) *
     smoothstep(GROUND_SHADOW_ADAPT_SUN[0], GROUND_SHADOW_ADAPT_SUN[1], sunSin)
   return GROUND_SHADOW + (GROUND_SHADOW_UNDER - GROUND_SHADOW) * under
 }
 
-const GROUND_FRAGMENT_HEAD = /* glsl */ `
-${FIELD}
+// The relief ground's shadow, softened over as much less as the deck's km
+// (tides-d9f.10). The flat tier's text never compiles it, and keeps the
+// line as it was.
+const FLAT_GROUND_OCCLUSION_GLSL = /* glsl */ `    occ = max(occ, cloudShade(col.x) * smoothstep(-0.008, 0.008, col.z - alt));`
+const RELIEF_GROUND_OCCLUSION_GLSL = /* glsl */ `    float soft = 0.008 * (CLOUD_UNITS_PER_KM / ${f(CLOUD_UNITS_PER_KM)});
+    occ = max(occ, cloudShade(col.x) * smoothstep(-soft, soft, col.z - alt));`
+
+const groundFragmentHead = (flat: boolean) => /* glsl */ `
+${field(false, flat ? FLAT_DECK_GLSL : RELIEF_DECK_GLSL)}
 varying vec3 vCloudGround;
 
 // groundShadowStrength() for the camera drawn (faceCamera()).
@@ -1917,7 +2082,7 @@ float cloudGroundShadow(vec3 dir) {
 #ifdef CLOUD_FLAT
     occ = cloudShade(col.x);
 #else
-    occ = max(occ, cloudShade(col.x) * smoothstep(-0.008, 0.008, col.z - alt));
+${flat ? FLAT_GROUND_OCCLUSION_GLSL : RELIEF_GROUND_OCCLUSION_GLSL}
 #endif
   }
   return 1.0 - uGroundShadow * occ;
@@ -1936,7 +2101,7 @@ const GROUND_FRAGMENT_LIGHT = /* glsl */ `
  * after lights_fragment_end), for the streamed tiles to reuse by text
  * (surface/tile-clouds.ts, tides-zmw.9.12). */
 export const CLOUD_GROUND_GLSL = {
-  head: (flat: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + GROUND_FRAGMENT_HEAD,
+  head: (flat: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + groundFragmentHead(flat),
   light: GROUND_FRAGMENT_LIGHT,
 }
 
@@ -1982,6 +2147,11 @@ export interface CloudLayer {
     /** The ground's shadow's strength for the camera drawn
      * (groundShadowStrength(), set by faceCamera()). */
     uGroundShadow: THREE.IUniform<number>
+    /** The deck's clearance and km scale for the camera drawn
+     * (../cloud-layer.ts cloudDeckAt(), set by faceCamera()); the relief
+     * programs' alone; the flat sheet's are constants. */
+    uCloudClearance: THREE.IUniform<number>
+    uCloudUnitsPerKm: THREE.IUniform<number>
   }
   /**
    * Shows `map`: whether it has measured heights (only geostationary imagery
@@ -1994,8 +2164,10 @@ export interface CloudLayer {
   /** Altitude of the shell mesh above sea level. */
   shellAltitude: number
   /** Readies the shell's mesh for drawing to `camera`: before three sorts
-   * what it draws (a scene's onBeforeRender), as it sets the draw order. */
-  faceCamera(mesh: THREE.Object3D, camera: THREE.Camera): void
+   * what it draws (a scene's onBeforeRender), as it sets the draw order.
+   * `fine` where the depth buffer can draw the true deck near the ground
+   * (ship/ship-session.ts fineGroundDepth()). */
+  faceCamera(mesh: THREE.Object3D, camera: THREE.Camera, fine?: boolean): void
   dispose(): void
 }
 
@@ -2041,6 +2213,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
     uGroundShadow: { value: GROUND_SHADOW },
+    uCloudClearance: { value: EXAGGERATED_DECK.clearance },
+    uCloudUnitsPerKm: { value: EXAGGERATED_DECK.unitsPerKm },
   }
   const defines: Record<string, string> = flat ? { CLOUD_FLAT: '' } : {}
   const material = new THREE.ShaderMaterial({
@@ -2052,8 +2226,13 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uAmbient: { value: CLOUD_AMBIENT },
       uFogPast: { value: Array.from({ length: FOG_EASE_SAMPLES }, () => new THREE.Vector3()) },
       uMarchPhase: { value: 0 },
+      uMarchStep: { value: MARCH_STEP },
       uCloudCeiling: { value: ceilingTexture() },
       uPixelScale: { value: 1 },
+      // Off until the ground's haze shares its own (groundHaze.ts shareWith()).
+      uGroundHaze: { value: 0 },
+      uGroundHazeLength: { value: 1 },
+      uGroundHazeTop: { value: 0 },
       ...SKY_VIEW_UNIFORMS,
     },
     defines,
@@ -2091,7 +2270,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   // finds its program linked.
   material.userData.warmDefines = ['CLOUD_TYPED']
   let ceilingLoad: Promise<void> | null = null
-  const faceCamera = (mesh: THREE.Object3D, camera: THREE.Camera) => {
+  const faceCamera = (mesh: THREE.Object3D, camera: THREE.Camera, fine = false) => {
     const seaLevel = uniforms.uSeaLevel.value
     const reach = withinShellReach(mesh, camera, seaLevel + shellAltitude)
     const side = reach ? THREE.BackSide : THREE.FrontSide
@@ -2108,10 +2287,19 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     const up = eyeRadius > 0 ? eyeDir.copy(eye).divideScalar(eyeRadius) : eyeDir.set(0, 1, 0)
     const floor = earthTerrain()
     const ground = floor ? terrainFloorRadius(floor, seaLevel, up) : seaLevel
+    // The deck for this camera's altitude (tides-d9f.10), which the ground's
+    // shadow below reads too.
+    const deck = flat ? EXAGGERATED_DECK : cloudDeckAt((eyeRadius - seaLevel) * EARTH_KM_PER_UNIT, fine)
+    uniforms.uCloudClearance.value = deck.clearance
+    uniforms.uCloudUnitsPerKm.value = deck.unitsPerKm
+    const marchStep = marchStepFor(deck)
+    material.uniforms.uMarchStep.value = marchStep
+    const [adaptFrom, adaptTop] = groundShadowAdaptBand(deck)
     uniforms.uGroundShadow.value = groundShadowStrength(
       eyeRadius - ground,
-      flat ? seaLevel + CLOUD_FLAT_ALTITUDE - ground : GROUND_SHADOW_ADAPT_TOP,
-      up.dot(uniforms.uSunDir.value)
+      flat ? seaLevel + CLOUD_FLAT_ALTITUDE - ground : adaptTop,
+      up.dot(uniforms.uSunDir.value),
+      adaptFrom
     )
     const underAurora = eyeRadius < seaLevel * AURORA_SHELL_INNER
     mesh.renderOrder = !reach
@@ -2160,7 +2348,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       camera.getWorldDirection(forward).transformDirection(toLocal.copy(mesh.matrixWorld).invert())
       const phase = material.uniforms.uMarchPhase
       const view = cloudFrame([forward.x, forward.y, forward.z], shift)
-      if (marchEye) phase.value = marchPhaseAfter(phase.value, marchEye, at, view, MARCH_STEP)
+      if (marchEye) phase.value = marchPhaseAfter(phase.value, marchEye, at, view, marchStep)
       marchEye = at
     }
     // The ceiling, once an eye is near Earth (any camera's: it loads once),
@@ -2176,7 +2364,6 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         })
     }
   }
-  const flag = flat ? '#define CLOUD_FLAT\n' : ''
   const groundPatch: MaterialPatch = {
     onBeforeCompile(shader) {
       Object.assign(shader.uniforms, uniforms)
@@ -2186,7 +2373,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         GROUND_VERTEX_BODY
       )
       shader.fragmentShader = inject(
-        inject(shader.fragmentShader, 'common', flag + GROUND_FRAGMENT_HEAD),
+        inject(shader.fragmentShader, 'common', CLOUD_GROUND_GLSL.head(flat)),
         'lights_fragment_end',
         GROUND_FRAGMENT_LIGHT
       )
