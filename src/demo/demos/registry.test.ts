@@ -21,6 +21,7 @@ import { positionsFor } from '../../flight-scale'
 import { sceneRadius } from '../../planets'
 import { eyeDirection, poseDistance, type DemoFocus, type DemoPose } from '../demo-script'
 import { clampLook } from '../../sky-look'
+import { demoAidAt } from '../demo-aids'
 import { demoStepPatch, type DemoSaved } from '../demo-session'
 import { DEMOS, findDemo } from '.'
 
@@ -212,6 +213,14 @@ describe('seasons', () => {
       expect(Date.parse(step.until!) - Date.parse(step.date)).toBe(86_400_000)
       expect(step.location).toBeUndefined()
     }
+  })
+
+  it('hides the Moon throughout and looks against the stars, so the axis keeps its lean on screen', () => {
+    demo.steps.forEach((step, i) => {
+      expect(demoAidAt(demo, i, 'hideMoon')).toBe(true)
+      expect(step.camera?.frame).toBe('stars')
+      if (i > 0) expect(step.travel?.camera?.frame).toBe('stars')
+    })
   })
 })
 
