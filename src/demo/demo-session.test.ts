@@ -1,8 +1,8 @@
-import { Vector3 } from 'three'
+import { Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SYSTEM_AIDS } from '../store'
 import type { Demo } from './demo-script'
-import { easeProgress, easedEye, eyeDirection } from './demo-script'
+import { easeProgress, easedEye, eyeDirection, poseDirection } from './demo-script'
 import {
   DEMO_PLAY_SCALE,
   demoPlayScale,
@@ -37,6 +37,7 @@ function view(overrides: Partial<View> = {}): View {
     compass: true,
     demo: null,
     demoSaved: null,
+    demoTravel: null,
     shipMode: false,
     ...overrides,
   }
@@ -165,8 +166,7 @@ describe('demoStepPatch', () => {
   it('sets the date directly, cancelling a pending jump', () => {
     const s = { ...view(), ...enterDemoPatch(view(), demo)! }
     const patch = goToDemoStepPatch({ ...s, jumpDate: new Date() } as View, demo, 1)!
-    expect(patch.timestamp).toBe(Date.parse('2026-03-03T09:40:00Z'))
-    expect(patch.jumpDate).toBeNull()
+    expect(patch).toMatchObject({ timestamp: Date.parse('2026-03-03T09:40:00Z'), jumpDate: null })
   })
 
   it('refuses a step out of range, or outside the demo', () => {
@@ -174,6 +174,72 @@ describe('demoStepPatch', () => {
     expect(goToDemoStepPatch(s, demo, -1)).toBeNull()
     expect(goToDemoStepPatch(s, demo, demo.steps.length)).toBeNull()
     expect(goToDemoStepPatch(view(), demo, 0)).toBeNull()
+  })
+})
+
+describe('goToDemoStepPatch travel', () => {
+  const earth = { focus: 'earth', azimuth: 0, elevation: 10, distance: 60 } as const
+  const travelling: Demo = {
+    id: 'travel',
+    title: 'Travel',
+    blurb: 'A demo that travels.',
+    steps: [
+      { date: '2026-03-20T14:46:00Z', timeScale: 0, camera: earth, travel: { seconds: 4 }, caption },
+      { date: '2026-06-21T08:24:00Z', camera: earth, travel: { seconds: 4, hold: ['spin'] }, caption },
+      { date: '2026-09-23T00:05:00Z', travel: { rate: 60 }, caption },
+    ],
+  }
+  const march = Date.parse(travelling.steps[0].date)
+  const june = Date.parse(travelling.steps[1].date)
+  const entered = (): View => ({ ...view(), ...enterDemoPatch(view(), travelling)! })
+
+  it('enters with the clock cut to the first step, its travel aside', () => {
+    expect(entered()).toMatchObject({ timestamp: march, demoTravel: null })
+  })
+
+  it('keeps the instant shown and travels from it to another step', () => {
+    const patch = goToDemoStepPatch(entered(), travelling, 1)!
+    expect(patch).toMatchObject({
+      demo: { id: 'travel', step: 1 },
+      timestamp: march,
+      demoTravel: { from: march, to: june, seconds: 4, easing: 'smooth', holdSpin: true },
+    })
+  })
+
+  it('cuts under reduced motion, to the same step, or where the travel would take too long', () => {
+    const s = entered()
+    expect(goToDemoStepPatch(s, travelling, 1, true)).toMatchObject({ timestamp: june, demoTravel: null })
+    expect(goToDemoStepPatch(s, travelling, 0)).toMatchObject({ timestamp: march, demoTravel: null })
+    // A minute a second over three months is far past the cap.
+    expect(goToDemoStepPatch(s, travelling, 2)).toMatchObject({
+      timestamp: Date.parse(travelling.steps[2].date),
+      demoTravel: null,
+    })
+  })
+
+  it('lands the travel on Next, without moving on', () => {
+    let s = entered()
+    s = { ...s, ...goToDemoStepPatch(s, travelling, 1)! }
+    s = { ...s, timestamp: march + 1000 }
+    expect(goToDemoStepPatch(s, travelling, 2)).toEqual({ timestamp: june, demoTravel: null })
+  })
+
+  it('travels back on Prev from wherever the clock has got to', () => {
+    let s = entered()
+    s = { ...s, ...goToDemoStepPatch(s, travelling, 1)! }
+    const mid = (march + june) / 2
+    s = { ...s, timestamp: mid }
+    expect(goToDemoStepPatch(s, travelling, 0)).toMatchObject({
+      demo: { id: 'travel', step: 0 },
+      timestamp: mid,
+      demoTravel: { from: mid, to: march },
+    })
+  })
+
+  it('clears the travel on exit', () => {
+    let s = entered()
+    s = { ...s, ...goToDemoStepPatch(s, travelling, 1)! }
+    expect(exitDemoPatch(s)!.demoTravel).toBeNull()
   })
 })
 
@@ -262,6 +328,42 @@ describe('eyeDirection', () => {
   })
 })
 
+describe('poseDirection', () => {
+  const bodies = {
+    focus: new Vector3(30, 4, -40),
+    sun: new Vector3(0, 0, 0),
+    earth: new Vector3(30, 4, -40),
+    earthTurn: new Quaternion(),
+  }
+  const near = (v: Vector3, x: number, y: number, z: number) =>
+    expect(v.distanceTo(new Vector3(x, y, z))).toBeCloseTo(0)
+
+  it("matches eyeDirection in the Sun's frame, the default", () => {
+    for (const frame of [undefined, 'sun'] as const) {
+      const pose = { frame, azimuth: 70, elevation: 20 }
+      near(poseDirection(pose, bodies), ...eyeDirection(bodies.focus, bodies.sun, bodies.earth, 70, 20).toArray())
+    }
+  })
+
+  it('measures ecliptic longitude against the stars, wherever the focus and the Sun are', () => {
+    for (const focus of [bodies.focus, new Vector3(-80, 0, 5)]) {
+      const at = { ...bodies, focus, earth: focus }
+      near(poseDirection({ frame: 'stars', azimuth: 0, elevation: 0 }, at), -1, 0, 0)
+      near(poseDirection({ frame: 'stars', azimuth: 90, elevation: 0 }, at), 0, 0, 1)
+      near(poseDirection({ frame: 'stars', azimuth: 37, elevation: 90 }, at), 0, 1, 0)
+    }
+  })
+
+  it('stands over a latitude and longitude, turning with Earth', () => {
+    // calculateLocationAndRotationForLatLng: longitude 0 on local +X, east toward -Z.
+    near(poseDirection({ frame: 'earth', azimuth: 0, elevation: 0 }, bodies), 1, 0, 0)
+    near(poseDirection({ frame: 'earth', azimuth: 90, elevation: 0 }, bodies), 0, 0, -1)
+    near(poseDirection({ frame: 'earth', azimuth: 123, elevation: 90 }, bodies), 0, 1, 0)
+    const turned = { ...bodies, earthTurn: new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2) }
+    near(poseDirection({ frame: 'earth', azimuth: 0, elevation: 0 }, turned), 0, 0, -1)
+  })
+})
+
 describe('easedEye', () => {
   const focus = new Vector3(100, 0, 0)
   const goal = new Vector3(0, 0, 1)
@@ -286,6 +388,16 @@ describe('easedEye', () => {
       const d = easedEye(from, goal, focus, t, 20).distanceTo(focus)
       expect(d).toBeGreaterThanOrEqual(7.8 - 1e-9)
       expect(d).toBeLessThanOrEqual(20 + 1e-9)
+    }
+  })
+
+  it('pushes straight in or out when already on the pose’s direction', () => {
+    for (const fromDistance of [3, 80]) {
+      const from = goal.clone().multiplyScalar(fromDistance)
+      for (let t = 0; t <= 1; t += 0.1) {
+        const dir = easedEye(from, goal, focus, t, 20).sub(focus).normalize()
+        expect(dir.distanceTo(goal)).toBeCloseTo(0)
+      }
     }
   })
 

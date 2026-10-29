@@ -12,6 +12,7 @@ import type {
 } from '../store'
 import type { SkyLook } from '../sky-look'
 import type { Demo } from './demo-script'
+import { travelRun, type TravelRun } from './demo-travel'
 
 /** The view a demo overrides, put back on exit. */
 export interface DemoSaved {
@@ -47,6 +48,9 @@ export interface DemoSessionState extends DemoSaved {
   shipMode: boolean
   /** A date jump under way, landing on this date. */
   jumpDate: Date | null
+  /** The clock travelling to the step's date (DemoClock carries it); null
+   * otherwise. */
+  demoTravel: TravelRun | null
 }
 
 /** The fields a step sets: all of DemoSaved but compass mode. */
@@ -102,6 +106,7 @@ export function demoStepPatch(saved: DemoSaved, demo: Demo, index: number) {
     systemAids,
     timestamp: Date.parse(demo.steps[index].date),
     jumpDate: null,
+    demoTravel: null,
     demo: { id: demo.id, step: index },
   }
 }
@@ -123,11 +128,20 @@ export function enterDemoPatch(s: DemoSessionState, demo: Demo, now = Date.now()
   return { demoSaved: saved, compass: false, ...demoStepPatch(saved, demo, 0) }
 }
 
-/** The store patch for step `index` of the running demo; null if out of range. */
-export function goToDemoStepPatch(s: DemoSessionState, demo: Demo, index: number) {
+/**
+ * The store patch for step `index` of the running demo; null if out of
+ * range. Moving to another step with a travel keeps the instant shown and
+ * starts the clock travelling from it. Next while a travel runs lands it
+ * instead: the first press finishes the journey, the second moves on.
+ */
+export function goToDemoStepPatch(s: DemoSessionState, demo: Demo, index: number, reduced = false) {
   if (!s.demo || !s.demoSaved || s.demo.id !== demo.id) return null
   if (!Number.isInteger(index) || index < 0 || index >= demo.steps.length) return null
-  return demoStepPatch(s.demoSaved, demo, index)
+  if (s.demoTravel && index === s.demo.step + 1) return { timestamp: s.demoTravel.to, demoTravel: null }
+  const patch = demoStepPatch(s.demoSaved, demo, index)
+  if (index === s.demo.step) return patch
+  const run = travelRun(demo.steps[index].travel, s.timestamp, patch.timestamp, reduced)
+  return run ? { ...patch, timestamp: s.timestamp, demoTravel: run } : patch
 }
 
 /**
@@ -143,7 +157,7 @@ export function exitDemoPatch(s: DemoSessionState, now = Date.now()) {
     saved.timeScale === 1 && saved.timestamp != null
       ? saved.timestamp + (now - enteredAt)
       : saved.timestamp
-  return { demo: null, demoSaved: null, jumpDate: null, ...saved, timestamp }
+  return { demo: null, demoSaved: null, jumpDate: null, demoTravel: null, ...saved, timestamp }
 }
 
 /** The speed Play runs a step at: its own, or an hour a second where it pauses. */

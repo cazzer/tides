@@ -14,7 +14,9 @@ import {
   type DemoSnapshot,
 } from './demo/demo-session'
 import { findDemo } from './demo/demos'
+import type { TravelRun } from './demo/demo-travel'
 import { requestMainCameraRestore } from './main-camera-session'
+import { prefersReducedMotion } from './ship/reduced-motion'
 import { holdRealTime } from './close-zoom-rules'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
@@ -281,6 +283,8 @@ export const useStore = create<{
   demo: DemoRun | null
   /** The view the demo overrode, restored on exit; null outside one. */
   demoSaved: DemoSnapshot | null
+  /** The clock travelling to a step's date; null otherwise. */
+  demoTravel: TravelRun | null
   startDemo: (id: string) => void
   goToDemoStep: (index: number) => void
   exitDemo: () => void
@@ -351,6 +355,7 @@ export const useStore = create<{
   },
   demo: null,
   demoSaved: null,
+  demoTravel: null,
   startDemo: (id: string) => {
     const demo = findDemo(id)
     const patch = demo && enterDemoPatch(get(), demo)
@@ -359,7 +364,7 @@ export const useStore = create<{
   goToDemoStep: (index: number) => {
     const run = get().demo
     const demo = run && findDemo(run.id)
-    const patch = demo && goToDemoStepPatch(get(), demo, index)
+    const patch = demo && goToDemoStepPatch(get(), demo, index, prefersReducedMotion())
     if (patch) set(patch)
   },
   exitDemo: () => {

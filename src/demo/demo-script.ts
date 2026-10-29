@@ -2,6 +2,7 @@
 // and a way of looking at it, with a caption saying what to notice.
 
 import { Quaternion, Vector3 } from 'three'
+import { calculateLocationAndRotationForLatLng } from '../utils'
 import type {
   Layout,
   Location,
@@ -13,18 +14,46 @@ import type { SkyLook } from '../sky-look'
 
 export type DemoFocus = 'sun' | 'earth' | 'moon' | PlanetFocus
 
+/** What a DemoPose's azimuth and elevation are measured against. */
+export type DemoFrame = 'sun' | 'stars' | 'earth'
+
 /**
- * Where the main view's eye sits, relative to the focused body. `azimuth`
- * (deg) turns about +Y (ecliptic north), counter-clockwise seen from the
- * north, from 0 = from the focus toward the Sun (for the Sun itself, toward
- * Earth). `elevation` (deg) is above the ecliptic plane. `distance` is in
- * scene units from the focus's centre, at least minDistance(focus).
+ * Where the main view's eye sits, relative to the focused body. `distance`
+ * is in scene units from the focus's centre, at least minDistance(focus).
+ * The angles (deg) depend on `frame`:
+ * - 'sun' (the default): `azimuth` turns about +Y (ecliptic north),
+ *   counter-clockwise seen from the north, from 0 = from the focus toward
+ *   the Sun (for the Sun itself, toward Earth); `elevation` is above the
+ *   ecliptic plane.
+ * - 'stars': `azimuth` is the ecliptic longitude of the eye seen from the
+ *   focus, 0 toward the vernal equinox (scene -X), 90 = +Z, counter-clockwise
+ *   about +Y; `elevation` is above the ecliptic. The eye keeps its place
+ *   against the stars as the focus moves.
+ * - 'earth': `azimuth` is the geographic east longitude and `elevation` the
+ *   latitude of the point under the eye, which turns with Earth as shown.
+ * A pose in 'stars' or 'earth' is followed for as long as the step runs.
  */
 export interface DemoPose {
   focus: DemoFocus
+  frame?: DemoFrame
   azimuth: number
   elevation: number
   distance: number
+}
+
+/** What a travel holds still on the way: Earth's spin, or the Moon (hidden). */
+export type TravelHold = 'spin' | 'moon'
+
+/**
+ * How the clock gets from the instant shown to a step's date: eased over
+ * `seconds`, or played at `rate` (sim seconds a second, like timeScale).
+ * Reduced motion, or a rate that would take over TRAVEL_MAX_SECONDS, cuts.
+ */
+export type DemoTravel = ({ seconds: number; rate?: never } | { rate: number; seconds?: never }) & {
+  hold?: TravelHold[]
+  /** The pose held on the way, about the step's own camera focus; the eye
+   * eases to the step's camera on arrival. Needs the step's camera. */
+  camera?: Omit<DemoPose, 'focus'>
 }
 
 export interface DemoOverlays {
@@ -63,15 +92,18 @@ export interface DemoAids {
 }
 
 /**
- * One stop. Every field but `date` and `caption` carries over to the steps
- * after it until one sets it again; before the first step to set it, the
- * user's own setting stands.
+ * One stop. Every field but `date`, `travel` and `caption` carries over to
+ * the steps after it until one sets it again; before the first step to set
+ * it, the user's own setting stands.
  */
 export interface DemoStep {
   /** ISO 8601, UTC. */
   date: string
   /** The clock stops here (ISO 8601); omit to let it run. */
   until?: string
+  /** Moving to this step from another, the clock travels to `date` rather
+   * than cutting to it. Entering the demo always cuts. */
+  travel?: DemoTravel
   timeScale?: number
   camera?: DemoPose
   mainPanel?: PanelKey
@@ -120,6 +152,41 @@ export function eyeDirection(
     .multiplyScalar(Math.cos(elevation))
     .addScaledVector(_up, Math.sin(elevation))
     .normalize()
+}
+
+/** Where a pose's angles are measured from, in world space. */
+export interface PoseBodies {
+  focus: Vector3
+  sun: Vector3
+  earth: Vector3
+  /** Earth's world orientation, spin included. */
+  earthTurn: Quaternion
+}
+
+const _vernal = new Vector3(-1, 0, 0)
+
+/** The unit direction from the focus to the eye for `pose` in its frame. */
+export function poseDirection(
+  pose: Pick<DemoPose, 'frame' | 'azimuth' | 'elevation'>,
+  bodies: PoseBodies,
+  out = new Vector3()
+): Vector3 {
+  const { azimuth, elevation } = pose
+  if (pose.frame === 'earth') {
+    // As the location pin is placed, so a pose over a city sits over its pin.
+    const { position } = calculateLocationAndRotationForLatLng(elevation, azimuth, 1)
+    return out.set(position.x, position.y, position.z).applyQuaternion(bodies.earthTurn).normalize()
+  }
+  if (pose.frame === 'stars') {
+    const lift = (elevation * Math.PI) / 180
+    return out
+      .copy(_vernal)
+      .applyAxisAngle(_up, (azimuth * Math.PI) / 180)
+      .multiplyScalar(Math.cos(lift))
+      .addScaledVector(_up, Math.sin(lift))
+      .normalize()
+  }
+  return eyeDirection(bodies.focus, bodies.sun, bodies.earth, azimuth, elevation, out)
 }
 
 const _fromDir = new Vector3()
