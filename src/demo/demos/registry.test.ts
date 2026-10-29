@@ -189,14 +189,30 @@ describe('solar eclipse', () => {
     expect(separation(patch.skyLook!, sun)).toBeLessThan(i === 1 ? 30 : 5)
   })
 
-  it('stops the partial phase at second contact and plays totality inside it', () => {
-    expect(Date.parse(demo.steps[1].until!)).toBeLessThanOrEqual(totalBegin)
-    expect(Date.parse(demo.steps[2].date)).toBeGreaterThan(totalBegin)
-    expect(Date.parse(demo.steps[2].until!)).toBeLessThan(totalEnd)
+  it('stops the partial phase just before second contact and plays totality through third', () => {
+    // Totality carries straight on from the partial phase, so second contact
+    // plays live a few seconds in.
+    expect(demo.steps[2].date).toBe(demo.steps[1].until)
+    expect(Date.parse(demo.steps[2].date)).toBeLessThan(totalBegin)
+    expect(totalBegin - Date.parse(demo.steps[2].date)).toBeLessThanOrEqual(30_000)
+    // On past third contact, so the diamond ring and the light coming back play.
+    expect(Date.parse(demo.steps[2].until!)).toBeGreaterThan(totalEnd)
+    expect(Date.parse(demo.steps[2].until!)).toBeLessThanOrEqual(totalEnd + 30_000)
   })
 
-  it('stops the shadow’s track as the umbra leaves Earth', () => {
-    expect(Date.parse(demo.steps[3].until!)).toBeLessThanOrEqual(Date.parse('2024-04-08T19:56:00Z'))
+  it('stops the shadow’s track as the umbra leaves Earth, both times', () => {
+    for (const i of [3, 4]) {
+      expect(Date.parse(demo.steps[i].until!)).toBeLessThanOrEqual(Date.parse('2024-04-08T19:56:00Z'))
+    }
+  })
+
+  it('runs its clock on from step to step but for the replayed crossing', () => {
+    demo.steps.forEach((step, i) => {
+      if (i === 0) return
+      const replay = i === 4
+      expect(step.date).toBe(replay ? demo.steps[3].date : demo.steps[i - 1].until)
+    })
+    expect(demo.steps[4].camera?.frame).toBe('earth')
   })
 })
 

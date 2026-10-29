@@ -35,11 +35,12 @@ describe('demoAidOn', () => {
     const demo = findDemo('solar-eclipse')!
     // The Torreón sky only for the steps that look at it, so the enlarged
     // Moon never stays on to be seen through the ground.
-    const on = (key: 'solarEclipseSky' | 'moonNodes' | 'moonShadow') =>
+    const on = (key: 'solarEclipseSky' | 'moonNodes' | 'moonShadow' | 'totalityPath') =>
       demo.steps.map((_, i) => demoAidOn({ demo: { id: demo.id, step: i } }, key))
-    expect(on('solarEclipseSky')).toEqual([false, true, true, false, false])
-    expect(on('moonNodes')).toEqual([false, false, false, false, true])
-    expect(on('moonShadow')).toEqual([true, true, true, true, false])
+    expect(on('solarEclipseSky')).toEqual([false, true, true, false, false, false])
+    expect(on('moonNodes')).toEqual([false, false, false, false, false, true])
+    expect(on('moonShadow')).toEqual([true, true, true, true, true, false])
+    expect(on('totalityPath')).toEqual([true, true, true, true, true, false])
   })
 
   it('is off once the demo is left', () => {
