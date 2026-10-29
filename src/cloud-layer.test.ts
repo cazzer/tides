@@ -411,7 +411,7 @@ describe('one deck at every altitude (tides-45y)', () => {
     const baseKm = FINE_DECK.clearance * EARTH_KM_PER_UNIT
     expect(baseKm).toBeGreaterThanOrEqual(2)
     expect(baseKm).toBeLessThanOrEqual(4)
-    expect(FINE_DECK.clearance).toBeLessThan(EXAGGERATED_DECK.clearance)
+    expect(FINE_DECK.clearance).toBeLessThanOrEqual(EXAGGERATED_DECK.clearance)
     expect(FINE_DECK.unitsPerKm).toBeLessThanOrEqual(EXAGGERATED_DECK.unitsPerKm)
   })
 

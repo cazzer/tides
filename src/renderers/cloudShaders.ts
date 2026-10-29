@@ -243,7 +243,8 @@ const COLUMN_READ = columnRead('uCloudMap')
 // The deck's clearance and km scale (../cloud-layer.ts CloudDeck). The flat
 // sheet's are the deck from orbit's, constants, as they always were; the
 // relief programs' are uniforms (tides-d9f.10), which faceCamera() sets for
-// the camera drawn: true near the ground, as from orbit higher up. The
+// the camera drawn: FINE_DECK on a fine depth buffer, the deck from orbit
+// on a coarse one, at every altitude (tides-45y). The
 // shell's one text serves both tiers, so it decides by CLOUD_FLAT; the
 // ground's shadow is built for its tier, so the flat one's text stays as it
 // was.

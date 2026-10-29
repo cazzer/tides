@@ -73,8 +73,8 @@ export const EXAGGERATED_DECK: CloudDeck = { clearance: CLOUD_CLEARANCE, unitsPe
  * exaggerated than the deck from orbit, so a raised relief doesn't lift
  * FINE_DECK over it. */
 export const TRUE_CLOUD_UNITS_PER_KM = Math.min(TERRAIN_DISPLACEMENT / TERRAIN_KM_PER_GREY, CLOUD_UNITS_PER_KM)
-/** FINE_DECK's base over the ground, true km [TUNE]: about three times where
- * low cloud's base stands, so the deck sits near the real clouds. */
+/** FINE_DECK's base over the ground, km at the ground's own scale (true at
+ * the default relief) [TUNE]: near where real low cloud stands. */
 export const FINE_DECK_BASE_KM = 3
 /** FINE_DECK's cloud-top exaggeration [TUNE]: enough that the deck still
  * reads as a layer from orbit (the user picked base 3 km, tops 6x on the

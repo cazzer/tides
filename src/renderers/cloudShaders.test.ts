@@ -1865,7 +1865,7 @@ describe('the ground shadow under the deck (tides-l0z)', () => {
   })
 })
 
-describe('the deck at true height near the ground (tides-d9f.10)', () => {
+describe('the deck by depth buffer, the same at every altitude (tides-d9f.10, tides-45y)', () => {
   const sea = sceneRadius(12742000)
 
   it('reads the clearance and km scale from uniforms on the relief path, constants on the flat one', () => {
