@@ -79,6 +79,9 @@ export const solarEclipse: Demo = {
       date: '2024-04-08T18:21:30Z',
       until: '2024-04-08T19:55:27Z',
       timeScale: 120,
+      // The crossing three times over, ~47 s a pass, back to its start after
+      // a 1 s rest, forward only; the trail and marks follow the clock.
+      loop: { from: '2024-04-08T18:21:30Z', to: '2024-04-08T19:55:27Z', times: 3, holdMs: 1000 },
       mainPanel: 'main',
       // As step 1, turned east with the shadow.
       camera: { ...SUN_SIDE, azimuth: 5 },
