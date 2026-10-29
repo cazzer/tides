@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { EARTH_RADIUS_KM } from './cloud-layer'
+import { CLOUD_DECK_BAND_KM, EARTH_RADIUS_KM, TRUE_CLOUD_UNITS_PER_KM } from './cloud-layer'
 import {
   EARTH_KM_PER_UNIT,
   SURFACE_FADE_START,
@@ -69,5 +69,15 @@ describe('the surface handover (tides-zmw.9.7)', () => {
   it("keeps the low tier's stop above it at any relief: that tier never draws the tiles", () => {
     expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(SURFACE_TOP)
     expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(surfaceTopKm(MAX_RELIEF) / EARTH_KM_PER_UNIT)
+  })
+})
+
+describe("the cloud deck's band (tides-d9f.10)", () => {
+  it('is true scale near the ground at the default relief, and exaggerated from the handover up', () => {
+    // The ground's km, which is the scene's to within the relief's rounding
+    // (REFERENCE_TERRAIN_DISPLACEMENT is 25x true scale to 1%).
+    if (RELIEF === 1) expect(TRUE_CLOUD_UNITS_PER_KM * EARTH_KM_PER_UNIT).toBeCloseTo(1, 1)
+    // cloud-layer.ts can't import this module (it imports that one).
+    expect(CLOUD_DECK_BAND_KM[1]).toBe(SURFACE_MIN_TOP_KM)
   })
 })

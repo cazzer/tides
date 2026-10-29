@@ -34,6 +34,9 @@ import {
 import {
   MAX_CLOUD_TOP_KM,
   CLOUD_CLEARANCE,
+  cloudDeckAt,
+  EXAGGERATED_DECK,
+  TRUE_DECK,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
@@ -80,6 +83,7 @@ import {
   TYPED_TOPS_KM,
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import {
@@ -1563,19 +1567,21 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // regenerated at tides-tvr.10, whose easing fog shows as the side it
   // eases from did: at uOpacity, under the haze in front of it (the flat
   // sheet's fog never eases, so only its text changed); the programs
-  // without FOG_EASE are as they were.
+  // without FOG_EASE are as they were. The relief programs' and the relief
+  // ground shadow's regenerated at tides-d9f.10: the deck's clearance and km
+  // scale are uniforms on the relief path; the flat ones are as they were.
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
-    'relief-full-front-noease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-front-ease': '5ebfadac1acaca043c9aa72e8800d129c0a85834e03eab5f1ba001a2835ca3e3',
-    'relief-full-back-noease': 'b1d2b7ee205e6d69d0f20ffbab8168fad93446b3e690fdd6b200020438edcea5',
-    'relief-full-back-ease': '521d40ea88539405da36a0be8c7dc84247a421496d960d34d0e44296237684f6',
+    'relief-full-front-noease': '748be0e051b1d727c3278147fe50d045870f95cbdfefd0cdd2ae00c507808e5d',
+    'relief-full-front-ease': '748be0e051b1d727c3278147fe50d045870f95cbdfefd0cdd2ae00c507808e5d',
+    'relief-full-back-noease': '1e2919ba1258c3dde6930c05d205f7c517598ba3fdac8d07f17f1f835825dede',
+    'relief-full-back-ease': 'a2cc59ed4ace5989e62ad419b04839fd62116507f0e4d5483f098133e04f361c',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-back-noease': '3a79db74cfaf67b5d9e8669562c686a9a09d1d8cea9c02036d6cd8de28049129',
     'flat-full-back-ease': '87b1586468186a76d84a8a944b70ea30effd6801014ce53242a31bece750311a',
   }
   const GROUND_SHADOW_SHA256: Record<string, string> = {
-    'relief-full': 'e0698f881b8f42f6a3c74652cb08cd0c8b1df922a1a2cb80c08de2bd1f0b172c',
+    'relief-full': 'b98df55f5a715ba1a44c85e4a5ac2ab0a4f2dbb01bec5ec7bf9304b1c31deffe',
     'flat-full': '58c11faac7965ebe03d6804b82152c11ab78ce3884eaa3d605f35c9e65f3a5f4',
   }
   const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -1836,6 +1842,81 @@ describe('the ground shadow under the deck (tides-l0z)', () => {
         expect(shader.fragmentShader).toContain('return 1.0 - uGroundShadow * occ;')
       } finally {
         setEarthTerrain(null)
+        clouds.dispose()
+      }
+    }
+  })
+})
+
+describe('the deck at true height near the ground (tides-d9f.10)', () => {
+  const sea = sceneRadius(12742000)
+
+  it('reads the clearance and km scale from uniforms on the relief path, constants on the flat one', () => {
+    const relief = createCloudLayer(createEclipseShadow('earth'), false)
+    const flat = createCloudLayer(createEclipseShadow('earth'), true)
+    try {
+      // The shell's one text, as three builds it for each tier, from inside
+      // (FLIP_SIDED), where the vertex shader reads the field too.
+      for (const shader of [relief.material.vertexShader, relief.material.fragmentShader]) {
+        const asRelief = preprocess(shader, new Set(['FLIP_SIDED']))
+        expect(asRelief).toContain('uniform float uCloudClearance;')
+        expect(asRelief).toContain('uniform float uCloudUnitsPerKm;')
+        expect(asRelief).toContain('#define CLOUD_CLEARANCE uCloudClearance')
+        expect(asRelief).toContain('#define CLOUD_UNITS_PER_KM uCloudUnitsPerKm')
+        const asFlat = preprocess(shader, new Set(['CLOUD_FLAT', 'FLIP_SIDED']))
+        expect(asFlat).not.toMatch(/uCloudClearance|uCloudUnitsPerKm/)
+        expect(asFlat).toContain(`#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}`)
+        expect(asFlat).toContain(`#define CLOUD_UNITS_PER_KM ${CLOUD_UNITS_PER_KM.toFixed(6)}`)
+        expect(asRelief.split('uniform float uCloudClearance;').length).toBe(2)
+      }
+      // The ground's shadow, built for its tier.
+      expect(CLOUD_GROUND_GLSL.head(false)).toContain('#define CLOUD_CLEARANCE uCloudClearance')
+      expect(CLOUD_GROUND_GLSL.head(false).split('uniform float uCloudUnitsPerKm;').length).toBe(2)
+      expect(CLOUD_GROUND_GLSL.head(true)).not.toMatch(/uCloudClearance|uCloudUnitsPerKm/)
+      expect(CLOUD_GROUND_GLSL.head(true)).toContain(`#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}`)
+      // The shell, the globe's ground and the streamed tiles share the
+      // uniform objects (tile-clouds.ts assigns the same ones).
+      for (const clouds of [relief, flat]) {
+        expect(clouds.material.uniforms.uCloudClearance).toBe(clouds.uniforms.uCloudClearance)
+        expect(clouds.material.uniforms.uCloudUnitsPerKm).toBe(clouds.uniforms.uCloudUnitsPerKm)
+        const shader = phongShader()
+        clouds.groundPatch.onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+        expect(shader.uniforms.uCloudClearance).toBe(clouds.uniforms.uCloudClearance)
+        expect(shader.uniforms.uCloudUnitsPerKm).toBe(clouds.uniforms.uCloudUnitsPerKm)
+        // Today's deck until a camera is faced.
+        expect(clouds.uniforms.uCloudClearance.value).toBe(EXAGGERATED_DECK.clearance)
+        expect(clouds.uniforms.uCloudUnitsPerKm.value).toBe(EXAGGERATED_DECK.unitsPerKm)
+      }
+    } finally {
+      relief.dispose()
+      flat.dispose()
+    }
+  })
+
+  it('sets the deck for each camera from its altitude, true near the ground only on a fine depth buffer', () => {
+    for (const flat of [false, true]) {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      clouds.uniforms.uSeaLevel.value = sea
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+      const camera = new THREE.PerspectiveCamera(60, 1.6, 0.0001, 100)
+      const deckAt = (km: number, fine: boolean) => {
+        camera.position.set(0, sea + km / EARTH_KM_PER_UNIT, 0)
+        camera.updateMatrixWorld()
+        clouds.faceCamera(mesh, camera, fine)
+        return { clearance: clouds.uniforms.uCloudClearance.value, unitsPerKm: clouds.uniforms.uCloudUnitsPerKm.value }
+      }
+      try {
+        const near = flat ? EXAGGERATED_DECK : TRUE_DECK
+        expect(deckAt(5, true)).toEqual({ ...near })
+        expect(deckAt(5, false)).toEqual({ ...EXAGGERATED_DECK })
+        expect(deckAt(36000, true)).toEqual({ ...EXAGGERATED_DECK })
+        // Halfway up the band, halfway between (to the float).
+        if (!flat) {
+          const mid = deckAt(60, true)
+          expect(mid.clearance).toBeCloseTo(cloudDeckAt(60, true).clearance, 12)
+          expect(mid.unitsPerKm).toBeCloseTo(cloudDeckAt(60, true).unitsPerKm, 12)
+        }
+      } finally {
         clouds.dispose()
       }
     }

@@ -26,6 +26,8 @@ import {
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
 import { SURFACE_TILES_ON } from '../surface'
+import { fineGroundDepth } from '../ship/ship-session'
+import { reversedFloatDepth } from './depth-precision'
 import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
@@ -406,7 +408,9 @@ function cloudsFaceEachCamera(
     previous.call(this, renderer, renderScene, camera, target)
     if (cloudRef.current) {
       sunInEarthFrame(cloudRef.current.parent, clouds.uniforms.uSunDir.value)
-      clouds.faceCamera(cloudRef.current, camera)
+      // The true deck near the ground only where the depth buffer can part
+      // its base from the ground, as the ship's true-scale stop (tides-d9f.10).
+      clouds.faceCamera(cloudRef.current, camera, fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(renderer)))
     }
     each?.(renderer, camera)
   }

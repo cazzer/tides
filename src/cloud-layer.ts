@@ -57,6 +57,54 @@ export const CLOUD_CLEARANCE = 0.012
  * ./relief.ts). At a relief under about 8.7 the clouds are exaggerated more
  * than the ground they sit on, as they are at the default. */
 export const CLOUD_UNITS_PER_KM = 0.004
+/**
+ * The cloud deck's place in the scene: its base's clearance over the ground
+ * and the scene units its tops stand per true km. From orbit the deck is
+ * exaggerated (EXAGGERATED_DECK), so that it reads as a layer; near the
+ * ground, where the eye sees the clouds' true height against the true-scale
+ * ground under them, it is drawn at true scale (TRUE_DECK, tides-d9f.10).
+ */
+export type CloudDeck = { clearance: number; unitsPerKm: number }
+/** The deck as it has been drawn since tides-42p, and still from orbit. */
+export const EXAGGERATED_DECK: CloudDeck = { clearance: CLOUD_CLEARANCE, unitsPerKm: CLOUD_UNITS_PER_KM }
+/** Scene units per true km of cloud near the ground: the ground's own scale
+ * (TERRAIN_DISPLACEMENT per TERRAIN_KM_PER_GREY), true at the default
+ * relief, and never more exaggerated than the deck from orbit, so a raised
+ * relief doesn't lift the near deck over the far one. */
+export const TRUE_CLOUD_UNITS_PER_KM = Math.min(TERRAIN_DISPLACEMENT / TERRAIN_KM_PER_GREY, CLOUD_UNITS_PER_KM)
+/** The true deck's base over the ground, km [TUNE]: about where low cloud's
+ * base stands. */
+export const CLOUD_TRUE_BASE_KM = 1
+/** The deck near the ground, at true scale. */
+export const TRUE_DECK: CloudDeck = {
+  clearance: CLOUD_TRUE_BASE_KM * TRUE_CLOUD_UNITS_PER_KM,
+  unitsPerKm: TRUE_CLOUD_UNITS_PER_KM,
+}
+/** The eye's altitudes over the sea (true km) between which the deck goes
+ * from true to exaggerated: true up to the first, as from orbit from the
+ * second, the top of the streamed ground's handover (surface-handover.ts
+ * SURFACE_MIN_TOP_KM, which imports this module; a test pins the two
+ * equal), so the deck is exaggerated wherever the globe alone is drawn. */
+export const CLOUD_DECK_BAND_KM: readonly [number, number] = [20, 100]
+
+/**
+ * The deck drawn for an eye `altitudeKm` over the sea (true km): true near
+ * the ground, as from orbit over CLOUD_DECK_BAND_KM, in proportion between.
+ * Only where the depth buffer is `fine` (ship/ship-session.ts
+ * fineGroundDepth()): a coarse one can't part a true deck's base from the
+ * ground under it, so there the deck is as from orbit at every altitude.
+ */
+export function cloudDeckAt(altitudeKm: number, fine: boolean): CloudDeck {
+  const [low, high] = CLOUD_DECK_BAND_KM
+  if (!fine || altitudeKm >= high) return EXAGGERATED_DECK
+  if (altitudeKm <= low) return TRUE_DECK
+  const t = (altitudeKm - low) / (high - low)
+  return {
+    clearance: TRUE_DECK.clearance + (EXAGGERATED_DECK.clearance - TRUE_DECK.clearance) * t,
+    unitsPerKm: TRUE_DECK.unitsPerKm + (EXAGGERATED_DECK.unitsPerKm - TRUE_DECK.unitsPerKm) * t,
+  }
+}
+
 /** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */
 export const MIN_MEASURED_TOP_KM = 1
 
@@ -103,16 +151,18 @@ export function cloudShape(alpha: number): number {
 
 /** A cloud column: base and top altitudes over ground of the given grey,
  * drawn at `displacement` (the ground's displacementScale,
- * TERRAIN_DISPLACEMENT; the tests pass others).
- * The base follows the ground; the top stands CLOUD_UNITS_PER_KM over it. */
+ * TERRAIN_DISPLACEMENT; the tests pass others), in `deck` (the one from
+ * orbit unless given).
+ * The base follows the ground; the top stands deck.unitsPerKm a km over it. */
 export function cloudColumn(
   alpha: number,
   topKm: number,
   terrainGrey: number,
-  displacement: number
+  displacement: number,
+  deck: CloudDeck = EXAGGERATED_DECK
 ): { base: number; top: number } {
-  const base = terrainGrey * displacement + CLOUD_CLEARANCE
-  return { base, top: base + CLOUD_UNITS_PER_KM * topKm * cloudShape(alpha) }
+  const base = terrainGrey * displacement + deck.clearance
+  return { base, top: base + deck.unitsPerKm * topKm * cloudShape(alpha) }
 }
 
 /** The faintest cloud drawn: a column under it is a gap in the deck. */
@@ -437,6 +487,7 @@ export interface MarchSpan {
  * ray comes within it, to where it leaves that sphere or, if it goes on to
  * meet the sea, drops below the lowest base anywhere, or from below that,
  * meets the sea (one that skims over the sea comes back up under the deck).
+ * The lowest base is `deck`'s clearance (the one from orbit unless given).
  * Not from the near plane (tides-tvr.1): what the ray starts in, and what it
  * meets short of the near plane, would then hang on where the near plane
  * cuts it; the near plane only bounds the depth a hit is drawn at. Null when
@@ -446,7 +497,8 @@ export function marchSpanFromEye(
   eye: Vec3,
   dir: Vec3,
   seaLevel: number,
-  outer: number
+  outer: number,
+  deck: CloudDeck = EXAGGERATED_DECK
 ): MarchSpan | null {
   const b = eye[0] * dir[0] + eye[1] * dir[1] + eye[2] * dir[2]
   const eye2 = eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]
@@ -455,7 +507,7 @@ export function marchSpanFromEye(
   const toOuter = -b - Math.sqrt(discOuter)
   const origin = Math.max(toOuter, 0)
   let end = -b + Math.sqrt(discOuter)
-  const inner = seaLevel + CLOUD_CLEARANCE
+  const inner = seaLevel + deck.clearance
   const discInner = b * b - (eye2 - inner * inner)
   const discSea = b * b - (eye2 - seaLevel * seaLevel)
   const toSea = -b - Math.sqrt(Math.max(discSea, 0))

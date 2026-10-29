@@ -7,6 +7,7 @@ import { CLOUD_AMBIENT } from '../lighting'
 import { MOONLIGHT_RGB, NIGHT_FILL_RGB } from '../night-flight'
 import { composePatches, createEclipseShadow, ECLIPSE_GLSL, type MaterialPatch } from './eclipseShadow'
 import { createCloudLayer, GROUND_SHADOW } from './cloudShaders'
+import { CLOUD_CLEARANCE, CLOUD_UNITS_PER_KM } from '../cloud-layer'
 import { earthHorizon } from './earthHorizonTexture'
 import { createGibsNightPatch } from './gibsNightPatch'
 import { createGibsPatch } from './gibsPatch'
@@ -207,12 +208,29 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(out.fragment))).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(out.fragment)))).digest('hex')
   }
 
   // The cloud shadow's strength, a define until tides-l0z made it a uniform
   // that is GROUND_SHADOW in the system view (cloudShaders.test.ts): put
   // back, so that the pins still hold the rest of the chain.
+  // The deck's clearance and km scale, constants until tides-d9f.10 made
+  // them uniforms on the relief path (cloudShaders.ts; the flat sheet's are
+  // still the constants): put back as they were, so that the pins still hold
+  // the rest of the chain.
+  const DECK_UNIFORMS = `uniform float uCloudClearance;
+uniform float uCloudUnitsPerKm;
+#define CLOUD_CLEARANCE uCloudClearance
+#define CLOUD_UNITS_PER_KM uCloudUnitsPerKm
+`
+  function deckAsDefines(fragment: string) {
+    expect(fragment.split(DECK_UNIFORMS).length).toBeLessThanOrEqual(2)
+    return fragment.replace(
+      DECK_UNIFORMS,
+      `#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}\n#define CLOUD_UNITS_PER_KM ${CLOUD_UNITS_PER_KM.toFixed(6)}\n`
+    )
+  }
+
   const SHADOW_UNIFORM = '// groundShadowStrength() for the camera drawn (faceCamera()).\nuniform float uGroundShadow;'
   function groundShadowAsDefine(fragment: string) {
     expect(fragment.split(SHADOW_UNIFORM).length).toBe(2)

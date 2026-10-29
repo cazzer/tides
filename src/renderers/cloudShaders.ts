@@ -30,6 +30,8 @@ import {
   type Vec3,
   airMass,
   ceilingReach,
+  cloudDeckAt,
+  type CloudDeck,
   cloudFrame,
   CLOUD_CLEARANCE,
   CLOUD_FLAT_ALTITUDE,
@@ -43,6 +45,7 @@ import {
   DETAIL_OCTAVES,
   DETAIL_OCTAVES_FLAT,
   EARTH_RADIUS_KM,
+  EXAGGERATED_DECK,
   eyePastOffsets,
   maxTopKm,
   FOG_EASE_SAMPLES,
@@ -62,6 +65,7 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { smoothstep } from '../night-flight'
 import { sceneRadius } from '../planets'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { neutralTypeTexture } from './cloudBlend'
 import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
@@ -222,10 +226,31 @@ const columnRead = (map: string) => `cloudPoleSmoothed(${map}, st,
     textureLod(${map}, st, lod))`
 const COLUMN_READ = columnRead('uCloudMap')
 
-// Height field shared by the cloud shell and the ground's shadow. The
-// shell's (typed) also has typed tops (tides-tvr.4.3) under CLOUD_TYPED;
-// the ground's shadow is untyped, its text as it was before types.
-const field = (typed: boolean) => /* glsl */ `
+// The deck's clearance and km scale (../cloud-layer.ts CloudDeck). The flat
+// sheet's are the deck from orbit's, constants, as they always were; the
+// relief programs' are uniforms (tides-d9f.10), which faceCamera() sets for
+// the camera drawn: true near the ground, as from orbit higher up. The
+// shell's one text serves both tiers, so it decides by CLOUD_FLAT; the
+// ground's shadow is built for its tier, so the flat one's text stays as it
+// was.
+const FLAT_DECK_GLSL = /* glsl */ `#define CLOUD_CLEARANCE ${f(CLOUD_CLEARANCE)}
+#define CLOUD_UNITS_PER_KM ${f(CLOUD_UNITS_PER_KM)}
+`
+const RELIEF_DECK_GLSL = /* glsl */ `uniform float uCloudClearance;
+uniform float uCloudUnitsPerKm;
+#define CLOUD_CLEARANCE uCloudClearance
+#define CLOUD_UNITS_PER_KM uCloudUnitsPerKm
+`
+const EITHER_DECK_GLSL = `#ifdef CLOUD_FLAT
+${FLAT_DECK_GLSL}#else
+${RELIEF_DECK_GLSL}#endif
+`
+
+// Height field shared by the cloud shell and the ground's shadow, with the
+// deck's GLSL above. The shell's (typed) also has typed tops (tides-tvr.4.3)
+// under CLOUD_TYPED; the ground's shadow is untyped, its text as it was
+// before types.
+const field = (typed: boolean, deck: string) => /* glsl */ `
 uniform sampler2D uCloudMap;
 uniform sampler2D uTerrainMap;
 uniform float uCloudShift;
@@ -235,9 +260,7 @@ uniform vec3 uSunDir;
 uniform float uSeaLevel;
 
 #define CLOUD_PI 3.141592653589793
-#define CLOUD_CLEARANCE ${f(CLOUD_CLEARANCE)}
-#define CLOUD_UNITS_PER_KM ${f(CLOUD_UNITS_PER_KM)}
-#define CLOUD_LAYER_TOP ${f(CLOUD_LAYER_TOP)}
+${deck}#define CLOUD_LAYER_TOP ${f(CLOUD_LAYER_TOP)}
 #define CLOUD_FLAT_ALTITUDE ${f(CLOUD_FLAT_ALTITUDE)}
 #define TERRAIN_DISPLACEMENT ${f(TERRAIN_DISPLACEMENT)}
 
@@ -310,14 +333,13 @@ float cloudLod(float footprint) {
   return max(0.0, log2(footprint / texel));
 }
 `
-const FIELD = field(false)
-const SHELL_FIELD = field(true)
+const SHELL_FIELD = field(true, EITHER_DECK_GLSL)
 
 // The mip the march from inside reads at the eye (tides-tvr.1): its own
 // steps' there, a level ray's a step across the map it was tuned to
 // (cloudMarchLod()). The same for every ray, so that all of them agree on
 // whether the eye is in a cloud; the base doesn't depend on it. The shell's
-// alone: the ground's shadow, which shares FIELD, never reads the eye.
+// alone: the ground's shadow, which shares the field, never reads the eye.
 const EYE_LOD_GLSL = /* glsl */ `
 float cloudEyeLod() {
   return max(0.0, log2(float(textureSize(uCloudMap, 0).x) / ${f(MARCH_MAP_WIDTH)}));
@@ -1860,14 +1882,20 @@ export const GROUND_SHADOW = 0.5
  * brightness (at 0.5 the ground under a deck read 0.6 of the sunlit's on
  * screen, the clouds above it light grey); patchy shadows still show. */
 export const GROUND_SHADOW_UNDER = 0.15
+/** The relief layer's band over the ground for the adaptation, in `deck`
+ * (the one drawn for the camera, faceCamera()): from the lowest base, where
+ * the adaptation starts to go out, to the thickest untyped top, where it is
+ * gone (groundShadowStrength()). Over a lower deck but under that, the eye
+ * is partly adapted: the CPU doesn't know the deck under it, and the band is
+ * the layer's. */
+export function groundShadowAdaptBand(deck: CloudDeck): readonly [from: number, top: number] {
+  return [deck.clearance, deck.clearance + deck.unitsPerKm * defaultTopKm(1)]
+}
 /** The eye's height over the ground (scene units) from which the adaptation
- * goes out: the lowest base. It is gone at the layer's top over the ground
- * (groundShadowStrength()). */
-export const GROUND_SHADOW_ADAPT_FROM = CLOUD_CLEARANCE
-/** The relief layer's top over the ground for the adaptation: the thickest
- * untyped top. Over a lower deck but under that, the eye is partly adapted:
- * the CPU doesn't know the deck under it, and the band is the layer's. */
-export const GROUND_SHADOW_ADAPT_TOP = CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * defaultTopKm(1)
+ * goes out under the deck from orbit, and the flat sheet's. */
+export const GROUND_SHADOW_ADAPT_FROM = groundShadowAdaptBand(EXAGGERATED_DECK)[0]
+/** The top of the deck from orbit's band. */
+export const GROUND_SHADOW_ADAPT_TOP = groundShadowAdaptBand(EXAGGERATED_DECK)[1]
 /** sin(elevation) of the Sun at the eye's sub-point over which it comes in:
  * none at dusk, 6 deg and under, all of it from 15 deg up. */
 export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
@@ -1877,17 +1905,22 @@ export const GROUND_SHADOW_ADAPT_SUN: readonly [number, number] = [
 
 /** The ground shadow's strength (uGroundShadow) for an eye `height` over
  * the ground under it, the layer's top `top` over that ground
- * (GROUND_SHADOW_ADAPT_TOP, or the flat deck's), and the Sun at `sunSin` at
- * the eye's sub-point. */
-export function groundShadowStrength(height: number, top: number, sunSin: number): number {
+ * (groundShadowAdaptBand(), or the flat deck's), the Sun at `sunSin` at the
+ * eye's sub-point, and the lowest base `from` over that ground. */
+export function groundShadowStrength(
+  height: number,
+  top: number,
+  sunSin: number,
+  from: number = GROUND_SHADOW_ADAPT_FROM
+): number {
   const under =
-    (1 - smoothstep(GROUND_SHADOW_ADAPT_FROM, Math.max(top, GROUND_SHADOW_ADAPT_FROM + 1e-6), height)) *
+    (1 - smoothstep(from, Math.max(top, from + 1e-6), height)) *
     smoothstep(GROUND_SHADOW_ADAPT_SUN[0], GROUND_SHADOW_ADAPT_SUN[1], sunSin)
   return GROUND_SHADOW + (GROUND_SHADOW_UNDER - GROUND_SHADOW) * under
 }
 
-const GROUND_FRAGMENT_HEAD = /* glsl */ `
-${FIELD}
+const groundFragmentHead = (flat: boolean) => /* glsl */ `
+${field(false, flat ? FLAT_DECK_GLSL : RELIEF_DECK_GLSL)}
 varying vec3 vCloudGround;
 
 // groundShadowStrength() for the camera drawn (faceCamera()).
@@ -1936,7 +1969,7 @@ const GROUND_FRAGMENT_LIGHT = /* glsl */ `
  * after lights_fragment_end), for the streamed tiles to reuse by text
  * (surface/tile-clouds.ts, tides-zmw.9.12). */
 export const CLOUD_GROUND_GLSL = {
-  head: (flat: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + GROUND_FRAGMENT_HEAD,
+  head: (flat: boolean) => (flat ? '#define CLOUD_FLAT\n' : '') + groundFragmentHead(flat),
   light: GROUND_FRAGMENT_LIGHT,
 }
 
@@ -1982,6 +2015,11 @@ export interface CloudLayer {
     /** The ground's shadow's strength for the camera drawn
      * (groundShadowStrength(), set by faceCamera()). */
     uGroundShadow: THREE.IUniform<number>
+    /** The deck's clearance and km scale for the camera drawn
+     * (../cloud-layer.ts cloudDeckAt(), set by faceCamera()); the relief
+     * programs' alone; the flat sheet's are constants. */
+    uCloudClearance: THREE.IUniform<number>
+    uCloudUnitsPerKm: THREE.IUniform<number>
   }
   /**
    * Shows `map`: whether it has measured heights (only geostationary imagery
@@ -1994,8 +2032,10 @@ export interface CloudLayer {
   /** Altitude of the shell mesh above sea level. */
   shellAltitude: number
   /** Readies the shell's mesh for drawing to `camera`: before three sorts
-   * what it draws (a scene's onBeforeRender), as it sets the draw order. */
-  faceCamera(mesh: THREE.Object3D, camera: THREE.Camera): void
+   * what it draws (a scene's onBeforeRender), as it sets the draw order.
+   * `fine` where the depth buffer can draw the true deck near the ground
+   * (ship/ship-session.ts fineGroundDepth()). */
+  faceCamera(mesh: THREE.Object3D, camera: THREE.Camera, fine?: boolean): void
   dispose(): void
 }
 
@@ -2041,6 +2081,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
     uGroundShadow: { value: GROUND_SHADOW },
+    uCloudClearance: { value: EXAGGERATED_DECK.clearance },
+    uCloudUnitsPerKm: { value: EXAGGERATED_DECK.unitsPerKm },
   }
   const defines: Record<string, string> = flat ? { CLOUD_FLAT: '' } : {}
   const material = new THREE.ShaderMaterial({
@@ -2091,7 +2133,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   // finds its program linked.
   material.userData.warmDefines = ['CLOUD_TYPED']
   let ceilingLoad: Promise<void> | null = null
-  const faceCamera = (mesh: THREE.Object3D, camera: THREE.Camera) => {
+  const faceCamera = (mesh: THREE.Object3D, camera: THREE.Camera, fine = false) => {
     const seaLevel = uniforms.uSeaLevel.value
     const reach = withinShellReach(mesh, camera, seaLevel + shellAltitude)
     const side = reach ? THREE.BackSide : THREE.FrontSide
@@ -2108,10 +2150,17 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     const up = eyeRadius > 0 ? eyeDir.copy(eye).divideScalar(eyeRadius) : eyeDir.set(0, 1, 0)
     const floor = earthTerrain()
     const ground = floor ? terrainFloorRadius(floor, seaLevel, up) : seaLevel
+    // The deck for this camera's altitude (tides-d9f.10), which the ground's
+    // shadow below reads too.
+    const deck = flat ? EXAGGERATED_DECK : cloudDeckAt((eyeRadius - seaLevel) * EARTH_KM_PER_UNIT, fine)
+    uniforms.uCloudClearance.value = deck.clearance
+    uniforms.uCloudUnitsPerKm.value = deck.unitsPerKm
+    const [adaptFrom, adaptTop] = groundShadowAdaptBand(deck)
     uniforms.uGroundShadow.value = groundShadowStrength(
       eyeRadius - ground,
-      flat ? seaLevel + CLOUD_FLAT_ALTITUDE - ground : GROUND_SHADOW_ADAPT_TOP,
-      up.dot(uniforms.uSunDir.value)
+      flat ? seaLevel + CLOUD_FLAT_ALTITUDE - ground : adaptTop,
+      up.dot(uniforms.uSunDir.value),
+      adaptFrom
     )
     const underAurora = eyeRadius < seaLevel * AURORA_SHELL_INNER
     mesh.renderOrder = !reach
@@ -2176,7 +2225,6 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         })
     }
   }
-  const flag = flat ? '#define CLOUD_FLAT\n' : ''
   const groundPatch: MaterialPatch = {
     onBeforeCompile(shader) {
       Object.assign(shader.uniforms, uniforms)
@@ -2186,7 +2234,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         GROUND_VERTEX_BODY
       )
       shader.fragmentShader = inject(
-        inject(shader.fragmentShader, 'common', flag + GROUND_FRAGMENT_HEAD),
+        inject(shader.fragmentShader, 'common', CLOUD_GROUND_GLSL.head(flat)),
         'lights_fragment_end',
         GROUND_FRAGMENT_LIGHT
       )
