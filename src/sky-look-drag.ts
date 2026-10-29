@@ -114,12 +114,19 @@ export function lookOnDrag(element: LookTarget, reset: RefObject<Reset | null>) 
     }
   }
 
+  // Entering, stepping through or leaving a demo sets the look itself: a
+  // reset under way gives way, unlanded.
+  const unsubscribe = useStore.subscribe((s, prev) => {
+    if (s.demo !== prev.demo) reset.current = null
+  })
+
   element.addEventListener('pointerdown', down)
   element.addEventListener('pointermove', move)
   element.addEventListener('pointerup', up)
   element.addEventListener('pointercancel', up)
   element.addEventListener('lostpointercapture', up)
   return () => {
+    unsubscribe()
     element.removeEventListener('pointerdown', down)
     element.removeEventListener('pointermove', move)
     element.removeEventListener('pointerup', up)

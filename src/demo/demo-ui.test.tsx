@@ -25,7 +25,6 @@ describe('DemoBarView', () => {
     onStep: () => {},
     onTogglePlaying: () => {},
     onExit: () => {},
-    time: Date.parse('2026-03-03T08:30:00Z'),
     ...overrides,
   })
 
@@ -40,7 +39,6 @@ describe('DemoBarView', () => {
     expect(html).not.toMatch(/ disabled=""/)
     // The count is shown, and spoken as words.
     expect(html).toContain('Step 1 of ')
-    expect(html).toContain('3 Mar 2026, 08:30 UTC')
     expect(html).toMatch(/<button[^>]*aria-describedby="[^"]+"[^>]*>Next/)
     expect(html).toContain('aria-label="Exit demo"')
     expect(html).toContain('aria-label="Play time"')

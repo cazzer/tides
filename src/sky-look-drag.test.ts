@@ -45,7 +45,7 @@ const look = () => useStore.getState().skyLook
 
 describe('dragging View from Earth (tides-2dp)', () => {
   beforeEach(() =>
-    useStore.setState({ skyLook: null, skyFov: null, location: { lat: 51.5, lon: 0 } })
+    useStore.setState({ skyLook: null, skyFov: null, location: { lat: 51.5, lon: 0 }, demo: null })
   )
 
   it('keeps short presses as taps and drags past the threshold', () => {
@@ -189,5 +189,37 @@ describe('dragging View from Earth (tides-2dp)', () => {
     expect(look()).toBeNull()
     expect(listeners.size).toBe(0)
     expect(element.style.touchAction).toBe('')
+  })
+
+  // tides-zec.6: exiting mid-reset unmounts the panel after the demo has
+  // put the user's look back.
+  it('drops a reset under way when a demo ends, keeping the look it restores', () => {
+    const { fire, reset, cleanup } = panel()
+    useStore.setState({ demo: { id: 'seasons', step: 0 }, skyLook: { azimuth: 10, altitude: 70 } })
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    expect(reset.current).not.toBeNull()
+    const restored = { azimuth: 200, altitude: 15 }
+    useStore.setState({ demo: null, skyLook: restored, skyFov: null })
+    expect(reset.current).toBeNull()
+    cleanup()
+    expect(look()).toEqual(restored)
+  })
+
+  it('drops a reset under way when the demo steps on', () => {
+    const { fire, reset, cleanup } = panel()
+    useStore.setState({ demo: { id: 'seasons', step: 0 }, skyLook: { azimuth: 10, altitude: 70 } })
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    fire('pointerdown', 50, 50)
+    fire('pointerup', 50, 50)
+    expect(reset.current).not.toBeNull()
+    const next = { azimuth: 90, altitude: 30 }
+    useStore.setState({ demo: { id: 'seasons', step: 1 }, skyLook: next, skyFov: null })
+    expect(reset.current).toBeNull()
+    cleanup()
+    expect(look()).toEqual(next)
   })
 })

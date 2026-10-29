@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { forwardRef, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { forwardRef, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import {
   View,
@@ -32,7 +32,7 @@ import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { DepthInfo } from './renderers/DepthInfo'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
-import { mainCameraPose, rememberMainCameraPose } from './main-camera-session'
+import { mainCameraPose, rememberMainCameraPose, takeMainCameraRestore } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
 import type { DistanceScale } from './distance-scale'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
@@ -433,6 +433,9 @@ function MainControls() {
 function MainCameraSession() {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls)
+  // A fresh main view starts at the saved pose (MainCamera); a restore asked
+  // for while it was away would only cut short the next ease.
+  useLayoutEffect(() => void takeMainCameraRestore(), [])
   useEffect(() => {
     if (!(camera instanceof THREE.OrthographicCamera || camera instanceof THREE.PerspectiveCamera) || !controls) return
     return useStore.subscribe((state, previous) => {

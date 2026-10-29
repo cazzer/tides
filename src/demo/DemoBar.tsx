@@ -1,5 +1,5 @@
 import styled from 'styled-components'
-import { useEffect, useId, useRef, useState, type Ref } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type Ref } from 'react'
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -10,7 +10,8 @@ import {
 import { useStore } from '../store'
 import { glassButton, glassPanel, PHONE } from '../glass-styles'
 import { findDemo } from './demos'
-import { formatDemoTime, type Demo } from './demo-script'
+import type { Demo } from './demo-script'
+import { subscribeDemoTime } from './demo-time'
 
 // After the exit has rendered, focus the demo button the dock came back
 // with, or the dock's toggle while the phone dock is folded and hides it.
@@ -30,8 +31,6 @@ function typingInto(target: EventTarget | null): boolean {
   )
 }
 
-const MINUTE = 60_000
-
 /**
  * The running demo's caption and controls, in place of the dock (tides-zec.5).
  * Escape leaves the demo and the arrow keys step through it.
@@ -39,12 +38,11 @@ const MINUTE = 60_000
 export function DemoBar() {
   const run = useStore((s) => s.demo)
   const playing = useStore((s) => s.timeScale !== 0)
-  // By the minute: the whole timestamp changes every frame.
-  const minute = useStore((s) => (s.timestamp == null ? null : Math.floor(s.timestamp / MINUTE)))
   const goToDemoStep = useStore((s) => s.goToDemoStep)
   const exitDemo = useStore((s) => s.exitDemo)
   const toggleDemoPlaying = useStore((s) => s.toggleDemoPlaying)
   const nextRef = useRef<HTMLButtonElement>(null)
+  const timeRef = useRef<HTMLSpanElement>(null)
   const demo = run ? findDemo(run.id) : undefined
 
   // The menu that started the demo has gone with the dock.
@@ -52,6 +50,16 @@ export function DemoBar() {
     nextRef.current?.focus({ preventScroll: true })
     return focusDemoButton
   }, [])
+
+  // Not through React state: a re-render per frame at 3600× for a clock
+  // that shows minutes.
+  useLayoutEffect(
+    () =>
+      subscribeDemoTime((text) => {
+        if (timeRef.current) timeRef.current.textContent = text
+      }),
+    []
+  )
 
   const step = run?.step ?? 0
   const count = demo?.steps.length ?? 0
@@ -77,7 +85,7 @@ export function DemoBar() {
       demo={demo}
       step={step}
       playing={playing}
-      time={minute == null ? null : minute * MINUTE}
+      timeRef={timeRef}
       nextRef={nextRef}
       onStep={goToDemoStep}
       onTogglePlaying={toggleDemoPlaying}
@@ -90,8 +98,8 @@ export interface DemoBarViewProps {
   demo: Demo
   step: number
   playing: boolean
-  /** The sim time (epoch ms), or null before the clock starts. */
-  time: number | null
+  /** The sim time's element, its text written outside React (DemoBar). */
+  timeRef?: Ref<HTMLSpanElement>
   nextRef?: Ref<HTMLButtonElement>
   onStep: (index: number) => void
   onTogglePlaying: () => void
@@ -103,7 +111,7 @@ export function DemoBarView({
   demo,
   step,
   playing,
-  time,
+  timeRef,
   nextRef,
   onStep,
   onTogglePlaying,
@@ -135,7 +143,8 @@ export function DemoBarView({
         <Heading>
           <Title>{caption.title}</Title>
           <Meta aria-hidden="true">
-            {time != null && <span>{formatDemoTime(time)}</span>}
+            {/* Written outside React (subscribeDemoTime): never give it children. */}
+            <Time ref={timeRef} />
             <span>
               {step + 1} / {count}
             </span>
@@ -239,6 +248,12 @@ const Meta = styled.span`
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: rgba(255, 255, 255, 0.6);
+`
+
+const Time = styled.span`
+  &:empty {
+    display: none;
+  }
 `
 
 const VisuallyHidden = styled.span`
