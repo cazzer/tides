@@ -351,9 +351,10 @@ describe('ground displacement (tides-zmw.2)', () => {
     // limb view's hysteresis.
     const swapGap = (screenPx: number) => {
       const earth = { key: 'earth', position: new THREE.Vector3(), radius: EARTH_RADIUS }
+      const camera = new THREE.PerspectiveCamera(SHIP_FOV)
       try {
         for (let gap = 3 * EARTH_RADIUS; gap > 0.001; gap *= 0.999) {
-          updateLimbView('earth', [earth], new THREE.Vector3(EARTH_RADIUS + gap, 0, 0), screenPx, SHIP_FOV)
+          updateLimbView('earth', [earth], new THREE.Vector3(EARTH_RADIUS + gap, 0, 0), screenPx, SHIP_FOV, camera)
           if (wantsLimbSphere('earth', EARTH_RADIUS, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)) return gap
         }
         return 0

@@ -276,7 +276,7 @@ describe('cloud march from inside the shell (tides-01v.8.4)', () => {
       try {
         // Ship mode with Earth nearest.
         const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
-        updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+        updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60, camera)
         const v0 = versionAt(clouds.shellAltitude - 0.005)
         expect(clouds.material.side).toBe(THREE.BackSide)
         expect(clouds.material.depthTest).toBe(true)
@@ -541,7 +541,7 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
       }
       try {
         const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
-        updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+        updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60, camera)
         const auroraBase = sea * (AURORA_SHELL_INNER - 1)
         expect(orderAt(clouds.shellAltitude + 0.1)).toBe(0)
         const top = clouds.shellAltitude - 0.001
@@ -574,7 +574,7 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
     }
     try {
       const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
-      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60, camera)
       renderAt(0, 0)
       expect(clouds.material.defines).not.toHaveProperty('FOG_EASE')
       vi.mocked(prefersReducedMotion).mockReturnValue(true)
@@ -1195,7 +1195,7 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
     }
     try {
       const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
-      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60, camera)
       look(0, 0)
       expect(clouds.material.side).toBe(THREE.BackSide)
       const start = phase()
@@ -1233,7 +1233,7 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
     const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
     try {
       const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
-      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60, camera)
       for (const y of [0, 0.003, 0.006]) {
         camera.position.set(0.001, sea + clouds.shellAltitude - 0.005 - y, 0)
         camera.lookAt(1, sea, 0)
@@ -1337,7 +1337,7 @@ describe('cloud tops holding still in flight (tides-ndh)', () => {
     }
     try {
       const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
-      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60)
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.1, 0), 800, 60, camera)
       frame()
       expect(clouds.material.side).toBe(THREE.BackSide)
       const start = phase()

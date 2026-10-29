@@ -5,8 +5,14 @@
 // moon's as ~16 px). Only the nearest body is ever that close, so only it
 // trades up to LIMB_SEGMENTS, and only once its own sphere's facets would
 // show (tides-01v.11); every other body keeps its own, cheaper sphere.
+//
+// The view belongs to one camera (tides-tvr.7.3): the ship's in flight, or
+// the system view's main camera in close zoom over Earth (close-zoom.ts).
+// Every consumer asks for its own View's camera, so an overview panel
+// drawing the same scene keeps its own spheres and front faces.
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Body } from './flight'
 
@@ -67,6 +73,8 @@ export const LIMB_GAP_FLOOR = 1e-4
 
 interface LimbView {
   key: string
+  /** The camera the view was fed for, the only one whose spheres it changes. */
+  camera: THREE.Camera
   /** From the eye to the body's centre. */
   distance: number
   /** The body's drawn radius, for the gap the hysteresis measures. */
@@ -75,55 +83,68 @@ interface LimbView {
   fovDeg: number
 }
 
-// The ship's limb body, set by ShipController while ship mode runs and null
-// otherwise. Ship mode and the main view never mount together, so outside
-// ship mode no body changes.
+// The limb body, set by ShipController while ship mode runs and by the main
+// view's close zoom while its eye is within the barrier over Earth
+// (close-zoom.ts useCloseZoom), null otherwise. Ship mode and the main view
+// never mount together, so only one of them feeds it at a time; zoomed out,
+// no body changes.
 let view: LimbView | null = null
 const listeners = new Set<() => void>()
 const notify = () => listeners.forEach((listener) => listener())
 
 const gapRatio = (a: number, b: number) => Math.max(a, LIMB_GAP_FLOOR) / Math.max(b, LIMB_GAP_FLOOR)
 
+/** What the limb view reads of a body: ship mode's bodies, or the system view's Earth. */
+export type LimbCandidate = Pick<Body, 'key' | 'position' | 'radius'>
+
 /**
- * ShipController's per-frame report: the nearest body (`nearestKey`, from
- * telemetry) seen from `eye` over `screenPx` device rows with a `fovDeg`
- * vertical FOV. Listeners hear only changes past LIMB_HYSTERESIS.
+ * The feeder's per-frame report (ShipController's, or close zoom's): the
+ * nearest body (`nearestKey`, from telemetry) seen by `camera` from `eye`
+ * over `screenPx` device rows with a `fovDeg` vertical FOV. Listeners hear
+ * only changes past LIMB_HYSTERESIS, or a change of camera.
  */
 export function updateLimbView(
   nearestKey: string | null,
-  bodies: readonly Body[],
+  bodies: readonly LimbCandidate[],
   eye: THREE.Vector3,
   screenPx: number,
-  fovDeg: number
+  fovDeg: number,
+  camera: THREE.Camera
 ): void {
   let body = nearestKey == null ? undefined : bodies.find((b) => b.key === nearestKey)
   if (!body) return clearLimbView()
   const held = view && view.key !== body.key ? bodies.find((b) => b.key === view?.key) : undefined
-  const gap = (b: Body) => b.position.distanceTo(eye) - b.radius
+  const gap = (b: LimbCandidate) => b.position.distanceTo(eye) - b.radius
   if (held && gapRatio(gap(held), gap(body)) < LIMB_HYSTERESIS) body = held
   const distance = body.position.distanceTo(eye)
   if (
     view &&
     view.key === body.key &&
+    view.camera === camera &&
     view.screenPx === screenPx &&
     view.fovDeg === fovDeg &&
     Math.abs(Math.log(gapRatio(distance - body.radius, view.distance - view.radius))) < Math.log(LIMB_HYSTERESIS)
   )
     return
-  view = { key: body.key, distance, radius: body.radius, screenPx, fovDeg }
+  view = { key: body.key, camera, distance, radius: body.radius, screenPx, fovDeg }
   notify()
 }
 
-/** Ends the limb view, for when ship mode ends. */
+/** Ends the limb view, for when ship mode or close zoom ends. */
 export function clearLimbView(): void {
   if (view == null) return
   view = null
   notify()
 }
 
-/** The limb body's key in ship mode, else null. */
+/** The limb body's key in ship mode or close zoom, else null. */
 export function limbBody(): string | null {
   return view?.key ?? null
+}
+
+/** The camera the limb view was fed for, else null. */
+export function limbEye(): THREE.Camera | null {
+  return view?.camera ?? null
 }
 
 export function subscribeLimbBody(listener: () => void): () => void {
@@ -131,7 +152,11 @@ export function subscribeLimbBody(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-/** limbBody() when `among` accepts it, else null; re-renders when that changes. */
+/**
+ * limbBody() when `among` accepts it, else null; re-renders when that
+ * changes. Not scoped to a camera: the system view only ever feeds Earth, so
+ * only ship mode's limb body is ever a moon or a planet.
+ */
 export function useLimbBodyAmong<K extends string>(among: (key: string) => key is K): K | null {
   return useSyncExternalStore(subscribeLimbBody, () => {
     const key = limbBody()
@@ -140,24 +165,33 @@ export function useLimbBodyAmong<K extends string>(among: (key: string) => key i
 }
 
 /**
- * Whether body `key`'s sphere of `radius` and `segments` wants the limb
- * sphere: `key` is the limb body, the eye is outside the sphere (a shell seen
+ * Whether body `key`'s sphere of `radius` and `segments`, drawn by `camera`,
+ * wants the limb sphere: `camera` is the one the view was fed for (any,
+ * when left out), `key` is the limb body, the eye is outside the sphere (a shell seen
  * from inside, like a planet's haze from the collision stop, has no limb),
  * and its facets would pass LIMB_FACET_PX, or the eye is within `swapFloor`
  * of the sphere: a short screen's facets pass it only near the ground, or
  * never, and a sphere whose ground the ship stops on must swap well above
  * that (EarthRenderer).
  */
-export function wantsLimbSphere(key: string | null, radius: number, segments: SphereSegments, swapFloor = 0): boolean {
+export function wantsLimbSphere(
+  key: string | null,
+  radius: number,
+  segments: SphereSegments,
+  swapFloor = 0,
+  camera?: THREE.Camera
+): boolean {
   if (view == null || key !== view.key || view.distance <= radius) return false
+  if (camera !== undefined && camera !== view.camera) return false
   if (view.distance - radius < swapFloor) return true
   return limbFacetPx(segments, view.distance / radius, view.screenPx, view.fovDeg) > LIMB_FACET_PX
 }
 
-/** wantsLimbSphere, re-rendering only when it flips. */
+/** wantsLimbSphere for this View's camera, re-rendering only when it flips. */
 export function useWantsLimbSphere(key: string | null, radius: number, segments: SphereSegments, swapFloor = 0): boolean {
+  const camera = useThree((s) => s.camera)
   const [width, height] = segments
-  return useSyncExternalStore(subscribeLimbBody, () => wantsLimbSphere(key, radius, [width, height], swapFloor))
+  return useSyncExternalStore(subscribeLimbBody, () => wantsLimbSphere(key, radius, [width, height], swapFloor, camera))
 }
 
 // One LIMB_SEGMENTS sphere's topology per ship session (tides-01v.18): every
@@ -225,7 +259,8 @@ function disposeOwnPositions(sphere: THREE.BufferGeometry) {
 // a planet and a close moon swaps a prop instead of rebuilding and uploading
 // ~130k vertices. Meshes retain the ones they show (useLimbSphere), and only
 // unretained ones beyond LIMB_CACHE_SIZE are disposed, oldest first, so a
-// sphere on screen is never disposed. ShipController drops them all on exit.
+// sphere on screen is never disposed. ShipController drops them all on exit;
+// close zoom lets them go once its meshes have (releaseLimbSpheres).
 const LIMB_CACHE_SIZE = 4
 interface LimbEntry {
   sphere: THREE.BufferGeometry
@@ -370,15 +405,40 @@ export function retainLimbSphere(radius: number, sphere: THREE.BufferGeometry): 
   }
 }
 
+// Disposes the unretained sphere of `radius`: its positions alone while
+// another shown one stays, else with the topology (disposeOwnPositions).
+function dropLimbSphere(radius: number, entry: LimbEntry) {
+  const othersShown = [...limbSpheres.values()].some((other) => other !== entry && other.shown)
+  if (othersShown) disposeOwnPositions(entry.sphere)
+  else entry.sphere.dispose()
+  limbSpheres.delete(radius)
+}
+
 function trimLimbSpheres() {
   for (const [radius, entry] of limbSpheres) {
     if (limbSpheres.size <= LIMB_CACHE_SIZE) return
     if (entry.users > 0) continue
-    const othersShown = [...limbSpheres.values()].some((other) => other !== entry && other.shown)
-    if (othersShown) disposeOwnPositions(entry.sphere)
-    else entry.sphere.dispose()
-    limbSpheres.delete(radius)
+    dropLimbSphere(radius, entry)
   }
+}
+
+/**
+ * Lets every limb sphere go that no mesh holds, and drops queued builds, for
+ * when close zoom ends (tides-tvr.7.3). Unlike on ship exit the scene stays
+ * mounted, so a mesh may still hold its sphere, and draw it, for a commit
+ * after the view clears: those stay until a later call finds them let go.
+ * True once none is left, with the topology let go too.
+ */
+export function releaseLimbSpheres(): boolean {
+  buildHandle?.()
+  buildHandle = null
+  buildQueue.clear()
+  for (const [radius, entry] of limbSpheres) {
+    if (entry.users === 0) dropLimbSphere(radius, entry)
+  }
+  if (limbSpheres.size > 0) return false
+  topology = null
+  return true
 }
 
 /**
@@ -409,8 +469,8 @@ export function useLimbSphere(radius: number, wanted: boolean): THREE.BufferGeom
 
 /**
  * Body `key`'s sphere of `radius`: its own `base` segments, or the shared
- * limb sphere while it wants one (wantsLimbSphere, with `swapFloor`) and
- * that is built.
+ * limb sphere while it wants one for this View's camera (wantsLimbSphere,
+ * with `swapFloor`) and that is built.
  */
 export function useBodySphere(
   key: string,

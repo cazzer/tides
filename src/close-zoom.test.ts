@@ -23,6 +23,7 @@ import {
   terrainFloorRadius,
 } from './ship/terrain-floor'
 import { decodeEarthDem } from './earth-dem'
+import { LIMB_SEGMENTS, disposeLimbSpheres, limbSphere, retainLimbSphere } from './ship/limb-detail'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import { useStore } from './store'
 
@@ -128,6 +129,23 @@ describe('earthGroundRadius', () => {
     expect(pacific - R).toBeLessThan(0.1 * (tibet - R))
     // Reading round a disc never lowers the ground.
     expect(earthGroundRadius(earth, at(earth, 30, 88), R, 0.05)).toBeGreaterThanOrEqual(tibet)
+  })
+
+  it("reads the limb sphere's floor while Earth's ground holds that sphere (tides-tvr.7.3)", () => {
+    // Flat floors, the limb sphere's standing higher, to tell them apart.
+    const level = (grey: number) => ({ width: 512, height: 256, data: new Float32Array(512 * 256).fill(grey) })
+    setEarthTerrain(buildTerrainFloor(level(20), EARTH_BASE_SEGMENTS), buildTerrainFloor(level(120), LIMB_SEGMENTS))
+    const earth = new Object3D()
+    const p = at(earth, 30, 88)
+    const base = earthGroundRadius(earth, p, R, 0)
+    const release = retainLimbSphere(R, limbSphere(R))
+    try {
+      expect(earthGroundRadius(earth, p, R, 0)).toBeGreaterThan(base)
+    } finally {
+      release()
+      disposeLimbSpheres()
+    }
+    expect(earthGroundRadius(earth, p, R, 0)).toBe(base)
   })
 })
 
