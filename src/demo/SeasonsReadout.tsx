@@ -5,10 +5,10 @@
 // a demo runs (App.tsx); shown only while the step has aids.seasons on.
 // It re-renders once a sim hour, through a bucketed store selector.
 import styled from 'styled-components'
-import { glassPanel, PHONE } from '../glass-styles'
+import { glassPanel } from '../glass-styles'
 import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
-import { insolation, seasonsLatitude, sunForSeasons } from './seasons'
+import { insolation, seasonsLatitude, SUNRISE_ALTITUDE, sunForSeasons } from './seasons'
 
 const HOUR_MS = 3_600_000
 const MINUS = '−'
@@ -31,17 +31,39 @@ function signed(value: number, digits = 0): string {
   return (value < 0 ? MINUS : '+') + text
 }
 
+/** A share as a percent and its W/m²; a percent that rounds to 0 shows 0
+ * W/m² too, so the two never disagree in sign. */
+function share(percent: number | null, wm2: number, digits: number): { percent: string; wm2: string } {
+  if (percent == null) return { percent: '', wm2: `${signed(wm2)} W/m²` }
+  const p = signed(percent * 100, digits)
+  return { percent: `${p}%`, wm2: `(${Number(p) === 0 ? '0' : signed(wm2)} W/m²)` }
+}
+
 function latitudeText(lat: number): string {
   const text = Math.abs(lat).toFixed(1)
   if (Number(text) === 0) return `${text}° · on the equator`
   return lat > 0 ? `${text}°N · northern hemisphere` : `${text}°S · southern hemisphere`
 }
 
+function noonText(altitude: number): string {
+  if (altitude < SUNRISE_ALTITUDE) return 'Noon Sun below the horizon'
+  if (altitude < 0.5) return 'Noon Sun on the horizon'
+  return `Noon Sun ${Math.round(altitude)}° up`
+}
+
 function daylightText(hours: number): string {
   if (hours >= 24) return 'daylight 24 h (Sun up all day)'
   if (hours <= 0) return 'daylight 0 h (Sun down all day)'
-  const minutes = Math.round(hours * 60)
+  // Never "24 h 0 min" for a day just short of it, nor "0 h 0 min".
+  const minutes = Math.min(24 * 60 - 1, Math.max(1, Math.round(hours * 60)))
   return `daylight ${Math.floor(minutes / 60)} h ${minutes % 60} min`
+}
+
+function noonSunlightText(altitude: number, top: number, ground: number): string {
+  if (altitude < SUNRISE_ALTITUDE) return 'No sunlight at noon'
+  if (top <= 0) return 'At noon the Sun only skims the horizon'
+  const through = Math.round((100 * ground) / top)
+  return `At noon ${Math.round(top)} W/m² in space · ${Math.round(ground)} at the ground (${through}% gets through)`
 }
 
 export interface SeasonsReadoutViewProps {
@@ -53,30 +75,30 @@ export interface SeasonsReadoutViewProps {
 export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutViewProps) {
   const sun = sunForSeasons(timestamp)
   const q = insolation(lat, sun.dec, sun.distanceAu)
-  const noon =
-    q.noonAltitude > 0 ? `Noon Sun ${Math.round(q.noonAltitude)}° up` : 'Noon Sun below the horizon'
-  const tilt =
-    q.tilt.percent == null
-      ? `${signed(q.tilt.wm2)} W/m²`
-      : `${signed(q.tilt.percent * 100)}% (${signed(q.tilt.wm2)} W/m²)`
+  const tilt = share(q.tilt.percent, q.tilt.wm2, 0)
+  const distance = share(q.distance.percent, q.distance.wm2, 1)
   return (
     <Panel aria-label="Sunlight at this latitude">
       <Line>
-        {latitudeText(lat)}
-        <Muted>{pinned ? ' (your pin)' : ' (example; no pin set)'}</Muted>
+        Sunlight at {latitudeText(lat)}
+        <Muted>{pinned ? ' (your pin)' : ' (example, no pin)'}</Muted>
       </Line>
       <Line>
-        {noon} · {daylightText(q.daylightHours)}
+        {noonText(q.noonAltitude)} · {daylightText(q.daylightHours)}
       </Line>
-      <Line>
-        Noon sunlight {Math.round(q.noonTop)} W/m² above the air, {Math.round(q.noonGround)} at the ground
-      </Line>
-      <Line>Day’s average above the air {Math.round(q.dailyTop)} W/m²</Line>
-      <Line>Tilt vs equinox {tilt}</Line>
-      <Line>
-        Distance {sun.distanceAu.toFixed(4)} AU: {signed(q.distance.percent * 100, 1)}% (
-        {signed(q.distance.wm2)} W/m²)
-      </Line>
+      <Line>{noonSunlightText(q.noonAltitude, q.noonTop, q.noonGround)}</Line>
+      <Line>Day’s average {Math.round(q.dailyTop)} W/m² in space</Line>
+      <Compare>
+        <Line>Against an equinox day at average distance:</Line>
+        <Shares>
+          <dt>tilt</dt>
+          <dd>{tilt.percent}</dd>
+          <dd>{tilt.wm2}</dd>
+          <dt>distance</dt>
+          <dd>{distance.percent}</dd>
+          <dd>{distance.wm2}</dd>
+        </Shares>
+      </Compare>
     </Panel>
   )
 }
@@ -88,7 +110,7 @@ const Panel = styled.section`
   left: var(--dock-inset-left);
   z-index: 1;
   box-sizing: border-box;
-  max-width: min(300px, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
+  max-width: min(360px, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
   padding: 8px 12px;
   border-radius: 14px;
   color: rgba(255, 255, 255, 0.85);
@@ -97,10 +119,6 @@ const Panel = styled.section`
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   ${glassPanel}
-
-  ${PHONE} {
-    font-size: 11px;
-  }
 `
 
 const Line = styled.p`
@@ -109,4 +127,29 @@ const Line = styled.p`
 
 const Muted = styled.span`
   color: rgba(255, 255, 255, 0.55);
+`
+
+// The demo's point, set off: the tilt's share against the distance's.
+const Compare = styled.div`
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+`
+
+const Shares = styled.dl`
+  display: grid;
+  grid-template-columns: max-content max-content 1fr;
+  column-gap: 8px;
+  margin: 2px 0 0 12px;
+  font-weight: 600;
+  color: #fff;
+
+  dt {
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.75);
+  }
+
+  dd {
+    margin: 0;
+  }
 `

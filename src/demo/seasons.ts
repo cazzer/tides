@@ -11,7 +11,7 @@
 // The tilt's share compares Q with the same day at the equinox at 1 AU; the
 // distance's, with the same declination at 1 AU.
 
-import { Body, Equator, Observer } from 'astronomy-engine'
+import { Body, EquatorFromVector, GeoVector, RotateVector, Rotation_EQJ_EQD } from 'astronomy-engine'
 import { airMass } from '../cloud-layer'
 import type { Location } from '../store'
 
@@ -22,8 +22,10 @@ export const SOLAR_CONSTANT = 1361
  * Not DEFAULT_SURFACE_LOCATION (sky.ts), which is in the south. */
 export const SEASONS_FALLBACK_LAT = 45
 
-/** The almanac's sunrise: the Sun's top edge on the horizon, refraction in. */
-const SUNRISE_ALTITUDE = -0.833
+/** The almanac's sunrise: the Sun's top edge on the horizon, refraction in.
+ * The day's length and whether the noon Sun is up both use it, so they
+ * agree. */
+export const SUNRISE_ALTITUDE = -0.833
 
 // Below this the equinox's day is too dark to compare against.
 const TILT_PERCENT_FLOOR_WM2 = 5
@@ -34,10 +36,12 @@ export function seasonsLatitude(location: Location | null): { lat: number; pinne
   return location ? { lat: location.lat, pinned: true } : { lat: SEASONS_FALLBACK_LAT, pinned: false }
 }
 
-/** The Sun's declination (deg, of date) and distance (AU) at `ms`. */
+/** The Sun's declination (deg, of date) and distance (AU) from Earth's
+ * centre at `ms`. */
 export function sunForSeasons(ms: number): { dec: number; distanceAu: number } {
-  const eq = Equator(Body.Sun, new Date(ms), new Observer(0, 0, 0), true, true)
-  return { dec: eq.dec, distanceAu: eq.dist }
+  const date = new Date(ms)
+  const sun = RotateVector(Rotation_EQJ_EQD(date), GeoVector(Body.Sun, date, true))
+  return { dec: EquatorFromVector(sun).dec, distanceAu: sun.Length() }
 }
 
 /** The hour angle (radians) at which the Sun sets to `altitudeDeg`: 0 when
@@ -63,7 +67,8 @@ export function dailyTop(latDeg: number, decDeg: number, distanceAu: number): nu
 }
 
 export interface Insolation {
-  /** Degrees; negative when the Sun stays down all day. */
+  /** Degrees, geometric (no refraction); below SUNRISE_ALTITUDE the Sun
+   * stays down all day. */
   noonAltitude: number
   daylightHours: number
   /** W/m² on a flat surface at noon, above the air and at the ground. */

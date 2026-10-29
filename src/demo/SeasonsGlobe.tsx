@@ -1,10 +1,10 @@
 // The seasons demo's globe aid (tides-zec.3), main view only: Earth's axis,
-// the point where the Sun is overhead and the readout latitude's circle.
-// Mounted as a child of Earth's OrbitingBody (solar-system.tsx), so it sits in
-// the tilted, spinning frame with the globe: the axis and ring are fixed in
-// it, and only the dot moves, once a frame, with no allocation. The axis and
-// ring are thin meshes, not lines: a one-pixel line all but vanishes over the
-// lit globe on a phone.
+// the point where the Sun is overhead, the readout latitude's circle and a
+// faint equator to measure the dot against. Mounted as a child of Earth's
+// OrbitingBody (solar-system.tsx), so it sits in the tilted, spinning frame
+// with the globe: the axis and rings are fixed in it, and only the dot moves,
+// re-placed when the clock has moved. The axis and rings are thin meshes, not
+// lines: a one-pixel line all but vanishes over the lit globe on a phone.
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -22,23 +22,29 @@ const RING_LIFT = 1.012 // the tube's centre, clear of the ground
 const RING_WIDTH = 0.008
 const RING_COLOR = '#7FD6FF'
 const RING_OPACITY = 0.9
+const EQUATOR_OPACITY = 0.3
 const DOT_SIZE = 0.06
 const DOT_LIFT = 1.01
 const DOT_COLOR = '#FFD54A'
 // After the globe's additive air and aurora shells, so they don't wash the
-// aid out; the ground's depth still hides the far side.
+// aid out; the ground's depth still hides the far side. Every material is
+// transparent, the dot's too: three draws opaque meshes before all
+// transparent ones, whatever their renderOrder.
 const AID_RENDER_ORDER = AURORA_RENDER_ORDER + 1
 
 function noRaycast() {}
 
 function aidMaterial(color: string, opacity: number) {
-  return new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity, toneMapped: false, depthWrite: false })
+  return new THREE.MeshBasicMaterial({ color, transparent: true, opacity, toneMapped: false, depthWrite: false })
 }
 
-// Module level, so the dot's mesh is moved outside the hook.
-function placeDot(dot: THREE.Mesh | null, radius: number) {
-  if (!dot) return
-  const sun = subsolarPoint(useStore.getState().timestamp ?? Date.now())
+// Module level, so the dot's mesh is moved outside the hook. subsolarPoint
+// returns a small object, so it runs only when the clock has moved.
+function placeDot(dot: THREE.Mesh | null, placedAt: { t: number }, radius: number) {
+  const t = useStore.getState().timestamp ?? Date.now()
+  if (!dot || t === placedAt.t) return
+  placedAt.t = t
+  const sun = subsolarPoint(t)
   const { x, y, z } = calculateLocationAndRotationForLatLng(sun.lat, sun.lon, radius * DOT_LIFT).position
   dot.position.set(x, y, z)
 }
@@ -48,12 +54,17 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
   const { lat } = seasonsLatitude(location)
   const circle = latitudeCircle(lat, radius * RING_LIFT)
   const dot = useRef<THREE.Mesh>(null)
+  const placedAt = useMemo(() => ({ t: NaN }), [])
 
   const geometries = useMemo(
     () => ({
       axis: new THREE.CylinderGeometry(AXIS_WIDTH * radius, AXIS_WIDTH * radius, 2 * AXIS_LENGTH * radius, 8, 1, true),
       dot: new THREE.SphereGeometry(DOT_SIZE * radius, 16, 12),
     }),
+    [radius]
+  )
+  const equator = useMemo(
+    () => new THREE.TorusGeometry(RING_LIFT * radius, RING_WIDTH * radius, 6, 128),
     [radius]
   )
   // Its own memo: a new pin rebuilds only the ring.
@@ -65,6 +76,7 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
     () => ({
       axis: aidMaterial('#FFFFFF', AXIS_OPACITY),
       ring: aidMaterial(RING_COLOR, RING_OPACITY),
+      equator: aidMaterial('#FFFFFF', EQUATOR_OPACITY),
       dot: aidMaterial(DOT_COLOR, 1),
     }),
     []
@@ -76,6 +88,7 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
     },
     [geometries]
   )
+  useEffect(() => () => equator.dispose(), [equator])
   useEffect(() => () => ring.dispose(), [ring])
   useEffect(
     () => () => {
@@ -84,12 +97,19 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
     [materials]
   )
 
-  useFrame(() => placeDot(dot.current, radius))
+  useFrame(() => placeDot(dot.current, placedAt, radius))
 
   return (
     <>
       <mesh renderOrder={AID_RENDER_ORDER} geometry={geometries.axis} material={materials.axis} raycast={noRaycast} />
-      {/* The torus lies in its xy plane: turned flat, round the axis. */}
+      {/* A torus lies in its xy plane: turned flat, round the axis. */}
+      <mesh
+        renderOrder={AID_RENDER_ORDER}
+        rotation-x={Math.PI / 2}
+        geometry={equator}
+        material={materials.equator}
+        raycast={noRaycast}
+      />
       <mesh
         renderOrder={AID_RENDER_ORDER}
         position-y={circle.y}

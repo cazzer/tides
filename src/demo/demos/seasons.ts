@@ -23,13 +23,12 @@ import type { Demo, DemoPose } from '../demo-script'
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
 
-// Sun-relative, 45° round from the Sun's side and just above the ecliptic:
-// the subsolar dot (which holds still on screen as the globe turns under it)
-// sits well inside the lit face, and the axis's lean toward the Sun in June
-// and away in December shows both across the screen and as the north pole
-// tipping toward or away from the eye. Nearer the side view (azimuth 90) the
-// lean would read more purely but the dot would sit on the limb.
-const CAMERA: DemoPose = { focus: 'earth', azimuth: 45, elevation: 8, distance: 30 }
+// Sun-relative, from nearly side on (azimuth 90 is square to the Sun line),
+// so the Sun's light comes from the left: at the solstices the axis leans
+// ~23° toward or away from the lit side, at the equinoxes it stands near
+// upright along the day-night line. The subsolar dot, which holds still on
+// screen as the globe turns under it, sits just inside the lit limb.
+const CAMERA: DemoPose = { focus: 'earth', azimuth: 75, elevation: 10, distance: 30 }
 
 function day(date: string) {
   return { date, until: new Date(Date.parse(date) + DAY).toISOString(), timeScale: 3600, camera: CAMERA }
@@ -46,15 +45,15 @@ export const seasons: Demo = {
       mainPanel: 'main',
       aids: { seasons: true },
       caption: {
-        title: 'A tilted axis that holds still',
-        body: 'Earth spins about a tilted axis (white line), 23.4° from upright, that points the same way in space all year. The yellow dot is where the Sun is overhead; the ring is the readout’s latitude.',
+        title: 'Earth’s tilted axis',
+        body: 'Earth spins on an axis (white line) tilted 23.4°, aimed the same way in space all year. Sunlight comes from the left. The yellow dot is where the Sun is straight overhead; the blue ring is the panel’s latitude.',
       },
     },
     {
       ...day('2026-06-21T08:25:06Z'),
       caption: {
         title: 'June solstice',
-        body: 'The north pole leans toward the Sun and the dot reaches 23.4°N, its farthest north. North of the equator the noon Sun is highest and days longest; south of it, lowest and shortest.',
+        body: 'The north pole leans toward the Sun; the dot reaches 23.4°N. The north’s high noon Sun shines steeply through little air; the south’s low Sun spreads its light thin through more air, so less reaches the ground.',
       },
     },
     {
@@ -68,14 +67,14 @@ export const seasons: Demo = {
       ...day('2026-12-21T20:50:29Z'),
       caption: {
         title: 'December solstice',
-        body: 'The axis still points the same way, but Earth is across its orbit: now the south pole leans sunward and the dot is at 23.4°S. The south has the high Sun and long days, the north the low Sun.',
+        body: 'Half an orbit on, the axis aims the same way, so the south pole leans sunward and the dot is at 23.4°S. The south gets the high Sun and long days; the north a low Sun, short days and light dimmed by more air.',
       },
     },
     {
       ...day('2027-01-03T02:07:49Z'),
       caption: {
         title: 'Nearest the Sun, in January',
-        body: 'Earth is closest to the Sun around 3 January, getting 3.4% more sunlight than at 1 AU, in the northern winter. The readout compares it: outside the tropics the tilt moves a day’s energy far more.',
+        body: 'Earth is nearest the Sun around 3 January, in the northern winter, and gets 3.4% more sunlight than at its average distance. Compare the panel’s last two lines: the tilt changes a day’s sunlight far more.',
       },
     },
   ],
