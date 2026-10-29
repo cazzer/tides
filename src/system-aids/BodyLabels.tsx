@@ -37,6 +37,7 @@ import { CLOCK_INNER_RADIUS, labelMaterial } from '../orbit-label'
 import { earthAngle } from '../ephemeris'
 import { MOONS, isMoonKey, moonOffsetInto } from '../moons/moons'
 import { bodyName } from '../ship/ship-distances'
+import { mainViewHidesMoon } from '../demo/demo-aids'
 import { AU_RINGS, ringLabelLayout } from './ecliptic-grid'
 import {
   BODY_LABEL_PX,
@@ -287,13 +288,15 @@ function placeLabels(
 
   // Each wanted name's size and default side. A moon is named only with its
   // planet in sight, so a lone moon at the edge doesn't read as a stray.
+  const moonHidden = mainViewHidesMoon(useStore.getState())
   for (let i = 0; i < n; i++) {
     const key = LABEL_KEYS[i]
     const text = texts[i]
     const bounds = text?.textRenderInfo?.blockBounds
     const parent = PARENT_INDEX[i]
     const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && discOnScreen(layout, frame, parent))
-    wanted[i] = text && bounds && inView[i] && parentSeen ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
+    const shown = text && bounds && inView[i] && parentSeen && !(key === 'moon' && moonHidden)
+    wanted[i] = shown ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
     if (!text || !bounds || wanted[i] < MIN_NAME_OPACITY) continue
     // Sides from the bodies' 3D offsets: what it orbits may be behind the
     // eye, where its projection is mirrored through the view's centre.

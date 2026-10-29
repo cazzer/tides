@@ -37,10 +37,10 @@ describe('SeasonsReadoutView', () => {
     for (const part of [
       'Sunlight at 45.0°N example',
       '15 h 37 min of daylight',
-      'Against an equinox day at average distance',
+      'Compared with an equinox day',
       'Tilt +63%',
       'Distance −3.2%',
-      'Noon Sun 68° up · 484 W/m² a day on average',
+      'Noon Sun 68° up',
       'Sizes and distances not to scale',
     ])
       expect(t).toContain(part)
@@ -63,7 +63,7 @@ describe('SeasonsReadoutView', () => {
     const t = text(70, true, december)
     expect(t).toContain('0 h of daylight (Sun down all day)')
     expect(t).toContain('Tilt −100%')
-    expect(t).toContain('Noon Sun below the horizon · 0 W/m² a day on average')
+    expect(t).toContain('Noon Sun below the horizon')
   })
 
   it('says when the Sun stays up', () => {

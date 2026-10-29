@@ -14,6 +14,7 @@
 import { Body, EquatorFromVector, GeoVector, KM_PER_AU, RotateVector, Rotation_EQJ_EQD } from 'astronomy-engine'
 import { airMass } from '../cloud-layer'
 import { subsolarPoint } from '../geo-clouds'
+import { PHONE_VIEW_PX } from '../system-aids/label-style'
 import type { Location } from '../store'
 import { earthSpinLag } from './demo-travel'
 
@@ -150,17 +151,8 @@ export function apsisLabel(kind: 'closest' | 'farthest', distanceAu: number): st
   return `${kind === 'closest' ? 'Closest' : 'Farthest'} · ${millions} million km`
 }
 
-/** A view this wide or narrower sizes the stand-in at phone size, CSS px
- * (label-style.ts's PHONE_VIEW_PX). */
-const PHONE_VIEW_PX = 600
-
 /** The stand-in globe's least radius on screen, CSS px. [TUNE] */
 export const MARKER_PX = { desktop: 14, phone: 10 }
-
-/** Scene units a CSS px spans `depth` in front of a perspective eye. */
-export function unitsPerPixel(depth: number, fovDeg: number, heightPx: number): number {
-  return (2 * depth * Math.tan((fovDeg * DEG) / 2)) / heightPx
-}
 
 /**
  * The stand-in globe's radius, scene units, where a CSS px spans `upp`: the
@@ -207,4 +199,86 @@ export function ghostDates(stepDates: readonly number[], step: number, landed: b
  * leaning toward +Z; the spin, about that axis, leaves it. */
 export function northAxis(tiltDeg: number): [number, number, number] {
   return [0, Math.cos(tiltDeg * DEG), Math.sin(tiltDeg * DEG)]
+}
+
+/** A circle on screen, CSS px from the view's centre (y up). */
+export interface ScreenCircle {
+  x: number
+  y: number
+  r: number
+}
+
+export interface LabelSideInput {
+  /** The dot, px from the view's centre (y up). */
+  dotX: number
+  dotY: number
+  /** The way out from the Sun at the dot, on screen (any length). */
+  outX: number
+  outY: number
+  halfW: number
+  halfH: number
+  /** The gap kept between the dot's centre and the label's edge, px. */
+  clearPx: number
+  viewW: number
+  viewH: number
+  /** What the label must not cover: Earth, the Sun. */
+  obstacles: readonly ScreenCircle[]
+}
+
+// A label keeps this far inside the view's edge. [TUNE]
+const LABEL_EDGE_MARGIN_PX = 8
+// Left or right of its dot while the way out is at least this much sideways
+// on screen (a cosine), else above or below. [TUNE]
+const LABEL_SIDEWAYS = 0.35
+
+function boxFits(x: number, y: number, input: LabelSideInput): boolean {
+  const { halfW, halfH, viewW, viewH, obstacles } = input
+  if (Math.abs(x) + halfW > viewW / 2 - LABEL_EDGE_MARGIN_PX) return false
+  if (Math.abs(y) + halfH > viewH / 2 - LABEL_EDGE_MARGIN_PX) return false
+  for (const { x: cx, y: cy, r } of obstacles) {
+    const nearX = Math.min(Math.max(cx, x - halfW), x + halfW)
+    const nearY = Math.min(Math.max(cy, y - halfH), y + halfH)
+    if (Math.hypot(cx - nearX, cy - nearY) < r) return false
+  }
+  return true
+}
+
+/**
+ * Where an apsis label's centre goes, px from the view's centre (into
+ * `out`): beside its dot on the side away from the Sun (left or right
+ * unless that is nearly straight up or down), else the other side, else
+ * above or below, whichever first stays inside the view and off Earth and
+ * the Sun; the first if none does. Anything over the dot is cleared all
+ * round.
+ */
+export function labelSide(input: LabelSideInput, out: { x: number; y: number }): { x: number; y: number } {
+  const { dotX, dotY, outX, outY, halfW, halfH, obstacles } = input
+  // Clear of anything over the dot too, as Earth at its closest.
+  let clearPx = input.clearPx
+  for (const { x, y, r } of obstacles) {
+    const d = Math.hypot(x - dotX, y - dotY)
+    if (d < r) clearPx = Math.max(clearPx, d + r)
+  }
+  const sideways = Math.abs(outX) >= LABEL_SIDEWAYS * Math.hypot(outX, outY)
+  const sx = Math.sign(outX) || 1
+  const sy = Math.sign(outY) || 1
+  // Sides in turn: (dx, dy) unit steps, primary first.
+  for (let k = 0; k < 4; k++) {
+    const flip = k % 2 === 0 ? 1 : -1
+    const along = k < 2 === sideways
+    const dx = along ? sx * flip : 0
+    const dy = along ? 0 : sy * flip
+    const x = dotX + dx * (clearPx + halfW)
+    const y = dotY + dy * (clearPx + halfH)
+    if (k === 0) {
+      out.x = x
+      out.y = y
+    }
+    if (boxFits(x, y, input)) {
+      out.x = x
+      out.y = y
+      return out
+    }
+  }
+  return out
 }

@@ -4,7 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { applyBodyTransform } from '../body-transform'
 import { earthPosition, earthSpin, earthTilt } from '../ephemeris'
 import { subsolarPoint } from '../geo-clouds'
+import { MAIN_FOV } from '../main-view'
+import { sceneRadius } from '../planets'
+import { worldUnitsPerPixel } from '../system-aids/pixel-scale'
 import { calculateLocationAndRotationForLatLng } from '../utils'
+import { poseDistance } from './demo-script'
+import { findDemo } from './demos'
 import {
   apsisLabel,
   dailyTop,
@@ -15,9 +20,10 @@ import {
   northAxis,
   SEASONS_APSIDES,
   standInFade,
-  unitsPerPixel,
+  type LabelSideInput,
   wideFade,
   SOLAR_CONSTANT,
+  labelSide,
   seasonsLatitude,
   shownSubsolarPoint,
   sunForSeasons,
@@ -164,11 +170,22 @@ describe('the subsolar dot', () => {
 
 describe('the orbit aid', () => {
   // Earth's drawn radius (solar-system.tsx's EARTH_DIAMETER, used as one).
-  const radius = 2.95
-  const FOV = 30
-  // The tour's wide eye (pose fit 60) and its close-up.
-  const desk = { width: 1440, height: 900, wide: 60 / Math.sin(15 * DEG) }
-  const phone = { width: 390, height: 844, wide: 60 / Math.sin(Math.atan(Math.tan(15 * DEG) * (390 / 844))) }
+  const radius = sceneRadius(12742000)
+  const tour = findDemo('seasons')!
+  const wide = tour.steps[1].travel!.camera!
+  const desk = { width: 1440, height: 900 }
+  const phone = { width: 390, height: 844 }
+
+  // Scene units a CSS px spans at the focus, the eye `distance` from it.
+  function uppAt(distance: number, view: { width: number; height: number }) {
+    const camera = new THREE.PerspectiveCamera(MAIN_FOV, view.width / view.height, 0.1, 1e5)
+    camera.position.set(0, 0, distance)
+    camera.lookAt(0, 0, 0)
+    camera.updateMatrixWorld()
+    return worldUnitsPerPixel(camera, new THREE.Vector3(), view.height)
+  }
+  const eyeAt = (pose: { distance: number; fit?: number }, view: { width: number; height: number }) =>
+    poseDistance(pose, MAIN_FOV, view.width / view.height)
 
   it('pins the apsides on either side of the tour', () => {
     const aphelion = SearchPlanetApsis(Body.Earth, new Date('2026-06-01T00:00:00Z'))
@@ -184,18 +201,19 @@ describe('the orbit aid', () => {
   })
 
   it('sizes the stand-in on screen, never under the true globe', () => {
-    const upp = unitsPerPixel(1000, FOV, 900)
-    expect(markerRadius(upp, radius, 1440) / upp).toBeCloseTo(14)
-    expect(markerRadius(upp, radius, 390) / upp).toBeCloseTo(10)
+    const upp = uppAt(1000, desk)
+    expect(markerRadius(upp, radius, desk.width) / upp).toBeCloseTo(14)
+    expect(markerRadius(upp, radius, phone.width) / upp).toBeCloseTo(10)
     // Close in, the true globe is the larger.
-    expect(markerRadius(unitsPerPixel(30, FOV, 900), radius, 1440)).toBe(radius)
+    expect(markerRadius(uppAt(tour.steps[0].camera!.distance, desk), radius, desk.width)).toBe(radius)
   })
 
-  it('shows in the wide view and not in the close-up, on a desktop and a phone', () => {
+  it('shows on the tour’s way between stops and not at any stop, on a desktop and a phone', () => {
     for (const view of [desk, phone]) {
-      const globePx = (eye: number) => radius / unitsPerPixel(eye, FOV, view.height)
-      expect(wideFade(globePx(view.wide))).toBe(1)
-      expect(wideFade(globePx(30))).toBe(0)
+      expect(wideFade(radius / uppAt(eyeAt(wide, view), view))).toBe(1)
+      tour.steps.forEach((step) => {
+        expect(wideFade(radius / uppAt(eyeAt(step.camera!, view), view))).toBeLessThan(0.01)
+      })
     }
   })
 
@@ -206,7 +224,7 @@ describe('the orbit aid', () => {
     expect(standInFade(1.65)).toBeCloseTo(0.5)
   })
 
-  it('leaves a stand-in at every stop reached', () => {
+  it('leaves a ghost at every stop reached', () => {
     const dates = [10, 20, 30, 40, 50]
     expect(ghostDates(dates, 0, false)).toEqual([])
     expect(ghostDates(dates, 0, true)).toEqual([10])
@@ -222,5 +240,45 @@ describe('the orbit aid', () => {
     const [x, y, z] = northAxis(earthTilt(june))
     expect(north.distanceTo(new THREE.Vector3(x, y, z))).toBeLessThan(1e-9)
     expect(z).toBeGreaterThan(0.39)
+  })
+
+  describe('labelSide', () => {
+    const base: LabelSideInput = {
+      dotX: 100,
+      dotY: 0,
+      outX: 1,
+      outY: 0.2,
+      halfW: 70,
+      halfH: 7,
+      clearPx: 9,
+      viewW: 1440,
+      viewH: 900,
+      obstacles: [],
+    }
+    const side = (input: Partial<LabelSideInput>) => labelSide({ ...base, ...input }, { x: 0, y: 0 })
+
+    it('goes beside the dot, away from the Sun', () => {
+      expect(side({})).toEqual({ x: 100 + 9 + 70, y: 0 })
+      expect(side({ outX: -1 })).toEqual({ x: 100 - 9 - 70, y: 0 })
+      // Nearly straight up: above.
+      expect(side({ outX: 0.1, outY: 1 })).toEqual({ x: 100, y: 9 + 7 })
+    })
+
+    it('goes the other side at the view’s edge', () => {
+      expect(side({ dotX: 600 })).toEqual({ x: 600 - 9 - 70, y: 0 })
+      expect(side({ dotX: -170, outX: -1, viewW: 390, viewH: 844 })).toEqual({ x: -170 + 9 + 70, y: 0 })
+    })
+
+    it('keeps off Earth at the dot and off the Sun', () => {
+      // Earth on the dot, its axis reaching 40 px: the label clears it.
+      expect(side({ obstacles: [{ x: 100, y: 0, r: 40 }] })).toEqual({ x: 100 + 40 + 70, y: 0 })
+      expect(side({ obstacles: [{ x: 105, y: 0, r: 40 }] })).toEqual({ x: 100 + 45 + 70, y: 0 })
+      // The Sun on the outward side: the other side.
+      expect(side({ obstacles: [{ x: 250, y: 0, r: 30 }] })).toEqual({ x: 100 - 9 - 70, y: 0 })
+    })
+
+    it('stays on the first side when none fits', () => {
+      expect(side({ viewW: 120, viewH: 120 })).toEqual({ x: 179, y: 0 })
+    })
   })
 })

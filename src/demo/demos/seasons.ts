@@ -6,16 +6,15 @@ import type { Demo, DemoPose, DemoTravel } from '../demo-script'
 // 14:45:42 on 20 March, the June solstice 08:25:06 on 21 June, the September
 // equinox 00:05:45 on 23 September and the December solstice 20:50:29 on
 // 21 December; SearchPlanetApsis(Body.Earth, 2026-12-25) perihelion at
-// 02:07:49 on 3 January, 0.98336 AU. registry.test.ts checks these.
+// 02:07:49 on 3 January, 0.98333 AU. registry.test.ts checks these.
 //
-// aids.seasons draws Earth's axis, the subsolar dot and the readout
-// latitude's ring (SeasonsGlobe.tsx) and the sunlight readout
-// (SeasonsReadout.tsx) for the user's pin, or 45°N without one. In the wide
-// view between stops, where Earth is a dot, it also draws a bold axis through
-// Earth, a faint stand-in with its axis left at each stop reached (four
-// parallel axes by the December leg) and the orbit's nearest and farthest
-// points with their distances (SeasonsOrbit.tsx); these fade out close in. Its sums are
-// seasons.ts: the day's mean sunlight above the air
+// aids.seasons draws Earth's axis, bold and arrowed north, and in the wide
+// view between stops a faint pale dot and axis left at each stop reached
+// (four parallel axes by the December leg) and the orbit's nearest and
+// farthest points with their distances (SeasonsOrbit.tsx); the subsolar dot
+// and the readout latitude's ring (SeasonsGlobe.tsx); and the sunlight
+// readout (SeasonsReadout.tsx) for the user's pin, or 45°N without one. Its
+// sums are seasons.ts: the day's mean sunlight above the air
 // Q = S0/(π r²)·(H0 sin φ sin δ + cos φ cos δ sin H0), the tilt's share against
 // the equinox at 1 AU and the distance's against 1 AU. At 45°N: 309 W/m² at
 // the March equinox, 484 at the June solstice (+63%), 120 at the December
@@ -36,6 +35,8 @@ const DAY = 24 * HOUR
 // narrow screen to keep 60 units (Earth's orbit is 50) about Earth in view.
 const CLOSE: DemoPose = { focus: 'earth', frame: 'stars', azimuth: 0, elevation: 45, distance: 30 }
 const WIDE: Omit<DemoPose, 'focus'> = { frame: 'stars', azimuth: 0, elevation: 45, distance: 170, fit: 60 }
+
+const SEPTEMBER_DISTANCE = 80
 
 function day(date: string) {
   return { date, until: new Date(Date.parse(date) + DAY).toISOString(), timeScale: 3600, camera: CLOSE }
@@ -64,11 +65,14 @@ export const seasons: Demo = {
       travel: travel(6),
       caption: {
         title: 'June solstice',
-        body: 'The north tips toward the Sun: high Sun, long days, summer. The yellow dot, the Sun overhead, reaches 23°N.',
+        body: 'The north tips toward the Sun: high Sun, long days, summer. The south gets winter.',
       },
     },
     {
       ...day('2026-09-23T00:05:45Z'),
+      // Further out, the same way: the Sun is behind Earth from here, so its
+      // edge and the lit limb come into frame past the night side.
+      camera: { ...CLOSE, distance: SEPTEMBER_DISTANCE },
       travel: travel(6),
       caption: {
         title: 'September equinox',

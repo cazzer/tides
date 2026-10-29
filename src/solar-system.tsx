@@ -129,7 +129,7 @@ export default function SolarSystem({
   // Earth, and a demo's aids.hideMoon the main view's; only its look goes, so
   // its body, refs and camera carry on.
   const travelHidesMoon = useStore((s) => s.demoTravel?.hideMoon ?? false)
-  const aidHidesMoon = useDemoAid('hideMoon') && !earthCamera
+  const aidHidesMoon = useDemoAid('hideMoon') && interactive && !earthCamera
   const moonHidden = travelHidesMoon || aidHidesMoon
 
   // From the surface, the Sun and Moon move to a sky around the observer, both
@@ -276,6 +276,7 @@ export default function SolarSystem({
         <SeasonsOrbit
           positionAt={positions.positionAt.earth}
           radius={EARTH_DIAMETER}
+          sunRadius={positions.radius.sun}
         />
       )}
       {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (

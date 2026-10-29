@@ -26,6 +26,15 @@ export function demoAidOn(s: { demo: DemoRun | null }, key: keyof DemoAids): boo
   return demo ? demoAidAt(demo, s.demo.step, key) : false
 }
 
+/**
+ * Whether the main view hides the Moon: a demo travel's hold (every view)
+ * or the step's aids.hideMoon (the main view's). Its name and orbit loop go
+ * with it (BodyLabels, OrbitGuides).
+ */
+export function mainViewHidesMoon(s: { demo: DemoRun | null; demoTravel: { hideMoon: boolean } | null }): boolean {
+  return (s.demoTravel?.hideMoon ?? false) || demoAidOn(s, 'hideMoon')
+}
+
 /** Whether the running step has `key` on; re-renders only when that changes. */
 export function useDemoAid(key: keyof DemoAids): boolean {
   return useStore((s) => demoAidOn(s, key))

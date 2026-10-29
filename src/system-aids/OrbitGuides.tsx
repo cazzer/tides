@@ -19,6 +19,7 @@ import * as THREE from 'three'
 import type { DistanceScale } from '../distance-scale'
 import { positionsFor } from '../flight-scale'
 import { useStore } from '../store'
+import { mainViewHidesMoon } from '../demo/demo-aids'
 import {
   GUIDE_PARENTS,
   MOON_ORBIT_SEGMENTS,
@@ -88,7 +89,8 @@ function updateGuides(
   t: number,
   scale: DistanceScale,
   camera: THREE.Camera,
-  heightPx: number
+  heightPx: number,
+  moonHidden: boolean
 ) {
   const { positionAt } = positionsFor(scale)
   for (let i = 0; i < guides.length; i++) {
@@ -98,7 +100,8 @@ function updateGuides(
     line.position.fromArray(positionAt[guide.parent](t))
     const extentPx = guideExtent(guide.parent, scale) / worldUnitsPerPixel(camera, line.position, heightPx)
     const strength = orbitGuideFade(extentPx)
-    line.visible = strength > 0
+    // Earth's set is the Moon's loop alone.
+    line.visible = strength > 0 && !(guide.parent === 'earth' && moonHidden)
     guide.material.opacity = MOON_ORBIT_OPACITY * strength
     // A hidden set catches up when it next shows.
     if (line.visible && orbitGuideIsStale(guide.parent, guide.pathT, t)) rebuild(guide, t)
@@ -106,6 +109,11 @@ function updateGuides(
 }
 
 function noRaycast() {}
+
+function moonHiddenIn(mainView: boolean): boolean {
+  const s = useStore.getState()
+  return mainView ? mainViewHidesMoon(s) : (s.demoTravel?.hideMoon ?? false)
+}
 
 export const OrbitGuides: FC<SystemAidProps> = ({ distanceScale }) => {
   const guides = useMemo(() => {
@@ -124,8 +132,9 @@ export const OrbitGuides: FC<SystemAidProps> = ({ distanceScale }) => {
     [guides]
   )
 
-  useFrame(({ camera, size }) =>
-    updateGuides(guides, lines, simTime(), distanceScale, camera, size.height)
+  // The main view (the one with controls) hides the Moon's loop with it.
+  useFrame(({ camera, size, controls }) =>
+    updateGuides(guides, lines, simTime(), distanceScale, camera, size.height, moonHiddenIn(controls != null))
   )
 
   return (

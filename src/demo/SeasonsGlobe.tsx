@@ -1,10 +1,11 @@
-// The seasons demo's globe aid (tides-zec.3), main view only: Earth's axis,
-// the point where the Sun is overhead, the readout latitude's circle and a
+// The seasons demo's globe aid (tides-zec.3), main view only: the point
+// where the Sun is overhead, the readout latitude's circle and a
 // faint equator to measure the dot against. Mounted as a child of Earth's
 // OrbitingBody (solar-system.tsx), so it sits in the tilted, spinning frame
-// with the globe: the axis and rings are fixed in it, and only the dot moves,
-// re-placed when the clock has moved. The axis and rings are thin meshes, not
-// lines: a one-pixel line all but vanishes over the lit globe on a phone.
+// with the globe: the rings are fixed in it, and only the dot moves,
+// re-placed when the clock has moved. The rings are thin meshes, not lines:
+// a one-pixel line all but vanishes over the lit globe on a phone. Earth's
+// axis is SeasonsOrbit's, bold and a fixed width on screen, the one axis.
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -14,14 +15,11 @@ import { calculateLocationAndRotationForLatLng } from '../utils'
 import { latitudeCircle, seasonsLatitude, shownSubsolarPoint } from './seasons'
 
 // Sizes are × Earth's radius.
-const AXIS_LENGTH = 1.4 // each way
-const AXIS_WIDTH = 0.008
-const AXIS_OPACITY = 0.8
 const RING_LIFT = 1.012 // the tube's centre, clear of the ground
-const RING_WIDTH = 0.008
+const RING_WIDTH = 0.006
 const RING_COLOR = '#7FD6FF'
 const RING_OPACITY = 0.9
-const EQUATOR_OPACITY = 0.3
+const EQUATOR_OPACITY = 0.15
 const DOT_SIZE = 0.06
 const DOT_LIFT = 1.01
 const DOT_COLOR = '#FFD54A'
@@ -58,7 +56,6 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
 
   const geometries = useMemo(
     () => ({
-      axis: new THREE.CylinderGeometry(AXIS_WIDTH * radius, AXIS_WIDTH * radius, 2 * AXIS_LENGTH * radius, 8, 1, true),
       dot: new THREE.SphereGeometry(DOT_SIZE * radius, 16, 12),
     }),
     [radius]
@@ -74,7 +71,6 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
   )
   const materials = useMemo(
     () => ({
-      axis: aidMaterial('#FFFFFF', AXIS_OPACITY),
       ring: aidMaterial(RING_COLOR, RING_OPACITY),
       equator: aidMaterial('#FFFFFF', EQUATOR_OPACITY),
       dot: aidMaterial(DOT_COLOR, 1),
@@ -101,7 +97,6 @@ export function SeasonsGlobe({ radius }: { radius: number }) {
 
   return (
     <>
-      <mesh renderOrder={AID_RENDER_ORDER} geometry={geometries.axis} material={materials.axis} raycast={noRaycast} />
       {/* A torus lies in its xy plane: turned flat, round the axis. */}
       <mesh
         renderOrder={AID_RENDER_ORDER}

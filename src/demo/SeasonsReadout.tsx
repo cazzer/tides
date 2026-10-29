@@ -1,7 +1,7 @@
 // The seasons demo's sunlight readout (tides-zec.3): a glass panel top-left
 // of the main view with the day's length at the user's pin (or 45°N without
 // one), bars for how much the tilt and the distance to the Sun change its
-// sunlight, and the noon Sun and the day's average. Mounted in the main
+// sunlight, and how high the noon Sun gets. Mounted in the main
 // Panel's overlay while a demo runs (App.tsx); shown only while the step has
 // aids.seasons on. It re-renders once a sim hour, through a bucketed store
 // selector.
@@ -70,7 +70,7 @@ function ShareBar({ label, share, digits }: ShareBarProps) {
     <Row>
       <dt>{label}</dt>
       <Track aria-hidden="true">
-        {amount > 0 && <Bar data-side={side} $less={side === 'less'} style={{ width: `${amount * 50}%` }} />}
+        {amount > 0 && <Bar data-side={side} style={{ width: `${amount * 50}%` }} />}
       </Track>
       <dd>{text == null ? '—' : `${text}%`}</dd>
     </Row>
@@ -92,14 +92,12 @@ export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutVie
         Sunlight at {latitudeText(lat)} <Muted>{pinned ? 'your pin' : 'example'}</Muted>
       </Line>
       <Daylight>{daylightText(q.daylightHours)}</Daylight>
-      <Small>Against an equinox day at average distance</Small>
+      <Small>Compared with an equinox day</Small>
       <Shares>
         <ShareBar label="Tilt" share={q.tilt.percent} digits={0} />
         <ShareBar label="Distance" share={q.distance.percent} digits={1} />
       </Shares>
-      <Small>
-        {noonText(q.noonAltitude)} · {Math.round(q.dailyTop)} W/m² a day on average
-      </Small>
+      <Small>{noonText(q.noonAltitude)}</Small>
       <Small $faint>Sizes and distances not to scale</Small>
     </Panel>
   )
@@ -191,12 +189,19 @@ const Track = styled.dd`
 `
 
 // Warm for more sunlight, cool for less.
-const Bar = styled.div<{ $less: boolean }>`
+const Bar = styled.div`
   position: absolute;
   top: 0;
   bottom: 0;
-  ${(p) => (p.$less ? 'right: 50%;' : 'left: 50%;')}
+  left: 50%;
   min-width: 2px;
-  border-radius: ${(p) => (p.$less ? '4px 0 0 4px' : '0 4px 4px 0')};
-  background: ${(p) => (p.$less ? '#6cb6ff' : '#ffb347')};
+  border-radius: 0 4px 4px 0;
+  background: #ffb347;
+
+  &[data-side='less'] {
+    right: 50%;
+    left: auto;
+    border-radius: 4px 0 0 4px;
+    background: #6cb6ff;
+  }
 `
