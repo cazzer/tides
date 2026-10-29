@@ -1,16 +1,20 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
-import { Object3D, Vector3 } from 'three'
+import { Object3D, PerspectiveCamera, Vector3 } from 'three'
+import { OrbitControls } from 'three-stdlib'
 import {
   CLOSE_ZOOM_HYSTERESIS,
   closeZoomClearance,
   closeZoomFloor,
-  closeZoomSpeed,
+  closeZoomInSpeed,
+  closeZoomOutSpeed,
   earthGroundRadius,
   isCloseZoom,
+  pinchWays,
 } from './close-zoom'
 import { MIN_DISTANCE_FACTOR, NEAR_MIN, mainNearFar } from './main-view'
 import { EARTH_KM_PER_UNIT, surfaceOpacityUniform } from './surface-handover'
+import { EARTH_RADIUS_KM } from './cloud-layer'
 import { setSurfaceGroundSampler, type SurfaceGroundQuery } from './surface-ground'
 import { RELIEF } from './relief'
 import { EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
@@ -67,39 +71,218 @@ describe('closeZoomFloor', () => {
   })
 })
 
-describe('closeZoomSpeed', () => {
-  const gT = R
+describe('closeZoomInSpeed', () => {
+  const RE = EARTH_RADIUS_KM / EARTH_KM_PER_UNIT
+  const km = 1 / EARTH_KM_PER_UNIT
+  const floor = RE + km
+  const EARTH_BARRIER = MIN_DISTANCE_FACTOR * RE
+  const notch = (d: number) => d * 0.95 ** closeZoomInSpeed(d, floor)
+  /** Wheel notches from `d` until the eye rests on the floor, each clamped to it as OrbitControls does. */
+  const notchesToFloor = (from: number) => {
+    let d = from
+    let n = 0
+    while (d !== floor && n < 100) {
+      const next = Math.max(notch(d), floor)
+      expect(next).toBeLessThan(d)
+      d = next
+      n++
+    }
+    expect(d).toBe(floor)
+    return n
+  }
+
   it('is a whole step at the barrier and above', () => {
-    expect(closeZoomSpeed(BARRIER, gT)).toBeCloseTo(1, 12)
-    expect(closeZoomSpeed(2 * BARRIER, gT)).toBe(1)
+    expect(closeZoomInSpeed(EARTH_BARRIER, floor)).toBe(1)
+    expect(closeZoomInSpeed(2 * EARTH_BARRIER, floor)).toBe(1)
   })
 
-  it('falls continuously below it', () => {
-    let previous = closeZoomSpeed(BARRIER, gT)
-    for (let d = BARRIER; d > gT + 1e-4; d = gT + (d - gT) * 0.9) {
-      const speed = closeZoomSpeed(d, gT)
+  it('falls continuously from the barrier to the floor, and so does the step', () => {
+    let previous = closeZoomInSpeed(EARTH_BARRIER, floor)
+    let previousStep = EARTH_BARRIER - notch(EARTH_BARRIER)
+    for (
+      let d = floor + (EARTH_BARRIER - floor) * 0.9;
+      d > floor + 1e-3 * km;
+      d = floor + (d - floor) * 0.9
+    ) {
+      const speed = closeZoomInSpeed(d, floor)
       expect(speed).toBeLessThanOrEqual(previous)
-      expect(previous - speed).toBeLessThan(0.11 * previous + 1e-9)
+      // The ease steepens the fall near 30 km: at most ~12.4% a step of 0.9.
+      expect(previous - speed).toBeLessThan(0.13 * previous)
+      const step = d - notch(d)
+      expect(step).toBeLessThan(previousStep)
       previous = speed
+      previousStep = step
     }
   })
 
-  it('cuts 17-20% of the altitude a wheel notch, from the barrier to a kilometre', () => {
-    const km = 1 / EARTH_KM_PER_UNIT
-    for (let d = BARRIER; d > gT + km; d = gT + (d - gT) * 0.7) {
-      const next = d * 0.95 ** closeZoomSpeed(d, gT)
-      const cut = 1 - (next - gT) / (d - gT)
-      expect(cut).toBeGreaterThan(0.17)
-      expect(cut).toBeLessThan(0.2)
+  it('moves about a fifth of the altitude a notch far out, as before', () => {
+    for (const altitude of [1000, 300]) {
+      const d = RE + altitude * km
+      const cut = (d - notch(d)) / (altitude * km)
+      expect(cut).toBeGreaterThan(0.19)
+      expect(cut).toBeLessThan(0.21)
     }
-    const d = gT + km
-    const cut = 1 - (d * 0.95 ** closeZoomSpeed(d, gT) - gT) / km
-    expect(cut).toBeGreaterThan(0.17)
-    expect(cut).toBeLessThan(0.2)
+  })
+
+  it('eases to 8% of the way left plus a kilometre near the ground', () => {
+    const share = (altitude: number) => {
+      const d = RE + altitude * km
+      return (d - notch(d)) / (d - floor + km)
+    }
+    expect(share(20)).toBeGreaterThan(0.13)
+    expect(share(20)).toBeLessThan(0.14)
+    expect(share(10)).toBeGreaterThan(0.1)
+    expect(share(10)).toBeLessThan(0.12)
+    expect(share(1)).toBeGreaterThan(0.079)
+    expect(share(1)).toBeLessThan(0.081)
+  })
+
+  it('reaches the floor in a few dozen notches at most, never below it', () => {
+    expect(notchesToFloor(EARTH_BARRIER)).toBe(52)
+    expect(notchesToFloor(RE + 100 * km)).toBe(39)
+    expect(notchesToFloor(RE + 20 * km)).toBe(30)
+    expect(notchesToFloor(RE + 10 * km)).toBe(25)
+    expect(notchesToFloor(RE + 2 * km)).toBe(9)
+  })
+
+  it('eases as much over the higher floor without reversed-Z depth', () => {
+    const high = RE + closeZoomClearance(false)
+    const notchesTo = (target: number, from: number) => {
+      let d = from
+      let n = 0
+      while (d !== target && n < 100) {
+        d = Math.max(d * 0.95 ** closeZoomInSpeed(d, target), target)
+        n++
+      }
+      return n
+    }
+    expect(notchesTo(high, high + 19 * km)).toBe(notchesTo(floor, floor + 19 * km))
+  })
+
+  it('never reverses, with the eye under the ground or at the centre', () => {
+    expect(closeZoomInSpeed(floor - 0.01, floor)).toBeGreaterThan(0)
+    const atCentre = closeZoomInSpeed(0, floor)
+    expect(Number.isFinite(atCentre)).toBe(true)
+    expect(atCentre).toBeGreaterThan(0)
+  })
+
+  describe("through OrbitControls' clamp", () => {
+    const d0 = RE + 10 * km
+    const controlsAt = (d: number) => {
+      const camera = new PerspectiveCamera(30, 1.5, 1e-4, 4000)
+      camera.position.set(0, 0, d)
+      const controls = new OrbitControls(camera)
+      controls.target.set(0, 0, 0)
+      controls.minDistance = floor
+      controls.maxDistance = 10 * RE
+      controls.update()
+      controls.zoomSpeed = closeZoomInSpeed(d, floor)
+      return controls
+    }
+
+    it('lands on the floor and stays there under held notches', () => {
+      const controls = controlsAt(d0)
+      for (let i = 0; i < 200; i++) {
+        controls.dollyIn()
+        expect(controls.getDistance()).toBeGreaterThanOrEqual(floor - 1e-12)
+      }
+      expect(controls.getDistance()).toBeCloseTo(floor, 12)
+    })
+
+    it('lands on the floor from a step far past it', () => {
+      const controls = controlsAt(d0)
+      controls.dollyIn(1e-6)
+      expect(controls.getDistance()).toBeCloseTo(floor, 12)
+    })
+
+    it('lands on the floor from a wide pinch spread', () => {
+      const controls = controlsAt(d0)
+      controls.dollyOut(1000 ** controls.zoomSpeed)
+      expect(controls.getDistance()).toBeCloseTo(floor, 12)
+    })
+
+    it('takes the same notches as the pure steps with the speed from the live distance', () => {
+      const controls = controlsAt(d0)
+      let n = 0
+      while (Math.abs(controls.getDistance() - floor) > 1e-12 && n < 100) {
+        controls.zoomSpeed = closeZoomInSpeed(controls.getDistance(), floor)
+        controls.dollyIn()
+        expect(controls.getDistance()).toBeGreaterThanOrEqual(floor - 1e-12)
+        n++
+      }
+      expect(n).toBe(notchesToFloor(d0))
+    })
+
+    it('steps out as before and in on the eased curve', () => {
+      const out = controlsAt(d0)
+      out.zoomSpeed = closeZoomOutSpeed(d0, RE)
+      out.dollyOut()
+      expect((out.getDistance() - d0) / km).toBeCloseTo(1.9788, 3)
+      const back = controlsAt(d0)
+      back.dollyIn()
+      expect((d0 - back.getDistance()) / km).toBeCloseTo(1.111, 3)
+    })
+  })
+})
+
+describe('closeZoomOutSpeed', () => {
+  const RE = EARTH_RADIUS_KM / EARTH_KM_PER_UNIT
+  const km = 1 / EARTH_KM_PER_UNIT
+  const EARTH_BARRIER = MIN_DISTANCE_FACTOR * RE
+  const out = (d: number) => d / 0.95 ** closeZoomOutSpeed(d, RE)
+
+  it('is a whole step at the barrier and above', () => {
+    expect(closeZoomOutSpeed(EARTH_BARRIER, RE)).toBeCloseTo(1, 12)
+    expect(closeZoomOutSpeed(2 * EARTH_BARRIER, RE)).toBe(1)
+  })
+
+  // Zooming out kept close zoom's pace from before the ease (tides-rwb).
+  it('adds about a fifth of the altitude a notch, as before', () => {
+    for (const [altitude, added] of [
+      [1, 0.1978],
+      [3, 0.5936],
+      [10, 1.9788],
+      [100, 19.8148],
+      [1000, 200.5247],
+    ]) {
+      const d = RE + altitude * km
+      expect((out(d) - d) / km).toBeCloseTo(added, 3)
+    }
+  })
+
+  it('climbs from a kilometre up to the barrier in 43 notches', () => {
+    let d = RE + km
+    let n = 0
+    while (d < EARTH_BARRIER && n < 100) {
+      d = out(d)
+      n++
+    }
+    expect(n).toBe(43)
   })
 
   it('never reverses, with the eye under the ground', () => {
-    expect(closeZoomSpeed(gT - 0.01, gT)).toBeGreaterThan(0)
+    expect(closeZoomOutSpeed(RE - 0.01, RE)).toBeGreaterThan(0)
+  })
+})
+
+describe('pinchWays', () => {
+  it('zooms in as two fingers spread and out as they close', () => {
+    const pinch = pinchWays()
+    pinch.down(1, 100, 100)
+    expect(pinch.move(1, 90, 100)).toBeNull()
+    pinch.down(2, 200, 100)
+    expect(pinch.move(2, 220, 100)).toBe('in')
+    expect(pinch.move(1, 120, 100)).toBe('out')
+    expect(pinch.move(1, 120, 100)).toBeNull()
+  })
+
+  it('ignores fingers it never saw go down, and a lifted one', () => {
+    const pinch = pinchWays()
+    pinch.down(1, 0, 0)
+    pinch.down(2, 10, 0)
+    expect(pinch.move(3, 50, 0)).toBeNull()
+    pinch.up(2)
+    expect(pinch.move(1, -50, 0)).toBeNull()
   })
 })
 
