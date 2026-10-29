@@ -24,7 +24,7 @@ export const lunarEclipse: Demo = {
       camera: { focus: 'earth', azimuth: 20, elevation: 25, distance: 170 },
       aids: { earthShadow: true },
       caption: {
-        title: 'Sun, Earth, Moon in a line',
+        title: 'Sun, Earth, Moon aligned',
         body: 'Full Moon, almost exactly behind Earth. Earth’s shadow points at it.',
       },
     },
