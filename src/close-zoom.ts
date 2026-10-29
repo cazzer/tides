@@ -104,14 +104,14 @@ const ZOOM_EASE = 30 / EARTH_KM_PER_UNIT
 const ZOOM_LANDING = 1 / EARTH_KM_PER_UNIT
 
 /**
- * OrbitControls' zoomSpeed for an eye `d` from Earth's centre over the zoom
- * `floor`: a wheel notch (0.95^zoomSpeed of the distance) moves a share of
- * the way left to the floor plus ZOOM_LANDING, so the last notch overshoots
- * it and OrbitControls' minDistance clamp lands the eye on it. The share is
- * about a fifth far out, easing to 8% within tens of km of the floor; at the
- * barrier and above the cap holds it at 1.
+ * OrbitControls' zoomSpeed zooming in, for an eye `d` from Earth's centre
+ * over the zoom `floor`: a wheel notch (0.95^zoomSpeed of the distance)
+ * moves a share of the way left to the floor plus ZOOM_LANDING, so the last
+ * notch overshoots it and OrbitControls' minDistance clamp lands the eye on
+ * it. The share is about a fifth far out, easing to 8% within tens of km of
+ * the floor; at the barrier and above the cap holds it at 1.
  */
-export function closeZoomSpeed(d: number, floor: number): number {
+export function closeZoomInSpeed(d: number, floor: number): number {
   const h = Math.max(d - floor, 0)
   const share = ZOOM_SHARE_FAR - (ZOOM_SHARE_FAR - ZOOM_SHARE_NEAR) * Math.exp(-h / ZOOM_EASE)
   const step = share * (h + ZOOM_LANDING)
@@ -119,6 +119,101 @@ export function closeZoomSpeed(d: number, floor: number): number {
   // A step of the whole distance (s = +Infinity) is a whole notch; NaN (a
   // step past the centre, or no distance) the least.
   return s > 0 ? Math.min(1, Math.max(MIN_ZOOM_SPEED, s)) : MIN_ZOOM_SPEED
+}
+
+/** The barrier's altitude as a share of its distance: where a zoom step is still a whole one. */
+const BARRIER_SHARE = (MIN_DISTANCE_FACTOR - 1) / MIN_DISTANCE_FACTOR
+
+/**
+ * OrbitControls' zoomSpeed zooming out, for an eye `d` from Earth's centre
+ * over ground `gT`: 1 at the barrier and above, then falling with the
+ * altitude's share of the distance, so a wheel notch (1/0.95^zoomSpeed of
+ * the distance) adds about a fifth of the altitude all the way up, as
+ * close zoom has since tides-tvr.7.1.
+ */
+export function closeZoomOutSpeed(d: number, gT: number): number {
+  return Math.min(1, Math.max(MIN_ZOOM_SPEED, (d - gT) / d / BARRIER_SHARE))
+}
+
+/** The zoomSpeed each way, set each frame; zoomWays hands OrbitControls the one an input zooms. */
+const zoomSpeeds = { in: 1, out: 1 }
+
+function setZoomSpeeds(controls: OrbitControlsImpl, zoomIn: number, zoomOut: number) {
+  zoomSpeeds.in = zoomIn
+  zoomSpeeds.out = zoomOut
+  if (controls.zoomSpeed !== zoomIn) controls.zoomSpeed = zoomIn
+}
+
+/**
+ * Which way a two-finger touch zooms on each move, from its spread against
+ * the last move's, as OrbitControls' pinch measures it: 'in' as the fingers
+ * spread, 'out' as they close, null while not two fingers or not spreading.
+ */
+export function pinchWays() {
+  const touches = new Map<number, { x: number; y: number }>()
+  const spread = () => {
+    const [a, b] = touches.values()
+    return Math.hypot(a.x - b.x, a.y - b.y)
+  }
+  return {
+    down(id: number, x: number, y: number) {
+      touches.set(id, { x, y })
+    },
+    up(id: number) {
+      touches.delete(id)
+    },
+    move(id: number, x: number, y: number): 'in' | 'out' | null {
+      const touch = touches.get(id)
+      if (!touch) return null
+      const before = touches.size === 2 ? spread() : null
+      touch.x = x
+      touch.y = y
+      if (before === null) return null
+      const after = spread()
+      return after > before ? 'in' : after < before ? 'out' : null
+    },
+  }
+}
+
+/**
+ * Hands `controls` the zoomSpeed for the way each wheel step or pinch move
+ * zooms before OrbitControls takes it (capture on the document runs ahead of
+ * its listeners), so zooming in eases to the floor while zooming out keeps
+ * its old pace. Returns the undo.
+ */
+function zoomWays(controls: OrbitControlsImpl): () => void {
+  const doc = controls.domElement?.ownerDocument
+  if (!doc) return () => {}
+  const inside = (event: Event) =>
+    event.target instanceof Node && !!controls.domElement?.contains(event.target)
+  const pinch = pinchWays()
+  const onWheel = (event: WheelEvent) => {
+    if (!inside(event) || event.deltaY === 0) return
+    controls.zoomSpeed = event.deltaY < 0 ? zoomSpeeds.in : zoomSpeeds.out
+  }
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch' && inside(event)) {
+      pinch.down(event.pointerId, event.pageX, event.pageY)
+    }
+  }
+  const onPointerMove = (event: PointerEvent) => {
+    const way = pinch.move(event.pointerId, event.pageX, event.pageY)
+    if (way) controls.zoomSpeed = zoomSpeeds[way]
+  }
+  const onPointerUp = (event: PointerEvent) => pinch.up(event.pointerId)
+  const capture = { capture: true }
+  doc.addEventListener('wheel', onWheel, capture)
+  doc.addEventListener('pointerdown', onPointerDown, capture)
+  doc.addEventListener('pointermove', onPointerMove, capture)
+  doc.addEventListener('pointerup', onPointerUp, capture)
+  doc.addEventListener('pointercancel', onPointerUp, capture)
+  return () => {
+    doc.removeEventListener('wheel', onWheel, capture)
+    doc.removeEventListener('pointerdown', onPointerDown, capture)
+    doc.removeEventListener('pointermove', onPointerMove, capture)
+    doc.removeEventListener('pointerup', onPointerUp, capture)
+    doc.removeEventListener('pointercancel', onPointerUp, capture)
+  }
 }
 
 /**
@@ -243,7 +338,7 @@ function leaveCloseZoom(
   closeZoomState.groundUnderTarget = null
   closeZoomState.groundUnderEye = null
   closeZoomState.guard = false
-  if (controls && controls.zoomSpeed !== 1) controls.zoomSpeed = 1
+  if (controls) setZoomSpeeds(controls, 1, 1)
   if (useStore.getState().closeZoom) useStore.getState().setCloseZoom(false)
   if (useStore.getState().closeZoomTiles) useStore.getState().setCloseZoomTiles(false)
 }
@@ -256,6 +351,8 @@ function leaveCloseZoom(
  */
 export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
   const get = useThree((s) => s.get)
+  const controls = useThree((s) => s.controls) as OrbitControlsImpl | null
+  useEffect(() => (controls ? zoomWays(controls) : undefined), [controls])
   const ownerRef = useRef<CloseZoomOwner>({
     owns: false,
     wasClose: false,
@@ -339,7 +436,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
       closeZoomState.groundUnderTarget = null
       closeZoomState.groundUnderEye = null
       closeZoomState.guard = false
-      if (controls.zoomSpeed !== 1) controls.zoomSpeed = 1
+      setZoomSpeeds(controls, 1, 1)
       // Over any ground, unsampled: the eye only crosses the barrier on it,
       // and the next frame, in close zoom, takes the ground's own.
       closeZoomState.floor = closeZoomFloor(
@@ -373,8 +470,8 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     closeZoomState.groundUnderEye = gE
     closeZoomState.guard = eyeR < gE + clearance / 2
 
-    const speed = closeZoomSpeed(controls.getDistance(), floor)
-    if (controls.zoomSpeed !== speed) controls.zoomSpeed = speed
+    const distance = controls.getDistance()
+    setZoomSpeeds(controls, closeZoomInSpeed(distance, floor), closeZoomOutSpeed(distance, gT))
 
     earth.getWorldQuaternion(_now)
     if (owner.hasPrevious) spin.turn.copy(_now).multiply(owner.previous.invert())
