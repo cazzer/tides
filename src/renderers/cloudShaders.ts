@@ -88,6 +88,7 @@ import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terr
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import { SKY_VIEW_GLSL, SKY_VIEW_UNIFORMS } from './skyView'
+import { GROUND_HAZE_GLSL } from './groundHaze'
 import depthGlsl from '../shaders/depth.glsl'
 
 const f = (x: number) => x.toFixed(6)
@@ -686,6 +687,51 @@ vec4 cloudHazeFront(vec3 eye, vec3 d, float s, float shell) {
 // light came from (dist, summed by the light's share, cleared of clear).
 vec4 cloudFogHaze(vec3 eye, vec3 d, float dist, float clear, float ease, float shell) {
   return ease < 1.0 ? cloudHazeFront(eye, d, dist / max(1.0 - clear, 1e-6), shell) : vec4(0.0);
+}
+#endif
+#ifndef CLOUD_FLAT
+// The ground's haze (groundHaze.ts, its uniforms shared: shareWith()), for
+// the air in front of a cloud on a ray that ends on the ground (tides-
+// d9f.10, whose deck can lie under a low eye). Under the shell's top the
+// atmosphere draws nothing over such a ray (the ground stops it), so the
+// share cloudHazeFront() re-adds of that ray's column (its column from
+// under the haze's base, a quarter of it around the nadir, none further
+// out) would veil the cloud where the ground beside it is clear. Radii
+// alone and the Sun's direction, the cloud's own, which the ground's is.
+uniform float uGroundHaze;
+uniform float uGroundHazeLength;
+uniform float uGroundHazeTop;
+#define uGroundHazeSun uSunDir
+${GROUND_HAZE_GLSL}#undef uGroundHazeSun
+
+// The haze in front of a hit s along d, as cloudHazeFront() gives it, and
+// the share of it laid (scale): over the ground the ground's haze for the
+// segment (its colour, cover and share), so a cloud's light comes through
+// as the ground's would. Why a blend and not a switch: the two models
+// don't meet at the sea horizon (the ground's is a share of its horizon's
+// haze by the segment's depth, the sky's a fraction of the ray's column),
+// so the ground's weight rises from none at the sea horizon over
+// HAZE_SEA_RAMP of 1 - (dip / depression)^2, the ramp over which the
+// atmosphere's sea rays (columnAheadOverSea()) leave the ray's own column,
+// and goes as the eye nears the shell's top, where cloudHazeFront() eases
+// to the whole column the atmosphere draws there and uGroundHaze turns off.
+// Land standing over the sea horizon is the sky's. The ground's share
+// rides on the share passed to cloudOut() (scale) and its cover is divided
+// by it, so the haze is tone mapped and then scaled, as the ground's.
+vec4 cloudHazeHit(vec3 eye, vec3 d, float s, float shell, out float scale) {
+  float b = dot(eye, d);
+  float h = b * b - (dot(eye, eye) - uSeaLevel * uSeaLevel);
+  float ground = b < 0.0 && h > 0.0
+    ? uGroundHaze * smoothstep(0.0, HAZE_SEA_RAMP, h / (b * b))
+      * (1.0 - smoothstep(shell - 2.0 * uScaleHeight, shell, length(eye)))
+    : 0.0;
+  scale = 1.0;
+  vec4 sky = ground < 1.0 ? cloudHazeFront(eye, d, s, shell) : vec4(0.0);
+  if (ground <= 0.0) return sky;
+  float cover;
+  vec4 haze = groundHaze(eye, d * s, cover);
+  scale = mix(1.0, haze.a, ground);
+  return vec4(mix(sky.rgb, haze.rgb, ground), mix(sky.a, cover, ground) / max(scale, 1e-6));
 }
 #endif
 
@@ -1895,20 +1941,42 @@ void main() {
   // through.
   float fogA = 1.0 - fogClear;
   float a = fogA + fogClear * opacity;
+#ifdef CLOUD_FLAT
   vec4 hazeFront = cloudHazeFront(eye, d, length(pShade - eye), shell);
+#else
+  // Over the ground, the ground's (cloudHazeHit()): its share rides on the
+  // cloud's.
+  float hazeScale;
+  vec4 hazeFront = cloudHazeHit(eye, d, length(pShade - eye), shell, hazeScale);
+  float shareFront = fogClear * opacity * hazeScale;
+#endif
 #ifdef FOG_EASE
   // And over the fog while it eases in (cloudFogHaze()).
   vec4 hazeFog = cloudFogHaze(eye, d, fogDist, fogClear, fogEase, shell);
   float shareFog = (1.0 - fogEase) * fogA;
+#ifdef CLOUD_FLAT
   float share = fogClear * opacity + shareFog;
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
     (hazeFront.rgb * fogClear * opacity + hazeFog.rgb * shareFog) / max(share, 1e-6), share,
     (hazeFront.a * fogClear * opacity + hazeFog.a * shareFog) / max(share, 1e-6));
 #else
+  float share = shareFront + shareFog;
+  cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
+    fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
+    (hazeFront.rgb * shareFront + hazeFog.rgb * shareFog) / max(share, 1e-6), share,
+    (hazeFront.a * shareFront + hazeFog.a * shareFog) / max(share, 1e-6));
+#endif
+#else
+#ifdef CLOUD_FLAT
   cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
     fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
     hazeFront.rgb, fogClear * opacity, hazeFront.a);
+#else
+  cloudOut(vec4((fogA * fogLight + fogClear * opacity * radiance) / max(a, 1e-6), a),
+    fogged ? FRAG_DEPTH_NEAREST : viewDepthToFragDepth(projectionMatrix, z),
+    hazeFront.rgb, shareFront, hazeFront.a);
+#endif
 #endif
 #else
   gl_FragColor = vec4(radiance, opacity);
@@ -2157,6 +2225,10 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       uMarchStep: { value: MARCH_STEP },
       uCloudCeiling: { value: ceilingTexture() },
       uPixelScale: { value: 1 },
+      // Off until the ground's haze shares its own (groundHaze.ts shareWith()).
+      uGroundHaze: { value: 0 },
+      uGroundHazeLength: { value: 1 },
+      uGroundHazeTop: { value: 0 },
       ...SKY_VIEW_UNIFORMS,
     },
     defines,

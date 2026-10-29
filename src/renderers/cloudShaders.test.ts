@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
 import { SKY_VIEW_GLSL } from './skyView'
+import { createGroundHaze, GROUND_HAZE_GLSL, groundHazeDepth, groundHazeWeights } from './groundHaze'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
@@ -73,6 +74,7 @@ import {
   cloudShape,
   cloudTopKm,
   maxTopKm,
+  EARTH_RADIUS_KM,
 } from '../cloud-layer'
 import {
   CIRRUS_STRETCH,
@@ -523,7 +525,12 @@ describe('fog inside a cloud (tides-01v.8.6)', () => {
       for (const name of ['cloudFogDensity', 'cloudHazeFront', 'fogged']) {
         expect(outside).not.toContain(name)
       }
-      expect(inside).toContain('cloudHazeFront(eye, d, length(pShade - eye), shell)')
+      // Over the ground the relief's hit takes the ground's haze (tides-d9f.10).
+      expect(inside).toContain(
+        flat
+          ? 'cloudHazeFront(eye, d, length(pShade - eye), shell)'
+          : 'cloudHazeHit(eye, d, length(pShade - eye), shell, hazeScale)'
+      )
       // The atmosphere's own haze, shared with its shader.
       expect(inside).toContain('float columnAhead(')
       // Only the relief march has columns to stand in.
@@ -1578,11 +1585,13 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // scale are uniforms on the relief path; the flat ones are as they were.
   // tides-d9f.10 B: deck-sized lengths (fog path, ground fade, shadow steps,
   // march step) follow the live deck; again only the relief ones regenerated.
+  // tides-d9f.10: a cloud on a ray that ends on the ground takes the ground's
+  // haze for the air in front of it (cloudHazeHit(), the relief back faces').
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
     'relief-full-front-ease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
-    'relief-full-back-noease': '3ff559ef65df13010feb6ebe629b8a6f11296618911258de344ca3c209466355',
-    'relief-full-back-ease': '1a785b6610c3600d38fa903e10c1852fe12870dcd7aafec6df6d604772bc7049',
+    'relief-full-back-noease': '1d9f7745cd9356e53d78ee85c18e2f45b7ed03086657747aa8056eb720484530',
+    'relief-full-back-ease': 'c3c207af397528901ac1def8e1fd87cd78f0846141630ed9c813154aa4721a54',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-back-noease': '3a79db74cfaf67b5d9e8669562c686a9a09d1d8cea9c02036d6cd8de28049129',
@@ -2039,6 +2048,59 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
       }
       expect(longest / MARCH_STEPS, `${km} km`).toBeLessThanOrEqual(step * 1.02)
       expect(most, `${km} km`).toBeLessThanOrEqual(MARCH_STEPS + 2)
+    }
+  })
+
+  it('lays the ground haze in front of a cloud on a ray that ends on the ground, on the relief path alone', () => {
+    const relief = createCloudLayer(createEclipseShadow('earth'), false)
+    const flat = createCloudLayer(createEclipseShadow('earth'), true)
+    try {
+      const inside = preprocess(relief.material.fragmentShader, new Set(['FLIP_SIDED']))
+      // The ground's own function, once, on the cloud's Sun.
+      expect(inside.split(GROUND_HAZE_GLSL).length).toBe(2)
+      expect(inside).toContain('#define uGroundHazeSun uSunDir')
+      expect(inside).toContain('vec4 haze = groundHaze(eye, d * s, cover);')
+      expect(inside.split('uniform float uGroundHaze;').length).toBe(2)
+      // The ground's program takes the same text.
+      const ground = phongShader()
+      const haze = createGroundHaze(relief.uniforms.uSunDir, sea, false)
+      haze.patch.onBeforeCompile(ground, {} as THREE.WebGLRenderer)
+      expect(ground.fragmentShader).toContain(GROUND_HAZE_GLSL)
+      // Neither the flat tier nor the faces from outside.
+      expect(preprocess(flat.material.fragmentShader, new Set(['CLOUD_FLAT', 'FLIP_SIDED']))).not.toMatch(/groundHaze\(|uGroundHaze/)
+      expect(preprocess(relief.material.fragmentShader, new Set())).not.toMatch(/groundHaze\(|uGroundHaze/)
+      // Off until shared; then the ground's own uniform objects.
+      expect(relief.material.uniforms.uGroundHaze.value).toBe(0)
+      haze.shareWith(relief.material)
+      for (const name of ['uGroundHaze', 'uGroundHazeLength', 'uGroundHazeTop']) {
+        const own = ground.uniforms[name]
+        expect(own).toBeDefined()
+        expect(relief.material.uniforms[name]).toBe(own)
+      }
+    } finally {
+      relief.dispose()
+      flat.dispose()
+    }
+  })
+
+  it('gives a cloud under a low eye no more haze than the ground beside it gets (groundHazeWeights())', () => {
+    const km = sea / EARTH_RADIUS_KM
+    const eye = new THREE.Vector3(0, sea + 5 * km, 0)
+    const share = (to: THREE.Vector3) =>
+      groundHazeWeights(eye.length(), groundHazeDepth(eye, to.clone().sub(eye), sea), 0, sea, false).haze
+    // Straight down onto a top 2 km up: the segment's share, where
+    // cloudHazeFront() laid a quarter of the ray's column.
+    expect(share(new THREE.Vector3(0, sea + 2 * km, 0))).toBeLessThan(1e-3)
+    // Along a slanting ray, a cloud before the ground takes less than the
+    // ground behind it, the ground's own model either side.
+    const d = new THREE.Vector3(1, -0.1, 0).normalize()
+    const b = eye.dot(d)
+    const sSea = -b - Math.sqrt(b * b - (eye.lengthSq() - sea * sea))
+    let last = 0
+    for (const f of [0.25, 0.5, 0.75, 1]) {
+      const next = share(eye.clone().addScaledVector(d, f * sSea))
+      expect(next).toBeGreaterThan(last)
+      last = next
     }
   })
 })

@@ -138,10 +138,11 @@ export default function EarthRenderer({
   const gibsNightPatch = useGibsNightPatch(groundRef, diameter)
   const nightFlight = useNightFlight(clouds.uniforms.uSunDir, clouds.material.uniforms.uAmbient)
   // Aerial perspective from inside the atmosphere (tides-zmw.5).
-  const groundHaze = useMemo(
-    () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
-    [clouds, diameter, textureSet.low]
-  )
+  const groundHaze = useMemo(() => {
+    const haze = createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low)
+    haze.shareWith(clouds.material)
+    return haze
+  }, [clouds, diameter, textureSet.low])
   // Open water that reads as water from low down (tides-07z): its waves'
   // clock and phases, at the haze's eye.
   const water = useMemo(() => createWater(groundHaze.frame), [groundHaze])
