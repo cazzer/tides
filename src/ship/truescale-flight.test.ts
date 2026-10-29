@@ -2,7 +2,8 @@
 // case reloads the modules with a stubbed location.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
-import { MAX_TRUESCALE } from '../truescale'
+import { createHash } from 'node:crypto'
+import { DEFAULT_TRUESCALE, MAX_TRUESCALE } from '../truescale'
 import type { MainCameraPose } from '../main-camera-session'
 
 const T = Date.UTC(2026, 9, 22, 12)
@@ -63,17 +64,17 @@ describe('the default (tides-krh)', () => {
     return Object.fromEntries(ship.map((b) => [b.key, b.radius]))
   }
 
-  it('flies at MAX_TRUESCALE without a flag, and at the scene sizes under ?truescale=0', async () => {
+  it('flies at DEFAULT_TRUESCALE without a flag, and at the scene sizes under ?truescale=0', async () => {
     const { scale, moons, truescale } = await loadAt('?ship=1')
-    expect(truescale.TRUESCALE).toBe(MAX_TRUESCALE)
+    expect(truescale.TRUESCALE).toBe(DEFAULT_TRUESCALE)
     const atDefault = await radiiAt('?ship=1')
     const off = await radiiAt('?ship=1&truescale=0')
     const system = scale.positionsFor('system').radius
     for (const key of ['sun', 'moon', 'mercury', 'jupiter', 'saturn'] as const) {
-      expect(atDefault[key]).toBe(scale.flightRadii(MAX_TRUESCALE)[key])
+      expect(atDefault[key]).toBe(scale.flightRadii(DEFAULT_TRUESCALE)[key])
       expect(off[key]).toBe(scale.flightRadii(0)[key])
     }
-    expect(atDefault.titan).toBe(moons.moonRadiiAt(MAX_TRUESCALE).titan)
+    expect(atDefault.titan).toBe(moons.moonRadiiAt(DEFAULT_TRUESCALE).titan)
     expect(off.titan).toBe(moons.moonRadiiAt(0).titan)
     // The system view keeps its sizes either way.
     expect(system.sun).toBeCloseTo(10, 9)
@@ -81,11 +82,11 @@ describe('the default (tides-krh)', () => {
   })
 })
 
-// At the cap. Past it the Sun's anchor reads on its pair scale with Mercury
-// all the way out (~4× the flight scale at 0.9), so a run in to Venus or
-// Mars that passes the Sun at a few hundred units read the range backwards,
-// by up to ~3–5 million km at 0.9 and on 3–4 of 120 dates at 0.8: the run-ins
-// below are what tides-ofv has to keep passing to raise the cap.
+// At the cap. While the Sun's pair gaps were to its grown shell, its anchor
+// read on its pair scale with Mercury all the way out (~4× the flight scale
+// at 0.9), so a run in to Venus or Mars that passed the Sun at a few hundred
+// units read the range backwards, by up to ~3–5 million km at 0.9 and on 3–4
+// of 120 dates at 0.8, which held the cap at 0.7 (tides-3ln, tides-ofv).
 const AT_MAX = `?truescale=${MAX_TRUESCALE}`
 
 async function setup(t: number, search = AT_MAX) {
@@ -157,6 +158,75 @@ describe('?truescale: HUD ranges', () => {
     },
     30_000
   )
+
+  // The default too, on the same 120 dates.
+  it.each(['venus', 'mars'] as const)(
+    'falls steadily on a straight run in to %s at the default',
+    async (key) => {
+      let worst = 0
+      for (let day = 0; day < 720; day += 6) {
+        const { ship, truth, find, ranges, distances, flight } = await setup(T + day * DAY, '?ship=1')
+        const planet = find(key)
+        const dir = find('earth').body.position.clone().sub(planet.body.position).normalize()
+        const position = new THREE.Vector3()
+        let previous = Infinity
+        const shell = flight.collisionRadius(planet.body)
+        for (let d = 1000; d >= shell + 0.02; d -= d > 200 ? 10 : 0.5) {
+          distances.measureRanges(position.copy(planet.body.position).addScaledVector(dir, d), ship, truth, ranges)
+          worst = Math.max(worst, ranges.km[planet.index] - previous)
+          previous = ranges.km[planet.index]
+        }
+      }
+      expect(worst).toBeLessThanOrEqual(1e-6)
+    },
+    30_000
+  )
+
+  // Past the Sun's band its anchor stands where the flight scale puts the
+  // ship, its growth over the scene size made up (tides-ofv).
+  it("reads the Sun's range at the flight scale beyond its band", async () => {
+    const { ship, truth, find, ranges, distances, flight, scale } = await setup(T)
+    const sun = find('sun')
+    const shell = flight.collisionRadius(sun.body)
+    const growth = shell * (1 - scale.flightRadii(0).sun / sun.body.radius)
+    expect(growth).toBeGreaterThan(200)
+    const kmPerUnit = 149_597_870.7 / scale.FLIGHT_UNITS_PER_AU
+    // Straight up out of the ecliptic, clear of every planet.
+    const up = new THREE.Vector3(0, 1, 0)
+    const position = new THREE.Vector3()
+    for (const gap of [3 * growth, 4 * growth]) {
+      const d = shell + gap
+      distances.measureRanges(position.copy(sun.body.position).addScaledVector(up, d), ship, truth, ranges)
+      // Within 1% (16% short without the band).
+      const share = ranges.km[sun.index] / (d * kmPerUnit - truth.radii[sun.index])
+      expect(Math.abs(share - 1), `gap ${gap}`).toBeLessThan(0.01)
+    }
+  })
+
+  // At ?truescale=0 nothing tides-ofv added takes part: every range, the km
+  // per unit, the true position and the nearest, as on c9dafb0 before it,
+  // over two years of dates from every body out toward three others.
+  it('measures exactly as before at ?truescale=0', async () => {
+    const hash = createHash('sha256')
+    for (let day = 0; day < 720; day += 60) {
+      const { ship, truth, ranges, distances } = await setup(T + day * DAY, '?truescale=0')
+      const sun = ship.find((b) => b.key === 'sun')
+      for (const b of ship) {
+        for (const f of [1.05, 1.5, 3, 20]) {
+          for (const toward of ['sun', 'earth', 'jupiter']) {
+            const other = ship.find((x) => x.key === toward)!
+            const dir = other === b ? new THREE.Vector3(0, 0, 1) : other.position.clone().sub(b.position).normalize()
+            const p = b.position.clone().addScaledVector(dir, b.radius * f + (b === sun ? 0 : 0.5))
+            distances.measureRanges(p, ship, truth, ranges)
+            hash.update(new Uint8Array(ranges.km.buffer.slice(0)))
+            const rest = [ranges.kmPerUnit, ranges.position.x, ranges.position.y, ranges.position.z, ranges.nearest]
+            hash.update(new Uint8Array(new Float64Array(rest).buffer))
+          }
+        }
+      }
+    }
+    expect(hash.digest('hex')).toBe('6f77fe6b2827f7a877610bedbd794434c5900f7e8671ef0827bc0e3f8e997b6e')
+  }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {
     const { ship, truth, find, ranges, distances, flight, moons } = await setup(T)

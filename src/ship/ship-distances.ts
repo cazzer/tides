@@ -82,7 +82,7 @@
 // Under ?truescale=<a> (../truescale.ts, tides-o39) the drawn radii grow
 // toward true while the distances stay, and nothing here changes: the pair
 // scales are true gaps over the drawn shell gaps, so they follow the radii.
-// The Sun shows it most. At the cap, a = 0.7 (MAX_TRUESCALE), it is drawn
+// The Sun shows it most. At the default, a = 0.7 (DEFAULT_TRUESCALE), it is drawn
 // ~114 units across where the true surface gaps are as before, so the scene
 // gap between it and Mercury or Earth shrinks by ~104 units and the km a
 // unit stands for near it grows (up to ~1.5× against Mercury at perihelion,
@@ -90,12 +90,19 @@
 // higher there, which the user accepted. A run straight in to the Sun still
 // falls to 0 at its shell, and the moon systems' hand-over bands
 // (MOON_SYSTEMS) grow with their flight extents (moonSystemExtent(parent,
-// 'flight')). The Sun's anchor reads on that Mercury-dominated scale however
-// far out the ship is, which is what caps a at 0.7: at 0.8 (Sun ~160) and
-// 0.9 (~228, ~4× against Mercury), a run in to Venus or Mars that passes a
-// few hundred units from the Sun can read its range backwards, by up to
-// ~3–5 million km at 0.9. Giving the Sun a hand-over to the planets' scale,
-// as the moon systems have, would unlock them (tides-ofv).
+// 'flight')).
+//
+// Except the Sun's pair gaps (tides-ofv). Taken to its grown shell, the
+// Sun's gap with Mercury shrank to a sliver (~4× the flight scale at 0.9,
+// ~228 units across), and that scale rode out on every anchor near either:
+// the Sun's own however far out the ship was, Mercury's and Venus's too, so
+// a run in to Venus or Mars passing a few hundred units from the Sun read
+// its range backwards by up to ~3–5 million km, which capped a at 0.7.
+// Pair gaps now take the Sun at its scene size (SUN_PAIR_SHARE), so its
+// pair scales are the planets' at any a, and the Sun's anchor makes up the
+// growth itself: its gap takes the extra shell at the flight scale through
+// SUN_BAND, from its shell out, so it reads 0 on arrival and true beyond the
+// band. At a = 0 the share is 1 and there is no growth: nothing changes.
 
 import {
   Body,
@@ -117,6 +124,8 @@ import {
   moonsOf,
 } from '../moons/moons'
 import { CLOUD_LAYER_TOP } from '../cloud-layer'
+import { FLIGHT_UNITS_PER_AU, flightRadii } from '../flight-scale'
+import { TRUESCALE } from '../truescale'
 import {
   V_NORMAL,
   collisionRadius,
@@ -177,6 +186,18 @@ const GROUND_BAND_DEPTH = (GROUND_BAND.inner + GROUND_BAND.outer) / 2
 // range read there is as before. Wide, so the speed reads little over the
 // usual scale while it does. [TUNE]
 const GROUND_PAYBACK: Band = { inner: GROUND_BAND.outer, outer: 4 }
+
+// The Sun's pair gaps are to its shell at the scene size (flightRadii(0)):
+// this share of its flight shell, 1 at a = 0.
+const SUN_PAIR_SHARE = flightRadii(0).sun / flightRadii(TRUESCALE).sun
+// km per scene unit at the flight scale, where the pair scales converge.
+const FLIGHT_KM_PER_UNIT = KM_PER_AU / FLIGHT_UNITS_PER_AU
+// The Sun's anchor takes its shell's growth over the scene size at the
+// flight scale from its shell out to SUN_BAND_GROWTHS × the growth, so the
+// speed reads at most 1.5 / SUN_BAND_GROWTHS of the flight scale over the
+// planets' through it; at 0.9 the band (~650 units) ends short of Earth.
+// [TUNE]
+const SUN_BAND_GROWTHS = 3
 
 const MOON_SYSTEMS: readonly MoonSystem[] = [
   { parent: 'earth', inner: MOON_SYSTEM_INNER, outer: 2 * MOON_SYSTEM_INNER },
@@ -262,8 +283,13 @@ export function trueBodies(keys: readonly string[], t: number): TrueBodies {
   }
 }
 
+// A body's shell as its pair gaps see it: the Sun's at its scene size.
+function pairShell(body: FlightBody): number {
+  return body.key === 'sun' ? collisionRadius(body) * SUN_PAIR_SHARE : collisionRadius(body)
+}
+
 function pairGap(a: FlightBody, b: FlightBody): number {
-  return Math.max(MIN_GAP, a.position.distanceTo(b.position) - collisionRadius(a) - collisionRadius(b))
+  return Math.max(MIN_GAP, a.position.distanceTo(b.position) - pairShell(a) - pairShell(b))
 }
 
 function weight(gap: number): number {
@@ -436,6 +462,12 @@ export function measureRanges(
       w *= systemBoost[s]
     } else {
       a = Math.exp(neighbourLogScale(r, bodies, truth))
+      const growth = collisionRadius(bodies[r]) - pairShell(bodies[r])
+      if (growth > 0) {
+        const band = { inner: 0, outer: SUN_BAND_GROWTHS * growth }
+        leavingKm = growth * FLIGHT_KM_PER_UNIT * bandSlope(gaps[r], band)
+        leavingGapKm = growth * FLIGHT_KM_PER_UNIT * THREE.MathUtils.smoothstep(gaps[r], band.inner, band.outer)
+      }
     }
     const grounded = bodies[r].ground && speedFloor(bodies[r]) < V_NORMAL
     const groundKm = grounded ? truth.radii[r] / bodies[r].radius - a : 0
