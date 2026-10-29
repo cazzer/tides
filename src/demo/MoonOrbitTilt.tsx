@@ -24,6 +24,7 @@ import {
   NODE_LINE_REACH,
   eclipticCirclePoints,
   moonOrbitPlane,
+  createShadowAxis,
   shadowAxis,
   shadowAxisOpacity,
   type MoonOrbitPlane,
@@ -36,7 +37,9 @@ const ORBIT_OPACITY = 1
 const ECLIPTIC_OPACITY = 0.25 // [TUNE]
 const NODE_COLOR = '#E8C25A'
 // Edge on, the node line lies along the ecliptic and the orbit: a 1 px line
-// there vanished, so it is wider and drawn over them.
+// there vanished, so it is wider and drawn after them. Depth-tested, so Earth
+// and the Moon hide what is behind them; the rings write no depth, so they
+// don't cut it.
 const NODE_LINE_PX = 2.5 // [TUNE]
 const NODE_DOT_RADIUS = 0.3 // scene units [TUNE]
 // Light, as a dark grey line vanishes on space.
@@ -45,18 +48,21 @@ const AXIS_LINE_PX = 2 // [TUNE]
 // Each way along the axis from its nearest point to Earth: well past Earth
 // and the drawn Moon, so it reads as a line going by.
 const AXIS_HALF_LENGTH = 15
-// Not the nodes' gold, which the caption names: the arrow lies along the node
-// line at the eclipse.
-const SUN_COLOR = '#FF9F43'
+// Pale, well apart from the nodes' gold, which the caption names: the arrow
+// lies along the node line at the eclipse.
+const SUN_COLOR = '#FFF1B8'
 const SUN_ARROW_FROM = 4 // scene units from Earth's centre
 const SUN_ARROW_TO = 9
 // Below the ecliptic: at new moon the Sun is behind the drawn Moon, and an
 // arrow through Earth's centre would end on it, reading as pointing at it.
 const SUN_ARROW_DROP = 2.2
-const SUN_HEAD_LENGTH = 0.9
-const SUN_HEAD_RADIUS = 0.35
+// A flat triangle turned about the shaft to face the eye, so seen nearly end
+// on (the step's start, the eye ~28° from the Sun) it is still a pointed
+// head, not a dot like the nodes'.
+const SUN_HEAD_LENGTH = 1.4
+const SUN_HEAD_HALF_WIDTH = 0.55
 const SUN_LINE_PX = 2.5
-// About 13 px on screen at step 5's distance (90), as the body names are.
+// About 13 px on screen at step 5's distance (85), as the body names are.
 const SUN_LABEL_SIZE = 1.1
 // Under the shaft's middle, clear of a phone's edge.
 const SUN_LABEL_ALONG = (SUN_ARROW_FROM + SUN_ARROW_TO) / 2
@@ -75,6 +81,11 @@ const SUN_SHAFT_POINTS: [number, number, number][] = [
   [SUN_ARROW_FROM, 0, 0],
   [SUN_ARROW_TO - SUN_HEAD_LENGTH, 0, 0],
 ]
+const SUN_HEAD = new THREE.Shape()
+  .moveTo(0, -SUN_HEAD_HALF_WIDTH)
+  .lineTo(SUN_HEAD_LENGTH, 0)
+  .lineTo(0, SUN_HEAD_HALF_WIDTH)
+  .closePath()
 
 function simTime(): number {
   return useStore.getState().timestamp ?? Date.now()
@@ -101,6 +112,7 @@ interface Parts {
   axisLine: Line2 | null
   /** Below Earth, turned so +X points at the Sun. */
   sun: THREE.Group | null
+  sunHead: THREE.Mesh | null
   sunLabel: THREE.Group | null
 }
 
@@ -143,10 +155,12 @@ function createLines(t: number): Lines {
 
 const _earth = new THREE.Vector3()
 const _toSun = new THREE.Vector3()
+const _eye = new THREE.Vector3()
+const _shadow = createShadowAxis()
 
 // Module level, so the memoised lines are mutated outside the hook.
-function follow(lines: Lines, parts: Parts, t: number) {
-  const { group, nodes, nodeLine, ascending, descending, axis, axisLine, sun, sunLabel } = parts
+function follow(lines: Lines, parts: Parts, t: number, camera: THREE.Camera) {
+  const { group, nodes, nodeLine, ascending, descending, axis, axisLine, sun, sunHead, sunLabel } = parts
   if (!group) return
   _earth.fromArray(positionsFor('system').positionAt.earth(t))
   group.position.copy(_earth)
@@ -159,7 +173,7 @@ function follow(lines: Lines, parts: Parts, t: number) {
   descending?.position.set(-plane.radius, 0, 0)
 
   if (axis && axisLine) {
-    const shadow = shadowAxis(t)
+    const shadow = shadowAxis(t, _shadow)
     const opacity = shadowAxisOpacity(shadow)
     axis.visible = opacity > 0
     if (axis.visible) {
@@ -171,7 +185,15 @@ function follow(lines: Lines, parts: Parts, t: number) {
 
   // The Sun sits at the scene's origin.
   _toSun.copy(_earth).negate().normalize()
-  sun?.quaternion.setFromUnitVectors(X_AXIS, _toSun)
+  if (sun) {
+    sun.quaternion.setFromUnitVectors(X_AXIS, _toSun)
+    if (sunHead) {
+      // Turned about the shaft (+X) so its face's normal, +Z, leans to the eye.
+      sun.updateWorldMatrix(true, false)
+      sun.worldToLocal(_eye.copy(camera.position))
+      sunHead.rotation.x = Math.atan2(-_eye.y, _eye.z)
+    }
+  }
   sunLabel?.position.copy(_toSun).multiplyScalar(SUN_LABEL_ALONG).setY(-SUN_LABEL_DROP)
 }
 
@@ -188,6 +210,7 @@ export function MoonOrbitTilt() {
     axis: null,
     axisLine: null,
     sun: null,
+    sunHead: null,
     sunLabel: null,
   })
 
@@ -199,7 +222,7 @@ export function MoonOrbitTilt() {
     [lines]
   )
 
-  useFrame(() => follow(lines, parts.current, simTime()))
+  useFrame(({ camera }) => follow(lines, parts.current, simTime(), camera))
 
   const [orbitMaterial, eclipticMaterial] = lines.materials
   const p = parts.current
@@ -211,8 +234,7 @@ export function MoonOrbitTilt() {
     >
       <lineLoop geometry={lines.orbit} material={orbitMaterial} raycast={noRaycast} />
       <lineLoop geometry={lines.ecliptic} material={eclipticMaterial} raycast={noRaycast} />
-      {/* Over everything else here, so it shows where the orbit and the
-          ecliptic lie along it edge on. */}
+      {/* After the rings, so it shows where they lie along it edge on. */}
       <group
         ref={(g) => {
           p.nodes = g
@@ -225,7 +247,6 @@ export function MoonOrbitTilt() {
           points={UNIT_LINE}
           color={NODE_COLOR}
           lineWidth={NODE_LINE_PX}
-          depthTest={false}
           depthWrite={false}
           transparent
           renderOrder={2}
@@ -242,7 +263,7 @@ export function MoonOrbitTilt() {
             raycast={noRaycast}
           >
             <sphereGeometry args={[NODE_DOT_RADIUS, 16, 12]} />
-            <meshBasicMaterial color={NODE_COLOR} depthTest={false} depthWrite={false} transparent />
+            <meshBasicMaterial color={NODE_COLOR} depthWrite={false} transparent />
           </mesh>
         ))}
       </group>
@@ -272,12 +293,14 @@ export function MoonOrbitTilt() {
       >
         <Line points={SUN_SHAFT_POINTS} color={SUN_COLOR} lineWidth={SUN_LINE_PX} raycast={noRaycast} />
         <mesh
-          position={[SUN_ARROW_TO - SUN_HEAD_LENGTH / 2, 0, 0]}
-          rotation={[0, 0, -Math.PI / 2]}
+          ref={(m) => {
+            p.sunHead = m
+          }}
+          position={[SUN_ARROW_TO - SUN_HEAD_LENGTH, 0, 0]}
           raycast={noRaycast}
         >
-          <coneGeometry args={[SUN_HEAD_RADIUS, SUN_HEAD_LENGTH, 16]} />
-          <meshBasicMaterial color={SUN_COLOR} />
+          <shapeGeometry args={[SUN_HEAD]} />
+          <meshBasicMaterial color={SUN_COLOR} side={THREE.DoubleSide} />
         </mesh>
       </group>
       <Billboard

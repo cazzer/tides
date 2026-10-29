@@ -6,9 +6,9 @@ import { MAIN_FOV } from '../main-view'
 import { eyeDirection } from './demo-script'
 import { solarEclipse } from './demos/solar-eclipse'
 import {
+  createShadowAxis,
   eclipticCirclePoints,
   moonOrbitPlane,
-  nodeLinePoints,
   shadowAxis,
   shadowAxisOpacity,
 } from './moon-orbit-tilt'
@@ -52,18 +52,6 @@ describe('moonOrbitPlane', () => {
   })
 })
 
-describe('nodeLinePoints', () => {
-  it('runs through Earth, both ways past the orbit', () => {
-    const plane = moonOrbitPlane(Date.parse('2024-04-08T18:17:16Z'))
-    const p = nodeLinePoints(plane)
-    const a = new THREE.Vector3(p[0], p[1], p[2])
-    const b = new THREE.Vector3(p[3], p[4], p[5])
-    expect(a.clone().add(b).length()).toBeLessThan(1e-6)
-    expect(a.length()).toBeGreaterThan(plane.radius)
-    expect(Math.abs(a.y)).toBeLessThan(1e-6)
-  })
-})
-
 describe('eclipticCirclePoints', () => {
   it('is a flat circle of the radius asked', () => {
     const points = eclipticCirclePoints(10, 16)
@@ -93,6 +81,11 @@ describe('shadowAxis', () => {
     expect(shadowAxisOpacity(axis)).toBe(1)
   })
 
+  it('fills the axis it is given', () => {
+    const out = createShadowAxis()
+    expect(shadowAxis(Date.parse('2024-05-08T03:22:00Z'), out)).toBe(out)
+  })
+
   it('runs away from the Sun, square to its nearest point', () => {
     const t = Date.parse('2024-05-08T03:22:00Z')
     const axis = shadowAxis(t)
@@ -109,7 +102,7 @@ describe('shadowAxis', () => {
 
   it('fades out between 8 and 10 Earth radii', () => {
     const at = (missR: number) =>
-      shadowAxisOpacity({ missR, sunward: true, closest: new THREE.Vector3(), direction: new THREE.Vector3() })
+      shadowAxisOpacity({ ...createShadowAxis(), missR, sunward: true })
     expect(at(8)).toBe(1)
     expect(at(9)).toBeCloseTo(0.5)
     expect(at(10)).toBe(0)

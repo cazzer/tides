@@ -41,14 +41,6 @@ export function moonOrbitPlane(t: number): MoonOrbitPlane {
 /** How far past the orbit the node line reaches, each way. */
 export const NODE_LINE_REACH = 1.2
 
-/** The node line's two ends (xyz, xyz), through Earth and past the orbit. */
-export function nodeLinePoints(plane: MoonOrbitPlane, out: Float32Array = new Float32Array(6)): Float32Array {
-  const { x, y, z } = plane.ascendingNode
-  const r = NODE_LINE_REACH * plane.radius
-  out.set([x * r, y * r, z * r, -x * r, -y * r, -z * r])
-  return out
-}
-
 /** A circle of `radius` in the ecliptic plane, `segments` xyz triples. */
 export function eclipticCirclePoints(
   radius: number,
@@ -85,13 +77,18 @@ const axisBodies: EclipseBodies = { sun: new THREE.Vector3(), moon: new THREE.Ve
  * that sits ~10 units out, ~6x too close for Earth's drawn size (flight-scale.ts),
  * so a line from it to the Sun would cross Earth at nearly every new moon.
  */
-export function shadowAxis(t: number): ShadowAxis {
+export function shadowAxis(t: number, out: ShadowAxis = createShadowAxis()): ShadowAxis {
   const { sun, moon } = eclipseBodies(t, axisBodies)
-  const direction = new THREE.Vector3().subVectors(moon, sun).normalize()
-  const closest = moon.clone().addScaledVector(direction, -moon.dot(direction))
-  const missR = closest.length() / EARTH_EQUATORIAL_RADIUS_KM
-  closest.multiplyScalar(positionsFor('system').radius.earth / EARTH_EQUATORIAL_RADIUS_KM)
-  return { missR, closest, direction, sunward: moon.dot(sun) > 0 }
+  out.direction.subVectors(moon, sun).normalize()
+  out.closest.copy(moon).addScaledVector(out.direction, -moon.dot(out.direction))
+  out.missR = out.closest.length() / EARTH_EQUATORIAL_RADIUS_KM
+  out.closest.multiplyScalar(positionsFor('system').radius.earth / EARTH_EQUATORIAL_RADIUS_KM)
+  out.sunward = moon.dot(sun) > 0
+  return out
+}
+
+export function createShadowAxis(): ShadowAxis {
+  return { missR: 0, closest: new THREE.Vector3(), direction: new THREE.Vector3(), sunward: false }
 }
 
 /** The axis shows within this many Earth radii, fading out over the last 2. */
