@@ -1586,12 +1586,13 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   // tides-d9f.10 B: deck-sized lengths (fog path, ground fade, shadow steps,
   // march step) follow the live deck; again only the relief ones regenerated.
   // tides-d9f.10: a cloud on a ray that ends on the ground takes the ground's
-  // haze for the air in front of it (cloudHazeHit(), the relief back faces').
+  // haze for the air in front of it (cloudHazeHit(), the relief back faces'),
+  // the colour mixed by each side's share across the sea horizon's band.
   const UNTYPED_SHELL_SHA256: Record<string, string> = {
     'relief-full-front-noease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
     'relief-full-front-ease': 'c469d704a652aa84704d52157834e5b14664a8abdda9ed23c6e341df5f5cd6be',
-    'relief-full-back-noease': '1d9f7745cd9356e53d78ee85c18e2f45b7ed03086657747aa8056eb720484530',
-    'relief-full-back-ease': 'c3c207af397528901ac1def8e1fd87cd78f0846141630ed9c813154aa4721a54',
+    'relief-full-back-noease': 'ee1445c154828932346a69a09697508e5a61b9f13f29bd86ae7da46be88e444a',
+    'relief-full-back-ease': 'cab1e55312942351b72563eb27097c72f076e1ef07221fda107500c6e18443b7',
     'flat-full-front-noease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-front-ease': '8aad56312c3414dacf7297ae3cd34429a05bfc25e565f7a1b7c07cf64168cb63',
     'flat-full-back-noease': '3a79db74cfaf67b5d9e8669562c686a9a09d1d8cea9c02036d6cd8de28049129',

@@ -731,7 +731,11 @@ vec4 cloudHazeHit(vec3 eye, vec3 d, float s, float shell, out float scale) {
   float cover;
   vec4 haze = groundHaze(eye, d * s, cover);
   scale = mix(1.0, haze.a, ground);
-  return vec4(mix(sky.rgb, haze.rgb, ground), mix(sky.a, cover, ground) / max(scale, 1e-6));
+  // The colour by each side's share: mixed apart from its share, the sky's
+  // share of 1 lit the ground's full glow mid-band, a bright line under the
+  // horizon far over either side's haze.
+  return vec4(mix(sky.rgb, haze.rgb * haze.a, ground) / max(scale, 1e-6),
+    mix(sky.a, cover, ground) / max(scale, 1e-6));
 }
 #endif
 
