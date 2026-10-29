@@ -75,7 +75,7 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: false },
       caption: {
         title: 'The shadow sweeps north-east',
-        body: 'The Moon carries its shadow east faster than Earth turns. Past Newfoundland it leaves Earth over the Atlantic.',
+        body: 'The Moon carries its shadow east, faster than Earth turns. The dark band behind it is the path of totality.',
       },
     },
     {
