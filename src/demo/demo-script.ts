@@ -1,7 +1,7 @@
 // What a demo is (tides-zec.5): a fixed list of steps, each a moment in time
 // and a way of looking at it, with a caption saying what to notice.
 
-import { Vector3 } from 'three'
+import { Quaternion, Vector3 } from 'three'
 import type {
   Layout,
   Location,
@@ -47,6 +47,9 @@ export interface DemoAids {
   solarEclipseSky?: boolean
   /** Main view: the Moon's tilted orbit, the ecliptic and the node line. */
   moonNodes?: boolean
+  /** Main view: Earth's axis, the subsolar dot and the readout latitude's
+   * ring, plus the sunlight readout (tides-zec.3). */
+  seasons?: boolean
 }
 
 /**
@@ -107,6 +110,35 @@ export function eyeDirection(
     .multiplyScalar(Math.cos(elevation))
     .addScaledVector(_up, Math.sin(elevation))
     .normalize()
+}
+
+const _fromDir = new Vector3()
+const _turn = new Quaternion()
+const _partial = new Quaternion()
+
+/**
+ * The eye `t` (0..1) of the way from `from` (eye minus target when the step
+ * began) to `goal` (eyeDirection) at `distance`, turning along the arc and
+ * scaling the distance geometrically. It is placed about the focus, not the
+ * view's target: a step's date jump moves the focus far from the target,
+ * which CameraProvider turns about the eye, so an eye placed about the target
+ * fed back into it and flew off (tides-ytp).
+ */
+export function easedEye(
+  from: Vector3,
+  goal: Vector3,
+  focus: Vector3,
+  t: number,
+  distance: number,
+  out = new Vector3()
+): Vector3 {
+  const fromDistance = from.length()
+  if (!(fromDistance > 0)) return out.copy(goal).multiplyScalar(distance).add(focus)
+  _fromDir.copy(from).divideScalar(fromDistance)
+  _turn.setFromUnitVectors(_fromDir, goal)
+  _partial.identity().slerp(_turn, t)
+  const eased = Math.exp((1 - t) * Math.log(fromDistance) + t * Math.log(distance))
+  return out.copy(_fromDir).applyQuaternion(_partial).multiplyScalar(eased).add(focus)
 }
 
 /** 0..1 smoothstep of the ease's progress. */

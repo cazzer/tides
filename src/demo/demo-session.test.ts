@@ -2,7 +2,7 @@ import { Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SYSTEM_AIDS } from '../store'
 import type { Demo } from './demo-script'
-import { easeProgress, eyeDirection } from './demo-script'
+import { easeProgress, easedEye, eyeDirection } from './demo-script'
 import {
   DEMO_PLAY_SCALE,
   demoPlayScale,
@@ -259,6 +259,38 @@ describe('eyeDirection', () => {
     const dir = eyeDirection(new Vector3(10, 5, 0), sun, earth, 0, 0)
     expect(dir.y).toBeCloseTo(0)
     expect(dir.x).toBeCloseTo(-1)
+  })
+})
+
+describe('easedEye', () => {
+  const focus = new Vector3(100, 0, 0)
+  const goal = new Vector3(0, 0, 1)
+
+  it('starts at the user’s offset and ends on the pose, about the focus', () => {
+    const from = new Vector3(7.8, 0, 0)
+    expect(easedEye(from, goal, focus, 0, 20).distanceTo(new Vector3(107.8, 0, 0))).toBeCloseTo(0)
+    expect(easedEye(from, goal, focus, 1, 20).distanceTo(new Vector3(100, 0, 20))).toBeCloseTo(0)
+  })
+
+  it('scales the distance geometrically on the way', () => {
+    const eye = easedEye(new Vector3(5, 0, 0), goal, focus, 0.5, 20)
+    expect(eye.distanceTo(focus)).toBeCloseTo(10)
+  })
+
+  // tides-ytp: zoomed in to 2.6 Earth radii, a step's date jump left the
+  // view's target ~30 radii from Earth; an eye placed about the target was
+  // turned further out each frame until it reached ~1e16 radii.
+  it('stays at the eased distance from the focus wherever the view’s target lags', () => {
+    const from = new Vector3(0, 7.8, 0)
+    for (let t = 0; t <= 1; t += 0.1) {
+      const d = easedEye(from, goal, focus, t, 20).distanceTo(focus)
+      expect(d).toBeGreaterThanOrEqual(7.8 - 1e-9)
+      expect(d).toBeLessThanOrEqual(20 + 1e-9)
+    }
+  })
+
+  it('takes the pose outright with no starting offset', () => {
+    expect(easedEye(new Vector3(), goal, focus, 0, 20).distanceTo(new Vector3(100, 0, 20))).toBeCloseTo(0)
   })
 })
 

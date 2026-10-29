@@ -39,6 +39,7 @@ import {
 } from './sky'
 import { useDemoAid } from './demo/demo-aids'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
+import { SeasonsGlobe } from './demo/SeasonsGlobe'
 import { EclipseDaylight } from './EclipseDaylight'
 import { coronaFade, eclipseSkyAt } from './eclipse-sky'
 
@@ -115,9 +116,10 @@ export default function SolarSystem({
   const showZodiac = useStore((s) => s.showZodiac)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
   const positions = positionsFor(distanceScale)
-  // The solar eclipse demo's aids (demo-aids.ts); off outside it.
+  // The demos' aids (demo-aids.ts); off outside them.
   const eclipseSky = useDemoAid('solarEclipseSky') && earthCamera
   const moonNodes = useDemoAid('moonNodes')
+  const seasons = useDemoAid('seasons')
 
   // From the surface, the Sun and Moon move to their true directions on a sky
   // around the observer (see sky.ts).
@@ -212,6 +214,7 @@ export default function SolarSystem({
         )}
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
+        {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
         {(ship ? SURFACE_TILES_ON : systemTiles) && (

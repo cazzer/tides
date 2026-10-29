@@ -39,6 +39,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { DemoBar } from './demo/DemoBar'
 import { DemoClock } from './demo/DemoClock'
 import { DemoPlayer } from './demo/DemoPlayer'
+import { SeasonsReadout } from './demo/SeasonsReadout'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
 
@@ -227,6 +228,7 @@ export default function App() {
                   {/* The close zoom tiles' credits (tides-tvr.7.2): none
                       without tiles on screen. */}
                   {SURFACE_TILES_ON && <SurfaceCredit />}
+                  {demo && <SeasonsReadout />}
                 </>
               ) : undefined
             }

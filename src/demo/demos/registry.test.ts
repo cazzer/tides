@@ -1,4 +1,13 @@
-import { Body, Equator, Horizon, MakeTime, Observer, SearchLocalSolarEclipse } from 'astronomy-engine'
+import {
+  Body,
+  Equator,
+  Horizon,
+  MakeTime,
+  Observer,
+  SearchLocalSolarEclipse,
+  SearchPlanetApsis,
+  Seasons,
+} from 'astronomy-engine'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SYSTEM_AIDS, isPlanetFocus } from '../../store'
 import { minDistance } from '../../main-view'
@@ -145,5 +154,27 @@ describe('solar eclipse', () => {
 
   it('stops the shadow’s track as the umbra leaves Earth', () => {
     expect(Date.parse(demo.steps[3].until!)).toBeLessThanOrEqual(Date.parse('2024-04-08T19:56:00Z'))
+  })
+})
+
+describe('seasons', () => {
+  const demo = findDemo('seasons')!
+  const year = Seasons(2026)
+  const perihelion = SearchPlanetApsis(Body.Earth, new Date('2026-12-25T00:00:00Z')).time.date
+  const instants = [year.mar_equinox, year.jun_solstice, year.sep_equinox, year.dec_solstice].map((t) => t.date)
+
+  it('steps through the 2026 equinoxes and solstices, then perihelion', () => {
+    const expected = [...instants, perihelion]
+    expect(demo.steps).toHaveLength(expected.length)
+    demo.steps.forEach((step, i) => {
+      expect(Math.abs(Date.parse(step.date) - expected[i].getTime())).toBeLessThan(60_000)
+    })
+  })
+
+  it('plays one day at each, from the user’s own location', () => {
+    for (const step of demo.steps) {
+      expect(Date.parse(step.until!) - Date.parse(step.date)).toBe(86_400_000)
+      expect(step.location).toBeUndefined()
+    }
   })
 })
