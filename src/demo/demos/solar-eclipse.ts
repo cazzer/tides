@@ -9,7 +9,7 @@ import type { Demo } from '../demo-script'
 //
 // Torreón rather than Dallas: ~30 km from greatest eclipse, totality 4 min
 // 12 s against Dallas' 3 min 58 s, and the Sun 70° up (64.6° in Dallas, due
-// south), so it stands clear of the hills. Dallas is in step 4's caption.
+// south), so it stands clear of the hills.
 //
 // In steps 2 and 3 the View from Earth draws the Moon at the Sun's scale with
 // a daylit sky (aids.solarEclipseSky, eclipse-sky.ts); step 5 adds the Moon's
@@ -27,14 +27,14 @@ export const solarEclipse: Demo = {
       timeScale: 60,
       layout: 'single',
       mainPanel: 'main',
-      // From high over the shadow's side of the Sun line: the lit Moon, in
-      // the ecliptic and sunward, drops out of the bottom of the frame while
-      // the shadow (~16° west of the subsolar meridian) stays near centre.
-      camera: { focus: 'earth', azimuth: -20, elevation: 40, distance: 20 },
+      // From the Sun's side and a little below the ecliptic, so the sunward
+      // Moon stands just over Earth's top limb, above its own shadow, on a
+      // phone as well as on desktop. It is seen full: the side facing us is lit.
+      camera: { focus: 'earth', azimuth: -10, elevation: -22, distance: 40 },
       aids: { moonShadow: true },
       caption: {
-        title: 'The Moon’s shadow reaches Earth',
-        body: 'New moon, 8 April 2024: the Moon is between the Sun and Earth. Its shadow is the dark dot ringed in white off Mexico: the umbra, 200 km wide, where the eclipse is total. Inside the big faint ring it is partial.',
+        title: 'The Moon’s shadow reaches Mexico',
+        body: 'Seen from the Sun’s side, past the Moon: in the dark dot the eclipse is total, inside the ring partial.',
       },
     },
     {
@@ -48,18 +48,18 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: true },
       caption: {
         title: 'Partial eclipse from Torreón',
-        body: 'Over Torreón, Mexico, the Moon covers more of the Sun each minute and the sky dims. Both are drawn larger than life, at their true size ratio. Totality starts at 18:17 UTC.',
+        body: 'From Torreón the Moon slides over the Sun and the sky dims. Both are drawn larger, true to each other.',
       },
     },
     {
       date: '2024-04-08T18:17:30Z',
-      until: '2024-04-08T18:21:10Z',
+      until: '2024-04-08T18:21:30Z',
       timeScale: 2,
       skyLook: { azimuth: 152.5, altitude: 70 },
       skyFov: 70,
       caption: {
         title: 'Totality',
-        body: 'For over 4 minutes the Moon, just larger than the Sun, hides it completely. The sky goes dark, the brightest stars and planets come out and the corona, the Sun’s faint outer atmosphere, appears.',
+        body: 'For 4 minutes the Moon just covers the Sun. The sky darkens, stars come out and the corona appears.',
       },
     },
     {
@@ -67,13 +67,14 @@ export const solarEclipse: Demo = {
       until: '2024-04-08T19:55:27Z',
       timeScale: 120,
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 15, elevation: 18, distance: 12 },
+      // As step 1, turned east with the shadow.
+      camera: { focus: 'earth', azimuth: 5, elevation: -22, distance: 40 },
       // Off again: the enlarged sky Moon sits inside the ground's bowl, so it
       // shows only while the Torreón steps hold it high.
       aids: { solarEclipseSky: false },
       caption: {
-        title: 'The shadow races north-east',
-        body: 'The umbra (the dark dot; the orange pin marks Torreón) crosses Dallas at 18:40 UTC, then Arkansas, Ohio, New York and Maine, and leaves Earth off Newfoundland near 19:55 UTC.',
+        title: 'The shadow sweeps north-east',
+        body: 'The Moon carries its shadow east faster than Earth turns. Past Newfoundland it leaves Earth over the Atlantic.',
       },
     },
     {
@@ -86,8 +87,8 @@ export const solarEclipse: Demo = {
       camera: { focus: 'earth', azimuth: -25, elevation: 0, distance: 55 },
       aids: { moonNodes: true, moonShadow: false },
       caption: {
-        title: 'Why eclipses are rare',
-        body: 'The Moon’s orbit (lilac ring) is tilted about 5° to Earth’s (faint white circle), so most new moons pass above or below the Sun. Only one near a node, where they cross (the gold line), casts a shadow on Earth.',
+        title: 'Why not every new moon?',
+        body: 'The Moon’s orbit (lilac) tilts 5°, so most new moons pass above or below the Sun. Eclipses need a node (gold).',
       },
     },
   ],

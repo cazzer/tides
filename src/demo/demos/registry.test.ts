@@ -189,10 +189,12 @@ describe('solar eclipse', () => {
     expect(separation(patch.skyLook!, sun)).toBeLessThan(i === 1 ? 30 : 5)
   })
 
-  it('stops the partial phase at second contact and plays totality inside it', () => {
+  it('stops the partial phase at second contact and plays totality through third', () => {
     expect(Date.parse(demo.steps[1].until!)).toBeLessThanOrEqual(totalBegin)
     expect(Date.parse(demo.steps[2].date)).toBeGreaterThan(totalBegin)
-    expect(Date.parse(demo.steps[2].until!)).toBeLessThan(totalEnd)
+    // On past third contact, so the diamond ring and the light coming back play.
+    expect(Date.parse(demo.steps[2].until!)).toBeGreaterThan(totalEnd)
+    expect(Date.parse(demo.steps[2].until!)).toBeLessThanOrEqual(totalEnd + 30_000)
   })
 
   it('stops the shadow’s track as the umbra leaves Earth', () => {
