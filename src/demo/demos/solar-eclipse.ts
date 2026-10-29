@@ -34,7 +34,7 @@ export const solarEclipse: Demo = {
       aids: { moonShadow: true },
       caption: {
         title: 'The Moon’s shadow reaches Earth',
-        body: 'New moon, 8 April 2024: the Moon is between the Sun and Earth. Its shadow, to scale but darkened, is the black spot ringed in white coming ashore in Mexico: the umbra, 200 km wide. The faint ring bounds the penumbra.',
+        body: 'New moon, 8 April 2024: the Moon is between the Sun and Earth. Its shadow is the dark dot ringed in white off Mexico: the umbra, 200 km wide, where the eclipse is total. Inside the big faint ring it is partial.',
       },
     },
     {
@@ -73,7 +73,7 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: false },
       caption: {
         title: 'The shadow races north-east',
-        body: 'The umbra (the black spot ringed in white; the orange pin marks Torreón) crosses Dallas at 18:40 UTC, then Arkansas, Ohio, New York and Maine, and leaves Earth off Newfoundland near 19:55 UTC.',
+        body: 'The umbra (the dark dot; the orange pin marks Torreón) crosses Dallas at 18:40 UTC, then Arkansas, Ohio, New York and Maine, and leaves Earth off Newfoundland near 19:55 UTC.',
       },
     },
     {
