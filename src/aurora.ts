@@ -7,8 +7,9 @@
 // is within a few degrees of CGM at auroral latitudes, which is far below what
 // the oval's own variability makes visible.
 import * as THREE from 'three'
-import { earthPosition, earthSpin, earthTilt } from './ephemeris'
+import { earthPosition, earthTilt } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
+import { shownEarthSpin } from './demo/demo-travel'
 
 const DEG = Math.PI / 180
 
@@ -131,11 +132,17 @@ const earthFrame = new THREE.Object3D()
 const inverse = new THREE.Quaternion()
 
 /** Unit vector toward the Sun in the Earth's local (rotating) frame: the
- * direction Sunlight.tsx shines from, undone by the Earth's tilt and spin. */
-export function sunDirectionLocal(ms: number, out = new THREE.Vector3()): THREE.Vector3 {
+ * direction Sunlight.tsx shines from, undone by the Earth's tilt and spin.
+ * The spin is the drawn globe's (a demo travel may hold it) unless spinAt
+ * says otherwise: pass earthSpin for the true frame. */
+export function sunDirectionLocal(
+  ms: number,
+  out = new THREE.Vector3(),
+  spinAt: (t: number) => number = shownEarthSpin
+): THREE.Vector3 {
   applyBodyTransform(
     earthFrame,
-    { tiltAt: earthTilt, spinAt: earthSpin },
+    { tiltAt: earthTilt, spinAt },
     ms
   )
   earthFrame.updateMatrix()

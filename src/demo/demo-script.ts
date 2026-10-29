@@ -13,18 +13,49 @@ import type { SkyLook } from '../sky-look'
 
 export type DemoFocus = 'sun' | 'earth' | 'moon' | PlanetFocus
 
+/** What a DemoPose's azimuth and elevation are measured against. */
+export type DemoFrame = 'sun' | 'stars' | 'earth'
+
 /**
- * Where the main view's eye sits, relative to the focused body. `azimuth`
- * (deg) turns about +Y (ecliptic north), counter-clockwise seen from the
- * north, from 0 = from the focus toward the Sun (for the Sun itself, toward
- * Earth). `elevation` (deg) is above the ecliptic plane. `distance` is in
- * scene units from the focus's centre, at least minDistance(focus).
+ * Where the main view's eye sits, relative to the focused body. `distance`
+ * is in scene units from the focus's centre, at least minDistance(focus).
+ * The angles (deg) depend on `frame`:
+ * - 'sun' (the default): `azimuth` turns about +Y (ecliptic north),
+ *   counter-clockwise seen from the north, from 0 = from the focus toward
+ *   the Sun (for the Sun itself, toward Earth); `elevation` is above the
+ *   ecliptic plane.
+ * - 'stars': `azimuth` is the ecliptic longitude of the eye seen from the
+ *   focus, 0 toward the vernal equinox (scene -X), 90 = +Z, counter-clockwise
+ *   about +Y; `elevation` is above the ecliptic. The eye keeps its place
+ *   against the stars as the focus moves.
+ * - 'earth': `azimuth` is the geographic east longitude and `elevation` the
+ *   latitude of the point under the eye, which turns with Earth as shown.
+ * A pose in 'stars' or 'earth' is followed for as long as the step runs.
  */
 export interface DemoPose {
   focus: DemoFocus
+  frame?: DemoFrame
   azimuth: number
   elevation: number
   distance: number
+  /** Scene units about the focus kept in view: on a view too narrow for
+   * them at `distance`, the eye backs off until they fit (poseDistance). */
+  fit?: number
+}
+
+/** What a travel holds still on the way: Earth's spin, or the Moon (hidden). */
+export type TravelHold = 'spin' | 'moon'
+
+/**
+ * How the clock gets from the instant shown to a step's date: eased over
+ * `seconds`, or played at `rate` (sim seconds a second, like timeScale).
+ * Reduced motion, or a rate that would take over TRAVEL_MAX_SECONDS, cuts.
+ */
+export type DemoTravel = ({ seconds: number; rate?: never } | { rate: number; seconds?: never }) & {
+  hold?: TravelHold[]
+  /** The pose held on the way, about the step's own camera focus; the eye
+   * eases to the step's camera on arrival. Needs the step's camera. */
+  camera?: Omit<DemoPose, 'focus'>
 }
 
 export interface DemoOverlays {
@@ -60,18 +91,23 @@ export interface DemoAids {
   /** Main view: the Moon's umbra on Earth filled and ringed and the
    * penumbra's edge ringed, from the true shadow geometry (tides-zec.7). */
   moonShadow?: boolean
+  /** Main view: the Moon is hidden, its body, refs and camera carrying on. */
+  hideMoon?: boolean
 }
 
 /**
- * One stop. Every field but `date` and `caption` carries over to the steps
- * after it until one sets it again; before the first step to set it, the
- * user's own setting stands.
+ * One stop. Every field but `date`, `travel` and `caption` carries over to
+ * the steps after it until one sets it again; before the first step to set
+ * it, the user's own setting stands.
  */
 export interface DemoStep {
   /** ISO 8601, UTC. */
   date: string
   /** The clock stops here (ISO 8601); omit to let it run. */
   until?: string
+  /** Moving to this step from another, the clock travels to `date` rather
+   * than cutting to it. Entering the demo always cuts. */
+  travel?: DemoTravel
   timeScale?: number
   camera?: DemoPose
   mainPanel?: PanelKey
@@ -96,6 +132,16 @@ export interface Demo {
 const _ref = new Vector3()
 const _up = new Vector3(0, 1, 0)
 
+// eyeDirection's azimuth 0: the focus-to-Sun direction (Sun-to-Earth for
+// the Sun itself) flattened onto the ecliptic plane, unit.
+function sunReference(focus: Vector3, sun: Vector3, earth: Vector3, out: Vector3): Vector3 {
+  if (focus.distanceToSquared(sun) < 1e-12) out.subVectors(earth, sun)
+  else out.subVectors(sun, focus)
+  out.y = 0
+  if (out.lengthSq() < 1e-12) out.set(1, 0, 0)
+  return out.normalize()
+}
+
 /**
  * The unit direction from the focus to the eye for a DemoPose's azimuth and
  * elevation (degrees). The reference is the focus-to-Sun direction flattened
@@ -109,17 +155,91 @@ export function eyeDirection(
   elevationDeg: number,
   out = new Vector3()
 ): Vector3 {
-  if (focus.distanceToSquared(sun) < 1e-12) _ref.subVectors(earth, sun)
-  else _ref.subVectors(sun, focus)
-  _ref.y = 0
-  if (_ref.lengthSq() < 1e-12) _ref.set(1, 0, 0)
-  _ref.normalize().applyAxisAngle(_up, (azimuthDeg * Math.PI) / 180)
+  sunReference(focus, sun, earth, _ref).applyAxisAngle(_up, (azimuthDeg * Math.PI) / 180)
   const elevation = (elevationDeg * Math.PI) / 180
   return out
     .copy(_ref)
     .multiplyScalar(Math.cos(elevation))
     .addScaledVector(_up, Math.sin(elevation))
     .normalize()
+}
+
+/** Where a pose's angles are measured from, in world space. */
+export interface PoseBodies {
+  focus: Vector3
+  sun: Vector3
+  earth: Vector3
+  /** Earth's world orientation, spin included. */
+  earthTurn: Quaternion
+}
+
+const _vernal = new Vector3(-1, 0, 0)
+
+/** The unit direction from the focus to the eye for `pose` in its frame. */
+export function poseDirection(
+  pose: Pick<DemoPose, 'frame' | 'azimuth' | 'elevation'>,
+  bodies: PoseBodies,
+  out = new Vector3()
+): Vector3 {
+  const { azimuth, elevation } = pose
+  if (pose.frame === 'earth') {
+    // As calculateLocationAndRotationForLatLng (utils.ts) places the location
+    // pin, so a pose over a city sits over its pin: longitude 0 on +X, east
+    // toward -Z. Inlined, as it runs every frame.
+    const lat = (elevation * Math.PI) / 180
+    const lon = (azimuth * Math.PI) / 180
+    return out
+      .set(Math.cos(lat) * Math.cos(lon), Math.sin(lat), -Math.cos(lat) * Math.sin(lon))
+      .applyQuaternion(bodies.earthTurn)
+      .normalize()
+  }
+  if (pose.frame === 'stars') {
+    const lift = (elevation * Math.PI) / 180
+    return out
+      .copy(_vernal)
+      .applyAxisAngle(_up, (azimuth * Math.PI) / 180)
+      .multiplyScalar(Math.cos(lift))
+      .addScaledVector(_up, Math.sin(lift))
+      .normalize()
+  }
+  return eyeDirection(bodies.focus, bodies.sun, bodies.earth, azimuth, elevation, out)
+}
+
+const _frameRef = new Vector3()
+const _frameTurn = new Quaternion()
+
+/**
+ * A pose frame's world orientation: Earth's turn for 'earth', none for
+ * 'stars', and for 'sun' the turn about the ecliptic pole taking +X onto
+ * eyeDirection's reference, which swings round as the focus orbits.
+ */
+export function poseFrameTurn(frame: DemoFrame, bodies: PoseBodies, out = new Quaternion()): Quaternion {
+  if (frame === 'earth') return out.copy(bodies.earthTurn)
+  if (frame === 'stars') return out.identity()
+  const ref = sunReference(bodies.focus, bodies.sun, bodies.earth, _frameRef)
+  return out.setFromAxisAngle(_up, Math.atan2(-ref.z, ref.x))
+}
+
+/** World `v` in a pose frame's own axes, so it can be kept turning with it. */
+export function intoPoseFrame(v: Vector3, frame: DemoFrame, bodies: PoseBodies, out = new Vector3()): Vector3 {
+  return out.copy(v).applyQuaternion(poseFrameTurn(frame, bodies, _frameTurn).invert())
+}
+
+/** `v` in a pose frame's own axes, back in world space as the frame stands now. */
+export function outOfPoseFrame(v: Vector3, frame: DemoFrame, bodies: PoseBodies, out = new Vector3()): Vector3 {
+  return out.copy(v).applyQuaternion(poseFrameTurn(frame, bodies, _frameTurn))
+}
+
+/**
+ * A pose's eye distance in a view of vertical field `vfovDeg` and `aspect`
+ * (width / height): its `distance`, or farther if a sphere of radius `fit`
+ * about the focus would not fit the view's narrower half-angle there.
+ */
+export function poseDistance(pose: Pick<DemoPose, 'distance' | 'fit'>, vfovDeg: number, aspect: number): number {
+  if (!(pose.fit && pose.fit > 0)) return pose.distance
+  const halfV = (vfovDeg * Math.PI) / 360
+  const half = Math.min(halfV, Math.atan(Math.tan(halfV) * aspect))
+  return Math.max(pose.distance, pose.fit / Math.sin(half))
 }
 
 const _fromDir = new Vector3()

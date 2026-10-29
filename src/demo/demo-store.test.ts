@@ -1,6 +1,27 @@
 import { PerspectiveCamera, Vector3 } from 'three'
 import type { OrbitControls } from 'three-stdlib'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Demo } from './demo-script'
+
+const motion = vi.hoisted(() => ({ reduced: false }))
+vi.mock('../ship/reduced-motion', () => ({ prefersReducedMotion: () => motion.reduced }))
+
+// A demo that travels, beside the real ones.
+const travelling: Demo = {
+  id: 'travel-test',
+  title: 'Travel',
+  blurb: 'A demo that travels.',
+  steps: [
+    { date: '2026-03-20T14:46:00Z', timeScale: 0, caption: { title: 'T', body: 'B' } },
+    { date: '2026-06-21T08:24:00Z', travel: { seconds: 4 }, caption: { title: 'T', body: 'B' } },
+    { date: '2026-09-23T00:05:00Z', caption: { title: 'T', body: 'B' } },
+  ],
+}
+vi.mock('./demos', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./demos')>()
+  return { ...real, findDemo: (id: string) => (id === travelling.id ? travelling : real.findDemo(id)) }
+})
+
 import { useStore } from '../store'
 import {
   rememberMainCameraPose,
@@ -15,6 +36,7 @@ import { findDemo } from './demos'
 const initial = useStore.getState()
 
 afterEach(() => {
+  motion.reduced = false
   useStore.setState(initial, true)
   takeMainCameraRestore()
   takeFocusSnap()
@@ -98,5 +120,38 @@ describe('store demo actions', () => {
     expect(useStore.getState().timeScale).toBe(0)
     useStore.getState().toggleDemoPlaying()
     expect(useStore.getState().timeScale).toBe(300)
+  })
+})
+
+describe('store demo travel', () => {
+  const march = Date.parse(travelling.steps[0].date)
+  const june = Date.parse(travelling.steps[1].date)
+
+  it('travels to a step, lands on Next and clears on exit', () => {
+    useStore.getState().startDemo(travelling.id)
+    useStore.getState().goToDemoStep(1)
+    expect(useStore.getState()).toMatchObject({
+      demo: { id: travelling.id, step: 1 },
+      timestamp: march,
+      demoTravel: { from: march, to: june, seconds: 4 },
+    })
+    useStore.getState().goToDemoStep(2)
+    expect(useStore.getState()).toMatchObject({
+      demo: { id: travelling.id, step: 1 },
+      timestamp: june,
+      demoTravel: null,
+    })
+    useStore.getState().goToDemoStep(0)
+    useStore.getState().goToDemoStep(1)
+    expect(useStore.getState().demoTravel).not.toBeNull()
+    useStore.getState().exitDemo()
+    expect(useStore.getState().demoTravel).toBeNull()
+  })
+
+  it('cuts under reduced motion', () => {
+    motion.reduced = true
+    useStore.getState().startDemo(travelling.id)
+    useStore.getState().goToDemoStep(1)
+    expect(useStore.getState()).toMatchObject({ timestamp: june, demoTravel: null })
   })
 })

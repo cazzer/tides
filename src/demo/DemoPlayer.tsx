@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Vector3, type Object3D } from 'three'
+import { Quaternion, Vector3, type Object3D, type PerspectiveCamera } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore } from '../store'
 import { focusedRef } from '../main-view'
@@ -8,7 +8,17 @@ import { updateMainNearFar } from '../camera'
 import { requestFocusSnap, takeFocusSnap } from '../main-camera-session'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { findDemo } from './demos'
-import { easeProgress, easedEye, eyeDirection, type DemoPose } from './demo-script'
+import {
+  easeProgress,
+  easedEye,
+  intoPoseFrame,
+  outOfPoseFrame,
+  poseDirection,
+  poseDistance,
+  type DemoFrame,
+  type DemoPose,
+} from './demo-script'
+import { DEMO_MAX_DELTA } from './demo-travel'
 
 /** How long the eye takes to reach a step's pose, in seconds. */
 export const DEMO_EASE_SECONDS = 2.5
@@ -19,9 +29,6 @@ export const DEMO_EASE_SECONDS = 2.5
  */
 export const DEMO_CAMERA_PRIORITY = 0.25
 
-/** The longest frame the ease counts, so a stall doesn't skip it. */
-const MAX_DELTA = 0.1
-
 /**
  * After the ease the pose is held until CameraProvider's target has turned
  * onto the focus (within this share of the eye distance), or for at most
@@ -30,26 +37,52 @@ const MAX_DELTA = 0.1
 const HOLD_SHARE = 0.01
 const HOLD_LIMIT = 5
 
+/**
+ * A followed pose takes the target onto the focus outright once it is this
+ * close (a share of the eye distance) on the ease's first frame, else once
+ * the ease is done and CameraProvider has had its time to turn it there.
+ */
+const LOCK_SHARE = 0.05
+
 type BodyRef = { current?: Object3D | null } | undefined
 
 interface Ease {
-  pose: DemoPose
-  /** Eye minus target when the step began; null until the first frame. */
+  pose: DemoPose & { frame: DemoFrame }
+  /** Eye minus target when the step began, in the pose frame's own axes,
+   * so the ease runs between two directions that turn together (a goal
+   * turning with Earth could otherwise swing through the opposite of a
+   * world-fixed start, and the arc flip); null until the first frame. */
   from: Vector3 | null
   elapsed: number
+  /** Followed while the clock travels to the step. */
+  travel: boolean
+  /** The travel's own pose (travel.camera), held on the way; on arrival the
+   * eye goes on to the step's pose. */
+  held: boolean
+  /** The target is kept on the focus each frame (a followed pose). */
+  locked: boolean
+}
+
+function easeTo(pose: DemoPose, travel: boolean, held = false): Ease {
+  return { pose: { ...pose, frame: pose.frame ?? 'sun' }, from: null, elapsed: 0, travel, held, locked: false }
 }
 
 const _focus = new Vector3()
 const _sun = new Vector3()
 const _earth = new Vector3()
 const _goal = new Vector3()
+const _from = new Vector3()
+const _earthTurn = new Quaternion()
+const _bodies = { focus: _focus, sun: _sun, earth: _earth, earthTurn: _earthTurn }
 
 /**
  * Eases the main view's eye to each demo step's pose, holds it until the
- * target has reached the focus, then lets go so the user can orbit. A press
- * or wheel in the view, or focusing another body, lets go at once. Mount it
- * in the main panel after CameraProvider: it remounts with the panel (after a
- * View from Earth step) and eases from wherever the camera then is. The
+ * target has reached the focus, then lets go so the user can orbit. While the
+ * clock travels, and for a pose against the stars or Earth, it follows the
+ * focus instead until the step ends. A press or wheel in the view, or
+ * focusing another body, lets go at once. Mount it in the main panel after
+ * CameraProvider: it remounts with the panel (after a View from Earth step)
+ * and eases from wherever the camera then is. The
  * camera write reads to tiltControls as a move from outside, which ends
  * CameraProvider's own framing ease.
  */
@@ -63,8 +96,15 @@ export function DemoPlayer() {
   const ease = useRef<Ease | null>(null)
 
   useEffect(() => {
-    const pose = demo && findDemo(demo.id)?.steps[demo.step]?.camera
-    ease.current = pose ? { pose, from: null, elapsed: 0 } : null
+    const step = demo && findDemo(demo.id)?.steps[demo.step]
+    const pose = step?.camera
+    const travelling = useStore.getState().demoTravel != null
+    const held = travelling && step?.travel?.camera
+    ease.current = !pose
+      ? null
+      : held
+        ? easeTo({ ...held, focus: pose.focus }, true, true)
+        : easeTo(pose, travelling)
     // A snap left unconsumed (the main view unmounted the next frame) must
     // not land on the user's restored view after the demo.
     if (!demo) takeFocusSnap()
@@ -101,28 +141,69 @@ export function DemoPlayer() {
     const sun = (state.sun as BodyRef)?.current
     const earth = (state.earth as BodyRef)?.current
     if (!focus || !sun || !earth) return
-
-    const target = controls.target
-    const reduced = prefersReducedMotion()
-    if (!current.from) {
-      current.from = camera.position.clone().sub(target)
-      if (reduced) requestFocusSnap()
-    }
-    current.elapsed += Math.min(delta, MAX_DELTA)
-    const duration = reduced ? 0 : DEMO_EASE_SECONDS
-    const t = easeProgress(current.elapsed, duration)
-
     focus.getWorldPosition(_focus)
     sun.getWorldPosition(_sun)
     earth.getWorldPosition(_earth)
-    eyeDirection(_focus, _sun, _earth, current.pose.azimuth, current.pose.elevation, _goal)
+    earth.getWorldQuaternion(_earthTurn)
 
-    easedEye(current.from, _goal, _focus, t, current.pose.distance, camera.position)
+    // The travel has landed (or Next landed it). A held pose goes on to the
+    // step's own: the eye was held on the same focus, so with the same
+    // direction this is a straight push in or pull out. The step's own pose
+    // eases on as it was, not braking to start again.
+    let start: Vector3 | null = null
+    if (current.travel && !state.demoTravel) {
+      const pose = findDemo(state.demo.id)?.steps[state.demo.step]?.camera
+      if (!pose) {
+        ease.current = null
+        return
+      }
+      if (current.held) {
+        Object.assign(current, easeTo(pose, false), { locked: current.locked })
+        start = _from.subVectors(camera.position, _focus)
+      } else current.travel = false
+    }
+
+    const target = controls.target
+    const reduced = prefersReducedMotion()
+    const first = !current.from && !start
+    if (first) {
+      start = _from.subVectors(camera.position, target)
+      if (reduced) requestFocusSnap()
+    }
+    const { frame } = current.pose
+    if (start) current.from = intoPoseFrame(start, frame, _bodies)
+    current.elapsed += Math.min(delta, DEMO_MAX_DELTA)
+    const duration = reduced ? 0 : DEMO_EASE_SECONDS
+    const t = easeProgress(current.elapsed, duration)
+
+    // Each frame, so a resized view keeps a pose's fit in view.
+    const lens = camera as PerspectiveCamera
+    const distance = lens.isPerspectiveCamera ? poseDistance(current.pose, lens.fov, lens.aspect) : current.pose.distance
+    poseDirection(current.pose, _bodies, _goal)
+    outOfPoseFrame(current.from!, frame, _bodies, _from)
+    easedEye(_from, _goal, _focus, t, distance, camera.position)
+
+    // Followed, the focus can move far in a frame; CameraProvider's target
+    // would trail it, so it is put on the focus outright, this frame here
+    // and from the next by a snap.
+    const follow = current.travel || frame !== 'sun'
+    if (follow && !current.locked) {
+      const near = target.distanceTo(_focus) <= LOCK_SHARE * camera.position.distanceTo(_focus)
+      current.locked = t >= 1 || (first && near)
+    }
+    if (follow && current.locked) {
+      requestFocusSnap()
+      target.copy(_focus)
+    }
     camera.lookAt(target)
     updateMainNearFar(camera, controls, gl)
 
-    const arrived = target.distanceTo(_focus) <= HOLD_SHARE * current.pose.distance
-    if (t >= 1 && (arrived || current.elapsed >= duration + HOLD_LIMIT)) ease.current = null
+    // A followed pose holds until the step ends or the user takes hold.
+    if (follow) return
+    const arrived = target.distanceTo(_focus) <= HOLD_SHARE * distance
+    if (t >= 1 && (arrived || current.elapsed >= duration + HOLD_LIMIT) && !state.demoTravel) {
+      ease.current = null
+    }
   }, DEMO_CAMERA_PRIORITY)
 
   return null

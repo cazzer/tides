@@ -15,12 +15,13 @@ import {
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SYSTEM_AIDS, isPlanetFocus } from '../../store'
-import { MAIN_FOV, minDistance } from '../../main-view'
+import { MAIN_FOV, maxDistance, minDistance } from '../../main-view'
 import { MOON_UNITS_PER_KM, earthPosition, moonOffset } from '../../ephemeris'
 import { positionsFor } from '../../flight-scale'
 import { sceneRadius } from '../../planets'
-import { eyeDirection } from '../demo-script'
+import { eyeDirection, poseDistance, type DemoFocus, type DemoPose } from '../demo-script'
 import { clampLook } from '../../sky-look'
+import { demoAidAt } from '../demo-aids'
 import { demoStepPatch, type DemoSaved } from '../demo-session'
 import { DEMOS, findDemo } from '.'
 
@@ -78,10 +79,39 @@ describe('DEMOS', () => {
         expect(Number.isFinite(step.timeScale)).toBe(true)
         expect(step.timeScale).toBeGreaterThanOrEqual(0)
       }
-      if (step.camera) {
-        expect(step.camera.distance).toBeGreaterThanOrEqual(minDistance(step.camera.focus))
-        expect(Number.isFinite(step.camera.azimuth)).toBe(true)
-        expect(Math.abs(step.camera.elevation)).toBeLessThanOrEqual(90)
+      // A planet focus needs the planets shown, whatever the user had on.
+      const patch = demoStepPatch(bare, demo, i)
+      // A desktop, and the tightest the system view fits: a phone held
+      // upright, where a pose's fit backs the eye off the most.
+      const views = [
+        { width: 1440, height: 900 },
+        { width: 390, height: 844 },
+      ]
+      const poseFits = (pose: Omit<DemoPose, 'focus'>, focus: DemoFocus) => {
+        expect(pose.distance).toBeGreaterThanOrEqual(minDistance(focus))
+        if (pose.fit !== undefined) expect(pose.fit).toBeGreaterThan(0)
+        for (const view of views) {
+          const distance = poseDistance(pose, MAIN_FOV, view.width / view.height)
+          expect(distance).toBeLessThanOrEqual(maxDistance(patch.showPlanets, view))
+        }
+        expect(Number.isFinite(pose.azimuth)).toBe(true)
+        expect(Math.abs(pose.elevation)).toBeLessThanOrEqual(90)
+      }
+      if (step.camera) poseFits(step.camera, step.camera.focus)
+      if (step.travel) {
+        const { seconds, rate } = step.travel
+        expect((seconds === undefined) !== (rate === undefined)).toBe(true)
+        expect(seconds ?? rate).toBeGreaterThan(0)
+        // The travel's pose is about the step's focus, which it can't change
+        // on the way: the focus is the one the step before left.
+        if (step.travel.camera) {
+          expect(step.camera).toBeDefined()
+          poseFits(step.travel.camera, step.camera!.focus)
+        }
+        if (i > 0 && step.camera) {
+          expect(demoStepPatch(bare, demo, i - 1).cameraFocus).toBe(step.camera.focus)
+        }
+        if (step.travel.hold?.includes('moon')) expect(patch.cameraFocus).not.toBe('moon')
       }
       if (step.location) {
         expect(Math.abs(step.location.lat)).toBeLessThanOrEqual(90)
@@ -94,12 +124,10 @@ describe('DEMOS', () => {
       expect(step.caption.title.length).toBeLessThanOrEqual(40)
       expect(step.caption.body.length).toBeLessThanOrEqual(220)
 
-      // A planet focus needs the planets shown, whatever the user had on.
-      const patch = demoStepPatch(bare, demo, i)
       if (isPlanetFocus(patch.cameraFocus)) expect(patch.showPlanets).toBe(true)
 
       // Only what exit puts back: nothing else (demo-only aids) is stored.
-      const restored = new Set([...Object.keys(bare).filter((k) => k !== 'compass'), 'jumpDate', 'demo'])
+      const restored = new Set([...Object.keys(bare).filter((k) => k !== 'compass'), 'jumpDate', 'demoTravel', 'demo'])
       for (const key of Object.keys(patch)) expect(restored).toContain(key)
       for (const key of Object.keys(patch.systemAids)) expect(Object.keys(DEFAULT_SYSTEM_AIDS)).toContain(key)
     })
@@ -185,6 +213,14 @@ describe('seasons', () => {
       expect(Date.parse(step.until!) - Date.parse(step.date)).toBe(86_400_000)
       expect(step.location).toBeUndefined()
     }
+  })
+
+  it('hides the Moon throughout and looks against the stars, so the axis keeps its lean on screen', () => {
+    demo.steps.forEach((step, i) => {
+      expect(demoAidAt(demo, i, 'hideMoon')).toBe(true)
+      expect(step.camera?.frame).toBe('stars')
+      if (i > 0) expect(step.travel?.camera?.frame).toBe('stars')
+    })
   })
 })
 

@@ -12,6 +12,13 @@ import type {
 } from '../store'
 import type { SkyLook } from '../sky-look'
 import type { Demo } from './demo-script'
+import {
+  shownEarthSpin,
+  stepTravel,
+  travelRun,
+  type EarthSpinHold,
+  type TravelRun,
+} from './demo-travel'
 
 /** The view a demo overrides, put back on exit. */
 export interface DemoSaved {
@@ -47,6 +54,9 @@ export interface DemoSessionState extends DemoSaved {
   shipMode: boolean
   /** A date jump under way, landing on this date. */
   jumpDate: Date | null
+  /** The clock travelling to the step's date (DemoClock carries it); null
+   * otherwise. */
+  demoTravel: TravelRun | null
 }
 
 /** The fields a step sets: all of DemoSaved but compass mode. */
@@ -102,6 +112,7 @@ export function demoStepPatch(saved: DemoSaved, demo: Demo, index: number) {
     systemAids,
     timestamp: Date.parse(demo.steps[index].date),
     jumpDate: null,
+    demoTravel: null,
     demo: { id: demo.id, step: index },
   }
 }
@@ -123,11 +134,20 @@ export function enterDemoPatch(s: DemoSessionState, demo: Demo, now = Date.now()
   return { demoSaved: saved, compass: false, ...demoStepPatch(saved, demo, 0) }
 }
 
-/** The store patch for step `index` of the running demo; null if out of range. */
-export function goToDemoStepPatch(s: DemoSessionState, demo: Demo, index: number) {
+/**
+ * The store patch for step `index` of the running demo; null if out of
+ * range. Moving to another step with a travel keeps the instant shown and
+ * starts the clock travelling from it. Next while a travel runs lands it
+ * instead: the first press finishes the journey, the second moves on.
+ */
+export function goToDemoStepPatch(s: DemoSessionState, demo: Demo, index: number, reduced = false) {
   if (!s.demo || !s.demoSaved || s.demo.id !== demo.id) return null
   if (!Number.isInteger(index) || index < 0 || index >= demo.steps.length) return null
-  return demoStepPatch(s.demoSaved, demo, index)
+  if (s.demoTravel && index === s.demo.step + 1) return { timestamp: s.demoTravel.to, demoTravel: null }
+  const patch = demoStepPatch(s.demoSaved, demo, index)
+  if (index === s.demo.step) return patch
+  const run = travelRun(demo.steps[index].travel, s.timestamp, patch.timestamp, reduced)
+  return run ? { ...patch, timestamp: s.timestamp, demoTravel: run } : patch
 }
 
 /**
@@ -143,7 +163,7 @@ export function exitDemoPatch(s: DemoSessionState, now = Date.now()) {
     saved.timeScale === 1 && saved.timestamp != null
       ? saved.timestamp + (now - enteredAt)
       : saved.timestamp
-  return { demo: null, demoSaved: null, jumpDate: null, ...saved, timestamp }
+  return { demo: null, demoSaved: null, jumpDate: null, demoTravel: null, ...saved, timestamp }
 }
 
 /** The speed Play runs a step at: its own, or an hour a second where it pauses. */
@@ -161,4 +181,57 @@ export function demoPlayScale(s: DemoSessionState, demo: Demo): number {
  */
 export function reachedUntil(previous: number | null, now: number, until: number): boolean {
   return previous != null && previous < until && now >= until
+}
+
+/** What DemoClock carries from one frame to the next. */
+export interface DemoClockTrack {
+  travel: TravelRun | null
+  elapsed: number
+  /** The spin shown as the travel set out (demo-travel.ts). */
+  spinFrom: number
+  /** The clock as last seen, for reachedUntil; null after a step change. */
+  previous: number | null
+}
+
+export function demoClockTrack(): DemoClockTrack {
+  return { travel: null, elapsed: 0, spinFrom: 0, previous: null }
+}
+
+/**
+ * One DemoClock frame, `delta` real seconds on: the store write it makes
+ * (null for none) and Earth's spin hold. A travel carries the clock and
+ * checks no stop on the way: a travel back past `until` isn't reaching it,
+ * and the step's date is short of it anyway. Once landed, the clock runs on
+ * from the step's date and stops at `until`. Updates `track`.
+ */
+export function demoClockFrame(
+  track: DemoClockTrack,
+  travel: TravelRun | null,
+  timestamp: number | null,
+  until: number | null,
+  delta: number
+): {
+  write: { timestamp: number; timeScale?: number; demoTravel?: null } | null
+  hold: EarthSpinHold | null
+} {
+  if (travel !== track.travel) {
+    // Read before the hold moves on: a travel begun mid-travel (Prev, say)
+    // turns on from the angle shown, not the true one.
+    track.spinFrom = travel ? shownEarthSpin(travel.from) : 0
+    track.travel = travel
+    track.elapsed = 0
+  }
+  if (travel) {
+    const step = stepTravel(travel, track.elapsed, delta, track.spinFrom)
+    track.elapsed = step.elapsed
+    track.previous = step.timestamp
+    const write = step.done ? { timestamp: step.timestamp, demoTravel: null } : { timestamp: step.timestamp }
+    return { write, hold: step.hold }
+  }
+  if (until != null && timestamp != null && reachedUntil(track.previous, timestamp, until)) {
+    track.previous = until
+    return { write: { timestamp: until, timeScale: 0 }, hold: null }
+  }
+  track.previous = timestamp
+  return { write: null, hold: null }
 }

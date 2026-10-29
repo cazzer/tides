@@ -15,12 +15,13 @@ describe('demoAidAt', () => {
     id: 'aids',
     title: 'Aids',
     blurb: 'b',
-    steps: [step({ solarEclipseSky: true }), step(), step({ moonNodes: true, solarEclipseSky: false })],
+    steps: [step({ solarEclipseSky: true, hideMoon: true }), step(), step({ moonNodes: true, solarEclipseSky: false })],
   }
 
   it('carries each aid over until a step turns it off', () => {
     expect([0, 1, 2].map((i) => demoAidAt(demo, i, 'solarEclipseSky'))).toEqual([true, true, false])
     expect([0, 1, 2].map((i) => demoAidAt(demo, i, 'moonNodes'))).toEqual([false, false, true])
+    expect([0, 1, 2].map((i) => demoAidAt(demo, i, 'hideMoon'))).toEqual([true, true, true])
   })
 })
 

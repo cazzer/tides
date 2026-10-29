@@ -25,6 +25,7 @@ import {
   ovalAt,
   sunDirectionLocal,
 } from './aurora'
+import { earthSpin } from './ephemeris'
 
 export const OVATION_URL = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json'
 
@@ -126,7 +127,8 @@ function kpForDiffuseEdge(lat: number, hour: number): number {
 export function fitOvation(grid: OvationGrid): OvationFit {
   const t = grid.forecastMs
   const pole = geomagneticAxis(t)
-  const sun = sunDirectionLocal(t)
+  // The true frame: the fit is of the data, whatever the globe is showing.
+  const sun = sunDirectionLocal(t, undefined, earthSpin)
   const midnight = sun.clone().addScaledVector(pole, -sun.dot(pole)).negate().normalize()
   const dawn = new THREE.Vector3().crossVectors(pole, midnight)
 
