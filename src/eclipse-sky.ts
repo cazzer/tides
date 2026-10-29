@@ -29,7 +29,7 @@ import { MOON_RADIUS_KM, SUN_RADIUS_KM, sunVisibleFraction } from './eclipse'
  * Moon outside the demos: big enough to see, small enough that the Sun's
  * upper limb leads sunrise by only (k − 1) × 0.27°. [TUNE]
  */
-export const SKY_SCALE = 6
+export const SKY_SCALE = 8
 
 /** The Sun and Moon from a place on Earth at one moment. */
 export interface EclipseSky {

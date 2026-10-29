@@ -52,8 +52,8 @@ export const lunarEclipse: Demo = {
       mainPanel: 'top',
       location: { lat: 21.31, lon: -157.86 },
       skyLook: { azimuth: 221.5, altitude: 70.3 },
-      // All the way in (SKY_FOV_MIN): the sky Moon is drawn 6× its true size
-      // (eclipse-sky.ts' SKY_SCALE), ~3° across, so this is what lets the
+      // All the way in (SKY_FOV_MIN): the sky Moon is drawn 8× its true size
+      // (eclipse-sky.ts' SKY_SCALE), ~4° across, so this is what lets the
       // copper Moon read on a phone.
       skyFov: 20,
       caption: {

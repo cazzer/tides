@@ -22,7 +22,7 @@ export const CORONA_MAX_ANGLE = 1.4
 /**
  * The corona's outer edge, in limb radii (vertex.glsl's uOuter). The
  * panels' perspective cameras show the Sun ~43x real size in the solar
- * eclipse demo (6x elsewhere, eclipse-sky.ts' SKY_SCALE), where a 3R corona
+ * eclipse demo (8x elsewhere, eclipse-sky.ts' SKY_SCALE), where a 3R corona
  * would fill the sky; 1.6 is tuned for the demo. The main view, which looks at
  * it at true scale, keeps 3.
  */

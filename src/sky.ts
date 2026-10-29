@@ -26,7 +26,7 @@ export const DEFAULT_SURFACE_LOCATION = { lat: -30, lon: 0 }
 // The sky Sun and Moon keep the renderers' scene sizes and are drawn at the
 // distance where that size looks k times their true angular radius (~0.27°),
 // which would otherwise be a few pixels (eclipse-sky.ts). Everyday, k is
-// SKY_SCALE: the Sun ~360 units out, the Moon ~35, the Sun's upper limb
+// SKY_SCALE: the Sun ~270 units out, the Moon ~26, the Sun's upper limb
 // clearing the horizon (k − 1) × 0.27° before the real one, and the discs
 // overlapping exactly when the real ones do. The solar eclipse demo's sky Sun
 // keeps its scene radius here instead, ~11.5°, so its k is ~43.
