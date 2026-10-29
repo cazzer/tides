@@ -13,7 +13,9 @@
 
 import { Body, EquatorFromVector, GeoVector, RotateVector, Rotation_EQJ_EQD } from 'astronomy-engine'
 import { airMass } from '../cloud-layer'
+import { subsolarPoint } from '../geo-clouds'
 import type { Location } from '../store'
+import { earthSpinLag } from './demo-travel'
 
 /** W/m² at 1 AU above the air (TSI, Kopp & Lean 2011). */
 export const SOLAR_CONSTANT = 1361
@@ -112,4 +114,14 @@ export function insolation(latDeg: number, decDeg: number, distanceAu: number): 
  */
 export function latitudeCircle(latDeg: number, radius: number): { y: number; radius: number } {
   return { y: radius * Math.sin(latDeg * DEG), radius: radius * Math.cos(latDeg * DEG) }
+}
+
+/**
+ * Where the Sun is overhead on the globe as drawn at t, degrees: the true
+ * subsolar point, east by the spin a demo travel holds the globe short of
+ * the true one, so it stays under the Sun as the held globe turns.
+ */
+export function shownSubsolarPoint(t: number): { lat: number; lon: number } {
+  const sun = subsolarPoint(t)
+  return { lat: sun.lat, lon: sun.lon + earthSpinLag(t) / DEG }
 }

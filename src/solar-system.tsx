@@ -39,6 +39,7 @@ import { useDemoAid } from './demo/demo-aids'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
 import { SeasonsGlobe } from './demo/SeasonsGlobe'
+import { shownEarthSpin } from './demo/demo-travel'
 import { TidesField } from './demo/TidesField'
 import { TidesSpot } from './demo/TidesSpot'
 import { EclipseDaylight } from './EclipseDaylight'
@@ -50,7 +51,6 @@ import moonTextureHigh from './assets/moon.jpg'
 import moonTextureLow from './assets/moon-2k.jpg'
 import {
   EARTH_ORBIT_RADIUS,
-  earthSpin,
   earthTilt,
   moonOrientation,
   sunOrientation,
@@ -124,6 +124,9 @@ export default function SolarSystem({
   const tides = useDemoAid('tides')
   // The globe's clouds give way to it (tides-zec.7.1).
   const moonShadowShown = useDemoAid('moonShadow') && interactive && !ship
+  // A demo travel may hide the Moon, which a fast clock would smear round
+  // Earth; only its look goes, so its body, refs and camera carry on.
+  const moonHidden = useStore((s) => s.demoTravel?.hideMoon ?? false)
 
   // From the surface, the Sun and Moon move to a sky around the observer, both
   // at one scale (see sky.ts): SKY_SCALE, or the solar eclipse demo's own.
@@ -205,7 +208,7 @@ export default function SolarSystem({
         storeLabel="earth"
         diameter={EARTH_DIAMETER}
         positionAt={positions.positionAt.earth}
-        spinAt={earthSpin}
+        spinAt={shownEarthSpin}
         tiltAt={earthTilt}
         interactive={interactive}
       >
@@ -254,10 +257,12 @@ export default function SolarSystem({
         orientationAt={moonOrientation}
         interactive={interactive}
       >
-        <MoonRenderer
-          diameter={positions.radius.moon}
-          texture={moonTexture}
-        />
+        <group visible={!moonHidden}>
+          <MoonRenderer
+            diameter={positions.radius.moon}
+            texture={moonTexture}
+          />
+        </group>
       </OrbitingBody>
       {moonNodes && interactive && !earthCamera && !moonCamera && distanceScale === 'system' && (
         <MoonOrbitTilt />

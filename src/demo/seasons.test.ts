@@ -1,6 +1,6 @@
 import { Body, SearchPlanetApsis, Seasons } from 'astronomy-engine'
 import * as THREE from 'three'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { applyBodyTransform } from '../body-transform'
 import { earthPosition, earthSpin, earthTilt } from '../ephemeris'
 import { subsolarPoint } from '../geo-clouds'
@@ -11,8 +11,10 @@ import {
   latitudeCircle,
   SOLAR_CONSTANT,
   seasonsLatitude,
+  shownSubsolarPoint,
   sunForSeasons,
 } from './seasons'
+import { earthSpinLag, setEarthSpinHold, shownEarthSpin } from './demo-travel'
 
 const DEG = Math.PI / 180
 const seasons = Seasons(2026)
@@ -127,5 +129,27 @@ describe('the subsolar dot', () => {
     const dot = globe.localToWorld(new THREE.Vector3(x, y, z)).sub(globe.position).normalize()
     const toSun = globe.position.clone().negate().normalize()
     expect(Math.acos(Math.min(1, dot.dot(toSun))) / DEG).toBeLessThan(0.5)
+  })
+
+  describe('on a globe a travel holds', () => {
+    afterEach(() => setEarthSpinHold(null))
+    // June to the September equinox, the globe setting out a third of a turn
+    // off the true spin: well short of it, or past it, on the way.
+    const from = june
+    const to = seasons.sep_equinox.date.getTime()
+
+    it.each([0.1, 0.35, 0.6, 0.9])('stays under the Sun %f of the way', (p) => {
+      setEarthSpinHold({ from, to, spinFrom: earthSpin(from) + 2 })
+      const t = from + (to - from) * p
+      expect(Math.abs(earthSpinLag(t))).toBeGreaterThan(0.1)
+      const globe = new THREE.Object3D()
+      applyBodyTransform(globe, { tiltAt: earthTilt, spinAt: shownEarthSpin, positionAt: earthPosition }, t)
+      globe.updateMatrixWorld(true)
+      const shown = shownSubsolarPoint(t)
+      const { x, y, z } = calculateLocationAndRotationForLatLng(shown.lat, shown.lon, 1).position
+      const dot = globe.localToWorld(new THREE.Vector3(x, y, z)).sub(globe.position).normalize()
+      const toSun = globe.position.clone().negate().normalize()
+      expect(Math.acos(Math.min(1, dot.dot(toSun))) / DEG).toBeLessThan(0.5)
+    })
   })
 })

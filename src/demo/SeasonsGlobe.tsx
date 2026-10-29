@@ -8,11 +8,10 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-import { subsolarPoint } from '../geo-clouds'
 import { AURORA_RENDER_ORDER } from '../renderers/earth-shells'
 import { useStore } from '../store'
 import { calculateLocationAndRotationForLatLng } from '../utils'
-import { latitudeCircle, seasonsLatitude } from './seasons'
+import { latitudeCircle, seasonsLatitude, shownSubsolarPoint } from './seasons'
 
 // Sizes are × Earth's radius.
 const AXIS_LENGTH = 1.4 // each way
@@ -38,13 +37,14 @@ function aidMaterial(color: string, opacity: number) {
   return new THREE.MeshBasicMaterial({ color, transparent: true, opacity, toneMapped: false, depthWrite: false })
 }
 
-// Module level, so the dot's mesh is moved outside the hook. subsolarPoint
-// returns a small object, so it runs only when the clock has moved.
+// Module level, so the dot's mesh is moved outside the hook. shownSubsolarPoint
+// returns a small object, so it runs only when the clock has moved. The globe
+// as drawn: a demo travel's held spin moves the dot as well (demo-travel.ts).
 function placeDot(dot: THREE.Mesh | null, placedAt: { t: number }, radius: number) {
   const t = useStore.getState().timestamp ?? Date.now()
   if (!dot || t === placedAt.t) return
   placedAt.t = t
-  const sun = subsolarPoint(t)
+  const sun = shownSubsolarPoint(t)
   const { x, y, z } = calculateLocationAndRotationForLatLng(sun.lat, sun.lon, radius * DOT_LIFT).position
   dot.position.set(x, y, z)
 }

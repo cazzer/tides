@@ -1,6 +1,7 @@
 // A step's travel (DemoStep.travel): the clock carried from the instant
 // shown to the step's date over a few seconds, instead of cutting to it.
 
+import { earthSpin } from '../ephemeris'
 import { easeProgress, type DemoTravel } from './demo-script'
 
 /** The longest frame a demo's eases and travels count, so a stall doesn't skip them. */
@@ -53,4 +54,48 @@ export function travelTimestamp(run: TravelRun, elapsed: number): number {
       ? Math.min(1, Math.max(0, elapsed / run.seconds))
       : easeProgress(elapsed, run.seconds)
   return run.from + (run.to - run.from) * p
+}
+
+// --- Spin hold --------------------------------------------------------------
+
+/** A spin hold under way: the travel's span and the angle it set out from. */
+export interface EarthSpinHold {
+  from: number
+  to: number
+  /** The spin shown at the travel's start (radians, as earthSpin). */
+  spinFrom: number
+}
+
+function wrapPi(a: number): number {
+  return a - 2 * Math.PI * Math.round(a / (2 * Math.PI))
+}
+
+/**
+ * Earth's spin shown at t under `hold`: turned from spinFrom the short way
+ * round to the true spin at the travel's end, in step with the clock, so a
+ * travel of months turns the globe under half a turn instead of strobing
+ * through hundreds, and lands on the true spin with no snap.
+ */
+export function heldEarthSpin(t: number, hold: EarthSpinHold): number {
+  const span = hold.to - hold.from
+  const p = span === 0 ? 1 : Math.min(1, Math.max(0, (t - hold.from) / span))
+  return hold.spinFrom + wrapPi(earthSpin(hold.to) - hold.spinFrom) * p
+}
+
+// Module state, not the store: Earth and everything drawn in its frame read
+// it every frame. Written only by DemoClock.
+let spinHold: EarthSpinHold | null = null
+
+export function setEarthSpinHold(hold: EarthSpinHold | null): void {
+  spinHold = hold
+}
+
+/** Earth's spin as drawn at t: the hold's while a travel holds it, else the true one. */
+export function shownEarthSpin(t: number): number {
+  return spinHold ? heldEarthSpin(t, spinHold) : earthSpin(t)
+}
+
+/** How far (radians) the drawn globe is turned short of the true one at t. */
+export function earthSpinLag(t: number): number {
+  return earthSpin(t) - shownEarthSpin(t)
 }
