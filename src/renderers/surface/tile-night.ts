@@ -36,8 +36,9 @@
 // lights_fragment_end, before the eclipse's and the clouds' code there, as
 // on the globe) reads normal and vNormal, which Phong gives the tiles as it
 // gives the globe; its uniforms are the link's nightFlight, which
-// EarthRenderer updates per camera before the tiles draw. Outside ship mode
-// there is no flight (null) and no fill, as on the globe.
+// EarthRenderer updates per camera before the tiles draw. Without flight
+// detail (flight-detail.ts) there is no flight (null) and no fill, as on the
+// globe.
 //
 // Fade. In flight the globe fades its lights as their finest source's
 // texel is magnified past a few pixels (../nightLights.ts, tides-zmw.24),
