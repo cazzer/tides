@@ -20,9 +20,9 @@ import { MOON_RADIUS_KM, SUN_RADIUS_KM, sunVisibleFraction } from './eclipse'
 // sum of their radii, and a 57% partial would look far deeper. So the Moon's
 // offset from the Sun is scaled by k too, up to first contact: coveredFraction
 // depends only on the radii and the separation over the Sun's radius, so every
-// phase looks as it truly does. Past contact the offset grows at its true
-// rate, so the Moon never jumps, and it is never more than (k − 1)× the sum of
-// the radii from its true direction.
+// phase looks as it truly does. Past contact the extra offset tapers back to
+// none at opposition, so the Moon never jumps or stalls, and it is never more
+// than (k − 1)× the sum of the radii from its true direction.
 
 /**
  * How many times their true angular size View from Earth draws the Sun and
@@ -110,20 +110,28 @@ export function eclipseSkyScale(e: EclipseSky, sunSceneRadius: number, sunDistan
 
 /**
  * The drawn Moon's angle from the drawn Sun for a true separation: k times
- * it until the discs part (contact, the sum of the true radii), then the
- * true rate on from there. Continuous and increasing; never past π.
+ * it until the discs part (contact, the sum of the true radii), then on to π
+ * at a true π, the extra (k − 1) × contact tapering off linearly, so the Moon
+ * reaches the antisolar point only at true opposition rather than parking
+ * there around every full moon. Continuous and increasing.
  */
 export function skyOffset(separation: number, contact: number, k: number): number {
-  const offset = separation <= contact ? k * separation : k * contact + (separation - contact)
-  return Math.min(offset, Math.PI)
+  if (separation <= contact) return Math.min(k * separation, Math.PI)
+  const atContact = k * contact
+  // A scale so large the discs would touch past opposition: just clamp.
+  if (atContact >= Math.PI) return Math.PI
+  return atContact + ((separation - contact) * (Math.PI - atContact)) / (Math.PI - contact)
 }
 
 const axis = new THREE.Vector3()
 
 /** The drawn Moon's unit direction: the Sun's, turned toward the true Moon by skyOffset. */
 export function eclipseMoonDirection(e: EclipseSky, k: number, out = new THREE.Vector3()): THREE.Vector3 {
-  if (e.separation < 1e-9) return out.copy(e.moon)
-  axis.crossVectors(e.sun, e.moon).normalize()
+  axis.crossVectors(e.sun, e.moon)
+  // In line (new or opposition) there is no plane to turn in, and none needed:
+  // the offset is then 0 or π, the true Moon's own direction.
+  if (axis.lengthSq() < 1e-18) return out.copy(e.moon)
+  axis.normalize()
   const offset = skyOffset(e.separation, e.sunRadius + e.moonRadius, k)
   return out.copy(e.sun).applyAxisAngle(axis, offset)
 }

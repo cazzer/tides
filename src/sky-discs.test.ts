@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { MakeTime, Observer, SearchLocalSolarEclipse } from 'astronomy-engine'
+import { MakeTime, Observer, SearchLocalSolarEclipse, SearchMoonPhase } from 'astronomy-engine'
 import { describe, expect, it } from 'vitest'
 import { coveredFraction } from './eclipse'
 import { SKY_SCALE, coronaFade, eclipseSkyAt } from './eclipse-sky'
@@ -136,6 +136,23 @@ describe('View from Earth draws the Sun and Moon at one scale (tides-zec.8)', ()
     for (const t of [newMoon - 12 * HOUR, newMoon, newMoon + 12 * HOUR]) {
       const { drawn } = drawnSky(torreon.lat, torreon.lon, t)
       expect(drawn.separation).toBeGreaterThan(drawn.sunRadius + drawn.moonRadius)
+    }
+  })
+
+  it('around the full moon of 2026-10-26 the drawn Moon keeps moving, short of the antisolar point', () => {
+    const fullMoon = SearchMoonPhase(180, MakeTime(new Date('2026-10-20T00:00:00Z')), 10)!.date.getTime()
+    let previous: ReturnType<typeof drawnSky> | undefined
+    for (let t = fullMoon - 12 * HOUR; t <= fullMoon + 12 * HOUR; t += 10 * 60 * SECOND) {
+      const sky = drawnSky(torreon.lat, torreon.lon, t)
+      expect(angle(sky.drawn.moon, sky.drawn.sun.clone().negate())).toBeGreaterThan(1e-6)
+      if (previous) {
+        // Against the stars, at nearly the true Moon's pace: not parked
+        // opposite the Sun, which moves ~13× slower.
+        const drawnStep = angle(sky.drawn.moon, previous.drawn.moon)
+        const trueStep = angle(sky.e.moon, previous.e.moon)
+        expect(drawnStep).toBeGreaterThan(0.5 * trueStep)
+      }
+      previous = sky
     }
   })
 

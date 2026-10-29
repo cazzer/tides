@@ -77,17 +77,27 @@ describe('skyOffset', () => {
   const k = 43.3
   const contact = 0.55 * DEG
 
-  it('is k times the separation up to contact, continuous there, and increasing', () => {
-    expect(skyOffset(0.2 * DEG, contact, k)).toBeCloseTo(k * 0.2 * DEG, 12)
-    expect(Math.abs(skyOffset(contact + 1e-12, contact, k) - skyOffset(contact, contact, k))).toBeLessThan(1e-11)
-    let previous = -1
-    for (let s = 0; s < Math.PI; s += 0.01 * DEG) {
-      const offset = skyOffset(s, contact, k)
-      expect(offset).toBeGreaterThanOrEqual(previous)
-      expect(offset).toBeLessThanOrEqual(Math.PI)
-      previous = offset
+  it.each([k, SKY_SCALE])(
+    'k = %s: k times the separation up to contact, continuous there, increasing, and π only at π',
+    (scale) => {
+      expect(skyOffset(0.2 * DEG, contact, scale)).toBeCloseTo(scale * 0.2 * DEG, 12)
+      expect(
+        Math.abs(skyOffset(contact + 1e-12, contact, scale) - skyOffset(contact, contact, scale))
+      ).toBeLessThan(1e-11)
+      expect(skyOffset(Math.PI, contact, scale)).toBeCloseTo(Math.PI, 12)
+      let previous = -1
+      for (let s = 0; s < Math.PI; s += 0.01 * DEG) {
+        const offset = skyOffset(s, contact, scale)
+        expect(offset).toBeGreaterThan(previous)
+        expect(offset).toBeLessThan(Math.PI)
+        // Never further from the true Moon than (k − 1)× contact.
+        expect(offset - s).toBeLessThanOrEqual((scale - 1) * contact + 1e-12)
+        previous = offset
+      }
+      // Within a hair of opposition, still short of it.
+      expect(skyOffset(Math.PI - 1e-6, contact, scale)).toBeLessThan(Math.PI)
     }
-  })
+  )
 
   it('keeps every phase’s coverage exactly', () => {
     const rs = 0.2662 * DEG

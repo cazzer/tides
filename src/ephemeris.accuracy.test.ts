@@ -25,7 +25,7 @@ import {
   skyDiscPositionsAt,
   surfaceView,
 } from './sky'
-import { SKY_SCALE, eclipseSkyAt } from './eclipse-sky'
+import { SKY_SCALE, eclipseMoonDirection, eclipseSkyAt } from './eclipse-sky'
 import { sceneRadius } from './planets'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import {
@@ -305,16 +305,20 @@ describe('View from Earth vs astronomy-engine Horizon()', () => {
 
     const site = new Observer(lat, lon, 0)
     const discs = skyDiscPositionsAt(lat, lon, EARTH_RADIUS, SKY_RADII, everydaySkyScale)
-    // The drawn Moon is turned from its true direction by up to (k − 1)× the
-    // sum of the radii, so the discs overlap only when the real ones do
-    // (eclipse-sky.ts); the Sun is drawn on its true direction.
+    const eye = camera.getWorldPosition(new THREE.Vector3())
+    // The Sun is drawn on its true direction. The Moon is turned from its
+    // true one by the scaled offset (eclipse-sky.ts), so the discs overlap
+    // only when the real ones do: its true direction is checked against
+    // Horizon() here, and the drawn one against eclipseMoonDirection.
     const e = eclipseSkyAt(t, lat, lon)
-    const moonSlack = (SKY_SCALE - 1) * (e.sunRadius + e.moonRadius) * DEG
-    for (const [name, body, positionAt, slack] of [
-      ['Sun', Body.Sun, discs.sun, 0],
-      ['Moon', Body.Moon, discs.moon, moonSlack],
+    const trueMoon = e.moon.clone().add(eye)
+    const drawnMoon = new THREE.Vector3(...discs.moon(t)).sub(eye).normalize()
+    expect(drawnMoon.distanceTo(eclipseMoonDirection(e, SKY_SCALE))).toBeLessThan(1e-9)
+    for (const [name, body, point] of [
+      ['Sun', Body.Sun, new THREE.Vector3(...discs.sun(t))],
+      ['Moon', Body.Moon, trueMoon],
     ] as const) {
-      const scene = cameraAltAz(camera, new THREE.Vector3(...positionAt(t)), lat)
+      const scene = cameraAltAz(camera, point, lat)
       const { ra, dec } = Equator(body, new Date(t), site, true, true)
       const expected = Horizon(new Date(t), site, ra, dec)
       const altError = scene.alt - expected.altitude
@@ -332,8 +336,8 @@ describe('View from Earth vs astronomy-engine Horizon()', () => {
       })
       // The ticket asks for 0.5°; measured max is 0.006°, and 0.05° still
       // catches a J2000/of-date mix-up (~0.36° by 2026).
-      expect(Math.abs(altError)).toBeLessThan(0.05 + slack)
-      expect(Math.abs(azError)).toBeLessThan(0.05 + slack)
+      expect(Math.abs(altError)).toBeLessThan(0.05)
+      expect(Math.abs(azError)).toBeLessThan(0.05)
     }
   })
 })
@@ -360,7 +364,6 @@ describe('View from Earth sunrise (tides-zec.8)', () => {
     const drawnRadius = Math.asin(SKY_RADII.sun / sun.distanceTo(eye)) * DEG
     const upperLimb = cameraAltAz(camera, sun, lat).alt + drawnRadius
     expect(Math.abs(upperLimb - (SKY_SCALE - 1) * trueRadius)).toBeLessThan(0.05)
-    expect(upperLimb).toBeLessThanOrEqual(SKY_SCALE * 0.27)
   })
 })
 
