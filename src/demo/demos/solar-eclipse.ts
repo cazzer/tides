@@ -36,7 +36,7 @@ export const solarEclipse: Demo = {
       aids: { moonShadow: true, totalityPath: true },
       caption: {
         title: 'Shadow reaches Mexico',
-        body: 'Seen from the Sun’s side, past the Moon: total eclipse in the dark dot, partial inside the ring.',
+        body: 'Seen from the Sun’s side: the Moon (above) casts this shadow. Total eclipse in the dark dot, partial inside the ring.',
       },
     },
     {
@@ -76,7 +76,7 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: false },
       caption: {
         title: 'The shadow sweeps north-east',
-        body: 'The Moon carries its shadow east, faster than Earth turns. The dark band behind it is the path of totality.',
+        body: 'The Moon drags its shadow east, outrunning Earth’s spin. The dark band shows where totality fell.',
       },
     },
     {
@@ -95,7 +95,7 @@ export const solarEclipse: Demo = {
       aids: { moonNodes: true, moonShadow: false, totalityPath: false },
       caption: {
         title: 'Why not every month?',
-        body: 'The Moon’s orbit (lilac) tilts 5°. In May its shadow (grey line) passes above Earth. Eclipses need a node (gold).',
+        body: 'The Moon’s orbit (lilac) tilts 5°. May’s new moon shadow (grey) passes above Earth. Eclipses need a node (gold).',
       },
     },
   ],
