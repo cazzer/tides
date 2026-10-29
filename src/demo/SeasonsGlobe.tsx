@@ -29,7 +29,7 @@ const DOT_COLOR = '#FFD54A'
 // aid out; the ground's depth still hides the far side. Every material is
 // transparent, the dot's too: three draws opaque meshes before all
 // transparent ones, whatever their renderOrder.
-const AID_RENDER_ORDER = AURORA_RENDER_ORDER + 1
+export const AID_RENDER_ORDER = AURORA_RENDER_ORDER + 1
 
 function noRaycast() {}
 

@@ -6,9 +6,17 @@ import { earthPosition, earthSpin, earthTilt } from '../ephemeris'
 import { subsolarPoint } from '../geo-clouds'
 import { calculateLocationAndRotationForLatLng } from '../utils'
 import {
+  apsisLabel,
   dailyTop,
+  ghostDates,
   insolation,
   latitudeCircle,
+  markerRadius,
+  northAxis,
+  SEASONS_APSIDES,
+  standInFade,
+  unitsPerPixel,
+  wideFade,
   SOLAR_CONSTANT,
   seasonsLatitude,
   shownSubsolarPoint,
@@ -151,5 +159,68 @@ describe('the subsolar dot', () => {
       const toSun = globe.position.clone().negate().normalize()
       expect(Math.acos(Math.min(1, dot.dot(toSun))) / DEG).toBeLessThan(0.5)
     })
+  })
+})
+
+describe('the orbit aid', () => {
+  // Earth's drawn radius (solar-system.tsx's EARTH_DIAMETER, used as one).
+  const radius = 2.95
+  const FOV = 30
+  // The tour's wide eye (pose fit 60) and its close-up.
+  const desk = { width: 1440, height: 900, wide: 60 / Math.sin(15 * DEG) }
+  const phone = { width: 390, height: 844, wide: 60 / Math.sin(Math.atan(Math.tan(15 * DEG) * (390 / 844))) }
+
+  it('pins the apsides on either side of the tour', () => {
+    const aphelion = SearchPlanetApsis(Body.Earth, new Date('2026-06-01T00:00:00Z'))
+    const next = SearchPlanetApsis(Body.Earth, new Date('2026-12-25T00:00:00Z'))
+    const [far, near] = SEASONS_APSIDES
+    expect(Math.abs(far.t - aphelion.time.date.getTime())).toBeLessThan(1000)
+    expect(far.distanceAu).toBeCloseTo(aphelion.dist_au, 5)
+    expect(Math.abs(near.t - next.time.date.getTime())).toBeLessThan(1000)
+    expect(Math.abs(near.t - perihelion)).toBeLessThan(1000)
+    expect(near.distanceAu).toBeCloseTo(next.dist_au, 5)
+    expect(apsisLabel(near.kind, near.distanceAu)).toBe('Closest · 147.1 million km')
+    expect(apsisLabel(far.kind, far.distanceAu)).toBe('Farthest · 152.1 million km')
+  })
+
+  it('sizes the stand-in on screen, never under the true globe', () => {
+    const upp = unitsPerPixel(1000, FOV, 900)
+    expect(markerRadius(upp, radius, 1440) / upp).toBeCloseTo(14)
+    expect(markerRadius(upp, radius, 390) / upp).toBeCloseTo(10)
+    // Close in, the true globe is the larger.
+    expect(markerRadius(unitsPerPixel(30, FOV, 900), radius, 1440)).toBe(radius)
+  })
+
+  it('shows in the wide view and not in the close-up, on a desktop and a phone', () => {
+    for (const view of [desk, phone]) {
+      const globePx = (eye: number) => radius / unitsPerPixel(eye, FOV, view.height)
+      expect(wideFade(globePx(view.wide))).toBe(1)
+      expect(wideFade(globePx(30))).toBe(0)
+    }
+  })
+
+  it('draws the stand-in over the true globe only once clearly larger', () => {
+    expect(standInFade(1.1)).toBe(0)
+    expect(standInFade(1.3)).toBe(0)
+    expect(standInFade(2)).toBe(1)
+    expect(standInFade(1.65)).toBeCloseTo(0.5)
+  })
+
+  it('leaves a stand-in at every stop reached', () => {
+    const dates = [10, 20, 30, 40, 50]
+    expect(ghostDates(dates, 0, false)).toEqual([])
+    expect(ghostDates(dates, 0, true)).toEqual([10])
+    expect(ghostDates(dates, 3, false)).toEqual([10, 20, 30])
+    expect(ghostDates(dates, 3, true)).toEqual([10, 20, 30, 40])
+    expect(ghostDates(dates, 4, true)).toEqual(dates)
+  })
+
+  it('points the axis where the globe’s north is', () => {
+    const globe = new THREE.Object3D()
+    applyBodyTransform(globe, { tiltAt: earthTilt, spinAt: earthSpin, positionAt: earthPosition }, june)
+    const north = new THREE.Vector3(0, 1, 0).applyQuaternion(globe.quaternion)
+    const [x, y, z] = northAxis(earthTilt(june))
+    expect(north.distanceTo(new THREE.Vector3(x, y, z))).toBeLessThan(1e-9)
+    expect(z).toBeGreaterThan(0.39)
   })
 })

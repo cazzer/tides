@@ -10,7 +10,11 @@ import type { Demo, DemoPose, DemoTravel } from '../demo-script'
 //
 // aids.seasons draws Earth's axis, the subsolar dot and the readout
 // latitude's ring (SeasonsGlobe.tsx) and the sunlight readout
-// (SeasonsReadout.tsx) for the user's pin, or 45°N without one. Its sums are
+// (SeasonsReadout.tsx) for the user's pin, or 45°N without one. In the wide
+// view between stops, where Earth is a dot, it also draws a bold axis through
+// Earth, a faint stand-in with its axis left at each stop reached (four
+// parallel axes by the December leg) and the orbit's nearest and farthest
+// points with their distances (SeasonsOrbit.tsx); these fade out close in. Its sums are
 // seasons.ts: the day's mean sunlight above the air
 // Q = S0/(π r²)·(H0 sin φ sin δ + cos φ cos δ sin H0), the tilt's share against
 // the equinox at 1 AU and the distance's against 1 AU. At 45°N: 309 W/m² at

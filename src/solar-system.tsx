@@ -39,6 +39,7 @@ import { useDemoAid } from './demo/demo-aids'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
 import { SeasonsGlobe } from './demo/SeasonsGlobe'
+import { SeasonsOrbit } from './demo/SeasonsOrbit'
 import { shownEarthSpin } from './demo/demo-travel'
 import { TidesField } from './demo/TidesField'
 import { TidesSpot } from './demo/TidesSpot'
@@ -269,6 +270,13 @@ export default function SolarSystem({
       </OrbitingBody>
       {moonNodes && interactive && !earthCamera && !moonCamera && distanceScale === 'system' && (
         <MoonOrbitTilt />
+      )}
+      {/* In world space: the stand-ins stay where Earth was. */}
+      {seasons && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
+        <SeasonsOrbit
+          positionAt={positions.positionAt.earth}
+          radius={EARTH_DIAMETER}
+        />
       )}
       {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
         <TidesField radius={EARTH_DIAMETER} />
