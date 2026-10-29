@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Quaternion, Vector3, type Object3D } from 'three'
+import { Vector3, type Object3D } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore } from '../store'
 import { focusedRef } from '../main-view'
@@ -8,7 +8,7 @@ import { updateMainNearFar } from '../camera'
 import { requestFocusSnap, takeFocusSnap } from '../main-camera-session'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { findDemo } from './demos'
-import { easeProgress, eyeDirection, type DemoPose } from './demo-script'
+import { easeProgress, easedEye, eyeDirection, type DemoPose } from './demo-script'
 
 /** How long the eye takes to reach a step's pose, in seconds. */
 export const DEMO_EASE_SECONDS = 2.5
@@ -43,9 +43,6 @@ const _focus = new Vector3()
 const _sun = new Vector3()
 const _earth = new Vector3()
 const _goal = new Vector3()
-const _fromDir = new Vector3()
-const _turn = new Quaternion()
-const _partial = new Quaternion()
 
 /**
  * Eases the main view's eye to each demo step's pose, holds it until the
@@ -94,7 +91,9 @@ export function DemoPlayer() {
     const current = ease.current
     if (!current || !controls) return
     const state = useStore.getState()
-    if (state.cameraFocus !== current.pose.focus) {
+    // Left the demo: the restore runs this frame, before the effect clears
+    // the ease, which would otherwise put the step's pose back over it.
+    if (!state.demo || state.cameraFocus !== current.pose.focus) {
       ease.current = null
       return
     }
@@ -118,17 +117,7 @@ export function DemoPlayer() {
     earth.getWorldPosition(_earth)
     eyeDirection(_focus, _sun, _earth, current.pose.azimuth, current.pose.elevation, _goal)
 
-    const fromDistance = current.from.length()
-    _fromDir.copy(current.from).normalize()
-    _turn.setFromUnitVectors(_fromDir, _goal)
-    _partial.identity().slerp(_turn, t)
-    const distance = fromDistance > 0
-      ? Math.exp((1 - t) * Math.log(fromDistance) + t * Math.log(current.pose.distance))
-      : current.pose.distance
-    camera.position
-      .copy(_fromDir.applyQuaternion(_partial))
-      .multiplyScalar(distance)
-      .add(target)
+    easedEye(current.from, _goal, _focus, t, current.pose.distance, camera.position)
     camera.lookAt(target)
     updateMainNearFar(camera, controls, gl)
 
