@@ -1,4 +1,4 @@
-import type { Demo } from '../demo-script'
+import type { Demo, DemoPose } from '../demo-script'
 
 // The total lunar eclipse of 3 March 2026. Contact times are astronomy-engine's
 // (SearchLunarEclipse) under the app's ΔT (delta-t.ts), UTC: penumbra from
@@ -10,6 +10,13 @@ import type { Demo } from '../demo-script'
 // Step 4's skyLook is the Moon's place in Honolulu's sky at greatest eclipse,
 // from astronomy-engine's Horizon (refracted): altitude 70.3, azimuth 221.5.
 // registry.test.ts checks it still is.
+// The wide view, about the Moon so every step keeps one focus and each move
+// between stops can carry the clock (DemoStep.travel) instead of cutting:
+// from the Sun's side and above, the Sun, Earth and the Moon in Earth's
+// shadow rings in frame, the Moon looking full; a narrow phone backs off to
+// keep 40 units about the Moon in view, which brings in the whole Sun.
+const WIDE: Omit<DemoPose, 'focus'> = { azimuth: 20, elevation: 25, distance: 170, fit: 40 }
+
 export const lunarEclipse: Demo = {
   id: 'lunar-eclipse',
   title: 'Total lunar eclipse',
@@ -21,7 +28,7 @@ export const lunarEclipse: Demo = {
       timeScale: 0,
       layout: 'single',
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 20, elevation: 25, distance: 170 },
+      camera: { focus: 'moon', ...WIDE },
       aids: { earthShadow: true },
       caption: {
         title: 'Sun, Earth, Moon aligned',
@@ -32,6 +39,9 @@ export const lunarEclipse: Demo = {
       date: '2026-03-03T09:40:00Z',
       until: '2026-03-03T11:04:04Z',
       timeScale: 300,
+      // The clock runs on from the line-up while the view stays wide, then
+      // pushes in past Earth's day side to the Moon entering the rings.
+      travel: { seconds: 4, camera: WIDE },
       camera: { focus: 'moon', azimuth: 21, elevation: 6, distance: 23 },
       caption: {
         title: 'Into the shadow',
@@ -42,6 +52,7 @@ export const lunarEclipse: Demo = {
       date: '2026-03-03T11:04:04Z',
       until: '2026-03-03T11:33:46Z',
       timeScale: 60,
+      travel: { seconds: 3 },
       camera: { focus: 'moon', azimuth: 10, elevation: 3, distance: 5 },
       aids: { earthShadow: false },
       caption: {
@@ -52,6 +63,7 @@ export const lunarEclipse: Demo = {
     {
       date: '2026-03-03T11:33:46Z',
       until: '2026-03-03T12:03:29Z',
+      travel: { seconds: 2 },
       timeScale: 0,
       mainPanel: 'top',
       location: { lat: 21.31, lon: -157.86 },
@@ -70,7 +82,8 @@ export const lunarEclipse: Demo = {
       until: '2026-03-03T14:23:25Z',
       timeScale: 300,
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 20, elevation: 25, distance: 170 },
+      travel: { seconds: 3, camera: WIDE },
+      camera: { focus: 'moon', ...WIDE },
       aids: { earthShadow: true, fullMoonGhosts: true },
       caption: {
         title: 'Out of the shadow',

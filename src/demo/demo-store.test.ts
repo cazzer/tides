@@ -74,7 +74,7 @@ describe('store demo actions', () => {
     expect(useStore.getState()).toMatchObject({
       demo: { id: demo.id, step: 0 },
       layout: 'single',
-      cameraFocus: 'earth',
+      cameraFocus: demo.steps[0].camera!.focus,
       timestamp: Date.parse(demo.steps[0].date),
     })
     useStore.getState().goToDemoStep(2)
