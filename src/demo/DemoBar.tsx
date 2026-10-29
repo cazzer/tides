@@ -1,5 +1,5 @@
 import styled from 'styled-components'
-import { useEffect, useId, useLayoutEffect, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type Ref } from 'react'
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -42,7 +42,14 @@ export function DemoBar() {
   const exitDemo = useStore((s) => s.exitDemo)
   const toggleDemoPlaying = useStore((s) => s.toggleDemoPlaying)
   const nextRef = useRef<HTMLButtonElement>(null)
-  const timeRef = useRef<HTMLSpanElement>(null)
+  const timeText = useRef('')
+  const timeEl = useRef<HTMLSpanElement | null>(null)
+  // A span that (re)attaches shows the time at once, not only from the next
+  // minute on: with the clock stopped that would never come.
+  const timeRef = useCallback((el: HTMLSpanElement | null) => {
+    timeEl.current = el
+    if (el) el.textContent = timeText.current
+  }, [])
   const demo = run ? findDemo(run.id) : undefined
 
   // The menu that started the demo has gone with the dock.
@@ -56,7 +63,8 @@ export function DemoBar() {
   useLayoutEffect(
     () =>
       subscribeDemoTime((text) => {
-        if (timeRef.current) timeRef.current.textContent = text
+        timeText.current = text
+        if (timeEl.current) timeEl.current.textContent = text
       }),
     []
   )
