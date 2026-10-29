@@ -45,7 +45,7 @@ export const lunarEclipse: Demo = {
       camera: { focus: 'moon', azimuth: 21, elevation: 6, distance: 23 },
       caption: {
         title: 'Into the shadow',
-        body: 'The Moon’s own orbit carries it into Earth’s shadow: a faint outer part, then the dark core.',
+        body: 'The Moon’s orbit carries it into Earth’s shadow, faint then dark. Gold dots: entering and leaving the dark core.',
       },
     },
     {
