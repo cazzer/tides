@@ -54,9 +54,9 @@ export interface TidePulls {
   /** Tide-raising strength in units of the Moon's at its mean distance. */
   moon: number
   sun: number
-  /** The combined tide's range (high minus low along the Moon–Sun great
-   * circle) in the same units: k_m + k_s when lined up, |k_m − k_s| when
-   * square. */
+  /** The combined tide's high-minus-low range along the great circle
+   * through the Moon and the Sun, in the same units (rangeMetres turns it
+   * into metres): k_m + k_s when lined up, |k_m − k_s| when square. */
   range: number
 }
 
@@ -74,6 +74,13 @@ export function tidePulls(t: number): TidePulls {
   const cos2Psi = 2 * cosPsi * cosPsi - 1
   const range = Math.sqrt(Math.max(0, km * km + ks * ks + 2 * km * ks * cos2Psi))
   return { moonKm, sunKm, moon: km, sun: ks, range }
+}
+
+/** A TidePulls range in metres of equilibrium tide. Along the Moon–Sun
+ * great circle each body's (3/2)·H·k·(cos²θ − 1/3) swings through (3/2)·H·k,
+ * so the two together swing through (3/2)·H·S. */
+export function rangeMetres(range: number): number {
+  return 1.5 * H_MOON_MEAN_M * range
 }
 
 /**

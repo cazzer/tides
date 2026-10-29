@@ -1,7 +1,8 @@
 // The tides demo's readout (tides-zec.4): a glass panel top-left of the main
 // view with the Moon's and the Sun's tide-raising pull in units of the
-// Moon's at its average distance, what they make together, the equilibrium
-// tide at the marked spot in real centimetres and the shell's exaggeration.
+// Moon's at its average distance, the high–low range they make together (in
+// those units and in real centimetres), the ideal tide at the red dot and the
+// shell's exaggeration.
 // Mounted in the main Panel's overlay while a demo runs (App.tsx); shown only
 // while the step has aids.tides on. It re-renders once every ten sim
 // minutes, through a bucketed store selector.
@@ -9,7 +10,7 @@ import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
-import { spotTide, TIDE_EXAGGERATION, tidePulls, tidesSpot } from './tides'
+import { rangeMetres, spotTide, TIDE_EXAGGERATION, tidePulls, tidesSpot } from './tides'
 
 const BUCKET_MS = 600_000
 const MINUS = '−'
@@ -64,10 +65,10 @@ export function TidesReadoutView({ lat, lon, pinned, timestamp }: TidesReadoutVi
         <Strong>{times(pulls.sun)}</Strong>
       </Line>
       <Line>
-        Together <Strong>{times(pulls.range)}</Strong>
+        High–low range <Strong>{times(pulls.range)}</Strong> · <Strong>{Math.round(rangeMetres(pulls.range) * 100)} cm</Strong>
       </Line>
       <Spot>
-        Tide here <Strong>{signed(tide * 100)} cm</Strong> <Muted>· {spotText(lat, lon, pinned)}</Muted>
+        Ideal tide at the red dot <Strong>{signed(tide * 100)} cm</Strong> <Muted>· {spotText(lat, lon, pinned)}</Muted>
       </Spot>
       <Line>
         <Muted>Bulge drawn ×{thousands.format(TIDE_EXAGGERATION)}</Muted>

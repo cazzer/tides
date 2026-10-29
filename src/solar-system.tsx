@@ -218,7 +218,9 @@ export default function SolarSystem({
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
         {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}
-        {tides && interactive && !earthCamera && !ship && <TidesSpot radius={EARTH_DIAMETER} />}
+        {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
+          <TidesSpot radius={EARTH_DIAMETER} />
+        )}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
         {(ship ? SURFACE_TILES_ON : systemTiles) && (

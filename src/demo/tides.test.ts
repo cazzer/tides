@@ -8,6 +8,7 @@ import {
   equilibriumHeight,
   H_MOON_MEAN_M,
   MOON_MEAN_KM,
+  rangeMetres,
   sceneTideDirections,
   spotTide,
   SUN_MOON_GM,
@@ -102,6 +103,33 @@ describe('equilibriumHeight', () => {
       sum += equilibriumHeight(p.dot(moon), p.dot(sun), pulls)
     }
     expect(Math.abs(sum / n)).toBeLessThan(1e-4)
+  })
+})
+
+describe('rangeMetres', () => {
+  it.each([SPRING, NEAP, KING])('is high minus low along the Moon–Sun great circle at %i', (t) => {
+    const moon = new THREE.Vector3()
+    const sun = new THREE.Vector3()
+    sceneTideDirections(t, moon, sun)
+    const pulls = tidePulls(t)
+    // The circle through both: moon and the unit in-plane normal to it.
+    const across = sun.clone().addScaledVector(moon, -sun.dot(moon)).normalize()
+    let hi = -Infinity
+    let lo = Infinity
+    for (let i = 0; i < 3600; i++) {
+      const a = (i / 3600) * 2 * Math.PI
+      const p = moon.clone().multiplyScalar(Math.cos(a)).addScaledVector(across, Math.sin(a))
+      const h = equilibriumHeight(p.dot(moon), p.dot(sun), pulls)
+      hi = Math.max(hi, h)
+      lo = Math.min(lo, h)
+    }
+    expect(Math.abs(hi - lo - rangeMetres(pulls.range))).toBeLessThan(1e-4)
+  })
+
+  it('reads 77, 22 and 93 cm at spring, neap and king', () => {
+    expect(Math.round(rangeMetres(tidePulls(SPRING).range) * 100)).toBe(77)
+    expect(Math.round(rangeMetres(tidePulls(NEAP).range) * 100)).toBe(22)
+    expect(Math.round(rangeMetres(tidePulls(KING).range) * 100)).toBe(93)
   })
 })
 

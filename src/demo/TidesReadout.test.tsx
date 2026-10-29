@@ -27,8 +27,8 @@ describe('TidesReadoutView', () => {
     for (const part of [
       'Tide-raising pull, × the Moon’s average',
       'Moon 0.98× (387,631 km) · Sun 0.46×',
-      'Together 1.43×',
-      'Tide here +49 cm · example: equator 62.4°W',
+      'High–low range 1.43× · 77 cm',
+      'Ideal tide at the red dot +49 cm · example: equator 62.4°W',
       'Bulge drawn ×1,000,000',
     ])
       expect(t).toContain(part)
@@ -36,16 +36,16 @@ describe('TidesReadoutView', () => {
 
   it('reads the neap and king tides', () => {
     expect(text(NEAP)).toContain('Moon 0.87× (402,738 km) · Sun 0.46×')
-    expect(text(NEAP)).toContain('Together 0.41×')
+    expect(text(NEAP)).toContain('High–low range 0.41× · 22 cm')
     expect(text(KING)).toContain('Moon 1.25× (356,729 km) · Sun 0.48×')
-    expect(text(KING)).toContain('Together 1.73×')
+    expect(text(KING)).toContain('High–low range 1.73× · 93 cm')
   })
 
   it('names the user’s pin, with a true minus at a low', () => {
     // A quarter of a day on, the equator under the Moon is at low water.
     const t = text(SPRING + 6.25 * 3_600_000, { lat: 0, lon: -62.4, pinned: true })
     expect(t).toContain('· your pin')
-    expect(t).toMatch(/Tide here −2[45] cm/)
+    expect(t).toMatch(/Ideal tide at the red dot −2[45] cm/)
     expect(t).not.toMatch(/[−+-]0(?![.\d])/)
   })
 })
