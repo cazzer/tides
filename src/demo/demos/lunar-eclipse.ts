@@ -3,7 +3,9 @@ import type { Demo } from '../demo-script'
 // The total lunar eclipse of 3 March 2026. Contact times are astronomy-engine's
 // (SearchLunarEclipse), UTC: penumbra from 08:44:02, umbra 09:49:45, totality
 // 11:03:58-12:03:23, greatest 11:33:40, umbra left 13:17:35, penumbra left
-// 14:23:19. Each step's `until` keeps Play within what its caption describes.
+// 14:23:19. The app's ΔT (delta-t.ts) puts each 6 s later (greatest 11:33:46,
+// step 4's moment). Time only runs forward: each step starts at or after the
+// last one's `until`, and `until` keeps Play within what its caption describes.
 //
 // Step 4's skyLook is the Moon's place in Honolulu's sky at greatest eclipse,
 // from astronomy-engine's Horizon (refracted): altitude 70.3, azimuth 221.5.
@@ -15,34 +17,36 @@ export const lunarEclipse: Demo = {
   steps: [
     {
       date: '2026-03-03T08:30:00Z',
-      until: '2026-03-03T09:49:45Z',
+      until: '2026-03-03T09:40:00Z',
       timeScale: 0,
       layout: 'single',
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 90, elevation: 25, distance: 120 },
+      camera: { focus: 'earth', azimuth: 15, elevation: 30, distance: 200 },
+      aids: { earthShadow: true },
       caption: {
-        title: 'Sun, Earth and Moon in a line',
-        body: 'The full Moon is lining up behind Earth, exactly opposite the Sun. Earth’s shadow points straight at it.',
+        title: 'Sun, Earth, Moon in a line',
+        body: 'Full Moon, almost exactly behind Earth. Earth’s shadow points at it.',
       },
     },
     {
       date: '2026-03-03T09:40:00Z',
-      until: '2026-03-03T11:00:00Z',
+      until: '2026-03-03T11:03:58Z',
       timeScale: 300,
-      camera: { focus: 'moon', azimuth: 40, elevation: 15, distance: 6 },
+      camera: { focus: 'moon', azimuth: 20, elevation: 4, distance: 14 },
       caption: {
         title: 'Into the shadow',
-        body: 'First the Moon crosses the faint outer shadow, the penumbra. From 09:50 UTC the dark inner shadow, the umbra, starts to cover it.',
+        body: 'The Moon’s own orbit carries it into Earth’s shadow: a faint outer part, then the dark core.',
       },
     },
     {
-      date: '2026-03-03T11:20:00Z',
-      until: '2026-03-03T11:50:00Z',
+      date: '2026-03-03T11:04:00Z',
+      until: '2026-03-03T11:33:46Z',
       timeScale: 60,
-      camera: { focus: 'moon', azimuth: 30, elevation: 10, distance: 3.5 },
+      camera: { focus: 'moon', azimuth: 10, elevation: 3, distance: 5 },
+      aids: { earthShadow: false },
       caption: {
-        title: 'Why the Moon turns copper',
-        body: 'No sunlight reaches the Moon directly now. The only light that reaches it is bent and reddened by Earth’s atmosphere: every sunrise and sunset on Earth at once.',
+        title: 'Why copper?',
+        body: 'No direct sunlight now. Only light bent through Earth’s air: every sunrise and sunset at once.',
       },
     },
     {
@@ -57,19 +61,20 @@ export const lunarEclipse: Demo = {
       // copper Moon read on a phone.
       skyFov: 20,
       caption: {
-        title: 'Seen from Honolulu',
-        body: 'Greatest eclipse, 01:33 local time. The red Moon stands high in the south-west sky over Hawaii.',
+        title: 'From Honolulu, 1:33 am',
+        body: 'High in the south-west. All of Earth’s night side sees it now. (Moon enlarged)',
       },
     },
     {
-      date: '2026-03-03T13:17:22Z',
+      date: '2026-03-03T12:03:23Z',
       until: '2026-03-03T14:23:19Z',
-      timeScale: 0,
+      timeScale: 300,
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 90, elevation: 25, distance: 120 },
+      camera: { focus: 'earth', azimuth: 15, elevation: 30, distance: 200 },
+      aids: { earthShadow: true, fullMoonGhosts: true },
       caption: {
-        title: 'Out of the umbra',
-        body: 'The Moon leaves the umbra. It stays faintly dimmed in the penumbra for another hour, then the eclipse is over.',
+        title: 'Out of the shadow',
+        body: 'The Moon slides out the other side. Most full Moons miss the shadow entirely (faint circles).',
       },
     },
   ],

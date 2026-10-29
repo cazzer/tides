@@ -36,6 +36,7 @@ import {
   skyDiscPositionsAt,
 } from './sky'
 import { useDemoAid } from './demo/demo-aids'
+import { EarthShadow } from './demo/EarthShadow'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
 import { SeasonsGlobe } from './demo/SeasonsGlobe'
@@ -121,6 +122,8 @@ export default function SolarSystem({
   // The demos' aids (demo-aids.ts); off outside them.
   const eclipseSky = useDemoAid('solarEclipseSky') && earthCamera
   const moonNodes = useDemoAid('moonNodes')
+  const earthShadow = useDemoAid('earthShadow')
+  const fullMoonGhosts = useDemoAid('fullMoonGhosts')
   const seasons = useDemoAid('seasons')
   const tides = useDemoAid('tides')
   // The globe's clouds give way to it (tides-zec.7.1).
@@ -278,6 +281,9 @@ export default function SolarSystem({
           radius={EARTH_DIAMETER}
           sunRadius={positions.radius.sun}
         />
+      )}
+      {earthShadow && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
+        <EarthShadow ghosts={fullMoonGhosts} />
       )}
       {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
         <TidesField radius={EARTH_DIAMETER} />

@@ -93,6 +93,13 @@ export interface DemoAids {
   moonShadow?: boolean
   /** Main view: the Moon is hidden, its body, refs and camera carrying on. */
   hideMoon?: boolean
+  /** Main view: Earth's umbra and penumbra as circles at the Moon, from the
+   * true shadow geometry, with the Moon's track across them and marks at the
+   * umbral contacts (tides-zec.13). */
+  earthShadow?: boolean
+  /** With earthShadow: the previous and next full Moons' places beside the
+   * shadow, which they miss. Not drawn without it. */
+  fullMoonGhosts?: boolean
 }
 
 /**
