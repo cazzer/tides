@@ -16,7 +16,7 @@ import {
   USGS_URL,
   type ImageryTile,
 } from './imagery'
-import { composedFrom, MATCH_DEADLINE_MS, regradeUsgs, SurfaceImageryOverlay } from './SurfaceImageryOverlay'
+import { ancestorCut, composedFrom, type AncestorCut, MATCH_DEADLINE_MS, regradeUsgs, SurfaceImageryOverlay } from './SurfaceImageryOverlay'
 import { forEachTileInBounds } from '3d-tiles-renderer/src/three/plugins/images/overlays/utils.js'
 import { CanvasTexture, Texture, type Source } from 'three'
 
@@ -248,6 +248,76 @@ describe('imagery fallback (tides-zmw.9.2)', () => {
     vi.spyOn(ImageOverlay.prototype, 'fetch').mockResolvedValue(ok)
     expect(await overlay.fetch(alps, {})).toBe(ok)
     expect(overlay.fallbacks).toBe(0)
+  })
+})
+
+describe('a failed tile is cut from its ancestor (tides-zmw.9.31)', () => {
+  afterEach(() => vi.restoreAllMocks())
+  // An Amazon tile at 3 km: x odd, y even, so it's the parent's top-right quarter.
+  const amazon = { z: 16, y: 32986, x: 21853 }
+  const image = (width: number) => ({ width, height: width }) as unknown as ImageBitmap
+
+  it('finds the tile in the flipped bitmap: its rows count up from the bottom', () => {
+    expect(ancestorCut(amazon, 1, 256, 256)).toEqual({ sx: 128, sy: 128, sw: 128, sh: 128, size: 128 })
+    expect(ancestorCut({ ...amazon, y: amazon.y + 1 }, 1, 256, 256)).toEqual({ sx: 128, sy: 0, sw: 128, sh: 128, size: 128 })
+    // 32986 = 4 * 8246 + 2, 21853 = 4 * 5463 + 1: column 1, row 2 of 4
+    expect(ancestorCut(amazon, 2, 256, 256)).toEqual({ sx: 64, sy: 64, sw: 64, sh: 64, size: 64 })
+    // an ancestor that was itself cut keeps its own size; never under 2 a side
+    expect(ancestorCut(amazon, 1, 128, 128).size).toBe(64)
+    expect(ancestorCut(amazon, 9, 256, 256).size).toBe(2)
+  })
+
+  /** An overlay whose every fetch fails, holding `cached` as z/x/y -> texture
+   * (or a promise of one, still loading). */
+  async function failingOverlay(cached: Record<string, unknown>) {
+    vi.spyOn(ImageOverlay.prototype, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const overlay = new SurfaceImageryOverlay()
+    overlay.retryDelays = [0, 0]
+    await (overlay as unknown as { init(): Promise<void> }).init()
+    const source = (overlay as unknown as { imageSource: { get(x: number, y: number, z: number): unknown } }).imageSource
+    source.get = (x, y, z) => cached[`${z}/${x}/${y}`] ?? null
+    const cut = vi.fn(async (_image: ImageBitmap, _cut: AncestorCut) => new Uint8Array([7, 7]).buffer)
+    overlay.cutAncestor = cut
+    return { overlay, cut }
+  }
+  const key = (up: number) => `${amazon.z - up}/${amazon.x >> up}/${amazon.y >> up}`
+
+  it('draws the nearest cached ancestor, passing over one drawn in the fallback colour', async () => {
+    const parent = image(1)
+    const grand = image(256)
+    const { overlay, cut } = await failingOverlay({ [key(1)]: new Texture(parent), [key(2)]: new Texture(grand) })
+    const res = await overlay.fetch(imageryUrl(EOX_URL, amazon), {})
+    expect(res.headers.get('Content-Type')).toBe('image/png')
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([7, 7])
+    expect(cut).toHaveBeenCalledWith(grand, ancestorCut(amazon, 2, 256, 256))
+    expect([overlay.fallbacks, overlay.ancestorFallbacks]).toEqual([1, 1])
+  })
+
+  it('passes over an ancestor still loading, and tries the next when a cut fails', async () => {
+    const grand = image(256)
+    const great = image(256)
+    const { overlay, cut } = await failingOverlay({
+      [key(1)]: new Promise(() => {}),
+      [key(2)]: new Texture(grand),
+      [key(3)]: new Texture(great),
+    })
+    cut.mockRejectedValueOnce(new DOMException('closed', 'InvalidStateError'))
+    await overlay.fetch(imageryUrl(EOX_URL, amazon), {})
+    expect(cut.mock.calls.map((c) => c[0])).toEqual([grand, great])
+    expect(overlay.ancestorFallbacks).toBe(1)
+  })
+
+  it('takes the fallback colour when no ancestor is cached, and ends at an abort', async () => {
+    const { overlay, cut } = await failingOverlay({})
+    const res = await overlay.fetch(imageryUrl(EOX_URL, amazon), {})
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual(Array.from(fallbackImageryPng()))
+    expect(cut).not.toHaveBeenCalled()
+    expect([overlay.fallbacks, overlay.ancestorFallbacks]).toEqual([1, 0])
+
+    const aborted = await failingOverlay({ [key(1)]: new Texture(image(256)) })
+    const controller = new AbortController()
+    aborted.cut.mockImplementation(async () => (controller.abort(), new ArrayBuffer(2)))
+    await expect(aborted.overlay.fetch(imageryUrl(EOX_URL, amazon), { signal: controller.signal })).rejects.toThrow()
   })
 })
 

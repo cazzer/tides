@@ -241,7 +241,8 @@ export function cancelBody(res: Response): void {
 
 /**
  * What a tile shows when no source has imagery for it (both fail, or the
- * network does; tides-zmw.9.2): the day map's open-ocean colour, sRGB
+ * network does; tides-zmw.9.2) and no ancestor's image is cached to cut it
+ * from (SurfaceImageryOverlay, tides-zmw.9.31): the day map's open-ocean colour, sRGB
  * (earth-day.jpg's grading, measured for scripts/fit-gibs-colour.mjs).
  * Without it a failed overlay fails its terrain tile too: a hole.
  */

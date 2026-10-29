@@ -7,10 +7,14 @@
 // falling back. Everything still goes through super.fetch, so the library's
 // per-host download queue and abort signals stay in charge.
 //
-// When every source fails (tides-zmw.9.2), the tile gets a plain patch of
-// the day map's ocean colour instead (imagery.ts), counted in `fallbacks`:
-// the library fails a terrain tile whose overlay fails, so a missing image
-// would otherwise leave a hole in the ground. A transient failure (network,
+// When every source fails (tides-zmw.9.2), the tile gets stand-in imagery,
+// counted in `fallbacks`: the library fails a terrain tile whose overlay
+// fails, so a missing image would otherwise leave a hole in the ground. The
+// stand-in is the tile's patch of its nearest cached ancestor's image, scaled
+// up (tides-zmw.9.31; the coarser tiles load first, so one is nearly always
+// there), and only failing that a plain patch of the day map's ocean colour
+// (imagery.ts), which over land drew hard-edged blue rectangles for as long
+// as the tile stayed cached. A transient failure (network,
 // 429, 5xx) is retried first (fetch-retry.ts), so one blip doesn't paint a
 // land tile in the ocean colour for as long as it stays cached. An abort
 // still ends the chain. Tiles in the US boxes that EOX answered for (USGS
@@ -78,14 +82,21 @@ interface RegionImageSourceInternals {
   }
 }
 
+/** An ancestor's image as the cache holds it: a decoded bitmap, or the
+ * fallback's 1x1 ocean patch. */
+type CachedImage = CanvasImageSource & { readonly width: number; readonly height: number }
+
 /** Closes a bitmap for real (protectOverlayBitmaps makes its own close a no-op). */
 function closeBitmap(image: unknown): void {
   if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) ImageBitmap.prototype.close.call(image)
 }
 
 export class SurfaceImageryOverlay extends XYZTilesOverlay {
-  /** Tiles drawn in the fallback colour because no source answered. */
+  /** Tiles drawn from stand-in imagery (an ancestor's, or the fallback
+   * colour) because no source answered. */
   fallbacks = 0
+  /** Of those, the tiles cut from an ancestor's image. */
+  ancestorFallbacks = 0
   /** Waits before each retry of a transient failure (tests shorten them). */
   retryDelays: readonly number[] = RETRY_DELAYS_MS
   /** USGS-first tiles whose last answer came from EOX, as z/x/y. */
@@ -103,6 +114,12 @@ export class SurfaceImageryOverlay extends XYZTilesOverlay {
         late?: (image: ArrayBuffer) => void
       ) => Promise<ArrayBuffer | null>)
     | null = canGradeImagery() ? regradeUsgs : null
+  /** Cuts `cut` out of an ancestor's cached image into an image file, or
+   * null where nothing can draw one (no OffscreenCanvas: the fallback colour
+   * stands). Tests swap it. */
+  cutAncestor: ((image: CachedImage, cut: AncestorCut) => Promise<ArrayBuffer>) | null = canGradeImagery()
+    ? cutCachedImage
+    : null
   /** Told the texture sources a late match redrew, so the tiles' maps that
    * share them (clones, which keep their own version) upload again. */
   onLateMatch: ((sources: ReadonlySet<Source>) => void) | null = null
@@ -141,7 +158,32 @@ export class SurfaceImageryOverlay extends XYZTilesOverlay {
       if ((error as Error)?.name === 'AbortError') throw error
     }
     this.fallbacks++
-    return fallbackImageryResponse()
+    const cut = tile && this.cutAncestor ? await this.ancestorImagery(tile, options.signal) : null
+    if (cut) this.ancestorFallbacks++
+    return cut ?? fallbackImageryResponse()
+  }
+
+  /** The tile's patch of its nearest cached ancestor's image, or null when
+   * none is cached or none can be cut. An ancestor drawn in the fallback
+   * colour is passed over for the next, as is one still loading: this fetch
+   * holds a slot of the library's download queue that the ancestor's may be
+   * waiting for (waiting stalled the whole tree at its coarse levels). */
+  private async ancestorImagery(tile: ImageryTile, signal?: AbortSignal | null): Promise<Response | null> {
+    const source = (this as unknown as { imageSource: ImageSourceInternals }).imageSource
+    for (let up = 1; up <= tile.z; up++) {
+      const texture = source.get(tile.x >> up, tile.y >> up, tile.z - up)
+      const image = texture instanceof Texture ? (texture.image as CachedImage | null) : null
+      if (!image || image.width <= 1) continue
+      try {
+        const file = await this.cutAncestor!(image, ancestorCut(tile, up, image.width, image.height))
+        signal?.throwIfAborted()
+        return new Response(file, { status: 200, headers: { 'Content-Type': 'image/png' } })
+      } catch (error) {
+        // A closed bitmap (the ancestor dropped meanwhile) can't be drawn: try the next.
+        if ((error as Error)?.name === 'AbortError') throw error
+      }
+    }
+    return null
   }
 
   /** A USGS answer matched (regrade), or as it came if matching fails. */
@@ -263,6 +305,40 @@ export function composedFrom(tiling: Tiling, args: readonly number[], tile: Imag
   if (clamped !== tile.z) return false
   const [x0, y0, x1, y1] = tiling.getTilesInRange(minX, minY, maxX, maxY, clamped, true)
   return tile.x >= x0 && tile.x <= x1 && tile.y >= y0 && tile.y <= y1
+}
+
+/** Where a tile lies in an ancestor's cached image `up` levels above it:
+ * the source rectangle in the cached bitmap's pixels, and the cut's size. */
+export interface AncestorCut {
+  readonly sx: number
+  readonly sy: number
+  readonly sw: number
+  readonly sh: number
+  readonly size: number
+}
+
+/** The ancestor's image is cached flipped (the library decodes with flipY),
+ * so the tile's rows count up from the bitmap's bottom. The cut keeps the
+ * ancestor's own pixels (a z16 tile's z15 parent gives 128 of them a side),
+ * at least 2 a side so it's never taken for the 1x1 fallback patch. */
+export function ancestorCut(tile: ImageryTile, up: number, width: number, height: number): AncestorCut {
+  const n = 2 ** up
+  const sw = width / n
+  const sh = height / n
+  const col = tile.x - ((tile.x >> up) << up)
+  const row = tile.y - ((tile.y >> up) << up)
+  return { sx: col * sw, sy: height - (row + 1) * sh, sw, sh, size: Math.max(2, Math.round(sw)) }
+}
+
+/** The overlay's cutAncestor: the cut drawn upright (the library flips what
+ * it's given as it decodes) and smoothed, as a PNG. */
+export async function cutCachedImage(image: CachedImage, { sx, sy, sw, sh, size }: AncestorCut): Promise<ArrayBuffer> {
+  const canvas = new OffscreenCanvas(size, size)
+  const ctx = canvas.getContext('2d')!
+  ctx.translate(0, size)
+  ctx.scale(1, -1)
+  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, size, size)
+  return (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()
 }
 
 /** Resolves `promise`, or rejects with the signal's reason when it aborts
