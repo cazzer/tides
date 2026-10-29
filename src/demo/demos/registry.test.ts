@@ -46,6 +46,13 @@ const bare: DemoSaved = {
 
 const DEG = Math.PI / 180
 
+const CAPTION_TITLE_WORDS = 4
+const CAPTION_BODY_WORDS = 16
+
+function words(text: string): number {
+  return text.trim().split(/\s+/).length
+}
+
 /** Angle in degrees between two alt/az directions. */
 function separation(a: { azimuth: number; altitude: number }, b: { azimuth: number; altitude: number }): number {
   const cos =
@@ -67,6 +74,12 @@ describe('DEMOS', () => {
       expect(demo.title.trim()).not.toBe('')
       expect(demo.blurb.trim()).not.toBe('')
       expect(demo.steps.length).toBeGreaterThan(0)
+    })
+
+    // Few words, read at a glance in the larger caption (tides-zec.15).
+    it.each(demo.steps.map((step, i) => [i, step] as const))('step %i caption fits the word budget', (_, step) => {
+      expect(words(step.caption.title)).toBeLessThanOrEqual(CAPTION_TITLE_WORDS)
+      expect(words(step.caption.body)).toBeLessThanOrEqual(CAPTION_BODY_WORDS)
     })
 
     it.each(demo.steps.map((step, i) => [i, step] as const))('step %i is well formed', (i, step) => {
@@ -121,8 +134,6 @@ describe('DEMOS', () => {
       if (step.skyFov != null) expect(step.skyFov).toBeGreaterThan(0)
       expect(step.caption.title.trim()).not.toBe('')
       expect(step.caption.body.trim()).not.toBe('')
-      expect(step.caption.title.length).toBeLessThanOrEqual(40)
-      expect(step.caption.body.length).toBeLessThanOrEqual(220)
 
       if (isPlanetFocus(patch.cameraFocus)) expect(patch.showPlanets).toBe(true)
 

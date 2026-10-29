@@ -81,18 +81,20 @@ export function TidesReadoutView({ lat, lon, pinned, timestamp, withSun }: Tides
   )
 }
 
-// Where the dock's top row would be: it is hidden while a demo runs.
+// Where the dock's top row would be: it is hidden while a demo runs. Its
+// type grows with the screen beside the demo caption's (tides-zec.15), and
+// the box in ems with it.
 const Panel = styled.section`
   position: absolute;
   top: var(--dock-top);
   left: var(--dock-inset-left);
   z-index: 1;
   box-sizing: border-box;
-  max-width: min(360px, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
-  padding: 8px 12px;
-  border-radius: 14px;
+  max-width: min(30em, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
+  padding: 0.67em 1em;
+  border-radius: 1.17em;
   color: rgba(255, 255, 255, 0.85);
-  font-size: 12px;
+  font-size: clamp(12px, 1.1vw, 18px);
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
   pointer-events: none;

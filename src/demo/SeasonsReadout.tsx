@@ -103,18 +103,20 @@ export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutVie
   )
 }
 
-// Where the dock's top row would be: it is hidden while a demo runs.
+// Where the dock's top row would be: it is hidden while a demo runs. Its
+// type grows with the screen beside the demo caption's (tides-zec.15), and
+// the box in ems with it.
 const Panel = styled.section`
   position: absolute;
   top: var(--dock-top);
   left: var(--dock-inset-left);
   z-index: 1;
   box-sizing: border-box;
-  width: min(300px, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
-  padding: 8px 12px;
-  border-radius: 14px;
+  width: min(25em, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
+  padding: 0.67em 1em;
+  border-radius: 1.17em;
   color: rgba(255, 255, 255, 0.85);
-  font-size: 12px;
+  font-size: clamp(12px, 1.1vw, 18px);
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -134,14 +136,14 @@ const Muted = styled.span`
 const Daylight = styled.p`
   margin: 2px 0 6px;
   color: #fff;
-  font-size: 16px;
+  font-size: 1.33em;
   font-weight: 600;
 `
 
 const Small = styled.p<{ $faint?: boolean }>`
   margin: 4px 0 0;
   color: rgba(255, 255, 255, ${(p) => (p.$faint ? 0.45 : 0.6)});
-  font-size: ${(p) => (p.$faint ? 10 : 11)}px;
+  font-size: ${(p) => (p.$faint ? 0.83 : 0.92)}em;
 `
 
 // The demo's point: the tilt's share against the distance's, on one scale.

@@ -3,7 +3,7 @@ import type * as THREE from 'three'
 import { describe, expect, test, vi } from 'vitest'
 
 const { state, texts } = vi.hoisted(() => ({
-  state: { showPlanets: false },
+  state: { showPlanets: false, demo: null as { id: string; step: number } | null },
   texts: [] as Record<string, unknown>[],
 }))
 vi.mock('@react-three/fiber', () => ({ useFrame: () => {} }))
@@ -17,7 +17,7 @@ vi.mock('./camera', () => ({ useCamera: () => ({ handleFocus: () => {} }) }))
 vi.mock('./store', () => {
   const store = Object.assign(
     (select: (s: object) => unknown) =>
-      select({ showPlanets: state.showPlanets, setPlanet: () => {} }),
+      select({ showPlanets: state.showPlanets, demo: state.demo, setPlanet: () => {} }),
     { getState: () => ({ timestamp: Date.parse('2026-10-27T12:00:00Z') }) }
   )
   return { useStore: store }
@@ -41,5 +41,22 @@ describe('OrbitLabel clock', () => {
     expect(material.depthTest).toBe(true)
     expect(material.depthWrite).toBe(false)
     expect(clock.renderOrder ?? 0).toBe(0)
+  })
+})
+
+describe('OrbitLabel in a demo', () => {
+  // The caption's clock is the only one (tides-zec.15).
+  test.each([
+    [null, true],
+    [{ id: 'seasons', step: 0 }, false],
+  ])('demo %o shows the clock and months: %s', (demo, shown) => {
+    state.demo = demo
+    texts.length = 0
+    renderToStaticMarkup(<OrbitLabel radius={100} />)
+    state.demo = null
+    expect(texts).toHaveLength(13)
+    for (const text of texts) expect(text.visible).toBe(shown)
+    const clock = texts.find((t) => t['userData-focus'] === 'clock')!
+    expect(clock.onClick === undefined).toBe(!shown)
   })
 })

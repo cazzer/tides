@@ -8,7 +8,7 @@ import {
   IconX,
 } from '@tabler/icons-react'
 import { useStore } from '../store'
-import { glassButton, glassPanel, PHONE } from '../glass-styles'
+import { glassButton, glassPanel } from '../glass-styles'
 import { findDemo } from './demos'
 import type { Demo } from './demo-script'
 import { subscribeDemoTime } from './demo-time'
@@ -208,27 +208,34 @@ export function DemoBarView({
   )
 }
 
-// Where the dock sits, a little wider: the dock is hidden while a demo runs.
+// Where the dock sits, wider: the dock is hidden while a demo runs. On
+// desktop it grows with the screen and its type with it (cqi, tides-zec.15);
+// on phones it spans the width, so the type rests on the clamps' floors.
 const Bar = styled.section`
   position: fixed;
   left: var(--dock-inset-left);
   right: var(--dock-inset-right);
   bottom: var(--dock-bottom);
   z-index: 10;
-  max-width: 560px;
+  box-sizing: border-box;
+  max-width: max(560px, 56vw);
+  max-height: 42dvh;
   margin: 0 auto;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 12px 8px;
-  border-radius: 20px;
+  gap: clamp(8px, 1.4cqi, 14px);
+  padding: clamp(12px, 2.2cqi, 22px) clamp(12px, 2.2cqi, 22px) clamp(8px, 1.4cqi, 14px);
+  border-radius: clamp(20px, 2.8cqi, 28px);
   color: rgba(255, 255, 255, 0.9);
   ${glassPanel}
 `
 
+// Shrinks under the bar's max-height, leaving the body to scroll.
 const Caption = styled.div`
   display: flex;
   flex-direction: column;
+  min-height: 0;
   gap: 4px;
   padding: 0 4px;
 `
@@ -243,7 +250,12 @@ const Heading = styled.div`
 
 const Title = styled.h2`
   margin: 0;
-  font-size: 16px;
+  font-size: clamp(17px, 3.6cqi, 36px);
+  line-height: 1.2;
+
+  @media (max-height: 500px) {
+    font-size: 15px;
+  }
   font-weight: 600;
   color: #fff;
 `
@@ -252,7 +264,7 @@ const Meta = styled.span`
   display: flex;
   gap: 10px;
   margin-left: auto;
-  font-size: 12px;
+  font-size: clamp(12px, 1.7cqi, 16px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: rgba(255, 255, 255, 0.6);
@@ -278,11 +290,16 @@ const VisuallyHidden = styled.span`
 
 const Body = styled.p`
   margin: 0;
-  max-height: 30dvh;
+  min-height: 0;
   overflow-y: auto;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: clamp(15px, 2.8cqi, 26px);
+  line-height: 1.4;
   color: rgba(255, 255, 255, 0.8);
+
+  /* A landscape phone: the bar's 42dvh holds three lines at most. */
+  @media (max-height: 500px) {
+    font-size: 13px;
+  }
 
   &:focus-visible {
     outline: 2px solid #4c9ffe;
@@ -290,9 +307,6 @@ const Body = styled.p`
     border-radius: 4px;
   }
 
-  ${PHONE} {
-    font-size: 13px;
-  }
 `
 
 const Buttons = styled.div`
