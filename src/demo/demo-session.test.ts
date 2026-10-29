@@ -23,7 +23,10 @@ import {
   goToDemoStepPatch,
   demoClockFrame,
   demoClockTrack,
+  demoStepSpan,
   reachedUntil,
+  replayDemoStepPatch,
+  stepSpeedAt,
   type DemoSaved,
   type DemoSessionState,
 } from './demo-session'
@@ -550,5 +553,114 @@ describe('easeProgress', () => {
     expect(easeProgress(1.25, 2.5)).toBeCloseTo(0.5)
     expect(easeProgress(3, 2.5)).toBe(1)
     expect(easeProgress(0, 0)).toBe(1)
+  })
+})
+
+describe('a step’s loop and speeds (tides-zec.15)', () => {
+  const MIN = 60_000
+  const date = '2024-04-08T18:00:00Z'
+  const t0 = Date.parse(date)
+  const loopDemo: Demo = {
+    id: 'loop',
+    title: 'Loop',
+    blurb: 'b',
+    steps: [
+      { date, timeScale: 0, caption },
+      {
+        date,
+        timeScale: 60,
+        loop: { from: '2024-04-08T18:10:00Z', to: '2024-04-08T18:40:00Z', times: 3, holdMs: 500 },
+        speeds: [{ at: '2024-04-08T18:20:00Z', timeScale: 600 }],
+        caption,
+      },
+    ],
+  }
+  const saved = view()
+
+  function frames(span: ReturnType<typeof demoStepSpan>, start: number, count: number, scale = 60) {
+    const track = demoClockTrack()
+    let timestamp = start
+    let timeScale = scale
+    const log: { timestamp: number; timeScale: number }[] = []
+    for (let i = 0; i < count; i++) {
+      const { write } = demoClockFrame(track, null, timestamp, null, 0.1, { span, replay: 0, timeScale })
+      if (write) {
+        timestamp = write.timestamp
+        if (write.timeScale !== undefined) timeScale = write.timeScale
+      }
+      log.push({ timestamp, timeScale })
+      // SimClock's advance, 0.1 s of real time at the speed.
+      if (timeScale > 0) timestamp += timeScale * 100
+    }
+    return log
+  }
+
+  it('parses the span, one pass and no rest under reduced motion', () => {
+    const span = demoStepSpan(saved, loopDemo, 1)!
+    expect(span.loop).toEqual({ from: t0 + 10 * MIN, to: t0 + 40 * MIN, times: 3, holdSeconds: 0.5 })
+    expect(span.restartScale).toBe(60)
+    expect(demoStepSpan(saved, loopDemo, 1, true)!.loop).toMatchObject({ times: 1, holdSeconds: 0 })
+    expect(demoStepSpan(saved, loopDemo, 0)).toBeNull()
+  })
+
+  it('speeds up as the clock passes each change, and Play resumes at that speed', () => {
+    const step = loopDemo.steps[1]
+    expect(stepSpeedAt(step, 60, t0 + 19 * MIN)).toBe(60)
+    expect(stepSpeedAt(step, 60, t0 + 20 * MIN)).toBe(600)
+    const run = { id: 'loop', step: 1 }
+    const at = (timestamp: number) =>
+      demoPlayScale(view({ demo: run, demoSaved: { ...saved, enteredAt: 0 }, timestamp }), loopDemo)
+    expect(at(t0 + 5 * MIN)).toBe(60)
+    expect(at(t0 + 25 * MIN)).toBe(600)
+  })
+
+  it('plays the passes, resting on `to`, each from `from` at its speed, then stops on `to`', () => {
+    const log = frames(demoStepSpan(saved, loopDemo, 1), t0, 800)
+    const to = t0 + 40 * MIN
+    const from = t0 + 10 * MIN
+    // Never past `to`, back to `from` twice, and stopped there at the end.
+    expect(Math.max(...log.map((f) => f.timestamp))).toBe(to)
+    const restarts = log.filter((f, i) => i > 0 && f.timestamp === from && log[i - 1].timestamp === to)
+    expect(restarts).toHaveLength(2)
+    for (const r of restarts) expect(r.timeScale).toBe(60)
+    expect(log[log.length - 1]).toEqual({ timestamp: to, timeScale: 0 })
+    // Each rest holds `to` for 0.5 s of frames before the restart.
+    const firstTo = log.findIndex((f) => f.timestamp === to)
+    expect(log.slice(firstTo, firstTo + 5).every((f) => f.timestamp === to)).toBe(true)
+    // The speed change is taken on every pass.
+    expect(log.filter((f, i) => i > 0 && f.timeScale === 600 && log[i - 1].timeScale === 60).length).toBe(3)
+  })
+
+  it('waits out a rest while paused', () => {
+    const span = demoStepSpan(saved, loopDemo, 1)!
+    const track = demoClockTrack()
+    const to = span.loop!.to
+    demoClockFrame(track, null, to - 1000, null, 0.1, { span, replay: 0, timeScale: 600 })
+    expect(demoClockFrame(track, null, to + 5000, null, 0.1, { span, replay: 0, timeScale: 600 }).write).toEqual({
+      timestamp: to,
+    })
+    for (let i = 0; i < 20; i++) {
+      expect(demoClockFrame(track, null, to, null, 0.1, { span, replay: 0, timeScale: 0 }).write).toEqual({ timestamp: to })
+    }
+  })
+
+  it('Replay starts the loop over, every pass again', () => {
+    const run = { id: 'loop', step: 1 }
+    const s = view({ demo: run, demoSaved: { ...saved, enteredAt: 0 } })
+    expect(replayDemoStepPatch(s, loopDemo, 4)).toEqual({
+      timestamp: t0 + 10 * MIN,
+      timeScale: 60,
+      demoTravel: null,
+      demoReplay: 5,
+    })
+    expect(replayDemoStepPatch(view({ demo: { id: 'loop', step: 0 }, demoSaved: { ...saved, enteredAt: 0 } }), loopDemo, 4)).toBeNull()
+
+    const span = demoStepSpan(saved, loopDemo, 1)!
+    const track = demoClockTrack()
+    track.passes = 3
+    track.previous = span.loop!.to
+    demoClockFrame(track, null, span.loop!.from, null, 0.1, { span, replay: 5, timeScale: 60 })
+    expect(track.passes).toBe(0)
+    expect(track.replay).toBe(5)
   })
 })

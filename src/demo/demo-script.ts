@@ -41,6 +41,10 @@ export interface DemoPose {
   /** Scene units about the focus kept in view: on a view too narrow for
    * them at `distance`, the eye backs off until they fit (poseDistance). */
   fit?: number
+  /** Bodies kept in view with the focus, their whole discs, seen from the
+   * pose's direction (keepDistance, tides-zec.15). Like `fit`, it only ever
+   * backs the eye off. */
+  keep?: readonly DemoFocus[]
 }
 
 /** What a travel holds still on the way: Earth's spin, or the Moon (hidden). */
@@ -56,6 +60,26 @@ export type DemoTravel = ({ seconds: number; rate?: never } | { rate: number; se
   /** The pose held on the way, about the step's own camera focus; the eye
    * eases to the step's camera on arrival. Needs the step's camera. */
   camera?: Omit<DemoPose, 'focus'>
+}
+
+/**
+ * A span of a step's time played over and over (tides-zec.15): the clock
+ * runs from `from` to `to` (ISO 8601) at the step's speed, rests `holdMs` on
+ * `to`, then starts again from `from`; after `times` passes it stops on `to`.
+ * Forward only. Reduced motion plays one pass; the bar's Replay starts it
+ * again.
+ */
+export interface DemoLoop {
+  from: string
+  to: string
+  times: number
+  holdMs?: number
+}
+
+/** The clock's speed from `at` (ISO 8601) on, within a step. */
+export interface DemoSpeed {
+  at: string
+  timeScale: number
 }
 
 export interface DemoOverlays {
@@ -103,12 +127,15 @@ export interface DemoAids {
   /** With `moonShadow`: the path of totality darkened behind the umbra, from
    * landfall up to the sim time (tides-zec.12). */
   totalityPath?: boolean
+  /** Main view: the month names round Earth's orbit, hidden in a demo
+   * otherwise (the 3D clock always is: the caption's is the only one). */
+  monthLabels?: boolean
 }
 
 /**
- * One stop. Every field but `date`, `travel` and `caption` carries over to
- * the steps after it until one sets it again; before the first step to set
- * it, the user's own setting stands.
+ * One stop. Every field but `date`, `travel`, `loop`, `speeds` and `caption`
+ * carries over to the steps after it until one sets it again; before the
+ * first step to set it, the user's own setting stands.
  */
 export interface DemoStep {
   /** ISO 8601, UTC. */
@@ -119,6 +146,11 @@ export interface DemoStep {
    * than cutting to it. Entering the demo always cuts. */
   travel?: DemoTravel
   timeScale?: number
+  /** The first pass runs from `date`, the rest from `loop.from`. */
+  loop?: DemoLoop
+  /** Speed changes as the clock passes each `at`; on a loop, each pass
+   * starts again at the speed for `loop.from`. */
+  speeds?: DemoSpeed[]
   camera?: DemoPose
   mainPanel?: PanelKey
   layout?: Layout
@@ -250,6 +282,43 @@ export function poseDistance(pose: Pick<DemoPose, 'distance' | 'fit'>, vfovDeg: 
   const halfV = (vfovDeg * Math.PI) / 360
   const half = Math.min(halfV, Math.atan(Math.tan(halfV) * aspect))
   return Math.max(pose.distance, pose.fit / Math.sin(half))
+}
+
+/** A body to keep in view: its centre less the focus's, and its radius. */
+export interface KeptBody {
+  offset: Vector3
+  radius: number
+}
+
+const _right = new Vector3()
+const _upAxis = new Vector3()
+
+/** The share of the half-field a kept body may fill. */
+export const KEEP_MARGIN = 0.9
+
+/**
+ * The least eye distance, along unit `direction` from the focus (looking
+ * back at it, ecliptic north up), at which every body's disc is inside a
+ * view of vertical field `vfovDeg` and `aspect` centred on the focus; 0 for
+ * none. Each body's extent across the view is its offset across the line of
+ * sight plus its radius, against the half-field at its own depth, with
+ * KEEP_MARGIN to spare: a sphere's outline reaches a little past that.
+ */
+export function keepDistance(bodies: readonly KeptBody[], direction: Vector3, vfovDeg: number, aspect: number): number {
+  const tanV = KEEP_MARGIN * Math.tan((vfovDeg * Math.PI) / 360)
+  const tanH = tanV * aspect
+  _right.crossVectors(_up, direction)
+  if (_right.lengthSq() < 1e-12) _right.set(1, 0, 0)
+  _right.normalize()
+  _upAxis.crossVectors(direction, _right)
+  let distance = 0
+  for (const { offset, radius } of bodies) {
+    const toward = offset.dot(direction)
+    const across = Math.abs(offset.dot(_right)) + radius
+    const up = Math.abs(offset.dot(_upAxis)) + radius
+    distance = Math.max(distance, toward + across / tanH, toward + up / tanV)
+  }
+  return distance
 }
 
 const _fromDir = new Vector3()

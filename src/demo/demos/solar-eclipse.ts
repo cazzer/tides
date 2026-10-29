@@ -28,7 +28,8 @@ import type { Demo } from '../demo-script'
 // stands just over Earth's top limb, above its own shadow; it is seen full,
 // the side facing us lit. Its 10 units are mostly up the screen, so only
 // Earth needs the width: a phone backs off to keep it (and a margin) in view.
-const SUN_SIDE = { focus: 'earth', elevation: -22, distance: 30, fit: 4.2 } as const
+// `keep` backs off too wherever the caption leaves the Moon too little room.
+const SUN_SIDE = { focus: 'earth', elevation: -22, distance: 30, fit: 4.2, keep: ['moon'] } as const
 export const solarEclipse: Demo = {
   id: 'solar-eclipse',
   title: 'Total solar eclipse',
@@ -79,6 +80,9 @@ export const solarEclipse: Demo = {
       date: '2024-04-08T18:21:30Z',
       until: '2024-04-08T19:55:27Z',
       timeScale: 120,
+      // The crossing three times over, ~47 s a pass, back to its start after
+      // a 1 s rest, forward only; the trail and marks follow the clock.
+      loop: { from: '2024-04-08T18:21:30Z', to: '2024-04-08T19:55:27Z', times: 3, holdMs: 1000 },
       mainPanel: 'main',
       // As step 1, turned east with the shadow.
       camera: { ...SUN_SIDE, azimuth: 5 },

@@ -46,6 +46,14 @@ const bare: DemoSaved = {
 
 const DEG = Math.PI / 180
 
+// Ceilings, not targets: a body should aim for ~15 words (tides-zec.15).
+const CAPTION_TITLE_WORDS = 4
+const CAPTION_BODY_WORDS = 22
+
+function words(text: string): number {
+  return text.trim().split(/\s+/).length
+}
+
 /** Angle in degrees between two alt/az directions. */
 function separation(a: { azimuth: number; altitude: number }, b: { azimuth: number; altitude: number }): number {
   const cos =
@@ -69,11 +77,31 @@ describe('DEMOS', () => {
       expect(demo.steps.length).toBeGreaterThan(0)
     })
 
+    // Few words, read at a glance in the larger caption (tides-zec.15).
+    it.each(demo.steps.map((step, i) => [i, step] as const))('step %i caption fits the word budget', (_, step) => {
+      expect(words(step.caption.title)).toBeLessThanOrEqual(CAPTION_TITLE_WORDS)
+      expect(words(step.caption.body)).toBeLessThanOrEqual(CAPTION_BODY_WORDS)
+    })
+
     it.each(demo.steps.map((step, i) => [i, step] as const))('step %i is well formed', (i, step) => {
       const date = Date.parse(step.date)
       expect(Number.isFinite(date)).toBe(true)
       if (step.until !== undefined) {
         expect(Date.parse(step.until)).toBeGreaterThan(date)
+      }
+      if (step.loop) {
+        const from = Date.parse(step.loop.from)
+        const to = Date.parse(step.loop.to)
+        expect(from).toBeGreaterThanOrEqual(date)
+        expect(to).toBeGreaterThan(from)
+        expect(Number.isInteger(step.loop.times) && step.loop.times >= 1).toBe(true)
+        expect(step.loop.holdMs ?? 0).toBeGreaterThanOrEqual(0)
+        // A stop short of `to` would end the first pass there.
+        if (step.until !== undefined) expect(Date.parse(step.until)).toBeGreaterThanOrEqual(to)
+      }
+      for (const speed of step.speeds ?? []) {
+        expect(Date.parse(speed.at)).toBeGreaterThanOrEqual(date)
+        expect(speed.timeScale).toBeGreaterThan(0)
       }
       if (step.timeScale !== undefined) {
         expect(Number.isFinite(step.timeScale)).toBe(true)
@@ -121,8 +149,6 @@ describe('DEMOS', () => {
       if (step.skyFov != null) expect(step.skyFov).toBeGreaterThan(0)
       expect(step.caption.title.trim()).not.toBe('')
       expect(step.caption.body.trim()).not.toBe('')
-      expect(step.caption.title.length).toBeLessThanOrEqual(40)
-      expect(step.caption.body.length).toBeLessThanOrEqual(220)
 
       if (isPlanetFocus(patch.cameraFocus)) expect(patch.showPlanets).toBe(true)
 

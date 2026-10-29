@@ -12,6 +12,7 @@ import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
+import { useDemoChromeRef } from './demo-chrome'
 import { moonAlone, rangeMetres, spotTide, TIDE_EXAGGERATION, tidePulls, tidesSpot } from './tides'
 import { TIDES_MOON_COLOR, TIDES_SUN_COLOR } from './tides-field'
 
@@ -52,11 +53,13 @@ export interface TidesReadoutViewProps {
 }
 
 export function TidesReadoutView({ lat, lon, pinned, timestamp, withSun }: TidesReadoutViewProps) {
+  // The main view frames its bodies clear of the readout (DemoPlayer).
+  const chromeRef = useDemoChromeRef<HTMLElement>()
   const all = tidePulls(timestamp)
   const pulls = withSun ? all : moonAlone(all)
   const tide = spotTide(lat, lon, timestamp, withSun)
   return (
-    <Panel aria-label="Tide-raising pull">
+    <Panel ref={chromeRef} aria-label="Tide-raising pull">
       <Lead>
         Tide at the red dot <Strong>{signed(tide * 100)} cm</Strong>
         {pinned && <Muted> · your pin</Muted>}
@@ -81,18 +84,20 @@ export function TidesReadoutView({ lat, lon, pinned, timestamp, withSun }: Tides
   )
 }
 
-// Where the dock's top row would be: it is hidden while a demo runs.
+// Where the dock's top row would be: it is hidden while a demo runs. Its
+// type grows with the screen beside the demo caption's (tides-zec.15), and
+// the box in ems with it.
 const Panel = styled.section`
   position: absolute;
   top: var(--dock-top);
   left: var(--dock-inset-left);
   z-index: 1;
   box-sizing: border-box;
-  max-width: min(360px, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
-  padding: 8px 12px;
-  border-radius: 14px;
+  max-width: min(30em, calc(100% - var(--dock-inset-left) - var(--dock-inset-right)));
+  padding: 0.67em 1em;
+  border-radius: 1.17em;
   color: rgba(255, 255, 255, 0.85);
-  font-size: 12px;
+  font-size: clamp(12px, 1.1vw, 18px);
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -115,7 +120,7 @@ const Strong = styled.span`
 // The tide at the spot, the payoff, larger than the rest.
 const Lead = styled.p`
   margin: 0 0 2px;
-  font-size: 15px;
+  font-size: 1.25em;
 `
 
 const Moon = styled.span`

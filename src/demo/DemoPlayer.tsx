@@ -4,6 +4,7 @@ import { Quaternion, Vector3, type Object3D, type PerspectiveCamera } from 'thre
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore } from '../store'
 import { focusedRef } from '../main-view'
+import { positionsFor, type BodyKey } from '../flight-scale'
 import { updateMainNearFar } from '../camera'
 import { requestFocusSnap, takeFocusSnap } from '../main-camera-session'
 import { prefersReducedMotion } from '../ship/reduced-motion'
@@ -15,10 +16,13 @@ import {
   outOfPoseFrame,
   poseDirection,
   poseDistance,
+  keepDistance,
   type DemoFrame,
+  type KeptBody,
   type DemoPose,
 } from './demo-script'
 import { DEMO_MAX_DELTA } from './demo-travel'
+import { bandFraming, clearBand, demoChromeRects, type Rect } from './demo-chrome'
 
 /** How long the eye takes to reach a step's pose, in seconds. */
 export const DEMO_EASE_SECONDS = 2.5
@@ -43,6 +47,10 @@ const HOLD_LIMIT = 5
  * the ease is done and CameraProvider has had its time to turn it there.
  */
 const LOCK_SHARE = 0.05
+
+/** How fast the framing follows the demo's boxes (1/s): a caption's height
+ * changes with each step's words. */
+const BAND_RATE = 4
 
 type BodyRef = { current?: Object3D | null } | undefined
 
@@ -74,6 +82,24 @@ const _goal = new Vector3()
 const _from = new Vector3()
 const _earthTurn = new Quaternion()
 const _bodies = { focus: _focus, sun: _sun, earth: _earth, earthTurn: _earthTurn }
+const _keptBodies: KeptBody[] = []
+
+/**
+ * The bodies a pose keeps in view, about the focus (keepDistance): its
+ * `keep`, and the focus itself, so the band's shift never crops it.
+ */
+function keptBodies(pose: DemoPose, state: ReturnType<typeof useStore.getState>): KeptBody[] {
+  const keep = [pose.focus, ...(pose.keep ?? [])]
+  for (let i = 0; i < keep.length; i++) {
+    _keptBodies[i] ??= { offset: new Vector3(), radius: 0 }
+    const body = focusedRef<BodyRef>(state, keep[i])?.current
+    if (body) body.getWorldPosition(_keptBodies[i].offset).sub(_focus)
+    else _keptBodies[i].offset.set(0, 0, 0)
+    _keptBodies[i].radius = positionsFor('system').radius[keep[i] as BodyKey]
+  }
+  _keptBodies.length = keep.length
+  return _keptBodies
+}
 
 /**
  * Eases the main view's eye to each demo step's pose, holds it until the
@@ -84,7 +110,9 @@ const _bodies = { focus: _focus, sun: _sun, earth: _earth, earthTurn: _earthTurn
  * CameraProvider: it remounts with the panel (after a View from Earth step)
  * and eases from wherever the camera then is. The
  * camera write reads to tiltControls as a move from outside, which ends
- * CameraProvider's own framing ease.
+ * CameraProvider's own framing ease. Throughout the demo the view's centre
+ * is shifted to the middle of the band its boxes leave clear (demo-chrome),
+ * and a pose's fit and kept bodies are fitted into that band.
  */
 export function DemoPlayer() {
   const camera = useThree((s) => s.camera)
@@ -94,6 +122,31 @@ export function DemoPlayer() {
   const dom = connected || canvas
   const demo = useStore((s) => s.demo)
   const ease = useRef<Ease | null>(null)
+  const viewRect = useRef<Rect | null>(null)
+  const offsetY = useRef(0)
+
+  // The view's rect, for the band; measured as the boxes' are (demo-chrome).
+  useEffect(() => {
+    const measure = () => {
+      viewRect.current = dom.getBoundingClientRect()
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(dom)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [dom])
+
+  useEffect(
+    () => () => {
+      const lens = camera as PerspectiveCamera
+      if (lens.isPerspectiveCamera) lens.clearViewOffset()
+    },
+    [camera]
+  )
 
   useEffect(() => {
     const step = demo && findDemo(demo.id)?.steps[demo.step]
@@ -128,9 +181,29 @@ export function DemoPlayer() {
   }, [dom])
 
   useFrame(({ gl }, delta) => {
+    const state = useStore.getState()
+    const lens = camera as PerspectiveCamera
+    const rect = viewRect.current
+    let band = { vfov: lens.fov, aspect: lens.aspect }
+    if (lens.isPerspectiveCamera && rect && rect.bottom > rect.top) {
+      const width = rect.right - rect.left
+      const height = rect.bottom - rect.top
+      if (state.demo) {
+        const clear = clearBand(rect, demoChromeRects())
+        const framing = bandFraming(clear, height, lens.fov)
+        const k = prefersReducedMotion() ? 1 : 1 - Math.exp(-BAND_RATE * Math.min(delta, DEMO_MAX_DELTA))
+        offsetY.current += (framing.offsetY - offsetY.current) * k
+        lens.setViewOffset(width, height, 0, offsetY.current, width, height)
+        band = { vfov: framing.vfov, aspect: width / (clear.bottom - clear.top) }
+      } else if (lens.view?.enabled) {
+        // Left the demo: the user's own view is centred again.
+        offsetY.current = 0
+        lens.clearViewOffset()
+      }
+    }
+
     const current = ease.current
     if (!current || !controls) return
-    const state = useStore.getState()
     // Left the demo: the restore runs this frame, before the effect clears
     // the ease, which would otherwise put the step's pose back over it.
     if (!state.demo || state.cameraFocus !== current.pose.focus) {
@@ -176,10 +249,15 @@ export function DemoPlayer() {
     const duration = reduced ? 0 : DEMO_EASE_SECONDS
     const t = easeProgress(current.elapsed, duration)
 
-    // Each frame, so a resized view keeps a pose's fit in view.
-    const lens = camera as PerspectiveCamera
-    const distance = lens.isPerspectiveCamera ? poseDistance(current.pose, lens.fov, lens.aspect) : current.pose.distance
+    // Each frame, so a resized view keeps a pose's fit and kept bodies in
+    // view, in the band clear of the demo's boxes.
     poseDirection(current.pose, _bodies, _goal)
+    const distance = lens.isPerspectiveCamera
+      ? Math.max(
+          poseDistance(current.pose, band.vfov, band.aspect),
+          keepDistance(keptBodies(current.pose, state), _goal, band.vfov, band.aspect)
+        )
+      : current.pose.distance
     outOfPoseFrame(current.from!, frame, _bodies, _from)
     easedEye(_from, _goal, _focus, t, distance, camera.position)
 

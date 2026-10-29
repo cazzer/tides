@@ -10,6 +10,7 @@ import {
   enterDemoPatch,
   exitDemoPatch,
   goToDemoStepPatch,
+  replayDemoStepPatch,
   type DemoRun,
   type DemoSnapshot,
 } from './demo/demo-session'
@@ -285,11 +286,15 @@ export const useStore = create<{
   demoSaved: DemoSnapshot | null
   /** The clock travelling to a step's date; null otherwise. */
   demoTravel: TravelRun | null
+  /** Counts Replays, so DemoClock starts the step's loop over. */
+  demoReplay: number
   startDemo: (id: string) => void
   goToDemoStep: (index: number) => void
   exitDemo: () => void
   /** Play pauses the clock, or runs it at the step's speed. */
   toggleDemoPlaying: () => void
+  /** Plays the step's loop again from its start (tides-zec.15). */
+  replayDemoStep: () => void
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
@@ -356,6 +361,7 @@ export const useStore = create<{
   demo: null,
   demoSaved: null,
   demoTravel: null,
+  demoReplay: 0,
   startDemo: (id: string) => {
     const demo = findDemo(id)
     const patch = demo && enterDemoPatch(get(), demo)
@@ -378,6 +384,12 @@ export const useStore = create<{
     const demo = s.demo && findDemo(s.demo.id)
     if (!demo) return
     set({ timeScale: s.timeScale !== 0 ? 0 : demoPlayScale(s, demo) })
+  },
+  replayDemoStep: () => {
+    const s = get()
+    const demo = s.demo && findDemo(s.demo.id)
+    const patch = demo && replayDemoStepPatch(s, demo, s.demoReplay)
+    if (patch) set(patch)
   },
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
