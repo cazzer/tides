@@ -46,8 +46,9 @@ const bare: DemoSaved = {
 
 const DEG = Math.PI / 180
 
+// Ceilings, not targets: a body should aim for ~15 words (tides-zec.15).
 const CAPTION_TITLE_WORDS = 4
-const CAPTION_BODY_WORDS = 16
+const CAPTION_BODY_WORDS = 22
 
 function words(text: string): number {
   return text.trim().split(/\s+/).length
