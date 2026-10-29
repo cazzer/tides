@@ -4,10 +4,11 @@
 //
 // Below the barrier, in Earth focus, the zoom floor follows the ground's
 // drawn height (the DEM terrain floor, ship/terrain-floor.ts), each zoom step
-// shrinks with altitude, and the eye turns with Earth (frame-carry) so the
-// ground doesn't sweep under it. In any focus the near plane follows the
-// ground and Earth's shells as ship mode's does. The store's `closeZoom` is
-// the shared predicate the later beads (tides-tvr.7.2 tiles, 7.3 detail) read.
+// eases toward the floor and lands on it, and the eye turns with Earth
+// (frame-carry) so the ground doesn't sweep under it. In any focus the near
+// plane follows the ground and Earth's shells as ship mode's does. The
+// store's `closeZoom` is the shared predicate the later beads (tides-tvr.7.2
+// tiles, 7.3 detail) read.
 //
 // In close zoom the main camera also feeds the limb view (ship/limb-detail.ts,
 // tides-tvr.7.3), as the ship's does in flight: Earth trades up to the limb
@@ -86,20 +87,30 @@ export function closeZoomFloor(
   return gT + (Math.max(gE - gT, 0) + clearance) / Math.cos(tilt)
 }
 
-/** The barrier's altitude as a share of its distance: where a zoom step is still a whole one. */
-const BARRIER_SHARE = (MIN_DISTANCE_FACTOR - 1) / MIN_DISTANCE_FACTOR
-
 /** Keeps zoomSpeed positive (a scroll that never reverses) with the eye transiently under the ground. */
 const MIN_ZOOM_SPEED = 1e-5
 
+/** The share of the way left a wheel notch moves far over the floor… */
+const ZOOM_SHARE_FAR = 0.2
+/** …and at it. */
+const ZOOM_SHARE_NEAR = 0.08
+/** The height over the floor the share eases across, scene units (30 km). */
+const ZOOM_EASE = 30 / EARTH_KM_PER_UNIT
+
 /**
- * OrbitControls' zoomSpeed for an eye `d` from Earth's centre over ground
- * `gT`: 1 at the barrier and above, then falling with the altitude's share
- * of the distance, so a wheel notch (0.95^zoomSpeed of the distance) cuts
- * about a fifth of the altitude all the way down.
+ * OrbitControls' zoomSpeed for an eye `d` from Earth's centre over the zoom
+ * `floor`: a wheel notch (0.95^zoomSpeed of the distance) moves a share of
+ * the way left to the floor plus `clearance`, so the last notch overshoots
+ * it and OrbitControls' minDistance clamp lands the eye on it. The share is
+ * about a fifth far out, easing to 8% within tens of km of the floor; at the
+ * barrier and above the cap holds it at 1.
  */
-export function closeZoomSpeed(d: number, gT: number): number {
-  return Math.min(1, Math.max(MIN_ZOOM_SPEED, (d - gT) / d / BARRIER_SHARE))
+export function closeZoomSpeed(d: number, floor: number, clearance: number): number {
+  const h = Math.max(d - floor, 0)
+  const share = ZOOM_SHARE_FAR - (ZOOM_SHARE_FAR - ZOOM_SHARE_NEAR) * Math.exp(-h / ZOOM_EASE)
+  const step = share * (h + clearance)
+  const s = Math.log(1 - step / d) / Math.log(0.95)
+  return Number.isFinite(s) ? Math.min(1, Math.max(MIN_ZOOM_SPEED, s)) : MIN_ZOOM_SPEED
 }
 
 /**
@@ -348,12 +359,13 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
       radius,
       groundAngle(eyeR - radius, radius)
     )
-    closeZoomState.floor = closeZoomFloor(gT, gE, clearance, pivot.tilt)
+    const floor = closeZoomFloor(gT, gE, clearance, pivot.tilt)
+    closeZoomState.floor = floor
     closeZoomState.groundUnderTarget = gT
     closeZoomState.groundUnderEye = gE
     closeZoomState.guard = eyeR < gE + clearance / 2
 
-    const speed = closeZoomSpeed(controls.getDistance(), gT)
+    const speed = closeZoomSpeed(controls.getDistance(), floor, clearance)
     if (controls.zoomSpeed !== speed) controls.zoomSpeed = speed
 
     earth.getWorldQuaternion(_now)
