@@ -54,7 +54,8 @@
 // Only the ease toward the shell's top still takes the eye's own ray, which
 // is the atmosphere's draw there.
 //
-// Only for the ship's camera under the cloud shell's top (update()); elsewhere
+// Only for the near-Earth camera (earth-shells.ts eyeNearEarth: the ship's, or
+// the main view's in close zoom) under the cloud shell's top (update()); elsewhere
 // the atmosphere still draws over the ground, so from outside nothing
 // changes. Spread through composePatches onto the ground's Phong material.
 //

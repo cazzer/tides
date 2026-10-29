@@ -1,10 +1,11 @@
 // The outer edges of Earth's drawn shells, as fractions of its radius: shared
 // by their renderers and by ship mode, whose near plane keeps clear of them
-// and whose low-tier stop stays outside them (tides-3bl.7). In ship mode both
-// are drawn from inside too (pickShellFaces), and on the high tier the ship
-// flies down through them to the terrain floor (tides-01v.8.7).
+// and whose low-tier stop stays outside them (tides-3bl.7). In ship mode, and
+// in the system view's close zoom (tides-tvr.7.3), both are drawn from inside
+// too (pickShellFaces), and on the high tier the eye comes down through them
+// to the terrain floor (tides-01v.8.7).
 import * as THREE from 'three'
-import { limbBody } from '../ship/limb-detail'
+import { limbBody, limbEye } from '../ship/limb-detail'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
 
 /** The atmosphere's limb-glow shell (AtmosphereRenderer). */
@@ -58,17 +59,23 @@ export function groundHazeTop(flat: boolean): number {
 const eye = new THREE.Vector3()
 
 /**
- * True for the ship's camera while Earth is its nearest body: the only
- * camera that draws the shells from inside. limbBody() is null outside ship
- * mode, which keeps every other view's camera on today's front faces,
- * including the Moon Phase panel's, which sits inside the shells.
+ * True for the camera the limb view was fed for while Earth is its limb
+ * body: the ship's with Earth nearest, or the main view's in close zoom
+ * (tides-tvr.7.3), the only cameras that draw the shells from inside. The
+ * view is null otherwise, and belongs to one camera, which keeps every other
+ * camera on front faces, including the Moon Phase panel's, which sits inside
+ * the shells.
  */
-export function shipNearEarth(camera: THREE.Camera): boolean {
-  return (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true && limbBody() === 'earth'
+export function eyeNearEarth(camera: THREE.Camera): boolean {
+  return (
+    (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true &&
+    limbBody() === 'earth' &&
+    limbEye() === camera
+  )
 }
 
 /**
- * True when the ship's camera (shipNearEarth) is inside the shell of radius
+ * True when the near-Earth camera (eyeNearEarth) is inside the shell of radius
  * `outer` round `shell`'s origin, or near enough that its near plane may clip
  * the shell (at the frustum's corners, the near plane reaches out to its
  * depth over the corner ray's cosine): where the shell needs its back faces.
@@ -78,7 +85,7 @@ export function withinShellReach(
   camera: THREE.Camera,
   outer: number
 ): boolean {
-  if (!shipNearEarth(camera)) return false
+  if (!eyeNearEarth(camera)) return false
   const { near, fov, aspect } = camera as THREE.PerspectiveCamera
   const tan = Math.tan(THREE.MathUtils.degToRad(fov / 2))
   const cornerReach = near * Math.sqrt(1 + tan * tan * (1 + aspect * aspect))
@@ -86,11 +93,11 @@ export function withinShellReach(
 }
 
 /**
- * True when the ship's camera (shipNearEarth) is inside the shell of radius
+ * True when the near-Earth camera (eyeNearEarth) is inside the shell of radius
  * `outer` round `shell`'s origin: where the shell shows its back faces alone.
  */
 export function insideShell(shell: THREE.Object3D, camera: THREE.Camera, outer: number): boolean {
-  return shipNearEarth(camera) && shell.worldToLocal(camera.getWorldPosition(eye)).length() < outer
+  return eyeNearEarth(camera) && shell.worldToLocal(camera.getWorldPosition(eye)).length() < outer
 }
 
 /**

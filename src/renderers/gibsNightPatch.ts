@@ -289,9 +289,9 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
 
 /**
  * The night patch for the ground mesh in `ground` (local sphere of
- * `radius`): in ship mode, on devices that take one, filled as the ship
- * nears Earth's night side and freed when it leaves, climbs into daylight
- * or the flight ends.
+ * `radius`): with flight detail (flight-detail.ts), on devices that take
+ * one, filled as the eye nears Earth's night side and freed when it leaves,
+ * climbs into daylight or the detail ends.
  */
 export function useGibsNightPatch(ground: RefObject<THREE.Object3D | null>, radius: number): MaterialPatch {
   return useStreamedPatch(createGibsNightPatch, ground, radius)

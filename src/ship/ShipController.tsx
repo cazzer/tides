@@ -117,7 +117,7 @@ export function ShipController() {
       fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
     }
     if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
-    updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov)
+    updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov, camera)
 
     camera.position.copy(state.position)
     camera.quaternion.copy(state.orientation)

@@ -17,7 +17,7 @@ import {
   ATMOSPHERE_SURFACE,
   groundHazeTop,
   pickShellFaces,
-  shipNearEarth,
+  eyeNearEarth,
 } from './earth-shells'
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
@@ -53,8 +53,9 @@ function setSunDisc(material: THREE.ShaderMaterial, shell: THREE.Object3D) {
 
 // The table for `camera`'s eye in the shell's frame (sea level `radius`),
 // or off over the haze, where the limb's glow takes over (haze.glsl
-// hazeGlow()), and for any camera but the ship's near Earth (the Moon Phase
-// panel's sits inside the shells, at the centre, but never draws the sky
+// hazeGlow()), and for any camera but the near-Earth one (eyeNearEarth: the
+// ship's, or the main view's in close zoom; the Moon Phase panel's sits
+// inside the shells, at the centre, but never draws the sky
 // from inside). Module level, so the memoised table isn't mutated in a hook.
 function drawSkyView(
   skyView: SkyView,
@@ -65,7 +66,7 @@ function drawSkyView(
   timestamp: number
 ) {
   if (!shell.current) return
-  if (!shipNearEarth(camera)) {
+  if (!eyeNearEarth(camera)) {
     skyView.update(gl, null, 0)
     return
   }

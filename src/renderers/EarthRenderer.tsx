@@ -224,6 +224,9 @@ export default function EarthRenderer({
   // Out of flight, the eye as the day's at once, for a View with no Earth of
   // its own to set it (the 'top' panel).
   useEffect(() => () => restoreEye(gl), [nightFlight, gl])
+  // And with the night flight on, once this View has drawn: in close zoom
+  // the overview panels draw in the same frame (tides-tvr.7.3).
+  useEffect(() => (nightFlight ? restoreEyeAfterDrawing(scene) : undefined), [nightFlight, scene])
   const groundPatch = useMemo(
     () =>
       composePatches(
@@ -377,6 +380,19 @@ function restoreEye(renderer: THREE.WebGLRenderer) {
   eyeSky.heightKm = EYE_AIRLESS_KM
   eyeSky.up.set(0, 1, 0)
   eyeSky.sunDiscFade = 0
+}
+
+// After `scene` draws, the day's eye again (restoreEye), for the Views drawn
+// after it. Returns the cleanup.
+function restoreEyeAfterDrawing(scene: THREE.Scene) {
+  const previous = scene.onAfterRender
+  scene.onAfterRender = function (renderer, renderScene, camera, target) {
+    previous.call(this, renderer, renderScene, camera, target)
+    restoreEye(renderer)
+  }
+  return () => {
+    scene.onAfterRender = previous
+  }
 }
 
 function cloudsFaceEachCamera(

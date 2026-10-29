@@ -8,10 +8,17 @@
 // ground doesn't sweep under it. In any focus the near plane follows the
 // ground and Earth's shells as ship mode's does. The store's `closeZoom` is
 // the shared predicate the later beads (tides-tvr.7.2 tiles, 7.3 detail) read.
+//
+// In close zoom the main camera also feeds the limb view (ship/limb-detail.ts,
+// tides-tvr.7.3), as the ship's does in flight: Earth trades up to the limb
+// sphere with the DEM's fine mesh and morph, and its shells, haze and cloud
+// march draw from inside for that camera alone (earth-shells.ts
+// eyeNearEarth). On leaving, the view clears and its spheres are let go once
+// Earth's meshes have let go of them.
 
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Quaternion, Vector3, type Camera, type Object3D } from 'three'
+import { Quaternion, Vector3, type Camera, type Object3D, type PerspectiveCamera } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { MIN_DISTANCE_FACTOR } from './main-view'
 import type { Pivot, Spin } from './pivot'
@@ -21,6 +28,15 @@ import { isTileRange } from './close-zoom-rules'
 import { TERRAIN_DISPLACEMENT } from './cloud-layer'
 import { NEAR_MIN as SHIP_NEAR_MIN } from './ship/ship-session'
 import {
+  clearLimbView,
+  limbEye,
+  limbSphereInUse,
+  releaseLimbSpheres,
+  updateLimbView,
+  type LimbCandidate,
+} from './ship/limb-detail'
+import {
+  earthLimbTerrain,
   earthTerrain,
   loadEarthTerrain,
   terrainFloorGreyAround,
@@ -98,9 +114,14 @@ export function groundAngle(altitude: number, radius: number): number {
 
 const _local = new Vector3()
 
-/** The globe's ground around `at` (unit, Earth's frame), highest within `reach`. */
+/**
+ * The globe's ground around `at` (unit, Earth's frame), highest within
+ * `reach`: the limb sphere's floor while Earth's ground draws that sphere,
+ * whose finer quads stand its peaks higher (ship-bodies.ts reads it so too),
+ * else the base sphere's.
+ */
 function globeGroundRadius(at: Vector3, reach: number, radius: number): number {
-  const floor = earthTerrain()
+  const floor = (limbSphereInUse(radius) ? earthLimbTerrain() : null) ?? earthTerrain()
   return floor
     ? radius + (TERRAIN_DISPLACEMENT * terrainFloorGreyAround(floor, at, reach / radius)) / 255
     : terrainFloorRadius(null, radius, at)
@@ -112,10 +133,10 @@ function globeGroundRadius(at: Vector3, reach: number, radius: number): number {
  * `radius` (`earth` its spinning object, whose own frame is the terrain
  * floor's: lon 0 on +X, east toward −Z).
  *
- * The globe's ground is the base 128 × 128 sphere's floor (before it loads,
- * the fixed sphere over any ground); once tides-tvr.7.3 draws the limb
- * sphere in the system view, this must read earthLimbTerrain(). Where the
- * streamed tiles draw (tides-tvr.7.2), theirs, as the ship's floor reads it
+ * The globe's ground is the drawn sphere's floor: the limb sphere's while
+ * close zoom's limb view has swapped it in (tides-tvr.7.3), else the base
+ * 128 × 128 sphere's (before they load, the fixed sphere over any ground).
+ * Where the streamed tiles draw (tides-tvr.7.2), theirs, as the ship's floor reads it
  * (surface-handover.ts tileGroundRadius). Called from useCloseZoom's frame,
  * before SurfaceTiles' (SURFACE_FRAME_PRIORITY): the floor and near plane see
  * the previous frame's tile share and tiles, the one-frame lag ship mode's
@@ -154,23 +175,49 @@ const _right = new Vector3()
 const _point = new Vector3()
 const _up = new Vector3(0, 1, 0)
 const _now = new Quaternion()
+// Earth as the limb view reads it, refilled each frame.
+const _earthLimb: LimbCandidate = { key: 'earth', position: _centre, radius: 0 }
+const _limbCandidates: readonly LimbCandidate[] = [_earthLimb]
 
-/** One CameraProvider's close zoom: whether it owns the shared state (it has controls), and Earth's last turn. */
+/**
+ * One CameraProvider's close zoom: whether it owns the shared state (it has
+ * controls), Earth's last turn, the camera it feeds the limb view for (null
+ * while it doesn't), and whether it still has limb spheres to let go of
+ * since it stopped.
+ */
 interface CloseZoomOwner {
   owns: boolean
   wasClose: boolean
   hasPrevious: boolean
   previous: Quaternion
+  fedCamera: Camera | null
+  releasing: boolean
 }
 
 /** Start the terrain floor's fetch and build once the eye is within this many barriers of Earth's centre. */
 const TERRAIN_LOAD_BARRIERS = 2
+
+/**
+ * Stops `owner` feeding the limb view: clears it while it is still the one
+ * `owner` fed, and leaves its spheres to be let go (releaseLimbSpheres).
+ * Never another feeder's view or spheres, such as the ship's on the frame
+ * ship mode starts.
+ */
+function stopFeedingLimb(owner: CloseZoomOwner) {
+  if (!owner.fedCamera) return
+  if (limbEye() === owner.fedCamera) {
+    clearLimbView()
+    owner.releasing = true
+  }
+  owner.fedCamera = null
+}
 
 function leaveCloseZoom(
   owner: CloseZoomOwner,
   controls: OrbitControlsImpl | null,
   spin: Spin
 ) {
+  stopFeedingLimb(owner)
   owner.wasClose = false
   owner.hasPrevious = false
   spin.turn.identity()
@@ -195,6 +242,8 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     wasClose: false,
     hasPrevious: false,
     previous: new Quaternion(),
+    fedCamera: null,
+    releasing: false,
   })
   // Every panel mounts a CameraProvider; only the one with controls clears
   // the shared state, so closing a panel leaves the main view's close zoom.
@@ -205,6 +254,13 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
       owner.owns = false
       closeZoomState.floor = null
       leaveCloseZoom(owner, get().controls as OrbitControlsImpl | null, spin)
+      // Once Earth's meshes, unmounting after this, have let go of their
+      // spheres; not as ship mode starts, whose ship reuses them and drops
+      // them all on exit.
+      if (owner.releasing && !useStore.getState().shipMode) {
+        owner.releasing = false
+        queueMicrotask(releaseLimbSpheres)
+      }
     }
   }, [get, spin])
 
@@ -217,7 +273,9 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     const earth = state.earth?.current as Object3D | null | undefined
     const radius = state.earthRadius
     if (!earth || radius == null || state.shipMode) {
-      if (owner.wasClose || state.closeZoom || state.closeZoomTiles) leaveCloseZoom(owner, controls, spin)
+      if (owner.wasClose || owner.fedCamera || state.closeZoom || state.closeZoomTiles) {
+        leaveCloseZoom(owner, controls, spin)
+      }
       return
     }
     earth.getWorldPosition(_centre)
@@ -225,6 +283,26 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     const close = isCloseZoom(eyeR, radius, owner.wasClose)
     if (close !== state.closeZoom) state.setCloseZoom(close)
     owner.wasClose = close
+    // The limb view (tides-tvr.7.3), in any focus: Earth is the only body
+    // close zoom brings the eye near.
+    if (close && (camera as PerspectiveCamera).isPerspectiveCamera) {
+      const { fov } = camera as PerspectiveCamera
+      _earthLimb.radius = radius
+      updateLimbView(
+        'earth',
+        _limbCandidates,
+        camera.position,
+        frame.size.height * frame.viewport.dpr,
+        fov,
+        camera
+      )
+      owner.fedCamera = camera
+      owner.releasing = false
+    } else {
+      stopFeedingLimb(owner)
+    }
+    // Each frame until Earth's meshes have let go of every sphere.
+    if (owner.releasing && releaseLimbSpheres()) owner.releasing = false
     // The tiles' range (tides-tvr.7.2): only in close zoom, from the eye's
     // height over the sea-level sphere.
     const tiles = close && isTileRange(eyeR - radius, SURFACE_TOP, state.closeZoomTiles)

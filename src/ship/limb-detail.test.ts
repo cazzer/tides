@@ -14,7 +14,10 @@ import {
   clearLimbView,
   limbFacetPx,
   limbBody,
+  limbEye,
+  limbSphereInUse,
   disposeLimbSpheres,
+  releaseLimbSpheres,
   limbSphere,
   requestLimbSphere,
   retainLimbSphere,
@@ -80,7 +83,9 @@ describe('LIMB_SEGMENTS', () => {
 
 const body = (key: string, x = 0, radius = 1): Body => ({ key, position: new THREE.Vector3(x, 0, 0), radius })
 const eyeAt = (x: number) => new THREE.Vector3(x, 0, 0)
-const view = (key: string, bodies: Body[], x: number) => updateLimbView(key, bodies, eyeAt(x), SCREEN_PX, SHIP_FOV)
+// The camera the views below are fed for.
+const fed = new THREE.PerspectiveCamera(SHIP_FOV)
+const view = (key: string, bodies: Body[], x: number) => updateLimbView(key, bodies, eyeAt(x), SCREEN_PX, SHIP_FOV, fed)
 
 describe('the limb view', () => {
   afterEach(() => clearLimbView())
@@ -130,8 +135,22 @@ describe('the limb view', () => {
 
   it('clears with no nearest body', () => {
     view('mars', [body('mars')], 2)
-    updateLimbView(null, [body('mars')], eyeAt(2), SCREEN_PX, SHIP_FOV)
+    updateLimbView(null, [body('mars')], eyeAt(2), SCREEN_PX, SHIP_FOV, fed)
     expect(limbBody()).toBe(null)
+    expect(limbEye()).toBe(null)
+  })
+
+  it('belongs to the camera it was fed for, and tells its listeners when that changes (tides-tvr.7.3)', () => {
+    let calls = 0
+    const unsubscribe = subscribeLimbBody(() => calls++)
+    const earth = [body('earth')]
+    view('earth', earth, 1.5)
+    expect(limbEye()).toBe(fed)
+    const other = new THREE.PerspectiveCamera(SHIP_FOV)
+    updateLimbView('earth', earth, eyeAt(1.5), SCREEN_PX, SHIP_FOV, other)
+    expect(limbEye()).toBe(other)
+    expect(calls).toBe(2)
+    unsubscribe()
   })
 })
 
@@ -160,10 +179,18 @@ describe('wantsLimbSphere', () => {
     expect(wantsLimbSphere('venus', 1, base)).toBe(true)
   })
 
+  it('wants it only for the camera the view was fed for (tides-tvr.7.3)', () => {
+    view('earth', [body('earth')], 1.02)
+    expect(wantsLimbSphere('earth', 1, base, 0, fed)).toBe(true)
+    // An overview panel's camera drawing the same Earth keeps its own sphere.
+    expect(wantsLimbSphere('earth', 1, base, 0, new THREE.PerspectiveCamera(SHIP_FOV))).toBe(false)
+    expect(wantsLimbSphere('earth', 1, base, 0, new THREE.OrthographicCamera())).toBe(false)
+  })
+
   it('leaves the Sun its own sphere mid-cruise', () => {
     const bodies = createShipBodies()
     const sun = bodies.find((b) => b.key === 'sun')!
-    updateLimbView('sun', bodies, eyeAt(0.5 * FLIGHT_UNITS_PER_AU), SCREEN_PX, SHIP_FOV)
+    updateLimbView('sun', bodies, eyeAt(0.5 * FLIGHT_UNITS_PER_AU), SCREEN_PX, SHIP_FOV, fed)
     expect(wantsLimbSphere('sun', sun.radius, base)).toBe(false)
   })
 })
@@ -323,6 +350,51 @@ describe('the limb spheres', () => {
     disposeLimbSpheres()
     await nextTask()
     expect(builtLimbSphere(21)).toBe(null)
+  })
+
+  describe('as close zoom ends (releaseLimbSpheres, tides-tvr.7.3)', () => {
+    it('lets go of every sphere no mesh holds, with the topology', () => {
+      freed.clear()
+      const [a, b] = [limbSphere(1), limbSphere(2)]
+      // Both drawn once, then let go of.
+      retainLimbSphere(1, a)()
+      retainLimbSphere(2, b)()
+      ;[a, b].forEach(freesOnDispose)
+      const shared = [a.index!, a.getAttribute('normal'), a.getAttribute('uv')]
+      expect(releaseLimbSpheres()).toBe(true)
+      expect([builtLimbSphere(1), builtLimbSphere(2)]).toEqual([null, null])
+      ;[a, b].forEach((sphere) => expect(freed.has(sphere.getAttribute('position'))).toBe(true))
+      shared.forEach((attribute) => expect(freed.has(attribute)).toBe(true))
+      // The next is built on a topology of its own.
+      expect(limbSphere(1).index).not.toBe(shared[0])
+    })
+
+    it('keeps one a mesh still holds, and its topology, until a later call finds it let go', () => {
+      freed.clear()
+      const held = limbSphere(1)
+      const release = retainLimbSphere(1, held)
+      const loose = limbSphere(2)
+      ;[held, loose].forEach(freesOnDispose)
+      const watched = watch(held)
+      expect(releaseLimbSpheres()).toBe(false)
+      expect(builtLimbSphere(2)).toBe(null)
+      expect(freed.has(loose.getAttribute('position'))).toBe(true)
+      // Its topology is still the held one's, still drawn.
+      expect(freed.has(held.index!)).toBe(false)
+      expect(watched.disposed).toBe(false)
+      expect(limbSphereInUse(1)).toBe(true)
+      release()
+      expect(releaseLimbSpheres()).toBe(true)
+      expect(watched.disposed).toBe(true)
+      expect(freed.has(held.index!)).toBe(true)
+    })
+
+    it('drops queued builds', async () => {
+      requestLimbSphere(24)
+      expect(releaseLimbSpheres()).toBe(true)
+      await nextTask()
+      expect(builtLimbSphere(24)).toBe(null)
+    })
   })
 
   it('all go when ship mode ends', () => {

@@ -11,7 +11,7 @@
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, type RefObject } from 'react'
 import * as THREE from 'three'
-import { useStore } from '../store'
+import { useFlightDetail } from './flight-detail'
 import { flightTextureCap } from '../quality'
 import {
   GIBS_PATCH_RANGE,
@@ -325,8 +325,9 @@ export function streamedPatch(material: MaterialPatch): StreamedPatch | null {
 
 /**
  * The patch `create` makes for the ground mesh in `ground` (local sphere of
- * `radius`): in ship mode, on devices that take one, filled as the ship
- * nears Earth and freed when it leaves or the flight ends. `create` gets the
+ * `radius`): with flight detail (flight-detail.ts: ship mode, or close
+ * zoom for this View's camera), on devices that take one, filled as the eye
+ * nears Earth and freed when it leaves or the detail ends. `create` gets the
  * side (gibsPatchSide), 0 for none.
  */
 export function useStreamedPatch(
@@ -334,15 +335,21 @@ export function useStreamedPatch(
   ground: RefObject<THREE.Object3D | null>,
   radius: number
 ): MaterialPatch {
-  const shipMode = useStore((s) => s.shipMode)
+  const flight = useFlightDetail()
   const gl = useThree((s) => s.gl)
-  const side = useMemo(
-    () => (shipMode ? gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)) : 0),
-    [shipMode, gl]
-  )
+  const side = useMemo(() => gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)), [gl])
+  // One patch for the ground's life, released while flight detail is off:
+  // three binds a material's uniforms when it first compiles a program and
+  // keeps them for that program, so a patch made afresh on each close zoom
+  // would draw with the first one's (tides-tvr.7.3).
   const patch = useMemo(() => create(side), [create, side])
+  const none = useMemo(() => create(0), [create])
   streamed.set(patch.material, patch)
+  streamed.set(none.material, none)
   useEffect(() => () => patch.release(), [patch])
+  useEffect(() => {
+    if (!flight) patch.release()
+  }, [flight, patch])
   // A restored context has lost the texture (as for the cloud blend).
   useEffect(() => {
     const canvas = gl.domElement
@@ -351,7 +358,7 @@ export function useStreamedPatch(
     return () => canvas.removeEventListener('webglcontextrestored', restart)
   }, [gl, patch])
   useFrame(({ camera, gl }) => {
-    if (ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
+    if (flight && ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
   })
-  return patch.material
+  return flight ? patch.material : none.material
 }

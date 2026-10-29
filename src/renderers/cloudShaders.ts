@@ -2075,10 +2075,12 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   // Where the eye was among the clouds when the march's phase last moved on.
   let marchEye: Vec3 | null = null
   const shellAltitude = flat ? CLOUD_FLAT_ALTITUDE : CLOUD_LAYER_TOP
-  // The back faces within the ship camera's reach of the shell (earth-shells.ts
-  // withinShellReach), the front ones elsewhere. Unlike the atmosphere's
+  // The back faces within the near-Earth camera's reach of the shell
+  // (earth-shells.ts withinShellReach: the ship's, or the main view's in close
+  // zoom), the front ones elsewhere. Unlike the atmosphere's
   // shells, the depth test stays on: the shader writes each hit's depth.
-  // The ship's warm-up compiles that program ahead (ship-warmup.ts).
+  // The ship's warm-up compiles that program ahead (ship-warmup.ts); close
+  // zoom compiles it on its first descent within reach.
   // Within reach the shell also draws after the atmosphere's haze, and
   // under the aurora's shell after the aurora, whose additive glow would
   // otherwise show through the fog (tides-01v.8.6; earth-shells.ts). The
@@ -2150,7 +2152,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     }
     // The march's steps move on with the eye along the view (tides-ndh), the
     // eye and the view in the clouds' frame, as they drift. Only for the
-    // ship camera's march: the other cameras, which render between, leave
+    // near-Earth camera's march: the other cameras, which render between, leave
     // it, so that coming back within reach only jumps the phase.
     if (reach && !flat) {
       const shift = uniforms.uCloudShift.value
@@ -2161,8 +2163,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       if (marchEye) phase.value = marchPhaseAfter(phase.value, marchEye, at, view, MARCH_STEP)
       marchEye = at
     }
-    // The ceiling, once the ship is near Earth, ahead of the march from
-    // inside (in a browser: elsewhere there is no asset server).
+    // The ceiling, once an eye is near Earth (any camera's: it loads once),
+    // ahead of the march from inside (in a browser: elsewhere there is no asset server).
     if (!flat && !ceilingLoad && limbBody() === 'earth' && typeof window !== 'undefined') {
       ceilingLoad = fetchCeiling()
         .then((texture) => {

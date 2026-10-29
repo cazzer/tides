@@ -23,10 +23,12 @@ import { EARTH_RADIUS_KM } from '../cloud-layer'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
 import { SKY_DAY, WATER_GLSL, WATER_SKY_LIGHT_ELEVATION, WATER_WAVE_TABLE } from './water'
 
-// The ship's camera is near Earth (limb-detail's view).
+// The near-Earth camera (limb-detail's view): the last one cameraAt made.
+const near = vi.hoisted(() => ({ camera: null as unknown }))
 vi.mock('../ship/limb-detail', async (original) => ({
   ...(await original<typeof import('../ship/limb-detail')>()),
   limbBody: () => 'earth',
+  limbEye: () => near.camera,
 }))
 
 const R = 3
@@ -101,6 +103,7 @@ function cameraAt(r: number): THREE.PerspectiveCamera {
   const camera = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
   camera.position.set(r, 0, 0)
   camera.updateMatrixWorld()
+  near.camera = camera
   return camera
 }
 
@@ -346,6 +349,14 @@ describe('ground haze', () => {
       pickShellFaces(atmosphere, material, camera)
       expect(material.depthTest).toBe(!reach)
     }
+
+    // Another perspective camera at the same eye (an overview panel's): the
+    // atmosphere draws over the ground for it, as from outside.
+    const other = new THREE.PerspectiveCamera(60, 1.6, 0.001, 100)
+    other.position.set(R * 1.002, 0, 0)
+    other.updateMatrixWorld()
+    haze.update(ground, other)
+    expect(shader.uniforms.uGroundHaze.value).toBe(0)
 
     const ortho = new THREE.OrthographicCamera()
     ortho.position.set(R * 1.002, 0, 0)
