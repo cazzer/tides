@@ -420,8 +420,8 @@ function cloudsFaceEachCamera(
     previous.call(this, renderer, renderScene, camera, target)
     if (cloudRef.current) {
       sunInEarthFrame(cloudRef.current.parent, clouds.uniforms.uSunDir.value)
-      // The true deck near the ground only where the depth buffer can part
-      // its base from the ground, as the ship's true-scale stop (tides-d9f.10).
+      // FINE_DECK only where the depth buffer can part its base from the
+      // ground, as the ship's true-scale stop (tides-45y).
       clouds.faceCamera(cloudRef.current, camera, fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(renderer)))
     }
     each?.(renderer, camera)

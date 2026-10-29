@@ -65,7 +65,6 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { smoothstep } from '../night-flight'
 import { sceneRadius } from '../planets'
-import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { neutralTypeTexture } from './cloudBlend'
 import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
@@ -186,8 +185,8 @@ export const MARCH_STEPS = Math.ceil(MARCH_CHORD / MARCH_STEP)
  * much shorter for a lower deck as the longest path through it, the chord
  * under the tallest top over the highest ground, is shorter than the one
  * under CLOUD_LAYER_TOP. So that path still takes MARCH_STEPS steps (a
- * loop bound, fixed when the program is built), and a deck at true height,
- * some nine times thinner, is read in steps under a third as long.
+ * loop bound, fixed when the program is built), and FINE_DECK, whose
+ * reach is some two-fifths lower, in steps about four-fifths as long.
  */
 export function marchStepFor(deck: CloudDeck): number {
   const outer = TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + deck.clearance + deck.unitsPerKm * MAX_CLOUD_TOP_KM
@@ -2165,7 +2164,7 @@ export interface CloudLayer {
   shellAltitude: number
   /** Readies the shell's mesh for drawing to `camera`: before three sorts
    * what it draws (a scene's onBeforeRender), as it sets the draw order.
-   * `fine` where the depth buffer can draw the true deck near the ground
+   * `fine` where the depth buffer can draw FINE_DECK
    * (ship/ship-session.ts fineGroundDepth()). */
   faceCamera(mesh: THREE.Object3D, camera: THREE.Camera, fine?: boolean): void
   dispose(): void
@@ -2287,9 +2286,9 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     const up = eyeRadius > 0 ? eyeDir.copy(eye).divideScalar(eyeRadius) : eyeDir.set(0, 1, 0)
     const floor = earthTerrain()
     const ground = floor ? terrainFloorRadius(floor, seaLevel, up) : seaLevel
-    // The deck for this camera's altitude (tides-d9f.10), which the ground's
-    // shadow below reads too.
-    const deck = flat ? EXAGGERATED_DECK : cloudDeckAt((eyeRadius - seaLevel) * EARTH_KM_PER_UNIT, fine)
+    // The deck for this camera's depth buffer (tides-45y), which the
+    // ground's shadow below reads too.
+    const deck = flat ? EXAGGERATED_DECK : cloudDeckAt(fine)
     uniforms.uCloudClearance.value = deck.clearance
     uniforms.uCloudUnitsPerKm.value = deck.unitsPerKm
     const marchStep = marchStepFor(deck)

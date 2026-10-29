@@ -59,50 +59,40 @@ export const CLOUD_CLEARANCE = 0.012
 export const CLOUD_UNITS_PER_KM = 0.004
 /**
  * The cloud deck's place in the scene: its base's clearance over the ground
- * and the scene units its tops stand per true km. From orbit the deck is
- * exaggerated (EXAGGERATED_DECK), so that it reads as a layer; near the
- * ground, where the eye sees the clouds' true height against the true-scale
- * ground under them, it is drawn at true scale (TRUE_DECK, tides-d9f.10).
+ * and the scene units its tops stand per true km. The same at every altitude
+ * (tides-45y: tides-d9f.10 handed it over to true height on the way down,
+ * and the deck was seen sinking with the ship): FINE_DECK where the depth
+ * buffer can part its base from the ground, EXAGGERATED_DECK elsewhere.
  */
 export type CloudDeck = { clearance: number; unitsPerKm: number }
-/** The deck as it has been drawn since tides-42p, and still from orbit. */
+/** The deck as it has been drawn since tides-42p, and still where the depth
+ * buffer is coarse. */
 export const EXAGGERATED_DECK: CloudDeck = { clearance: CLOUD_CLEARANCE, unitsPerKm: CLOUD_UNITS_PER_KM }
-/** Scene units per true km of cloud near the ground: the ground's own scale
- * (TERRAIN_DISPLACEMENT per TERRAIN_KM_PER_GREY), true at the default
- * relief, and never more exaggerated than the deck from orbit, so a raised
- * relief doesn't lift the near deck over the far one. */
+/** Scene units per true km at the ground's own scale (TERRAIN_DISPLACEMENT
+ * per TERRAIN_KM_PER_GREY), true at the default relief, and never more
+ * exaggerated than the deck from orbit, so a raised relief doesn't lift
+ * FINE_DECK over it. */
 export const TRUE_CLOUD_UNITS_PER_KM = Math.min(TERRAIN_DISPLACEMENT / TERRAIN_KM_PER_GREY, CLOUD_UNITS_PER_KM)
-/** The true deck's base over the ground, km [TUNE]: about where low cloud's
- * base stands. */
-export const CLOUD_TRUE_BASE_KM = 1
-/** The deck near the ground, at true scale. */
-export const TRUE_DECK: CloudDeck = {
-  clearance: CLOUD_TRUE_BASE_KM * TRUE_CLOUD_UNITS_PER_KM,
-  unitsPerKm: TRUE_CLOUD_UNITS_PER_KM,
+/** FINE_DECK's base over the ground, true km [TUNE]: about three times where
+ * low cloud's base stands, so the deck sits near the real clouds. */
+export const FINE_DECK_BASE_KM = 3
+/** FINE_DECK's cloud-top exaggeration [TUNE]: enough that the deck still
+ * reads as a layer from orbit (the user picked base 3 km, tops 6x on the
+ * board, tides-45y.1). */
+export const FINE_DECK_EXAGGERATION = 6
+/** The deck at every altitude on a fine depth buffer. */
+export const FINE_DECK: CloudDeck = {
+  clearance: FINE_DECK_BASE_KM * TRUE_CLOUD_UNITS_PER_KM,
+  unitsPerKm: Math.min(FINE_DECK_EXAGGERATION * TRUE_CLOUD_UNITS_PER_KM, CLOUD_UNITS_PER_KM),
 }
-/** The eye's altitudes over the sea (true km) between which the deck goes
- * from true to exaggerated: true up to the first, as from orbit from the
- * second, the top of the streamed ground's handover (surface-handover.ts
- * SURFACE_MIN_TOP_KM, which imports this module; a test pins the two
- * equal), so the deck is exaggerated wherever the globe alone is drawn. */
-export const CLOUD_DECK_BAND_KM: readonly [number, number] = [20, 100]
 
 /**
- * The deck drawn for an eye `altitudeKm` over the sea (true km): true near
- * the ground, as from orbit over CLOUD_DECK_BAND_KM, in proportion between.
- * Only where the depth buffer is `fine` (ship/ship-session.ts
- * fineGroundDepth()): a coarse one can't part a true deck's base from the
- * ground under it, so there the deck is as from orbit at every altitude.
+ * The deck drawn wherever the eye is: FINE_DECK where the depth buffer is
+ * `fine` (ship/ship-session.ts fineGroundDepth()); a coarse one can't part
+ * its base from the ground under it, so there the deck is as from orbit.
  */
-export function cloudDeckAt(altitudeKm: number, fine: boolean): CloudDeck {
-  const [low, high] = CLOUD_DECK_BAND_KM
-  if (!fine || altitudeKm >= high) return EXAGGERATED_DECK
-  if (altitudeKm <= low) return TRUE_DECK
-  const t = (altitudeKm - low) / (high - low)
-  return {
-    clearance: TRUE_DECK.clearance + (EXAGGERATED_DECK.clearance - TRUE_DECK.clearance) * t,
-    unitsPerKm: TRUE_DECK.unitsPerKm + (EXAGGERATED_DECK.unitsPerKm - TRUE_DECK.unitsPerKm) * t,
-  }
+export function cloudDeckAt(fine: boolean): CloudDeck {
+  return fine ? FINE_DECK : EXAGGERATED_DECK
 }
 
 /** Lowest top a measured cloud gets; daytime low cloud reads ~0 from IR. */
