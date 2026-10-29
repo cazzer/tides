@@ -5,8 +5,7 @@ import {
   GROUND_RADIUS,
   HILL_HEIGHT,
   HORIZON_ROW,
-  MOON_SKY_DISTANCE,
-  SUN_SKY_DISTANCE,
+  ECLIPSE_SUN_SKY_DISTANCE,
   SURFACE_FOV,
   groundGeometry,
   hillAltitude,
@@ -14,6 +13,7 @@ import {
   roundDiscMatrix,
   surfaceView,
 } from './sky'
+import { SKY_SCALE, matchedSkyDistance } from './eclipse-sky'
 
 const DEG = Math.PI / 180
 
@@ -67,9 +67,18 @@ function discExtents(
   }
 }
 
+// At the everyday SKY_SCALE and at the solar eclipse demo's k ≈ 43, for mean
+// true radii (eclipse-sky.ts).
+const SUN_SCENE = sceneRadius(1392700000)
+const MOON_SCENE = sceneRadius(3474800)
+const SUN_TRUE = 0.2666 * DEG
+const MOON_TRUE = 0.259 * DEG
+const DEMO_SCALE = Math.asin(SUN_SCENE / ECLIPSE_SUN_SKY_DISTANCE) / SUN_TRUE
 const bodies = [
-  { name: 'Sun', radius: sceneRadius(1392700000), distance: SUN_SKY_DISTANCE },
-  { name: 'Moon', radius: sceneRadius(3474800), distance: MOON_SKY_DISTANCE },
+  { name: 'Sun', radius: SUN_SCENE, distance: matchedSkyDistance(SUN_SCENE, SKY_SCALE, SUN_TRUE) },
+  { name: 'Moon', radius: MOON_SCENE, distance: matchedSkyDistance(MOON_SCENE, SKY_SCALE, MOON_TRUE) },
+  { name: 'demo Sun', radius: SUN_SCENE, distance: ECLIPSE_SUN_SKY_DISTANCE },
+  { name: 'demo Moon', radius: MOON_SCENE, distance: matchedSkyDistance(MOON_SCENE, DEMO_SCALE, MOON_TRUE) },
 ]
 // Where on the panel the disc's centre sits, in NDC; corners included.
 const spots = [-0.85, 0, 0.85].flatMap((x) => [-0.85, 0, 0.85].map((y) => [x, y]))

@@ -1,28 +1,21 @@
 import * as THREE from 'three'
 import {
-  Body,
-  Equator,
-  MakeTime,
-  Observer,
-  RotateVector,
-  Rotation_EQD_ECT,
-} from 'astronomy-engine'
-import {
   EARTH_ORBIT_RADIUS,
   earthPosition,
   earthSpin,
   earthTilt,
-  eclipticToScene,
   type Vec3,
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import type { SkyLook } from './sky-look'
 import {
+  SKY_SCALE,
   eclipseMoonDirection,
   eclipseSkyAt,
   eclipseSkyScale,
-  matchedMoonDistance,
+  matchedSkyDistance,
+  type EclipseSky,
 } from './eclipse-sky'
 
 const DEG = Math.PI / 180
@@ -30,14 +23,14 @@ const DEG = Math.PI / 180
 // "View from Earth" stands here until the user sets a location.
 export const DEFAULT_SURFACE_LOCATION = { lat: -30, lon: 0 }
 
-// The sky Sun and Moon keep the renderers' scene sizes at these distances, so
-// they appear ~11° and ~6° in radius. The real ones are ~0.27° and would be a
-// few pixels; the sizes are exaggerated for visibility, the directions are not.
-// Side effects of the size: the Sun's upper limb clears the horizon while its
-// centre is still ~11° below (about an hour before sunrise), and the discs
-// overlap whenever the Moon is within ~17° of the Sun, near every new moon.
-export const SUN_SKY_DISTANCE = EARTH_ORBIT_RADIUS
-export const MOON_SKY_DISTANCE = 10
+// The sky Sun and Moon keep the renderers' scene sizes and are drawn at the
+// distance where that size looks k times their true angular radius (~0.27°),
+// which would otherwise be a few pixels (eclipse-sky.ts). Everyday, k is
+// SKY_SCALE: the Sun ~270 units out, the Moon ~26, the Sun's upper limb
+// clearing the horizon (k − 1) × 0.27° before the real one, and the discs
+// overlapping exactly when the real ones do. The solar eclipse demo's sky Sun
+// keeps its scene radius here instead, ~11.5°, so its k is ~43.
+export const ECLIPSE_SUN_SKY_DISTANCE = EARTH_ORBIT_RADIUS
 
 // The surface camera's vertical field of view, in degrees.
 export const SURFACE_FOV = 90
@@ -56,8 +49,9 @@ export function surfaceView(lat: number) {
   }
 }
 
-// Below the horizon: a dome around the observer, inside the sky Moon's
-// distance, so whatever has set is hidden.
+// Below the horizon: a dome around the observer, inside the sky Sun's and
+// Moon's distances (all but the demo's k ≈ 43 Moon, about as far out as it),
+// so whatever has set is hidden.
 export const GROUND_RADIUS = 5
 
 // Hills on the horizon, at most this high (degrees): enough to read as a
@@ -195,8 +189,8 @@ const toCenter = new THREE.Vector3()
 // A sphere θ off a perspective camera's axis projects as an ellipse stretched
 // away from the centre of view by about 1/cos θ: 1.4x at the side of the 90°
 // surface view (tides-39l). Squashing the body by cos θ along that direction,
-// about its centre, keeps the disc round (within 2% to 70° off axis for the
-// Sun's ~11°) and on its true direction. Writes the world-space squash into
+// about its centre, keeps the disc round (within 2% to 70° off axis, even for
+// the demo Sun's ~11°) and on its true direction. Writes the world-space squash into
 // `target`.
 export function roundDiscMatrix(
   target: THREE.Matrix4,
@@ -224,7 +218,6 @@ export function roundDiscMatrix(
 
 const earth = new THREE.Object3D()
 const observerWorld = new THREE.Vector3()
-const direction = new THREE.Vector3()
 
 // The observer's scene position at t, into observerWorld: their place on the
 // scene Earth under its transform, as OrbitingBody applies it.
@@ -238,46 +231,67 @@ function observerWorldAt(t: number, position: { x: number; y: number; z: number 
   return observerWorld.set(position.x, position.y, position.z).applyMatrix4(earth.matrix)
 }
 
-// Scene position of a sky body for an observer at lat/lon on the scene Earth
-// (radius in scene units): the observer plus `distance` along the body's true
-// topocentric direction. The scene's own Sun and Moon are at compressed
-// distances, so their directions from the surface are off by up to ~16°.
-export function skyPositionAt(
-  body: Body,
-  distance: number,
-  lat: number,
-  lon: number,
-  radius: number
-): (t: number) => Vec3 {
-  const site = new Observer(lat, lon, 0)
+/** The observer's scene position at t, for lat/lon on a scene Earth of radius. */
+export function skyObserverAt(lat: number, lon: number, radius: number): (t: number) => Vec3 {
   const { position } = calculateLocationAndRotationForLatLng(lat, lon, radius)
   return (t) => {
-    observerWorldAt(t, position)
-    const time = MakeTime(new Date(t))
-    const { vec } = Equator(body, time, site, true, true)
-    eclipticToScene(RotateVector(Rotation_EQD_ECT(time), vec), direction)
-    direction.normalize().multiplyScalar(distance).add(observerWorld)
-    return [direction.x, direction.y, direction.z]
+    const { x, y, z } = observerWorldAt(t, position)
+    return [x, y, z]
   }
 }
 
-// The solar eclipse demo's sky Moon (tides-zec.1, eclipse-sky.ts): at the sky
-// Sun's scale, closer in so its scene radius looks that size, and turned from
-// the Sun by the scaled offset, so the phases look as they truly do.
-export function eclipseMoonSkyPositionAt(
+/** How many times their true size the sky Sun and Moon are drawn, given the sky. */
+export type SkyScale = (e: EclipseSky) => number
+
+export const everydaySkyScale: SkyScale = () => SKY_SCALE
+
+/** The solar eclipse demo's k (≈ 43): its sky Sun at ECLIPSE_SUN_SKY_DISTANCE. */
+export function eclipseDemoSkyScale(sunSceneRadius: number): SkyScale {
+  return (e) => eclipseSkyScale(e, sunSceneRadius, ECLIPSE_SUN_SKY_DISTANCE)
+}
+
+// The sky Sun and Moon for an observer at lat/lon on the scene Earth (radius
+// in scene units), both at scaleAt's k times their true angular size: each at
+// the distance where its scene radius looks that size, the Sun along its true
+// topocentric direction and the Moon turned from it by the scaled offset
+// (eclipse-sky.ts). The scene's own Sun and Moon are at compressed distances,
+// so their directions from the surface would be off by up to ~16°.
+export function skyDiscPositionsAt(
   lat: number,
   lon: number,
   radius: number,
-  sunSceneRadius: number,
-  moonSceneRadius: number
-): (t: number) => Vec3 {
+  sceneRadius: { sun: number; moon: number },
+  scaleAt: SkyScale
+): { sun: (t: number) => Vec3; moon: (t: number) => Vec3 } {
   const { position } = calculateLocationAndRotationForLatLng(lat, lon, radius)
-  return (t) => {
-    const e = eclipseSkyAt(t, lat, lon)
-    const k = eclipseSkyScale(e, sunSceneRadius, SUN_SKY_DISTANCE)
-    eclipseMoonDirection(e, k, direction)
-      .multiplyScalar(matchedMoonDistance(moonSceneRadius, k, e.moonRadius))
-      .add(observerWorldAt(t, position))
-    return [direction.x, direction.y, direction.z]
+  const eye = new THREE.Vector3()
+  const place = new THREE.Vector3()
+  // Both bodies are placed once a frame at the same t: one observer for both.
+  let eyeT = NaN
+  const eyeAt = (t: number) => {
+    if (t !== eyeT) {
+      eye.copy(observerWorldAt(t, position))
+      eyeT = t
+    }
+    return eye
+  }
+  return {
+    sun: (t) => {
+      const e = eclipseSkyAt(t, lat, lon)
+      const k = scaleAt(e)
+      place
+        .copy(e.sun)
+        .multiplyScalar(matchedSkyDistance(sceneRadius.sun, k, e.sunRadius))
+        .add(eyeAt(t))
+      return [place.x, place.y, place.z]
+    },
+    moon: (t) => {
+      const e = eclipseSkyAt(t, lat, lon)
+      const k = scaleAt(e)
+      eclipseMoonDirection(e, k, place)
+        .multiplyScalar(matchedSkyDistance(sceneRadius.moon, k, e.moonRadius))
+        .add(eyeAt(t))
+      return [place.x, place.y, place.z]
+    },
   }
 }

@@ -41,6 +41,11 @@ export function useDockDisclosure() {
   }
 }
 
+// How long the controls take to fade as the dock folds. The expanded layout
+// (wrapped second row, taller dock) holds until they have faded, so nothing
+// shows outside the shrinking dock.
+const FOLD_FADE = 120
+
 /**
  * The dock's phone layout: a glass circle at the top-left that widens
  * across the top when expanded. Everything but the toggle hides while folded;
@@ -56,7 +61,14 @@ export const phoneDock = `
     width: var(--dock-height);
     max-width: none;
     justify-content: space-between;
-    transition: width 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition:
+      width 240ms cubic-bezier(0.2, 0.8, 0.2, 1) ${FOLD_FADE}ms,
+      flex-wrap 0s linear ${FOLD_FADE}ms,
+      height 0s linear ${FOLD_FADE}ms,
+      min-height 0s linear ${FOLD_FADE}ms,
+      padding-block 0s linear ${FOLD_FADE}ms,
+      border-radius 0s linear ${FOLD_FADE}ms;
+    transition-behavior: allow-discrete;
 
     &[data-expanded='true'] {
       width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
@@ -83,8 +95,8 @@ export const phoneDock = `
       visibility: hidden;
       opacity: 0;
       transition:
-        opacity 120ms ease,
-        visibility 0s linear 120ms;
+        opacity ${FOLD_FADE}ms ease,
+        visibility 0s linear ${FOLD_FADE}ms;
     }
 
     @media (prefers-reduced-motion: reduce) {

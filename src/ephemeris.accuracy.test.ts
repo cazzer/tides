@@ -8,6 +8,7 @@ import {
   Horizon,
   KM_PER_AU,
   Observer,
+  SearchAltitude,
 } from 'astronomy-engine'
 import {
   MOON_UNITS_PER_KM,
@@ -19,12 +20,13 @@ import {
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
 import {
-  MOON_SKY_DISTANCE,
-  SUN_SKY_DISTANCE,
+  everydaySkyScale,
   placeSurfaceCamera,
-  skyPositionAt,
+  skyDiscPositionsAt,
   surfaceView,
 } from './sky'
+import { SKY_SCALE, eclipseMoonDirection, eclipseSkyAt } from './eclipse-sky'
+import { sceneRadius } from './planets'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import {
   DEFAULT_RADIUS,
@@ -244,6 +246,7 @@ describe('scene terminator vs USNO sunrise/sunset', () => {
 // The scene Earth's radius (solar-system.tsx); the directions below don't
 // depend on it, since the sky bodies are placed relative to the observer.
 const EARTH_RADIUS = 2.95
+const SKY_RADII = { sun: sceneRadius(1392700000), moon: sceneRadius(3474800) }
 
 // The "View from Earth" camera, inside the observer that OrbitingBody stands
 // on the spinning Earth.
@@ -301,15 +304,21 @@ describe('View from Earth vs astronomy-engine Horizon()', () => {
     expect(up.dot(zenith)).toBeGreaterThan(0)
 
     const site = new Observer(lat, lon, 0)
-    for (const [name, body, distance] of [
-      ['Sun', Body.Sun, SUN_SKY_DISTANCE],
-      ['Moon', Body.Moon, MOON_SKY_DISTANCE],
+    const discs = skyDiscPositionsAt(lat, lon, EARTH_RADIUS, SKY_RADII, everydaySkyScale)
+    const eye = camera.getWorldPosition(new THREE.Vector3())
+    // The Sun is drawn on its true direction. The Moon is turned from its
+    // true one by the scaled offset (eclipse-sky.ts), so the discs overlap
+    // only when the real ones do: its true direction is checked against
+    // Horizon() here, and the drawn one against eclipseMoonDirection.
+    const e = eclipseSkyAt(t, lat, lon)
+    const trueMoon = e.moon.clone().add(eye)
+    const drawnMoon = new THREE.Vector3(...discs.moon(t)).sub(eye).normalize()
+    expect(drawnMoon.distanceTo(eclipseMoonDirection(e, SKY_SCALE))).toBeLessThan(1e-9)
+    for (const [name, body, point] of [
+      ['Sun', Body.Sun, new THREE.Vector3(...discs.sun(t))],
+      ['Moon', Body.Moon, trueMoon],
     ] as const) {
-      const scene = cameraAltAz(
-        camera,
-        new THREE.Vector3(...skyPositionAt(body, distance, lat, lon, EARTH_RADIUS)(t)),
-        lat
-      )
+      const scene = cameraAltAz(camera, point, lat)
       const { ra, dec } = Equator(body, new Date(t), site, true, true)
       const expected = Horizon(new Date(t), site, ra, dec)
       const altError = scene.alt - expected.altitude
@@ -330,6 +339,31 @@ describe('View from Earth vs astronomy-engine Horizon()', () => {
       expect(Math.abs(altError)).toBeLessThan(0.05)
       expect(Math.abs(azError)).toBeLessThan(0.05)
     }
+  })
+})
+
+// The sky Sun is SKY_SCALE times its true size about its true centre, so its
+// upper limb clears the horizon (k − 1) × its true radius before the real one.
+describe('View from Earth sunrise (tides-zec.8)', () => {
+  test.each([
+    { place: 'Torreón', lat: 25.54, lon: -103.41, day: '2024-04-08' },
+    { place: 'Asturias', lat: 43.3, lon: -5.5, day: '2026-08-12' },
+  ])('$place $day: the drawn upper limb leads the real one by (k − 1) × its radius', ({ lat, lon, day }) => {
+    const site = new Observer(lat, lon, 0)
+    const start = Date.parse(`${day}T00:00:00Z`)
+    const radius = eclipseSkyAt(start, lat, lon).sunRadius * DEG
+    // SearchAltitude is geometric (no refraction) and for the Sun's centre:
+    // the true upper limb is on the horizon here.
+    const t = SearchAltitude(Body.Sun, site, +1, new Date(start), 1, -radius)!.date.getTime()
+    const trueRadius = eclipseSkyAt(t, lat, lon).sunRadius * DEG
+    const camera = surfaceCameraAt(t, lat, lon)
+    const eye = camera.getWorldPosition(new THREE.Vector3())
+    const sun = new THREE.Vector3(
+      ...skyDiscPositionsAt(lat, lon, EARTH_RADIUS, SKY_RADII, everydaySkyScale).sun(t)
+    )
+    const drawnRadius = Math.asin(SKY_RADII.sun / sun.distanceTo(eye)) * DEG
+    const upperLimb = cameraAltAz(camera, sun, lat).alt + drawnRadius
+    expect(Math.abs(upperLimb - (SKY_SCALE - 1) * trueRadius)).toBeLessThan(0.05)
   })
 })
 

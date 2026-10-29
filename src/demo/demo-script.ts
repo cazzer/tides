@@ -54,6 +54,9 @@ export interface DemoAids {
    * sea's equilibrium shape drawn exaggerated, a marked spot and the tide
    * readout (tides-zec.4). */
   tides?: boolean
+  /** Main view: the Moon's umbra on Earth filled and ringed and the
+   * penumbra's edge ringed, from the true shadow geometry (tides-zec.7). */
+  moonShadow?: boolean
 }
 
 /**

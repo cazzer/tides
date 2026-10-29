@@ -13,7 +13,9 @@ import type { Demo } from '../demo-script'
 //
 // In steps 2 and 3 the View from Earth draws the Moon at the Sun's scale with
 // a daylit sky (aids.solarEclipseSky, eclipse-sky.ts); step 5 adds the Moon's
-// tilted orbit and node line (aids.moonNodes).
+// tilted orbit and node line (aids.moonNodes). In steps 1 and 4 the main view
+// darkens and rings the shadow on Earth (aids.moonShadow, MoonShadowGlobe.tsx),
+// which at true scale is a faint smudge; step 5 turns it off.
 export const solarEclipse: Demo = {
   id: 'solar-eclipse',
   title: 'Total solar eclipse',
@@ -29,9 +31,10 @@ export const solarEclipse: Demo = {
       // the ecliptic and sunward, drops out of the bottom of the frame while
       // the shadow (~16° west of the subsolar meridian) stays near centre.
       camera: { focus: 'earth', azimuth: -20, elevation: 40, distance: 20 },
+      aids: { moonShadow: true },
       caption: {
         title: 'The Moon’s shadow reaches Earth',
-        body: 'New moon, 8 April 2024: the Moon is between the Sun and Earth. Its shadow, drawn to scale, is the grey smudge on the Pacific west of Mexico: a faint penumbra around a dark umbra about 200 km wide.',
+        body: 'New moon, 8 April 2024: the Moon is between the Sun and Earth. Its shadow is the dark dot ringed in white off Mexico: the umbra, 200 km wide, where the eclipse is total. Inside the big faint ring it is partial.',
       },
     },
     {
@@ -70,7 +73,7 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: false },
       caption: {
         title: 'The shadow races north-east',
-        body: 'The umbra (the grey smudge; the orange pin marks Torreón) crosses Dallas at 18:40 UTC, then Arkansas, Ohio, New York and Maine, and leaves Earth off Newfoundland near 19:55 UTC.',
+        body: 'The umbra (the dark dot; the orange pin marks Torreón) crosses Dallas at 18:40 UTC, then Arkansas, Ohio, New York and Maine, and leaves Earth off Newfoundland near 19:55 UTC.',
       },
     },
     {
@@ -81,7 +84,7 @@ export const solarEclipse: Demo = {
       // circle, Earth's orbit and the month labels collapse to one line, and
       // the Moon's orbit crosses it at its ~5° tilt.
       camera: { focus: 'earth', azimuth: -25, elevation: 0, distance: 55 },
-      aids: { moonNodes: true },
+      aids: { moonNodes: true, moonShadow: false },
       caption: {
         title: 'Why eclipses are rare',
         body: 'The Moon’s orbit (lilac ring) is tilted about 5° to Earth’s (faint white circle), so most new moons pass above or below the Sun. Only one near a node, where they cross (the gold line), casts a shadow on Earth.',
