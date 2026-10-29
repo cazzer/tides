@@ -39,8 +39,9 @@ export const SUN_MOON_GM = MassProduct(Body.Sun) / MassProduct(Body.Moon)
  * sea right under it stands H above the mean, and −H/2 along the limb. */
 export const H_MOON_MEAN_M =
   (MassProduct(Body.Moon) / MassProduct(Body.Earth)) * (EARTH_RADIUS_KM ** 4 / MOON_MEAN_KM ** 3) * 1000
-/** How much taller the drawn tide shell is than the true tide. */
-export const TIDE_EXAGGERATION = 1e6
+/** How much taller the drawn tide shell is than the true tide: enough that
+ * its outline stands clear of mean sea level with the Moon in frame. */
+export const TIDE_EXAGGERATION = 3e6
 /** The marked spot with no pin: on the equator under the Moon at the daily
  * step's start (demos/tides.ts). */
 export const TIDES_DEFAULT_SPOT = { lat: 0, lon: -62.4 }
@@ -76,6 +77,11 @@ export function tidePulls(t: number): TidePulls {
   return { moonKm, sunKm, moon: km, sun: ks, range }
 }
 
+/** `pulls` with the Sun's share left out: the Moon's tide alone. */
+export function moonAlone(pulls: TidePulls): TidePulls {
+  return { ...pulls, sun: 0, range: pulls.moon }
+}
+
 /** A TidePulls range in metres of equilibrium tide. Along the Moon–Sun
  * great circle each body's (3/2)·H·k·(cos²θ − 1/3) swings through (3/2)·H·k,
  * so the two together swing through (3/2)·H·S. */
@@ -103,8 +109,9 @@ export function equilibriumHeight(cosMoon: number, cosSun: number, pulls: Pick<T
 }
 
 /** The equilibrium tide at a latitude and longitude (deg) at `t`, metres,
- * worked in the true equator of date, apart from the scene. */
-export function spotTide(latDeg: number, lonDeg: number, t: number): number {
+ * worked in the true equator of date, apart from the scene; without the Sun,
+ * the Moon's alone. */
+export function spotTide(latDeg: number, lonDeg: number, t: number, withSun = true): number {
   const date = new Date(t)
   const rotation = Rotation_EQJ_EQD(date)
   const { moon, sun } = geoBodies(date)
@@ -117,7 +124,8 @@ export function spotTide(latDeg: number, lonDeg: number, t: number): number {
   const pz = Math.sin(phi)
   const cosMoon = (px * m.x + py * m.y + pz * m.z) / m.Length()
   const cosSun = (px * s.x + py * s.y + pz * s.z) / s.Length()
-  return equilibriumHeight(cosMoon, cosSun, tidePulls(t))
+  const pulls = tidePulls(t)
+  return equilibriumHeight(cosMoon, cosSun, withSun ? pulls : moonAlone(pulls))
 }
 
 export function tidesSpot(location: Location | null): { lat: number; lon: number; pinned: boolean } {

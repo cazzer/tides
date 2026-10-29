@@ -1,33 +1,42 @@
 // The tides demo's field aid (tides-zec.4), main view only: the sea's
 // equilibrium shape as a translucent shell over the globe, its heights drawn
-// TIDE_EXAGGERATION times, and a ring of arrows in the Moon's orbit plane at
-// the limb showing the Moon's tidal pull (violet), the Sun's (gold) and their
-// sum (white), with small discs just past the ring toward the Moon and the
-// Sun; the sums are tides-field.ts. It is in an inertial frame centred on
+// TIDE_EXAGGERATION times, its outline in the Moon's orbit plane drawn
+// bright over a dashed circle at mean sea level, and a ring of arrows in
+// that plane at the limb showing the Moon's tidal pull (violet), the Sun's
+// (gold) and their sum (white), with small discs past the ring toward the
+// Moon and the Sun; the sums are tides-field.ts. With aids.tidesSun off, the
+// shell, the outline and the arrows are the Moon's alone, and the Sun's
+// arrows, the sum and the Sun's disc are hidden. It is in an inertial frame centred on
 // Earth, moved with it each frame like MoonOrbitTilt: the bulges point at
 // the Moon and Sun, not with the spin.
-// Everything is rebuilt in place only when the clock has moved.
+// Everything is rebuilt in place only when the clock has moved or the Sun
+// has been turned on or off.
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { positionsFor } from '../flight-scale'
 import { CLOUD_UNDER_AURORA_RENDER_ORDER } from '../renderers/earth-shells'
 import { useStore } from '../store'
+import { useDemoAid } from './demo-aids'
 import {
   ARROW_POINTS,
   arrowLength,
+  OUTLINE_POINTS,
+  outlineVertices,
   ringArrows,
   ringFrame,
   ringPoint,
   shellVertices,
+  TIDES_MOON_COLOR,
+  TIDES_SUN_COLOR,
 } from './tides-field'
-import { sceneTideDirections, tidePulls } from './tides'
+import { moonAlone, sceneTideDirections, tidePulls } from './tides'
 
 // Sizes are × Earth's radius.
 const SHELL_COLOR = '#2F8CFF'
 const SHELL_OPACITY = 0.28 // [TUNE]
 const SHELL_SEGMENTS: [number, number] = [128, 64]
-const SHELL_BOUND = 1.25
+const SHELL_BOUND = 1.35
 
 const THIN_WIDTH = 0.015
 const SUM_WIDTH = 0.03
@@ -36,15 +45,18 @@ const THIN_HEAD = 0.07
 const SUM_HEAD = 0.1
 const HEAD_SHARE = 0.6 // of the arrow, at most
 const MIN_ARROW = 1e-4
-const RING_WIDTH = 0.006
-const RING_OPACITY = 0.2 // [TUNE]
+// The mean sea level's dashed circle.
+const RING_WIDTH = 0.012
+const RING_DASHES = 60
+const RING_OPACITY = 0.45 // [TUNE]
+const OUTLINE_WIDTH = 0.02
+const OUTLINE_COLOR = '#7CC4FF'
 const MARKER_SIZE = 0.05
-// Past the ring, clear of the marked spot on the globe's edge; the arrows
-// draw over them.
-const MARKER_LIFT = 1.18 // [TUNE]
+// Past the ring, clear of the marked spot's halo on the globe's edge and of
+// the sea's outline, which reaches ~1.3 at the king tide; the arrows draw
+// over them.
+const MARKER_LIFT = 1.4 // [TUNE]
 
-const MOON_COLOR = '#C9A6FF'
-const SUN_COLOR = '#FFC23D'
 const SUM_COLOR = '#FFFFFF'
 
 // Over the globe's additive air, aurora and cloud shells, under the labels.
@@ -52,6 +64,7 @@ const SUM_COLOR = '#FFFFFF'
 // shows where one lies along it.
 const SHELL_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.5
 const RING_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.6
+const OUTLINE_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.62
 const SUM_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.7
 const MOON_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.8
 const SUN_ORDER = CLOUD_UNDER_AURORA_RENDER_ORDER + 0.9
@@ -88,14 +101,49 @@ interface Field {
   /** The shell's unit vertex directions. */
   directions: Float32Array
   shellMaterial: THREE.MeshBasicMaterial
-  ring: THREE.TorusGeometry
+  ring: THREE.BufferGeometry
+  outline: THREE.BufferGeometry
   marker: THREE.CircleGeometry
   shaftGeometry: THREE.CylinderGeometry
   headGeometry: THREE.ConeGeometry
-  materials: Record<'ring' | 'moon' | 'sun' | 'sum' | 'moonMarker' | 'sunMarker', THREE.MeshBasicMaterial>
+  materials: Record<'ring' | 'outline' | 'moon' | 'sun' | 'sum' | 'moonMarker' | 'sunMarker', THREE.MeshBasicMaterial>
   arrows: { moon: ArrowSet; sun: ArrowSet; sum: ArrowSet }
-  /** Sim time the field was last built for. */
+  /** Sim time the field was last built for, and whether with the Sun. */
   builtAt: number
+  builtSun: boolean
+}
+
+// A flat circle of `dashes` dashes `width` wide about +Z, its outer edge at
+// `radius`.
+function dashedRing(radius: number, width: number, dashes: number): THREE.BufferGeometry {
+  const steps = 4
+  const positions: number[] = []
+  const index: number[] = []
+  for (let d = 0; d < dashes; d++) {
+    const base = positions.length / 3
+    for (let k = 0; k <= steps; k++) {
+      const a = ((d + (0.5 * k) / steps) / dashes) * 2 * Math.PI
+      for (const r of [radius - width, radius]) positions.push(Math.cos(a) * r, Math.sin(a) * r, 0)
+    }
+    for (let k = 0; k < steps; k++) {
+      const i = base + 2 * k
+      index.push(i, i + 1, i + 2, i + 1, i + 3, i + 2)
+    }
+  }
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)).setIndex(index)
+}
+
+// A ribbon of OUTLINE_POINTS (inner, outer) pairs, closed; outlineVertices
+// fills it.
+function outlineRibbon(): THREE.BufferGeometry {
+  const position = new THREE.BufferAttribute(new Float32Array(OUTLINE_POINTS * 2 * 3), 3).setUsage(THREE.DynamicDrawUsage)
+  const index: number[] = []
+  for (let j = 0; j < OUTLINE_POINTS; j++) {
+    const i = 2 * j
+    const n = (2 * (j + 1)) % (2 * OUTLINE_POINTS)
+    index.push(i, i + 1, n, i + 1, n + 1, n)
+  }
+  return new THREE.BufferGeometry().setAttribute('position', position).setIndex(index)
 }
 
 function arrowSet(field: Pick<Field, 'shaftGeometry' | 'headGeometry'>, material: THREE.Material, width: number, headLength: number, order: number): ArrowSet {
@@ -124,12 +172,13 @@ function createField(radius: number): Field {
   const shaftGeometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1).translate(0, 0.5, 0)
   const headGeometry = new THREE.ConeGeometry(0.5, 1, 12, 1).translate(0, 0.5, 0)
   const materials = {
-    ring: overlayMaterial('#FFFFFF', RING_OPACITY),
-    moon: overlayMaterial(MOON_COLOR),
-    sun: overlayMaterial(SUN_COLOR),
+    ring: overlayMaterial('#FFFFFF', RING_OPACITY, THREE.DoubleSide),
+    outline: overlayMaterial(OUTLINE_COLOR, 1, THREE.DoubleSide),
+    moon: overlayMaterial(TIDES_MOON_COLOR),
+    sun: overlayMaterial(TIDES_SUN_COLOR),
     sum: overlayMaterial(SUM_COLOR),
-    moonMarker: overlayMaterial(MOON_COLOR, 1, THREE.DoubleSide),
-    sunMarker: overlayMaterial(SUN_COLOR, 1, THREE.DoubleSide),
+    moonMarker: overlayMaterial(TIDES_MOON_COLOR, 1, THREE.DoubleSide),
+    sunMarker: overlayMaterial(TIDES_SUN_COLOR, 1, THREE.DoubleSide),
   }
   const parts = { shaftGeometry, headGeometry }
   return {
@@ -144,7 +193,8 @@ function createField(radius: number): Field {
       depthTest: true,
       vertexColors: true,
     }),
-    ring: new THREE.TorusGeometry(radius, RING_WIDTH * radius, 6, 160),
+    ring: dashedRing(radius, RING_WIDTH * radius, RING_DASHES),
+    outline: outlineRibbon(),
     marker: new THREE.CircleGeometry(MARKER_SIZE * radius, 24),
     ...parts,
     materials,
@@ -154,11 +204,13 @@ function createField(radius: number): Field {
       sum: arrowSet(parts, materials.sum, SUM_WIDTH * radius, SUM_HEAD * radius, SUM_ORDER),
     },
     builtAt: NaN,
+    builtSun: false,
   }
 }
 
 function disposeField(field: Field) {
-  for (const geometry of [field.shell, field.ring, field.marker, field.shaftGeometry, field.headGeometry]) geometry.dispose()
+  for (const geometry of [field.shell, field.ring, field.outline, field.marker, field.shaftGeometry, field.headGeometry])
+    geometry.dispose()
   field.shellMaterial.dispose()
   for (const material of Object.values(field.materials)) material.dispose()
   for (const set of Object.values(field.arrows)) {
@@ -203,8 +255,8 @@ function placeArrow(set: ArrowSet, i: number, base: THREE.Vector3, vector: THREE
 }
 
 // Module level, so the memoised field is mutated outside the hook.
-function build(field: Field, objects: FieldObjects, t: number, radius: number) {
-  const pulls = tidePulls(t)
+function build(field: Field, objects: FieldObjects, t: number, radius: number, withSun: boolean) {
+  const pulls = withSun ? tidePulls(t) : moonAlone(tidePulls(t))
   sceneTideDirections(t, _moon, _sun)
 
   const position = field.shell.getAttribute('position') as THREE.BufferAttribute
@@ -216,6 +268,9 @@ function build(field: Field, objects: FieldObjects, t: number, radius: number) {
   // The ring in the Moon's orbit plane, through the Moon's direction.
   ringFrame(t, _moon, _normal, _side)
   const normal = _normal
+  const outline = field.outline.getAttribute('position') as THREE.BufferAttribute
+  outlineVertices(_moon, _side, _sun, pulls, radius, OUTLINE_WIDTH * radius, outline.array as Float32Array)
+  outline.needsUpdate = true
   const { moon, sun, sum } = field.arrows
   for (let j = 0; j < ARROW_POINTS; j++) {
     ringPoint(j, _moon, _side, _point)
@@ -229,6 +284,9 @@ function build(field: Field, objects: FieldObjects, t: number, radius: number) {
     set.shaft.instanceMatrix.needsUpdate = true
     set.head.instanceMatrix.needsUpdate = true
   }
+  // The Moon's arrows alone are its sum.
+  for (const mesh of [sun.shaft, sun.head, sum.shaft, sum.head]) mesh.visible = withSun
+  if (objects.sunMarker) objects.sunMarker.visible = withSun
 
   if (objects.ring) objects.ring.quaternion.setFromUnitVectors(_z, normal)
   if (objects.moonMarker) placeMarker(objects.moonMarker, _moon, normal, radius)
@@ -236,6 +294,7 @@ function build(field: Field, objects: FieldObjects, t: number, radius: number) {
   _dir.copy(_sun).addScaledVector(normal, -_sun.dot(normal)).normalize()
   if (objects.sunMarker) placeMarker(objects.sunMarker, _dir, normal, radius)
   field.builtAt = t
+  field.builtSun = withSun
 }
 
 // A disc just past the ring, lying in the plane.
@@ -250,14 +309,15 @@ interface FieldObjects {
   sunMarker: THREE.Mesh | null
 }
 
-function follow(field: Field, group: THREE.Group | null, objects: FieldObjects, t: number, radius: number) {
+function follow(field: Field, group: THREE.Group | null, objects: FieldObjects, t: number, radius: number, withSun: boolean) {
   if (!group) return
   group.position.fromArray(positionsFor('system').positionAt.earth(t))
-  if (t !== field.builtAt) build(field, objects, t, radius)
+  if (t !== field.builtAt || withSun !== field.builtSun) build(field, objects, t, radius, withSun)
 }
 
 export function TidesField({ radius }: { radius: number }) {
   const field = useMemo(() => createField(radius), [radius])
+  const withSun = useDemoAid('tidesSun')
   const group = useRef<THREE.Group>(null)
   const ring = useRef<THREE.Mesh>(null)
   const moonMarker = useRef<THREE.Mesh>(null)
@@ -280,7 +340,7 @@ export function TidesField({ radius }: { radius: number }) {
 
   useEffect(() => () => disposeField(field), [field])
 
-  useFrame(() => follow(field, group.current, objects, simTime(), radius))
+  useFrame(() => follow(field, group.current, objects, simTime(), radius, withSun))
 
   const { moon, sun, sum } = field.arrows
   return (
@@ -293,6 +353,13 @@ export function TidesField({ radius }: { radius: number }) {
         raycast={noRaycast}
       />
       <mesh ref={ring} renderOrder={RING_ORDER} geometry={field.ring} material={field.materials.ring} raycast={noRaycast} />
+      <mesh
+        renderOrder={OUTLINE_ORDER}
+        frustumCulled={false}
+        geometry={field.outline}
+        material={field.materials.outline}
+        raycast={noRaycast}
+      />
       <mesh
         ref={moonMarker}
         renderOrder={RING_ORDER}

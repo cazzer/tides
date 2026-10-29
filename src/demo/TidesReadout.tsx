@@ -1,8 +1,10 @@
 // The tides demo's readout (tides-zec.4): a glass panel top-left of the main
-// view with the Moon's and the Sun's tide-raising pull in units of the
-// Moon's at its average distance, the high–low range they make together (in
-// those units and in real centimetres), the ideal tide at the red dot and the
-// shell's exaggeration.
+// view led by the ideal tide at the red dot, then the Moon's and the Sun's
+// tide-raising pull in units of the Moon's at its average distance, coloured
+// as their arrows, the white arrows' key and the high–low range the two make
+// together in real centimetres; last, muted, what the picture leaves out. Kept short so the
+// Moon above Earth clears it on a phone. With aids.tidesSun off it is the
+// Moon's alone, as the field is.
 // Mounted in the main Panel's overlay while a demo runs (App.tsx); shown only
 // while the step has aids.tides on. It re-renders once every ten sim
 // minutes, through a bucketed store selector.
@@ -10,7 +12,8 @@ import styled from 'styled-components'
 import { glassPanel } from '../glass-styles'
 import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
-import { rangeMetres, spotTide, TIDE_EXAGGERATION, tidePulls, tidesSpot } from './tides'
+import { moonAlone, rangeMetres, spotTide, TIDE_EXAGGERATION, tidePulls, tidesSpot } from './tides'
+import { TIDES_MOON_COLOR, TIDES_SUN_COLOR } from './tides-field'
 
 const BUCKET_MS = 600_000
 const MINUS = '−'
@@ -21,9 +24,10 @@ export function TidesReadout() {
 
 function TidesReadoutLive() {
   const location = useStore((s) => s.location)
+  const withSun = useDemoAid('tidesSun')
   const bucket = useStore((s) => (s.timestamp == null ? null : Math.floor(s.timestamp / BUCKET_MS)))
   if (bucket == null) return null
-  return <TidesReadoutView {...tidesSpot(location)} timestamp={bucket * BUCKET_MS} />
+  return <TidesReadoutView {...tidesSpot(location)} timestamp={bucket * BUCKET_MS} withSun={withSun} />
 }
 
 const thousands = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 })
@@ -39,39 +43,39 @@ function times(value: number): string {
   return `${value.toFixed(2)}×`
 }
 
-function spotText(lat: number, lon: number, pinned: boolean): string {
-  if (pinned) return 'your pin'
-  const where = Math.abs(lat) < 0.05 ? 'equator' : `${Math.abs(lat).toFixed(1)}°${lat < 0 ? 'S' : 'N'}`
-  return `example: ${where} ${Math.abs(lon).toFixed(1)}°${lon < 0 ? 'W' : 'E'}`
-}
-
 export interface TidesReadoutViewProps {
   lat: number
   lon: number
   pinned: boolean
   timestamp: number
+  withSun: boolean
 }
 
-export function TidesReadoutView({ lat, lon, pinned, timestamp }: TidesReadoutViewProps) {
-  const pulls = tidePulls(timestamp)
-  const tide = spotTide(lat, lon, timestamp)
+export function TidesReadoutView({ lat, lon, pinned, timestamp, withSun }: TidesReadoutViewProps) {
+  const all = tidePulls(timestamp)
+  const pulls = withSun ? all : moonAlone(all)
+  const tide = spotTide(lat, lon, timestamp, withSun)
   return (
     <Panel aria-label="Tide-raising pull">
+      <Lead>
+        Tide at the red dot <Strong>{signed(tide * 100)} cm</Strong>
+        {pinned && <Muted> · your pin</Muted>}
+      </Lead>
       <Line>
-        Tide-raising pull, <Muted>× the Moon’s average</Muted>
+        Pull <Moon>Moon {times(pulls.moon)}</Moon>
+        {withSun && (
+          <>
+            {' '}
+            · <Sun>Sun {times(pulls.sun)}</Sun> · <Strong>white: both</Strong>
+          </>
+        )}{' '}
+        · range <Strong>{Math.round(rangeMetres(pulls.range) * 100)} cm</Strong>
       </Line>
       <Line>
-        Moon <Strong>{times(pulls.moon)}</Strong> <Muted>({thousands.format(pulls.moonKm)} km)</Muted> · Sun{' '}
-        <Strong>{times(pulls.sun)}</Strong>
-      </Line>
-      <Line>
-        High–low range <Strong>{times(pulls.range)}</Strong> · <Strong>{Math.round(rangeMetres(pulls.range) * 100)} cm</Strong>
-      </Line>
-      <Spot>
-        Ideal tide at the red dot <Strong>{signed(tide * 100)} cm</Strong> <Muted>· {spotText(lat, lon, pinned)}</Muted>
-      </Spot>
-      <Line>
-        <Muted>Bulge drawn ×{thousands.format(TIDE_EXAGGERATION)}</Muted>
+        <Muted>
+          Pull × the Moon’s average. Ideal all-ocean Earth, sea drawn ×{thousands.format(TIDE_EXAGGERATION)}; real
+          coasts lag hours.
+        </Muted>
       </Line>
     </Panel>
   )
@@ -108,9 +112,18 @@ const Strong = styled.span`
   color: #fff;
 `
 
-// The spot's tide, set off from the pulls above it.
-const Spot = styled.p`
-  margin: 6px 0 0;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.18);
+// The tide at the spot, the payoff, larger than the rest.
+const Lead = styled.p`
+  margin: 0 0 2px;
+  font-size: 15px;
+`
+
+const Moon = styled.span`
+  font-weight: 600;
+  color: ${TIDES_MOON_COLOR};
+`
+
+const Sun = styled.span`
+  font-weight: 600;
+  color: ${TIDES_SUN_COLOR};
 `

@@ -191,6 +191,9 @@ describe('seasons', () => {
 describe('tides', () => {
   const demo = findDemo('tides')!
   const HOUR = 3_600_000
+  // The screen's top 13%, in the -1..1 units below: on a 390×844 phone the
+  // readout's three lines end 11.6% down.
+  const READOUT_BAND = 1 - 2 * 0.13
 
   /** The quarter (0 new, 1 first quarter, 2 full) nearest `t`. */
   function nearestQuarter(t: number, quarter: number) {
@@ -234,7 +237,7 @@ describe('tides', () => {
     for (const step of demo.steps) expect(step.location).toBeUndefined()
   })
 
-  it.each(demo.steps.map((_, i) => [i] as const))('step %i looks from the Moon’s side, with the Moon off frame', (i) => {
+  it.each(demo.steps.map((_, i) => [i] as const))('step %i has the Moon in frame above Earth, clear of the readout', (i) => {
     const patch = demoStepPatch(bare, demo, i)
     expect(patch.cameraFocus).toBe('earth')
     const pose = demo.steps.slice(0, i + 1).reverse().find((s) => s.camera)!.camera!
@@ -245,7 +248,8 @@ describe('tides', () => {
     // measures the azimuth.
     const toSun = earth.clone().negate()
     const moonAz = (Math.atan2(-moon.z, moon.x) - Math.atan2(-toSun.z, toSun.x)) / DEG
-    expect(Math.abs(((moonAz - pose.azimuth + 540) % 360) - 180)).toBeLessThan(15)
+    // The eye is on the far side of Earth from the Moon.
+    expect(Math.abs(((moonAz + 180 - pose.azimuth + 540) % 360) - 180)).toBeLessThan(15)
 
     const eye = eyeDirection(earth, new THREE.Vector3(), earth, pose.azimuth, pose.elevation)
       .multiplyScalar(pose.distance)
@@ -257,12 +261,16 @@ describe('tides', () => {
       camera.lookAt(earth)
       camera.updateMatrixWorld(true)
       const c = moon.clone().add(earth).applyMatrix4(camera.matrixWorldInverse)
-      const halfV = (MAIN_FOV / 2) * DEG
-      const halfH = Math.atan(Math.tan(halfV) * aspect)
-      const reach = Math.asin(moonRadius / c.length())
-      const offV = Math.atan(Math.abs(c.y) / -c.z) - reach
-      const offH = Math.atan(Math.abs(c.x) / -c.z) - reach
-      expect(c.z > 0 || offV > halfV || offH > halfH).toBe(true)
+      // In screen units, -1..1 bottom to top: the Moon's whole disc above
+      // Earth and below the readout's band at the top.
+      const tanHalf = Math.tan((MAIN_FOV / 2) * DEG)
+      const y = c.y / -c.z / tanHalf
+      const reach = moonRadius / -c.z / tanHalf
+      const x = c.x / -c.z / tanHalf / aspect
+      expect(c.z).toBeLessThan(0)
+      expect(Math.abs(x) + reach / aspect).toBeLessThan(1)
+      expect(y - reach).toBeGreaterThan(0.3)
+      expect(y + reach).toBeLessThan(READOUT_BAND)
     }
   })
 
@@ -270,7 +278,7 @@ describe('tides', () => {
     const R = sceneRadius(12742000)
     for (const step of demo.steps) {
       if (!step.camera) continue
-      expect(1.25 * R).toBeLessThanOrEqual(Math.tan((MAIN_FOV / 2) * DEG) * (390 / 844) * step.camera.distance)
+      expect(1.35 * R).toBeLessThanOrEqual(Math.tan((MAIN_FOV / 2) * DEG) * (390 / 844) * step.camera.distance)
     }
   })
 })

@@ -1,6 +1,7 @@
 // What TidesField.tsx draws (tides-zec.4), as plain sums on scene vectors so
-// they can be tested without a renderer: the tide shell's vertices and the
-// ring of arrows in the Moon's orbit plane. Sizes are × Earth's scene radius.
+// they can be tested without a renderer: the tide shell's vertices, its
+// outline in the Moon's orbit plane and the ring of arrows in that plane;
+// and the arrows' colours, which the readout keys. Sizes are × Earth's scene radius.
 
 import * as THREE from 'three'
 import { moonOrbitPlane } from './moon-orbit-tilt'
@@ -17,7 +18,21 @@ export const ARROW_POINTS = 12
  * under it (2 units at mean distance) is 0.3 R. */
 export const ARROW_UNIT = 0.3 / 2 // [TUNE]
 
+/** The Moon's and the Sun's arrows and discs, and their names in the
+ * readout. */
+export const TIDES_MOON_COLOR = '#C9A6FF'
+export const TIDES_SUN_COLOR = '#FFC23D'
+
+/** Points round the sea's outline. */
+export const OUTLINE_POINTS = 160
+
 const METRES_PER_RADIUS = EARTH_RADIUS_KM * 1000
+
+/** The drawn sea's height over the ground, × Earth's radius, where the
+ * Moon's and the Sun's zenith angles have cosines `cosMoon`, `cosSun`. */
+function seaLift(cosMoon: number, cosSun: number, pulls: Pick<TidePulls, 'moon' | 'sun'>): number {
+  return SHELL_LIFT + (TIDE_EXAGGERATION * equilibriumHeight(cosMoon, cosSun, pulls)) / METRES_PER_RADIUS
+}
 
 function smoothstep(edge: number, x: number): number {
   const t = Math.min(1, Math.max(0, x / edge))
@@ -43,8 +58,7 @@ export function shellVertices(
     const x = directions[i]
     const y = directions[i + 1]
     const z = directions[i + 2]
-    const h = equilibriumHeight(x * moon.x + y * moon.y + z * moon.z, x * sun.x + y * sun.y + z * sun.z, pulls)
-    const lift = SHELL_LIFT + (TIDE_EXAGGERATION * h) / METRES_PER_RADIUS
+    const lift = seaLift(x * moon.x + y * moon.y + z * moon.z, x * sun.x + y * sun.y + z * sun.z, pulls)
     const r = radius * (1 + lift)
     positions[i] = x * r
     positions[i + 1] = y * r
@@ -54,6 +68,37 @@ export function shellVertices(
     colors[c + 1] = 1
     colors[c + 2] = 1
     colors[c + 3] = smoothstep(SHELL_FADE, lift)
+  }
+}
+
+/**
+ * The sea's outline in the ring's plane as a ribbon `width` wide, its outer
+ * edge on the drawn sea: OUTLINE_POINTS pairs (inner, outer) of xyz into
+ * `positions`, from the Moon's direction round toward `side`.
+ */
+export function outlineVertices(
+  moon: THREE.Vector3,
+  side: THREE.Vector3,
+  sun: THREE.Vector3,
+  pulls: Pick<TidePulls, 'moon' | 'sun'>,
+  radius: number,
+  width: number,
+  positions: Float32Array
+): void {
+  const sunMoon = sun.dot(moon)
+  const sunSide = sun.dot(side)
+  for (let j = 0; j < OUTLINE_POINTS; j++) {
+    const alpha = (j / OUTLINE_POINTS) * 2 * Math.PI
+    const c = Math.cos(alpha)
+    const s = Math.sin(alpha)
+    const r = radius * (1 + seaLift(c, c * sunMoon + s * sunSide, pulls))
+    for (let k = 0; k < 2; k++) {
+      const rk = k === 0 ? r - width : r
+      const i = (2 * j + k) * 3
+      positions[i] = (moon.x * c + side.x * s) * rk
+      positions[i + 1] = (moon.y * c + side.y * s) * rk
+      positions[i + 2] = (moon.z * c + side.z * s) * rk
+    }
   }
 }
 

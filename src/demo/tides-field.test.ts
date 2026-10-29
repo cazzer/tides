@@ -1,8 +1,17 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { findDemo } from './demos'
-import { ARROW_POINTS, arrowLength, ringArrows, ringFrame, ringPoint, shellVertices } from './tides-field'
-import { sceneTideDirections, tidePulls } from './tides'
+import {
+  ARROW_POINTS,
+  arrowLength,
+  OUTLINE_POINTS,
+  outlineVertices,
+  ringArrows,
+  ringFrame,
+  ringPoint,
+  shellVertices,
+} from './tides-field'
+import { moonAlone, sceneTideDirections, tidePulls } from './tides'
 
 const DEG = Math.PI / 180
 const R = 2.95
@@ -32,12 +41,53 @@ describe('the tide shell', () => {
     const highest = new THREE.Vector3(positions[best], positions[best + 1], positions[best + 2]).normalize()
     // Toward the Moon or straight away from it: the bulges are alike.
     expect(Math.acos(Math.abs(highest.dot(moon))) / DEG).toBeLessThan(2)
-    // ~8% of R above the ground at spring tide, ×1,000,000.
-    expect(top / R - 1).toBeGreaterThan(0.06)
-    expect(top / R - 1).toBeLessThan(0.1)
+    // ~24% of R above the ground at spring tide, ×3,000,000.
+    expect(top / R - 1).toBeGreaterThan(0.2)
+    expect(top / R - 1).toBeLessThan(0.28)
     // Shown there, faded to nothing where it meets the ground.
     expect(colors[(best / 3) * 4 + 3]).toBe(1)
     expect(Math.min(...colors.filter((_, k) => k % 4 === 3))).toBe(0)
+  })
+})
+
+describe('the sea’s outline', () => {
+  /** The outline's outer edge, × R, at each point round the ring. */
+  function outline(t: number, withSun: boolean): number[] {
+    const moon = new THREE.Vector3()
+    const sun = new THREE.Vector3()
+    const normal = new THREE.Vector3()
+    const side = new THREE.Vector3()
+    sceneTideDirections(t, moon, sun)
+    ringFrame(t, moon, normal, side)
+    const pulls = withSun ? tidePulls(t) : moonAlone(tidePulls(t))
+    const positions = new Float32Array(OUTLINE_POINTS * 6)
+    outlineVertices(moon, side, sun, pulls, R, 0.02 * R, positions)
+    const out: number[] = []
+    for (let j = 0; j < OUTLINE_POINTS; j++) {
+      const i = (2 * j + 1) * 3
+      const p = new THREE.Vector3(positions[i], positions[i + 1], positions[i + 2])
+      // In the ring's plane.
+      expect(Math.abs(p.dot(normal))).toBeLessThan(1e-4)
+      out.push(p.length() / R)
+    }
+    return out
+  }
+
+  it('stands out under the Moon and opposite, and in at the sides', () => {
+    const r = outline(step1, true)
+    const quarter = OUTLINE_POINTS / 4
+    expect(r[0]).toBeGreaterThan(1.2)
+    expect(r[2 * quarter]).toBeCloseTo(r[0], 2)
+    expect(r[quarter]).toBeLessThan(0.92)
+    expect(r[3 * quarter]).toBeLessThan(0.92)
+  })
+
+  it('is lower with the Moon alone, and lower again at neap', () => {
+    const spring = Math.max(...outline(step1, true))
+    const alone = Math.max(...outline(step1, false))
+    const neapTop = Math.max(...outline(neap, true))
+    expect(alone).toBeLessThan(spring)
+    expect(neapTop).toBeLessThan(alone)
   })
 })
 
