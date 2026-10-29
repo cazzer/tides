@@ -1,16 +1,25 @@
 import {
+  ApsisKind,
   Body,
   Equator,
   Horizon,
   MakeTime,
+  NextMoonQuarter,
   Observer,
   SearchLocalSolarEclipse,
+  SearchLunarApsis,
+  SearchMoonQuarter,
   SearchPlanetApsis,
   Seasons,
 } from 'astronomy-engine'
+import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SYSTEM_AIDS, isPlanetFocus } from '../../store'
-import { minDistance } from '../../main-view'
+import { MAIN_FOV, minDistance } from '../../main-view'
+import { MOON_UNITS_PER_KM, earthPosition, moonOffset } from '../../ephemeris'
+import { positionsFor } from '../../flight-scale'
+import { sceneRadius } from '../../planets'
+import { eyeDirection } from '../demo-script'
 import { clampLook } from '../../sky-look'
 import { demoStepPatch, type DemoSaved } from '../demo-session'
 import { DEMOS, findDemo } from '.'
@@ -178,3 +187,94 @@ describe('seasons', () => {
     }
   })
 })
+
+describe('tides', () => {
+  const demo = findDemo('tides')!
+  const HOUR = 3_600_000
+
+  /** The quarter (0 new, 1 first quarter, 2 full) nearest `t`. */
+  function nearestQuarter(t: number, quarter: number) {
+    let q = SearchMoonQuarter(new Date(t - 20 * 24 * HOUR))
+    let best = Infinity
+    for (let i = 0; i < 8; i++, q = NextMoonQuarter(q)) {
+      if (q.quarter !== quarter) continue
+      const gap = q.time.date.getTime() - t
+      if (Math.abs(gap) < Math.abs(best)) best = gap
+    }
+    return best
+  }
+
+  it('steps through a New Moon, a first quarter and a Full Moon', () => {
+    const quarters = [0, 0, 0, 1, 2]
+    demo.steps.forEach((step, i) => {
+      expect(Math.abs(nearestQuarter(Date.parse(step.date), quarters[i]))).toBeLessThan(60_000)
+    })
+  })
+
+  it('ends on 2026’s nearest Full Moon, with perigee within 12 h', () => {
+    const king = Date.parse(demo.steps[4].date)
+    const perigee = SearchLunarApsis(new Date(king - 7 * 24 * HOUR))
+    expect(perigee.kind).toBe(ApsisKind.Pericenter)
+    expect(Math.abs(perigee.time.date.getTime() - king)).toBeLessThan(12 * HOUR)
+    // Every other Full Moon of 2026 is farther.
+    const kingKm = moonDistanceKm(king)
+    let q = SearchMoonQuarter(new Date('2026-01-01T00:00:00Z'))
+    for (; q.time.date.getUTCFullYear() === 2026; q = NextMoonQuarter(q)) {
+      if (q.quarter !== 2) continue
+      const t = q.time.date.getTime()
+      if (Math.abs(t - king) > 60_000) expect(moonDistanceKm(t)).toBeGreaterThan(kingKm)
+    }
+  })
+
+  it('plays one lunar day on the daily step and holds the clock on the rest', () => {
+    const daily = demo.steps[2]
+    expect(Date.parse(daily.until!) - Date.parse(daily.date)).toBe(89_400_000)
+    expect(daily.timeScale).toBeGreaterThan(0)
+    for (const i of [0, 1, 3, 4]) expect(demo.steps[i].timeScale).toBe(0)
+    for (const step of demo.steps) expect(step.location).toBeUndefined()
+  })
+
+  it.each(demo.steps.map((_, i) => [i] as const))('step %i looks from the Moon’s side, with the Moon off frame', (i) => {
+    const patch = demoStepPatch(bare, demo, i)
+    expect(patch.cameraFocus).toBe('earth')
+    const pose = demo.steps.slice(0, i + 1).reverse().find((s) => s.camera)!.camera!
+    const t = Date.parse(demo.steps[i].date)
+    const earth = new THREE.Vector3(...earthPosition(t))
+    const moon = new THREE.Vector3(...moonOffset(t))
+    // The Moon's angle from the Sun about ecliptic north, as eyeDirection
+    // measures the azimuth.
+    const toSun = earth.clone().negate()
+    const moonAz = (Math.atan2(-moon.z, moon.x) - Math.atan2(-toSun.z, toSun.x)) / DEG
+    expect(Math.abs(((moonAz - pose.azimuth + 540) % 360) - 180)).toBeLessThan(15)
+
+    const eye = eyeDirection(earth, new THREE.Vector3(), earth, pose.azimuth, pose.elevation)
+      .multiplyScalar(pose.distance)
+      .add(earth)
+    const moonRadius = positionsFor('system').radius.moon
+    for (const aspect of [1440 / 900, 390 / 844]) {
+      const camera = new THREE.PerspectiveCamera(MAIN_FOV, aspect, 0.1, 1000)
+      camera.position.copy(eye)
+      camera.lookAt(earth)
+      camera.updateMatrixWorld(true)
+      const c = moon.clone().add(earth).applyMatrix4(camera.matrixWorldInverse)
+      const halfV = (MAIN_FOV / 2) * DEG
+      const halfH = Math.atan(Math.tan(halfV) * aspect)
+      const reach = Math.asin(moonRadius / c.length())
+      const offV = Math.atan(Math.abs(c.y) / -c.z) - reach
+      const offH = Math.atan(Math.abs(c.x) / -c.z) - reach
+      expect(c.z > 0 || offV > halfV || offH > halfH).toBe(true)
+    }
+  })
+
+  it('fits the globe and its bulge across a phone', () => {
+    const R = sceneRadius(12742000)
+    for (const step of demo.steps) {
+      if (!step.camera) continue
+      expect(1.25 * R).toBeLessThanOrEqual(Math.tan((MAIN_FOV / 2) * DEG) * (390 / 844) * step.camera.distance)
+    }
+  })
+})
+
+function moonDistanceKm(t: number): number {
+  return moonOffset(t).reduce((sum, v) => sum + v * v, 0) ** 0.5 / MOON_UNITS_PER_KM
+}
