@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Quaternion, Vector3, type Object3D } from 'three'
+import { Quaternion, Vector3, type Object3D, type PerspectiveCamera } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore } from '../store'
 import { focusedRef } from '../main-view'
@@ -14,6 +14,7 @@ import {
   intoPoseFrame,
   outOfPoseFrame,
   poseDirection,
+  poseDistance,
   type DemoFrame,
   type DemoPose,
 } from './demo-script'
@@ -175,9 +176,12 @@ export function DemoPlayer() {
     const duration = reduced ? 0 : DEMO_EASE_SECONDS
     const t = easeProgress(current.elapsed, duration)
 
+    // Each frame, so a resized view keeps a pose's fit in view.
+    const lens = camera as PerspectiveCamera
+    const distance = lens.isPerspectiveCamera ? poseDistance(current.pose, lens.fov, lens.aspect) : current.pose.distance
     poseDirection(current.pose, _bodies, _goal)
     outOfPoseFrame(current.from!, frame, _bodies, _from)
-    easedEye(_from, _goal, _focus, t, current.pose.distance, camera.position)
+    easedEye(_from, _goal, _focus, t, distance, camera.position)
 
     // Followed, the focus can move far in a frame; CameraProvider's target
     // would trail it, so it is put on the focus outright, this frame here
@@ -196,7 +200,7 @@ export function DemoPlayer() {
 
     // A followed pose holds until the step ends or the user takes hold.
     if (follow) return
-    const arrived = target.distanceTo(_focus) <= HOLD_SHARE * current.pose.distance
+    const arrived = target.distanceTo(_focus) <= HOLD_SHARE * distance
     if (t >= 1 && (arrived || current.elapsed >= duration + HOLD_LIMIT) && !state.demoTravel) {
       ease.current = null
     }

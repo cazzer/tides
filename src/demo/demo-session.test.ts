@@ -10,6 +10,7 @@ import {
   intoPoseFrame,
   outOfPoseFrame,
   poseDirection,
+  poseDistance,
   type DemoFrame,
 } from './demo-script'
 import { setEarthSpinHold, shownEarthSpin, travelRun } from './demo-travel'
@@ -429,6 +430,32 @@ describe('poseDirection', () => {
     near(poseDirection({ frame: 'earth', azimuth: 123, elevation: 90 }, bodies), 0, 1, 0)
     const turned = { ...bodies, earthTurn: new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2) }
     near(poseDirection({ frame: 'earth', azimuth: 0, elevation: 0 }, turned), 0, 0, -1)
+  })
+})
+
+describe('poseDistance', () => {
+  // A sphere of radius `fit` exactly fills the narrower half-angle at the result.
+  const fills = (fit: number, distance: number, vfov: number, aspect: number) => {
+    const halfV = (vfov / 2) * (Math.PI / 180)
+    const half = Math.min(halfV, Math.atan(Math.tan(halfV) * aspect))
+    expect(Math.asin(fit / distance)).toBeCloseTo(half)
+  }
+
+  it('is the pose’s distance without a fit', () => {
+    expect(poseDistance({ distance: 170 }, 30, 390 / 844)).toBe(170)
+  })
+
+  it('keeps the distance on a wide view, where the fit already shows', () => {
+    // 1440x900: the vertical 15° half-angle is the narrower; 60 fits from 232.
+    expect(poseDistance({ distance: 300, fit: 60 }, 30, 1440 / 900)).toBe(300)
+    const d = poseDistance({ distance: 170, fit: 60 }, 30, 1440 / 900)
+    fills(60, d, 30, 1440 / 900)
+  })
+
+  it('backs off on a phone held upright, fitting across its width', () => {
+    const d = poseDistance({ distance: 170, fit: 60 }, 30, 390 / 844)
+    expect(d).toBeGreaterThan(170)
+    fills(60, d, 30, 390 / 844)
   })
 })
 

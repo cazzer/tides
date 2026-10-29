@@ -38,6 +38,9 @@ export interface DemoPose {
   azimuth: number
   elevation: number
   distance: number
+  /** Scene units about the focus kept in view: on a view too narrow for
+   * them at `distance`, the eye backs off until they fit (poseDistance). */
+  fit?: number
 }
 
 /** What a travel holds still on the way: Earth's spin, or the Moon (hidden). */
@@ -88,6 +91,8 @@ export interface DemoAids {
   /** Main view: the Moon's umbra on Earth filled and ringed and the
    * penumbra's edge ringed, from the true shadow geometry (tides-zec.7). */
   moonShadow?: boolean
+  /** Main view: the Moon is hidden, its body, refs and camera carrying on. */
+  hideMoon?: boolean
 }
 
 /**
@@ -223,6 +228,18 @@ export function intoPoseFrame(v: Vector3, frame: DemoFrame, bodies: PoseBodies, 
 /** `v` in a pose frame's own axes, back in world space as the frame stands now. */
 export function outOfPoseFrame(v: Vector3, frame: DemoFrame, bodies: PoseBodies, out = new Vector3()): Vector3 {
   return out.copy(v).applyQuaternion(poseFrameTurn(frame, bodies, _frameTurn))
+}
+
+/**
+ * A pose's eye distance in a view of vertical field `vfovDeg` and `aspect`
+ * (width / height): its `distance`, or farther if a sphere of radius `fit`
+ * about the focus would not fit the view's narrower half-angle there.
+ */
+export function poseDistance(pose: Pick<DemoPose, 'distance' | 'fit'>, vfovDeg: number, aspect: number): number {
+  if (!(pose.fit && pose.fit > 0)) return pose.distance
+  const halfV = (vfovDeg * Math.PI) / 360
+  const half = Math.min(halfV, Math.atan(Math.tan(halfV) * aspect))
+  return Math.max(pose.distance, pose.fit / Math.sin(half))
 }
 
 const _fromDir = new Vector3()

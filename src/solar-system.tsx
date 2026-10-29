@@ -125,8 +125,11 @@ export default function SolarSystem({
   // The globe's clouds give way to it (tides-zec.7.1).
   const moonShadowShown = useDemoAid('moonShadow') && interactive && !ship
   // A demo travel may hide the Moon, which a fast clock would smear round
-  // Earth; only its look goes, so its body, refs and camera carry on.
-  const moonHidden = useStore((s) => s.demoTravel?.hideMoon ?? false)
+  // Earth, and a demo's aids.hideMoon the main view's; only its look goes, so
+  // its body, refs and camera carry on.
+  const travelHidesMoon = useStore((s) => s.demoTravel?.hideMoon ?? false)
+  const aidHidesMoon = useDemoAid('hideMoon') && !earthCamera
+  const moonHidden = travelHidesMoon || aidHidesMoon
 
   // From the surface, the Sun and Moon move to a sky around the observer, both
   // at one scale (see sky.ts): SKY_SCALE, or the solar eclipse demo's own.

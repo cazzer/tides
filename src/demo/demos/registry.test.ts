@@ -19,7 +19,7 @@ import { MAIN_FOV, maxDistance, minDistance } from '../../main-view'
 import { MOON_UNITS_PER_KM, earthPosition, moonOffset } from '../../ephemeris'
 import { positionsFor } from '../../flight-scale'
 import { sceneRadius } from '../../planets'
-import { eyeDirection, type DemoFocus } from '../demo-script'
+import { eyeDirection, poseDistance, type DemoFocus, type DemoPose } from '../demo-script'
 import { clampLook } from '../../sky-look'
 import { demoStepPatch, type DemoSaved } from '../demo-session'
 import { DEMOS, findDemo } from '.'
@@ -80,11 +80,19 @@ describe('DEMOS', () => {
       }
       // A planet focus needs the planets shown, whatever the user had on.
       const patch = demoStepPatch(bare, demo, i)
-      // The tightest the system view fits: a phone held upright.
-      const farthest = maxDistance(patch.showPlanets, { width: 390, height: 844 })
-      const poseFits = (pose: { distance: number; azimuth: number; elevation: number }, focus: DemoFocus) => {
+      // A desktop, and the tightest the system view fits: a phone held
+      // upright, where a pose's fit backs the eye off the most.
+      const views = [
+        { width: 1440, height: 900 },
+        { width: 390, height: 844 },
+      ]
+      const poseFits = (pose: Omit<DemoPose, 'focus'>, focus: DemoFocus) => {
         expect(pose.distance).toBeGreaterThanOrEqual(minDistance(focus))
-        expect(pose.distance).toBeLessThanOrEqual(farthest)
+        if (pose.fit !== undefined) expect(pose.fit).toBeGreaterThan(0)
+        for (const view of views) {
+          const distance = poseDistance(pose, MAIN_FOV, view.width / view.height)
+          expect(distance).toBeLessThanOrEqual(maxDistance(patch.showPlanets, view))
+        }
         expect(Number.isFinite(pose.azimuth)).toBe(true)
         expect(Math.abs(pose.elevation)).toBeLessThanOrEqual(90)
       }
