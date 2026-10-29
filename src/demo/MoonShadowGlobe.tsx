@@ -80,9 +80,13 @@ vec3 moonShadowAngles(vec3 point) {
   return vec3(sunRadius, occluderRadius, separation);
 }
 
-// 1 on t = 1, fading out over uLinePx pixels either side.
-float edgeLine(float t) {
-  return 1.0 - smoothstep(0.0, uLinePx * fwidth(t), abs(t - 1.0));
+// 1 on t = 1, fading out over uLinePx pixels either side; or with outside 1,
+// moved out by those pixels so it stops at t = 1. The umbra's line sits
+// outside: near the limb the umbra is a few pixels across, and a line on its
+// edge covers it, leaving a white dot where the dark one should be.
+float edgeLine(float t, float outside) {
+  float width = uLinePx * fwidth(t);
+  return 1.0 - smoothstep(0.0, width, abs(t - 1.0 - outside * width));
 }
 
 void main() {
@@ -108,8 +112,8 @@ void main() {
   // the moment the umbra slides off at the terminator.
   float day = smoothstep(-0.01, 0.005, dot(normalize(p), normalize(uEclipseSun - p)));
 
-  float umbraLine = edgeLine(tU) * ${UMBRA_LINE_OPACITY.toFixed(2)};
-  float penumbraLine = edgeLine(tP) * ${PENUMBRA_LINE_OPACITY.toFixed(2)};
+  float umbraLine = edgeLine(tU, 1.0) * ${UMBRA_LINE_OPACITY.toFixed(2)};
+  float penumbraLine = edgeLine(tP, 0.0) * ${PENUMBRA_LINE_OPACITY.toFixed(2)};
   float line = umbraLine + penumbraLine * (1.0 - umbraLine);
   float umbra = 1.0 - smoothstep(1.0 - fwidth(tU), 1.0, tU);
   float shade = 1.0 - visible;
