@@ -27,6 +27,7 @@ import { SURFACE_TILES_ON } from './surface'
 import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
+import { SurfaceCredit } from './ship/SurfaceCredit'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { DepthInfo } from './renderers/DepthInfo'
@@ -223,6 +224,9 @@ export default function App() {
                 <>
                   {!demo && showPlanets && systemAids.scale && <ScaleReadout />}
                   {!demo && <ShipButton />}
+                  {/* The close zoom tiles' credits (tides-tvr.7.2): none
+                      without tiles on screen. */}
+                  {SURFACE_TILES_ON && <SurfaceCredit />}
                 </>
               ) : undefined
             }
@@ -233,6 +237,7 @@ export default function App() {
               background="black"
               matrix={matrix}
               interactive
+              mainSlot={panelProps('main').gridArea === 'main'}
               showOrbitLabels
               onReady={readyHandler('main')}
             />
@@ -290,6 +295,7 @@ function Scene({
   interactive = false,
   distanceScale = 'system',
   ship = false,
+  mainSlot = false,
   onReady,
   ...props
 }: {
@@ -299,6 +305,7 @@ function Scene({
   interactive?: boolean
   distanceScale?: DistanceScale
   ship?: boolean
+  mainSlot?: boolean
   onReady?: () => void
   [key: string]: any
 }) {
@@ -320,6 +327,7 @@ function Scene({
             interactive={interactive}
             distanceScale={distanceScale}
             ship={ship}
+            mainSlot={mainSlot}
             {...props}
           />
           {onReady ? <SceneReadySignal onReady={onReady} /> : null}

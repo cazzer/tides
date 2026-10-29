@@ -16,11 +16,19 @@
 // it up, dissolving between
 // (surfaceOpacity(), surfaceOpacityUniform) on a screen-door the globe fills
 // (surface-scale.ts), so between the two only the DEM and the imagery
-// differ, spread over 40 km of descent at 1x. One writer, one value a frame:
-// ShipController calls setSurfaceEye() with the ship's altitude before it
-// steps the flight model, so the floor the step clamps to (ship-bodies.ts,
-// which takes the tiles only where they draw) and the frame drawn agree.
+// differ, spread over 40 km of descent at 1x. One writer at a time, one
+// value a frame: in flight ShipController calls setSurfaceEye() with the
+// ship's altitude before it steps the flight model, so the floor the step
+// clamps to (ship-bodies.ts, which takes the tiles only where they draw) and
+// the frame drawn agree. In the system view's close zoom (tides-tvr.7.2) the
+// mounted SurfaceTiles calls it with the camera's altitude, after close
+// zoom's floor and near plane have read the ground (close-zoom.ts): they see
+// the previous frame's share and tiles, a frame behind the drawn one. The
+// two never run together: the main view isn't drawn in ship mode.
+//
+// tileGroundRadius() is the drawn ground both floors read where the tiles draw.
 import type * as THREE from 'three'
+import { earthLatLon, surfaceGroundSampler } from './surface-ground'
 import { EARTH_RADIUS_KM } from './cloud-layer'
 import { sceneRadius } from './planets'
 import { RELIEF } from './relief'
@@ -29,6 +37,12 @@ import { RELIEF } from './relief'
  * drawn sphere's radius; ~2159). Not ship-bodies.ts' EARTH_RADIUS: that
  * module reads this one. */
 export const EARTH_KM_PER_UNIT = EARTH_RADIUS_KM / sceneRadius(12742000)
+
+/** Scene units per true metre at Earth (~4.63e-7). */
+export const EARTH_UNITS_PER_METRE = 1 / (EARTH_KM_PER_UNIT * 1000)
+
+/** Metres the floor stands over the highest tile vertex in its window. */
+export const SURFACE_GROUND_MARGIN_METRES = 1
 
 /** The highest ground the streamed tiles draw, metres (Everest, 8849 m,
  * with room): the globe's own highest is smoothed to 5385 m, but the tiles
@@ -91,9 +105,37 @@ export const surfaceOpacityUniform: THREE.IUniform<number> = { value: 0 }
 /**
  * Sets the tiles' share for an eye `altitude` over the sea-level sphere
  * (Infinity: away from Earth, or no ship). ShipController's frame, once,
- * after the spawn and before the step (see the header); its unmount passes
- * Infinity, so the system views draw the globe alone.
+ * after the spawn and before the step, or the system view's SurfaceTiles in
+ * close zoom (see the header); each one's unmount passes Infinity, so the
+ * views draw the globe alone.
  */
 export function setSurfaceEye(altitude: number): void {
   surfaceOpacityUniform.value = surfaceOpacity(altitude)
+}
+
+const tileLatLon: [number, number] = [0, 0]
+
+/**
+ * How far from Earth's centre the drawn ground stands, highest within
+ * `reach` (scene units) of `at` (a unit direction in Earth's own frame), for
+ * Earth's sphere of `radius`: the globe's (`globe`, asked only when needed)
+ * where no tile draws, the tiles' alone where they cover the window at full
+ * opacity, and else the higher of the two, since the globe shows through the
+ * dissolve and wherever no tile has loaded. Reads this frame's
+ * surfaceOpacityUniform and the mounted tiles' sampler (surface-ground.ts).
+ */
+export function tileGroundRadius<V extends { x: number; y: number; z: number }>(
+  at: V,
+  radius: number,
+  reach: number,
+  globe: (at: V, reach: number, radius: number) => number
+): number {
+  const sampler = surfaceGroundSampler()
+  const opacity = surfaceOpacityUniform.value
+  if (!sampler || !(opacity > 0)) return globe(at, reach, radius)
+  const [lat, lon] = earthLatLon(at, tileLatLon)
+  const tiles = sampler.maxElevation(lat, lon, reach / EARTH_UNITS_PER_METRE)
+  if (!tiles) return globe(at, reach, radius)
+  const ground = radius + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * EARTH_UNITS_PER_METRE
+  return opacity < 1 || !tiles.covered ? Math.max(ground, globe(at, reach, radius)) : ground
 }

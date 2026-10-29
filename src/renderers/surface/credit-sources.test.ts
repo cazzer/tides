@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   ActiveSources,
+  creditsShown,
   imageryTileFor,
   sourcesForTile,
   tileOnNearSide,
@@ -115,5 +116,14 @@ describe('EOX standing in for USGS (tides-zmw.9.2)', () => {
     // its land neighbour keeps USGS; outside the boxes nothing changes
     expect(sourcesForTile(rad(11, 327, 801), byEox)).toEqual(['mapterhorn', 'usgs', 'eox'])
     expect(sourcesForTile(rad(10, 541, 361), byEox)).toEqual(['mapterhorn', 'eox'])
+  })
+})
+
+describe('creditsShown', () => {
+  test('in flight always; in the system view only while the tiles draw', () => {
+    expect(creditsShown('ship', true)).toBe(true)
+    expect(creditsShown('ship', false)).toBe(true)
+    expect(creditsShown('system', true)).toBe(true)
+    expect(creditsShown('system', false)).toBe(false)
   })
 })

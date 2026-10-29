@@ -15,6 +15,7 @@ import {
 } from './demo/demo-session'
 import { findDemo } from './demo/demos'
 import { requestMainCameraRestore } from './main-camera-session'
+import { holdRealTime } from './close-zoom-rules'
 
 /** Solar order; each key is also the store slot its mesh ref registers under. */
 export const PLANET_FOCUS_KEYS = [
@@ -232,6 +233,14 @@ export const useStore = create<{
   locationPin: any
   earthRadius: number | undefined
   timeScale: number
+  /** The main view's eye is below Earth's close-zoom barrier (close-zoom.ts):
+   * time runs no faster than real time there. */
+  closeZoom: boolean
+  /** In close zoom, the eye is low enough for the streamed surface tiles
+   * (close-zoom-rules.ts isTileRange, tides-tvr.7.2). */
+  closeZoomTiles: boolean
+  /** Bumped each time close zoom holds time at real time, for a brief cue. */
+  realTimeCue: number
   initialTimestamp: number | null
   /** Simulation time (epoch ms), written every frame by SimClock. Read it
    * with useStore.getState() inside useFrame; selecting it re-renders per frame. */
@@ -280,6 +289,8 @@ export const useStore = create<{
   setPlanet: Function
   setEarthRadius: (radius: number | undefined) => void
   setTimeScale: (value: number) => void
+  setCloseZoom: (closeZoom: boolean) => void
+  setCloseZoomTiles: (closeZoomTiles: boolean) => void
   setCameraFocus: (focus: CameraFocus) => void
   setMainPanel: (panel: PanelKey) => void
   setWeatherSource: (weatherSource: WeatherSource) => void
@@ -302,6 +313,9 @@ export const useStore = create<{
   locationPin: undefined,
   earthRadius: undefined,
   timeScale: getInitialTimeScale(),
+  closeZoom: false,
+  closeZoomTiles: false,
+  realTimeCue: 0,
   initialTimestamp: getInitialTimestamp(),
   timestamp: null,
   cameraFocus: getInitialCameraFocus(),
@@ -362,7 +376,27 @@ export const useStore = create<{
   },
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
-  setTimeScale: (timeScale: number) => set({ timeScale }),
+  // In close zoom a faster speed is refused, with the cue; time stays as it is.
+  // A demo owns the clock, so its steps' speeds hold even in close zoom.
+  setTimeScale: (timeScale: number) =>
+    set((s) =>
+      holdRealTime(timeScale, s.closeZoom && !s.demo).cue
+        ? { realTimeCue: s.realTimeCue + 1 }
+        : { timeScale }
+    ),
+  // Entering close zoom faster than real time drops to it, with the cue,
+  // outside a demo.
+  setCloseZoom: (closeZoom: boolean) =>
+    set((s) => {
+      if (closeZoom === s.closeZoom) return s
+      if (!closeZoom || s.demo) return { closeZoom }
+      const { timeScale, cue } = holdRealTime(s.timeScale, true)
+      return cue
+        ? { closeZoom, timeScale, realTimeCue: s.realTimeCue + 1 }
+        : { closeZoom }
+    }),
+  setCloseZoomTiles: (closeZoomTiles: boolean) =>
+    set((s) => (closeZoomTiles === s.closeZoomTiles ? s : { closeZoomTiles })),
   setCameraFocus: (cameraFocus: CameraFocus) => set({ cameraFocus }),
   setMainPanel: (mainPanel: PanelKey) => set({ mainPanel }),
   setWeatherSource: (weatherSource: WeatherSource) => set({ weatherSource }),

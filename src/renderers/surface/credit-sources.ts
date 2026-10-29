@@ -110,6 +110,20 @@ export function tileRadianBounds(tile: unknown): RadianBounds | null {
 }
 
 /**
+ * Whether the tiles' credits line names their sources this frame
+ * (tides-tvr.7.2): in flight always, as before; in the system view only
+ * while the tiles draw (`drawing`: the handover gives them a share of the
+ * ground). Mounted there ahead of the handover's top, they stream tiles they
+ * don't yet show, and those aren't credited.
+ */
+export function creditsShown(eye: 'ship' | 'system', drawing: boolean): boolean {
+  return eye === 'ship' || drawing
+}
+
+/** The credits while none are shown: one array, so the store compares it by identity. */
+export const NO_SOURCES: readonly SurfaceSource[] = []
+
+/**
  * The sources on screen, held `lingerMs` after the last tile that used one
  * leaves view: panning between tiles (or over a USGS edge) never flickers the
  * line, and it clears a moment after the last tile goes.

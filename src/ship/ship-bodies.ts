@@ -12,8 +12,13 @@ import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN, MAX_DT } from './flight'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { RELIEF } from '../relief'
-import { EARTH_KM_PER_UNIT, SURFACE_MAX_METRES, surfaceOpacityUniform } from '../surface-handover'
-import { earthLatLon, surfaceGroundSampler } from '../surface-ground'
+import {
+  EARTH_KM_PER_UNIT,
+  EARTH_UNITS_PER_METRE,
+  SURFACE_GROUND_MARGIN_METRES,
+  SURFACE_MAX_METRES,
+  tileGroundRadius,
+} from '../surface-handover'
 import { SURFACE_TILES_ON } from '../surface'
 import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
 import {
@@ -71,8 +76,8 @@ export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
  */
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
 
-/** Scene units per true metre at Earth (~4.63e-7). */
-export const EARTH_UNITS_PER_METRE = 1 / (EARTH_KM_PER_UNIT * 1000)
+// Scene units per true metre at Earth, now beside the handover's tile ground.
+export { EARTH_UNITS_PER_METRE }
 
 /** The highest the globe's floor stands at true scale, scene units: its
  * highest drawn ground (TERRAIN_MAX_GREY) plus the floor's margin. */
@@ -138,8 +143,8 @@ export function earthClearance(fine: boolean, out: EarthClearance = { soft: 0, h
   return out
 }
 
-/** Metres the floor stands over the highest tile vertex in its window. */
-export const SURFACE_GROUND_MARGIN_METRES = 1
+// Metres the floor stands over the highest tile vertex in its window.
+export { SURFACE_GROUND_MARGIN_METRES }
 
 /**
  * Seconds per e-fold in which the floor catches up with ground that rose
@@ -323,7 +328,6 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
   const euler = new THREE.Euler()
   const local = new THREE.Vector3()
   const marked = new THREE.Vector3()
-  const latLon: [number, number] = [0, 0]
   const low = tier === 'low'
   // Without the tiles (?surface=0 or the low tier) the stop is the globe's
   // as it was: the standard clearance and window, no settling. The speed
@@ -346,16 +350,7 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
   }
 
   // The highest ground drawn within `reach` of `at` (see the header).
-  const drawn = (at: THREE.Vector3, reach: number) => {
-    const sampler = surfaceGroundSampler()
-    const opacity = surfaceOpacityUniform.value
-    if (!sampler || !(opacity > 0)) return globe(at, reach)
-    const [lat, lon] = earthLatLon(at, latLon)
-    const tiles = sampler.maxElevation(lat, lon, reach / EARTH_UNITS_PER_METRE)
-    if (!tiles) return globe(at, reach)
-    const ground = EARTH_RADIUS + (tiles.metres + SURFACE_GROUND_MARGIN_METRES) * RELIEF * EARTH_UNITS_PER_METRE
-    return opacity < 1 || !tiles.covered ? Math.max(ground, globe(at, reach)) : ground
-  }
+  const drawn = (at: THREE.Vector3, reach: number) => tileGroundRadius(at, EARTH_RADIUS, reach, globe)
 
   const height = (at: THREE.Vector3) => drawn(at, clearance.reach) - EARTH_RADIUS
 

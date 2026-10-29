@@ -29,6 +29,7 @@ import { sceneRadius } from './planets'
 import { useStore } from './store'
 import { isLowQuality } from './quality'
 import { SURFACE_TILES_ON } from './surface'
+import { systemSurfaceTilesOn } from './close-zoom-rules'
 import {
   DEFAULT_SURFACE_LOCATION,
   MOON_SKY_DISTANCE,
@@ -56,7 +57,8 @@ import {
 const EARTH_DIAMETER = sceneRadius(12742000)
 
 // The streamed surface (tides-zmw.9.1) loads its own chunk, the tiles library
-// with it, and only in ship mode on the high tier unless ?surface=0.
+// with it, and only on the high tier unless ?surface=0: in ship mode, and in
+// the main view's close zoom over Earth (tides-tvr.7.2).
 const SurfaceTiles = lazy(() => import('./renderers/surface/SurfaceTiles'))
 
 useTexture.preload(getEarthTexture())
@@ -70,6 +72,7 @@ export default function SolarSystem({
   starRadius,
   distanceScale = 'system',
   ship = false,
+  mainSlot = false,
 }: {
   earthCamera?: boolean
   moonCamera?: boolean
@@ -83,6 +86,8 @@ export default function SolarSystem({
   distanceScale?: DistanceScale
   /** In ship mode, for the parts that look different there. */
   ship?: boolean
+  /** The view holds the main grid slot, where its overlay (the tiles' credits) shows. */
+  mainSlot?: boolean
 }) {
   const earthTexture = getEarthTexture()
   const moonTexture = getMoonTexture()
@@ -98,6 +103,15 @@ export default function SolarSystem({
   const showConstellations = useStore((s) => s.showConstellations)
   const showConstellationArt = useStore((s) => s.showConstellationArt)
   const showLunar = useStore((s) => s.showLunar)
+  const systemTiles = useStore((s) =>
+    systemSurfaceTilesOn({
+      tilesOn: SURFACE_TILES_ON,
+      interactive,
+      mainSlot,
+      closeZoomTiles: s.closeZoomTiles,
+      cameraFocus: s.cameraFocus,
+    })
+  )
   const showZodiac = useStore((s) => s.showZodiac)
   const { lat, lon } = location ?? DEFAULT_SURFACE_LOCATION
   const positions = positionsFor(distanceScale)
@@ -200,9 +214,9 @@ export default function SolarSystem({
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
-        {ship && SURFACE_TILES_ON && (
+        {(ship ? SURFACE_TILES_ON : systemTiles) && (
           <Suspense fallback={null}>
-            <SurfaceTiles />
+            <SurfaceTiles eye={ship ? 'ship' : 'system'} />
           </Suspense>
         )}
       </OrbitingBody>
