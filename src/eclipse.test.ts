@@ -240,6 +240,29 @@ describe('no eclipse', () => {
 })
 
 describe('shader patch', () => {
+  test('only the Moon is shaded as an eye sees it', () => {
+    const compile = (body: 'earth' | 'moon') => {
+      const shadow = createEclipseShadow(body)
+      const shader = {
+        uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.phong.uniforms),
+        vertexShader: THREE.ShaderLib.phong.vertexShader,
+        fragmentShader: THREE.ShaderLib.phong.fragmentShader,
+      }
+      shadow.material.onBeforeCompile(
+        shader as THREE.WebGLProgramParametersWithUniforms,
+        {} as THREE.WebGLRenderer
+      )
+      return { fragment: shader.fragmentShader, key: shadow.material.customProgramCacheKey() }
+    }
+    const moon = compile('moon')
+    const earth = compile('earth')
+    expect(moon.fragment).toMatch(/float lit = sqrt\(eclipse\.x\);/)
+    expect(earth.fragment).not.toMatch(/sqrt\(eclipse\.x\)/)
+    expect(moon.key).not.toBe(earth.key)
+    expect(earth.key).toBe('eclipse-shadow')
+  })
+
+
   test.each(['phong', 'lambert'] as const)('%s material compiles the shadow in', (name) => {
     const shadow = createEclipseShadow('moon')
     const shader = {

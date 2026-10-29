@@ -149,6 +149,12 @@ describe('lunar eclipse', () => {
     expect(moon.altitude).toBeGreaterThan(45)
     expect(separation(patch.skyLook!, moon)).toBeLessThan(15)
   })
+
+  it('only runs time forward, each step starting where the last one stops', () => {
+    for (let i = 1; i < demo.steps.length; i++) {
+      expect(Date.parse(demo.steps[i].date)).toBeGreaterThanOrEqual(Date.parse(demo.steps[i - 1].until!))
+    }
+  })
 })
 
 describe('solar eclipse', () => {
