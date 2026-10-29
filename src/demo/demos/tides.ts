@@ -12,8 +12,10 @@ import type { Demo, DemoPose } from '../demo-script'
 // registry.test.ts checks them.
 //
 // aids.tides draws the arrows and the sea's equilibrium shape (TidesField.tsx,
-// heights ×1,000,000), the marked spot (TidesSpot.tsx) and the readout
-// (TidesReadout.tsx); the sums are tides.ts. Held steps stop the clock
+// heights ×TIDE_EXAGGERATION), the marked spot (TidesSpot.tsx) and the readout
+// (TidesReadout.tsx); the sums are tides.ts. The first step shows the Moon's
+// pull alone; aids.tidesSun adds the Sun's from the second, so the two pulls
+// add on screen. Held steps stop the clock
 // (timeScale 0); their `until`, a quarter of a lunar day on, only caps the
 // clock if the user starts it. The daily step plays one lunar
 // day, 24 h 50 min, at 3000×, about 30 s. At the spot under the Moon on the
@@ -25,12 +27,13 @@ import type { Demo, DemoPose } from '../demo-script'
 const MINUTE = 60_000
 const HELD = 6 * 60 * MINUTE + 12 * MINUTE
 
-// From nearly overhead (looking down on the Moon's orbit plane), on the
-// Moon's side: azimuth is Sun-relative, so 0 is the New Moon's direction, 90
-// first quarter's and 180 the Full Moon's. The Moon then lies beyond the
-// bottom edge of the screen, its arrows pointing down to it and up away.
-function camera(azimuth: number): DemoPose {
-  return { focus: 'earth', azimuth, elevation: 80, distance: 31 }
+// From above the Moon's orbit plane, on the side away from the Moon, so the
+// real Moon sits above Earth on screen, clear of the caption below; low
+// enough that on a phone it also clears the readout at the top. Azimuth is
+// Sun-relative, so the Moon's own azimuth (0 at New Moon, 90 at first
+// quarter, 180 at Full Moon) plus 180.
+function camera(moonAzimuth: number): DemoPose {
+  return { focus: 'earth', azimuth: (moonAzimuth + 180) % 360, elevation: 60, distance: 45 }
 }
 
 function held(date: string) {
@@ -50,14 +53,15 @@ export const tides: Demo = {
       aids: { tides: true },
       caption: {
         title: 'Why two bulges',
-        body: 'Violet arrows: the Moon’s pull less its pull on Earth’s centre; gold: the Sun’s; white: both together. The side toward the Moon (far below) is pulled out, the far side left behind, the sides pressed in.',
+        body: 'The Moon (top) pulls the near side hardest and the far side least. The arrows sweep the sea into two bulges.',
       },
     },
     {
       ...held('2026-10-10T15:50:36Z'),
+      aids: { tidesSun: true },
       caption: {
         title: 'Spring tide',
-        body: 'New Moon: Sun and Moon line up below the screen, so their pulls add. Blue caps: the sea heaped toward and away from them, ×1,000,000, on an ideal all-ocean Earth. Real coasts lag hours behind.',
+        body: 'New Moon: Sun and Moon in line, so their stretches add: big ‘spring’ tides (nothing to do with springtime).',
       },
     },
     {
@@ -66,7 +70,7 @@ export const tides: Demo = {
       timeScale: 3000,
       caption: {
         title: 'A day of tides',
-        body: 'Follow the red dot (your pin, or a spot that starts under the Moon, at the bottom): Earth turns it under each blue cap (high) and past the sides (low), twice in 24 h 50 min. The land itself rises ~30 cm.',
+        body: 'Earth turns the red dot under both bulges: two highs and two lows every 24 h 50 min.',
       },
     },
     {
@@ -74,7 +78,7 @@ export const tides: Demo = {
       camera: camera(90),
       caption: {
         title: 'Neap tide',
-        body: 'First quarter: the Sun (gold disc, left) is square to the Moon (below). Its gold arrows press in where the Moon’s pull out, so the range falls to 0.41× and the blue caps all but vanish: neap tides.',
+        body: 'Quarter Moon: the Sun pulls across the Moon’s line, so the stretches partly cancel. Range under a third of spring’s.',
       },
     },
     {
@@ -82,7 +86,7 @@ export const tides: Demo = {
       camera: camera(180),
       caption: {
         title: 'King tide',
-        body: 'Christmas Eve’s Full Moon is 2026’s closest; the Sun (gold disc, top) lines up beyond Earth. The Moon pulls 25% harder: range 1.73×, against 1.43× in October. A king tide, metres on some coasts.',
+        body: 'Full Moon at its closest, lined up with the Sun: tidal pull 25% up. A perigean spring, or ‘king’, tide.',
       },
     },
   ],
