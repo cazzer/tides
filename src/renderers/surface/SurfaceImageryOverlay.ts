@@ -180,7 +180,7 @@ export class SurfaceImageryOverlay extends XYZTilesOverlay {
         return new Response(file, { status: 200, headers: { 'Content-Type': 'image/png' } })
       } catch (error) {
         // A closed bitmap (the ancestor dropped meanwhile) can't be drawn: try the next.
-        if ((error as Error)?.name === 'AbortError') throw error
+        if (signal?.aborted || (error as Error)?.name === 'AbortError') throw error
       }
     }
     return null
