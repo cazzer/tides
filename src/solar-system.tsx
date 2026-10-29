@@ -39,6 +39,7 @@ import {
 } from './sky'
 import { useDemoAid } from './demo/demo-aids'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
+import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
 import { SeasonsGlobe } from './demo/SeasonsGlobe'
 import { TidesField } from './demo/TidesField'
 import { TidesSpot } from './demo/TidesSpot'
@@ -123,6 +124,7 @@ export default function SolarSystem({
   const moonNodes = useDemoAid('moonNodes')
   const seasons = useDemoAid('seasons')
   const tides = useDemoAid('tides')
+  const moonShadow = useDemoAid('moonShadow')
 
   // From the surface, the Sun and Moon move to their true directions on a sky
   // around the observer (see sky.ts).
@@ -221,6 +223,7 @@ export default function SolarSystem({
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
           <TidesSpot radius={EARTH_DIAMETER} />
         )}
+        {moonShadow && interactive && !earthCamera && !ship && <MoonShadowGlobe radius={EARTH_DIAMETER} />}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
         {(ship ? SURFACE_TILES_ON : systemTiles) && (
