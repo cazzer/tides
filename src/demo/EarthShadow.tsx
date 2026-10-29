@@ -7,7 +7,7 @@
 // inside one. Built once from the eclipse nearest the clock (earth-shadow.ts);
 // each frame only moves and turns the group to the shadow's frame at the Moon.
 import { useEffect, useMemo, useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, type RootState } from '@react-three/fiber'
 import * as THREE from 'three'
 import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'
@@ -32,11 +32,16 @@ const PENUMBRA_COLOR = '#BFBBDA'
 const PENUMBRA_OPACITY = 0.35 // [TUNE]
 const GHOST_COLOR = '#FFFFFF'
 const GHOST_OPACITY = 0.3 // [TUNE]
-/** Point sizes, CSS pixels. [TUNE] */
+/** Point sizes: at most these CSS pixels, and at most these shares of the
+ * drawn Moon's diameter, so far out (a phone's wide view, the Moon a few
+ * pixels) they shrink with it rather than burying it, and the 5-minute dots
+ * stay apart. [TUNE] */
 const TRACK_SIZE = 2.5 // [TUNE]
+const TRACK_SHARE = 0.06 // [TUNE]
 const TRACK_COLOR = '#FFFFFF'
 const TRACK_OPACITY = 0.5 // [TUNE]
 const TICK_SIZE = 6 // [TUNE]
+const TICK_SHARE = 0.25 // [TUNE]
 const TICK_COLOR = '#E8C25A'
 const TICK_OPACITY = 0.9 // [TUNE]
 
@@ -59,14 +64,25 @@ function ringMaterial(color: string, opacity: number): LineMaterial {
   })
 }
 
+// Round: PointsMaterial draws squares, which read as blocks at the ticks' size.
+function roundPoints(shader: THREE.WebGLProgramParametersWithUniforms) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <clipping_planes_fragment>',
+    '#include <clipping_planes_fragment>\nif (length(gl_PointCoord - 0.5) > 0.5) discard;'
+  )
+}
+
 function pointsMaterial(color: string, opacity: number): THREE.PointsMaterial {
-  return new THREE.PointsMaterial({
+  const material = new THREE.PointsMaterial({
     color,
     transparent: true,
     opacity,
     sizeAttenuation: false,
     depthWrite: false,
   })
+  material.onBeforeCompile = roundPoints
+  material.customProgramCacheKey = () => 'earth-shadow-round-point'
+  return material
 }
 
 function noRaycast() {}
@@ -96,6 +112,8 @@ interface Shadow {
   geometries: THREE.BufferGeometry[]
   lineMaterials: LineMaterial[]
   pointMaterials: THREE.PointsMaterial[]
+  /** Sim time the group was last placed for. */
+  placedT: number | null
 }
 
 function createShadow(t: number): Shadow {
@@ -129,20 +147,35 @@ function createShadow(t: number): Shadow {
     ],
     lineMaterials,
     pointMaterials,
+    placedT: null,
   }
 }
 
 const basis = new THREE.Matrix4()
+const moonAt = new THREE.Vector3()
 
 // Module level, so the memoised shadow is mutated outside the hook.
-function follow(shadow: Shadow, group: THREE.Group | null, t: number, pixelRatio: number) {
+function follow(shadow: Shadow, group: THREE.Group | null, t: number, state: RootState) {
   if (!group) return
-  const { axis, north, east, centre } = shadowFrame(t, shadow.frame)
-  group.position.fromArray(positionsFor('system').positionAt.moon(t)).add(centre)
-  group.quaternion.setFromRotationMatrix(basis.makeBasis(east, north, axis))
+  const system = positionsFor('system')
+  moonAt.fromArray(system.positionAt.moon(t))
+  // The Sun line and the Moon only move with the clock (paused steps too).
+  if (shadow.placedT !== t) {
+    const { axis, north, east, centre } = shadowFrame(t, shadow.frame)
+    group.position.copy(moonAt).add(centre)
+    group.quaternion.setFromRotationMatrix(basis.makeBasis(east, north, axis))
+    shadow.placedT = t
+  }
   // PointsMaterial sizes are device pixels.
-  shadow.pointMaterials[0].size = TRACK_SIZE * pixelRatio
-  shadow.pointMaterials[1].size = TICK_SIZE * pixelRatio
+  const pixelRatio = state.gl.getPixelRatio()
+  const camera = state.camera as THREE.PerspectiveCamera
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2)
+  const moonDiameter =
+    (system.radius.moon / (camera.position.distanceTo(moonAt) * Math.tan(halfFov))) *
+    state.size.height *
+    pixelRatio
+  shadow.pointMaterials[0].size = Math.min(TRACK_SIZE * pixelRatio, TRACK_SHARE * moonDiameter)
+  shadow.pointMaterials[1].size = Math.min(TICK_SIZE * pixelRatio, TICK_SHARE * moonDiameter)
 }
 
 interface EarthShadowProps {
@@ -162,7 +195,7 @@ export function EarthShadow({ ghosts }: EarthShadowProps) {
     [shadow]
   )
 
-  useFrame((state) => follow(shadow, group.current, simTime(), state.gl.getPixelRatio()))
+  useFrame((state) => follow(shadow, group.current, simTime(), state))
 
   return (
     <group ref={group}>

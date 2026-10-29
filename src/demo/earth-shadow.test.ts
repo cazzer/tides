@@ -1,4 +1,7 @@
+import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
+import { EARTH_SHADOW_RADIUS_KM, MOON_RADIUS_KM, eclipseBodies, sunVisibleFraction } from '../eclipse'
+import { positionsFor } from '../flight-scale'
 import { circlePoints, lunarEclipseTrack, moonInShadow, shadowFrame, shadowRadii } from './earth-shadow'
 
 const at = (hms: string) => Date.parse(`2026-03-03T${hms}Z`)
@@ -17,6 +20,28 @@ describe('earth shadow, 3 March 2026', () => {
       expect(Math.abs(umbra - 2.684)).toBeLessThan(0.01)
       expect(Math.abs(penumbra - 4.751)).toBeLessThan(0.01)
     }
+  })
+
+  it('draws its circles where the Moon’s own shading has its edges', () => {
+    // The shading's model, not just its constants: a point in the Moon's
+    // plane just inside the umbra circle sees no Sun, just outside some; just
+    // inside the penumbra circle some is hidden, just outside none.
+    const { umbra, penumbra } = shadowRadii(PEAK)
+    const { axis, east } = shadowFrame(PEAK)
+    const { sun, moon } = eclipseBodies(PEAK)
+    const kmPerUnit = MOON_RADIUS_KM / positionsFor('system').radius.moon
+    const earth = new THREE.Vector3()
+    const visible = (r: number) =>
+      sunVisibleFraction(
+        axis.clone().multiplyScalar(moon.dot(axis)).addScaledVector(east, r * kmPerUnit),
+        sun,
+        earth,
+        EARTH_SHADOW_RADIUS_KM
+      )
+    expect(visible(umbra - 0.01)).toBe(0)
+    expect(visible(umbra + 0.01)).toBeGreaterThan(0)
+    expect(visible(penumbra - 0.01)).toBeLessThan(1)
+    expect(visible(penumbra + 0.01)).toBe(1)
   })
 
   it('finds the contacts astronomy-engine gives, to 2 s', () => {

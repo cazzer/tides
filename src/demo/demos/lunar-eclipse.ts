@@ -74,7 +74,7 @@ export const lunarEclipse: Demo = {
       aids: { earthShadow: true, fullMoonGhosts: true },
       caption: {
         title: 'Out of the shadow',
-        body: 'The Moon slides out the other side. Most full Moons miss the shadow entirely (faint circles).',
+        body: 'The Moon slides out the other side. Most full Moons miss it, like the two small circles.',
       },
     },
   ],
