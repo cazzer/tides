@@ -96,21 +96,29 @@ const ZOOM_SHARE_FAR = 0.2
 const ZOOM_SHARE_NEAR = 0.08
 /** The height over the floor the share eases across, scene units (30 km). */
 const ZOOM_EASE = 30 / EARTH_KM_PER_UNIT
+/**
+ * How far past the floor a notch reaches, scene units (1 km): a feel, not the
+ * depth buffer's clearance, which is ~4 km without reversed-Z and would keep
+ * the last notches long.
+ */
+const ZOOM_LANDING = 1 / EARTH_KM_PER_UNIT
 
 /**
  * OrbitControls' zoomSpeed for an eye `d` from Earth's centre over the zoom
  * `floor`: a wheel notch (0.95^zoomSpeed of the distance) moves a share of
- * the way left to the floor plus `clearance`, so the last notch overshoots
+ * the way left to the floor plus ZOOM_LANDING, so the last notch overshoots
  * it and OrbitControls' minDistance clamp lands the eye on it. The share is
  * about a fifth far out, easing to 8% within tens of km of the floor; at the
  * barrier and above the cap holds it at 1.
  */
-export function closeZoomSpeed(d: number, floor: number, clearance: number): number {
+export function closeZoomSpeed(d: number, floor: number): number {
   const h = Math.max(d - floor, 0)
   const share = ZOOM_SHARE_FAR - (ZOOM_SHARE_FAR - ZOOM_SHARE_NEAR) * Math.exp(-h / ZOOM_EASE)
-  const step = share * (h + clearance)
+  const step = share * (h + ZOOM_LANDING)
   const s = Math.log(1 - step / d) / Math.log(0.95)
-  return Number.isFinite(s) ? Math.min(1, Math.max(MIN_ZOOM_SPEED, s)) : MIN_ZOOM_SPEED
+  // A step of the whole distance (s = +Infinity) is a whole notch; NaN (a
+  // step past the centre, or no distance) the least.
+  return s > 0 ? Math.min(1, Math.max(MIN_ZOOM_SPEED, s)) : MIN_ZOOM_SPEED
 }
 
 /**
@@ -365,7 +373,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     closeZoomState.groundUnderEye = gE
     closeZoomState.guard = eyeR < gE + clearance / 2
 
-    const speed = closeZoomSpeed(controls.getDistance(), floor, clearance)
+    const speed = closeZoomSpeed(controls.getDistance(), floor)
     if (controls.zoomSpeed !== speed) controls.zoomSpeed = speed
 
     earth.getWorldQuaternion(_now)
