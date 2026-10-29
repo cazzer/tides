@@ -1,7 +1,7 @@
 import { PerspectiveCamera, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { bandFraming, clearBand, type Rect } from './demo-chrome'
-import { keepDistance } from './demo-script'
+import { KEEP_MARGIN, keepDistance } from './demo-script'
 
 const rect = (left: number, top: number, right: number, bottom: number): Rect => ({ left, top, right, bottom })
 
@@ -57,13 +57,13 @@ describe('bandFraming', () => {
 
 describe('keepDistance', () => {
   const vfov = 50
-  const tanV = Math.tan((25 * Math.PI) / 180)
+  const tanV = KEEP_MARGIN * Math.tan((25 * Math.PI) / 180)
 
   it('is 0 with nothing kept', () => {
     expect(keepDistance([], new Vector3(0, 0, 1), vfov, 1)).toBe(0)
   })
 
-  it('backs off until a body above the focus fits, top edge on the view’s edge', () => {
+  it('backs off until a body above the focus fits, its top edge just inside the view’s', () => {
     const body = { offset: new Vector3(0, 10, 0), radius: 1 }
     const distance = keepDistance([body], new Vector3(0, 0, 1), vfov, 2)
     expect(distance).toBeCloseTo(11 / tanV)

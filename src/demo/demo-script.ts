@@ -44,7 +44,7 @@ export interface DemoPose {
   /** Bodies kept in view with the focus, their whole discs, seen from the
    * pose's direction (keepDistance, tides-zec.15). Like `fit`, it only ever
    * backs the eye off. */
-  keep?: DemoFocus[]
+  keep?: readonly DemoFocus[]
 }
 
 /** What a travel holds still on the way: Earth's spin, or the Moon (hidden). */
@@ -293,15 +293,19 @@ export interface KeptBody {
 const _right = new Vector3()
 const _upAxis = new Vector3()
 
+/** The share of the half-field a kept body may fill. */
+export const KEEP_MARGIN = 0.9
+
 /**
  * The least eye distance, along unit `direction` from the focus (looking
  * back at it, ecliptic north up), at which every body's disc is inside a
  * view of vertical field `vfovDeg` and `aspect` centred on the focus; 0 for
  * none. Each body's extent across the view is its offset across the line of
- * sight plus its radius, against the half-field at its own depth.
+ * sight plus its radius, against the half-field at its own depth, with
+ * KEEP_MARGIN to spare: a sphere's outline reaches a little past that.
  */
 export function keepDistance(bodies: readonly KeptBody[], direction: Vector3, vfovDeg: number, aspect: number): number {
-  const tanV = Math.tan((vfovDeg * Math.PI) / 360)
+  const tanV = KEEP_MARGIN * Math.tan((vfovDeg * Math.PI) / 360)
   const tanH = tanV * aspect
   _right.crossVectors(_up, direction)
   if (_right.lengthSq() < 1e-12) _right.set(1, 0, 0)

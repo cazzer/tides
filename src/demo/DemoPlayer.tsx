@@ -84,9 +84,12 @@ const _earthTurn = new Quaternion()
 const _bodies = { focus: _focus, sun: _sun, earth: _earth, earthTurn: _earthTurn }
 const _keptBodies: KeptBody[] = []
 
-/** The bodies a pose keeps in view, about the focus (keepDistance). */
+/**
+ * The bodies a pose keeps in view, about the focus (keepDistance): its
+ * `keep`, and the focus itself, so the band's shift never crops it.
+ */
 function keptBodies(pose: DemoPose, state: ReturnType<typeof useStore.getState>): KeptBody[] {
-  const keep = pose.keep ?? []
+  const keep = [pose.focus, ...(pose.keep ?? [])]
   for (let i = 0; i < keep.length; i++) {
     _keptBodies[i] ??= { offset: new Vector3(), radius: 0 }
     const body = focusedRef<BodyRef>(state, keep[i])?.current
