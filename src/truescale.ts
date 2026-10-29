@@ -25,8 +25,9 @@
 // the HUD's: past ~0.7 the Sun's pair scale with the squeezed-in Mercury ran
 // inner-planet ranges backwards (tides-3ln), until the Sun's pair gaps took
 // it at its scene size and its anchor a hand-over band (tides-ofv,
-// ../ship/ship-distances.ts), which holds to 0.9. The default stays 0.7, the
-// size the user saw and accepted; 0.8–0.9 are a ?truescale= away.
+// ../ship/ship-distances.ts), which truescale-flight.test.ts checks at 0.9;
+// 0.95 was not tried, and leaves Mercury only ~30 clear. The default stays
+// 0.7, the size the user saw and accepted; 0.8–0.9 are a ?truescale= away.
 //
 // Read once at load, like ?relief= (./relief.ts): a change is a reload, so
 // nothing has to rebuild live. Outside a browser (the tests) it is 0, so the

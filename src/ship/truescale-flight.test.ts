@@ -184,12 +184,12 @@ describe('?truescale: HUD ranges', () => {
 
   // Past the Sun's band its anchor stands where the flight scale puts the
   // ship, its growth over the scene size made up (tides-ofv).
-  it("reads the Sun's range at the flight scale beyond its band", async () => {
-    const { ship, truth, find, ranges, distances, flight, scale } = await setup(T)
+  it.each([AT_MAX, '?ship=1'])("reads the Sun's range at the flight scale beyond its band (%s)", async (search) => {
+    const { ship, truth, find, ranges, distances, flight, scale } = await setup(T, search)
     const sun = find('sun')
     const shell = flight.collisionRadius(sun.body)
     const growth = shell * (1 - scale.flightRadii(0).sun / sun.body.radius)
-    expect(growth).toBeGreaterThan(200)
+    expect(growth).toBeGreaterThan(100)
     const kmPerUnit = 149_597_870.7 / scale.FLIGHT_UNITS_PER_AU
     // Straight up out of the ecliptic, clear of every planet.
     const up = new THREE.Vector3(0, 1, 0)
@@ -204,8 +204,9 @@ describe('?truescale: HUD ranges', () => {
   })
 
   // At ?truescale=0 nothing tides-ofv added takes part: every range, the km
-  // per unit, the true position and the nearest, as on c9dafb0 before it,
-  // over two years of dates from every body out toward three others.
+  // per unit, the true position and the nearest, bit for bit as before it,
+  // over two years of dates from every body out toward three others. A
+  // deliberate change to the ranges at a = 0 re-pins this (log the digest).
   it('measures exactly as before at ?truescale=0', async () => {
     const hash = createHash('sha256')
     for (let day = 0; day < 720; day += 60) {
