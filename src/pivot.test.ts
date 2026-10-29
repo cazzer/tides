@@ -370,20 +370,39 @@ describe('tiltControls', () => {
 })
 
 describe('tiltControls spin', () => {
-  it('turns the eye about the target once, then is spent', () => {
+  it('turns the eye about its centre once, then is spent', () => {
     const camera = new OrthographicCamera()
     camera.position.set(0, 0, 10)
     const controls = new OrbitControls(camera)
-    const spin = new Quaternion()
+    const spin = { turn: new Quaternion(), centre: new Vector3() }
     tiltControls(controls, camera, { tilt: 0, heading: 0, depth: 0 }, () => 3, undefined, undefined, spin)
     controls.update()
-    spin.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2)
+    spin.turn.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2)
     controls.update()
     expect(camera.position.x).toBeCloseTo(10, 9)
     expect(camera.position.z).toBeCloseTo(0, 9)
-    expect(spin.equals(new Quaternion())).toBe(true)
+    expect(spin.turn.equals(new Quaternion())).toBe(true)
     controls.update()
     expect(camera.position.x).toBeCloseTo(10, 9)
     expect(camera.position.z).toBeCloseTo(0, 9)
+  })
+
+  it("turns the carried eye about the body's centre, not the lagging target", () => {
+    // The date jumps: the body is carried far off, and the target, which
+    // eases after it, is still at the origin.
+    const camera = new OrthographicCamera()
+    camera.position.set(0, 0, 10)
+    const controls = new OrbitControls(camera)
+    const carry = new Vector3()
+    const spin = { turn: new Quaternion(), centre: new Vector3() }
+    tiltControls(controls, camera, { tilt: 0, heading: 0, depth: 0 }, () => 3, carry, undefined, spin)
+    controls.update()
+    carry.set(1e6, 0, 0)
+    spin.centre.set(1e6, 0, 0)
+    spin.turn.setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2)
+    controls.update()
+    // About the target the eye would swing a million units round to z.
+    expect(camera.position.x).toBeCloseTo(1e6 + 10, 6)
+    expect(camera.position.z).toBeCloseTo(0, 6)
   })
 })

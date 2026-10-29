@@ -14,7 +14,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { Quaternion, Vector3, type Camera, type Object3D } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { MIN_DISTANCE_FACTOR } from './main-view'
-import type { Pivot } from './pivot'
+import type { Pivot, Spin } from './pivot'
 import { useStore } from './store'
 import { EARTH_KM_PER_UNIT, SURFACE_TOP, tileGroundRadius } from './surface-handover'
 import { isTileRange } from './close-zoom-rules'
@@ -169,11 +169,11 @@ const TERRAIN_LOAD_BARRIERS = 2
 function leaveCloseZoom(
   owner: CloseZoomOwner,
   controls: OrbitControlsImpl | null,
-  spin: Quaternion
+  spin: Spin
 ) {
   owner.wasClose = false
   owner.hasPrevious = false
-  spin.identity()
+  spin.turn.identity()
   closeZoomState.groundUnderTarget = null
   closeZoomState.groundUnderEye = null
   closeZoomState.guard = false
@@ -188,7 +188,7 @@ function leaveCloseZoom(
  * tiltControls spends on the next update. Call it before CameraProvider's
  * frame, so that frame's update carries the eye.
  */
-export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
+export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
   const get = useThree((s) => s.get)
   const ownerRef = useRef<CloseZoomOwner>({
     owns: false,
@@ -238,7 +238,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
     const clearance = closeZoomClearance(reversedFloatDepth(frame.gl))
     if (!close || !earthFocus) {
       owner.hasPrevious = false
-      spin.identity()
+      spin.turn.identity()
       closeZoomState.groundUnderTarget = null
       closeZoomState.groundUnderEye = null
       closeZoomState.guard = false
@@ -279,8 +279,9 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Quaternion) {
     if (controls.zoomSpeed !== speed) controls.zoomSpeed = speed
 
     earth.getWorldQuaternion(_now)
-    if (owner.hasPrevious) spin.copy(_now).multiply(owner.previous.invert())
-    else spin.identity()
+    if (owner.hasPrevious) spin.turn.copy(_now).multiply(owner.previous.invert())
+    else spin.turn.identity()
+    spin.centre.copy(_centre)
     owner.previous.copy(_now)
     owner.hasPrevious = true
   })

@@ -258,6 +258,16 @@ describe('store close zoom', () => {
     expect(useStore.getState().timeScale).toBe(86400)
   })
 
+  it("leaves a demo's clock alone: entering at its speed, and its speeds while close", () => {
+    useStore.setState({ timeScale: 43200, closeZoom: false, demo: { id: 'tour', step: 0 } })
+    const cue = useStore.getState().realTimeCue
+    useStore.getState().setCloseZoom(true)
+    expect(useStore.getState()).toMatchObject({ closeZoom: true, timeScale: 43200, realTimeCue: cue })
+    useStore.getState().setTimeScale(3600)
+    expect(useStore.getState()).toMatchObject({ timeScale: 3600, realTimeCue: cue })
+    useStore.setState({ demo: null })
+  })
+
   it("doesn't notify when the flag is unchanged", () => {
     let calls = 0
     const unsubscribe = useStore.subscribe(() => calls++)

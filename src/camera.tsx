@@ -57,6 +57,7 @@ import {
   tiltControls,
   wrapAngle,
   type Pivot,
+  type Spin,
 } from './pivot'
 import { closeZoomState, earthGroundRadius, groundAngle, useCloseZoom } from './close-zoom'
 import { reversedFloatDepth } from './renderers/depth-precision'
@@ -239,7 +240,7 @@ function useEarthPivot(
   dom: HTMLElement | undefined,
   carry: Vector3,
   outsideMoveRef: { current: boolean },
-  spin: Quaternion
+  spin: Spin
 ): Pivot {
   const [pivot] = useState<Pivot>(() => ({ tilt: 0, heading: 0, depth: 0 }))
 
@@ -469,7 +470,10 @@ export const CameraProvider = ({ children }: { children: any }) => {
     speed: 0,
   })
   const carry = useMemo(() => new Vector3(), [])
-  const spin = useMemo(() => new Quaternion(), [])
+  const spin = useMemo<Spin>(
+    () => ({ turn: new Quaternion(), centre: new Vector3() }),
+    []
+  )
   const outsideMoveRef = useRef(false)
   const rideRef = useClockRide(controls)
   const focusedObject = useRef<{

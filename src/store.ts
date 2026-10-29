@@ -377,17 +377,19 @@ export const useStore = create<{
   setPlanet: (name: string, ref: any) => set({ [name]: ref }),
   setEarthRadius: (earthRadius: number | undefined) => set({ earthRadius }),
   // In close zoom a faster speed is refused, with the cue; time stays as it is.
+  // A demo owns the clock, so its steps' speeds hold even in close zoom.
   setTimeScale: (timeScale: number) =>
     set((s) =>
-      holdRealTime(timeScale, s.closeZoom).cue
+      holdRealTime(timeScale, s.closeZoom && !s.demo).cue
         ? { realTimeCue: s.realTimeCue + 1 }
         : { timeScale }
     ),
-  // Entering close zoom faster than real time drops to it, with the cue.
+  // Entering close zoom faster than real time drops to it, with the cue,
+  // outside a demo.
   setCloseZoom: (closeZoom: boolean) =>
     set((s) => {
       if (closeZoom === s.closeZoom) return s
-      if (!closeZoom) return { closeZoom }
+      if (!closeZoom || s.demo) return { closeZoom }
       const { timeScale, cue } = holdRealTime(s.timeScale, true)
       return cue
         ? { closeZoom, timeScale, realTimeCue: s.realTimeCue + 1 }
