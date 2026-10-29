@@ -97,6 +97,23 @@ if (uEclipseActive > 0.5) {
 }
 `
 
+// The Moon (tides-zec.13), as an eye or camera sees it. Its stylised glow
+// (lighting.ts) is ~10% of sunlight where the real one is ~10⁻⁴, and shown
+// linearly the penumbra's first half Moon radius (3-20% of the Sun) read as
+// dark as it, so the umbra looked half a radius wider than it is. Seeing
+// brightness roughly logarithmically, the glow stays in the umbra and the
+// penumbra's sunlight is lifted (its square root), so the umbra's edge reads
+// where the Sun's disc is first wholly hidden. No water on the Moon.
+const FRAGMENT_LIGHT_SEEN_BY_EYE = /* glsl */ `
+if (uEclipseActive > 0.5) {
+  vec2 eclipse = eclipseSunlight(vEclipsePoint);
+  float lit = sqrt(eclipse.x);
+  vec3 glow = uEclipseGlow * (1.0 - smoothstep(0.0, 0.02, eclipse.x)) * (1.0 - 0.6 * eclipse.y);
+  reflectedLight.directDiffuse *= vec3(lit) + glow;
+  reflectedLight.directSpecular *= lit;
+}
+`
+
 function inject(source: string, chunk: string, code: string): string {
   const include = `#include <${chunk}>`
   if (!source.includes(include)) {
@@ -127,6 +144,15 @@ export interface EclipseShadow {
   material: MaterialPatch
   /** Shared with every material the shadow is spread onto. */
   uniforms: Record<string, THREE.IUniform>
+}
+
+const LIGHT: Record<ShadedBody, string> = {
+  earth: FRAGMENT_LIGHT,
+  moon: FRAGMENT_LIGHT_SEEN_BY_EYE,
+}
+const CACHE_KEY: Record<ShadedBody, string> = {
+  earth: 'eclipse-shadow',
+  moon: 'eclipse-shadow-seen-by-eye',
 }
 
 export function createEclipseShadow(body: ShadedBody): EclipseShadow {
@@ -161,12 +187,12 @@ export function createEclipseShadow(body: ShadedBody): EclipseShadow {
         shader.fragmentShader = inject(
           inject(shader.fragmentShader, 'common', FRAGMENT_HEAD),
           'lights_fragment_end',
-          FRAGMENT_LIGHT
+          LIGHT[body]
         )
       },
-      // Every eclipse-shadowed material compiles the same code; the uniforms
-      // are per material.
-      customProgramCacheKey: () => 'eclipse-shadow',
+      // Every eclipse-shadowed material of a body compiles the same code; the
+      // uniforms are per material.
+      customProgramCacheKey: () => CACHE_KEY[body],
     },
   }
 }
