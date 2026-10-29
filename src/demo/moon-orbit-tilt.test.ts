@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { earthPosition, moonOffset } from '../ephemeris'
 import { positionsFor } from '../flight-scale'
 import { MAIN_FOV } from '../main-view'
-import { eyeDirection } from './demo-script'
+import { eyeDirection, poseDistance } from './demo-script'
 import { solarEclipse } from './demos/solar-eclipse'
 import {
   createShadowAxis,
@@ -110,7 +110,7 @@ describe('shadowAxis', () => {
 })
 
 describe('the solar eclipse tour’s last step', () => {
-  const step = solarEclipse.steps[4]
+  const step = solarEclipse.steps.find((s) => s.aids?.moonNodes)!
   const pose = step.camera!
 
   it('has the Moon on a phone at the 8 May stop, with the pose set at the step’s start', () => {
@@ -120,7 +120,7 @@ describe('the solar eclipse tour’s last step', () => {
     const eye = eyeDirection(start, new THREE.Vector3(), start, pose.azimuth, pose.elevation)
     const t = Date.parse(step.until!)
     const moon = new THREE.Vector3(...moonOffset(t))
-    const toMoon = moon.clone().sub(eye.clone().multiplyScalar(pose.distance))
+    const toMoon = moon.clone().sub(eye.clone().multiplyScalar(poseDistance(pose, MAIN_FOV, 390 / 844)))
     const offAxis = toMoon.angleTo(eye.clone().negate()) / DEG
     const moonDisc = Math.asin(positionsFor('system').radius.moon / toMoon.length()) / DEG
     const phoneHalfFov = Math.atan(Math.tan((MAIN_FOV / 2) * DEG) * (390 / 844)) / DEG

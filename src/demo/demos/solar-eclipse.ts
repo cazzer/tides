@@ -11,37 +11,46 @@ import type { Demo } from '../demo-script'
 // 12 s against Dallas' 3 min 58 s, and the Sun 70° up (64.6° in Dallas, due
 // south), so it stands clear of the hills.
 //
+// The clock runs on from step to step, landfall to the 8 May new moon, but
+// for step 5, which plays step 4's crossing again from a camera turning with
+// Earth: the ground holds still and the shadow still runs east, so it is the
+// Moon's motion that carries it, Earth's spin only slowing it on the ground.
+//
 // In steps 2 and 3 the View from Earth draws the Moon at the Sun's scale with
-// a daylit sky (aids.solarEclipseSky, eclipse-sky.ts); step 5 adds the Moon's
+// a daylit sky (aids.solarEclipseSky, eclipse-sky.ts); step 6 adds the Moon's
 // tilted orbit, node line, true shadow axis near new moon and an arrow to the
-// Sun (aids.moonNodes). In steps 1 and 4 the main view
-// darkens and rings the shadow on Earth (aids.moonShadow, MoonShadowGlobe.tsx),
-// which at true scale is a faint smudge, and leaves the path of totality
-// behind it (aids.totalityPath, totality-path.ts); step 5 turns both off.
+// Sun (aids.moonNodes). In steps 1, 4 and 5 the main view darkens and rings
+// the shadow on Earth (aids.moonShadow, MoonShadowGlobe.tsx), which at true
+// scale is a faint smudge, and leaves the path of totality behind it
+// (aids.totalityPath, totality-path.ts); step 6 turns both off.
+
+// From the Sun's side and a little below the ecliptic, so the sunward Moon
+// stands just over Earth's top limb, above its own shadow; it is seen full,
+// the side facing us lit. Its 10 units are mostly up the screen, so only
+// Earth needs the width: a phone backs off to keep it (and a margin) in view.
+const SUN_SIDE = { focus: 'earth', elevation: -22, distance: 30, fit: 4.2 } as const
 export const solarEclipse: Demo = {
   id: 'solar-eclipse',
   title: 'Total solar eclipse',
   blurb: 'Follow the Moon’s shadow across North America and stand in totality, 8 April 2024.',
   steps: [
     {
-      date: '2024-04-08T17:55:00Z',
-      until: '2024-04-08T18:17:16Z',
-      timeScale: 60,
+      // The umbra's axis meets Earth at sunrise on the Pacific limb at 16:40.
+      date: '2024-04-08T16:40:00Z',
+      until: '2024-04-08T17:50:00Z',
+      timeScale: 180,
       layout: 'single',
       mainPanel: 'main',
-      // From the Sun's side and a little below the ecliptic, so the sunward
-      // Moon stands just over Earth's top limb, above its own shadow, on a
-      // phone as well as on desktop. It is seen full: the side facing us is lit.
-      camera: { focus: 'earth', azimuth: -10, elevation: -22, distance: 40 },
+      camera: { ...SUN_SIDE, azimuth: -10 },
       aids: { moonShadow: true, totalityPath: true },
       caption: {
-        title: 'Shadow reaches Mexico',
-        body: 'Seen from the Sun’s side: the Moon (above) casts this shadow. Total eclipse in the dark dot, partial inside the ring.',
+        title: 'The Moon’s shadow lands',
+        body: 'Seen from the Sun’s side: the Moon (above) casts this shadow. Total in the dark dot, partial inside the ring.',
       },
     },
     {
       date: '2024-04-08T17:50:00Z',
-      until: '2024-04-08T18:17:01Z',
+      until: '2024-04-08T18:16:40Z',
       timeScale: 60,
       mainPanel: 'top',
       location: { lat: 25.54, lon: -103.41 },
@@ -54,9 +63,11 @@ export const solarEclipse: Demo = {
       },
     },
     {
-      date: '2024-04-08T18:17:30Z',
+      // On from the partial phase, so second contact plays live a few
+      // seconds in, then third and the light coming back.
+      date: '2024-04-08T18:16:40Z',
       until: '2024-04-08T18:21:30Z',
-      timeScale: 2,
+      timeScale: 4,
       skyLook: { azimuth: 152.5, altitude: 70 },
       skyFov: 70,
       caption: {
@@ -65,12 +76,12 @@ export const solarEclipse: Demo = {
       },
     },
     {
-      date: '2024-04-08T18:40:00Z',
+      date: '2024-04-08T18:21:30Z',
       until: '2024-04-08T19:55:27Z',
       timeScale: 120,
       mainPanel: 'main',
       // As step 1, turned east with the shadow.
-      camera: { focus: 'earth', azimuth: 5, elevation: -22, distance: 40 },
+      camera: { ...SUN_SIDE, azimuth: 5 },
       // Off again: the enlarged sky Moon sits inside the ground's bowl, so it
       // shows only while the Torreón steps hold it high.
       aids: { solarEclipseSky: false },
@@ -80,7 +91,20 @@ export const solarEclipse: Demo = {
       },
     },
     {
-      date: '2024-04-08T18:17:16Z',
+      // The same crossing again, cut back to its start, from high over Canada
+      // and turning with Earth, so North America holds still under the eye
+      // and the Moon stays low in the frame, off it on a phone.
+      date: '2024-04-08T18:21:30Z',
+      until: '2024-04-08T19:55:27Z',
+      timeScale: 120,
+      camera: { focus: 'earth', frame: 'earth', azimuth: -88, elevation: 55, distance: 30, fit: 4.2 },
+      caption: {
+        title: 'Turning with Earth',
+        body: 'Now we turn with Earth: the ground holds still, yet the shadow still runs east. The Moon carries it.',
+      },
+    },
+    {
+      date: '2024-04-08T19:55:27Z',
       until: '2024-05-08T03:22:29Z',
       timeScale: 43200,
       // Edge on to the ecliptic: the ecliptic circle, Earth's orbit and the
@@ -90,8 +114,8 @@ export const solarEclipse: Demo = {
       // from the Sun (to the right) and ~23° off the node line, so the new
       // Moon is mostly lit, well clear of the node dots, the orbit's tilt
       // shows, and the shadow axis passing above Earth runs across the view.
-      // Far enough that the whole orbit fits a phone's width.
-      camera: { focus: 'earth', azimuth: -28, elevation: 0, distance: 85 },
+      // A phone backs off until the whole orbit fits its width.
+      camera: { focus: 'earth', azimuth: -28, elevation: 0, distance: 55, fit: 10.8 },
       aids: { moonNodes: true, moonShadow: false, totalityPath: false },
       caption: {
         title: 'Why not every month?',
