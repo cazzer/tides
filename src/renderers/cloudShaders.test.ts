@@ -38,11 +38,10 @@ import {
   MAX_CLOUD_TOP_KM,
   CLOUD_CLEARANCE,
   cloudDeckAt,
-  CLOUD_DECK_BAND_KM,
   EXAGGERATED_DECK,
+  FINE_DECK,
   fogPath,
   TERRAIN_MAX_GREY,
-  TRUE_DECK,
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
@@ -1866,7 +1865,7 @@ describe('the ground shadow under the deck (tides-l0z)', () => {
   })
 })
 
-describe('the deck at true height near the ground (tides-d9f.10)', () => {
+describe('the deck by depth buffer, the same at every altitude (tides-d9f.10, tides-45y)', () => {
   const sea = sceneRadius(12742000)
 
   it('reads the clearance and km scale from uniforms on the relief path, constants on the flat one', () => {
@@ -1911,7 +1910,7 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
     }
   })
 
-  it('sets the deck for each camera from its altitude, true near the ground only on a fine depth buffer', () => {
+  it('sets the same deck for a camera at every altitude, FINE_DECK only on a fine depth buffer (tides-45y)', () => {
     for (const flat of [false, true]) {
       const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
       clouds.uniforms.uSeaLevel.value = sea
@@ -1924,15 +1923,10 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
         return { clearance: clouds.uniforms.uCloudClearance.value, unitsPerKm: clouds.uniforms.uCloudUnitsPerKm.value }
       }
       try {
-        const near = flat ? EXAGGERATED_DECK : TRUE_DECK
-        expect(deckAt(5, true)).toEqual({ ...near })
-        expect(deckAt(5, false)).toEqual({ ...EXAGGERATED_DECK })
-        expect(deckAt(36000, true)).toEqual({ ...EXAGGERATED_DECK })
-        // Halfway up the band, halfway between (to the float).
-        if (!flat) {
-          const mid = deckAt(60, true)
-          expect(mid.clearance).toBeCloseTo(cloudDeckAt(60, true).clearance, 12)
-          expect(mid.unitsPerKm).toBeCloseTo(cloudDeckAt(60, true).unitsPerKm, 12)
+        const fine = flat ? EXAGGERATED_DECK : FINE_DECK
+        for (const km of [0.5, 5, 20, 60, 100, 400, 36000]) {
+          expect(deckAt(km, true), `${km} km`).toEqual({ ...fine })
+          expect(deckAt(km, false), `${km} km`).toEqual({ ...EXAGGERATED_DECK })
         }
       } finally {
         clouds.dispose()
@@ -1942,18 +1936,18 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
 
   // The longest path from inside through `deck`: under the tallest top
   // over the highest ground, grazing the sea.
-  const deckOuter = (deck: typeof TRUE_DECK) =>
+  const deckOuter = (deck: typeof FINE_DECK) =>
     TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + deck.clearance + deck.unitsPerKm * MAX_CLOUD_TOP_KM
   const chord = (top: number) => 2 * Math.sqrt((sea + top) ** 2 - sea ** 2)
 
   it('steps the march as much shorter as the deck\'s longest path, and as it was from orbit', () => {
     expect(deckOuter(EXAGGERATED_DECK)).toBe(CLOUD_LAYER_TOP)
     expect(marchStepFor(EXAGGERATED_DECK)).toBe(MARCH_STEP)
-    const ratio = chord(deckOuter(TRUE_DECK)) / chord(CLOUD_LAYER_TOP)
-    expect(marchStepFor(TRUE_DECK)).toBeCloseTo(MARCH_STEP * ratio, 15)
-    // A little over a third of the step from orbit.
-    expect(ratio).toBeGreaterThan(0.3)
-    expect(ratio).toBeLessThan(0.4)
+    const ratio = chord(deckOuter(FINE_DECK)) / chord(CLOUD_LAYER_TOP)
+    expect(marchStepFor(FINE_DECK)).toBeCloseTo(MARCH_STEP * ratio, 15)
+    // About four-fifths of the step from orbit.
+    expect(ratio).toBeGreaterThan(0.7)
+    expect(ratio).toBeLessThan(0.85)
     for (const flat of [false, true]) {
       const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
       clouds.uniforms.uSeaLevel.value = sea
@@ -1967,8 +1961,8 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
       }
       try {
         expect(clouds.material.uniforms.uMarchStep.value).toBe(MARCH_STEP)
-        expect(stepAt(5)).toBe(flat ? MARCH_STEP : marchStepFor(TRUE_DECK))
-        expect(stepAt(36000)).toBe(MARCH_STEP)
+        expect(stepAt(5)).toBe(flat ? MARCH_STEP : marchStepFor(FINE_DECK))
+        expect(stepAt(36000)).toBe(flat ? MARCH_STEP : marchStepFor(FINE_DECK))
       } finally {
         clouds.dispose()
       }
@@ -2009,9 +2003,9 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
   it('fogs a column of so many km as it did, at any deck', () => {
     expect(fogPath(EXAGGERATED_DECK)).toBe(fogPath())
     // The opacity through the whole thickness of a column of km km, at the
-    // deck's own scale: the true deck's, some nine times thinner in scene
-    // units, as dense per unit as it is thinner.
-    const through = (deck: typeof TRUE_DECK, alpha: number, km: number) => {
+    // deck's own scale: FINE_DECK's, a third or so thinner in scene units,
+    // as dense per unit as it is thinner.
+    const through = (deck: typeof FINE_DECK, alpha: number, km: number) => {
       const base = deck.clearance
       const top = base + deck.unitsPerKm * km
       const n = 4000
@@ -2020,20 +2014,20 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
       return 1 - Math.exp((-depth * (top - base)) / n)
     }
     for (const alpha of [0.05, 0.3, 0.8])
-      for (const km of [0.5, 2, 9]) expect(through(TRUE_DECK, alpha, km)).toBeCloseTo(through(EXAGGERATED_DECK, alpha, km), 12)
+      for (const km of [0.5, 2, 9]) expect(through(FINE_DECK, alpha, km)).toBeCloseTo(through(EXAGGERATED_DECK, alpha, km), 12)
     // And over a step: the eye's share of the phase reads the same fog
     // over the live step as the shader's cloudFogStep().
-    const fog = fogExtinction(0.5, TRUE_DECK.clearance, TRUE_DECK.clearance + 0.003, TRUE_DECK.clearance + 0.0015, TRUE_DECK)
-    expect(fog * marchStepFor(TRUE_DECK)).toBeCloseTo(
-      ((0.5 * -Math.log(0.5)) / (0.004 * (TRUE_DECK.unitsPerKm / CLOUD_UNITS_PER_KM))) * marchStepFor(TRUE_DECK),
+    const fog = fogExtinction(0.5, FINE_DECK.clearance, FINE_DECK.clearance + 0.003, FINE_DECK.clearance + 0.0015, FINE_DECK)
+    expect(fog * marchStepFor(FINE_DECK)).toBeCloseTo(
+      ((0.5 * -Math.log(0.5)) / (0.004 * (FINE_DECK.unitsPerKm / CLOUD_UNITS_PER_KM))) * marchStepFor(FINE_DECK),
       9
     )
   })
 
-  it('keeps every march from inside within the step budget at every deck in the band', () => {
-    // From under the deck's base to above its reach, at each step's own deck.
-    for (let km = 0; km <= CLOUD_DECK_BAND_KM[1] + 20; km += 5) {
-      const deck = cloudDeckAt(km, true)
+  it('keeps every march from inside within the step budget at either deck', () => {
+    // From under the deck's base to above its reach.
+    for (const fine of [true, false]) {
+      const deck = cloudDeckAt(fine)
       const step = marchStepFor(deck)
       const outer = sea + deckOuter(deck)
       let longest = 0
@@ -2047,8 +2041,8 @@ describe('the deck at true height near the ground (tides-d9f.10)', () => {
           most = Math.max(most, marchSteps(span, step, MARCH_STEPS, 0.999).length)
         }
       }
-      expect(longest / MARCH_STEPS, `${km} km`).toBeLessThanOrEqual(step * 1.02)
-      expect(most, `${km} km`).toBeLessThanOrEqual(MARCH_STEPS + 2)
+      expect(longest / MARCH_STEPS, `fine ${fine}`).toBeLessThanOrEqual(step * 1.02)
+      expect(most, `fine ${fine}`).toBeLessThanOrEqual(MARCH_STEPS + 2)
     }
   })
 

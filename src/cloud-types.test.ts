@@ -33,10 +33,10 @@ import {
   cloudTopKm,
   CLOUD_UNITS_PER_KM,
   EXAGGERATED_DECK,
+  FINE_DECK,
   MAX_CLOUD_TOP_KM,
   maxTopKm,
   TERRAIN_DISPLACEMENT,
-  TRUE_DECK,
 } from './cloud-layer'
 import { DETAIL_INTERIOR } from './renderers/cloudShaders'
 import { GRID_LATS, GRID_LONS, GRID_POINTS, type CoverGrid } from './forecast-clouds'
@@ -697,27 +697,27 @@ describe('typed tops (tides-tvr.4.3, tides-tvr.4.9)', () => {
   })
 })
 
-describe('typed columns on the true deck (tides-d9f.10)', () => {
-  // Relief 1: a true km is 0.117 / 255 units, and the base stands one of
-  // them over the ground.
+describe('typed columns on FINE_DECK (tides-45y)', () => {
+  // Relief 1: a true km is 0.117 / 255 units; the base stands three of them
+  // over the ground, and a km of cloud six.
   const km = 0.117 / 255
   const grey = 0.4
 
-  test('untyped, the true cloudColumn()', () => {
-    const c = typedColumn(1, 0, 0, false, [0, 0, 0], grey, TERRAIN_DISPLACEMENT, TRUE_DECK)
-    expect(c).toEqual({ ground: c.base, ...cloudColumn(1, 8.5, grey, TERRAIN_DISPLACEMENT, TRUE_DECK) })
-    expect(c.base).toBeCloseTo(0.0012 + km, 15)
-    // The thickest untyped top: 8.5 km.
-    expect(c.top).toBeCloseTo(0.0012 + 9.5 * km, 15)
+  test('untyped, cloudColumn() on the deck', () => {
+    const c = typedColumn(1, 0, 0, false, [0, 0, 0], grey, TERRAIN_DISPLACEMENT, FINE_DECK)
+    expect(c).toEqual({ ground: c.base, ...cloudColumn(1, 8.5, grey, TERRAIN_DISPLACEMENT, FINE_DECK) })
+    expect(c.base).toBeCloseTo(0.0012 + 3 * km, 15)
+    // The thickest untyped top: 8.5 km, six times over.
+    expect(c.top).toBeCloseTo(0.0012 + (3 + 6 * 8.5) * km, 15)
   })
 
-  test('typed, lifted and topped in true km', () => {
+  test('typed, lifted and topped in the deck\'s km', () => {
     expect(TYPED_TOPS_KM).toBe(16)
     // A top of 0.25 of 16 km, lifted 0.1 of it: 4 km, 1.6 km.
-    const c = typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT, TRUE_DECK)
-    expect(c.ground).toBeCloseTo(0.0012 + km, 15)
-    expect(c.base).toBeCloseTo(0.0012 + 2.6 * km, 15)
-    expect(c.top).toBeCloseTo(0.0012 + 5 * km, 15)
+    const c = typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT, FINE_DECK)
+    expect(c.ground).toBeCloseTo(0.0012 + 3 * km, 15)
+    expect(c.base).toBeCloseTo(0.0012 + (3 + 6 * 1.6) * km, 15)
+    expect(c.top).toBeCloseTo(0.0012 + (3 + 6 * 4) * km, 15)
     // Without a deck, the one from orbit.
     expect(typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT)).toEqual(
       typedColumn(1, 0, 0, false, [0.25, 0.1, 1], grey, TERRAIN_DISPLACEMENT, EXAGGERATED_DECK)

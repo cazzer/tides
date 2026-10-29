@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition, positionsFor } from '../flight-scale'
-import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, TRUE_DECK, cloudColumn, type CloudDeck } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, FINE_DECK, cloudColumn, type CloudDeck } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
@@ -374,25 +374,25 @@ describe('ship bodies', () => {
       expect(underBaseShare(earth, pooled)).toBe(coarseShare)
     })
 
-    // The fine floor's share of land under the true deck's base, a
+    // The fine floor's share of land under FINE_DECK's base, a
     // regression guard (all of it at tides-d9f.10: the floor stands 30 m
-    // over the drawn ground, the base 1 km over the march's).
+    // over the drawn ground, the base then 1 km over the march's, now 3).
     const FINE_TRUE_SHARE = 0.999
 
-    it('stops the fine floor under the true deck near the ground (tides-d9f.10; a regression guard)', () => {
+    it('stops the fine floor under FINE_DECK (tides-d9f.10, tides-45y; a regression guard)', () => {
       const pooled = pooledTerrain()
       setEarthTerrain(baseFloor(), limbFloor())
       onTestFinished(disposeLimbSpheres)
       const release = retainLimbSphere(EARTH_RADIUS, limbSphere(EARTH_RADIUS))
       onTestFinished(release)
       // Over the streamed tiles on a reversed-Z float depth buffer, where the
-      // true deck is drawn (ship-session.ts fineGroundDepth()).
+      // FINE_DECK is drawn (ship-session.ts fineGroundDepth()).
       const bodies = createShipBodies('high', true)
       updateShipBodies(bodies, T)
       const earth = bodies.find((b) => b.key === 'earth')!
       earth.floor!.beginFrame(true)
-      expect(underBaseShare(earth, pooled, TRUE_DECK, true)).toBe(1)
-      const share = underBaseShare(earth, pooled, TRUE_DECK)
+      expect(underBaseShare(earth, pooled, FINE_DECK, true)).toBe(1)
+      const share = underBaseShare(earth, pooled, FINE_DECK)
       expect(share, String(share)).toBeGreaterThanOrEqual(FINE_TRUE_SHARE)
     })
 
