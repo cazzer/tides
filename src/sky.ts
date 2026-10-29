@@ -18,6 +18,12 @@ import {
 import { applyBodyTransform } from './body-transform'
 import { calculateLocationAndRotationForLatLng } from './utils'
 import type { SkyLook } from './sky-look'
+import {
+  eclipseMoonDirection,
+  eclipseSkyAt,
+  eclipseSkyScale,
+  matchedMoonDistance,
+} from './eclipse-sky'
 
 const DEG = Math.PI / 180
 
@@ -220,6 +226,18 @@ const earth = new THREE.Object3D()
 const observerWorld = new THREE.Vector3()
 const direction = new THREE.Vector3()
 
+// The observer's scene position at t, into observerWorld: their place on the
+// scene Earth under its transform, as OrbitingBody applies it.
+function observerWorldAt(t: number, position: { x: number; y: number; z: number }) {
+  applyBodyTransform(
+    earth,
+    { tiltAt: earthTilt, spinAt: earthSpin, positionAt: earthPosition },
+    t
+  )
+  earth.updateMatrix()
+  return observerWorld.set(position.x, position.y, position.z).applyMatrix4(earth.matrix)
+}
+
 // Scene position of a sky body for an observer at lat/lon on the scene Earth
 // (radius in scene units): the observer plus `distance` along the body's true
 // topocentric direction. The scene's own Sun and Moon are at compressed
@@ -234,19 +252,32 @@ export function skyPositionAt(
   const site = new Observer(lat, lon, 0)
   const { position } = calculateLocationAndRotationForLatLng(lat, lon, radius)
   return (t) => {
-    // The Earth's transform, as OrbitingBody applies it.
-    applyBodyTransform(
-      earth,
-      { tiltAt: earthTilt, spinAt: earthSpin, positionAt: earthPosition },
-      t
-    )
-    earth.updateMatrix()
-    observerWorld.set(position.x, position.y, position.z).applyMatrix4(earth.matrix)
-
+    observerWorldAt(t, position)
     const time = MakeTime(new Date(t))
     const { vec } = Equator(body, time, site, true, true)
     eclipticToScene(RotateVector(Rotation_EQD_ECT(time), vec), direction)
     direction.normalize().multiplyScalar(distance).add(observerWorld)
+    return [direction.x, direction.y, direction.z]
+  }
+}
+
+// The solar eclipse demo's sky Moon (tides-zec.1, eclipse-sky.ts): at the sky
+// Sun's scale, closer in so its scene radius looks that size, and turned from
+// the Sun by the scaled offset, so the phases look as they truly do.
+export function eclipseMoonSkyPositionAt(
+  lat: number,
+  lon: number,
+  radius: number,
+  sunSceneRadius: number,
+  moonSceneRadius: number
+): (t: number) => Vec3 {
+  const { position } = calculateLocationAndRotationForLatLng(lat, lon, radius)
+  return (t) => {
+    const e = eclipseSkyAt(t, lat, lon)
+    const k = eclipseSkyScale(e, sunSceneRadius, SUN_SKY_DISTANCE)
+    eclipseMoonDirection(e, k, direction)
+      .multiplyScalar(matchedMoonDistance(moonSceneRadius, k, e.moonRadius))
+      .add(observerWorldAt(t, position))
     return [direction.x, direction.y, direction.z]
   }
 }

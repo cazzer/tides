@@ -9,6 +9,7 @@ import starsMeta from '../assets/stars.meta.json'
 import { eclipticToScene } from '../ephemeris'
 import { useStore } from '../store'
 import { eyeSky } from '../night-flight'
+import { eclipseSkyVeil } from '../eclipse-sky'
 import { depthAmount, shellDepth, shellPointVertex, shellScale, shellVertex } from './starDepth'
 
 type StarfieldProps = {
@@ -133,9 +134,20 @@ function fadeShell(
 }
 
 // The daylit sky's veil for the camera drawing (night-flight.ts eyeSky).
+// Over the eclipse demo's coloured sky (EclipseDaylight) the stars add to it,
+// so a veiled star fades into the blue instead of painting a darker speck.
 // Module level, as fadeShell.
-function veilStars(uDaylight: { value: number }) {
-  uDaylight.value = eyeSky.daylight
+function veilStars(uDaylight: { value: number }, fromSurface: boolean, material: THREE.Material) {
+  const eclipseSky = fromSurface && eclipseSkyVeil.active
+  uDaylight.value = eclipseSky
+    ? Math.max(eyeSky.daylight, eclipseSkyVeil.daylight)
+    : eyeSky.daylight
+  const blending = eclipseSky ? THREE.AdditiveBlending : THREE.NormalBlending
+  if (material.blending !== blending) {
+    material.blending = blending
+    // Normal blending of an opaque material compiles as opaque.
+    material.needsUpdate = true
+  }
 }
 
 // The surface camera's parent is the observer, whose +Y is the zenith.
@@ -244,7 +256,7 @@ export default function Starfield({
         centreStarfieldOn(stars.current, camera, shellTarget.current, uniforms.uDepth.value)
         if (fromSurface) zenithOf(camera, uniforms.uZenith.value)
         // From inside the daylit atmosphere in flight, the sky hides them.
-        veilStars(uniforms.uDaylight)
+        veilStars(uniforms.uDaylight, fromSurface, stars.current.material as THREE.Material)
       }}
       frustumCulled={false}
       scale={radius}
