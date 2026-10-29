@@ -313,9 +313,9 @@ export function createGibsPatch(side: number): GibsPatch {
 }
 
 /**
- * The patch for the ground mesh in `ground` (local sphere of `radius`): in
- * ship mode, on devices that take one, filled as the ship nears Earth and
- * freed when it leaves or the flight ends.
+ * The patch for the ground mesh in `ground` (local sphere of `radius`): with
+ * flight detail (flight-detail.ts), on devices that take one, filled as the
+ * eye nears Earth and freed when it leaves or the detail ends.
  */
 export function useGibsPatch(ground: RefObject<THREE.Object3D | null>, radius: number): MaterialPatch {
   return useStreamedPatch(createGibsPatch, ground, radius)

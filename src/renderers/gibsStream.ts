@@ -11,7 +11,7 @@
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, type RefObject } from 'react'
 import * as THREE from 'three'
-import { useStore } from '../store'
+import { useFlightDetail } from './flight-detail'
 import { flightTextureCap } from '../quality'
 import {
   GIBS_PATCH_RANGE,
@@ -325,8 +325,9 @@ export function streamedPatch(material: MaterialPatch): StreamedPatch | null {
 
 /**
  * The patch `create` makes for the ground mesh in `ground` (local sphere of
- * `radius`): in ship mode, on devices that take one, filled as the ship
- * nears Earth and freed when it leaves or the flight ends. `create` gets the
+ * `radius`): with flight detail (flight-detail.ts: ship mode, or close
+ * zoom for this View's camera), on devices that take one, filled as the eye
+ * nears Earth and freed when it leaves or the detail ends. `create` gets the
  * side (gibsPatchSide), 0 for none.
  */
 export function useStreamedPatch(
@@ -334,11 +335,11 @@ export function useStreamedPatch(
   ground: RefObject<THREE.Object3D | null>,
   radius: number
 ): MaterialPatch {
-  const shipMode = useStore((s) => s.shipMode)
+  const flight = useFlightDetail()
   const gl = useThree((s) => s.gl)
   const side = useMemo(
-    () => (shipMode ? gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)) : 0),
-    [shipMode, gl]
+    () => (flight ? gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)) : 0),
+    [flight, gl]
   )
   const patch = useMemo(() => create(side), [create, side])
   streamed.set(patch.material, patch)

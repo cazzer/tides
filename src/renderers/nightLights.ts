@@ -11,6 +11,7 @@
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
+import { useFlightDetail } from './flight-detail'
 import { CLOUD_AMBIENT } from '../lighting'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 import { moonOffset } from '../ephemeris'
@@ -273,7 +274,7 @@ export interface NightFlightUniforms {
 
 /** `sun`: the Sun's direction in the ground mesh's local frame, kept up to
  * date by the caller (the cloud layer's uSunDir). `flight`: the night
- * flight's uniforms, in ship mode. */
+ * flight's uniforms, with flight detail (useNightFlight). */
 export function nightLightsPatch(sun: THREE.IUniform<THREE.Vector3>, flight?: NightFlightUniforms): MaterialPatch {
   return {
     onBeforeCompile(shader) {
@@ -361,11 +362,12 @@ export function createNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbie
   }
 }
 
-/** The night flight in ship mode, else null; the cloud ambient goes back
- * to CLOUD_AMBIENT when the flight ends. */
+/** The night flight with flight detail (flight-detail.ts: ship mode, or
+ * close zoom for this View's camera), else null; the cloud ambient goes
+ * back to CLOUD_AMBIENT when the flight ends. */
 export function useNightFlight(sun: THREE.IUniform<THREE.Vector3>, cloudAmbient: THREE.IUniform<number>): NightFlight | null {
-  const shipMode = useStore((s) => s.shipMode)
-  const flight = useMemo(() => (shipMode ? createNightFlight(sun, cloudAmbient) : null), [shipMode, sun, cloudAmbient])
+  const detail = useFlightDetail()
+  const flight = useMemo(() => (detail ? createNightFlight(sun, cloudAmbient) : null), [detail, sun, cloudAmbient])
   useEffect(
     () => () => {
       if (flight) cloudAmbient.value = CLOUD_AMBIENT
