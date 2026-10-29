@@ -1,10 +1,10 @@
 import type { Demo } from '../demo-script'
 
 // The total lunar eclipse of 3 March 2026. Contact times are astronomy-engine's
-// (SearchLunarEclipse), UTC: penumbra from 08:44:02, umbra 09:49:45, totality
-// 11:03:58-12:03:23, greatest 11:33:40, umbra left 13:17:35, penumbra left
-// 14:23:19. The app's ΔT (delta-t.ts) puts each 6 s later (greatest 11:33:46,
-// step 4's moment). Time only runs forward: each step starts at or after the
+// (SearchLunarEclipse) under the app's ΔT (delta-t.ts), UTC: penumbra from
+// 08:44:08, umbra 09:49:51, totality 11:04:04-12:03:29, greatest 11:33:46,
+// umbra left 13:17:41, penumbra left 14:23:25 (each 6 s later than under
+// astronomy-engine's default ΔT). Time only runs forward: each step starts at or after the
 // last one's `until`, and `until` keeps Play within what its caption describes.
 //
 // Step 4's skyLook is the Moon's place in Honolulu's sky at greatest eclipse,
@@ -21,7 +21,7 @@ export const lunarEclipse: Demo = {
       timeScale: 0,
       layout: 'single',
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 15, elevation: 30, distance: 200 },
+      camera: { focus: 'earth', azimuth: 20, elevation: 25, distance: 170 },
       aids: { earthShadow: true },
       caption: {
         title: 'Sun, Earth, Moon in a line',
@@ -30,16 +30,16 @@ export const lunarEclipse: Demo = {
     },
     {
       date: '2026-03-03T09:40:00Z',
-      until: '2026-03-03T11:03:58Z',
+      until: '2026-03-03T11:04:04Z',
       timeScale: 300,
-      camera: { focus: 'moon', azimuth: 20, elevation: 4, distance: 14 },
+      camera: { focus: 'moon', azimuth: 21, elevation: 6, distance: 23 },
       caption: {
         title: 'Into the shadow',
         body: 'The Moon’s own orbit carries it into Earth’s shadow: a faint outer part, then the dark core.',
       },
     },
     {
-      date: '2026-03-03T11:04:00Z',
+      date: '2026-03-03T11:04:04Z',
       until: '2026-03-03T11:33:46Z',
       timeScale: 60,
       camera: { focus: 'moon', azimuth: 10, elevation: 3, distance: 5 },
@@ -51,7 +51,7 @@ export const lunarEclipse: Demo = {
     },
     {
       date: '2026-03-03T11:33:46Z',
-      until: '2026-03-03T12:03:23Z',
+      until: '2026-03-03T12:03:29Z',
       timeScale: 0,
       mainPanel: 'top',
       location: { lat: 21.31, lon: -157.86 },
@@ -66,11 +66,11 @@ export const lunarEclipse: Demo = {
       },
     },
     {
-      date: '2026-03-03T12:03:23Z',
-      until: '2026-03-03T14:23:19Z',
+      date: '2026-03-03T12:03:29Z',
+      until: '2026-03-03T14:23:25Z',
       timeScale: 300,
       mainPanel: 'main',
-      camera: { focus: 'earth', azimuth: 15, elevation: 30, distance: 200 },
+      camera: { focus: 'earth', azimuth: 20, elevation: 25, distance: 170 },
       aids: { earthShadow: true, fullMoonGhosts: true },
       caption: {
         title: 'Out of the shadow',
