@@ -64,11 +64,15 @@ const earthHorizonUrl = horizonCurveRelief(RELIEF) === HORIZON_TRUE_CURVE_RELIEF
 interface EarthRendererProps {
   diameter: number
   texture: string
+  /** No cloud shell and no cloud shadows on the ground, for the solar
+   * eclipse demo's Moon's shadow (tides-zec.7.1). */
+  hideClouds?: boolean
 }
 
 export default function EarthRenderer({
   diameter,
   texture,
+  hideClouds = false,
 }: EarthRendererProps) {
   const textureSet = getEarthTextureSet(texture)
 
@@ -192,11 +196,15 @@ export default function EarthRenderer({
   // haze's camera and frame, for each camera before anything draws (the
   // tiles draw before the ground); one wrapper, so its cleanup restores the
   // scene's.
+  const cloudsHidden = useRef(hideClouds)
+  cloudsHidden.current = hideClouds
   useEffect(() => {
     // A new layer (a new tier) is faced afresh.
     cloudsFaced.current = false
     return cloudsFaceEachCamera(scene, clouds, cloudRef, (renderer, camera) => {
       cloudsFaced.current = true
+      // After faceCamera, which sets it for this camera.
+      if (cloudsHidden.current) clouds.uniforms.uGroundShadow.value = 0
       // The tiles' handover marks (surface-scale.ts), cleared within this
       // View's scissor.
       if (SURFACE_TILES_ON) renderer.clearStencil()
@@ -337,6 +345,7 @@ export default function EarthRenderer({
           texture is a uniform, never a material map: R3F would tag it sRGB. */}
       <mesh
         ref={cloudRef}
+        visible={!hideClouds}
         geometry={cloudSphere}
         raycast={meshBounds}
         material={clouds.material}

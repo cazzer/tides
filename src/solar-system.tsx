@@ -122,7 +122,8 @@ export default function SolarSystem({
   const moonNodes = useDemoAid('moonNodes')
   const seasons = useDemoAid('seasons')
   const tides = useDemoAid('tides')
-  const moonShadow = useDemoAid('moonShadow')
+  // The globe's clouds give way to it (tides-zec.7.1).
+  const moonShadowShown = useDemoAid('moonShadow') && interactive && !ship
 
   // From the surface, the Sun and Moon move to a sky around the observer, both
   // at one scale (see sky.ts): SKY_SCALE, or the solar eclipse demo's own.
@@ -213,6 +214,7 @@ export default function SolarSystem({
           <EarthRenderer
             diameter={EARTH_DIAMETER}
             texture={earthTexture}
+            hideClouds={moonShadowShown}
           />
         )}
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
@@ -221,7 +223,7 @@ export default function SolarSystem({
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
           <TidesSpot radius={EARTH_DIAMETER} />
         )}
-        {moonShadow && interactive && !earthCamera && !ship && <MoonShadowGlobe radius={EARTH_DIAMETER} />}
+        {moonShadowShown && !earthCamera && <MoonShadowGlobe radius={EARTH_DIAMETER} />}
         {/* Under Earth's spin like the globe; its own Suspense, so the chunk
             loading never hides Earth. */}
         {(ship ? SURFACE_TILES_ON : systemTiles) && (
