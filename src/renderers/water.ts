@@ -94,6 +94,7 @@ import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, WATER_TINT_D
 import { climateAt, climateBytes, decode, localEastNorth, waterSeaTexture, WATER_CLIMATE_GLSL, type ClimateCell } from './waterClimate'
 import { NOISE_CELL_TEXELS, NOISE_LAT_MAX, noiseCellsAround } from './waterNoise'
 import { refractHeading, seaFloor, type DepthGrid, type SeaFloor } from './waterRefraction'
+import { liveClimate, type LiveWaveGrid } from '../forecast-waves'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
@@ -1115,6 +1116,9 @@ export interface Water {
   /** The depth map's grey levels, once loaded, to bend the waves toward
    * shallow water by (tides-nh8.3); until then they run as the climate says. */
   setSeaFloor(grid: DepthGrid | null): void
+  /** The live wave directions to aim by (tides-nh8.4, ../forecast-waves.ts),
+   * or null for the baked climate's. */
+  setLiveWaves(grid: LiveWaveGrid | null): void
 }
 
 let climateCells: ClimateCell[] | null = null
@@ -1138,6 +1142,9 @@ export function createWater(frame: GroundHaze['frame']): Water {
   let aim: WaterAim | null = null
   let headings: WaveHeadings | null = null
   let floor: DepthGrid | null = null
+  // The climate the waves are aimed by: the baked one, or it with the live
+  // directions (made once per grid).
+  let live: { grid: LiveWaveGrid; cells: ClimateCell[] } | null = null
   // Seconds since the waves were last aimed.
   let pending = 0
   const aimAt = (climate: ClimateCell) => {
@@ -1163,7 +1170,7 @@ export function createWater(frame: GroundHaze['frame']): Water {
       frame.uGroundHazeEyeLocal.value.toArray(eye)
       if (!aim || pending > 0) {
         climateCells ??= decode(climateBytes())
-        aimAt(climateAt(climateCells, upAt(eye)))
+        aimAt(climateAt(live?.cells ?? climateCells, upAt(eye)))
       }
       waterPhases(aim!, eye, time, uniforms.uWavePhase.value)
       waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)
@@ -1174,6 +1181,11 @@ export function createWater(frame: GroundHaze['frame']): Water {
     },
     setSeaFloor(grid) {
       floor = grid
+    },
+    setLiveWaves(grid) {
+      if (grid === live?.grid) return
+      climateCells ??= decode(climateBytes())
+      live = grid ? { grid, cells: liveClimate(climateCells, grid) } : null
     },
   }
 }

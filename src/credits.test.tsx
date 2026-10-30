@@ -40,11 +40,11 @@ describe('Credits', () => {
     expect(line).toMatch(/CC BY 4.0<\/a>, adapted\)/)
   })
 
-  test('credits the wave climate to Open-Meteo, adapted, and its Copernicus Marine source', () => {
-    const line = html.match(/<li>Sea state \(wave climate\):.*?<\/li>/)?.[0] ?? ''
+  test('credits the wave climate and the live wave directions to Open-Meteo, adapted, and their Copernicus Marine source', () => {
+    const line = html.match(/<li>Sea state \(wave climate and live wave directions\):.*?<\/li>/)?.[0] ?? ''
     expect(line).toContain(`href="${OPEN_METEO_SITE}"`)
     expect(line).toContain('href="https://creativecommons.org/licenses/by/4.0/"')
-    expect(line).toMatch(/CC BY 4.0<\/a>, adapted: means of four days(?:'|&#x27;|&#39;) maxima, a season apart, at 7\.5°\)/)
+    expect(line).toMatch(/CC BY 4.0<\/a>, adapted: means of four days(?:'|&#x27;|&#39;) maxima, a season apart, at 7\.5°; current directions at 7\.5°\)/)
     expect(line).toContain(`href="${COPERNICUS_MARINE_WAVES_URL}"`)
     expect(line).toContain('generated using E.U. Copernicus Marine Service Information')
   })

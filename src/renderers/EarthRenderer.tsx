@@ -18,6 +18,8 @@ import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
 import { depthGridOf } from './waterRefraction'
+import { liveWaveGrids } from './liveWaveGrid'
+import { liveServes } from '../forecast-waves'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
@@ -156,6 +158,30 @@ export default function EarthRenderer({
   // The depth map read on the CPU too, to bend the waves toward shallow
   // water under the eye (tides-nh8.3).
   useEffect(() => water.setSeaFloor(depthGridOf(depthMap.image)), [water, depthMap])
+  // Today's wave directions (tides-nh8.4) while the real weather is shown
+  // and the clock is near their time; else the baked climate's. Checked
+  // each minute: the clock moves, and a refresh lands in the background.
+  useEffect(() => {
+    if (!real) {
+      water.setLiveWaves(null)
+      return
+    }
+    let alive = true
+    const check = () =>
+      liveWaveGrids
+        .peek()
+        .then((grid) => {
+          if (alive) water.setLiveWaves(liveServes(grid, useStore.getState().timestamp) ? grid : null)
+        })
+        .catch(() => {})
+    check()
+    const id = setInterval(check, 60_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+      water.setLiveWaves(null)
+    }
+  }, [water, real])
   // The streamed tiles (tides-zmw.9.7) take the globe's features through
   // this link (its haze, eclipse, clouds, night, maps and horizon; the
   // tiles' composer, tides-zmw.9.16, surface/tile-material.ts), and the globe

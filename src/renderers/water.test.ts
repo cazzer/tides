@@ -674,6 +674,34 @@ describe('the waves aimed the way the sea runs (tides-nh8.1)', () => {
     }
   })
 
+  it('aims by the live directions when given them (tides-nh8.4), and by the baked climate again without', () => {
+    const up = latLonToLocal(39.5, -11).toArray() as V
+    const haze = createGroundHaze({ value: new THREE.Vector3(1, 0, 0) }, 2.95, false)
+    haze.frame.uGroundHazeEyeLocal.value.set(...up.map((x) => x * 2.95) as V)
+    const water = createWater(haze.frame)
+    const swellBearing = () => {
+      const i = WATER_WAVE_TABLE.findIndex((w) => w.metres > 100)
+      return bearingAt(Array.from(water.uniforms.uWaveDir.value.slice(3 * i, 3 * i + 3)), up)
+    }
+    water.update()
+    const baked = swellBearing()
+    // Live: the swell from the south-west, so heading north-east.
+    const blank = () => new Float32Array(48 * 24).fill(225)
+    water.setLiveWaves({ timeMs: 0, wave: blank(), wind: blank(), swell: blank() })
+    // Eased: a minute on, it has come round.
+    for (let n = 0; n < 60; n++) {
+      water.advance(1, true)
+      water.update()
+    }
+    expect(bearingGap(swellBearing(), 45)).toBeLessThan(1)
+    water.setLiveWaves(null)
+    for (let n = 0; n < 60; n++) {
+      water.advance(1, true)
+      water.update()
+    }
+    expect(bearingGap(swellBearing(), baked)).toBeLessThan(1)
+  })
+
   it('runs the baked climate\'s way off a swell coast: Portugal\'s swell shoreward, east', () => {
     const up = latLonToLocal(39.5, -11).toArray() as V
     const waves = aimWaves(up, climateAt(decode(climateBytes()), up))
