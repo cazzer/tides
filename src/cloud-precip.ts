@@ -14,7 +14,15 @@
 // in mm/h, so a rate between two reads low: 0 and 20 mm/h at half way give
 // 5, not 10.
 // Pure; the build is renderers/cloudPipeline.ts.
+//
+// And how it shows (tides-bl3.2): a raining or snowing layer is drawn a
+// little darker, its base seen from under it more than its top from above
+// (precipWetness, precipDarkening; the typed shell's cloudWet(),
+// renderers/cloudTypeGlsl.ts). Rain darkens the low and mid cloud (stratus
+// and alto), showers the cumulus, snow all but cirrus. Dry, or untyped, the
+// clouds are exactly as before.
 import { precipitationAt, sampleCoverSmooth, type CoverGrid, type CoverPrecip, type PrecipRate } from './forecast-clouds'
+import { smoothstep } from './real-clouds'
 import { TYPE_H, TYPE_W, typeTexelLat, typeTexelLon } from './cloud-types'
 
 /** The heaviest rate a byte holds (mm/h); heavier is clamped to it. */
@@ -124,4 +132,41 @@ export function precipFromFrames(
     showers: decodePrecip(mixedAt(a, b, mix, 1) / alpha),
     snow: decodePrecip(mixedAt(a, b, mix, 2) / alpha),
   }
+}
+
+/** The rate (mm/h) at which a layer is as dark as rain makes it: moderate
+ * rain, past which a heavier rate looks the same. */
+export const PRECIP_DARK_FULL_MM_H = 8
+/** How much of its light a wet layer's top loses at the full rate, seen
+ * from above: slightly, as the sun still lights it. */
+export const PRECIP_DARK_TOP = 0.1
+/** And its base, seen from under it: more, as a rain cloud's base is dark,
+ * but still slight. */
+export const PRECIP_DARK_BASE = 0.3
+
+/** The rate ramp in the encoded space: e = sqrt(rate / PRECIP_MAX_MM_H). */
+const PRECIP_DARK_FULL = Math.sqrt(PRECIP_DARK_FULL_MM_H / PRECIP_MAX_MM_H)
+
+/**
+ * How wet a column is, 0..1: the CPU's copy of the typed shell's cloudWet()
+ * times the type texel's confidence. texel is the blended precipitation
+ * texel as sampled (RGBA 0..1, RGB premultiplied by A), shares the column's
+ * cirrus, cumulus, alto and stratus. 0 exactly where dry or there is no data.
+ */
+export function precipWetness(
+  texel: readonly [number, number, number, number],
+  shares: readonly [number, number, number, number],
+  confidence: number
+): number {
+  const a = texel[3]
+  if (!(a > 0)) return 0
+  const ramp = (c: number) => smoothstep(0, PRECIP_DARK_FULL, Math.min(c / a, 1))
+  const [cirrus, cumulus, alto, stratus] = shares
+  return confidence * a * Math.max(ramp(texel[0]) * (alto + stratus), ramp(texel[1]) * cumulus, ramp(texel[2]) * (1 - cirrus))
+}
+
+/** What a hit's light is multiplied by at wetness wet and depth (0 the top
+ * seen from above, 1 the base from under it). */
+export function precipDarkening(wet: number, depth: number): number {
+  return 1 - wet * (PRECIP_DARK_TOP + (PRECIP_DARK_BASE - PRECIP_DARK_TOP) * depth)
 }

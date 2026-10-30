@@ -2,9 +2,14 @@ import { describe, expect, test } from 'vitest'
 import {
   decodePrecip,
   encodePrecip,
+  PRECIP_DARK_BASE,
+  PRECIP_DARK_FULL_MM_H,
+  PRECIP_DARK_TOP,
   PRECIP_MAX_MM_H,
+  precipDarkening,
   precipFromFrames,
   precipGridImage,
+  precipWetness,
 } from './cloud-precip'
 import { TYPE_H, TYPE_W } from './cloud-types'
 import { GRID_LATS, GRID_POINTS, type CoverGrid } from './forecast-clouds'
@@ -134,5 +139,73 @@ describe('precipFromFrames', () => {
     expect(precipFromFrames(image, null, 0, 0, -180 + 1.25)!.rain).toBeCloseTo(decodePrecip(200 / 255), 5)
     expect(precipFromFrames(image, null, 0, 89.9, -180 + 1.25)!.rain).toBeCloseTo(decodePrecip(200 / 255), 5)
     expect(precipFromFrames(image, null, 0, -90, -180 + 1.25)!.rain).toBeCloseTo(decodePrecip(200 / 255), 5)
+  })
+})
+
+describe('the darkening of wet cloud (tides-bl3.2)', () => {
+  type Texel = [number, number, number, number]
+  type Shares = [number, number, number, number]
+  // A covered texel (A 1) of rain, showers and snow in mm/h, as sampled.
+  const texel = (rain: number, showers: number, snow: number, a = 1): Texel => [
+    (a * encodePrecip(rain)) / 255,
+    (a * encodePrecip(showers)) / 255,
+    (a * encodePrecip(snow)) / 255,
+    a,
+  ]
+  const CIRRUS: Shares = [1, 0, 0, 0]
+  const CUMULUS: Shares = [0, 1, 0, 0]
+  const ALTO: Shares = [0, 0, 1, 0]
+  const STRATUS: Shares = [0, 0, 0, 1]
+
+  test('is dry where there is no data, no rate, or only cirrus', () => {
+    expect(precipWetness([0, 0, 0, 0], STRATUS, 1)).toBe(0)
+    expect(precipWetness([0.5, 0.5, 0.5, 0], STRATUS, 1)).toBe(0)
+    expect(precipWetness(texel(0, 0, 0), STRATUS, 1)).toBe(0)
+    expect(precipWetness(texel(20, 20, 20), CIRRUS, 1)).toBe(0)
+  })
+
+  test('rain wets the low and mid cloud, showers the cumulus, snow all but cirrus', () => {
+    expect(precipWetness(texel(8, 0, 0), STRATUS, 1)).toBeGreaterThan(0)
+    expect(precipWetness(texel(8, 0, 0), ALTO, 1)).toBeGreaterThan(0)
+    expect(precipWetness(texel(8, 0, 0), CUMULUS, 1)).toBe(0)
+    expect(precipWetness(texel(0, 8, 0), CUMULUS, 1)).toBeGreaterThan(0)
+    expect(precipWetness(texel(0, 8, 0), STRATUS, 1)).toBe(0)
+    for (const shares of [CUMULUS, ALTO, STRATUS]) {
+      expect(precipWetness(texel(0, 0, 8), shares, 1)).toBeGreaterThan(0)
+    }
+    // Mixed kinds: the wettest reading wins.
+    expect(precipWetness(texel(8, 0, 0), [0, 0.5, 0, 0.5], 1)).toBeCloseTo(0.5, 2)
+  })
+
+  test('grows with the rate, full from PRECIP_DARK_FULL_MM_H', () => {
+    let last = 0
+    for (const rate of [0.1, 0.5, 1, 2, 4, 6]) {
+      const wet = precipWetness(texel(rate, 0, 0), STRATUS, 1)
+      expect(wet).toBeGreaterThan(last)
+      last = wet
+    }
+    expect(last).toBeLessThan(1)
+    expect(precipWetness(texel(PRECIP_DARK_FULL_MM_H, 0, 0), STRATUS, 1)).toBeCloseTo(1, 2)
+    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 1)).toBe(1)
+  })
+
+  test('scales with the data\'s coverage and the type\'s confidence', () => {
+    const full = precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 1)
+    // Premultiplied: half covered, the same rate, half as wet.
+    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0, 0.5), STRATUS, 1)).toBeCloseTo(full / 2, 6)
+    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 0.25)).toBeCloseTo(full / 4, 6)
+    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 0)).toBe(0)
+  })
+
+  test('darkens slightly, a base more than a top, and dry not at all', () => {
+    for (const depth of [0, 0.3, 1]) expect(precipDarkening(0, depth)).toBe(1)
+    expect(precipDarkening(1, 0)).toBeCloseTo(1 - PRECIP_DARK_TOP, 9)
+    expect(precipDarkening(1, 1)).toBeCloseTo(1 - PRECIP_DARK_BASE, 9)
+    for (const wet of [0, 0.5, 1]) {
+      for (const depth of [0, 0.5, 1]) expect(precipDarkening(wet, depth)).toBeGreaterThanOrEqual(1 - PRECIP_DARK_BASE - 1e-12)
+    }
+    expect(PRECIP_DARK_TOP).toBeLessThan(PRECIP_DARK_BASE)
+    expect(PRECIP_DARK_TOP).toBeLessThanOrEqual(0.15)
+    expect(PRECIP_DARK_BASE).toBeLessThanOrEqual(0.35)
   })
 })

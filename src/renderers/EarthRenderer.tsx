@@ -342,7 +342,7 @@ export default function EarthRenderer({
       cloudsTexture,
       wallMs
     )
-    clouds.setMap(out?.texture ?? cloudsTexture, out?.measured ?? false, out?.typed ? { grid: out.typeTexture, tops: out.topsTexture } : null)
+    clouds.setMap(out?.texture ?? cloudsTexture, out?.measured ?? false, out?.typed ? { grid: out.typeTexture, tops: out.topsTexture, precip: out.precip ? out.precipTexture : null } : null)
     // The typed program (or, typed already, the untyped), compiled ahead of
     // the frame that turns to it: else that frame links it, tens of ms, in
     // each View the ship's warm-up (ShipWarmup) doesn't run in, the
