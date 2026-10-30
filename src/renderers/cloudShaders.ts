@@ -1833,7 +1833,8 @@ void main() {
   // tides-tvr.3's program itself.
   vec4 lookD;
   vec4 lookL;
-  cloudLook(vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0)), lod, lookD, lookL);
+  float wet;
+  cloudLook(vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0)), lod, lookD, lookL, wet);
   vec2 slope = lookD.x * dz / h;
   // Cirrus's detail is drawn out east-west: the same noise with its scale
   // across the pole axis stretched, mixed in by how much of the cloud is
@@ -1923,6 +1924,11 @@ void main() {
 #else
   vec3 radiance = cloudRadiance(upShade, n, d, alpha, depth, cloudKm(colShade.z, colShade.y), occ,
     CLOUD_ECLIPSE_HIT);
+#endif
+#ifdef CLOUD_TYPED
+  // Raining or snowing (tides-bl3.2): a little darker, a base seen from under
+  // it (depth 1) more than a top from above (0); dry, wet is 0 and nothing changes.
+  if (wet > 0.0) radiance *= 1.0 - wet * mix(PRECIP_DARK_TOP, PRECIP_DARK_BASE, depth);
 #endif
 
   float opacity = hitShow * uOpacity;
@@ -2117,6 +2123,9 @@ function inject(source: string, chunk: string, code: string): string {
 export interface CloudTypes {
   grid: THREE.Texture
   tops: THREE.Texture
+  /** Its blended precipitation grid (./cloudBlend.ts, ../cloud-precip.ts),
+   * or null where the map has none: dry. */
+  precip: THREE.Texture | null
 }
 
 export interface CloudLayer {
@@ -2142,6 +2151,9 @@ export interface CloudLayer {
     /** Its typed columns (./cloudBlend.ts), or the neutral grid, whose
      * zeros read as untyped. */
     uCloudTops: THREE.IUniform<THREE.Texture>
+    /** Its blended precipitation grid (tides-bl3.2), or the neutral grid,
+     * whose zeros read as dry. */
+    uCloudPrecip: THREE.IUniform<THREE.Texture>
     uSunDir: THREE.IUniform<THREE.Vector3>
     uSeaLevel: THREE.IUniform<number>
     /** The ground's shadow's strength for the camera drawn
@@ -2210,6 +2222,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uCloudTyped: { value: 0 },
     uCloudType: { value: neutralTypeTexture() },
     uCloudTops: { value: neutralTypeTexture() },
+    uCloudPrecip: { value: neutralTypeTexture() },
     uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uSeaLevel: { value: 1 },
     uGroundShadow: { value: GROUND_SHADOW },
@@ -2387,6 +2400,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uniforms.uCloudTyped.value = types ? 1 : 0
     uniforms.uCloudType.value = types?.grid ?? neutralTypeTexture()
     uniforms.uCloudTops.value = types?.tops ?? neutralTypeTexture()
+    uniforms.uCloudPrecip.value = types?.precip ?? neutralTypeTexture()
   }
   return {
     material,

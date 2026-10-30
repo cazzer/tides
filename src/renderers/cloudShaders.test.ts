@@ -5,6 +5,7 @@ import { neutralTypeTexture } from './cloudBlend'
 import { SKY_VIEW_GLSL } from './skyView'
 import { createGroundHaze, GROUND_HAZE_GLSL, groundHazeDepth, groundHazeWeights } from './groundHaze'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
+import { PRECIP_DARK_BASE, PRECIP_DARK_FULL_MM_H, PRECIP_DARK_TOP, PRECIP_MAX_MM_H } from '../cloud-precip'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
   CLOUD_GROUND_GLSL,
@@ -1382,7 +1383,7 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     ['CLOUD_FLAT', 'FLIP_SIDED'],
     ['FLIP_SIDED', 'FOG_EASE'],
   ]
-  const LOOK_WORDS = ['uCloudType', 'cloudLook', 'lookD', 'lookL', 'wStretch', 'CLOUD_STRETCH', 'cloudTypeShares']
+  const LOOK_WORDS = ['uCloudType', 'cloudLook', 'lookD', 'lookL', 'wStretch', 'CLOUD_STRETCH', 'cloudTypeShares', 'uCloudPrecip', 'cloudWet']
 
   for (const variant of variants) {
     const name = variant.join('+') || 'relief'
@@ -1408,6 +1409,7 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       const look = main.indexOf('cloudLook(')
       expect(look).toBeGreaterThan(0)
       expect(main.indexOf('cloudLook(', look + 1)).toBe(-1)
+      expect(main).toContain('cloudLook(vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0)), lod, lookD, lookL, wet);')
       // Past the march (and from inside, the top's refinement, so the look
       // is the pinned top's), the miss of a hit that doesn't show and the
       // edge, whose reads it would hold registers across; ahead of all it sets.
@@ -1432,6 +1434,17 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       expect(fn.indexOf('if (uCloudTyped < 0.5) return;')).toBeLessThan(fn.indexOf('textureLod(uCloudType'))
       expect(fn.indexOf('if (t.a <= 0.0) return;')).toBeLessThan(fn.indexOf('textureLod(uCloudMap'))
       expect(fn).toContain('uCloudMeasured > 0.5 ? textureLod(uCloudMap, st, min(lod, 1.0)).rgb : vec3(0.0)')
+      // The precipitation (tides-bl3.2) once, at the type's own texel, past
+      // both returns (dry until then) and once the shares are known.
+      expect(src.match(/\buCloudPrecip\b/g)).toHaveLength(2)
+      const tap = fn.indexOf('wet = t.a * cloudWet(textureLod(uCloudPrecip, st, 0.0), s);')
+      expect(fn.indexOf('wet = 0.0;')).toBeLessThan(fn.indexOf('if (uCloudTyped < 0.5) return;'))
+      expect(tap).toBeGreaterThan(fn.indexOf('vec4 s = cloudTypeShares(t, raw);'))
+      expect(tap).toBeGreaterThan(fn.indexOf('if (t.a <= 0.0) return;'))
+      // And darkens the hit's light once it is shaded, before it shows.
+      const dark = main.indexOf('if (wet > 0.0) radiance *= 1.0 - wet * mix(PRECIP_DARK_TOP, PRECIP_DARK_BASE, depth);')
+      expect(dark).toBeGreaterThan(main.indexOf('vec3 radiance = cloudRadiance('))
+      expect(dark).toBeLessThan(main.indexOf('float opacity = hitShow * uOpacity;'))
       // Never in the vertex stage, where the march's phase must be the same
       // at every vertex.
       const vertex = preprocess(clouds.material.vertexShader, typed)
@@ -1483,6 +1496,21 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     clouds.dispose()
   })
 
+  it('darkens wet cloud as precipWetness() and precipDarkening() do (tides-bl3.2)', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
+    const define = (name: string) => src.match(new RegExp(`#define ${name} (\\S+)`))![1]
+    expect(define('PRECIP_DARK_FULL')).toBe(Math.sqrt(PRECIP_DARK_FULL_MM_H / PRECIP_MAX_MM_H).toFixed(6))
+    expect(define('PRECIP_DARK_TOP')).toBe(PRECIP_DARK_TOP.toFixed(6))
+    expect(define('PRECIP_DARK_BASE')).toBe(PRECIP_DARK_BASE.toFixed(6))
+    expect(src).toContain(`float cloudWet(vec4 p, vec4 s) {
+  if (p.a <= 0.0) return 0.0;
+  vec3 f = smoothstep(0.0, PRECIP_DARK_FULL, min(p.rgb / p.a, vec3(1.0)));
+  return p.a * max(max(f.r * (s.z + s.w), f.g * s.y), f.b * (1.0 - s.x));
+}`)
+    clouds.dispose()
+  })
+
   it('refines the shares by the infrared as refineWithIr() does', () => {
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
     const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
@@ -1531,10 +1559,17 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       // untyped.
       expect(uniforms.uCloudTops.value).toBe(neutralTypeTexture())
       expect(material.uniforms.uCloudTops).toBe(uniforms.uCloudTops)
+      // And the precipitation (tides-bl3.2): neutral, dry.
+      expect(uniforms.uCloudPrecip.value).toBe(neutralTypeTexture())
+      expect(material.uniforms.uCloudPrecip).toBe(uniforms.uCloudPrecip)
 
       const map = new THREE.Texture()
-      const types = { grid: new THREE.Texture(), tops: new THREE.Texture() }
+      // Typed but dry: no precipitation grid, the neutral one.
+      clouds.setMap(map, true, { grid: new THREE.Texture(), tops: new THREE.Texture(), precip: null })
+      expect(uniforms.uCloudPrecip.value).toBe(neutralTypeTexture())
+      const types = { grid: new THREE.Texture(), tops: new THREE.Texture(), precip: new THREE.Texture() }
       clouds.setMap(map, true, types)
+      expect(uniforms.uCloudPrecip.value).toBe(types.precip)
       expect(uniforms.uCloudMap.value).toBe(map)
       expect(uniforms.uCloudMeasured.value).toBe(1)
       expect(uniforms.uCloudMaxKm.value).toBe(MAX_CLOUD_TOP_KM)
@@ -1554,6 +1589,7 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       expect(uniforms.uCloudMeasured.value).toBe(0)
       expect(uniforms.uCloudType.value).toBe(neutralTypeTexture())
       expect(uniforms.uCloudTops.value).toBe(neutralTypeTexture())
+      expect(uniforms.uCloudPrecip.value).toBe(neutralTypeTexture())
       expect(uniforms.uCloudTyped.value).toBe(0)
       clouds.faceCamera(mesh, camera)
       expect(material.defines).not.toHaveProperty('CLOUD_TYPED')
@@ -1613,7 +1649,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     expect(fragment.split(TABLE_READ[0]).length).toBe(fragment.split(declared).length)
     return fragment.replace(declared, '').replace(TABLE_READ[0], TABLE_READ[1])
   }
-  const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops/
+  const TYPED_WORDS = /TYPED_|LIFTED_THICKNESS|CLOUD_TYPED|uCloudTops|uCloudPrecip|cloudWet|PRECIP_/
   // The low tier's flat sheet from inside, entered as decided at the eye
   // (tides-tvr.11): put back as it was, so the rest is pinned.
   const FLAT_ENTRY = [

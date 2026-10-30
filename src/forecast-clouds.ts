@@ -22,6 +22,14 @@
 // (below ~3 km), mid (3-8 km) and high (above 8 km): what kind of cloud the
 // cover is (./cloud-types.ts). A response without them still serves the
 // cover, untyped.
+//
+// And the hour's precipitation (tides-bl3.1): rain, showers and snowfall,
+// each the total over the preceding hour (so read half an hour on, the
+// middle of the hour it describes), here as millimetres of water per
+// hour (snowfall's centimetres of snow at 10/7 mm of water each, as
+// Open-Meteo's own precipitation total counts it). Where it falls is
+// ./cloud-precip.ts. It's optional too: any trouble with it leaves the grid
+// dry, with the cover and the layers as they are.
 import { boxBlur, FORECAST_DAYS, FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W, smoothstep } from './real-clouds'
 
 /** Grid point latitudes, north first, and longitudes, west first: one point
@@ -61,12 +69,28 @@ export const CALIBRATION_RANGE = [0.4, 1.2] as const
  * a stale grid. */
 export const COVER_PAST_DAYS = 2
 /** The hourly variables asked for: instantaneous total cover, then its low,
- * mid and high layers. */
-export const COVER_VARIABLES = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'] as const
+ * mid and high layers, then the hour's rain, showers and snowfall. */
+export const COVER_VARIABLES = [
+  'cloud_cover',
+  'cloud_cover_low',
+  'cloud_cover_mid',
+  'cloud_cover_high',
+  'rain',
+  'showers',
+  'snowfall',
+] as const
 const LAYER_VARIABLES = { low: 'cloud_cover_low', mid: 'cloud_cover_mid', high: 'cloud_cover_high' } as const
+const PRECIP_VARIABLES = { rain: 'rain', showers: 'showers', snow: 'snowfall' } as const
+/** Millimetres of water in a centimetre of snowfall, as Open-Meteo counts it
+ * (its precipitation is rain + showers + snowfall * 10/7). */
+export const SNOW_CM_TO_MM = 10 / 7
+/** Rain and showers (mm) and snowfall (cm) in an hour above this, or below
+ * zero, are gaps. */
+export const PRECIP_VALID_MAX = 500
 
 /** Every grid point at once, hourly, from COVER_PAST_DAYS back to
- * FORECAST_DAYS ahead, in UTC epoch seconds: total cover and its layers. */
+ * FORECAST_DAYS ahead, in UTC epoch seconds: total cover, its layers, and the
+ * hour's rain, showers and snowfall. */
 export function coverRequestBody(): URLSearchParams {
   const lats: number[] = []
   const lons: number[] = []
@@ -93,6 +117,21 @@ export interface CoverLayers {
   high: Float32Array
 }
 
+/** The hour's precipitation by kind, each laid out like CoverGrid.cover but
+ * in mm of water per hour (snow as its water). */
+export interface CoverPrecip {
+  rain: Float32Array
+  showers: Float32Array
+  snow: Float32Array
+}
+
+/** Precipitation at a point, mm of water per hour. */
+export interface PrecipRate {
+  rain: number
+  showers: number
+  snow: number
+}
+
 export interface CoverGrid {
   startMs: number
   hours: number
@@ -101,6 +140,9 @@ export interface CoverGrid {
   /** The cover's low, mid and high layers; null when the response lacks any
    * of them or has too many gaps in one (the grid is then untyped). */
   layers: CoverLayers | null
+  /** The hour's rain, showers and snow; null when the response lacks any of
+   * them or has too many gaps in one (the grid is then dry). */
+  precip: CoverPrecip | null
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -115,7 +157,8 @@ function lonGap(a: number, b: number): number {
 /** Validates Open-Meteo's multi-location response into a grid. Missing or
  * out-of-range values are filled with their row's mean at that hour; throws
  * (with the reason) when the response isn't the grid asked for. The layers
- * are optional: any trouble with them leaves the grid untyped instead. */
+ * and the precipitation are optional: any trouble with the layers leaves the
+ * grid untyped instead, with the precipitation dry, each apart. */
 export function parseCoverGrid(json: unknown): CoverGrid {
   if (isRecord(json) && json.error) {
     throw new Error(`Open-Meteo error: ${typeof json.reason === 'string' ? json.reason : 'unknown'}`)
@@ -124,9 +167,12 @@ export function parseCoverGrid(json: unknown): CoverGrid {
   if (json.length !== GRID_POINTS) throw new Error(`${json.length} locations, not ${GRID_POINTS}`)
   let times: number[] | null = null
   const rows: unknown[][] = []
-  // Per layer, every point's values while every point has them so far.
-  const layerRows: Record<keyof CoverLayers, unknown[][]> = { low: [], mid: [], high: [] }
-  let layersWhole = true
+  // Per optional variable, the values of every point that has them whole: a
+  // group is usable when each of its variables has every point's.
+  const optionalRows: Record<string, unknown[][]> = {}
+  for (const name of [...Object.values(LAYER_VARIABLES), ...Object.values(PRECIP_VARIABLES)]) {
+    optionalRows[name] = []
+  }
   json.forEach((point: unknown, i) => {
     if (!isRecord(point)) throw new Error(`location ${i} is not an object`)
     const lat = GRID_LATS[Math.floor(i / GRID_LONS.length)]
@@ -162,39 +208,43 @@ export function parseCoverGrid(json: unknown): CoverGrid {
       throw new Error(`location ${i} has ${hourly.cloud_cover.length} values for ${time.length} hours`)
     }
     rows.push(hourly.cloud_cover as unknown[])
-    if (!layersWhole) return
-    for (const key of Object.keys(LAYER_VARIABLES) as (keyof CoverLayers)[]) {
-      const values = hourly[LAYER_VARIABLES[key]]
-      if (!Array.isArray(values) || values.length !== time.length) layersWhole = false
-      else layerRows[key].push(values as unknown[])
+    for (const name of Object.keys(optionalRows)) {
+      const values = hourly[name]
+      if (Array.isArray(values) && values.length === time.length) optionalRows[name].push(values as unknown[])
     }
   })
   const hours = times!.length
-  const cover = percentGrid(rows, hours)
+  const cover = valueGrid(rows, hours, 100, 1 / 100)
   if (typeof cover === 'string') throw new Error(cover)
-  let layers: CoverLayers | null = null
-  if (layersWhole) {
-    const [low, mid, high] = (['low', 'mid', 'high'] as const).map((key) => percentGrid(layerRows[key], hours))
-    if (typeof low !== 'string' && typeof mid !== 'string' && typeof high !== 'string') {
-      layers = { low, mid, high }
-    } else {
-      console.warn('[clouds] cloud cover layers unusable; untyped', [low, mid, high].find((v) => typeof v === 'string'))
-    }
+  const group = (names: string[], max: number, scales: number[]): Float32Array[] | string => {
+    const missing = names.find((name) => optionalRows[name].length !== GRID_POINTS)
+    if (missing) return `${missing} missing at ${GRID_POINTS - optionalRows[missing].length} locations`
+    const grids = names.map((name, k) => valueGrid(optionalRows[name], hours, max, scales[k]))
+    return grids.find((g): g is string => typeof g === 'string') ?? (grids as Float32Array[])
   }
-  return { startMs: times![0] * 1000, hours, cover, layers }
+  let layers: CoverLayers | null = null
+  const layerGrids = group(Object.values(LAYER_VARIABLES), 100, [1 / 100, 1 / 100, 1 / 100])
+  if (typeof layerGrids === 'string') console.warn('[clouds] cloud cover layers unusable; untyped', layerGrids)
+  else layers = { low: layerGrids[0], mid: layerGrids[1], high: layerGrids[2] }
+  let precip: CoverPrecip | null = null
+  const precipGrids = group(Object.values(PRECIP_VARIABLES), PRECIP_VALID_MAX, [1, 1, SNOW_CM_TO_MM])
+  if (typeof precipGrids === 'string') console.warn('[clouds] precipitation unusable; dry', precipGrids)
+  else precip = { rain: precipGrids[0], showers: precipGrids[1], snow: precipGrids[2] }
+  return { startMs: times![0] * 1000, hours, cover, layers, precip }
 }
 
-/** Percentages, one row per point, as an hour-major 0..1 grid with the gaps
- * filled; the reason instead when there are too many gaps. */
-function percentGrid(rows: unknown[][], hours: number): Float32Array | string {
+/** Values, one row per point, valid from 0 to max, as an hour-major grid
+ * times scale with the gaps filled; the reason instead when there are too
+ * many gaps. */
+function valueGrid(rows: unknown[][], hours: number, max: number, scale: number): Float32Array | string {
   const grid = new Float32Array(hours * GRID_POINTS)
   const valid = new Uint8Array(hours * GRID_POINTS)
   let invalid = 0
   rows.forEach((values, i) => {
     for (let h = 0; h < hours; h++) {
       const v = values[h]
-      if (typeof v === 'number' && v >= 0 && v <= 100) {
-        grid[h * GRID_POINTS + i] = v / 100
+      if (typeof v === 'number' && v >= 0 && v <= max) {
+        grid[h * GRID_POINTS + i] = v * scale
         valid[h * GRID_POINTS + i] = 1
       } else {
         invalid++
@@ -269,6 +319,32 @@ export function layersAt(grid: CoverGrid, tMs: number): CoverLayers | null {
     low: valuesAt(grid, grid.layers.low, tMs)!,
     mid: valuesAt(grid, grid.layers.mid, tMs)!,
     high: valuesAt(grid, grid.layers.high, tMs)!,
+  }
+}
+
+/** The precipitation at a time, linear between hours. Each hour's value is
+ * the total over the hour before it, so it is read half an hour on, in the
+ * middle of the hour it describes: null where that is outside the grid (its
+ * first half hour and its last hour), or without precipitation. */
+export function precipitationAt(grid: CoverGrid, tMs: number): CoverPrecip | null {
+  const at = tMs + HOUR_MS / 2
+  if (!grid.precip || !gridCovers(grid, at)) return null
+  return {
+    rain: valuesAt(grid, grid.precip.rain, at)!,
+    showers: valuesAt(grid, grid.precip.showers, at)!,
+    snow: valuesAt(grid, grid.precip.snow, at)!,
+  }
+}
+
+/** The precipitation at a point and time (sampleCoverSmooth between cell
+ * centres); null outside the grid or without it. */
+export function precipAt(grid: CoverGrid, latDeg: number, lonDeg: number, tMs: number): PrecipRate | null {
+  const p = precipitationAt(grid, tMs)
+  if (!p) return null
+  return {
+    rain: sampleCoverSmooth(p.rain, latDeg, lonDeg),
+    showers: sampleCoverSmooth(p.showers, latDeg, lonDeg),
+    snow: sampleCoverSmooth(p.snow, latDeg, lonDeg),
   }
 }
 

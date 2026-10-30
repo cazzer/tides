@@ -6,6 +6,8 @@ import {
   neutralTypeTexture,
   outputFlags,
   planBlendPass,
+  precipBytesOf,
+  precipOf,
   typesOf,
   type BlendPassState,
   TYPE_FRAGMENT_SHADER,
@@ -97,18 +99,35 @@ describe('type grids', () => {
     expect(TYPE_FRAGMENT_SHADER).toContain('gl_FragColor = mix(typeTexel(uPrev, uPrevTyped), frames, uFade);')
   })
 
-  const frame = (geo: boolean, typed: boolean) => ({ geo, typed })
-  const none = { measured: false, typed: false }
+  const frame = (geo: boolean, typed: boolean, precip = false) => ({ geo, typed, precip })
+  const none = { measured: false, typed: false, precip: false }
 
   test('typed where either frame carries types', () => {
-    expect(outputFlags(frame(true, true), frame(true, false), none, 1)).toEqual({ measured: true, typed: true })
-    expect(outputFlags(frame(false, false), frame(false, true), none, 1)).toEqual({ measured: false, typed: true })
+    expect(outputFlags(frame(true, true), frame(true, false), none, 1)).toEqual({
+      measured: true,
+      typed: true,
+      precip: false,
+    })
+    expect(outputFlags(frame(false, false), frame(false, true), none, 1)).toEqual({
+      measured: false,
+      typed: true,
+      precip: false,
+    })
     // The static clouds and untyped frames: neither.
     expect(outputFlags(frame(false, false), frame(false, false), none, 1)).toEqual(none)
   })
 
+  test('precipitation where either frame carries it (tides-bl3.1), apart from the types', () => {
+    expect(outputFlags(frame(false, false, true), frame(false, false), none, 1)).toEqual({ ...none, precip: true })
+    expect(outputFlags(frame(false, true), frame(false, false, true), none, 1)).toEqual({
+      ...none,
+      typed: true,
+      precip: true,
+    })
+  })
+
   test('the frozen output counts until its fade ends', () => {
-    const prev = { measured: true, typed: true }
+    const prev = { measured: true, typed: true, precip: true }
     expect(outputFlags(frame(false, false), frame(false, false), prev, 0.5)).toEqual(prev)
     expect(outputFlags(frame(false, false), frame(false, false), prev, 1)).toEqual(none)
   })
@@ -124,6 +143,21 @@ describe('type grids', () => {
     expect(typesOf(untyped)).toBeNull()
   })
 
+  test("a frame's precipitation is in userData.precip, its bytes for the CPU; the static clouds have none", () => {
+    const bytes = new Uint8Array([1, 2, 3, 255])
+    const precip = new THREE.DataTexture(bytes, 1, 1)
+    const wet = new THREE.Texture()
+    wet.userData.precip = precip
+    expect(precipOf(wet)).toBe(precip)
+    expect(precipBytesOf(wet)).toBe(bytes)
+    const dry = new THREE.Texture()
+    dry.userData.precip = null
+    expect(precipOf(dry)).toBeNull()
+    expect(precipBytesOf(dry)).toBeNull()
+    expect(precipBytesOf(new THREE.Texture())).toBeNull()
+    expect(precipBytesOf('static')).toBeNull()
+  })
+
   test('the neutral grid is one texel of confidence 0, shared', () => {
     const neutral = neutralTypeTexture()
     expect([neutral.image.width, neutral.image.height]).toEqual([1, 1])
@@ -134,17 +168,24 @@ describe('type grids', () => {
 })
 
 describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
-  /** A renderer that records what each pass draws, and into what. */
+  /** A renderer that records what each pass draws, and into what: its
+   * uniforms' values as they were then, as passes share a material. */
   function recorder() {
     let target: THREE.WebGLRenderTarget | null = null
-    const passes: { target: THREE.WebGLRenderTarget | null; material: THREE.ShaderMaterial }[] = []
+    const passes: {
+      target: THREE.WebGLRenderTarget | null
+      material: THREE.ShaderMaterial
+      uniforms: Record<string, unknown>
+    }[] = []
     const gl = {
       getRenderTarget: () => target,
       setRenderTarget: (t: THREE.WebGLRenderTarget | null) => {
         target = t
       },
       render: (mesh: THREE.Mesh) => {
-        passes.push({ target, material: mesh.material as THREE.ShaderMaterial })
+        const material = mesh.material as THREE.ShaderMaterial
+        const uniforms = Object.fromEntries(Object.entries(material.uniforms).map(([k, u]) => [k, u.value]))
+        passes.push({ target, material, uniforms })
       },
     }
     return { gl: gl as unknown as THREE.WebGLRenderer, passes }
@@ -158,12 +199,12 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     const b = new THREE.Texture()
     const out = blender.update(gl, { a, b, mix: 0.5 }, new THREE.Texture(), 0)!
     expect(out.typed).toBe(true)
-    expect(passes).toHaveLength(2)
-    const [types, main] = passes
+    expect(passes).toHaveLength(3)
+    const [types, , main] = passes
     expect(types.target!.texture).toBe(out.typeTexture)
     expect(main.target!.texture).toBe(out.texture)
     // The output's own grid, just drawn; not the frozen output's.
-    expect(main.material.uniforms.uTypes.value).toBe(out.typeTexture)
+    expect(main.uniforms.uTypes).toBe(out.typeTexture)
     blender.release()
   })
 
@@ -171,7 +212,7 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     const { gl, passes } = recorder()
     const blender = createCloudBlender()
     const out = blender.update(gl, { a: new THREE.Texture(), b: new THREE.Texture(), mix: 0.5 }, new THREE.Texture(), 0)!
-    const target = passes[1].target!
+    const target = passes[2].target!
     expect(target.textures).toHaveLength(2)
     expect(target.textures[0]).toBe(out.texture)
     expect(target.textures[1]).toBe(out.topsTexture)
@@ -184,7 +225,7 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     expect([tops.image.width, tops.image.height]).toEqual([map.image.width, map.image.height])
     // GLSL3, for the second output; the map's alpha back to 1 as before
     // tides-tvr.4.3, and the frozen output's map alone fed back.
-    const main = passes[1].material
+    const main = passes[2].material
     expect(main.glslVersion).toBe(THREE.GLSL3)
     const src = main.fragmentShader
     expect(src).toContain('layout(location = 0) out highp vec4 cloudMap;')
@@ -194,7 +235,34 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     expect(src).toContain('cloudTops = cloudTypedTops(textureLod(uTypes, vUv, 0.0), c);')
     // A swap: the next pass fades from this output's map, not its tops.
     blender.update(gl, { a: new THREE.Texture(), b: new THREE.Texture(), mix: 0.5 }, new THREE.Texture(), 1000)
-    expect(passes[3].material.uniforms.uPrev.value).toBe(out.texture)
+    expect(passes[5].uniforms.uPrev).toBe(out.texture)
+    blender.release()
+  })
+
+  test('blends the precipitation grids (tides-bl3.1) in a pass of the type material of their own', () => {
+    const { gl, passes } = recorder()
+    const blender = createCloudBlender()
+    const precip = new THREE.DataTexture(new Uint8Array(4), 1, 1)
+    const a = new THREE.Texture()
+    a.userData.types = new THREE.DataTexture(new Uint8Array(4), 1, 1)
+    const b = new THREE.Texture()
+    b.userData.precip = precip
+    const out = blender.update(gl, { a, b, mix: 0.25 }, new THREE.Texture(), 0)!
+    expect(out.precip).toBe(true)
+    expect(out.typed).toBe(true)
+    const [types, wet] = passes
+    expect(wet.target!.texture).toBe(out.precipTexture)
+    expect(out.precipTexture).not.toBe(out.typeTexture)
+    expect(wet.material).toBe(types.material)
+    // Each grid's own: the types pass has a's types and no b's, the
+    // precipitation pass no a's and b's precipitation.
+    const typeTexture = a.userData.types as THREE.Texture
+    expect(types.uniforms).toMatchObject({ uATyped: 1, uBTyped: 0, uMix: 0.25, uPrevTyped: 0 })
+    expect(types.uniforms.uA).toBe(typeTexture)
+    expect(types.uniforms.uB).toBe(neutralTypeTexture())
+    expect(wet.uniforms).toMatchObject({ uATyped: 0, uBTyped: 1, uMix: 0.25, uPrevTyped: 0 })
+    expect(wet.uniforms.uA).toBe(neutralTypeTexture())
+    expect(wet.uniforms.uB).toBe(precip)
     blender.release()
   })
 

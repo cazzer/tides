@@ -64,9 +64,19 @@ export interface ShipTelemetry {
    * Earth's spin carried; density over sea level's; dynamic pressure, Pa.
    * Without the carry (?surface=0 or the low tier) speed is `speed` and
    * coupling 0; density and dynamic pressure are filled either way
-   * (fillAirDensity, tides-xxg), at that speed without it.
+   * (fillAirDensity, tides-xxg), at that speed without it. velocity is the
+   * ship's world-frame velocity through the air, scene units/s, whose length
+   * is speed (the falling rain and snow stream past along it, tides-bl3.3).
    */
-  air: { speed: number; coupling: number; density: number; dynamicPressure: number }
+  air: { speed: number; coupling: number; density: number; dynamicPressure: number; velocity: THREE.Vector3 }
+  /**
+   * Where the eye is over Earth (frame-carry.ts fillEarthEye, tides-bl3.3):
+   * up, the world unit direction from Earth's centre to the ship; local, the
+   * same in Earth's own frame (Y north, lon 0 at +X, east toward −Z, as
+   * surface-ground.ts earthLatLon reads it); altitude over the sea-level
+   * sphere, scene units, Infinity without Earth or its spin.
+   */
+  earthEye: { up: THREE.Vector3; local: THREE.Vector3; altitude: number }
 }
 
 export function createShipTelemetry(): ShipTelemetry {
@@ -82,13 +92,14 @@ export function createShipTelemetry(): ShipTelemetry {
     well: { key: null, factor: 1, floor: V_NORMAL },
     target: null,
     colliding: false,
-    air: { speed: 0, coupling: 0, density: 0, dynamicPressure: 0 },
+    air: { speed: 0, coupling: 0, density: 0, dynamicPressure: 0, velocity: new THREE.Vector3() },
+    earthEye: { up: new THREE.Vector3(0, 1, 0), local: new THREE.Vector3(0, 1, 0), altitude: Infinity },
   }
 }
 
 export const shipTelemetry: ShipTelemetry = createShipTelemetry()
 
-/** Zero the singleton in place, keeping its velocity, nearest, well and air objects. */
+/** Zero the singleton in place, keeping its velocity, nearest, well, air and earthEye objects. */
 export function resetShipTelemetry(): void {
   shipTelemetry.speed = 0
   shipTelemetry.speedCap = 0
@@ -108,6 +119,10 @@ export function resetShipTelemetry(): void {
   shipTelemetry.air.coupling = 0
   shipTelemetry.air.density = 0
   shipTelemetry.air.dynamicPressure = 0
+  shipTelemetry.air.velocity.set(0, 0, 0)
+  shipTelemetry.earthEye.up.set(0, 1, 0)
+  shipTelemetry.earthEye.local.set(0, 1, 0)
+  shipTelemetry.earthEye.altitude = Infinity
 }
 
 let shipTarget: string | null = null

@@ -4,7 +4,8 @@
 // can draw there, and on the main thread otherwise. Either way the pipeline is
 // ./cloudPipeline.ts; this only uploads its pixels as a texture, with the
 // frame's cloud-type grid (tides-tvr.4.1) as a tiny one of its own in
-// userData.types, freed with it. The frames are cross-faded by the shared
+// userData.types, and its precipitation grid (tides-bl3.1) likewise in
+// userData.precip, freed with it. The frames are cross-faded by the shared
 // blender (./cloudBlend.ts, tides-kzj.4.2).
 import { useEffect, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
@@ -56,11 +57,12 @@ const buildImage = createCloudImageBuilder({
   assets,
 })
 
-/** The type grid as a texture: bottom row first like the frame, linear
- * between its 2.5° texels with no mipmaps (a far view's few texels are
- * already blurry enough), wrapping across 180° but not over the poles. */
-function typeTextureOf(types: Uint8Array<ArrayBuffer>): THREE.DataTexture {
-  const texture = new THREE.DataTexture(types, TYPE_W, TYPE_H, THREE.RGBAFormat, THREE.UnsignedByteType)
+/** A type or precipitation grid as a texture: bottom row first like the
+ * frame, linear between its 2.5° texels with no mipmaps (a far view's few
+ * texels are already blurry enough), wrapping across 180° but not over the
+ * poles. */
+function gridTextureOf(grid: Uint8Array<ArrayBuffer>): THREE.DataTexture {
+  const texture = new THREE.DataTexture(grid, TYPE_W, TYPE_H, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearFilter
   texture.magFilter = THREE.LinearFilter
   texture.generateMipmaps = false
@@ -71,7 +73,7 @@ function typeTextureOf(types: Uint8Array<ArrayBuffer>): THREE.DataTexture {
   return texture
 }
 
-function textureOf({ rgba, geo, cold, held, types }: CloudImage): THREE.DataTexture {
+function textureOf({ rgba, geo, cold, held, types, precip }: CloudImage): THREE.DataTexture {
   // Bottom row first, so no flipY; filtered and mipmapped like an image.
   const texture = new THREE.DataTexture(rgba, OUT_W, OUT_H, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearMipmapLinearFilter
@@ -82,15 +84,18 @@ function textureOf({ rgba, geo, cold, held, types }: CloudImage): THREE.DataText
   texture.userData.geo = geo
   texture.userData.cold = Boolean(cold)
   texture.userData.held = Boolean(held)
-  texture.userData.types = types ? typeTextureOf(types) : null
+  texture.userData.types = types ? gridTextureOf(types) : null
+  texture.userData.precip = precip ? gridTextureOf(precip) : null
   texture.needsUpdate = true
   return texture
 }
 
-/** Frees a frame and its type grid. */
+/** Frees a frame and its type and precipitation grids. */
 function disposeFrame(texture: THREE.Texture) {
   const types = texture.userData.types as THREE.Texture | null | undefined
   types?.dispose()
+  const precip = texture.userData.precip as THREE.Texture | null | undefined
+  precip?.dispose()
   texture.dispose()
 }
 
