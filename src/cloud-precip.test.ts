@@ -179,7 +179,7 @@ describe('the darkening of wet cloud (tides-bl3.2)', () => {
 
   test('grows with the rate, full from PRECIP_DARK_FULL_MM_H', () => {
     let last = 0
-    for (const rate of [0.1, 0.5, 1, 2, 4, 6]) {
+    for (const rate of [0.05, 0.1, 0.2, 0.4, 0.7]) {
       const wet = precipWetness(texel(rate, 0, 0), STRATUS, 1)
       expect(wet).toBeGreaterThan(last)
       last = wet

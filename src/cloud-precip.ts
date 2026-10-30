@@ -134,9 +134,12 @@ export function precipFromFrames(
   }
 }
 
-/** The rate (mm/h) at which a layer is as dark as rain makes it: moderate
- * rain, past which a heavier rate looks the same. */
-export const PRECIP_DARK_FULL_MM_H = 8
+/** The rate (mm/h) at which a layer is as dark as rain makes it, past which
+ * a heavier rate looks the same: on the 10° grid's smoothed rates a mean of
+ * 1 mm/h is a heavy front (at one hour, 80% of the cloud was under 0.1 and
+ * 1.4% over 1), so the darkening shows where it rains, not only in the
+ * rarest storms. */
+export const PRECIP_DARK_FULL_MM_H = 1
 /** How much of its light a wet layer's top loses at the full rate, seen
  * from above: slightly, as the sun still lights it. */
 export const PRECIP_DARK_TOP = 0.1
