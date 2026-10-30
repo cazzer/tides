@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { latLonToLocal } from '../aurora'
-import { CLOUD_FLAT_ALTITUDE, EXAGGERATED_DECK, FINE_DECK, FINE_DECK_BASE_KM, TRUE_CLOUD_UNITS_PER_KM } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_FLAT_ALTITUDE, CLOUD_UNITS_PER_KM, EXAGGERATED_DECK, FINE_DECK, FINE_DECK_BASE_KM, TRUE_CLOUD_UNITS_PER_KM } from '../cloud-layer'
 import { encodePrecip, precipFromFrames } from '../cloud-precip'
 import { TYPE_H, TYPE_W, typeTexelLat, typeTexelLon } from '../cloud-types'
 import { EARTH_UNITS_PER_METRE } from '../surface-handover'
@@ -16,12 +16,15 @@ import {
   NIGHT_LIGHT,
   PRECIP_HALF,
   PRECIP_PARTICLES,
+  PRECIP_TOP,
   RAIN_FALL_MS,
   REDUCED_RAIN_STREAK_M,
   SHUTTER_S,
   SNOW_FALL_MS,
   altitudeFade,
   baseOverGround,
+  cloudCoverAt,
+  coverGate,
   daylight,
   fallSpeed,
   particleCount,
@@ -42,7 +45,7 @@ describe('the scale (tides-bl3.3)', () => {
   it("sizes the drops in true metres, the scale of FINE_DECK's base", () => {
     expect(TRUE_CLOUD_UNITS_PER_KM / (1000 * M)).toBeCloseTo(1, 1)
     expect(FINE_DECK.clearance / M / 1000).toBeCloseTo(FINE_DECK_BASE_KM, 1)
-    expect(PRECIP_HALF / M).toBeCloseTo(25, 9)
+    expect(PRECIP_HALF / M).toBeCloseTo(15, 9)
   })
 })
 
@@ -96,6 +99,41 @@ describe('where it falls (tides-bl3.3)', () => {
     expect(baseOverGround(false, FINE_DECK, 0.0001)).toBe(FINE_DECK.clearance)
     expect(baseOverGround(false, EXAGGERATED_DECK, 0.0001)).toBe(EXAGGERATED_DECK.clearance)
     expect(baseOverGround(true, EXAGGERATED_DECK, 0.0001)).toBeCloseTo(CLOUD_FLAT_ALTITUDE - 0.0001, 15)
+  })
+
+  it("stands its ceiling over every deck's base and band", () => {
+    // The highest ground, as CLOUD_FLAT_ALTITUDE is built over it.
+    const ground = CLOUD_FLAT_ALTITUDE - CLOUD_CLEARANCE - 1.5 * CLOUD_UNITS_PER_KM
+    for (const deck of [FINE_DECK, EXAGGERATED_DECK]) {
+      expect(ground + deck.clearance + deck.unitsPerKm).toBeLessThan(PRECIP_TOP)
+    }
+    expect(altitudeFade(PRECIP_TOP, baseOverGround(true, EXAGGERATED_DECK, 0), CLOUD_UNITS_PER_KM)).toBe(0)
+  })
+
+  it('falls only under the cloud drawn overhead, read as the shell lays out its map', () => {
+    // A small map, bottom row first: cloud over the northern hemisphere's
+    // eastern half only (lon 0..180, the map's right half), alpha in green.
+    const width = 72
+    const height = 36
+    const data = new Uint8Array(width * height * 4)
+    for (let y = height / 2; y < height; y++) {
+      for (let x = width / 2; x < width; x++) data[(y * width + x) * 4 + 1] = 255
+    }
+    const map = { data, width, height }
+    expect(cloudCoverAt(map, map, 0.4, 45, 90)).toBe(1)
+    expect(cloudCoverAt(map, map, 0.4, -45, 90)).toBe(0)
+    expect(cloudCoverAt(map, map, 0.4, 45, -90)).toBe(0)
+    // Wrapping: 270° east is 90° west.
+    expect(cloudCoverAt(map, null, 0, 45, 270)).toBe(0)
+    // Mixed a to b, a missing map clear; soft at an edge.
+    expect(cloudCoverAt(map, null, 0.25, 45, 90)).toBeCloseTo(0.75, 12)
+    const edge = cloudCoverAt(map, map, 0, 0, 90)
+    expect(edge).toBeGreaterThan(0)
+    expect(edge).toBeLessThan(1)
+    expect(coverGate(0)).toBe(0)
+    expect(coverGate(0.15)).toBe(0)
+    expect(coverGate(0.5)).toBe(1)
+    expect(coverGate(0.3)).toBeGreaterThan(0)
   })
 
   it('draws nothing (hidden, no draw) when dry, over the base or too fast', () => {

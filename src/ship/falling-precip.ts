@@ -20,7 +20,7 @@
 
 import type * as THREE from 'three'
 import { EARTH_UNITS_PER_METRE } from '../surface-handover'
-import { CLOUD_FLAT_ALTITUDE, type CloudDeck } from '../cloud-layer'
+import { CLOUD_FLAT_ALTITUDE, CLOUD_UNITS_PER_KM, type CloudDeck } from '../cloud-layer'
 import type { PrecipRate } from '../forecast-clouds'
 import { clamp01, positiveMod, smoothstep } from './dust'
 
@@ -30,14 +30,14 @@ export type PrecipKind = 'rain' | 'snow'
 /** Drops allocated (and drawn at the full rate) per tier: one instanced draw. [TUNE] */
 export const PRECIP_PARTICLES: Readonly<Record<PrecipTier, number>> = { high: 4000, low: 1500 }
 /** The box around the eye, half its side, true metres. */
-export const PRECIP_HALF_METRES = 25
+export const PRECIP_HALF_METRES = 15
 export const PRECIP_HALF = PRECIP_HALF_METRES * EARTH_UNITS_PER_METRE
 
 /** Terminal fall speeds, m/s: a raindrop's, a snowflake's. */
 export const RAIN_FALL_MS = 8
 export const SNOW_FALL_MS = 1
-/** The streak shutter, seconds: a drop at rest draws ~0.36 m. */
-export const SHUTTER_S = 0.045
+/** The streak shutter, seconds: a drop at rest draws ~0.72 m. */
+export const SHUTTER_S = 0.09
 /** Longest streak, as a share of the box's half-side. */
 export const MAX_STREAK_SHARE = 0.5
 /** A still raindrop's streak under reduced motion, m. */
@@ -62,6 +62,19 @@ export const SNOW_VISUAL_GAIN = 2.5
  * (deck.unitsPerKm): it rains in the cloud's lower part, not over it. */
 export const ABOVE_BASE_FADE_KM = 1
 
+/** Over this altitude (sea level, scene units) nothing falls whatever the
+ * deck: the flat shell's altitude, over every deck's base, and the widest
+ * band over it. The frame gate's first, cheapest check. */
+export const PRECIP_TOP = CLOUD_FLAT_ALTITUDE + ABOVE_BASE_FADE_KM * CLOUD_UNITS_PER_KM
+
+/** The drawn cloud's alpha at the eye over which it falls: none under the
+ * first, all of it over the second (the 10° rate grid runs on under clear
+ * sky, where the drawn deck has gaps). [TUNE] */
+export const COVER_GATE: readonly [number, number] = [0.15, 0.5]
+/** The cover is averaged over a 3 x 3 of texels this far apart, degrees, so
+ * a deck's edge doesn't strobe the field. */
+export const COVER_SPREAD_DEG = 0.25
+
 /** How often the rate under the eye is read, ms, and its ease, s. */
 export const SAMPLE_MS = 250
 export const RATE_TAU_S = 1.5
@@ -75,12 +88,12 @@ export const EDGE_FADE: readonly [number, number] = [0.7, 1]
 export const SPEED_FADE_MS: readonly [number, number] = [600, 1500]
 
 /** Peak opacities, and the share under reduced motion. */
-export const RAIN_OPACITY = 0.35
+export const RAIN_OPACITY = 0.9
 export const SNOW_OPACITY = 0.8
 export const REDUCED_OPACITY = 0.6
 /** Light at night, as a share of day's, and under the deck. */
 export const NIGHT_LIGHT = 0.08
-export const UNDER_CLOUD_LIGHT = 0.6
+export const UNDER_CLOUD_LIGHT = 0.8
 
 /** A number as a GLSL float literal. */
 export function glsl(x: number): string {
@@ -204,4 +217,51 @@ export function precipShown(amount: number, fade: number, speed: number): boolea
 /** Whether to read the rate again at `nowMs`, last read at `lastMs`. */
 export function shouldSample(nowMs: number, lastMs: number): boolean {
   return !(nowMs - lastMs < SAMPLE_MS)
+}
+
+/** A cloud map's bytes: RGBA, bottom row first, alpha in green
+ * (renderers/cloudPipeline.ts CloudImage). */
+export interface CloudBytes {
+  data: ArrayLike<number>
+  width: number
+  height: number
+}
+
+// The map's alpha at the texel holding (lat, lon), degrees, laid out as the
+// shell's cloudUv() reads it: u = (lon + 180) / 360 (wrapping), v = (lat +
+// 90) / 180, row 0 at the south.
+function alphaAt(map: CloudBytes, latDeg: number, lonDeg: number): number {
+  const u = positiveMod((lonDeg + 180) / 360, 1)
+  const v = clamp01((latDeg + 90) / 180)
+  const x = Math.min(map.width - 1, Math.floor(u * map.width))
+  const y = Math.min(map.height - 1, Math.floor(v * map.height))
+  return map.data[(y * map.width + x) * 4 + 1] / 255
+}
+
+/**
+ * The drawn cloud's alpha, 0..1, around (lat, lon), degrees: a 3 x 3 average
+ * COVER_SPREAD_DEG apart, of a and b mixed `mix` of the way from a to b, as
+ * precipFromFrames mixes the grids (a missing map counts as clear).
+ */
+export function cloudCoverAt(
+  a: CloudBytes | null,
+  b: CloudBytes | null,
+  mix: number,
+  latDeg: number,
+  lonDeg: number
+): number {
+  let sum = 0
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const lat = latDeg + i * COVER_SPREAD_DEG
+      const lon = lonDeg + j * COVER_SPREAD_DEG
+      sum += (a ? (1 - mix) * alphaAt(a, lat, lon) : 0) + (b ? mix * alphaAt(b, lat, lon) : 0)
+    }
+  }
+  return sum / 9
+}
+
+/** How much of the rate's amount falls under a drawn cloud alpha of `cover`. */
+export function coverGate(cover: number): number {
+  return smoothstep(COVER_GATE[0], COVER_GATE[1], cover)
 }

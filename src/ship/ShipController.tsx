@@ -117,6 +117,10 @@ export function ShipController() {
       fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
     }
     if (earth) fillEarthEye(shipTelemetry, state.position, earth)
+    else {
+      shipTelemetry.earthEye.altitude = Infinity
+      shipTelemetry.air.velocity.set(0, 0, 0)
+    }
     if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov, camera)
 

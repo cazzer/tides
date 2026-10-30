@@ -14,6 +14,7 @@ import {
   NEAR_FADE,
   PRECIP_HALF,
   PRECIP_PARTICLES,
+  PRECIP_TOP,
   RAIN_OPACITY,
   RATE_TAU_S,
   REDUCED_OPACITY,
@@ -23,6 +24,8 @@ import {
   UNDER_CLOUD_LIGHT,
   altitudeFade,
   baseOverGround,
+  cloudCoverAt,
+  coverGate,
   daylight,
   fallSpeed,
   glsl,
@@ -34,6 +37,7 @@ import {
   stepAnchor,
   streakVector,
   swayAmplitude,
+  type CloudBytes,
   type PrecipTier,
 } from './falling-precip'
 import { EARTH_UNITS_PER_METRE } from '../surface-handover'
@@ -51,10 +55,10 @@ import { reversedFloatDepth } from '../renderers/depth-precision'
 const SEED = 0x7a1d
 // A drop's radius in CSS pixels is its size over its distance (share of the
 // half-side), clamped: raindrops thin streaks, flakes soft dots.
-const DROP_SIZE = 0.25
-const DROP_RADIUS: readonly [number, number] = [0.8, 1.6]
-const FLAKE_SIZE = 0.6
-const FLAKE_RADIUS: readonly [number, number] = [1.5, 3.5]
+const DROP_SIZE = 0.375
+const DROP_RADIUS: readonly [number, number] = [1.2, 2.4]
+const FLAKE_SIZE = 0.9
+const FLAKE_RADIUS: readonly [number, number] = [2.25, 5.25]
 const RAIN_COLOR: readonly [number, number, number] = [0.75, 0.8, 0.85]
 const SNOW_COLOR: readonly [number, number, number] = [0.95, 0.97, 1]
 // After the planets' translucent shells, as SpaceDust.
@@ -66,6 +70,8 @@ const SWAY_RATE = 2 * Math.PI * SNOW_SWAY_HZ
 const RAD_TO_DEG = 180 / Math.PI
 const WORLD_Y = new THREE.Vector3(0, 1, 0)
 const WORLD_X = new THREE.Vector3(1, 0, 0)
+// Read once: it parses the URL and reads storage.
+const FLAT = isLowQuality()
 
 function vec3(c: readonly [number, number, number]): string {
   return `vec3(${c.map(glsl).join(', ')})`
@@ -221,6 +227,14 @@ function createPrecipMaterial(): THREE.ShaderMaterial {
   })
 }
 
+// A frame's cloud map bytes (its DataTexture's image), or null for the
+// static clouds, whose image the CPU can't read.
+function cloudBytesOf(texture: THREE.Texture | 'static'): CloudBytes | null {
+  if (texture === 'static') return null
+  const image = texture.image as Partial<CloudBytes> | undefined
+  return image?.data && image.width && image.height ? (image as CloudBytes) : null
+}
+
 const viewport = new THREE.Vector4()
 const down = new THREE.Vector3()
 const toSun = new THREE.Vector3()
@@ -237,7 +251,7 @@ const latLon: [number, number] = [0, 0]
 export function FallingPrecip() {
   const tier: PrecipTier = useMemo(() => {
     const coarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
-    return isLowQuality() || coarse ? 'low' : 'high'
+    return FLAT || coarse ? 'low' : 'high'
   }, [])
   const geometry = useMemo(() => createPrecipGeometry(PRECIP_PARTICLES[tier]), [tier])
   const material = useMemo(() => createPrecipMaterial(), [])
@@ -288,9 +302,16 @@ export function FallingPrecip() {
       target.visible = false
       return
     }
+    // Over any deck's base and band: nothing falls, and no ground to read.
+    if (eye.altitude > PRECIP_TOP) {
+      g.amount = 0
+      g.targetAmount = 0
+      target.visible = false
+      return
+    }
     const floor = earthTerrain()
     const ground = floor ? terrainFloorRadius(floor, EARTH_RADIUS, eye.local) - EARTH_RADIUS : 0
-    const flat = isLowQuality()
+    const flat = FLAT
     const deck = flat ? EXAGGERATED_DECK : cloudDeckAt(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
     const fade = altitudeFade(
       eye.altitude - ground,
@@ -311,7 +332,12 @@ export function FallingPrecip() {
         ? precipFromFrames(precipBytesOf(pick.a), precipBytesOf(pick.b), pick.mix, latLon[0] * RAD_TO_DEG, latLon[1] * RAD_TO_DEG)
         : null
       const { amount, snowShare } = precipIntensity(rate)
-      g.targetAmount = amount
+      // Only under the cloud drawn overhead: the rate's grid is 10° coarse.
+      const cover =
+        pick && amount > 0
+          ? cloudCoverAt(cloudBytesOf(pick.a), cloudBytesOf(pick.b), pick.mix, latLon[0] * RAD_TO_DEG, latLon[1] * RAD_TO_DEG)
+          : 0
+      g.targetAmount = amount * coverGate(cover)
       // Dry keeps the last split, so the field doesn't turn to rain as it eases out.
       if (amount > 0) g.targetSnowShare = snowShare
     }
