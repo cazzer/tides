@@ -144,8 +144,9 @@ export const PRECIP_DARK_FULL_MM_H = 1
  * from above: slightly, as the sun still lights it. */
 export const PRECIP_DARK_TOP = 0.1
 /** And its base, seen from under it: more, as a rain cloud's base is dark,
- * but still slight. */
-export const PRECIP_DARK_BASE = 0.3
+ * but still slight (the deck's base reads about 8% darker under a heavy
+ * front, where 0.3 gave a barely visible 5%). */
+export const PRECIP_DARK_BASE = 0.5
 
 /** The rate ramp in the encoded space: e = sqrt(rate / PRECIP_MAX_MM_H). */
 const PRECIP_DARK_FULL = Math.sqrt(PRECIP_DARK_FULL_MM_H / PRECIP_MAX_MM_H)

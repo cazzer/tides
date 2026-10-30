@@ -206,6 +206,6 @@ describe('the darkening of wet cloud (tides-bl3.2)', () => {
     }
     expect(PRECIP_DARK_TOP).toBeLessThan(PRECIP_DARK_BASE)
     expect(PRECIP_DARK_TOP).toBeLessThanOrEqual(0.15)
-    expect(PRECIP_DARK_BASE).toBeLessThanOrEqual(0.35)
+    expect(PRECIP_DARK_BASE).toBeLessThanOrEqual(0.5)
   })
 })
