@@ -16,7 +16,10 @@ export const DPR_WINDOW_MS = 500
 export const DPR_MIN_SAMPLES = 10
 /** How long the step up must stay predicted to fit before it's taken. */
 export const DPR_RAISE_DWELL_MS = 2000
-/** The dwell doubles on each raise undone within 2 s, up to this. */
+/**
+ * The dwell doubles on each raise undone within 2 s, up to this, and goes
+ * back to DPR_RAISE_DWELL_MS once a raise holds 2 s.
+ */
 export const DPR_RAISE_DWELL_CAP_MS = 32000
 /** Samples ignored after a change: the first frames at a new size run cold. */
 export const DPR_SETTLE_FRAMES = 2
@@ -67,7 +70,10 @@ export interface AdaptiveDprState {
   /** When the step up was first predicted to fit, or null. */
   goodSince: number | null
   raiseDwellMs: number
+  /** The last raise, until it's undone or has held BOUNCE_MS. */
   lastRaiseAt: number | null
+  /** The window median that decided the last change, for the log. */
+  lastMedianMs: number | null
 }
 
 /** The ceiling: R3F's default [1, 2] applied to the display's ratio. */
@@ -106,21 +112,31 @@ export function raiseTarget(levels: number[], current: number, medianMs: number,
   return predictMs(medianMs, current, up) < raiseBelowMs ? up : null
 }
 
-export function median(values: number[]): number {
+function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b)
   const mid = sorted.length >> 1
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
-export function createAdaptiveDprState(max: number, config: AdaptiveDprConfig = DEFAULT_DPR_CONFIG): AdaptiveDprState {
+/**
+ * Starts at the highest level at or below `start` (the ratio the canvas has
+ * now, so a remount doesn't jump back to the max).
+ */
+export function createAdaptiveDprState(
+  max: number,
+  start: number = max,
+  config: AdaptiveDprConfig = DEFAULT_DPR_CONFIG,
+): AdaptiveDprState {
+  const levels = dprLevels(max)
   return {
-    dpr: max,
-    levels: dprLevels(max),
+    dpr: levels.find((level) => level <= start) ?? levels[levels.length - 1],
+    levels,
     samples: [],
     skip: 0,
     goodSince: null,
     raiseDwellMs: config.raiseDwellMs,
     lastRaiseAt: null,
+    lastMedianMs: null,
   }
 }
 
@@ -151,9 +167,14 @@ export function stepAdaptiveDpr(
     }
   }
   if (next.levels.length === 1 || sample.dpr !== next.dpr) return next
+  const { at } = sample
+  if (next.lastRaiseAt != null && at - next.lastRaiseAt > BOUNCE_MS) {
+    // The raise held: the next one waits the base dwell again, so a drop
+    // when the view turns heavy doesn't count against it.
+    next = { ...next, raiseDwellMs: config.raiseDwellMs, lastRaiseAt: null }
+  }
   if (next.skip > 0) return { ...next, skip: next.skip - 1 }
 
-  const { at } = sample
   const last = next.samples[next.samples.length - 1]
   const kept = last && at - last.at > GAP_MS ? [] : next.samples.filter((s) => s.at >= at - config.windowMs)
   const samples = [...kept, { at, ms: sample.ms }]
@@ -171,6 +192,8 @@ export function stepAdaptiveDpr(
         skip: config.settleFrames,
         goodSince: null,
         raiseDwellMs: bounced ? Math.min(next.raiseDwellMs * 2, config.raiseDwellCapMs) : next.raiseDwellMs,
+        lastRaiseAt: null,
+        lastMedianMs: medianMs,
       }
     }
   } else if (full) {
@@ -178,7 +201,15 @@ export function stepAdaptiveDpr(
     if (up != null) {
       const goodSince = next.goodSince ?? at
       if (at - goodSince >= next.raiseDwellMs) {
-        return { ...next, dpr: up, samples: [], skip: config.settleFrames, goodSince: null, lastRaiseAt: at }
+        return {
+          ...next,
+          dpr: up,
+          samples: [],
+          skip: config.settleFrames,
+          goodSince: null,
+          lastRaiseAt: at,
+          lastMedianMs: medianMs,
+        }
       }
       return { ...next, samples, goodSince }
     }

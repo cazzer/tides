@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { addAfterEffect, addEffect, useThree } from '@react-three/fiber'
-import { createAdaptiveDprState, maxDpr, median, stepAdaptiveDpr, type AdaptiveDprState } from '../adaptive-dpr'
+import { createAdaptiveDprState, maxDpr, stepAdaptiveDpr, type AdaptiveDprState } from '../adaptive-dpr'
 import { createGpuFrameTimer, type GpuFrameTimer } from './gpu-frame-timer'
 import { isLowQuality } from '../quality'
 
@@ -54,7 +54,7 @@ export function AdaptivePixelRatio(): null {
       if (import.meta.env.DEV) console.info('[render] dpr fixed: no GPU timer (EXT_disjoint_timer_query_webgl2)')
       return
     }
-    let state: AdaptiveDprState = createAdaptiveDprState(maxDpr(window.devicePixelRatio))
+    let state: AdaptiveDprState = createAdaptiveDprState(maxDpr(window.devicePixelRatio), get().viewport.dpr)
     let pending: number | null = null
 
     const unsubscribeBefore = addEffect(() => {
@@ -69,7 +69,6 @@ export function AdaptivePixelRatio(): null {
       if (!timer) return
       timer.end()
       for (const { ms, tag } of timer.poll()) {
-        const previous = state
         state = stepAdaptiveDpr(state, { at: performance.now(), ms, dpr: tag }, maxDpr(window.devicePixelRatio))
         const current = get().viewport.dpr
         if (state.dpr === current) {
@@ -77,8 +76,8 @@ export function AdaptivePixelRatio(): null {
           continue
         }
         if (pending !== state.dpr && import.meta.env.DEV) {
-          const windowMs = median([...previous.samples.map((s) => s.ms), ms])
-          console.info(`[render] dpr ${current} -> ${state.dpr} (median ${windowMs.toFixed(1)} ms)`)
+          const decided = state.lastMedianMs == null ? '' : ` (median ${state.lastMedianMs.toFixed(1)} ms)`
+          console.info(`[render] dpr ${current} -> ${state.dpr}${decided}`)
         }
         pending = state.dpr
       }

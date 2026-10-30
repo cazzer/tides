@@ -9,6 +9,7 @@ import {
   type AdaptiveDprState,
   DPR_BUDGET_MS,
   DPR_RAISE_BELOW_MS,
+  DPR_RAISE_DWELL_MS,
 } from './adaptive-dpr'
 
 const FRAME = 16.7
@@ -27,6 +28,18 @@ function run(
     if (state.dpr !== dpr) changes.push({ at, dpr: state.dpr, frame: i })
   }
   return { state, changes, end: at }
+}
+
+/** Steps frames until done(state) or limitMs passes; at is the last frame's time. */
+function runUntil(
+  state: AdaptiveDprState,
+  { from, ms, done, limitMs }: { from: number; ms: (dpr: number) => number; done: (s: AdaptiveDprState) => boolean; limitMs: number },
+) {
+  let at = from
+  for (; at < from + limitMs && !done(state); at += FRAME) {
+    state = stepAdaptiveDpr(state, { at, ms: ms(state.dpr), dpr: state.dpr }, state.levels[0])
+  }
+  return { state, at }
 }
 
 /** Fill-bound: the cost at 2x scaled by pixel count. */
@@ -79,6 +92,17 @@ describe('raiseTarget', () => {
   })
 })
 
+describe('createAdaptiveDprState', () => {
+  it('starts at the max, or at the highest level at or below a given ratio', () => {
+    expect(createAdaptiveDprState(2).dpr).toBe(2)
+    expect(createAdaptiveDprState(2, 1.25).dpr).toBe(1.25)
+    expect(createAdaptiveDprState(2, 1.3).dpr).toBe(1.25)
+    expect(createAdaptiveDprState(2, 3).dpr).toBe(2)
+    expect(createAdaptiveDprState(2, 0.5).dpr).toBe(1)
+    expect(createAdaptiveDprState(1.1, 1.05).dpr).toBe(1)
+  })
+})
+
 describe('stepAdaptiveDpr', () => {
   it('drops a steady 31.8 ms at 2x to 1 after about half a second', () => {
     const { state, changes } = run(createAdaptiveDprState(2), { from: 0, frames: 60, ms: () => 31.8 })
@@ -88,6 +112,7 @@ describe('stepAdaptiveDpr', () => {
     expect(changes[0].at).toBeGreaterThanOrEqual(400)
     expect(changes[0].at).toBeLessThan(550)
     expect(state.dpr).toBe(1)
+    expect(state.lastMedianMs).toBe(31.8)
   })
 
   it('decides nothing on fewer than 10 samples', () => {
@@ -191,5 +216,63 @@ describe('stepAdaptiveDpr', () => {
     const { changes, state } = run(createAdaptiveDprState(2), { from: 0, frames: 600, ms: fill(23.2) })
     expect(changes.map((c) => c.dpr)).toEqual([1.25])
     expect(state.dpr).toBe(1.25)
+  })
+
+  it('puts the dwell back to base once a raise holds 2 s', () => {
+    const start = { ...createAdaptiveDprState(2, 1.25), raiseDwellMs: 4 * DPR_RAISE_DWELL_MS }
+    const cheap = fill(1.3)
+    const raised = runUntil(start, { from: 0, ms: cheap, done: (s) => s.dpr > 1.25, limitMs: 10000 })
+    expect(raised.state.dpr).toBe(1.5)
+    expect(raised.state.raiseDwellMs).toBe(4 * DPR_RAISE_DWELL_MS)
+    const held = runUntil(raised.state, {
+      from: raised.at + FRAME,
+      ms: cheap,
+      done: (s) => s.lastRaiseAt == null,
+      limitMs: 3000,
+    })
+    expect(held.state.dpr).toBe(1.5)
+    expect(held.state.raiseDwellMs).toBe(DPR_RAISE_DWELL_MS)
+    expect(held.at - raised.at).toBeGreaterThan(2000)
+    expect(held.at - raised.at).toBeLessThan(2100)
+  })
+
+  it('climbs back to 2x after each close zoom, the dwell staying at base', () => {
+    const close = fill(24.8)
+    const system = fill(1.3)
+    let state = createAdaptiveDprState(2)
+    let at = 0
+    for (let cycle = 0; cycle < 5; cycle++) {
+      // Zoom in for a second: drops to 1.25.
+      let r = run(state, { from: at, frames: 60, ms: close })
+      expect(r.state.dpr).toBe(1.25)
+      expect(r.state.raiseDwellMs).toBe(DPR_RAISE_DWELL_MS)
+      // Zoom out: three steps of a window and a 2 s dwell back to 2.
+      const out = r.end + FRAME
+      const back = runUntil(r.state, { from: out, ms: system, done: (s) => s.dpr === 2, limitMs: 20000 })
+      expect(back.state.dpr).toBe(2)
+      expect(back.at - out).toBeLessThan(3 * (DPR_RAISE_DWELL_MS + 500))
+      // The raise to 2 holds before the next zoom in.
+      r = run(back.state, { from: back.at, frames: 150, ms: system })
+      expect(r.state.raiseDwellMs).toBe(DPR_RAISE_DWELL_MS)
+      state = r.state
+      at = r.end + FRAME
+    }
+  })
+
+  it('recovers the base dwell after zooming in right after a raise', () => {
+    const close = fill(24.8)
+    const system = fill(1.3)
+    let state = run(createAdaptiveDprState(2), { from: 0, frames: 60, ms: close }).state
+    const back = runUntil(state, { from: 1000, ms: system, done: (s) => s.dpr === 2, limitMs: 20000 })
+    // Zoom in within 2 s of the raise to 2: the raise counts as undone.
+    let r = run(back.state, { from: back.at, frames: 60, ms: close })
+    expect(r.state.dpr).toBe(1.25)
+    expect(r.state.raiseDwellMs).toBe(2 * DPR_RAISE_DWELL_MS)
+    // Zoomed out again, the first raise waits the doubled dwell and, held,
+    // puts it back.
+    r = run(r.state, { from: r.end + FRAME, frames: 900, ms: system })
+    state = r.state
+    expect(state.dpr).toBe(2)
+    expect(state.raiseDwellMs).toBe(DPR_RAISE_DWELL_MS)
   })
 })
