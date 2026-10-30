@@ -7,7 +7,10 @@ import * as THREE from 'three'
 import { TerrainLambertMaterial } from '3d-tiles-renderer/src/three/plugins/images/terrain-rgb/TerrainLambertMaterial.js'
 import { RELIEF } from '../../relief'
 import { createEclipseShadow } from '../eclipseShadow'
+import { createGibsPatch } from '../gibsPatch'
+import { createGibsNightPatch } from '../gibsNightPatch'
 import { createGroundHaze } from '../groundHaze'
+import type { NightFlightUniforms } from '../nightLights'
 import { createWater } from '../water'
 import type { GlobeLink } from './surface-link'
 
@@ -52,6 +55,24 @@ export function fakeLink(): GlobeLink {
     seaLevel: 2.95,
     water: createWater(haze.frame),
   }
+}
+
+/** A link in flight (tides-tvr.7.7): the night flight's uniforms, and
+ * both GIBS streams `side` tiles square. */
+export function flightLink(side = 8): GlobeLink {
+  const link = fakeLink()
+  const night: NightFlightUniforms = {
+    uNightMoon: { value: new THREE.Vector3(0, 1, 0) },
+    uNightMoonView: { value: new THREE.Vector3(0, 0, 1) },
+    uNightFill: { value: new THREE.Color(0.01, 0.01, 0.02) },
+    uNightMoonLight: { value: new THREE.Color(0.02, 0.02, 0.03) },
+  }
+  link.nightFlight = night
+  const day = createGibsPatch(side)
+  link.gibs = { patch: day.material, uniforms: day.uniforms, side }
+  const lights = createGibsNightPatch(side)
+  link.gibsNight = { patch: lights.material, uniforms: lights.uniforms, side }
+  return link
 }
 
 /** A tile mesh as the terrain plugin leaves it: its Lambert with the

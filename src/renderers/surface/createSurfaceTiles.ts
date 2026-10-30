@@ -231,7 +231,9 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
   tiles.group.name = 'surface-tiles'
   tiles.group.userData.tiles = tiles
   // Out of ShipWarmup's reach (ship-warmup.ts): tiles come and go too fast to
-  // queue, and the grids are uploaded as they finish (upload, above).
+  // queue, and the grids are uploaded as they finish (upload, above). Their
+  // programs are warmed through the ground's probes instead (tileProbe.ts,
+  // tides-tvr.7.7).
   tiles.group.userData.warmup = false
 
   // Earth's mesh takes pointer events (OrbitingBody's onPointerDown), and R3F

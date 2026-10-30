@@ -12,7 +12,7 @@ import * as THREE from 'three'
  * space by the target drawn into), after `prepare` (false: skip it). Listed
  * by an object as userData.warmProbes, a function called when the object
  * is found cold (tides-tvr.7.4): the ground's flight variant, a pass drawn
- * off-scene into a target.
+ * off-scene into a target, a streamed tile's program (tides-tvr.7.7).
  */
 export interface WarmProbe {
   object: THREE.Object3D

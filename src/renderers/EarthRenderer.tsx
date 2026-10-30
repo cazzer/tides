@@ -37,6 +37,7 @@ import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
 import { createGroundProbe, syncGroundProbe } from './groundProbe'
+import { useTileWarmProbes } from './tileWarmProbes'
 import { EarthDemLoader } from './earthDemTexture'
 import { earthHorizon } from './earthHorizonTexture'
 import {
@@ -212,21 +213,30 @@ export default function EarthRenderer({
   const surfaceLink = useMemo<GlobeLink | null>(
     () =>
       SURFACE_TILES_ON && surfaceMaps
-        ? {
-            haze: groundHaze,
-            sunDir: clouds.uniforms.uSunDir,
-            clouds: { uniforms: clouds.uniforms, flat: textureSet.low },
-            eclipse: eclipseShadow.uniforms,
-            nightFlight: nightFlight?.uniforms ?? null,
-            gibs: globeStream(gibsPatch),
-            gibsNight: globeStream(gibsNightPatch),
-            maps: surfaceMaps,
-            horizon: earthHorizon(earthHorizonUrl),
-            seaLevel: diameter,
-            water,
-          }
+        ? surfaceLinkOf(
+            { haze: groundHaze, clouds, low: textureSet.low, eclipse: eclipseShadow.uniforms, maps: surfaceMaps, seaLevel: diameter, water },
+            nightFlight?.uniforms ?? null,
+            gibsPatch,
+            gibsNightPatch
+          )
         : null,
     [groundHaze, clouds, textureSet.low, eclipseShadow, nightFlight, gibsPatch, gibsNightPatch, surfaceMaps, diameter, water]
+  )
+  // The link with flight detail, whatever the detail now, for the warm-ups
+  // to compile the tiles' flight programs ahead through probes
+  // (surface/tileProbe.ts, tides-tvr.7.7): with flight detail on,
+  // surfaceLink holds the same objects and keys the same program.
+  const flightSurfaceLink = useMemo<GlobeLink | null>(
+    () =>
+      SURFACE_TILES_ON && surfaceMaps
+        ? surfaceLinkOf(
+            { haze: groundHaze, clouds, low: textureSet.low, eclipse: eclipseShadow.uniforms, maps: surfaceMaps, seaLevel: diameter, water },
+            night.flight.uniforms,
+            gibs.flight.material,
+            gibsNight.flight.material
+          )
+        : null,
+    [groundHaze, clouds, textureSet.low, eclipseShadow, night.flight, gibs.flight, gibsNight.flight, surfaceMaps, diameter, water]
   )
   useEffect(() => {
     if (!surfaceLink) return
@@ -314,9 +324,16 @@ export default function EarthRenderer({
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
   const groundMaterial = useRef<THREE.MeshPhongMaterial>(null)
+  // The tiles' probes, once their chunk has loaded (tileWarmProbes.ts). The
+  // ground's probes are listed only while the ground is found cold, so a
+  // late load has it looked at again: the same program, so nothing links.
+  const tileWarmProbes = useTileWarmProbes(flightSurfaceLink, () => {
+    if (groundMaterial.current) groundMaterial.current.needsUpdate = true
+  })
   // For the warm-ups (ship-warmup.ts): the flight program's probe, synced to
-  // the ground as it is when its turn comes; and the GIBS streams' tile
-  // passes, drawn into their targets as the first tiles land.
+  // the ground as it is when its turn comes; the GIBS streams' tile
+  // passes, drawn into their targets as the first tiles land; and the
+  // streamed tiles' flight programs, both fade variants.
   const groundWarmProbes = (): WarmProbe[] => [
     {
       object: groundProbe,
@@ -330,6 +347,7 @@ export default function EarthRenderer({
     },
     ...gibs.flight.probes(),
     ...gibsNight.flight.probes(),
+    ...tileWarmProbes(),
   ]
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
@@ -469,6 +487,40 @@ function groundPatchOf(
     gibsNight,
     haze.patch
   )
+}
+
+/** What the tiles' link shares whatever the flight detail. */
+interface SurfaceLinkParts {
+  haze: ReturnType<typeof createGroundHaze>
+  clouds: CloudLayer
+  low: boolean
+  eclipse: GlobeLink['eclipse']
+  maps: GlobeLink['maps']
+  seaLevel: number
+  water: ReturnType<typeof createWater>
+}
+
+/** The tiles' link (surface/surface-link.ts) with the flight detail's
+ * parts, as groundPatchOf takes them. */
+function surfaceLinkOf(
+  { haze, clouds, low, eclipse, maps, seaLevel, water }: SurfaceLinkParts,
+  nightFlight: NightFlightUniforms | null,
+  gibs: MaterialPatch,
+  gibsNight: MaterialPatch
+): GlobeLink {
+  return {
+    haze,
+    sunDir: clouds.uniforms.uSunDir,
+    clouds: { uniforms: clouds.uniforms, flat: low },
+    eclipse,
+    nightFlight,
+    gibs: globeStream(gibs),
+    gibsNight: globeStream(gibsNight),
+    maps,
+    horizon: earthHorizon(earthHorizonUrl),
+    seaLevel,
+    water,
+  }
 }
 
 /** The link's maps before their first render's textures. */
