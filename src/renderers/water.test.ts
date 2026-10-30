@@ -51,6 +51,8 @@ import {
   waterMss,
   waterPatch,
   waterAim,
+  waveHeadings,
+  easeHeadings,
   waterPhases,
   reaim,
   waterSeaVariance,
@@ -523,8 +525,8 @@ describe('the waves (tides-07z)', () => {
   const ups: V[] = [UP, [1, 0, 0], norm([0.3, 0.5, -0.8]), norm([-0.6, -0.2, 0.4])]
   const seas = (up: V): WaterSea[] => [
     medianSea(levelAxis(up, 0)),
-    { windScale: 1.8, swellScale: Math.sqrt(1.8), noise: 1.3, axis: levelAxis(up, 0.7) },
-    { windScale: 0.6, swellScale: Math.sqrt(0.6), noise: 0.5, axis: levelAxis(up, 2.1) },
+    { windScale: 1.8, swellScale: Math.sqrt(1.8), noise: 1.3, settled: 0.9, axis: levelAxis(up, 0.7) },
+    { windScale: 0.6, swellScale: Math.sqrt(0.6), noise: 0.5, settled: 0.4, axis: levelAxis(up, 2.1) },
   ]
   /** A wave's drawn slope variance, from the amplitude the GLSL draws it at
    * (W sqrt(F) times its slope, along its level direction). */
@@ -565,7 +567,7 @@ describe('the waves (tides-07z)', () => {
     for (const up of ups) {
       const waves = aimWaves(up, CLIMATE)
       const swell = waves.find((w) => w.metres > 100)!
-      const calm: WaterSea = { windScale: 1.2, swellScale: 0.5, noise: 1, axis: levelAxis(up, 0.3) }
+      const calm: WaterSea = { windScale: 1.2, swellScale: 0.5, noise: 1, settled: 0.5, axis: levelAxis(up, 0.3) }
       const heavy = { ...calm, swellScale: 2 }
       for (const footprint of [1e9, 0]) {
         expect(waterMss(footprint, waves, heavy)).toBeCloseTo(waterMss(footprint, waves, calm), 12)
@@ -574,14 +576,14 @@ describe('the waves (tides-07z)', () => {
     }
     // The swell takes the swell's scale, squared; the wind sea the wind's;
     // the noise scales both.
-    const sea: WaterSea = { windScale: 1.5, swellScale: 0.5, noise: 1.2, axis: AXIS }
+    const sea: WaterSea = { windScale: 1.5, swellScale: 0.5, noise: 1.2, settled: 0, axis: AXIS }
     expect(waveGain({ ...WATER_WAVE_TABLE[0], metres: 120 }, sea)).toBeCloseTo(1.2 * 0.25, 12)
     expect(waveGain({ ...WATER_WAVE_TABLE[0], metres: 5 }, sea)).toBeCloseTo(1.2 * 1.5, 12)
   })
 
-  it('lays a faded wave\'s variance on the glint about the sea\'s axis as the wave lies off the axis under the eye', () => {
-    const sea = medianSea(AXIS)
-    for (const [c2, share] of [[1, 1], [-1, 0], [0, 0.5]]) {
+  it('lays a faded wave\'s variance on the glint about the sea\'s axis as the wave lies off the axis under the eye, as far as the sea is settled', () => {
+    for (const [settled, c2, share] of [[1, 1, 1], [1, -1, 0], [1, 0, 0.5], [0.5, 1, 0.75], [0, 1, 0.5]]) {
+      const sea = { ...medianSea(AXIS), settled }
       const w: AimedWave = { ...WATER_WAVE_TABLE[0], dir: [1, 0, 0], c2 }
       const slope = waterSlopeVariance(1e9, [w], sea)
       const base = 0.5 * waterBaseMss([w])
@@ -640,6 +642,38 @@ describe('the waves aimed the way the sea runs (tides-nh8.1)', () => {
     }
   })
 
+  it('turns the waves between wind and swell smoothly as the two pass opposite, and eases a far swing over seconds', () => {
+    // Wind and swell 189 then 191 deg apart: the turn taken near the last
+    // one, so no wave moves more than the climate did.
+    const a = waveHeadings(climateOf(10, 189))
+    const b = waveHeadings(climateOf(10, 191), a.turn)
+    for (let i = 0; i < WATER_WAVES; i++) expect(Math.abs(b.headings[i] - a.headings[i])).toBeLessThan((2.1 * Math.PI) / 180)
+    // A heading that swings right round goes the short way, a share at a time.
+    const flipped = waveHeadings(climateOf(190, 300))
+    const step = easeHeadings(a, flipped, 1 - Math.exp(-1 / 60 / WATER_AIM_EASE_S))
+    for (let i = 0; i < WATER_WAVES; i++) {
+      expect(angleGap(step.headings[i], a.headings[i])).toBeLessThan(Math.PI / 60 / WATER_AIM_EASE_S)
+    }
+    const done = easeHeadings(a, flipped, 1)
+    for (let i = 0; i < WATER_WAVES; i++) expect(angleGap(done.headings[i], flipped.headings[i])).toBeLessThan(1e-9)
+    expect(angleGap(2 * done.axis, 2 * flipped.axis)).toBeLessThan(1e-9)
+  })
+
+  it('aims finite waves over the poles and before any eye is set', () => {
+    for (const eye of [[0, 0, 0], [0, 2.95, 0], [0, -2.95, 0]] as V[]) {
+      const haze = createGroundHaze({ value: new THREE.Vector3(1, 0, 0) }, 2.95, false)
+      haze.frame.uGroundHazeEyeLocal.value.set(...eye)
+      const water = createWater(haze.frame)
+      water.update()
+      water.advance(1 / 60, false)
+      haze.frame.uGroundHazeEyeLocal.value.set(eye[0] + 1e-5, eye[1], eye[2])
+      water.update()
+      for (const u of [water.uniforms.uWaveDir, water.uniforms.uWaveC2, water.uniforms.uWavePhase]) {
+        expect(Array.from(u.value).every(Number.isFinite)).toBe(true)
+      }
+    }
+  })
+
   it('runs the baked climate\'s way off a swell coast: Portugal\'s swell shoreward, east', () => {
     const up = latLonToLocal(39.5, -11).toArray() as V
     const waves = aimWaves(up, climateAt(decode(climateBytes()), up))
@@ -671,7 +705,7 @@ describe('the waves (tides-07z)', () => {
     }
     // One wave's block from the normal piece, at a pixel that draws it,
     // against waveSlope(), the TS mirror of its slope and fade.
-    const sea: WaterSea = { windScale: 1.3, swellScale: 0.8, noise: 1.1, axis: levelAxis(up, 0.4) }
+    const sea: WaterSea = { windScale: 1.3, swellScale: 0.8, noise: 1.1, settled: 0.5, axis: levelAxis(up, 0.4) }
     const footprint = 2e-8 // ~4 cm: every wave drawn
     const e1 = levelAxis(up, 0)
     const e2 = levelAxis(up, Math.PI / 2)
@@ -685,7 +719,7 @@ describe('the waves (tides-07z)', () => {
       const ray = [1.5e-4, -2e-5, 3e-5]
       const phases = new Array(WATER_WAVES).fill(0.9)
       const out = runGlsl(glsl.normal.slice(start, end + 1), {
-        waterUpGround: up, waterGroups: 0, waterGroupNoise: [0, 0],
+        waterUpGround: up, waterGroups: 0, waterGroupNoise: [0, 0], waterSettled: sea.settled,
         uWaveDir: aimed.map((a) => [...a.dir]) as unknown as number[], uWaveC2: aimed.map((a) => a.c2),
         waterWindF: sea.noise * sea.windScale, waterSwellF: sea.noise * sea.swellScale ** 2,
         waterRx: e1.map((x) => x * footprint), waterRy: e2.map((x) => x * footprint),
@@ -712,7 +746,7 @@ describe('the waves (tides-07z)', () => {
     const there = new Float64Array(WATER_WAVES) as unknown as number[]
     const here = new Float64Array(WATER_WAVES) as unknown as number[]
     // Aimed from a little way off: the anchor's place doesn't matter.
-    const aim = waterAim([1.2003, 2.0998, -1.6001], CLIMATE)
+    const aim = waterAim([1.2003, 2.0998, -1.6001], waveHeadings(CLIMATE))
     for (const t of [0, 13.7]) {
       waterPhases(aim, eye, t, here)
       waterPhases(aim, [eye[0] + ray[0], eye[1] + ray[1], eye[2] + ray[2]], t, there)
@@ -731,8 +765,8 @@ describe('the waves (tides-07z)', () => {
 
   it('turns the waves about the eye when re-aimed, their phases there unbroken', () => {
     const eye: V = [1.2, 2.1, -1.6]
-    const aim = waterAim([1.2003, 2.0998, -1.6001], CLIMATE)
-    const turned = reaim(aim, eye, climateOf(200, 150))
+    const aim = waterAim([1.2003, 2.0998, -1.6001], waveHeadings(CLIMATE))
+    const turned = reaim(aim, eye, waveHeadings(climateOf(200, 150)))
     const before = new Float64Array(WATER_WAVES) as unknown as number[]
     const after = new Float64Array(WATER_WAVES) as unknown as number[]
     waterPhases(aim, eye, 7.5, before)
@@ -843,7 +877,7 @@ describe('the waves (tides-07z)', () => {
     expect(Array.from(water.uniforms.uWavePhase.value)).not.toEqual(still)
     const expected = new Float32Array(WATER_WAVES)
     const eye: V = [0.4, 2.9, 0.1]
-    waterPhases(waterAim(eye, climateAt(decode(climateBytes()), norm(eye))), eye, 5, expected)
+    waterPhases(waterAim(eye, waveHeadings(climateAt(decode(climateBytes()), norm(eye)))), eye, 5, expected)
     for (let i = 0; i < WATER_WAVES; i++) expect(angleGap(water.uniforms.uWavePhase.value[i], expected[i])).toBeLessThan(1e-5)
     // The eye split for the globe's ray: the two halves add up to it.
     const hi = water.uniforms.uWaterEyeHi.value

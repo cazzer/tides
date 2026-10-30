@@ -235,12 +235,14 @@ export function climateUv([x, y, z]: Vec3): [number, number] {
   return [u - Math.floor(u), 0.5 - Math.asin(Math.max(-1, Math.min(1, y))) / Math.PI]
 }
 
-/** Unit east and north tangents at a local direction (not at the poles). */
+/** Unit east and north tangents at a local direction (at the poles,
+ * longitude 0's). */
 export function localEastNorth([x, y, z]: Vec3): { east: [number, number, number]; north: [number, number, number] } {
   const length = Math.hypot(x, y, z)
   const [ux, uy, uz] = [x / length, y / length, z / length]
   const flat = Math.hypot(ux, uz)
-  const east: [number, number, number] = [uz / flat, 0, -ux / flat]
+  // At a pole, longitude 0's east.
+  const east: [number, number, number] = flat > 1e-9 ? [uz / flat, 0, -ux / flat] : [0, 0, -1]
   const north: [number, number, number] = [
     uy * east[2] - uz * east[1],
     uz * east[0] - ux * east[2],
