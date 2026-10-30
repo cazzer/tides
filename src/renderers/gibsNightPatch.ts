@@ -30,8 +30,7 @@ import {
   gibsNightTileUrl,
   nightPatchWanted,
 } from '../gibs-patch'
-import type { MaterialPatch } from './eclipseShadow'
-import { createGibsStream, EDGE_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch } from './gibsStream'
+import { createGibsStream, EDGE_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch, type StreamedPatchUse } from './gibsStream'
 
 // Shared by every flight. GIBS serves these no-store, so this is the only
 // cache: 160 tiles is ~9 MB of JPEG, a desktop's patch twice over.
@@ -245,6 +244,7 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
       material: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
       update() {},
       release() {},
+      probes: () => [],
       uniforms: {},
       side: 0,
     }
@@ -283,6 +283,7 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
     uniforms,
     side,
     update: stream.update,
+    probes: () => [stream.probe()],
     release: stream.dispose,
   }
 }
@@ -293,6 +294,6 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
  * one, filled as the eye nears Earth's night side and freed when it leaves,
  * climbs into daylight or the detail ends.
  */
-export function useGibsNightPatch(ground: RefObject<THREE.Object3D | null>, radius: number): MaterialPatch {
+export function useGibsNightPatch(ground: RefObject<THREE.Object3D | null>, radius: number): StreamedPatchUse {
   return useStreamedPatch(createGibsNightPatch, ground, radius)
 }

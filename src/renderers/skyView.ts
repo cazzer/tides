@@ -10,6 +10,7 @@
 import * as THREE from 'three'
 import skyViewFragment from '../shaders/atmosphere/sky-view.frag'
 import { ATMOSPHERE_SCALE_HEIGHT, ATMOSPHERE_SURFACE } from './earth-shells'
+import type { WarmProbe } from '../ship/ship-warmup'
 
 /** The table's size: azimuths from the Sun's (0 to 180 deg) by elevations. */
 export const SKY_VIEW_WIDTH = 192
@@ -47,6 +48,11 @@ export interface SkyView {
    * under a Sun at sine of elevation `sunMu` there, and turns it on; or,
    * with `eyeR` null (no eye inside the haze), turns it off. */
   update(renderer: THREE.WebGLRenderer, eyeR: number | null, sunMu: number): void
+  /** The table's pass for the warm-ups to compile ahead of its first draw
+   * (tides-tvr.7.4): drawn off-scene, so no scene scan finds it. Its own
+   * scene (no lights or fog, as update draws it) and its target, whose
+   * kind keys the program's tone mapping and output colour space. */
+  probe: WarmProbe
   dispose(): void
 }
 
@@ -81,6 +87,7 @@ export function createSkyView(): SkyView {
   quad.frustumCulled = false
   const camera = new THREE.OrthographicCamera()
   return {
+    probe: { object: quad, scene: quad, target },
     update(renderer, eyeR, sunMu) {
       // A half-float target needs a colour-buffer extension (WebGL2 without
       // it, a forced high tier, would draw the sky black): else analytic.

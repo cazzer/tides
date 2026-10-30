@@ -107,8 +107,11 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
         // Double-sided in ship mode (pickShellFaces), where the shader keeps
         // one face per ray; under the cloud shell's top it stops at the
         // ground, which lays its own share of the haze over itself
-        // (groundHaze.ts).
+        // (groundHaze.ts). That program warmed ahead (ship-warmup.ts
+        // warmSides): the main view's first close zoom turns to it
+        // (tides-tvr.7.4).
         forceSinglePass: true,
+        userData: { warmSides: [THREE.DoubleSide] },
       }),
     []
   )
@@ -151,6 +154,8 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
       material={material}
       renderOrder={ATMOSPHERE_RENDER_ORDER}
       raycast={noRaycast}
+      // The sky-view table's pass, for the warm-ups (ship-warmup.ts).
+      userData={{ warmProbes: () => (skyView ? [skyView.probe] : []) }}
       onBeforeRender={(_renderer, _scene, camera, _geometry, shader) => {
         pickShellFaces(mesh.current!, shader, camera, hazeStop)
         setSunDisc(shader as THREE.ShaderMaterial, mesh.current!)

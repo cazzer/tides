@@ -32,8 +32,7 @@ import {
   gibsGroundTileUrl,
 } from '../gibs-patch'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
-import type { MaterialPatch } from './eclipseShadow'
-import { createGibsStream, EDGE_TILES, SEAM_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch } from './gibsStream'
+import { createGibsStream, EDGE_TILES, SEAM_TILES, useStreamedPatch, type GibsStreamPass, type StreamedPatch, type StreamedPatchUse } from './gibsStream'
 import colourLutUrl from '../assets/gibs-colour-lut.bin?url&inline'
 import warpUrl from '../assets/gibs-warp.bin?url&inline'
 
@@ -267,6 +266,7 @@ export function createGibsPatch(side: number): GibsPatch {
       material: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
       update() {},
       release() {},
+      probes: () => [],
       uniforms: {},
       side: 0,
     }
@@ -304,6 +304,7 @@ export function createGibsPatch(side: number): GibsPatch {
     uniforms,
     side,
     update: stream.update,
+    probes: () => [stream.probe()],
     release() {
       stream.dispose()
       // three uploads it again if the patch is used after.
@@ -317,6 +318,6 @@ export function createGibsPatch(side: number): GibsPatch {
  * flight detail (flight-detail.ts), on devices that take one, filled as the
  * eye nears Earth and freed when it leaves or the detail ends.
  */
-export function useGibsPatch(ground: RefObject<THREE.Object3D | null>, radius: number): MaterialPatch {
+export function useGibsPatch(ground: RefObject<THREE.Object3D | null>, radius: number): StreamedPatchUse {
   return useStreamedPatch(createGibsPatch, ground, radius)
 }

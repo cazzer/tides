@@ -13,7 +13,7 @@ import { groundShadowPatch } from './groundShadow'
 import { useGibsPatch } from './gibsPatch'
 import { useGibsNightPatch } from './gibsNightPatch'
 import { streamedPatch } from './gibsStream'
-import { nightLightsPatch, useNightFlight } from './nightLights'
+import { nightLightsPatch, useNightFlight, type NightFlightUniforms } from './nightLights'
 import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
@@ -35,7 +35,8 @@ import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
-import { warmDefinesOnce } from '../ship/ship-warmup'
+import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
+import { createGroundProbe, syncGroundProbe } from './groundProbe'
 import { EarthDemLoader } from './earthDemTexture'
 import { earthHorizon } from './earthHorizonTexture'
 import {
@@ -140,10 +141,13 @@ export default function EarthRenderer({
   const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
-  const gibsPatch = useGibsPatch(groundRef, diameter)
+  const gibs = useGibsPatch(groundRef, diameter)
+  const gibsPatch = gibs.drawn
   // Sharper city lights, and the night lit for the adapted eye (tides-tvr.2).
-  const gibsNightPatch = useGibsNightPatch(groundRef, diameter)
-  const nightFlight = useNightFlight(clouds.uniforms.uSunDir, clouds.material.uniforms.uAmbient)
+  const gibsNight = useGibsNightPatch(groundRef, diameter)
+  const gibsNightPatch = gibsNight.drawn
+  const night = useNightFlight(clouds.uniforms.uSunDir, clouds.material.uniforms.uAmbient)
+  const nightFlight = night.drawn
   // Aerial perspective from inside the atmosphere (tides-zmw.5).
   const groundHaze = useMemo(
     () => createGroundHaze(clouds.uniforms.uSunDir, diameter, textureSet.low),
@@ -275,31 +279,45 @@ export default function EarthRenderer({
   // And with the night flight on, once this View has drawn: in close zoom
   // the overview panels draw in the same frame (tides-tvr.7.3).
   useEffect(() => (nightFlight ? restoreEyeAfterDrawing(scene) : undefined), [nightFlight, scene])
+  const groundParts = useMemo<GroundParts>(
+    () => ({ eclipse: eclipseShadow.material, clouds, low: textureSet.low, water, haze: groundHaze, waterDepth }),
+    [eclipseShadow, clouds, textureSet.low, groundHaze, water, waterDepth]
+  )
   const groundPatch = useMemo(
-    () =>
-      composePatches(
-        eclipseShadow.material,
-        clouds.groundPatch,
-        nightLightsPatch(clouds.uniforms.uSunDir, nightFlight?.uniforms),
-        poleSmoothingPatch(),
-        groundDetailPatch(textureSet.low),
-        groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
-        // After the shadows in the list, so its sky lands before they dim
-        // directSpecular.
-        waterPatch(water, groundHaze.frame, textureSet.low, waterDepth),
-        gibsPatch,
-        gibsNightPatch,
-        groundHaze.patch
-      ),
-    [eclipseShadow, clouds, textureSet.low, gibsPatch, gibsNightPatch, nightFlight, groundHaze, water, waterDepth]
+    () => groundPatchOf(groundParts, nightFlight?.uniforms, gibsPatch, gibsNightPatch),
+    [groundParts, gibsPatch, gibsNightPatch, nightFlight]
   )
   // The mesh's displacement, at its vertex spacing (tides-zmw.2).
   const displacement = useMemo(() => createGroundDisplacement(EARTH_BASE_SEGMENTS), [])
   const drawnPatch = useMemo(() => composePatches(groundPatch, displacement.patch), [groundPatch, displacement])
+  // The patch drawn with flight detail, whatever the detail now, for the
+  // warm-ups to compile the ground's flight program ahead through a probe
+  // (groundProbe.ts, tides-tvr.7.4): with flight detail on, drawnPatch
+  // keys the same program.
+  const flightPatch = useMemo(
+    () =>
+      composePatches(
+        groundPatchOf(groundParts, night.flight.uniforms, gibs.flight.material, gibsNight.flight.material),
+        displacement.patch
+      ),
+    [groundParts, night.flight, gibs.flight, gibsNight.flight, displacement]
+  )
+  const groundProbe = useMemo(() => createGroundProbe(), [])
+  useEffect(() => () => groundProbe.material.dispose(), [groundProbe])
   displacement.uniforms.uGroundHeights.value = groundTexture
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
   const groundMaterial = useRef<THREE.MeshPhongMaterial>(null)
+  // Read when the warm-up runs them (ship-warmup.ts), so the probe is synced
+  // to the ground as it is then; and the GIBS streams' tile passes, drawn
+  // into their targets as the first tiles land.
+  const groundWarmProbes = (): WarmProbe[] => {
+    const ground = groundRef.current
+    const material = groundMaterial.current
+    if (!ground || !material) return []
+    syncGroundProbe(groundProbe, ground, material, flightPatch)
+    return [{ object: groundProbe }, ...gibs.flight.probes(), ...gibsNight.flight.probes()]
+  }
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
   }, [drawnPatch])
@@ -359,6 +377,7 @@ export default function EarthRenderer({
         ref={groundRef}
         geometry={groundSphere}
         raycast={meshBounds}
+        userData={{ warmProbes: groundWarmProbes }}
         onBeforeRender={(renderer, _scene, camera, geometry) => {
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
           // The haze and the Sun are set per camera before anything draws
@@ -402,6 +421,40 @@ export default function EarthRenderer({
         />
       </mesh> */}
     </group>
+  )
+}
+
+/** What the ground's patch is made of but the flight detail's parts. */
+interface GroundParts {
+  eclipse: MaterialPatch
+  clouds: CloudLayer
+  low: boolean
+  water: ReturnType<typeof createWater>
+  haze: ReturnType<typeof createGroundHaze>
+  waterDepth: THREE.IUniform<THREE.Texture>
+}
+
+/** The ground's patch with the flight detail's parts: the night flight's
+ * uniforms (none: the day's night lights) and the GIBS patches. */
+function groundPatchOf(
+  { eclipse, clouds, low, water, haze, waterDepth }: GroundParts,
+  nightFlight: NightFlightUniforms | undefined,
+  gibs: MaterialPatch,
+  gibsNight: MaterialPatch
+): MaterialPatch {
+  return composePatches(
+    eclipse,
+    clouds.groundPatch,
+    nightLightsPatch(clouds.uniforms.uSunDir, nightFlight),
+    poleSmoothingPatch(),
+    groundDetailPatch(low),
+    groundShadowPatch(clouds.uniforms.uSunDir, earthHorizon(earthHorizonUrl)),
+    // After the shadows in the list, so its sky lands before they dim
+    // directSpecular.
+    waterPatch(water, haze.frame, low, waterDepth),
+    gibs,
+    gibsNight,
+    haze.patch
   )
 }
 

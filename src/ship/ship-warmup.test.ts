@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import * as THREE from 'three'
-import { coldWork, compileSide, createWarmed, warmDefinesOnce } from './ship-warmup'
+import { coldWork, compileSide, createWarmed, runWarmup, warmDefinesOnce, type WarmProbe } from './ship-warmup'
 
 function loaded(): THREE.Texture {
   const texture = new THREE.Texture()
@@ -180,5 +180,102 @@ describe('coldWork', () => {
     const plain = new THREE.Mesh(undefined, new THREE.ShaderMaterial())
     warmDefinesOnce(renderer, plain, camera, scene.add(plain), done, byMaterial)
     expect(compiled).toHaveLength(2)
+  })
+
+  test('lists an object\'s probes with it, once a material version (tides-tvr.7.4)', () => {
+    const material = new THREE.MeshBasicMaterial()
+    const mesh = new THREE.Mesh(undefined, material)
+    const probes = (): WarmProbe[] => []
+    mesh.userData.warmProbes = probes
+    const scene = new THREE.Scene().add(mesh)
+    const warmed = createWarmed()
+
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: mesh }, { owner: mesh, probes }])
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([])
+    material.needsUpdate = true
+    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: mesh }, { owner: mesh, probes }])
+  })
+})
+
+describe('runWarmup', () => {
+  const camera = new THREE.PerspectiveCamera()
+
+  function recorder() {
+    const calls: { object: THREE.Object3D; scene: THREE.Object3D | undefined; target: THREE.WebGLRenderTarget | null }[] = []
+    let target: THREE.WebGLRenderTarget | null = null
+    const renderer = {
+      compile: (object: THREE.Object3D, _camera: THREE.Camera, scene?: THREE.Object3D) => {
+        calls.push({ object, scene, target })
+      },
+      initTexture: () => {},
+      getRenderTarget: () => target,
+      setRenderTarget: (next: THREE.WebGLRenderTarget | null) => {
+        target = next
+      },
+    } as unknown as THREE.WebGLRenderer
+    return { renderer, calls, target: () => target }
+  }
+
+  test('compiles each probe against its own scene and target, then restores the target', () => {
+    const { renderer, calls, target } = recorder()
+    const scene = new THREE.Scene()
+    const owner = new THREE.Mesh()
+    scene.add(owner)
+    const pass = new THREE.Mesh()
+    const passTarget = new THREE.WebGLRenderTarget(1, 1)
+    const stand = new THREE.Mesh()
+    const probes = (): WarmProbe[] => [{ object: stand }, { object: pass, scene: pass, target: passTarget }]
+
+    runWarmup(renderer, { owner, probes }, camera, scene, createWarmed(), byMaterial)
+
+    expect(calls).toEqual([
+      { object: stand, scene, target: null },
+      { object: pass, scene: pass, target: passTarget },
+    ])
+    expect(target()).toBe(null)
+  })
+
+  test('restores the target when a compile throws', () => {
+    const { renderer, target } = recorder()
+    renderer.compile = () => {
+      throw new Error('link')
+    }
+    const owner = new THREE.Mesh()
+    const scene = new THREE.Scene().add(owner)
+    const probes = (): WarmProbe[] => [{ object: new THREE.Mesh(), target: new THREE.WebGLRenderTarget(1, 1) }]
+
+    expect(() => runWarmup(renderer, { owner, probes }, camera, scene, createWarmed(), byMaterial)).toThrow('link')
+    expect(target()).toBe(null)
+  })
+
+  test('skips the probes of an owner that unmounted while it waited, and an unmounted object', () => {
+    const { renderer, calls } = recorder()
+    let asked = 0
+    const probes = (): WarmProbe[] => {
+      asked++
+      return [{ object: new THREE.Mesh() }]
+    }
+
+    runWarmup(renderer, { owner: new THREE.Mesh(), probes }, camera, new THREE.Scene(), createWarmed(), byMaterial)
+    runWarmup(renderer, { object: new THREE.Mesh() }, camera, new THREE.Scene(), createWarmed(), byMaterial)
+
+    expect(asked).toBe(0)
+    expect(calls).toEqual([])
+  })
+
+  test('compiles a mounted object as it is, and uploads a map', () => {
+    const { renderer, calls } = recorder()
+    const uploaded: THREE.Texture[] = []
+    renderer.initTexture = (texture: THREE.Texture) => void uploaded.push(texture)
+    const scene = new THREE.Scene()
+    const mesh = new THREE.Mesh()
+    scene.add(mesh)
+    const map = loaded()
+
+    runWarmup(renderer, { object: mesh }, camera, scene, createWarmed(), byMaterial)
+    runWarmup(renderer, { texture: map }, camera, scene, createWarmed(), byMaterial)
+
+    expect(calls).toEqual([{ object: mesh, scene, target: null }])
+    expect(uploaded).toEqual([map])
   })
 })

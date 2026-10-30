@@ -27,6 +27,7 @@ import {
   type GibsTileStore,
 } from '../gibs-patch'
 import type { MaterialPatch } from './eclipseShadow'
+import type { WarmProbe } from '../ship/ship-warmup'
 
 /** Fetches in flight at once, and tiles uploaded a frame (each regenerates
  * the texture's mips, and a 512 px upload is ~1 MB). */
@@ -85,6 +86,9 @@ export interface GibsStream {
   update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number): void
   /** Frees the texture; the stream fills again if update finds the ship near. */
   release(): void
+  /** The tile pass, made now if not yet, for the warm-ups to compile ahead
+   * of the first tile's draw (tides-tvr.7.4). */
+  probe(): WarmProbe
   /** Frees everything, the pass and the mask too (three uploads the mask
    * again if the stream is used after). */
   dispose(): void
@@ -289,6 +293,10 @@ export function createGibsStream({
     uniforms,
     update,
     release,
+    probe() {
+      const drawing = (pass ??= createPass())
+      return { object: drawing.scene, scene: drawing.scene, target: passProbeTarget() }
+    },
     dispose() {
       release()
       pass?.dispose()
@@ -299,6 +307,14 @@ export function createGibsStream({
 }
 
 const _ready: number[] = []
+
+// Any target keys a pass's program as the stream's does (three keys only
+// that it isn't the canvas: no tone mapping, linear output), so one texel
+// stands in for the patch's ~20 MB until the first tile.
+let probeTarget: THREE.WebGLRenderTarget | null = null
+function passProbeTarget(): THREE.WebGLRenderTarget {
+  return (probeTarget ??= new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false }))
+}
 
 /** A streamed patch for the ground's material, as useStreamedPatch takes it. */
 export interface StreamedPatch {
@@ -313,6 +329,18 @@ export interface StreamedPatch {
   update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number): void
   /** Frees everything; the patch fills again if update finds the ship near. */
   release(): void
+  /** Its stream's pass (GibsStream.probe), none where there is none. */
+  probes(): WarmProbe[]
+}
+
+/** What useStreamedPatch returns. */
+export interface StreamedPatchUse {
+  /** For the ground's material now: the patch with flight detail, else
+   * one that adds nothing. */
+  drawn: MaterialPatch
+  /** The patch with flight detail, whatever the detail now, for the
+   * warm-ups to compile the ground's flight program ahead (tides-tvr.7.4). */
+  flight: StreamedPatch
 }
 
 const streamed = new WeakMap<MaterialPatch, StreamedPatch>()
@@ -334,7 +362,7 @@ export function useStreamedPatch(
   create: (side: number) => StreamedPatch,
   ground: RefObject<THREE.Object3D | null>,
   radius: number
-): MaterialPatch {
+): StreamedPatchUse {
   const flight = useFlightDetail()
   const gl = useThree((s) => s.gl)
   const side = useMemo(() => gibsPatchSide(flightTextureCap(gl.capabilities.maxTextureSize)), [gl])
@@ -360,5 +388,5 @@ export function useStreamedPatch(
   useFrame(({ camera, gl }) => {
     if (flight && ground.current) patch.update(gl, camera, ground.current, radius, performance.now())
   })
-  return flight ? patch.material : none.material
+  return { drawn: flight ? patch.material : none.material, flight: patch }
 }
