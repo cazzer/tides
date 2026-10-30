@@ -17,6 +17,7 @@ import { nightLightsPatch, useNightFlight } from './nightLights'
 import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
+import { depthGridOf } from './waterRefraction'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
@@ -152,6 +153,9 @@ export default function EarthRenderer({
   // Open water that reads as water from low down (tides-07z): its waves'
   // clock and phases, at the haze's eye.
   const water = useMemo(() => createWater(groundHaze.frame), [groundHaze])
+  // The depth map read on the CPU too, to bend the waves toward shallow
+  // water under the eye (tides-nh8.3).
+  useEffect(() => water.setSeaFloor(depthGridOf(depthMap.image)), [water, depthMap])
   // The streamed tiles (tides-zmw.9.7) take the globe's features through
   // this link (its haze, eclipse, clouds, night, maps and horizon; the
   // tiles' composer, tides-zmw.9.16, surface/tile-material.ts), and the globe

@@ -38,7 +38,8 @@
 // - the waves (normal): WATER_WAVES sinusoids fixed to the Earth (so the
 //   swell stays put under a moving eye), running level the way the sea
 //   runs under the eye (tides-nh8.1, aimWaves(): about the wave climate's
-//   swell and wind-sea headings, each spread as the real sea's, turned
+//   swell and wind-sea headings, each spread as the real sea's, bent toward
+//   shallow water over the shelf, tides-nh8.3 refractHeadings(), turned
 //   slowly about the eye as it moves, reaim()), deep-water
 //   dispersion for their speeds, the longer ones carrying more of the
 //   slope (WATER_SLOPE_TILT) and bending the shorter ones' crests
@@ -92,6 +93,7 @@ import type { GroundHaze } from './groundHaze'
 import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, WATER_TINT_DEEP, waterTinted } from './waterDepth'
 import { climateAt, climateBytes, decode, localEastNorth, waterSeaTexture, WATER_CLIMATE_GLSL, type ClimateCell } from './waterClimate'
 import { NOISE_CELL_TEXELS, NOISE_LAT_MAX, noiseCellsAround } from './waterNoise'
+import { refractHeading, seaFloor, type DepthGrid, type SeaFloor } from './waterRefraction'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
@@ -337,6 +339,12 @@ export function easeHeadings(from: WaveHeadings, to: WaveHeadings, a: number): W
     axis: from.axis + 0.5 * wrapPi(2 * (to.axis - from.axis)) * a,
     turn: to.turn,
   }
+}
+
+/** `headings` bent for the sea floor under the eye (./waterRefraction.ts),
+ * each wave for its own wavelength: the longest feel the bottom first. */
+export function refractHeadings(headings: WaveHeadings, floor: SeaFloor): WaveHeadings {
+  return { ...headings, headings: headings.headings.map((h, i) => refractHeading(h, WATER_WAVE_TABLE[i].metres, floor)) }
 }
 
 /** The waves aimed over ground whose up is `up` (unit, the ground's frame)
@@ -1104,6 +1112,9 @@ export interface Water {
    * first camera after advance() also turns the waves toward the climate
    * under its eye. */
   update(): void
+  /** The depth map's grey levels, once loaded, to bend the waves toward
+   * shallow water by (tides-nh8.3); until then they run as the climate says. */
+  setSeaFloor(grid: DepthGrid | null): void
 }
 
 let climateCells: ClimateCell[] | null = null
@@ -1126,12 +1137,14 @@ export function createWater(frame: GroundHaze['frame']): Water {
   let time = 0
   let aim: WaterAim | null = null
   let headings: WaveHeadings | null = null
+  let floor: DepthGrid | null = null
   // Seconds since the waves were last aimed.
   let pending = 0
   const aimAt = (climate: ClimateCell) => {
     // The first aim, or a jump: straight to the climate here.
     const jumped = !aim || !headings || Math.hypot(...sub(eye, aim.anchor)) * EARTH_KM_PER_UNIT > WATER_AIM_SNAP_KM
-    const target = waveHeadings(climate, jumped ? undefined : headings!.turn)
+    const climateHeadings = waveHeadings(climate, jumped ? undefined : headings!.turn)
+    const target = floor ? refractHeadings(climateHeadings, seaFloor(floor, upAt(eye), EARTH_RADIUS_KM)) : climateHeadings
     headings = jumped ? target : easeHeadings(headings!, target, 1 - Math.exp(-pending / WATER_AIM_EASE_S))
     aim = jumped ? waterAim([...eye], headings) : reaim(aim!, [...eye], headings)
     pending = 0
@@ -1158,6 +1171,9 @@ export function createWater(frame: GroundHaze['frame']): Water {
       const split = eye.map(splitDouble)
       uniforms.uWaterEyeHi.value.set(split[0][0], split[1][0], split[2][0])
       uniforms.uWaterEyeLo.value.set(split[0][1], split[1][1], split[2][1])
+    },
+    setSeaFloor(grid) {
+      floor = grid
     },
   }
 }
