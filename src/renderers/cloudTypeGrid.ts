@@ -8,7 +8,6 @@
 // (tides-tvr.4.2) has to take in its stride. Forecast frames already wait for
 // the grid for their cover, and type from that (./cloudPipeline.ts).
 import { COVER_PAST_DAYS, FORECAST_STALE_MAX_MS, type CoverGrid } from '../forecast-clouds'
-import { typeGridImage } from '../cloud-types'
 import { DAY_MS, utcDay } from '../real-clouds'
 
 /** A ceiling on the wait for the grid once the tiles are done. peek only
@@ -35,13 +34,11 @@ export function typeGridLoad(deps: TypeGridDeps, fromMs: number, toMs: number): 
   })
 }
 
-/** The type grid from a typeGridLoad, waiting at most TYPE_GRID_WAIT_MS
- * (then null). Rejects with the signal's reason when aborted. */
-export async function typesWithin(
-  load: Promise<CoverGrid | null>,
-  timeOfLon: (grid: CoverGrid) => (lonDeg: number) => number,
-  signal: AbortSignal
-): Promise<Uint8Array<ArrayBuffer> | null> {
+/** The grid from a typeGridLoad, waiting at most TYPE_GRID_WAIT_MS (then
+ * null), for the type and precipitation grids (../cloud-types.ts,
+ * ../cloud-precip.ts) to come from one wait. Rejects with the signal's reason
+ * when aborted. */
+export async function gridWithin(load: Promise<CoverGrid | null>, signal: AbortSignal): Promise<CoverGrid | null> {
   signal.throwIfAborted()
   let timer: ReturnType<typeof setTimeout> | undefined
   let onAbort: (() => void) | undefined
@@ -53,8 +50,7 @@ export async function typesWithin(
     signal.addEventListener('abort', onAbort, { once: true })
   })
   try {
-    const grid = await Promise.race([load, late, aborted])
-    return grid && typeGridImage(grid, timeOfLon(grid))
+    return await Promise.race([load, late, aborted])
   } finally {
     clearTimeout(timer)
     signal.removeEventListener('abort', onAbort!)

@@ -60,6 +60,7 @@ function grid(
     hours,
     cover: new Float32Array(hours * GRID_POINTS),
     layers: { low: make('low'), mid: make('mid'), high: make('high') },
+    precip: null,
   }
 }
 

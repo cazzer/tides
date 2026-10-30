@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { TYPE_GRID_WAIT_MS, typeGridLoad, typesWithin } from './cloudTypeGrid'
+import { gridWithin, TYPE_GRID_WAIT_MS, typeGridLoad } from './cloudTypeGrid'
 import { COVER_PAST_DAYS, FORECAST_STALE_MAX_MS, GRID_POINTS, type CoverGrid } from '../forecast-clouds'
-import { TYPE_H, TYPE_W } from '../cloud-types'
 import { DAY_MS, HOUR_MS, utcDay } from '../real-clouds'
 
 const NOW = Date.UTC(2026, 9, 26, 1, 30)
@@ -15,10 +14,9 @@ function grid(): CoverGrid {
     hours: 48,
     cover: new Float32Array(n),
     layers: { low: new Float32Array(n), mid: new Float32Array(n), high: new Float32Array(n).fill(1) },
+    precip: null,
   }
 }
-
-const at = (t: number) => () => () => t
 
 afterEach(() => {
   vi.useRealTimers()
@@ -52,23 +50,20 @@ describe('typeGridLoad', () => {
   })
 })
 
-describe('typesWithin', () => {
-  test('the type grid at the times given', async () => {
-    const types = await typesWithin(Promise.resolve(grid()), at(START + HOUR_MS), new AbortController().signal)
-    expect(types).toHaveLength(TYPE_W * TYPE_H * 4)
-    expect([...types!.subarray(0, 4)]).toEqual([255, 0, 0, 255])
+describe('gridWithin', () => {
+  test('the grid once it loads', async () => {
+    const g = grid()
+    expect(await gridWithin(Promise.resolve(g), new AbortController().signal)).toBe(g)
   })
 
-  test('no grid, or no layers: untyped', async () => {
-    const signal = new AbortController().signal
-    expect(await typesWithin(Promise.resolve(null), at(START), signal)).toBeNull()
-    expect(await typesWithin(Promise.resolve({ ...grid(), layers: null }), at(START), signal)).toBeNull()
+  test('no grid: null', async () => {
+    expect(await gridWithin(Promise.resolve(null), new AbortController().signal)).toBeNull()
   })
 
-  test('storage that hangs: untyped after TYPE_GRID_WAIT_MS', async () => {
+  test('storage that hangs: null after TYPE_GRID_WAIT_MS', async () => {
     vi.useFakeTimers()
     let settled = false
-    const pending = typesWithin(new Promise<CoverGrid | null>(() => {}), at(START), new AbortController().signal)
+    const pending = gridWithin(new Promise<CoverGrid | null>(() => {}), new AbortController().signal)
     pending.then(() => (settled = true))
     await vi.advanceTimersByTimeAsync(TYPE_GRID_WAIT_MS - 1)
     expect(settled).toBe(false)
@@ -80,7 +75,7 @@ describe('typesWithin', () => {
   test('an abort while waiting rejects with an AbortError, not null', async () => {
     vi.useFakeTimers()
     const abort = new AbortController()
-    const pending = typesWithin(new Promise<CoverGrid | null>(() => {}), at(START), abort.signal)
+    const pending = gridWithin(new Promise<CoverGrid | null>(() => {}), abort.signal)
     abort.abort()
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
     expect(vi.getTimerCount()).toBe(0)
@@ -89,15 +84,13 @@ describe('typesWithin', () => {
   test('an already aborted build throws at once', async () => {
     const abort = new AbortController()
     abort.abort()
-    await expect(typesWithin(Promise.resolve(grid()), at(START), abort.signal)).rejects.toMatchObject({
-      name: 'AbortError',
-    })
+    await expect(gridWithin(Promise.resolve(grid()), abort.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   test('drops its abort listener once done', async () => {
     const abort = new AbortController()
     const remove = vi.spyOn(abort.signal, 'removeEventListener')
-    await typesWithin(Promise.resolve(grid()), at(START), abort.signal)
+    await gridWithin(Promise.resolve(grid()), abort.signal)
     expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
   })
 })

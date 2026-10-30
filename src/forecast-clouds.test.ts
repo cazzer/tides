@@ -28,6 +28,10 @@ import {
   resampleWeight,
   layersAt,
   sampleCoverSmooth,
+  precipAt,
+  precipitationAt,
+  PRECIP_VALID_MAX,
+  SNOW_CM_TO_MM,
   type FetchBackoff,
 } from './forecast-clouds'
 import { FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W } from './real-clouds'
@@ -67,8 +71,25 @@ function layeredResponse(
   }))
 }
 
+/** layeredResponse() (layers 50%) with the hour's rain and showers (mm) and
+ * snowfall (cm) too. */
+function precipResponse(
+  precip: (key: 'rain' | 'showers' | 'snowfall', i: number, h: number) => number | null,
+  hours = 48
+) {
+  return layeredResponse(() => 50, hours).map((point, i) => ({
+    ...point,
+    hourly: {
+      ...point.hourly,
+      rain: Array.from({ length: hours }, (_, h) => precip('rain', i, h)),
+      showers: Array.from({ length: hours }, (_, h) => precip('showers', i, h)),
+      snowfall: Array.from({ length: hours }, (_, h) => precip('snowfall', i, h)),
+    },
+  }))
+}
+
 describe('coverRequestBody', () => {
-  test('every grid point, hourly cover and its layers from two days back for a week, in unix time', () => {
+  test('every grid point in one body, hourly cover, its layers and the precipitation from two days back for a week, in unix time', () => {
     const body = coverRequestBody()
     const lats = body.get('latitude')!.split(',').map(Number)
     const lons = body.get('longitude')!.split(',').map(Number)
@@ -77,7 +98,9 @@ describe('coverRequestBody', () => {
     expect([lats[0], lons[0], lats[1], lons[1], lats[36]]).toEqual([85, -180, 85, -170, 75])
     expect(lats[GRID_POINTS - 1]).toBe(-85)
     expect(lons[GRID_POINTS - 1]).toBe(170)
-    expect(body.get('hourly')).toBe('cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high')
+    expect(body.get('hourly')).toBe(
+      'cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,rain,showers,snowfall'
+    )
     expect(body.get('forecast_days')).toBe('7')
     expect(body.get('past_days')).toBe('2')
     expect(COVER_PAST_DAYS).toBe(2)
@@ -91,8 +114,61 @@ describe('parseCoverGrid', () => {
     expect(grid.startMs).toBe(START)
     expect(grid.hours).toBe(48)
     expect(grid.cover[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
-    // Without layers (a grid stored before tides-tvr.4.1): untyped.
+    // Without layers (a grid stored before tides-tvr.4.1): untyped, and dry.
     expect(grid.layers).toBeNull()
+    expect(grid.precip).toBeNull()
+  })
+
+  test('a response with precipitation: rain and showers as they are, snowfall as its water', () => {
+    const grid = parseCoverGrid(
+      precipResponse((key, i, h) => (key === 'rain' ? 1.5 : key === 'showers' ? 0.25 * h : i === 10 ? 0.7 : 0))
+    )
+    expect(grid.cover[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
+    expect(grid.layers!.low[0]).toBeCloseTo(0.5)
+    expect(grid.precip!.rain[5 * GRID_POINTS + 7]).toBeCloseTo(1.5)
+    expect(grid.precip!.showers[4 * GRID_POINTS + 7]).toBeCloseTo(1)
+    expect(grid.precip!.snow[3 * GRID_POINTS + 10]).toBeCloseTo(0.7 * SNOW_CM_TO_MM)
+    expect(grid.precip!.snow[3 * GRID_POINTS + 10]).toBeCloseTo(1)
+    expect(grid.precip!.snow[3 * GRID_POINTS + 11]).toBe(0)
+  })
+
+  test('precipitation missing at one point, the wrong length or full of gaps leaves the grid dry, cover and layers intact', () => {
+    const missing = precipResponse(() => 1)
+    delete (missing[100].hourly as Partial<(typeof missing)[0]['hourly']>).showers
+    const short = precipResponse(() => 1)
+    short[3].hourly.snowfall.pop()
+    const gappy = precipResponse((key, i) => (key === 'rain' && i < 70 ? null : 1))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const json of [missing, short, gappy]) {
+      const grid = parseCoverGrid(json)
+      expect(grid.precip).toBeNull()
+      expect(grid.cover[3 * GRID_POINTS + 10]).toBeCloseTo(0.13)
+      expect(grid.layers!.mid[3 * GRID_POINTS + 10]).toBeCloseTo(0.5)
+    }
+    expect(warn).toHaveBeenCalledWith('[clouds] precipitation unusable; dry', expect.any(String))
+    // A grid of cover and layers alone (stored before tides-bl3.1): dry.
+    expect(parseCoverGrid(layeredResponse(() => 50)).precip).toBeNull()
+    warn.mockRestore()
+  })
+
+  test('layers unusable leave the precipitation as it is', () => {
+    const json = precipResponse(() => 2)
+    delete (json[5].hourly as Partial<(typeof json)[0]['hourly']>).cloud_cover_low
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const grid = parseCoverGrid(json)
+    warn.mockRestore()
+    expect(grid.layers).toBeNull()
+    expect(grid.precip!.rain[GRID_POINTS + 5]).toBeCloseTo(2)
+  })
+
+  test('fills negative or implausible precipitation with its row mean at that hour', () => {
+    const grid = parseCoverGrid(
+      precipResponse((key, i, h) =>
+        key === 'rain' && h === 2 && i === 80 ? -1 : key === 'snowfall' && h === 3 && i === 81 ? PRECIP_VALID_MAX + 1 : 3
+      )
+    )
+    expect(grid.precip!.rain[2 * GRID_POINTS + 80]).toBeCloseTo(3)
+    expect(grid.precip!.snow[3 * GRID_POINTS + 81]).toBeCloseTo(3 * SNOW_CM_TO_MM)
   })
 
   test('a response with layers', () => {
@@ -199,6 +275,35 @@ test('layersAt: linear between hours, null outside the grid or without layers', 
   expect(layersAt(grid, START - 1)).toBeNull()
   expect(layersAt(grid, START + 47 * HOUR_MS + 1)).toBeNull()
   expect(layersAt(parseCoverGrid(response()), START + HOUR_MS)).toBeNull()
+})
+
+test('precipitationAt: linear between hours, null outside the grid or without precipitation', () => {
+  const grid = parseCoverGrid(precipResponse((key, i, h) => (key === 'rain' ? (h % 2 ? 3 : 1) : key === 'showers' ? 0.5 : 0.7)))
+  const at = precipitationAt(grid, START + 2.5 * HOUR_MS)!
+  expect(at.rain[0]).toBeCloseTo(2)
+  expect(at.showers[GRID_POINTS - 1]).toBeCloseTo(0.5)
+  expect(at.snow[300]).toBeCloseTo(1)
+  expect(precipitationAt(grid, START - 1)).toBeNull()
+  expect(precipitationAt(grid, START + 47 * HOUR_MS + 1)).toBeNull()
+  expect(precipitationAt(parseCoverGrid(layeredResponse(() => 50)), START + HOUR_MS)).toBeNull()
+})
+
+test("precipAt: the cell centre's value there, continuous across 180°, null without precipitation", () => {
+  const grid = parseCoverGrid(
+    precipResponse((key, i) => (key === 'rain' ? (i % 36) / 10 : key === 'showers' ? Math.floor(i / 36) / 10 : 0))
+  )
+  const t = START + 5 * HOUR_MS
+  // Point 3 * 36 + 4: 55° N, 140° W.
+  expect(precipAt(grid, 55, -140, t)).toEqual({
+    rain: expect.closeTo(0.4, 5),
+    showers: expect.closeTo(0.3, 5),
+    snow: 0,
+  })
+  const west = precipAt(grid, 10, 179.999, t)!
+  const east = precipAt(grid, 10, -179.999, t)!
+  expect(Math.abs(west.rain - east.rain)).toBeLessThan(0.01)
+  expect(precipAt(grid, 10, 0, START - 1)).toBeNull()
+  expect(precipAt(parseCoverGrid(layeredResponse(() => 50)), 10, 0, t)).toBeNull()
 })
 
 test('sampleCoverSmooth: through the cell centres, flat at them, continuous across 180°', () => {

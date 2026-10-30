@@ -131,4 +131,16 @@ describe('imageTransfer', () => {
     expect(copy.types).toHaveLength(144 * 72 * 4)
     expect(copy.types![1000]).toBe(1000 % 251)
   })
+
+  test('moves the precipitation grid too (tides-bl3.1)', () => {
+    const types = new Uint8Array(144 * 72 * 4)
+    const precip = Uint8Array.from({ length: 144 * 72 * 4 }, (_, i) => i % 241)
+    const wet: CloudImage = { rgba: new Uint8ClampedArray(16), geo: null, types, precip }
+    expect(imageTransfer(wet)).toEqual([wet.rgba.buffer, types.buffer, precip.buffer])
+    const untyped: CloudImage = { rgba: new Uint8ClampedArray(16), geo: null, precip: new Uint8Array(4) }
+    expect(imageTransfer(untyped)).toEqual([untyped.rgba.buffer, untyped.precip!.buffer])
+    const copy = structuredClone(wet, { transfer: imageTransfer(wet) })
+    expect(precip.byteLength).toBe(0)
+    expect(copy.precip![1000]).toBe(1000 % 241)
+  })
 })

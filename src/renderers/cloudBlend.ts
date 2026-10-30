@@ -16,6 +16,10 @@
 // beside its output, each typed column's top and lift (tides-tvr.4.3,
 // tides-tvr.4.9, ./cloudTypeGlsl.ts CLOUD_TYPED_TOP_GLSL), for the typed
 // march to read where it reads the map.
+//
+// The frames' precipitation grids (tides-bl3.1, ../cloud-precip.ts) take a
+// third pass with the type pass's own material, as they are laid out alike
+// (premultiplied by A): a frame without one counts as A 0, no data.
 import * as THREE from 'three'
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import { OUT_H, OUT_W, smoothstep } from '../real-clouds'
@@ -163,20 +167,35 @@ export function typesOf(texture: THREE.Texture): THREE.Texture | null {
   return (texture.userData.types as THREE.Texture | null | undefined) ?? null
 }
 
+/** A frame's precipitation grid (realCloudTextures.ts keeps it in
+ * userData.precip), or null without one. */
+export function precipOf(texture: THREE.Texture): THREE.Texture | null {
+  return (texture.userData.precip as THREE.Texture | null | undefined) ?? null
+}
+
+/** A frame's precipitation grid's bytes (../cloud-precip.ts, for
+ * precipFromFrames on the main thread), or null without one; the static
+ * clouds have none. */
+export function precipBytesOf(texture: THREE.Texture | 'static'): Uint8Array | null {
+  if (texture === 'static') return null
+  return ((texture.userData.precip as THREE.DataTexture | null | undefined)?.image.data as Uint8Array | undefined) ?? null
+}
+
 /**
  * What an output carries: measured heights where any of its inputs did, and
- * types likewise; the frozen output it fades from counts until the fade
- * ends, when the pass drops it.
+ * types and precipitation likewise; the frozen output it fades from counts
+ * until the fade ends, when the pass drops it.
  */
 export function outputFlags(
-  a: { geo: boolean; typed: boolean },
-  b: { geo: boolean; typed: boolean },
-  prev: { measured: boolean; typed: boolean },
+  a: { geo: boolean; typed: boolean; precip: boolean },
+  b: { geo: boolean; typed: boolean; precip: boolean },
+  prev: { measured: boolean; typed: boolean; precip: boolean },
   fade: number
-): { measured: boolean; typed: boolean } {
+): { measured: boolean; typed: boolean; precip: boolean } {
   return {
     measured: a.geo || b.geo || (fade < 1 && prev.measured),
     typed: a.typed || b.typed || (fade < 1 && prev.typed),
+    precip: a.precip || b.precip || (fade < 1 && prev.precip),
   }
 }
 
@@ -189,9 +208,14 @@ interface Output {
   measured: boolean
   /** Whether any of its inputs carried a type grid. */
   typed: boolean
+  /** The blended precipitation grid, TYPE_W x TYPE_H. */
+  precip: THREE.WebGLRenderTarget
+  /** Whether any of its inputs carried a precipitation grid. */
+  hasPrecip: boolean
 }
 
-function createTypeTarget(): THREE.WebGLRenderTarget {
+/** A blended type or precipitation grid. */
+function createGridTarget(): THREE.WebGLRenderTarget {
   const target = new THREE.WebGLRenderTarget(TYPE_W, TYPE_H, {
     format: THREE.RGBAFormat,
     type: THREE.UnsignedByteType,
@@ -225,7 +249,14 @@ function createTarget(): Output {
     magFilter: THREE.LinearFilter,
     colorSpace: THREE.NoColorSpace,
   })
-  return { target, types: createTypeTarget(), measured: false, typed: false }
+  return {
+    target,
+    types: createGridTarget(),
+    measured: false,
+    typed: false,
+    precip: createGridTarget(),
+    hasPrecip: false,
+  }
 }
 
 const isGeo = (texture: THREE.Texture) => Boolean(texture.userData.geo)
@@ -242,6 +273,8 @@ export function createCloudBlender() {
     geo: boolean
     measured: boolean
     typed: boolean
+    precip: THREE.Texture
+    hasPrecip: boolean
   } | null = null
   let quad: FullScreenQuad | null = null
   let material: THREE.ShaderMaterial | null = null
@@ -304,10 +337,20 @@ export function createCloudBlender() {
           geo: true,
           measured: frozen.measured,
           typed: frozen.typed,
+          precip: frozen.precip.texture,
+          hasPrecip: frozen.hasPrecip,
         }
         current = 1 - current
       } else {
-        prev = { texture: staticTexture, types: neutralTypeTexture(), geo: false, measured: false, typed: false }
+        prev = {
+          texture: staticTexture,
+          types: neutralTypeTexture(),
+          geo: false,
+          measured: false,
+          typed: false,
+          precip: neutralTypeTexture(),
+          hasPrecip: false,
+        }
       }
     }
     const out = outputs[current]
@@ -323,27 +366,44 @@ export function createCloudBlender() {
     u.uTypes.value = out.types.texture
     const aTypes = typesOf(pick.a)
     const bTypes = typesOf(pick.b)
-    const t = typeMaterial.uniforms
-    t.uPrev.value = prev.types
-    t.uPrevTyped.value = prev.typed ? 1 : 0
-    t.uA.value = aTypes ?? neutralTypeTexture()
-    t.uATyped.value = aTypes ? 1 : 0
-    t.uB.value = bTypes ?? neutralTypeTexture()
-    t.uBTyped.value = bTypes ? 1 : 0
-    t.uMix.value = pick.mix
-    t.uFade.value = fade
+    const aPrecip = precipOf(pick.a)
+    const bPrecip = precipOf(pick.b)
     const flags = outputFlags(
-      { geo: isGeo(pick.a), typed: aTypes !== null },
-      { geo: isGeo(pick.b), typed: bTypes !== null },
-      prev,
+      { geo: isGeo(pick.a), typed: aTypes !== null, precip: aPrecip !== null },
+      { geo: isGeo(pick.b), typed: bTypes !== null, precip: bPrecip !== null },
+      { measured: prev.measured, typed: prev.typed, precip: prev.hasPrecip },
       fade
     )
     out.measured = flags.measured
     out.typed = flags.typed
+    out.hasPrecip = flags.precip
+
+    // One pass of the grid material: the frozen output's grid, then each
+    // frame's, a missing one as the neutral texel times 0.
+    const t = typeMaterial.uniforms
+    const gridQuad = typeQuad
+    function drawGrid(
+      target: THREE.WebGLRenderTarget,
+      prevGrid: THREE.Texture,
+      prevHas: boolean,
+      aGrid: THREE.Texture | null,
+      bGrid: THREE.Texture | null
+    ) {
+      t.uPrev.value = prevGrid
+      t.uPrevTyped.value = prevHas ? 1 : 0
+      t.uA.value = aGrid ?? neutralTypeTexture()
+      t.uATyped.value = aGrid ? 1 : 0
+      t.uB.value = bGrid ?? neutralTypeTexture()
+      t.uBTyped.value = bGrid ? 1 : 0
+      t.uMix.value = pick.mix
+      t.uFade.value = fade
+      gl.setRenderTarget(target)
+      gridQuad.render(gl)
+    }
 
     const restore = gl.getRenderTarget()
-    gl.setRenderTarget(out.types)
-    typeQuad.render(gl)
+    drawGrid(out.types, prev.types, prev.typed, aTypes, bTypes)
+    drawGrid(out.precip, prev.precip, prev.hasPrecip, aPrecip, bPrecip)
     gl.setRenderTarget(out.target)
     quad.render(gl)
     gl.setRenderTarget(restore)
@@ -356,7 +416,9 @@ export function createCloudBlender() {
      * show, or null before the first output. Idempotent within a frame for the
      * same wallMs, so every View can call it. typeTexture is the blended
      * cloud-type grid, which only counts where typed, and topsTexture its
-     * typed columns, laid out like the map.
+     * typed columns, laid out like the map. precipTexture is the blended
+     * precipitation grid (../cloud-precip.ts), and precip whether any input
+     * had one.
      */
     update(
       gl: THREE.WebGLRenderer,
@@ -369,6 +431,8 @@ export function createCloudBlender() {
       typed: boolean
       typeTexture: THREE.Texture
       topsTexture: THREE.Texture
+      precipTexture: THREE.Texture
+      precip: boolean
     } | null {
       if (pick) {
         const step = planBlendPass(
@@ -387,6 +451,8 @@ export function createCloudBlender() {
         typed: out.typed,
         typeTexture: out.types.texture,
         topsTexture: out.target.textures[1],
+        precipTexture: out.precip.texture,
+        precip: out.hasPrecip,
       }
     },
     /** Frees the GPU resources; the next update starts afresh. */
@@ -394,6 +460,7 @@ export function createCloudBlender() {
       outputs?.forEach((o) => {
         o.target.dispose()
         o.types.dispose()
+        o.precip.dispose()
       })
       material?.dispose()
       quad?.dispose()

@@ -9,9 +9,11 @@
 // it's day, over that day's composite. A forecast (tides-kzj.4.3) evolves
 // the latest of those with forecast cloud cover. Each frame carries a small
 // cloud-type grid (tides-tvr.4.1) from the forecast's low, mid and high cover
-// at the time it shows, where the cover grid has it. The maths is in
-// ../real-clouds.ts, ../geo-clouds.ts, ../forecast-clouds.ts and
-// ../cloud-types.ts; ./realCloudTextures.ts makes the textures.
+// at the time it shows, where the cover grid has it, and a precipitation grid
+// (tides-bl3.1) likewise from its rain, showers and snowfall. The maths is in
+// ../real-clouds.ts, ../geo-clouds.ts, ../forecast-clouds.ts,
+// ../cloud-types.ts and ../cloud-precip.ts; ./realCloudTextures.ts makes the
+// textures.
 import {
   blendDaily,
   COLS,
@@ -48,6 +50,7 @@ import {
   type CoverGrid,
 } from '../forecast-clouds'
 import { dailyTimeOfLon, typeGridImage } from '../cloud-types'
+import { precipGridImage } from '../cloud-precip'
 import {
   bridgeGaps,
   composeGeoClouds,
@@ -64,7 +67,7 @@ import {
   type Terrain,
 } from '../geo-clouds'
 import { coverGrids } from './forecastGrid'
-import { typeGridLoad, typesWithin } from './cloudTypeGrid'
+import { gridWithin, typeGridLoad } from './cloudTypeGrid'
 import { decodeEarthDem, halveDem, resampleDem, type EarthDem } from '../earth-dem'
 import type { ImagerySource } from './realCloudController'
 
@@ -521,6 +524,9 @@ export interface CloudImage {
   /** The cloud-type grid (../cloud-types.ts, TYPE_W x TYPE_H RGBA, bottom
    * row first) where the cover grid has layers for the frame's time. */
   types?: Uint8Array<ArrayBuffer>
+  /** The precipitation grid (../cloud-precip.ts, TYPE_W x TYPE_H RGBA,
+   * bottom row first) where the cover grid has it for the frame's time. */
+  precip?: Uint8Array<ArrayBuffer>
 }
 
 /** Reverses the rows of an OUT_W-wide RGBA image in place. */
@@ -543,6 +549,20 @@ function imageOf(rgba: Uint8ClampedArray<ArrayBuffer>, geo: GeoTextureInfo | nul
   return { rgba, geo }
 }
 
+/** The image with the grid's type and precipitation grids for it, those it
+ * has; as it is without a grid. */
+function withGridImages(
+  image: CloudImage,
+  grid: CoverGrid | null,
+  timeOfLon: (grid: CoverGrid) => (lonDeg: number) => number
+): CloudImage {
+  if (!grid) return image
+  const at = timeOfLon(grid)
+  const types = typeGridImage(grid, at)
+  const precip = precipGridImage(grid, at)
+  return { ...image, ...(types && { types }), ...(precip && { precip }) }
+}
+
 // The cloud types of geostationary and daily frames (./cloudTypeGrid.ts):
 // from the grid to hand, without waiting on the network.
 const typeGrids = { peek: coverGrids.peek, now: () => Date.now() }
@@ -559,8 +579,7 @@ async function buildDailyImage(
   if (!data) return null
   // A copy: the composite stays shared with geostationary builds.
   const image = imageOf(new Uint8ClampedArray(data), null)
-  const types = await typesWithin(grid, (g) => dailyTimeOfLon(g, dayMs), signal)
-  return types ? { ...image, types } : image
+  return withGridImages(image, await gridWithin(grid, signal), (g) => dailyTimeOfLon(g, dayMs))
 }
 
 interface SatelliteTiles {
@@ -622,8 +641,7 @@ async function buildGeoImage(
   const built = await buildGeoRgba(source, staticUrl, signal)
   if (!built) return null
   const image = imageOf(built.rgba, built.geo)
-  const types = await typesWithin(grid, () => () => slotMs, signal)
-  return types ? { ...image, types } : image
+  return withGridImages(image, await gridWithin(grid, signal), () => () => slotMs)
 }
 
 /** Null when there's neither geostationary nor daily imagery. Throws when
@@ -846,11 +864,11 @@ async function buildForecastImage(
   )
   await yieldToFrame()
   signal.throwIfAborted()
-  // Types at the frame's hour. A held frame (above) stays untyped, whatever
-  // held it: no grid, a grid not covering the observation or the hour, or no
-  // cloud structure (rank) even though the grid covers the hour.
-  const types = typeGridImage(grid, () => toMs)
-  return types ? { ...imageOf(out, null), types } : imageOf(out, null)
+  // Types and precipitation at the frame's hour. A held frame (above) stays
+  // without them, whatever held it: no grid, a grid not covering the
+  // observation or the hour, or no cloud structure (rank) even though the
+  // grid covers the hour.
+  return withGridImages(imageOf(out, null), grid, () => () => toMs)
 }
 
 /** The texture's pixels for a source, or null when there's neither imagery
