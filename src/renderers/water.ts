@@ -1147,10 +1147,12 @@ export function createWater(frame: GroundHaze['frame']): Water {
   let live: { grid: LiveWaveGrid; cells: ClimateCell[] } | null = null
   // Seconds since the waves were last aimed.
   let pending = 0
-  const aimAt = (climate: ClimateCell) => {
+  // `climate` the waves run by; `glint` the climate whose dominant axis the
+  // GPU's texture holds (the baked), which each wave's cos 2 delta is off.
+  const aimAt = (climate: ClimateCell, glint: ClimateCell) => {
     // The first aim, or a jump: straight to the climate here.
     const jumped = !aim || !headings || Math.hypot(...sub(eye, aim.anchor)) * EARTH_KM_PER_UNIT > WATER_AIM_SNAP_KM
-    const climateHeadings = waveHeadings(climate, jumped ? undefined : headings!.turn)
+    const climateHeadings = { ...waveHeadings(climate, jumped ? undefined : headings!.turn), axis: Math.atan2(glint.waveSin, glint.waveCos) }
     const target = floor ? refractHeadings(climateHeadings, seaFloor(floor, upAt(eye), EARTH_RADIUS_KM)) : climateHeadings
     headings = jumped ? target : easeHeadings(headings!, target, 1 - Math.exp(-pending / WATER_AIM_EASE_S))
     aim = jumped ? waterAim([...eye], headings) : reaim(aim!, [...eye], headings)
@@ -1170,7 +1172,8 @@ export function createWater(frame: GroundHaze['frame']): Water {
       frame.uGroundHazeEyeLocal.value.toArray(eye)
       if (!aim || pending > 0) {
         climateCells ??= decode(climateBytes())
-        aimAt(climateAt(live?.cells ?? climateCells, upAt(eye)))
+        const baked = climateAt(climateCells, upAt(eye))
+        aimAt(live ? climateAt(live.cells, upAt(eye)) : baked, baked)
       }
       waterPhases(aim!, eye, time, uniforms.uWavePhase.value)
       waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)

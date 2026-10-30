@@ -3,28 +3,22 @@
 // (and any failure backoff) in Cache Storage, shared by every tab, so neither
 // a reload nor a second tab fetches again within LIVE_WAVES_TTL_MS. Tabs take
 // turns through a Web Lock. As ./forecastGrid.ts does the clouds' cover.
-import { createWaveGridSource, MARINE_URL, waveRequestBodies, type WaveBackoff } from '../forecast-waves'
+import { createWaveGridSource, MARINE_URL, waveRequestBody, type WaveBackoff } from '../forecast-waves'
 
 const FETCH_TIMEOUT_MS = 30_000
 const STORE = 'tides-forecast-v1'
 // The Cache API only stores GET requests, so the POST's response is kept
 // under a fixed URL of its own.
-const STORE_KEY = 'https://tides.invalid/open-meteo/marine-current-7.5deg'
+const STORE_KEY = 'https://tides.invalid/open-meteo/marine-current-15deg'
 const BACKOFF_KEY = 'https://tides.invalid/open-meteo/marine-backoff'
 const FETCHED_AT = 'x-fetched-at'
 const LOCK = 'tides-live-waves'
 
-/** Every request's answer, in turn, concatenated. */
 async function fetchJson(): Promise<unknown> {
-  const all: unknown[] = []
-  for (const body of waveRequestBodies()) {
-    // Form-encoded, so no CORS preflight; the coordinates are too long for a URL.
-    const res = await fetch(MARINE_URL, { method: 'POST', body, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-    if (!res.ok) throw new Error(`Open-Meteo Marine HTTP ${res.status}`)
-    const json: unknown = await res.json()
-    all.push(...(Array.isArray(json) ? json : [json]))
-  }
-  return all
+  // Form-encoded, so no CORS preflight; the coordinates are too long for a URL.
+  const res = await fetch(MARINE_URL, { method: 'POST', body: waveRequestBody(), signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+  if (!res.ok) throw new Error(`Open-Meteo Marine HTTP ${res.status}`)
+  return res.json()
 }
 
 /** Null where Cache Storage isn't available; the grid then lives in memory. */

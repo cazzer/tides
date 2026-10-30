@@ -19,7 +19,7 @@ import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
 import { depthGridOf } from './waterRefraction'
 import { liveWaveGrids } from './liveWaveGrid'
-import { liveServes } from '../forecast-waves'
+import { liveServes, type LiveWaveGrid } from '../forecast-waves'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
@@ -160,22 +160,27 @@ export default function EarthRenderer({
   useEffect(() => water.setSeaFloor(depthGridOf(depthMap.image)), [water, depthMap])
   // Today's wave directions (tides-nh8.4) while the real weather is shown
   // and the clock is near their time; else the baked climate's. Checked
-  // each minute: the clock moves, and a refresh lands in the background.
+  // every ten seconds (the clock moves; the grid is in memory) and as soon
+  // as a refresh lands.
   useEffect(() => {
     if (!real) {
       water.setLiveWaves(null)
       return
     }
     let alive = true
+    const apply = (grid: LiveWaveGrid | null) => {
+      if (alive) water.setLiveWaves(liveServes(grid, useStore.getState().timestamp) ? grid : null)
+    }
     const check = () =>
       liveWaveGrids
         .peek()
         .then((grid) => {
-          if (alive) water.setLiveWaves(liveServes(grid, useStore.getState().timestamp) ? grid : null)
+          apply(grid)
+          return liveWaveGrids.settled().then(() => liveWaveGrids.peek().then(apply))
         })
         .catch(() => {})
     check()
-    const id = setInterval(check, 60_000)
+    const id = setInterval(check, 10_000)
     return () => {
       alive = false
       clearInterval(id)

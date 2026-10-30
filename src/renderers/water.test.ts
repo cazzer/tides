@@ -686,7 +686,7 @@ describe('the waves aimed the way the sea runs (tides-nh8.1)', () => {
     water.update()
     const baked = swellBearing()
     // Live: the swell from the south-west, so heading north-east.
-    const blank = () => new Float32Array(48 * 24).fill(225)
+    const blank = () => new Float32Array(24 * 11).fill(225)
     water.setLiveWaves({ timeMs: 0, wave: blank(), wind: blank(), swell: blank() })
     // Eased: a minute on, it has come round.
     for (let n = 0; n < 60; n++) {
