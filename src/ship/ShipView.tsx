@@ -7,6 +7,7 @@ import { glassFloatingButton } from '../glass-styles'
 import { ShipController } from './ShipController'
 import { DesktopShipControls } from './DesktopShipControls'
 import { SpaceDust } from './SpaceDust'
+import { FallingPrecip } from './FallingPrecip'
 import { SpeedFov } from './useSpeedFov'
 import { ShipShake } from './useShipShake'
 import { SpeedBlur } from './SpeedBlur'
@@ -102,12 +103,14 @@ export function ShipView({ children }: { children: ReactNode }) {
         {children}
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust, the
+            rain and snow falling under a wet cloud (tides-bl3.3), the
             speed FOV kick (tides-3bl.6), the gravity wells' rings
             (tides-h6a), the air shudder (tides-xxg) and
             the engine and wind sound (tides-a4j.2) and its one-shot cues
             (tides-a4j.3), which read what ShipController, SpeedFov and
             ShipTargeting write, so they come after them. */}
         <SpaceDust />
+        <FallingPrecip />
         <SpeedFov />
         <ShipShake />
         <ShipTargeting />

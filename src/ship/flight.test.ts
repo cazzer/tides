@@ -1637,7 +1637,7 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     const state = shipAt(new THREE.Vector3(20, 0, 0), new THREE.Vector3(50, 0, 0))
     fly(state, 1, input({ throttle: 1 }), env(BODIES))
     stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES), telemetry)
-    expect(telemetry.air).toEqual({ speed: telemetry.speed, coupling: 0, density: 0, dynamicPressure: 0 })
+    expect(telemetry.air).toEqual({ speed: telemetry.speed, coupling: 0, density: 0, dynamicPressure: 0, velocity: new THREE.Vector3() })
     expect(telemetry.speed).toBeGreaterThan(0)
   })
 })

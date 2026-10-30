@@ -15,6 +15,7 @@ import {
   SCALE_HEIGHT_KM,
   SIDEREAL_RATE,
   airDensity,
+  airVelocity,
   carryShip,
   createFrameCarry,
   dragRate,
@@ -23,6 +24,7 @@ import {
   fillAir,
   fillAirDensity,
   fillAirUncarried,
+  fillEarthEye,
   relaxKappa,
   releaseRate,
   resetFrameCarry,
@@ -437,5 +439,50 @@ describe('the air without the carry (tides-d9f.1)', () => {
     const telemetry = createShipTelemetry()
     fillAirUncarried(telemetry, state, earth, new THREE.Vector3(0, 0.5, 0), 0)
     expect(telemetry.air.speed).toBeCloseTo(0.5, 12)
+  })
+})
+
+describe('the air velocity and the eye over Earth (tides-bl3.3)', () => {
+  it('fills the velocity through the air, whose length is the speed, with and without the carry', () => {
+    const { earth } = carriers(T0)
+    const state = shipOver(earth, 30, 20, 2000)
+    const spinRate = earthSpinRate(1)
+    const orbit = shipBodyVelocity(earth, T0, new THREE.Vector3())
+    state.velocity.set(120 * M, -40 * M, 300 * M)
+    const telemetry = createShipTelemetry()
+    const carry = createFrameCarry()
+    carry.kappa = 0.4
+    fillAir(carry, telemetry, state, earth, spinRate)
+    expect(telemetry.air.velocity.length()).toBeCloseTo(telemetry.air.speed, 15)
+    expect(telemetry.air.velocity.distanceTo(airVelocity(new THREE.Vector3(), state, earth, 0.4, spinRate))).toBe(0)
+    fillAirUncarried(telemetry, state, earth, orbit, spinRate)
+    expect(telemetry.air.velocity.length()).toBeCloseTo(telemetry.air.speed, 15)
+    expect(telemetry.air.speed).toBeGreaterThan(0)
+  })
+
+  it("reads the eye's up in the world and in Earth's frame, and its altitude over the sea", () => {
+    const earth: Carrier = { position: new THREE.Vector3(5, -2, 1), radius: EARTH_RADIUS, spin: new THREE.Quaternion() }
+    const telemetry = createShipTelemetry()
+    const up = new THREE.Vector3(1, 2, -2).normalize()
+    fillEarthEye(telemetry, earth.position.clone().addScaledVector(up, EARTH_RADIUS + 3000 * M), earth)
+    expect(telemetry.earthEye.up.distanceTo(up)).toBeLessThan(1e-12)
+    expect(telemetry.earthEye.local.distanceTo(up)).toBeLessThan(1e-12)
+    expect(telemetry.earthEye.altitude / M).toBeCloseTo(3000, 3)
+    // Spun 90° about Y: the world's −Z is Earth's +X (lon 0).
+    earth.spin!.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2)
+    fillEarthEye(telemetry, earth.position.clone().add(new THREE.Vector3(0, 0, -EARTH_RADIUS)), earth)
+    expect(telemetry.earthEye.up.distanceTo(new THREE.Vector3(0, 0, -1))).toBeLessThan(1e-12)
+    expect(telemetry.earthEye.local.distanceTo(new THREE.Vector3(1, 0, 0))).toBeLessThan(1e-12)
+    expect(telemetry.earthEye.altitude).toBeCloseTo(0, 12)
+  })
+
+  it('has no altitude without the spin or at the centre', () => {
+    const telemetry = createShipTelemetry()
+    const still: Carrier = { position: new THREE.Vector3(), radius: EARTH_RADIUS }
+    fillEarthEye(telemetry, new THREE.Vector3(EARTH_RADIUS * 2, 0, 0), still)
+    expect(telemetry.earthEye.altitude).toBe(Infinity)
+    const earth: Carrier = { ...still, spin: new THREE.Quaternion() }
+    fillEarthEye(telemetry, new THREE.Vector3(), earth)
+    expect(telemetry.earthEye.altitude).toBe(Infinity)
   })
 })

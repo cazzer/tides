@@ -22,7 +22,7 @@ import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail
 import { setSurfaceEye } from '../surface-handover'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 import { SURFACE_TILES_ON } from '../surface'
-import { carryShip, earthSpinRate, fillAir, fillAirUncarried, resetFrameCarry, shipCarry } from './frame-carry'
+import { carryShip, earthSpinRate, fillAir, fillAirUncarried, fillEarthEye, resetFrameCarry, shipCarry } from './frame-carry'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
 // the ephemeris every frame would buy nothing, so it waits for this much sim
@@ -116,6 +116,7 @@ export function ShipController() {
       earthVelocityNow.copy(earthVelocity).multiplyScalar(Number.isFinite(timeScale) ? timeScale : 0)
       fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
     }
+    if (earth) fillEarthEye(shipTelemetry, state.position, earth)
     if (SURFACE_TILES_ON) earth?.floor?.mark(state.position)
     updateLimbView(shipTelemetry.nearest.key, bodies, state.position, size.height * viewport.dpr, camera.fov, camera)
 

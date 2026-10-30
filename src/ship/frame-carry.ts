@@ -315,8 +315,8 @@ export function carryShip(
 }
 
 /**
- * Fills telemetry.air after stepShip: the speed through the air (the HUD's
- * speed), the grip, the density over sea level's and the dynamic pressure,
+ * Fills telemetry.air after stepShip: the velocity and speed through the air
+ * (the speed is the HUD's), the grip, the density over sea level's and the dynamic pressure,
  * Pa. stepShip's fillTelemetry leaves them as the frame speed and zeros.
  */
 export function fillAir(
@@ -326,7 +326,7 @@ export function fillAir(
   earth: Carrier,
   spinRate: number
 ): void {
-  telemetry.air.speed = airVelocity(air, state, earth, carry.kappa, spinRate).length()
+  telemetry.air.speed = telemetry.air.velocity.copy(airVelocity(air, state, earth, carry.kappa, spinRate)).length()
   telemetry.air.coupling = carry.kappa
   fillAirDensity(telemetry, state.position, earth)
 }
@@ -351,7 +351,7 @@ export function fillAirUncarried(
   const distance = state.position.distanceTo(earth.position)
   const weightEarth = Number.isFinite(distance) ? 1 - smoothstep(EARTH_SOI[0], EARTH_SOI[1], distance) : 0
   airVelocity(air, state, earth, 0, spinRate).addScaledVector(earthVelocity, -weightEarth)
-  telemetry.air.speed = Number.isFinite(air.x + air.y + air.z) ? air.length() : state.velocity.length()
+  telemetry.air.speed = telemetry.air.velocity.copy(Number.isFinite(air.x + air.y + air.z) ? air : state.velocity).length()
   telemetry.air.coupling = 0
   fillAirDensity(telemetry, state.position, earth)
 }
@@ -371,4 +371,26 @@ export function fillAirDensity(
   const metresPerSecond = telemetry.air.speed * METRES_PER_UNIT
   telemetry.air.density = density
   telemetry.air.dynamicPressure = 0.5 * SEA_LEVEL_DENSITY * density * metresPerSecond * metresPerSecond
+}
+
+const eyeOffset = new THREE.Vector3()
+const unspin = new THREE.Quaternion()
+
+/**
+ * Fills telemetry.earthEye (tides-bl3.3): the ship's up from Earth's centre,
+ * in the world and in Earth's own frame (its spin undone), and its altitude
+ * over the sea-level sphere, scene units. Without Earth's spin, or at its
+ * centre, the altitude is Infinity: nothing reads where it is then.
+ */
+export function fillEarthEye(telemetry: ShipTelemetry, position: THREE.Vector3, earth: Carrier): void {
+  const eye = telemetry.earthEye
+  eyeOffset.subVectors(position, earth.position)
+  const distance = eyeOffset.length()
+  if (!earth.spin || !(distance > 0) || !Number.isFinite(distance)) {
+    eye.altitude = Infinity
+    return
+  }
+  eye.up.copy(eyeOffset).divideScalar(distance)
+  eye.local.copy(eye.up).applyQuaternion(unspin.copy(earth.spin).invert())
+  eye.altitude = distance - earth.radius
 }
