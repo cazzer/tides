@@ -244,6 +244,7 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
       material: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
       update() {},
       release() {},
+      dispose() {},
       probes: () => [],
       uniforms: {},
       side: 0,
@@ -284,7 +285,8 @@ export function createGibsNightPatch(side: number): GibsNightPatch {
     side,
     update: stream.update,
     probes: () => [stream.probe()],
-    release: stream.dispose,
+    release: stream.release,
+    dispose: stream.dispose,
   }
 }
 

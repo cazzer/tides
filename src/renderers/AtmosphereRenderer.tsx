@@ -1,7 +1,7 @@
 // A thin blue limb glow on the sunlit side, warming toward the terminator
 // (tides-qe5). Additive from outside, so it only ever brightens the limb.
 import { useEffect, useMemo, useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import { sunDirectionLocal } from '../aurora'
@@ -21,7 +21,7 @@ import {
 } from './earth-shells'
 import { isLowQuality } from '../quality'
 import { useBodySphere } from '../ship/limb-detail'
-import { createSkyView, SKY_VIEW_UNIFORMS, type SkyView } from './skyView'
+import { createSkyView, SKY_VIEW_UNIFORMS, skyViewDrawable, type SkyView } from './skyView'
 import { eyeSky } from '../night-flight'
 
 // Fractions of the Earth's radius. The haze starts at the cloud deck and
@@ -142,6 +142,7 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
   // it is inside the haze (skyView.ts).
   const skyView = useMemo(() => (isLowQuality() ? null : createSkyView()), [])
   useEffect(() => () => skyView?.dispose(), [skyView])
+  const gl = useThree((s) => s.gl)
   useFrame(({ gl, camera }) => {
     const { timestamp } = useStore.getState()
     if (skyView && timestamp != null) drawSkyView(skyView, gl, mesh, camera, radius, timestamp)
@@ -154,8 +155,9 @@ export default function AtmosphereRenderer({ radius }: { radius: number }) {
       material={material}
       renderOrder={ATMOSPHERE_RENDER_ORDER}
       raycast={noRaycast}
-      // The sky-view table's pass, for the warm-ups (ship-warmup.ts).
-      userData={{ warmProbes: () => (skyView ? [skyView.probe] : []) }}
+      // The sky-view table's pass, for the warm-ups (ship-warmup.ts), where
+      // it draws.
+      userData={{ warmProbes: () => (skyView && skyViewDrawable(gl) ? [skyView.probe] : []) }}
       onBeforeRender={(_renderer, _scene, camera, _geometry, shader) => {
         pickShellFaces(mesh.current!, shader, camera, hazeStop)
         setSunDisc(shader as THREE.ShaderMaterial, mesh.current!)

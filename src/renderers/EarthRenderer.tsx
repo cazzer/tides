@@ -303,21 +303,34 @@ export default function EarthRenderer({
     [groundParts, night.flight, gibs.flight, gibsNight.flight, displacement]
   )
   const groundProbe = useMemo(() => createGroundProbe(), [])
-  useEffect(() => () => groundProbe.material.dispose(), [groundProbe])
+  useEffect(
+    () => () => {
+      groundProbe.material.dispose()
+      groundProbe.geometry.dispose()
+    },
+    [groundProbe]
+  )
   displacement.uniforms.uGroundHeights.value = groundTexture
   // The ground's program holds the patch's uniforms; a new patch (Fast
   // Refresh re-runs the memos) needs a new program.
   const groundMaterial = useRef<THREE.MeshPhongMaterial>(null)
-  // Read when the warm-up runs them (ship-warmup.ts), so the probe is synced
-  // to the ground as it is then; and the GIBS streams' tile passes, drawn
-  // into their targets as the first tiles land.
-  const groundWarmProbes = (): WarmProbe[] => {
-    const ground = groundRef.current
-    const material = groundMaterial.current
-    if (!ground || !material) return []
-    syncGroundProbe(groundProbe, ground, material, flightPatch)
-    return [{ object: groundProbe }, ...gibs.flight.probes(), ...gibsNight.flight.probes()]
-  }
+  // For the warm-ups (ship-warmup.ts): the flight program's probe, synced to
+  // the ground as it is when its turn comes; and the GIBS streams' tile
+  // passes, drawn into their targets as the first tiles land.
+  const groundWarmProbes = (): WarmProbe[] => [
+    {
+      object: groundProbe,
+      prepare: () => {
+        const ground = groundRef.current
+        const material = groundMaterial.current
+        if (!ground || !material) return false
+        syncGroundProbe(groundProbe, ground, material, flightPatch)
+        return true
+      },
+    },
+    ...gibs.flight.probes(),
+    ...gibsNight.flight.probes(),
+  ]
   useLayoutEffect(() => {
     if (groundMaterial.current) groundMaterial.current.needsUpdate = true
   }, [drawnPatch])

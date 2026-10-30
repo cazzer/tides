@@ -182,18 +182,20 @@ describe('coldWork', () => {
     expect(compiled).toHaveLength(2)
   })
 
-  test('lists an object\'s probes with it, once a material version (tides-tvr.7.4)', () => {
+  test('lists an object\'s probes with it, one item each, once a material version (tides-tvr.7.4)', () => {
     const material = new THREE.MeshBasicMaterial()
     const mesh = new THREE.Mesh(undefined, material)
-    const probes = (): WarmProbe[] => []
-    mesh.userData.warmProbes = probes
+    const a: WarmProbe = { object: new THREE.Mesh() }
+    const b: WarmProbe = { object: new THREE.Mesh() }
+    mesh.userData.warmProbes = (): WarmProbe[] => [a, b]
     const scene = new THREE.Scene().add(mesh)
     const warmed = createWarmed()
+    const cold = [{ object: mesh }, { owner: mesh, probe: a }, { owner: mesh, probe: b }]
 
-    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: mesh }, { owner: mesh, probes }])
+    expect(coldWork(scene, warmed, byMaterial)).toEqual(cold)
     expect(coldWork(scene, warmed, byMaterial)).toEqual([])
     material.needsUpdate = true
-    expect(coldWork(scene, warmed, byMaterial)).toEqual([{ object: mesh }, { owner: mesh, probes }])
+    expect(coldWork(scene, warmed, byMaterial)).toEqual(cold)
   })
 })
 
@@ -216,7 +218,7 @@ describe('runWarmup', () => {
     return { renderer, calls, target: () => target }
   }
 
-  test('compiles each probe against its own scene and target, then restores the target', () => {
+  test('compiles a probe against its own scene and target, then restores the target, after its prepare', () => {
     const { renderer, calls, target } = recorder()
     const scene = new THREE.Scene()
     const owner = new THREE.Mesh()
@@ -224,10 +226,20 @@ describe('runWarmup', () => {
     const pass = new THREE.Mesh()
     const passTarget = new THREE.WebGLRenderTarget(1, 1)
     const stand = new THREE.Mesh()
-    const probes = (): WarmProbe[] => [{ object: stand }, { object: pass, scene: pass, target: passTarget }]
+    const order: string[] = []
+    const prepared: WarmProbe = {
+      object: stand,
+      prepare: () => {
+        order.push(`prepare with ${calls.length} compiled`)
+        return true
+      },
+    }
 
-    runWarmup(renderer, { owner, probes }, camera, scene, createWarmed(), byMaterial)
+    runWarmup(renderer, { owner, probe: prepared }, camera, scene, createWarmed(), byMaterial)
+    runWarmup(renderer, { owner, probe: { object: pass, scene: pass, target: passTarget } }, camera, scene, createWarmed(), byMaterial)
+    runWarmup(renderer, { owner, probe: { object: new THREE.Mesh(), prepare: () => false } }, camera, scene, createWarmed(), byMaterial)
 
+    expect(order).toEqual(['prepare with 0 compiled'])
     expect(calls).toEqual([
       { object: stand, scene, target: null },
       { object: pass, scene: pass, target: passTarget },
@@ -242,21 +254,24 @@ describe('runWarmup', () => {
     }
     const owner = new THREE.Mesh()
     const scene = new THREE.Scene().add(owner)
-    const probes = (): WarmProbe[] => [{ object: new THREE.Mesh(), target: new THREE.WebGLRenderTarget(1, 1) }]
+    const probe: WarmProbe = { object: new THREE.Mesh(), target: new THREE.WebGLRenderTarget(1, 1) }
 
-    expect(() => runWarmup(renderer, { owner, probes }, camera, scene, createWarmed(), byMaterial)).toThrow('link')
+    expect(() => runWarmup(renderer, { owner, probe }, camera, scene, createWarmed(), byMaterial)).toThrow('link')
     expect(target()).toBe(null)
   })
 
-  test('skips the probes of an owner that unmounted while it waited, and an unmounted object', () => {
+  test('skips the probe of an owner that unmounted while it waited, and an unmounted object', () => {
     const { renderer, calls } = recorder()
     let asked = 0
-    const probes = (): WarmProbe[] => {
-      asked++
-      return [{ object: new THREE.Mesh() }]
+    const probe: WarmProbe = {
+      object: new THREE.Mesh(),
+      prepare: () => {
+        asked++
+        return true
+      },
     }
 
-    runWarmup(renderer, { owner: new THREE.Mesh(), probes }, camera, new THREE.Scene(), createWarmed(), byMaterial)
+    runWarmup(renderer, { owner: new THREE.Mesh(), probe }, camera, new THREE.Scene(), createWarmed(), byMaterial)
     runWarmup(renderer, { object: new THREE.Mesh() }, camera, new THREE.Scene(), createWarmed(), byMaterial)
 
     expect(asked).toBe(0)

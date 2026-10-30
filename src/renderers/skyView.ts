@@ -49,11 +49,19 @@ export interface SkyView {
    * with `eyeR` null (no eye inside the haze), turns it off. */
   update(renderer: THREE.WebGLRenderer, eyeR: number | null, sunMu: number): void
   /** The table's pass for the warm-ups to compile ahead of its first draw
-   * (tides-tvr.7.4): drawn off-scene, so no scene scan finds it. Its own
+   * (tides-tvr.7.4), where it draws at all (skyViewDrawable): drawn
+   * off-scene, so no scene scan finds it. Its own
    * scene (no lights or fog, as update draws it) and its target, whose
    * kind keys the program's tone mapping and output colour space. */
   probe: WarmProbe
   dispose(): void
+}
+
+/** Whether `renderer` can draw the table: a half-float target needs a
+ * colour-buffer extension (WebGL2 without it, a forced high tier, would
+ * draw the sky black); else the sky stays analytic. */
+export function skyViewDrawable(renderer: Pick<THREE.WebGLRenderer, 'extensions'>): boolean {
+  return renderer.extensions.has('EXT_color_buffer_half_float') || renderer.extensions.has('EXT_color_buffer_float')
 }
 
 export function createSkyView(): SkyView {
@@ -89,9 +97,7 @@ export function createSkyView(): SkyView {
   return {
     probe: { object: quad, scene: quad, target },
     update(renderer, eyeR, sunMu) {
-      // A half-float target needs a colour-buffer extension (WebGL2 without
-      // it, a forced high tier, would draw the sky black): else analytic.
-      if (eyeR == null || !(renderer.extensions.has('EXT_color_buffer_half_float') || renderer.extensions.has('EXT_color_buffer_float'))) {
+      if (eyeR == null || !skyViewDrawable(renderer)) {
         SKY_VIEW_UNIFORMS.uSkyViewOn.value = 0
         return
       }

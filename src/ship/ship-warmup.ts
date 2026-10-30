@@ -9,23 +9,25 @@ import * as THREE from 'three'
  * yet, compiled ahead through a stand-in: `object`, kept out of the scene,
  * against `scene`'s lights and fog (default: the warm-up's scene) into
  * `target` (default: as it is; three keys the tone mapping and output colour
- * space by the target drawn into). Listed by an object as
- * userData.warmProbes, a function called when the work runs (tides-tvr.7.4):
- * the ground's flight variant, a pass drawn off-scene into a target.
+ * space by the target drawn into), after `prepare` (false: skip it). Listed
+ * by an object as userData.warmProbes, a function called when the object
+ * is found cold (tides-tvr.7.4): the ground's flight variant, a pass drawn
+ * off-scene into a target.
  */
 export interface WarmProbe {
   object: THREE.Object3D
   scene?: THREE.Object3D
   target?: THREE.WebGLRenderTarget | null
+  prepare?: () => boolean
 }
 
 /** One piece of first-draw work, done ahead of time: a map's upload, or an
  * object's program, or with `side` and `defines`, the program its material
- * turns to later (warmSides, warmDefines), or the probes `owner` lists. */
+ * turns to later (warmSides, warmDefines), or a probe `owner` lists. */
 export type Warmup =
   | { texture: THREE.Texture }
   | { object: THREE.Object3D; side?: THREE.Side; defines?: readonly string[] }
-  | { owner: THREE.Object3D; probes: () => WarmProbe[] }
+  | { owner: THREE.Object3D; probe: WarmProbe }
 
 function materialsOf(object: THREE.Object3D): THREE.Material[] {
   const { material } = object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }
@@ -124,8 +126,9 @@ export function coldWork(
       for (const define of warmDefines(material)) toggles.add(define)
     }
     if (cold) work.push({ object })
+    // One a probe, so a frame compiles one program.
     const probes = cold ? warmProbes(object) : null
-    if (probes) work.push({ owner: object, probes })
+    if (probes) for (const probe of probes()) work.push({ owner: object, probe })
     for (const side of sides) work.push({ object, side })
     if (toggles.size > 0) {
       const defines = [...toggles]
@@ -141,7 +144,7 @@ type WarmupRenderer = Pick<THREE.WebGLRenderer, 'compile' | 'initTexture' | 'get
 
 /**
  * Does `item` (from coldWork) for `camera` in `scene`, skipping an object
- * (or a probes' owner) that unmounted while it waited. Only from a frame
+ * (or a probe's owner) that unmounted while it waited. Only from a frame
  * callback that runs before the View renders: three's compile replaces the
  * renderer's render state, so it must not run mid-render (an
  * onBeforeRender).
@@ -159,8 +162,8 @@ export function runWarmup(
     return
   }
   if ('owner' in item) {
-    if (!item.owner.parent) return
-    for (const probe of item.probes()) compileProbe(renderer, probe, camera, scene)
+    if (!item.owner.parent || (item.probe.prepare && !item.probe.prepare())) return
+    compileProbe(renderer, item.probe, camera, scene)
     return
   }
   if (!item.object.parent) return

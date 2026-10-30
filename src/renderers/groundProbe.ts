@@ -8,15 +8,19 @@
 import * as THREE from 'three'
 import type { MaterialPatch } from './eclipseShadow'
 
-export type GroundProbe = THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial>
+export type GroundProbe = THREE.Mesh<THREE.SphereGeometry, THREE.MeshPhongMaterial>
 
+/** On a sphere of its own: three keys a program by which attributes the
+ * geometry has, and both of the ground's spheres (the base and the shared
+ * limb sphere, limb-detail.ts) have SphereGeometry's position, normal and
+ * uv; holding the ground's would keep a released limb sphere's ~7 MB. */
 export function createGroundProbe(): GroundProbe {
-  return new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshPhongMaterial())
+  return new THREE.Mesh(new THREE.SphereGeometry(1, 4, 2), new THREE.MeshPhongMaterial())
 }
 
 /**
  * Makes `probe` key the program `ground` (drawing `material`) would draw
- * with `patch`: its geometry, its material copied, and the patch, which
+ * with `patch`: its material copied, and the patch, which
  * Material.copy leaves (onBeforeCompile and the cache key are the
  * material's own functions); the probe's material moves on a version, so
  * three keys it afresh.
@@ -27,7 +31,6 @@ export function syncGroundProbe(
   material: THREE.MeshPhongMaterial,
   patch: MaterialPatch
 ): void {
-  probe.geometry = ground.geometry
   probe.receiveShadow = ground.receiveShadow
   probe.castShadow = ground.castShadow
   const stand = probe.material

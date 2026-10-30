@@ -69,7 +69,7 @@ export function CloseZoomWarmup() {
 }
 
 // Whether any of `root`'s meshes has drawn (three holds a program for its
-// material): Earth's maps are in and its first frames are behind.
+// material): Earth is up and its first frames are behind.
 function hasDrawn(root: THREE.Object3D, gl: THREE.WebGLRenderer): boolean {
   let drawn = false
   root.traverse((object) => {

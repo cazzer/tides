@@ -327,8 +327,13 @@ export interface StreamedPatch {
   side: number
   /** `ground`: the ground mesh, whose local sphere has `radius`. */
   update(gl: THREE.WebGLRenderer, camera: THREE.Camera, ground: THREE.Object3D, radius: number, now: number): void
-  /** Frees everything; the patch fills again if update finds the ship near. */
+  /** Frees the streamed texture and its tiles; the patch fills again if
+   * update finds the ship near. Keeps the tile pass (its program, a few
+   * KB of quad and colour table), which the next approach draws with and
+   * the warm-ups compile ahead (tides-tvr.7.4). */
   release(): void
+  /** Frees everything, the pass too. */
+  dispose(): void
   /** Its stream's pass (GibsStream.probe), none where there is none. */
   probes(): WarmProbe[]
 }
@@ -374,7 +379,7 @@ export function useStreamedPatch(
   const none = useMemo(() => create(0), [create])
   streamed.set(patch.material, patch)
   streamed.set(none.material, none)
-  useEffect(() => () => patch.release(), [patch])
+  useEffect(() => () => patch.dispose(), [patch])
   useEffect(() => {
     if (!flight) patch.release()
   }, [flight, patch])

@@ -266,6 +266,7 @@ export function createGibsPatch(side: number): GibsPatch {
       material: { onBeforeCompile() {}, customProgramCacheKey: () => '' },
       update() {},
       release() {},
+      dispose() {},
       probes: () => [],
       uniforms: {},
       side: 0,
@@ -306,8 +307,12 @@ export function createGibsPatch(side: number): GibsPatch {
     update: stream.update,
     probes: () => [stream.probe()],
     release() {
-      stream.dispose()
+      stream.release()
       // three uploads it again if the patch is used after.
+      warp.dispose()
+    },
+    dispose() {
+      stream.dispose()
       warp.dispose()
     },
   }

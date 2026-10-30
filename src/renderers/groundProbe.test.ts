@@ -70,6 +70,17 @@ function ground(drawn: MaterialPatch): THREE.Mesh<THREE.SphereGeometry, THREE.Me
   return new THREE.Mesh(new THREE.SphereGeometry(1, 128, 128), material)
 }
 
+// As limb-detail.ts builds the limb sphere: position, normal and uv set by hand.
+function limbLike(): THREE.SphereGeometry {
+  const unit = new THREE.SphereGeometry(1, 16, 8)
+  const sphere = new THREE.BufferGeometry()
+  sphere.setAttribute('position', unit.getAttribute('position').clone())
+  sphere.setAttribute('normal', unit.getAttribute('normal'))
+  sphere.setAttribute('uv', unit.getAttribute('uv'))
+  sphere.setIndex(unit.getIndex())
+  return sphere as THREE.SphereGeometry
+}
+
 describe('syncGroundProbe (tides-tvr.7.4)', () => {
   test("keys the program the ground draws with the probe's patch", () => {
     const programs = programKeys()
@@ -89,7 +100,8 @@ describe('syncGroundProbe (tides-tvr.7.4)', () => {
     earth.material.customProgramCacheKey = flight.customProgramCacheKey
     expect(probeKey).toBe(keyOf(programs, earth, scene))
     expect(probeKey.endsWith('night-lights-flight+gibs-patch-8+ground-displacement-128x128')).toBe(true)
-    expect(probe.geometry).toBe(earth.geometry)
+    // On its own small sphere: the key reads which attributes there are.
+    expect(probe.geometry).not.toBe(earth.geometry)
     expect(probe.parent).toBe(null)
   })
 
@@ -98,6 +110,8 @@ describe('syncGroundProbe (tides-tvr.7.4)', () => {
     const scene = new THREE.Scene()
     const flight = patch('flight')
     const earth = ground(flight)
+    // On the limb sphere's geometry (limb-detail.ts): its own attributes.
+    earth.geometry = limbLike()
     const probe = createGroundProbe()
     syncGroundProbe(probe, earth, earth.material, flight)
     const version = probe.material.version
