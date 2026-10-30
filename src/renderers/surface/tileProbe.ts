@@ -60,10 +60,17 @@ export function createTileProbes(link: GlobeLink): TileProbes {
     wrapFadeMaterial(material, material.onBeforeCompile)
     material.defines!.FEATURE_FADE = fade
     owned.push(material, terrain.map, grid)
-    return { object: new THREE.Mesh(geometry, material) }
+    // Skipped once disposed: a warm-up's queue may still hold the probe
+    // after a new link replaced it, and compiling a disposed material would
+    // take a program nothing frees.
+    return { object: new THREE.Mesh(geometry, material), prepare: () => !disposed }
   })
+  let disposed = false
   return {
     probes,
-    dispose: () => owned.forEach((item) => item.dispose()),
+    dispose: () => {
+      disposed = true
+      owned.forEach((item) => item.dispose())
+    },
   }
 }

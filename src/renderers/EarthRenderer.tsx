@@ -210,17 +210,18 @@ export default function EarthRenderer({
     surfaceMaps.specular.value = specularMap
     surfaceMaps.night.value = nightTexture
   }
-  const surfaceLink = useMemo<GlobeLink | null>(
+  // What both links below share, in one place: the drawn link and the
+  // flight link must key the same program once flight detail is on.
+  const surfaceParts = useMemo<SurfaceLinkParts | null>(
     () =>
       SURFACE_TILES_ON && surfaceMaps
-        ? surfaceLinkOf(
-            { haze: groundHaze, clouds, low: textureSet.low, eclipse: eclipseShadow.uniforms, maps: surfaceMaps, seaLevel: diameter, water },
-            nightFlight?.uniforms ?? null,
-            gibsPatch,
-            gibsNightPatch
-          )
+        ? { haze: groundHaze, clouds, low: textureSet.low, eclipse: eclipseShadow.uniforms, maps: surfaceMaps, seaLevel: diameter, water }
         : null,
-    [groundHaze, clouds, textureSet.low, eclipseShadow, nightFlight, gibsPatch, gibsNightPatch, surfaceMaps, diameter, water]
+    [groundHaze, clouds, textureSet.low, eclipseShadow, surfaceMaps, diameter, water]
+  )
+  const surfaceLink = useMemo<GlobeLink | null>(
+    () => (surfaceParts ? surfaceLinkOf(surfaceParts, nightFlight?.uniforms ?? null, gibsPatch, gibsNightPatch) : null),
+    [surfaceParts, nightFlight, gibsPatch, gibsNightPatch]
   )
   // The link with flight detail, whatever the detail now, for the warm-ups
   // to compile the tiles' flight programs ahead through probes
@@ -228,15 +229,10 @@ export default function EarthRenderer({
   // surfaceLink holds the same objects and keys the same program.
   const flightSurfaceLink = useMemo<GlobeLink | null>(
     () =>
-      SURFACE_TILES_ON && surfaceMaps
-        ? surfaceLinkOf(
-            { haze: groundHaze, clouds, low: textureSet.low, eclipse: eclipseShadow.uniforms, maps: surfaceMaps, seaLevel: diameter, water },
-            night.flight.uniforms,
-            gibs.flight.material,
-            gibsNight.flight.material
-          )
+      surfaceParts
+        ? surfaceLinkOf(surfaceParts, night.flight.uniforms, gibs.flight.material, gibsNight.flight.material)
         : null,
-    [groundHaze, clouds, textureSet.low, eclipseShadow, night.flight, gibs.flight, gibsNight.flight, surfaceMaps, diameter, water]
+    [surfaceParts, night.flight, gibs.flight, gibsNight.flight]
   )
   useEffect(() => {
     if (!surfaceLink) return

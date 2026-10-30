@@ -16,7 +16,7 @@ type TileProbeModule = typeof import('./surface/tileProbe')
  * for the owner to have itself looked at again.
  */
 export function useTileWarmProbes(link: GlobeLink | null, onLoaded: () => void): () => WarmProbe[] {
-  const module = useRef<TileProbeModule | null>(null)
+  const probeModule = useRef<TileProbeModule | null>(null)
   const loading = useRef(false)
   const made = useRef<{ link: GlobeLink; probes: ReturnType<TileProbeModule['createTileProbes']> } | null>(null)
   const loaded = useRef(onLoaded)
@@ -33,12 +33,12 @@ export function useTileWarmProbes(link: GlobeLink | null, onLoaded: () => void):
   )
   return () => {
     if (!link) return []
-    if (!module.current) {
+    if (!probeModule.current) {
       if (!loading.current) {
         loading.current = true
         import('./surface/tileProbe').then(
           (loadedModule) => {
-            module.current = loadedModule
+            probeModule.current = loadedModule
             loaded.current()
           },
           (error: unknown) => console.warn('tile warm-up: the surface chunk failed to load; the tiles link at first draw', error)
@@ -48,7 +48,7 @@ export function useTileWarmProbes(link: GlobeLink | null, onLoaded: () => void):
     }
     if (made.current?.link !== link) {
       made.current?.probes.dispose()
-      made.current = { link, probes: module.current.createTileProbes(link) }
+      made.current = { link, probes: probeModule.current.createTileProbes(link) }
     }
     return made.current.probes.probes
   }

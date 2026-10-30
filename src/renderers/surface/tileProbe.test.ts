@@ -121,8 +121,11 @@ describe('the tiles\' warm-up probes (tides-tvr.7.7)', () => {
       material.map!.addEventListener('dispose', freed)
       material.displacementMap!.addEventListener('dispose', freed)
     }
+    expect(probes.map((probe) => probe.prepare?.())).toEqual([true, true])
     dispose()
     // The geometry, and each probe's material, map and grid.
     expect(freed).toHaveBeenCalledTimes(1 + 2 * 3)
+    // A warm-up still holding them skips them.
+    expect(probes.map((probe) => probe.prepare?.())).toEqual([false, false])
   })
 })
