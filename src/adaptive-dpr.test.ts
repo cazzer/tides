@@ -147,11 +147,20 @@ describe('stepAdaptiveDpr', () => {
     expect(state.samples).toHaveLength(1)
   })
 
-  it('clears the window after a 300 ms gap', () => {
+  it('clears the window after a gap over 1 s', () => {
     const { state, end } = run(createAdaptiveDprState(2), { from: 0, frames: 20, ms: () => 5 })
     expect(state.samples.length).toBe(20)
-    const after = stepAdaptiveDpr(state, { at: end + 300, ms: 5, dpr: 2 }, 2)
-    expect(after.samples).toEqual([{ at: end + 300, ms: 5 }])
+    const after = stepAdaptiveDpr(state, { at: end + 1100, ms: 5, dpr: 2 }, 2)
+    expect(after.samples).toEqual([{ at: end + 1100, ms: 5 }])
+  })
+
+  it('still drops on a device drawing 4 frames a second', () => {
+    // 250 ms frames: a 500 ms window would hold two samples and never decide.
+    let state = createAdaptiveDprState(2)
+    let i = 0
+    for (; i < 20 && state.dpr === 2; i++) state = stepAdaptiveDpr(state, { at: i * 250, ms: 60, dpr: 2 }, 2)
+    expect(state.dpr).toBe(1)
+    expect(i).toBe(10)
   })
 
   it('raises only after 2 s of good predictions; one bad window resets the wait', () => {

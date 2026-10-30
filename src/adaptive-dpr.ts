@@ -10,7 +10,11 @@
 export const DPR_BUDGET_MS = 12
 /** A step up must be predicted under this, so a raise doesn't land over budget. */
 export const DPR_RAISE_BELOW_MS = 9
-/** The sliding window the median is taken over. */
+/**
+ * The sliding window the median is taken over, stretched to hold
+ * DPR_MIN_SAMPLES when frames come slower than that, so a device that
+ * needs the drop most (frames over 50 ms) still gets a window.
+ */
 export const DPR_WINDOW_MS = 500
 /** Fewer samples than this in a window decide nothing. */
 export const DPR_MIN_SAMPLES = 10
@@ -26,8 +30,11 @@ export const DPR_SETTLE_FRAMES = 2
 export const DPR_STEP = 0.25
 export const DPR_FLOOR = 1
 
-/** A gap this long (a hidden tab, a stall) makes the window stale. */
-const GAP_MS = 250
+/**
+ * A gap this long (a hidden tab, a stall) makes the window stale. Well over a
+ * slow frame: a device drawing 4 frames a second must still fill a window.
+ */
+const GAP_MS = 1000
 /** A full window spans at least this much of DPR_WINDOW_MS. */
 const MIN_SPAN_MS = 400
 /** A drop this soon after a raise means the raise was wrong. */
@@ -176,7 +183,13 @@ export function stepAdaptiveDpr(
   if (next.skip > 0) return { ...next, skip: next.skip - 1 }
 
   const last = next.samples[next.samples.length - 1]
-  const kept = last && at - last.at > GAP_MS ? [] : next.samples.filter((s) => s.at >= at - config.windowMs)
+  const recent = next.samples.filter((s) => s.at >= at - config.windowMs)
+  const kept =
+    last && at - last.at > GAP_MS
+      ? []
+      : recent.length >= config.minSamples - 1
+        ? recent
+        : next.samples.slice(-(config.minSamples - 1))
   const samples = [...kept, { at, ms: sample.ms }]
   const full = samples.length >= config.minSamples && at - samples[0].at >= MIN_SPAN_MS
   const medianMs = full ? median(samples.map((s) => s.ms)) : NaN
