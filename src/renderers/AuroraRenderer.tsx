@@ -103,8 +103,11 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         // shoulder keeps them in range.
         toneMapped: false,
         // Double-sided in ship mode (pickShellFaces), where the shader keeps
-        // one face per ray.
+        // one face per ray. That program warmed ahead (ship-warmup.ts
+        // warmSides): the main view's first close zoom turns to it
+        // (tides-tvr.7.4).
         forceSinglePass: true,
+        userData: { warmSides: [THREE.DoubleSide] },
       }),
     [low]
   )

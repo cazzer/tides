@@ -110,7 +110,7 @@ describe('GIBS patch streaming', () => {
   const setup = setupGibsStream
   const settle = settleGibsStream
 
-  it('fetches six at a time, uploads two a frame with one mip rebuild, and frees everything on release', async () => {
+  it('fetches six at a time, uploads two a frame with one mip rebuild, frees the tiles on release and everything on dispose', async () => {
     let n = 0
     const { bitmaps, uploads, passes, gl, camera, ground } = setup(async (url) => {
       n++
@@ -136,17 +136,23 @@ describe('GIBS patch streaming', () => {
     expect(gl.getRenderTarget()).toBeNull()
     expect(gl.autoClear).toBe(true)
     expect(bitmaps.filter((b) => b.close.mock.calls.length > 0)).toHaveLength(2)
-    // The recolour's textures and program go with the patch.
+    // The tile's copy goes on release; the recolour's program and table
+    // stay for the next approach (tides-tvr.7.4), and go with the patch.
     const material = (passes[0].children[0] as THREE.Mesh).material as THREE.ShaderMaterial
-    const disposed = [material, material.uniforms.uTile.value, material.uniforms.uLut.value].map((o: THREE.EventDispatcher<{ dispose: object }>) => {
-      const listener = vi.fn()
-      o.addEventListener('dispose', listener)
-      return listener
-    })
+    const [kept, tile] = [[material, material.uniforms.uLut.value], [material.uniforms.uTile.value]].map((objects) =>
+      objects.map((o: THREE.EventDispatcher<{ dispose: object }>) => {
+        const listener = vi.fn()
+        o.addEventListener('dispose', listener)
+        return listener
+      })
+    )
     patch.release()
     expect(bitmaps.every((b) => b.close.mock.calls.length > 0)).toBe(true)
-    for (const listener of disposed) expect(listener).toHaveBeenCalled()
+    for (const listener of tile) expect(listener).toHaveBeenCalled()
+    for (const listener of kept) expect(listener).not.toHaveBeenCalled()
     patch.release()
+    patch.dispose()
+    for (const listener of kept) expect(listener).toHaveBeenCalled()
   })
 
   it('drops tiles that land after a release', async () => {

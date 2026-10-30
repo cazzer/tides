@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import type * as THREE from 'three'
-import { coldWork, compileSide, createWarmed, type Warmup } from './ship-warmup'
+import { coldWork, createWarmed, runWarmup, type Warmup } from './ship-warmup'
 
 // How often the scene is searched for newly loaded maps and new materials.
 const RESCAN_S = 0.5
@@ -24,14 +24,7 @@ export function ShipWarmup() {
   useFrame(({ gl, scene, camera, clock }) => {
     const materialKey = (material: THREE.Material) => gl.properties.get(material)
     const next = queue.current.shift()
-    if (next) {
-      if ('texture' in next) gl.initTexture(next.texture)
-      // Skip what unmounted while it waited.
-      else if (next.object.parent) {
-        if (next.side === undefined && !next.defines) gl.compile(next.object, camera, scene)
-        else compileSide(gl, next.object, next.side, camera, scene, warmed, materialKey, next.defines)
-      }
-    }
+    if (next) runWarmup(gl, next, camera, scene, warmed, materialKey)
     if (queue.current.length > 0 || clock.elapsedTime - scannedAt.current < RESCAN_S) return
     scannedAt.current = clock.elapsedTime
     queue.current = coldWork(scene, warmed, materialKey)

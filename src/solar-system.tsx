@@ -5,6 +5,7 @@ import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import AuroraRenderer from './renderers/AuroraRenderer'
+import { CloseZoomWarmup } from './renderers/CloseZoomWarmup'
 import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
 import Starfield from './renderers/Starfield'
@@ -230,6 +231,8 @@ export default function SolarSystem({
         )}
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
+        {/* The main view's first close zoom, compiled ahead (tides-tvr.7.4). */}
+        {!earthCamera && !ship && <CloseZoomWarmup />}
         {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
           <TidesSpot radius={EARTH_DIAMETER} />

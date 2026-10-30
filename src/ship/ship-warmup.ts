@@ -4,12 +4,30 @@
 // until the ship turns to them.
 import * as THREE from 'three'
 
+/**
+ * A program an object's draw needs that no drawn object's material holds
+ * yet, compiled ahead through a stand-in: `object`, kept out of the scene,
+ * against `scene`'s lights and fog (default: the warm-up's scene) into
+ * `target` (default: as it is; three keys the tone mapping and output colour
+ * space by the target drawn into), after `prepare` (false: skip it). Listed
+ * by an object as userData.warmProbes, a function called when the object
+ * is found cold (tides-tvr.7.4): the ground's flight variant, a pass drawn
+ * off-scene into a target.
+ */
+export interface WarmProbe {
+  object: THREE.Object3D
+  scene?: THREE.Object3D
+  target?: THREE.WebGLRenderTarget | null
+  prepare?: () => boolean
+}
+
 /** One piece of first-draw work, done ahead of time: a map's upload, or an
  * object's program, or with `side` and `defines`, the program its material
- * turns to later (warmSides, warmDefines). */
+ * turns to later (warmSides, warmDefines), or a probe `owner` lists. */
 export type Warmup =
   | { texture: THREE.Texture }
   | { object: THREE.Object3D; side?: THREE.Side; defines?: readonly string[] }
+  | { owner: THREE.Object3D; probe: WarmProbe }
 
 function materialsOf(object: THREE.Object3D): THREE.Material[] {
   const { material } = object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }
@@ -41,6 +59,16 @@ function warmSides(material: THREE.Material): THREE.Side[] {
  */
 function warmDefines(material: THREE.Material): string[] {
   return (material.userData.warmDefines as string[] | undefined) ?? []
+}
+
+/**
+ * The object's probes (WarmProbe), or null. On the object, not its
+ * material: three's Material.copy copies userData through JSON, which drops
+ * a function (and would choke on a mesh).
+ */
+function warmProbes(object: THREE.Object3D): (() => WarmProbe[]) | null {
+  const probes: unknown = object.userData.warmProbes
+  return typeof probes === 'function' ? (probes as () => WarmProbe[]) : null
 }
 
 /** What has been warmed: textures once, materials at a version. */
@@ -98,6 +126,9 @@ export function coldWork(
       for (const define of warmDefines(material)) toggles.add(define)
     }
     if (cold) work.push({ object })
+    // One a probe, so a frame compiles one program.
+    const probes = cold ? warmProbes(object) : null
+    if (probes) for (const probe of probes()) work.push({ owner: object, probe })
     for (const side of sides) work.push({ object, side })
     if (toggles.size > 0) {
       const defines = [...toggles]
@@ -107,6 +138,50 @@ export function coldWork(
   }
   visit(scene)
   return work
+}
+
+type WarmupRenderer = Pick<THREE.WebGLRenderer, 'compile' | 'initTexture' | 'getRenderTarget' | 'setRenderTarget'>
+
+/**
+ * Does `item` (from coldWork) for `camera` in `scene`, skipping an object
+ * (or a probe's owner) that unmounted while it waited. Only from a frame
+ * callback that runs before the View renders: three's compile replaces the
+ * renderer's render state, so it must not run mid-render (an
+ * onBeforeRender).
+ */
+export function runWarmup(
+  renderer: WarmupRenderer,
+  item: Warmup,
+  camera: THREE.Camera,
+  scene: THREE.Scene,
+  warmed: Warmed,
+  materialKey: (material: THREE.Material) => object
+): void {
+  if ('texture' in item) {
+    renderer.initTexture(item.texture)
+    return
+  }
+  if ('owner' in item) {
+    if (!item.owner.parent || (item.probe.prepare && !item.probe.prepare())) return
+    compileProbe(renderer, item.probe, camera, scene)
+    return
+  }
+  if (!item.object.parent) return
+  if (item.side === undefined && !item.defines) renderer.compile(item.object, camera, scene)
+  else compileSide(renderer, item.object, item.side, camera, scene, warmed, materialKey, item.defines)
+}
+
+function compileProbe(renderer: WarmupRenderer, probe: WarmProbe, camera: THREE.Camera, scene: THREE.Scene) {
+  const previous = renderer.getRenderTarget()
+  const retarget = probe.target !== undefined
+  if (retarget) renderer.setRenderTarget(probe.target)
+  try {
+    // A bare mesh as the scene, as render(quad, camera) draws it: three
+    // takes any object there (its typings say a Scene).
+    renderer.compile(probe.object, camera, (probe.scene ?? scene) as THREE.Scene)
+  } finally {
+    if (retarget) renderer.setRenderTarget(previous)
+  }
 }
 
 /**
