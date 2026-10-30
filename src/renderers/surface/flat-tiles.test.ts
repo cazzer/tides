@@ -20,11 +20,15 @@ function tileMesh(width: number, height = width) {
 /** A tile carrying the plugin's measured range. */
 const tileOf = (min: number, max: number) => ({ [Symbol('HEIGHT_RANGE')]: { min, max } })
 
-/** Parses `mesh` for `tile` through the plugin, as the renderer does at parse. */
+/** Parses `mesh` for `tile` through the plugin, as the renderer does at parse: the index entries it draws. */
 function parse(mesh: THREE.Mesh, tile: object) {
   createFlatTilePlugin().processTileModel(mesh, tile)
-  return mesh.geometry.index!.array as Uint32Array
+  const array = mesh.geometry.index!.array as Uint32Array
+  const { count } = mesh.geometry.drawRange
+  return Number.isFinite(count) ? array.subarray(0, count) : array
 }
+
+const libraryIndex = () => new SkirtedPlaneGeometry(1, 1, 32, 32).index!.array as Uint32Array
 
 /** Twice the signed area of triangle (a, b, c) in uv. */
 function uvArea(uv: THREE.BufferAttribute, a: number, b: number, c: number) {
@@ -64,14 +68,12 @@ describe('flat tiles (tides-zmw.9.33)', () => {
   it('leaves a tile with any vertex off sea level, no range, or all 32 segments, as the library made it', () => {
     for (const tile of [tileOf(-1, 0), tileOf(0, 3), tileOf(-40, 120), {}]) {
       const mesh = tileMesh(9_000)
-      const index = mesh.geometry.index
-      parse(mesh, tile)
-      expect(mesh.geometry.index).toBe(index)
+      expect(parse(mesh, tile)).toEqual(libraryIndex())
+      expect(mesh.geometry.drawRange.count).toBe(Infinity)
     }
     const wide = tileMesh(300_000)
-    const index = wide.geometry.index
-    parse(wide, tileOf(0, 0))
-    expect(wide.geometry.index).toBe(index)
+    expect(parse(wide, tileOf(0, 0))).toEqual(libraryIndex())
+    expect(wide.geometry.drawRange.count).toBe(Infinity)
   })
 
   it("reproduces the library's index at 32 segments", () => {
@@ -100,6 +102,50 @@ describe('flat tiles (tides-zmw.9.33)', () => {
     }
     expect(area).toBeCloseTo(1, 10)
     expect(Array.from(index.subarray(6 * n * n))).toEqual(Array.from(original.subarray(SURFACE)))
+  })
+
+  it('rewrites the index in place, never swapping the attribute (three frees only the current one)', () => {
+    const mesh = tileMesh(9_000)
+    const index = mesh.geometry.index
+    parse(mesh, tileOf(0, 0))
+    expect(mesh.geometry.index).toBe(index)
+    expect(index!.array).toHaveLength(SURFACE + SKIRTS)
+    expect(mesh.geometry.drawRange.count).toBe(6 * 4 * 4 + SKIRTS)
+  })
+
+  describe('when a neighbour is stitched in later', () => {
+    /** A flat 9 km tile drawing a 4 x 4 grid of zeros, parsed. */
+    function stitchedTile() {
+      const data = new Float32Array(16)
+      const grid = new THREE.DataTexture(data, 4, 4, THREE.RedFormat, THREE.FloatType)
+      const mesh = new THREE.Mesh(tileMesh(9_000).geometry, new THREE.MeshPhongMaterial({ displacementMap: grid }))
+      parse(mesh, tileOf(0, 0))
+      const draw = () => mesh.onBeforeRender({} as THREE.WebGLRenderer, new THREE.Scene(), new THREE.Camera(), mesh.geometry, mesh.material as THREE.Material, null)
+      return { mesh, grid, data, draw }
+    }
+
+    it('stays coarse while the grid holds only sea level', () => {
+      const { mesh, grid, draw } = stitchedTile()
+      draw()
+      grid.needsUpdate = true
+      draw()
+      expect(mesh.geometry.drawRange.count).toBe(6 * 4 * 4 + SKIRTS)
+    })
+
+    it("takes the library's index back once land reaches under a vertex", () => {
+      const { mesh, grid, data, draw } = stitchedTile()
+      // The stitched border: a land neighbour's edge texel.
+      data[3] = 12
+      draw()
+      // Not until the stitch's needsUpdate moves the source's version.
+      expect(mesh.geometry.drawRange.count).toBe(6 * 4 * 4 + SKIRTS)
+      grid.needsUpdate = true
+      const version = mesh.geometry.index!.version
+      draw()
+      expect(mesh.geometry.drawRange.count).toBe(Infinity)
+      expect(mesh.geometry.index!.array).toEqual(libraryIndex())
+      expect(mesh.geometry.index!.version).toBeGreaterThan(version)
+    })
   })
 
   it("leaves the vertices alone (the ship's floor reads them)", () => {
@@ -165,9 +211,7 @@ describe('flat tiles (tides-zmw.9.33)', () => {
     it('leaves a tile with an island alone', async () => {
       const { tile, mesh } = await libraryTile(X, Y, LEVEL, (i, j) => (i === 9 && j === 9 ? 30 : 0))
       expect(tileHeightRange(tile)!.max).toBeGreaterThan(0)
-      const index = mesh.geometry.index
-      parse(mesh, tile)
-      expect(mesh.geometry.index).toBe(index)
+      expect(parse(mesh, tile)).toEqual(libraryIndex())
     })
   })
 })
