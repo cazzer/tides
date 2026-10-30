@@ -35,8 +35,12 @@
 //   banks and silt left as they are); anything still darker than WATER_DEEP
 //   is lifted to it; by day only (SKY_DAY), so the night fill and the
 //   Moon's light find the night sea as dark as they did;
-// - the waves (normal): WATER_WAVES fixed sinusoids in the Earth's frame
-//   (Earth-fixed, so the swell stays put under a moving eye), deep-water
+// - the waves (normal): WATER_WAVES sinusoids fixed to the Earth (so the
+//   swell stays put under a moving eye), running level the way the sea
+//   runs under the eye (tides-nh8.1, aimWaves(): about the wave climate's
+//   swell and wind-sea headings, each spread as the real sea's, bent toward
+//   shallow water over the shelf, tides-nh8.3 refractHeadings(), turned
+//   slowly about the eye as it moves, reaim()), deep-water
 //   dispersion for their speeds, the longer ones carrying more of the
 //   slope (WATER_SLOPE_TILT) and bending the shorter ones' crests
 //   (WATER_WARP), each faded out on its phase step across the pixel (the
@@ -54,7 +58,9 @@
 //   doesn't run as one ruler-straight grating under the eye;
 // - the sea's state (normal): how rough it runs and which way, from the
 //   wave climate (waterClimate.ts: the wind sea's Cox-Munk variance, the
-//   swell's height, the settled axis the waves pull toward, WATER_ALIGN),
+//   swell's height, the dominant waves' axis the glint stretches along,
+//   each faded wave's variance laid about it as the wave lies off the axis
+//   under the eye),
 //   broken up by Earth-fixed noise tens of kilometres across
 //   (WATER_NOISE_KM), so from a few kilometres up the sea isn't one
 //   roughness everywhere: in the glint, and in the sky's reflection, read
@@ -85,8 +91,10 @@ import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import type { MaterialPatch } from './eclipseShadow'
 import type { GroundHaze } from './groundHaze'
 import { WATER_DEPTH_GLSL, WATER_DEPTH_NEUTRAL, WATER_DEPTH_SAMPLE, WATER_TINT_DEEP, waterTinted } from './waterDepth'
-import { waterSeaTexture, WATER_CLIMATE_GLSL } from './waterClimate'
+import { climateAt, climateBytes, decode, localEastNorth, waterSeaTexture, WATER_CLIMATE_GLSL, type ClimateCell } from './waterClimate'
 import { NOISE_CELL_TEXELS, NOISE_LAT_MAX, noiseCellsAround } from './waterNoise'
+import { refractHeading, seaFloor, type DepthGrid, type SeaFloor } from './waterRefraction'
+import { liveClimate, type LiveWaveGrid } from '../forecast-waves'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
 
 /** Waves on the full tier; the low tier keeps the longest WATER_WAVES_LOW. */
@@ -172,10 +180,10 @@ export const WATER_DEEP_LUMA = luma(WATER_DEEP)
 const METRES_PER_UNIT = EARTH_KM_PER_UNIT * 1000
 
 export interface WaterWave {
-  /** Its slot in uWavePhase. */
+  /** Its slot in uWavePhase, uWaveDir and uWaveC2. */
   index: number
-  /** Unit direction of travel in the ground's frame (Y north). */
-  dir: readonly [number, number, number]
+  /** Its offset off its heading, in its spread's widths (WATER_SPREAD_Q). */
+  spread: number
   /** Wavelength, metres and scene units. */
   metres: number
   lambda: number
@@ -187,9 +195,9 @@ export interface WaterWave {
 }
 
 /** Each wave's slope amplitude: WATER_MSS - WATER_MSS_BASE over the full
- * set, a wave's mean projected variance being half its amplitude squared
- * times 2/3 (a random direction's level share). */
-export const WATER_WAVE_SLOPE = Math.sqrt((2 * (WATER_MSS - WATER_MSS_BASE)) / WATER_WAVES / (2 / 3))
+ * set, a wave's variance being half its amplitude squared (every wave runs
+ * level: aimWaves()). */
+export const WATER_WAVE_SLOPE = Math.sqrt((2 * (WATER_MSS - WATER_MSS_BASE)) / WATER_WAVES)
 
 /** How the slope is shared out: each wave's goes as its wavelength to this
  * power (the set's variance unchanged), so the longer waves shape the sea
@@ -208,10 +216,21 @@ export const WATER_FADE_END = 1 / 6
  * (its gain, F) fades sooner still, as F^1/4. */
 export const WATER_GLINT_HARMONIC = 2.5
 
-/** The wave climate's pull on each wave's slope: 1 + WATER_ALIGN R cos 2Δ,
- * Δ between the wave and the local sea's axis, R how settled the axis is
- * (waterClimate.ts). Its mean over directions is 1. */
-export const WATER_ALIGN = 0.8
+/** Which way the waves run (tides-nh8.1): each about its heading under the
+ * eye (aimWaves()), the swell's narrowly (WATER_SPREAD_SWELL_DEG, the
+ * width of a cos^2s spread with s near 30) and the wind sea's widely
+ * (WATER_SPREAD_WIND_DEG, s near 2), as far again where the climate's
+ * heading is unsettled (its length R: the width times 2 - R). Each wave sits
+ * WATER_SPREAD_Q[rank] widths off its heading, rank by wavelength, longest
+ * first: the longest on it, the rest to either side in turn, so waves of
+ * neighbouring lengths cross. */
+export const WATER_SPREAD_SWELL_DEG = 10
+export const WATER_SPREAD_WIND_DEG = 30
+export const WATER_SPREAD_Q = [0, 0.8, -0.8, 0.4, -0.5, 0.5, -1.1, 1.1, -1.7, 1.7, -0.25, 0.25] as const
+/** How fast the waves' headings follow the climate under a moving eye
+ * (s), and how far the eye jumps in a frame (km) before they snap to it. */
+export const WATER_AIM_EASE_S = 3
+export const WATER_AIM_SNAP_KM = 50
 /** The wavelengths (m) over which a wave goes from wind sea (its slope
  * scaled as the wind waves' Cox-Munk variance) to swell (as the swell's
  * height, squared). */
@@ -240,19 +259,15 @@ export const WATER_SWELL_BEND = 6
 export const WATER_SWELL_GROUPS = 0.5
 export const WATER_SWELL_BEND_K = WATER_SWELL_BEND * 2 * (1 / WATER_SWELL_KM[0] + 0.5 / WATER_SWELL_KM[1])
 
-/** The waves: directions on a golden spiral over the northern hemisphere
- * (a plane wave and its opposite are the same pattern, so this covers every
- * direction), wavelengths shuffled across them (i 5 mod 12) so the long
- * ones don't all run one way. */
+/** The waves: wavelengths shuffled across the slots (i 5 mod 12); which
+ * way each runs is the eye's (aimWaves()). */
 export const WATER_WAVE_TABLE: readonly WaterWave[] = Array.from({ length: WATER_WAVES }, (_, index) => {
-  const y = 1 - (index + 0.5) / WATER_WAVES
-  const r = Math.sqrt(1 - y * y)
-  const phi = index * 2.39996
-  const metres = WATER_WAVE_LONGEST * WATER_WAVE_RATIO ** ((index * 5) % WATER_WAVES)
+  const rank = (index * 5) % WATER_WAVES
+  const metres = WATER_WAVE_LONGEST * WATER_WAVE_RATIO ** rank
   const lambda = metres / METRES_PER_UNIT
   return {
     index,
-    dir: [r * Math.cos(phi), y, r * Math.sin(phi)] as const,
+    spread: WATER_SPREAD_Q[rank],
     metres,
     lambda,
     k: TAU / lambda,
@@ -276,10 +291,84 @@ const smoothstep = (a: number, b: number, x: number) => {
 type Vec3 = readonly [number, number, number]
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
+/** A wave aimed under the eye (aimWaves()): its unit direction of travel
+ * in the ground's frame, level at the eye, and cos 2Δ, Δ its turn off the
+ * dominant waves' axis there (the glint lays its variance about the local
+ * axis by it, wherever the pixel). */
+export interface AimedWave extends WaterWave {
+  dir: Vec3
+  c2: number
+}
+
+/** Which way each wave runs (compass radians, clockwise from north, by
+ * index), the dominant waves' heading, and the turn from the wind sea's
+ * heading to the swell's that the waves between take a share of. */
+export interface WaveHeadings {
+  headings: number[]
+  axis: number
+  turn: number
+}
+
+const wrapPi = (a: number) => a - TAU * Math.round(a / TAU)
+
+/** The headings for a climate (waterClimate.ts climateAt()): each wave
+ * about the heading of its class (the wind sea's, the swell's, turned
+ * between them as waveSwell() goes), WATER_SPREAD_Q of its spread off it.
+ * The turn from wind to swell is taken nearest `turnNear` (the last one),
+ * so the waves between don't flip sides as wind and swell pass opposite. */
+export function waveHeadings(climate: ClimateCell, turnNear?: number): WaveHeadings {
+  const wind = Math.atan2(climate.windSin, climate.windCos)
+  const swell = Math.atan2(climate.swellSin, climate.swellCos)
+  const turn = turnNear === undefined ? wrapPi(swell - wind) : turnNear + wrapPi(swell - wind - turnNear)
+  const windSettled = Math.min(Math.hypot(climate.windCos, climate.windSin), 1)
+  const swellSettled = Math.min(Math.hypot(climate.swellCos, climate.swellSin), 1)
+  const headings = WATER_WAVE_TABLE.map((w) => {
+    const t = waveSwell(w)
+    const width = (WATER_SPREAD_WIND_DEG + (WATER_SPREAD_SWELL_DEG - WATER_SPREAD_WIND_DEG) * t) * (Math.PI / 180)
+    const settled = windSettled + (swellSettled - windSettled) * t
+    return wind + turn * t + w.spread * width * (2 - settled)
+  })
+  return { headings, axis: Math.atan2(climate.waveSin, climate.waveCos), turn }
+}
+
+/** `from` eased by `a` (0 to 1) toward `to`, each heading the short way
+ * round (the axis mod pi), so a heading that swings far turns over seconds
+ * rather than jumping. */
+export function easeHeadings(from: WaveHeadings, to: WaveHeadings, a: number): WaveHeadings {
+  return {
+    headings: from.headings.map((h, i) => h + wrapPi(to.headings[i] - h) * a),
+    axis: from.axis + 0.5 * wrapPi(2 * (to.axis - from.axis)) * a,
+    turn: to.turn,
+  }
+}
+
+/** `headings` bent for the sea floor under the eye (./waterRefraction.ts),
+ * each wave for its own wavelength: the longest feel the bottom first. */
+export function refractHeadings(headings: WaveHeadings, floor: SeaFloor): WaveHeadings {
+  return { ...headings, headings: headings.headings.map((h, i) => refractHeading(h, WATER_WAVE_TABLE[i].metres, floor)) }
+}
+
+/** The waves aimed over ground whose up is `up` (unit, the ground's frame)
+ * along `headings`. */
+export function aimAlong(up: Vec3, headings: WaveHeadings): AimedWave[] {
+  const { east, north } = localEastNorth(up)
+  return WATER_WAVE_TABLE.map((w) => {
+    const heading = headings.headings[w.index]
+    const [c, sn] = [Math.cos(heading), Math.sin(heading)]
+    const dir: Vec3 = [north[0] * c + east[0] * sn, north[1] * c + east[1] * sn, north[2] * c + east[2] * sn]
+    return { ...w, dir, c2: Math.cos(2 * (heading - headings.axis)) }
+  })
+}
+
+/** The waves aimed over ground whose up is `up` for a climate there. */
+export function aimWaves(up: Vec3, climate: ClimateCell): AimedWave[] {
+  return aimAlong(up, waveHeadings(climate))
+}
+
 /** The sea at a place as the GLSL forms it: the climate's scales
  * (waterClimate.ts mssScale and swellScale), the large-scale noise's scale,
- * how settled the sea's axis is (0 to 1) and that axis (unit, level, the
- * ground's frame). */
+ * how settled the dominant waves' heading is (0 to 1: an unsettled sea's
+ * glint goes round) and their axis (unit, level, the ground's frame). */
 export interface WaterSea {
   windScale: number
   swellScale: number
@@ -293,18 +382,14 @@ export function medianSea(axis: Vec3): WaterSea {
   return { windScale: 1, swellScale: 1, noise: 1, settled: 0, axis }
 }
 
-/** A wave's level part over ground whose up is `up`, and its squared length. */
-function levelPart(w: WaterWave, up: Vec3): { dt: Vec3; dt2: number } {
+/** A wave's level direction over ground whose up is `up`, as the GLSL takes
+ * it: its direction less its part along up, made unit (so a wave carries
+ * its whole variance however far from the eye it was aimed). */
+function levelPart(w: AimedWave, up: Vec3): Vec3 {
   const along = dot(w.dir, up)
   const dt: Vec3 = [w.dir[0] - up[0] * along, w.dir[1] - up[1] * along, w.dir[2] - up[2] * along]
-  return { dt, dt2: Math.max(dot(dt, dt), 1e-8) }
-}
-
-/** cos 2Δ between a wave's level direction and the sea's axis. */
-function axisCos2(w: WaterWave, up: Vec3, sea: WaterSea): number {
-  const { dt, dt2 } = levelPart(w, up)
-  const a = dot(dt, sea.axis)
-  return (2 * a * a) / dt2 - 1
+  const length = Math.sqrt(Math.max(dot(dt, dt), 1e-8))
+  return [dt[0] / length, dt[1] / length, dt[2] / length]
 }
 
 /** How far a wave is swell rather than wind sea, by its wavelength. */
@@ -312,26 +397,25 @@ export function waveSwell(w: WaterWave): number {
   return smoothstep(WATER_SWELL_FROM, WATER_SWELL_TO, w.metres)
 }
 
-/** A wave's gain F on its slope variance in `sea` over ground whose up is
- * `up` (its amplitude goes as the square root). */
-export function waveGain(w: WaterWave, up: Vec3, sea: WaterSea): number {
+/** A wave's gain F on its slope variance in `sea` (its amplitude goes as
+ * the square root). */
+export function waveGain(w: WaterWave, sea: WaterSea): number {
   const t = waveSwell(w)
-  const scale = sea.windScale + (sea.swellScale * sea.swellScale - sea.windScale) * t
-  return sea.noise * scale * (1 + WATER_ALIGN * sea.settled * axisCos2(w, up, sea))
+  return sea.noise * (sea.windScale + (sea.swellScale * sea.swellScale - sea.windScale) * t)
 }
 
 /** A wave's gain on the variance it hands the glint when it fades: the wind
  * sea's (Cox-Munk's slope variance is the wind's), whatever its class; the
  * swell's height scales only what's drawn. */
-export function waveGlintGain(w: WaterWave, up: Vec3, sea: WaterSea): number {
-  return sea.noise * sea.windScale * (1 + WATER_ALIGN * sea.settled * axisCos2(w, up, sea))
+export function waveGlintGain(sea: WaterSea): number {
+  return sea.noise * sea.windScale
 }
 
 /** A wave's phase step (radians) across a pixel `footprint` wide (scene
  * units, square on the level sea). The GLSL takes the pixel's two steps and
  * adds the longer waves' warp; the mirrors fade on the wavelength alone. */
-export function waveStep(w: WaterWave, up: Vec3, footprint: number): number {
-  return w.k * Math.sqrt(levelPart(w, up).dt2) * footprint
+export function waveStep(w: WaterWave, footprint: number): number {
+  return w.k * footprint
 }
 
 /** A wave's weight at a phase `step` per pixel for its `gain`. */
@@ -342,46 +426,44 @@ export function waveWeight(step: number, gain = 1): number {
 /** A wave's slope as the GLSL draws it (its part of waterGrad, the height's
  * gradient in the ground's frame) at its `phase` here, in `sea` at
  * `footprint`, with no swell groups or bend. */
-export function waveSlope(w: WaterWave, up: Vec3, sea: WaterSea, footprint: number, phase: number): Vec3 {
-  const { dt } = levelPart(w, up)
-  const s = weightAt(w, up, sea, footprint) * Math.sqrt(waveGain(w, up, sea)) * w.slope * Math.sin(phase)
+export function waveSlope(w: AimedWave, up: Vec3, sea: WaterSea, footprint: number, phase: number): Vec3 {
+  const dt = levelPart(w, up)
+  const s = weightAt(w, sea, footprint) * Math.sqrt(waveGain(w, sea)) * w.slope * Math.sin(phase)
   return [-s * dt[0], -s * dt[1], -s * dt[2]]
 }
 
-/** A wave's slope variance in `sea` at `gain`. */
-function waveVariance(w: WaterWave, up: Vec3, gain: number): number {
-  return gain * 0.5 * w.slope * w.slope * levelPart(w, up).dt2
+/** A wave's slope variance at `gain`. */
+function waveVariance(w: WaterWave, gain: number): number {
+  return gain * 0.5 * w.slope * w.slope
 }
 
-const weightAt = (w: WaterWave, up: Vec3, sea: WaterSea, footprint: number) =>
-  waveWeight(waveStep(w, up, footprint), waveGain(w, up, sea))
+const weightAt = (w: WaterWave, sea: WaterSea, footprint: number) => waveWeight(waveStep(w, footprint), waveGain(w, sea))
 
-/** The slope variance `waves` still draw at `footprint` over ground whose
- * up is `up` (unit, the ground's frame): a wave drawn at weight W carries
- * W^2 of its variance. */
-export function waterVisibleVariance(footprint: number, up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  return waves.reduce((sum, w) => sum + weightAt(w, up, sea, footprint) ** 2 * waveVariance(w, up, waveGain(w, up, sea)), 0)
+/** The slope variance `waves` still draw at `footprint`: a wave drawn at
+ * weight W carries W^2 of its variance. */
+export function waterVisibleVariance(footprint: number, waves: readonly WaterWave[], sea: WaterSea): number {
+  return waves.reduce((sum, w) => sum + weightAt(w, sea, footprint) ** 2 * waveVariance(w, waveGain(w, sea)), 0)
 }
 
-/** The roughness the tier's waves leave in the glint, on average, with
- * every wave drawn, for the median sea: WATER_MSS_BASE, plus the dropped
- * waves' on the low tier. */
+/** The roughness the tier's waves leave in the glint with every wave drawn,
+ * for the median sea: WATER_MSS_BASE, plus the dropped waves' on the low
+ * tier. */
 export function waterBaseMss(waves: readonly WaterWave[]): number {
-  return WATER_MSS - waves.reduce((sum, w) => sum + 0.5 * w.slope * w.slope * (2 / 3), 0)
+  return WATER_MSS - waves.reduce((sum, w) => sum + 0.5 * w.slope * w.slope, 0)
 }
 
 /** The sea's whole slope variance here as the glint sees it, every wave
  * faded: its base roughness and every wave's, at the wind's scale. Where
  * the swell's scale squared is the wind's, it is also what the drawn waves
  * and the glint add up to at any footprint. */
-export function waterSeaVariance(up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  return waterBaseMss(waves) * sea.windScale * sea.noise + waves.reduce((sum, w) => sum + waveVariance(w, up, waveGlintGain(w, up, sea)), 0)
+export function waterSeaVariance(waves: readonly WaterWave[], sea: WaterSea): number {
+  return waterBaseMss(waves) * sea.windScale * sea.noise + waves.reduce((sum, w) => sum + waveVariance(w, waveGlintGain(sea)), 0)
 }
 
 /** The variance the faded waves hand to the glint at `footprint`: (1 - W^2)
  * of each wave's, at the wind's scale. */
-export function waterLostVariance(footprint: number, up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  return waves.reduce((sum, w) => sum + (1 - weightAt(w, up, sea, footprint) ** 2) * waveVariance(w, up, waveGlintGain(w, up, sea)), 0)
+export function waterLostVariance(footprint: number, waves: readonly WaterWave[], sea: WaterSea): number {
+  return waves.reduce((sum, w) => sum + (1 - weightAt(w, sea, footprint) ** 2) * waveVariance(w, waveGlintGain(sea)), 0)
 }
 
 /** The glint's slope variances along and across the sea's axis. */
@@ -394,23 +476,23 @@ export interface WaterSlope {
 const WATER_MSS_FLOOR = 1e-3
 
 /** The glint's slope variance at `footprint`: the base roughness, half on
- * each axis, and each faded wave's lost variance on the axes as its
- * direction lies (cos^2 and sin^2 of Δ). */
-export function waterSlopeVariance(footprint: number, up: Vec3, waves: readonly WaterWave[], sea: WaterSea): WaterSlope {
+ * each axis, and each faded wave's lost variance on the sea's axis as the
+ * wave lies off the axis under the eye (cos^2 and sin^2 of Δ), as far as
+ * the sea here is settled. */
+export function waterSlopeVariance(footprint: number, waves: readonly AimedWave[], sea: WaterSea): WaterSlope {
   let along = 0.5 * waterBaseMss(waves) * sea.windScale * sea.noise
   let cross = along
   for (const w of waves) {
-    const lost = (1 - weightAt(w, up, sea, footprint) ** 2) * waveVariance(w, up, waveGlintGain(w, up, sea))
-    const c2 = axisCos2(w, up, sea)
-    along += lost * (0.5 + 0.5 * c2)
-    cross += lost * (0.5 - 0.5 * c2)
+    const lost = (1 - weightAt(w, sea, footprint) ** 2) * waveVariance(w, waveGlintGain(sea))
+    along += lost * (0.5 + 0.5 * sea.settled * w.c2)
+    cross += lost * (0.5 - 0.5 * sea.settled * w.c2)
   }
   return { along: Math.max(along, 0.5 * WATER_MSS_FLOOR), cross: Math.max(cross, 0.5 * WATER_MSS_FLOOR), axis: sea.axis }
 }
 
 /** The glint's total slope variance (along plus across). */
-export function waterMss(footprint: number, up: Vec3, waves: readonly WaterWave[], sea: WaterSea): number {
-  const { along, cross } = waterSlopeVariance(footprint, up, waves, sea)
+export function waterMss(footprint: number, waves: readonly AimedWave[], sea: WaterSea): number {
+  const { along, cross } = waterSlopeVariance(footprint, waves, sea)
   return along + cross
 }
 
@@ -419,14 +501,42 @@ export function isotropicSlope(mss: number, axis: Vec3): WaterSlope {
   return { along: mss / 2, cross: mss / 2, axis }
 }
 
+/** The waves as aimed (by index), and where: each wave's phase is
+ * k.(p - anchor) + offset - w t at a point p, fixed to the Earth until the
+ * waves are aimed afresh (reaim()). */
+export interface WaterAim {
+  waves: AimedWave[]
+  anchor: Vec3
+  offset: number[]
+}
+
+/** The waves aimed from `eye` (from the centre, the ground's frame) along
+ * `headings`, their phases there 0 at time 0. */
+export function waterAim(eye: Vec3, headings: WaveHeadings): WaterAim {
+  return { waves: aimAlong(upAt(eye), headings), anchor: eye, offset: new Array(WATER_WAVES).fill(0) }
+}
+
+/** `aim` re-aimed from `eye` along `headings`: the waves turn about the
+ * eye, where their phases carry on unbroken. */
+export function reaim(aim: WaterAim, eye: Vec3, headings: WaveHeadings): WaterAim {
+  const offset = aim.waves.map((w) => wrap(aim.offset[w.index] + w.k * dot(w.dir, sub(eye, aim.anchor))))
+  return { waves: aimAlong(upAt(eye), headings), anchor: eye, offset }
+}
+
 /** Each wave's phase at the eye (`eye` from the centre, the ground's frame)
  * at `time` s, into `out` by its index, mod 2 pi: the GPU adds k.ray. */
-export function waterPhases(eye: Vec3, time: number, out: Float32Array | number[]): void {
-  for (const w of WATER_WAVE_TABLE) {
-    const phase = ((w.k * dot(w.dir, eye)) % TAU) - ((w.omega * time) % TAU)
-    out[w.index] = phase - TAU * Math.floor(phase / TAU)
+export function waterPhases(aim: WaterAim, eye: Vec3, time: number, out: Float32Array | number[]): void {
+  const ray = sub(eye, aim.anchor)
+  for (const w of aim.waves) {
+    out[w.index] = wrap(aim.offset[w.index] + ((w.k * dot(w.dir, ray)) % TAU) - ((w.omega * time) % TAU))
   }
 }
+
+const wrap = (phase: number) => phase - TAU * Math.floor(phase / TAU)
+const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+/** The up over an eye; the equator's at longitude 0 before any frame has
+ * set one. */
+const upAt = (eye: Vec3): Vec3 => (dot(eye, eye) > 0 ? unit(eye) : [1, 0, 0])
 
 /** Each noise octave's cells round the equator (./waterNoise.ts): the
  * sea's (WATER_NOISE_KM), then the swell's (WATER_SWELL_KM). */
@@ -556,6 +666,10 @@ const DIRECT = `${BLINN_PHONG_DIRECT.replace('RE_Direct_BlinnPhong(', 'RE_Direct
 // climate and noise.
 const head = () => /* glsl */ `
 uniform float uWavePhase[${WATER_WAVES}];
+// Each wave's direction (unit, the ground's frame) and cos 2Δ off the axis
+// under the eye (aimWaves()).
+uniform vec3 uWaveDir[${WATER_WAVES}];
+uniform float uWaveC2[${WATER_WAVES}];
 // The eye's place in metres mod WATER_SPARKLE_PERIOD_M (from the CPU in
 // double), and the water's clock in sparkle draws.
 uniform vec3 uWaterSparkleEye;
@@ -667,7 +781,7 @@ vec3 waterBody(vec3 c) {
 `
 
 // One wave, unrolled (no arrays indexed in the loop: those spill on some
-// GPUs): its level part at this ground, its gain in this sea, its fade and
+// GPUs): its level direction at this ground, its gain in this sea, its fade and
 // the variance it hands the glint (every water pixel: cheap), then, only
 // where it's drawn, its slope. Its fade is on its phase step across the
 // pixel (the two steps' length, so a long footprint fades only the waves
@@ -679,17 +793,16 @@ const v2 = (c: readonly number[]) => `vec2(${c.map(f).join(', ')})`
 /** Each wave's own mix of the swell noise's two channels. */
 const swellTurn = (i: number) => [Math.cos(i * 2.39996 + 1), Math.sin(i * 2.39996 + 1)]
 const wave = (w: WaterWave) => /* glsl */ `
-  waterD = ${v3(w.dir)};
+  waterD = uWaveDir[${w.index}];
   waterDt = waterD - waterUpGround * dot(waterD, waterUpGround);
-  waterDt2 = max(dot(waterDt, waterDt), 1e-8);
-  waterDa = dot(waterDt, waterAxis);
-  waterC2 = 2.0 * waterDa * waterDa / waterDt2 - 1.0;
+  waterDt = waterDt * inversesqrt(max(dot(waterDt, waterDt), 1e-12));
+  waterC2 = waterSettled * uWaveC2[${w.index}];
   waterA = max(1.0 + waterGroups * dot(waterGroupNoise, ${v2(swellTurn(w.index + 0.5))}), 0.2);
-  waterA = waterA * waterA * (1.0 + ${f(WATER_ALIGN)} * waterSettled * waterC2);
+  waterA = waterA * waterA;
   waterF = mix(waterWindF, waterSwellF, ${f(waveSwell(w))}) * waterA;
   waterW = 1.0 - smoothstep(${f(WATER_FADE_START * TAU)}, ${f(WATER_FADE_END * TAU)},
     (${e(w.k)} * length(vec2(dot(waterDt, waterRx), dot(waterDt, waterRy))) + (waterWarpK + waterBendK) * waterPx) * ${f(WATER_GLINT_HARMONIC)} * sqrt(sqrt(waterF)));
-  waterLost = (1.0 - waterW * waterW) * waterWindF * waterA * ${e(0.5 * w.slope * w.slope)} * waterDt2;
+  waterLost = (1.0 - waterW * waterW) * waterWindF * waterA * ${e(0.5 * w.slope * w.slope)};
   waterAlong += waterLost * (0.5 + 0.5 * waterC2);
   waterCross += waterLost * (0.5 - 0.5 * waterC2);
   if (waterW > 0.0) {
@@ -697,31 +810,25 @@ const wave = (w: WaterWave) => /* glsl */ `
       + ${f(WATER_SWELL_BEND)} * dot(waterBendNoise, ${v2(swellTurn(w.index))}));
     waterGrad -= (waterW * sqrt(waterF) * ${f(w.slope)} * waterS) * waterDt;
     waterWarp += waterW * ${f(WATER_WARP)} * waterS;
-    waterWarpK += waterW * ${e(WATER_WARP * w.k)} * sqrt(waterDt2);
+    waterWarpK += waterW * ${e(WATER_WARP * w.k)};
   }`
 
 // One wave where every wave has faded: only the variance it hands the glint.
 const waveFaded = (w: WaterWave) => /* glsl */ `
-  waterD = ${v3(w.dir)};
-  waterDt = waterD - waterUpGround * dot(waterD, waterUpGround);
-  waterDt2 = max(dot(waterDt, waterDt), 1e-8);
-  waterDa = dot(waterDt, waterAxis);
-  waterC2 = 2.0 * waterDa * waterDa / waterDt2 - 1.0;
-  waterLost = waterWindF * (1.0 + ${f(WATER_ALIGN)} * waterSettled * waterC2) * ${e(0.5 * w.slope * w.slope)} * waterDt2;
-  waterAlong += waterLost * (0.5 + 0.5 * waterC2);
-  waterCross += waterLost * (0.5 - 0.5 * waterC2);`
+  waterLost = waterWindF * ${e(0.5 * w.slope * w.slope)};
+  waterAlong += waterLost * (0.5 + 0.5 * waterSettled * uWaveC2[${w.index}]);
+  waterCross += waterLost * (0.5 - 0.5 * waterSettled * uWaveC2[${w.index}]);`
 
 /** A pixel's narrower step on the sea past which every wave has faded: the
- * longest's fade end, for any wave with a level share over WATER_FADED_LEVEL
- * and a gain over WATER_FADED_GAIN (those under have next to no slope to
- * draw). The GLSL scales the step by the pixel's least gain (a wave fades on
+ * longest's fade end (every wave runs level, so its step is at least its
+ * wavenumber times the narrower step), for any wave with a gain over
+ * WATER_FADED_GAIN (those under have next to no slope to draw). The GLSL scales the step by the pixel's least gain (a wave fades on
  * its step times its gain's fourth root): where every wave's gain is over
  * WATER_FADED_GAIN, the cheaper paths come in that much nearer the eye. */
-const WATER_FADED_LEVEL = 0.3
 const WATER_FADED_GAIN = 0.02
 const fadedStep = (waves: readonly WaterWave[]) =>
   (WATER_FADE_END * TAU) /
-  (Math.min(...waves.map((w) => w.k)) * WATER_FADED_LEVEL * WATER_GLINT_HARMONIC * WATER_FADED_GAIN ** 0.25)
+  (Math.min(...waves.map((w) => w.k)) * WATER_GLINT_HARMONIC * WATER_FADED_GAIN ** 0.25)
 
 // A tap of noise octave i (WATER_NOISE_CELLS) at the pixel's waterMerc and
 // waterLod: its cells, turned by a quarter turn or more (whole tiles either
@@ -785,9 +892,12 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     float waterNs = clamp(exp2(${f(WATER_NOISE_SCALE)} * waterNoise.x), 0.3, 3.0);
     float waterWindF = waterNs * waterMssScale(waterClimate.x);
     float waterSwellF = waterNs * waterSwellScale(waterClimate.y) * waterSwellScale(waterClimate.y);
+    // How settled the dominant waves' heading is here: the waves' variance
+    // goes on the glint about the axis that far (an unsettled sea's goes
+    // round, so no axis flips where neighbouring headings cancel). The axis:
+    // compass theta (clockwise from north) of half the doubled angle, turned
+    // by the noise.
     float waterSettled = min(length(waterClimate.zw), 1.0);
-    // The axis: compass theta (clockwise from north) of half the doubled
-    // angle, turned by the noise.
     float waterTheta = 0.5 * (waterSettled > 1e-4 ? atan(waterClimate.w, waterClimate.z) : 0.0)
       + ${f(WATER_NOISE_TURN)} * waterNoise.y;
     vec3 waterEast = vec3(waterUpGround.z, 0.0, -waterUpGround.x);
@@ -814,13 +924,13 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     // faded, so only their variance (wavesByStep()). The groups take it
     // times the fourth root of the least gain any wave has here (each wave's
     // waterF at its weakest: the lesser of the wind's and the swell's, its
-    // groups' and its pull off the axis'), over WATER_FADED_GAIN's.
+    // groups'), over WATER_FADED_GAIN's.
     float waterGa = dot(waterRx, waterRx);
     float waterGb = dot(waterRx, waterRy);
     float waterGc = dot(waterRy, waterRy);
     float waterNarrow = sqrt(max(0.5 * (waterGa + waterGc) - sqrt(0.25 * (waterGa - waterGc) * (waterGa - waterGc) + waterGb * waterGb), 0.0));
     float waterGroupsMin = max(1.0 - waterGroups * length(waterGroupNoise), 0.2);
-    float waterGainMin = min(waterWindF, waterSwellF) * waterGroupsMin * waterGroupsMin * (1.0 - ${f(WATER_ALIGN)} * waterSettled);
+    float waterGainMin = min(waterWindF, waterSwellF) * waterGroupsMin * waterGroupsMin;
     float waterFadedNarrow = waterNarrow * sqrt(sqrt(max(waterGainMin, ${f(WATER_FADED_GAIN)}) / ${f(WATER_FADED_GAIN)}));
     // The sparkle's cell: Earth-fixed, a power of two in metres under the
     // narrower step, so each pixel draws its own; and the facets it spans.
@@ -832,8 +942,6 @@ diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
     vec3 waterGrad = vec3(0.0);
     vec3 waterD;
     vec3 waterDt;
-    float waterDt2;
-    float waterDa;
     float waterC2;
     float waterA;
     float waterF;
@@ -985,10 +1093,12 @@ export function splitDouble(x: number): [number, number] {
 }
 
 export interface Water {
-  /** The phases, by wave index, and the wave climate (shared by every
-   * program that takes the water). */
+  /** The phases and directions, by wave index, and the wave climate (shared
+   * by every program that takes the water). */
   uniforms: {
     uWavePhase: THREE.IUniform<Float32Array>
+    uWaveDir: THREE.IUniform<Float32Array>
+    uWaveC2: THREE.IUniform<Float32Array>
     uWaterSea: THREE.IUniform<THREE.DataArrayTexture>
     uWaterSparkleEye: THREE.IUniform<THREE.Vector3>
     uWaterTwinkle: THREE.IUniform<number>
@@ -999,14 +1109,28 @@ export interface Water {
   /** Moves the waves on by `dt` seconds, unless `reduced` (prefers-reduced-motion). */
   advance(dt: number, reduced: boolean): void
   /** For each camera before anything draws, after the frame's update
-   * (GroundHaze.update): the phases at its eye, and the eye split. */
+   * (GroundHaze.update): the phases at its eye, and the eye split. The
+   * first camera after advance() also turns the waves toward the climate
+   * under its eye. */
   update(): void
+  /** The depth map's grey levels, once loaded, to bend the waves toward
+   * shallow water by (tides-nh8.3); until then they run as the climate says. */
+  setSeaFloor(grid: DepthGrid | null): void
+  /** The live wave directions to aim by (tides-nh8.4, ../forecast-waves.ts),
+   * or null for the baked climate's. */
+  setLiveWaves(grid: LiveWaveGrid | null): void
 }
 
-/** The water's clock and phases on the haze's `frame` (its eye). */
+let climateCells: ClimateCell[] | null = null
+
+/** The water's clock, phases and aim on the haze's `frame` (its eye). One
+ * per View: its waves are aimed for the first camera to draw after each
+ * advance(), and levelled at that camera's eye. */
 export function createWater(frame: GroundHaze['frame']): Water {
   const uniforms = {
     uWavePhase: { value: new Float32Array(WATER_WAVES) },
+    uWaveDir: { value: new Float32Array(WATER_WAVES * 3) },
+    uWaveC2: { value: new Float32Array(WATER_WAVES) },
     uWaterSea: { value: waterSeaTexture() },
     uWaterSparkleEye: { value: new THREE.Vector3() },
     uWaterTwinkle: { value: 0 },
@@ -1015,19 +1139,56 @@ export function createWater(frame: GroundHaze['frame']): Water {
   }
   const eye: [number, number, number] = [0, 0, 0]
   let time = 0
+  let aim: WaterAim | null = null
+  let headings: WaveHeadings | null = null
+  let floor: DepthGrid | null = null
+  // The climate the waves are aimed by: the baked one, or it with the live
+  // directions (made once per grid).
+  let live: { grid: LiveWaveGrid; cells: ClimateCell[] } | null = null
+  // Seconds since the waves were last aimed.
+  let pending = 0
+  // `climate` the waves run by; `glint` the climate whose dominant axis the
+  // GPU's texture holds (the baked), which each wave's cos 2 delta is off.
+  const aimAt = (climate: ClimateCell, glint: ClimateCell) => {
+    // The first aim, or a jump: straight to the climate here.
+    const jumped = !aim || !headings || Math.hypot(...sub(eye, aim.anchor)) * EARTH_KM_PER_UNIT > WATER_AIM_SNAP_KM
+    const climateHeadings = { ...waveHeadings(climate, jumped ? undefined : headings!.turn), axis: Math.atan2(glint.waveSin, glint.waveCos) }
+    const target = floor ? refractHeadings(climateHeadings, seaFloor(floor, upAt(eye), EARTH_RADIUS_KM)) : climateHeadings
+    headings = jumped ? target : easeHeadings(headings!, target, 1 - Math.exp(-pending / WATER_AIM_EASE_S))
+    aim = jumped ? waterAim([...eye], headings) : reaim(aim!, [...eye], headings)
+    pending = 0
+    for (const w of aim.waves) {
+      uniforms.uWaveDir.value.set(w.dir, 3 * w.index)
+      uniforms.uWaveC2.value[w.index] = w.c2
+    }
+  }
   return {
     uniforms,
     advance(dt, reduced) {
       if (!reduced) time += dt
+      pending += dt
     },
     update() {
       frame.uGroundHazeEyeLocal.value.toArray(eye)
-      waterPhases(eye, time, uniforms.uWavePhase.value)
+      if (!aim || pending > 0) {
+        climateCells ??= decode(climateBytes())
+        const baked = climateAt(climateCells, upAt(eye))
+        aimAt(live ? climateAt(live.cells, upAt(eye)) : baked, baked)
+      }
+      waterPhases(aim!, eye, time, uniforms.uWavePhase.value)
       waterSparkleEye(eye, uniforms.uWaterSparkleEye.value)
       uniforms.uWaterTwinkle.value = (time * WATER_TWINKLE_HZ) % 65536
       const split = eye.map(splitDouble)
       uniforms.uWaterEyeHi.value.set(split[0][0], split[1][0], split[2][0])
       uniforms.uWaterEyeLo.value.set(split[0][1], split[1][1], split[2][1])
+    },
+    setSeaFloor(grid) {
+      floor = grid
+    },
+    setLiveWaves(grid) {
+      if (grid === live?.grid) return
+      climateCells ??= decode(climateBytes())
+      live = grid ? { grid, cells: liveClimate(climateCells, grid) } : null
     },
   }
 }

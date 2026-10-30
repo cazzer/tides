@@ -17,6 +17,9 @@ import { nightLightsPatch, useNightFlight } from './nightLights'
 import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
 import { createWater, waterPatch } from './water'
+import { depthGridOf } from './waterRefraction'
+import { liveWaveGrids } from './liveWaveGrid'
+import { liveServes, type LiveWaveGrid } from '../forecast-waves'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
@@ -152,6 +155,38 @@ export default function EarthRenderer({
   // Open water that reads as water from low down (tides-07z): its waves'
   // clock and phases, at the haze's eye.
   const water = useMemo(() => createWater(groundHaze.frame), [groundHaze])
+  // The depth map read on the CPU too, to bend the waves toward shallow
+  // water under the eye (tides-nh8.3).
+  useEffect(() => water.setSeaFloor(depthGridOf(depthMap.image)), [water, depthMap])
+  // Today's wave directions (tides-nh8.4) while the real weather is shown
+  // and the clock is near their time; else the baked climate's. Checked
+  // every ten seconds (the clock moves; the grid is in memory) and as soon
+  // as a refresh lands.
+  useEffect(() => {
+    if (!real) {
+      water.setLiveWaves(null)
+      return
+    }
+    let alive = true
+    const apply = (grid: LiveWaveGrid | null) => {
+      if (alive) water.setLiveWaves(liveServes(grid, useStore.getState().timestamp) ? grid : null)
+    }
+    const check = () =>
+      liveWaveGrids
+        .peek()
+        .then((grid) => {
+          apply(grid)
+          return liveWaveGrids.settled().then(() => liveWaveGrids.peek().then(apply))
+        })
+        .catch(() => {})
+    check()
+    const id = setInterval(check, 10_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+      water.setLiveWaves(null)
+    }
+  }, [water, real])
   // The streamed tiles (tides-zmw.9.7) take the globe's features through
   // this link (its haze, eclipse, clouds, night, maps and horizon; the
   // tiles' composer, tides-zmw.9.16, surface/tile-material.ts), and the globe

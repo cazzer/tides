@@ -3,9 +3,12 @@ import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { latLonToLocal } from '../aurora'
 import {
+  bearing,
   CLIMATE_BYTES,
   CLIMATE_COLS,
+  CLIMATE_PLANE_BYTES,
   CLIMATE_ROWS,
+  climateAt,
   climateCell,
   climateTexture,
   climateUv,
@@ -44,15 +47,18 @@ const median = (xs: number[]) => {
 }
 
 describe('the wave climate asset', () => {
-  test('decodes to one RGBA texel per 7.5°, all in range', () => {
-    expect(bytes.length).toBe(48 * 24 * 4)
-    expect(CLIMATE_BYTES).toBe(48 * 24 * 4)
+  test('decodes to two planes of one RGBA texel per 7.5°, all in range', () => {
+    expect(bytes.length).toBe(2 * 48 * 24 * 4)
+    expect(CLIMATE_BYTES).toBe(2 * 48 * 24 * 4)
     expect(cells).toHaveLength(48 * 24)
     for (const c of cells) {
-      for (const x of [c.windWave, c.swell, c.axisCos, c.axisSin]) expect(Number.isFinite(x)).toBe(true)
+      for (const x of Object.values(c)) expect(Number.isFinite(x)).toBe(true)
       expect(c.windWave).toBeGreaterThanOrEqual(0)
       expect(c.swell).toBeGreaterThanOrEqual(0)
-      expect(Math.hypot(c.axisCos, c.axisSin)).toBeLessThanOrEqual(Math.SQRT2 + 1e-9)
+      // Means of unit vectors, to within a byte.
+      for (const [x, y] of [[c.waveCos, c.waveSin], [c.windCos, c.windSin], [c.swellCos, c.swellSin]]) {
+        expect(Math.hypot(x, y)).toBeLessThanOrEqual(1.01)
+      }
     }
   })
 
@@ -61,18 +67,38 @@ describe('the wave climate asset', () => {
     expect(cellAt(-55, 90).swell).toBeGreaterThan(cellAt(5, -120).swell)
   })
 
+  // Toward which bearing (degrees) the waves travel off coasts known for
+  // their swell and in the trades and the westerlies: shoreward, downwind.
+  const heading = (lat: number, lon: number, of: 'wind' | 'swell') => {
+    const c = climateAt(cells, local(lat, lon))
+    return of === 'wind' ? bearing(c.windCos, c.windSin) : bearing(c.swellCos, c.swellSin)
+  }
+  test.each([
+    ['off Southern California, the swell onto its south-west-facing coast', 32, -121, 'swell', 110, 170],
+    ['off Portugal, the swell onto its west-facing coast', 39.5, -11, 'swell', 90, 150],
+    ["north of Hawaii, the swell onto Oahu's north shore", 23, -158, 'swell', 135, 225],
+    ['in the Southern Ocean, the westerlies\' swell east', -50, 90, 'swell', 45, 135],
+    ['in the Southern Ocean, the westerlies\' wind sea east', -50, 90, 'wind', 45, 135],
+    ["in the Atlantic's north-east trades, the wind sea south-west", 15, -40, 'wind', 225, 280],
+    ["in the Pacific's north-east trades, the wind sea south-west", 12, -140, 'wind', 225, 280],
+  ] as const)('heads the right way %s', (_, lat, lon, of, from, to) => {
+    const b = heading(lat, lon, of)
+    expect(b).toBeGreaterThan(from)
+    expect(b).toBeLessThan(to)
+  })
+
   test("its medians are the scales' references", () => {
     // Over every texel: land holds its neighbouring sea's values.
     expect(Math.abs(median(cells.map((c) => c.windWave)) / WIND_WAVE_REF_M - 1)).toBeLessThan(0.2)
     expect(Math.abs(median(cells.map((c) => c.swell)) / SWELL_REF_M - 1)).toBeLessThan(0.2)
   })
 
-  test('loads as a texture of the same bytes', () => {
+  test('loads plane 0 as a texture of the same bytes', () => {
     const texture = climateTexture()
     expect(texture.image.width).toBe(CLIMATE_COLS)
     expect(texture.image.height).toBe(CLIMATE_ROWS)
     expect(texture.flipY).toBe(false)
-    expect(Array.from(texture.image.data as Uint8Array)).toEqual(Array.from(bytes))
+    expect(Array.from(texture.image.data as Uint8Array)).toEqual(Array.from(bytes.subarray(0, CLIMATE_PLANE_BYTES)))
   })
 })
 
@@ -96,6 +122,24 @@ describe('climateUv', () => {
   })
 })
 
+describe('climateAt', () => {
+  test('is the texel at its centre and bilinear between, across the antimeridian too', () => {
+    for (const [i, j] of [[0, 3], [47, 10], [20, 23]]) {
+      const at = climateAt(cells, local(texelLat(j), texelLon(i)))
+      const texel = cells[j * CLIMATE_COLS + i]
+      for (const key of Object.keys(texel) as (keyof ClimateCell)[]) expect(at[key]).toBeCloseTo(texel[key], 9)
+    }
+    // Halfway between column 47 and column 0, on row 5.
+    const mid = climateAt(cells, local(texelLat(5), 180))
+    const a = cells[5 * CLIMATE_COLS + 47]
+    const b = cells[5 * CLIMATE_COLS]
+    expect(mid.swell).toBeCloseTo((a.swell + b.swell) / 2, 9)
+    expect(mid.windCos).toBeCloseTo((a.windCos + b.windCos) / 2, 9)
+    // Clamped past the first and last rows' centres.
+    expect(climateAt(cells, local(89.9, texelLon(4))).swell).toBeCloseTo(cells[4].swell, 9)
+  })
+})
+
 describe('localEastNorth', () => {
   test('is orthonormal to up, east toward rising longitude, north toward rising latitude', () => {
     const dot = (a: number[], b: number[]) => a.reduce((s, x, k) => s + x * b[k], 0)
@@ -114,35 +158,52 @@ describe('localEastNorth', () => {
 })
 
 describe('encoding', () => {
-  const sea: ClimateCell = { windWave: 1.2, swell: 2.5, axisCos: 0.6, axisSin: -0.3 }
+  const sea: ClimateCell = { windWave: 1.2, swell: 2.5, waveCos: 0.6, waveSin: -0.3, windCos: -0.8, windSin: 0.1, swellCos: 0.2, swellSin: 0.9 }
 
   test('round-trips a texel to within a byte', () => {
     const decoded = decode(encode(Array(CLIMATE_COLS * CLIMATE_ROWS).fill(sea)))[0]
-    expect(decoded.windWave).toBeCloseTo(1.2, 1)
-    expect(decoded.swell).toBeCloseTo(2.5, 1)
-    expect(decoded.axisCos).toBeCloseTo(0.6, 1)
-    expect(decoded.axisSin).toBeCloseTo(-0.3, 1)
+    for (const key of Object.keys(sea) as (keyof ClimateCell)[]) expect(decoded[key]).toBeCloseTo(sea[key], 1)
   })
 
   test('fills land from the sea, across the date line and into empty rows', () => {
     const grid: (ClimateCell | null)[] = Array(CLIMATE_COLS * CLIMATE_ROWS).fill(null)
     grid[CLIMATE_ROWS / 2 * CLIMATE_COLS] = sea
     const filled = fillGaps(grid)
-    expect(filled.every((c) => Math.abs(c.windWave - 1.2) < 1e-9 && Math.abs(c.axisCos - 0.6) < 1e-9)).toBe(true)
+    expect(filled.every((c) => Object.keys(sea).every((key) => Math.abs(c[key as keyof ClimateCell] - sea[key as keyof ClimateCell]) < 1e-9))).toBe(true)
   })
 
-  test('weights the axis by wave height and averages heights over the sea days', () => {
+  test('turns each direction round to a heading, weighted by its own waves\' height, and averages heights over the sea days', () => {
+    const none = { waveHeight: null, windWave: null, swell: null, direction: null, windDirection: null, swellDirection: null }
     const cell = climateCell([
-      { waveHeight: 3, windWave: 1, swell: 2, direction: 90 },
-      { waveHeight: 1, windWave: 3, swell: 4, direction: 0 },
-      { waveHeight: null, windWave: null, swell: null, direction: null },
+      { waveHeight: 3, windWave: 1, swell: 3, direction: 90, windDirection: 0, swellDirection: 270 },
+      { waveHeight: 1, windWave: 3, swell: 1, direction: 0, windDirection: 90, swellDirection: 180 },
+      none,
     ])
     expect(cell?.windWave).toBe(2)
-    expect(cell?.swell).toBe(3)
-    // 90° (an east–west axis) is cos 2θ = −1 at weight 3; 0° is +1 at weight 1.
-    expect(cell?.axisCos).toBeCloseTo(-0.5, 9)
-    expect(cell?.axisSin).toBeCloseTo(0, 9)
-    expect(climateCell([{ waveHeight: null, windWave: null, swell: null, direction: null }])).toBeNull()
+    expect(cell?.swell).toBe(2)
+    // From the east (weight 3) and the north (1): toward the west 3/4, the south 1/4.
+    expect(cell?.waveCos).toBeCloseTo(-0.25, 9)
+    expect(cell?.waveSin).toBeCloseTo(-0.75, 9)
+    // The wind waves from the north (weight 1) and the east (3).
+    expect(cell?.windCos).toBeCloseTo(-0.25, 9)
+    expect(cell?.windSin).toBeCloseTo(-0.75, 9)
+    // The swell from the west (weight 3) and the south (1).
+    expect(cell?.swellCos).toBeCloseTo(0.25, 9)
+    expect(cell?.swellSin).toBeCloseTo(0.75, 9)
+    // Opposed days cancel: no settled heading.
+    const opposed = climateCell([
+      { ...none, waveHeight: 1, windWave: 1, swell: 1, direction: 0, windDirection: 0, swellDirection: 0 },
+      { ...none, waveHeight: 1, windWave: 1, swell: 1, direction: 180, windDirection: 180, swellDirection: 180 },
+    ])
+    expect(Math.hypot(opposed!.waveCos, opposed!.waveSin)).toBeCloseTo(0, 9)
+    expect(climateCell([none])).toBeNull()
+  })
+
+  test('bearing() is the compass bearing of a heading', () => {
+    expect(bearing(1, 0)).toBeCloseTo(0, 9)
+    expect(bearing(0, 1)).toBeCloseTo(90, 9)
+    expect(bearing(-1, 0)).toBeCloseTo(180, 9)
+    expect(bearing(0, -1)).toBeCloseTo(270, 9)
   })
 })
 
