@@ -43,6 +43,7 @@ import {
   retryFailedTiles,
   startFailedTileRetry,
   SurfaceGridCache,
+  tileHeightRange,
   type SurfaceGridOptions,
   type TerrainPluginInternals,
 } from './terrain-internals'
@@ -195,6 +196,33 @@ describe('3d-tiles-renderer internals (pinned to 0.5.3)', () => {
     // and a REPLACE tile none of whose children is in the frustum is hidden (not drawn, kept cached), cascading up
     const traverse = read('src/core/renderer/tiles/traverseFunctions.js')
     expect(traverse).toContain("if ( tile.refine === 'REPLACE' && ! anyChildrenInFrustum && children.length !== 0 ) {\n\n\t\ttile.traversal.inFrustum = false;")
+  })
+
+  // tides-zmw.9.33 (flat-tiles.ts): a tile's HEIGHT_RANGE is the grid at
+  // its surface vertices, measured as its mesh is made, before the plugins'
+  // processTileModel; and the mesh is a 32x32 SkirtedPlaneGeometry, its
+  // Uint32Array index laid out surface triangles first, then the skirts'.
+  it("measures a tile's HEIGHT_RANGE at its surface vertices as parseToMesh makes its mesh, ahead of processTileModel (tides-zmw.9.33)", () => {
+    const src = read('src/three/plugins/images/terrain-rgb/TerrainRGBMeshPlugin.js')
+    expect(src.match(/Symbol\( 'HEIGHT_RANGE' \)/g)).toEqual(["Symbol( 'HEIGHT_RANGE' )"])
+    expect(src).toContain("const HEIGHT_RANGE = Symbol( 'HEIGHT_RANGE' );")
+    expect(built(/Symbol\("HEIGHT_RANGE"\)/)).toHaveLength(1)
+    const create = src.slice(src.indexOf('_createTerrainMesh( tile, subview ) {'), src.indexOf('_updateBoundingVolume( tile ) {'))
+    expect(create).toContain('const height = sampleGrid( grid, tu, tv );\n\t\t\tif ( height < minHeight ) minHeight = height;\n\t\t\tif ( height > maxHeight ) maxHeight = height;')
+    expect(create).toContain('tile[ HEIGHT_RANGE ] = { min: minHeight, max: maxHeight };')
+    expect(src).toContain('const mesh = this._createTerrainMesh( tile, subview );')
+    expect(src).toContain('const MESH_SIZE = 32;')
+    expect(read('src/three/renderer/tiles/TilesRenderer.js')).toContain(
+      '// wait for extra processing by plugins if needed\n\t\tawait this.invokeAllPlugins( plugin => {\n\n\t\t\treturn plugin.processTileModel && plugin.processTileModel( scene, tile );'
+    )
+    const skirted = read('src/three/plugins/images/terrain-rgb/SkirtedPlaneGeometry.js')
+    expect(skirted).toContain('const index = new Uint32Array( 6 * widthSegments * heightSegments + 6 * skirtVertexCount );')
+    expect(skirted).toContain(
+      'index[ offset ++ ] = a;\n\t\t\t\tindex[ offset ++ ] = b;\n\t\t\t\tindex[ offset ++ ] = d;\n\t\t\t\tindex[ offset ++ ] = b;\n\t\t\t\tindex[ offset ++ ] = c;\n\t\t\t\tindex[ offset ++ ] = d;'
+    )
+    expect(skirted.indexOf('// surface triangles')).toBeLessThan(skirted.indexOf('// skirt triangles, one quad per perimeter edge'))
+    expect(skirted).toContain('this.surfaceVertexCount = surfaceVertexCount;')
+    expect(built(/\.surfaceVertexCount = /)).toHaveLength(1)
   })
 
   it('takes the view error from each camera\'s root-frame position and sseDenominator, Infinity at distance 0, on the ellipsoid\'s cartographic conversions (tides-zmw.9.17)', () => {
@@ -1251,6 +1279,19 @@ interface TilesInternals {
   ensureChildrenArePreprocessed(tile: TestTile, forceImmediate: boolean): void
   requestTileContents(tile: TestTile): unknown
 }
+
+describe('tileHeightRange (tides-zmw.9.33)', () => {
+  it("reads the plugin's HEIGHT_RANGE among the tile's own symbols, by description", () => {
+    const tile = { [Symbol('TILE_X')]: 3, [Symbol('HEIGHT_RANGE')]: { min: -2, max: 40 }, children: [] }
+    expect(tileHeightRange(tile)).toEqual({ min: -2, max: 40 })
+  })
+
+  it('is null for a tile without one, or with no range in it', () => {
+    expect(tileHeightRange({ [Symbol('TILE_X')]: 3 })).toBeNull()
+    expect(tileHeightRange({ HEIGHT_RANGE: { min: 0, max: 0 } })).toBeNull()
+    expect(tileHeightRange({ [Symbol('HEIGHT_RANGE')]: undefined })).toBeNull()
+  })
+})
 
 describe('retryFailedTiles (tides-zmw.9.20)', () => {
   const FAILED = -1

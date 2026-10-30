@@ -125,6 +125,21 @@ const EMPTY_STATUSES = new Set([204, 404, 410])
  */
 export const GRID_LEVEL_STEP = 2
 
+/**
+ * A tile's elevation range as the terrain plugin measured it (its
+ * HEIGHT_RANGE, a module-private Symbol('HEIGHT_RANGE') own property, set at
+ * the end of _createTerrainMesh): the grid sampled at each surface vertex's
+ * uv, so exactly the heights the GPU displaces the vertices by, in metres
+ * before the height scale. Set in parseToMesh, so by processTileModel; a
+ * child holds its parent's until its own mesh is made. Null when the tile
+ * carries none (tides-zmw.9.33, flat-tiles.ts).
+ */
+export function tileHeightRange(tile: object): { min: number; max: number } | null {
+  const symbol = Object.getOwnPropertySymbols(tile).find((s) => s.description === 'HEIGHT_RANGE')
+  const range = symbol && (tile as Record<symbol, { min?: unknown; max?: unknown } | undefined>)[symbol]
+  return range && typeof range.min === 'number' && typeof range.max === 'number' ? { min: range.min, max: range.max } : null
+}
+
 export interface SurfaceGridOptions {
   /** 'linear' needs OES_texture_float_linear; 'nearest' is core WebGL2. */
   filter: 'linear' | 'nearest'

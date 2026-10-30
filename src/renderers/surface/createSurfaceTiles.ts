@@ -37,6 +37,11 @@
 // tides-zmw.9.16 built each tile's material in one composer (tile-material.ts):
 // Phong, the relief and handover, and the globe's features from its link
 // (surface-link.ts) in the globe's order (tile-features.ts).
+//
+// tides-zmw.9.33 drew open water with fewer triangles: a tile flat at sea
+// level, whose 1-2 px triangles had the water shaded several times over
+// along their edges (1.5 ms against the globe's 0.15 at sea), keeps its
+// vertices but takes a coarser index, chords of 4 km at most (flat-tiles.ts).
 import * as THREE from 'three'
 import { DEFAULT_LRU_CACHE, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
@@ -49,6 +54,7 @@ import type { GlobeLink } from './surface-link'
 import { TILE_FEATURES } from './tile-features'
 import { createTileComposer, createTileMaterialPlugin, type TileComposer } from './tile-material'
 import { createTileUploadPlugin, trackUploads } from './tile-upload'
+import { createFlatTilePlugin } from './flat-tiles'
 import { GridEdges, type RectWriter } from './grid-upload'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
@@ -211,6 +217,8 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
   // tiles fade in too, over the globe they replace.
   const composer = createTileComposer(link, TILE_FEATURES)
   tiles.registerPlugin(createTileMaterialPlugin(composer))
+  // A tile flat at sea level drawn with fewer triangles (flat-tiles.ts).
+  tiles.registerPlugin(createFlatTilePlugin())
   // Then its textures queued for upload when the budget has time and bytes
   // to spare, ahead of a crowded first draw; the tile doesn't wait (tile-upload.ts).
   if (tracked) tiles.registerPlugin(createTileUploadPlugin(budget, tracked))
@@ -231,7 +239,9 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
   tiles.group.name = 'surface-tiles'
   tiles.group.userData.tiles = tiles
   // Out of ShipWarmup's reach (ship-warmup.ts): tiles come and go too fast to
-  // queue, and the grids are uploaded as they finish (upload, above).
+  // queue, and the grids are uploaded as they finish (upload, above). Their
+  // programs are warmed through the ground's probes instead (tileProbe.ts,
+  // tides-tvr.7.7).
   tiles.group.userData.warmup = false
 
   // Earth's mesh takes pointer events (OrbitingBody's onPointerDown), and R3F

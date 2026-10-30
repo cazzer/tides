@@ -22,7 +22,7 @@ import {
   TerrainPhongMaterial,
   type TileAdapter,
 } from './tile-material'
-import { compiled, fakeLink, phongShader, tileMesh } from './tile-test-fixtures'
+import { compiled, fakeLink, flightLink, phongShader, tileMesh } from './tile-test-fixtures'
 
 describe('the tiles\' frame (tides-zmw.9.16)', () => {
   it('turns ECEF into the ground mesh\'s frame as the tiles\' group does', () => {
@@ -353,3 +353,29 @@ describe('the tile material plugin (tides-zmw.9.16)', () => {
   })
 })
 
+
+describe('the composer\'s material for the warm-ups (tides-tvr.7.7)', () => {
+  it('is the material prepare builds: the same key and shader text', () => {
+    const composer = createTileComposer(flightLink(), TILE_FEATURES)
+    const tile = tileMesh()
+    composer.prepare(tile, {})
+    const drawn = tile.material as TerrainPhongMaterial
+    const terrain = tileMesh().material as THREE.MeshLambertMaterial
+    const probe = composer.material(terrain)
+
+    expect(probe).toBeInstanceOf(TerrainPhongMaterial)
+    expect(probe.customProgramCacheKey()).toBe(drawn.customProgramCacheKey())
+    expect(probe.customProgramCacheKey()).toContain('night-surface-flight-gibs8')
+    const a = compiled(probe)
+    const b = compiled(drawn)
+    expect(a.vertexShader).toBe(b.vertexShader)
+    expect(a.fragmentShader).toBe(b.fragmentShader)
+    expect(probe.stencilRef).toBe(drawn.stencilRef)
+    expect(probe.bumpScale).toBe(drawn.bumpScale)
+    // The library's material is the caller's to free.
+    const disposed = vi.fn()
+    terrain.addEventListener('dispose', disposed)
+    composer.material(terrain)
+    expect(disposed).not.toHaveBeenCalled()
+  })
+})

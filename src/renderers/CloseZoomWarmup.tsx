@@ -12,10 +12,11 @@ const RESCAN_S = 0.5
  * Compiles the programs Earth turns to on the main view's first close zoom
  * ahead of it (tides-tvr.7.4), one per frame, as the ship's warm-up does
  * (ShipWarmup, ship-warmup.ts): the shells' inside faces (warmSides), the
- * ground's flight variant and the GIBS tile passes (the ground's
- * warmProbes), the sky-view table (the atmosphere's). Each would otherwise
- * be linked on the frame of its first draw on the way down, up to a few
- * hundred ms where the driver links at first use.
+ * ground's flight variant, the GIBS tile passes and the streamed tiles'
+ * flight programs (the ground's warmProbes; the tiles', tides-tvr.7.7, once
+ * the surface chunk has loaded), the sky-view table (the atmosphere's).
+ * Each would otherwise be linked on the frame of its first draw on the way
+ * down, up to a few hundred ms where the driver links at first use.
  *
  * Mount among Earth's renderers (its OrbitingBody's children, which it
  * searches, its parent's subtree), in the system scene. It runs only in the

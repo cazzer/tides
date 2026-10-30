@@ -350,6 +350,13 @@ export interface TileComposer {
   readonly patch: MaterialPatch
   /** Builds `mesh`'s material (header, steps 1 to 4) for its `tile`. */
   prepare(mesh: THREE.Mesh, tile: object): void
+  /**
+   * The material prepare() builds on `terrain`, without the per-tile hooks
+   * (no onTile's uniforms, no onDispose): the program every tile compiles,
+   * for the warm-ups' probe (tileProbe.ts, tides-tvr.7.7). `terrain` is
+   * left as it is (prepare disposes the tile's).
+   */
+  material(terrain: THREE.MeshLambertMaterial): TerrainPhongMaterial
 }
 
 let warnedNotLambert = false
@@ -394,10 +401,20 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
   const key = `surface-tile:${patch.customProgramCacheKey()}`
   const hooks = active.flatMap(({ feature }) => (feature.onTile ? [feature] : []))
   const disposers = active.flatMap(({ feature }) => (feature.onDispose ? [feature] : []))
+  // Steps 1 to 4 on `terrain`, with `extra` after the features (a tile's
+  // own uniforms): one builder for the tiles and the probe, so both key and
+  // compose the same program.
+  const build = (terrain: THREE.MeshLambertMaterial, extra: MaterialPatch[]) => {
+    const material = new TerrainPhongMaterial(terrain)
+    prepareSurfaceMaterial(material, [patch, ...extra])
+    material.customProgramCacheKey = () => key
+    return material
+  }
   return {
     key,
     features: active.map(({ name }) => name),
     patch,
+    material: (terrain) => build(terrain, []),
     prepare(mesh, tile) {
       const built: { material: TerrainPhongMaterial; own: Record<string, THREE.IUniform> }[] = []
       const swap = (old: THREE.Material) => {
@@ -407,8 +424,6 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
           warnNotLambert(old)
           return old
         }
-        const material = new TerrainPhongMaterial(old as THREE.MeshLambertMaterial)
-        old.dispose()
         // Filled by the hooks below; read when three compiles the tile.
         const own: Record<string, THREE.IUniform> = {}
         const tileUniforms: MaterialPatch = {
@@ -417,8 +432,8 @@ export function createTileComposer(link: GlobeLink | null, slots: readonly TileF
           },
           customProgramCacheKey: () => '',
         }
-        prepareSurfaceMaterial(material, hooks.length ? [patch, tileUniforms] : [patch])
-        material.customProgramCacheKey = () => key
+        const material = build(old as THREE.MeshLambertMaterial, hooks.length ? [tileUniforms] : [])
+        old.dispose()
         built.push({ material, own })
         return material
       }
