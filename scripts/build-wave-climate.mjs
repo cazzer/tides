@@ -19,7 +19,14 @@ import { runnerImport } from "vite";
 
 const API = "https://marine-api.open-meteo.com/v1/marine";
 const MODEL = "meteofrance_wave";
-const DAILY = ["wave_height_max", "wind_wave_height_max", "swell_wave_height_max", "wave_direction_dominant"];
+const DAILY = [
+  "wave_height_max",
+  "wind_wave_height_max",
+  "swell_wave_height_max",
+  "wave_direction_dominant",
+  "wind_wave_direction_dominant",
+  "swell_wave_direction_dominant",
+];
 const BATCH = 96;
 const PACE_MS = 11_000;
 const TIMEOUT_MS = 60_000;
@@ -75,11 +82,11 @@ async function fetchBatch(day, points) {
 // One batch of a day, from the cache or the API.
 async function batch(day, start, points) {
   const file = path.join(cache, `${day}-${String(start).padStart(4, "0")}.json`);
-  const key = points.map((p) => `${p.lat},${p.lon}`).join(";");
+  const key = `${DAILY.join(",")};${points.map((p) => `${p.lat},${p.lon}`).join(";")}`;
   let body;
   if (fs.existsSync(file)) {
     const cached = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (cached.key !== key) throw new Error(`${file} holds other points; delete it`);
+    if (cached.key !== key) throw new Error(`${file} holds other points or variables; delete it`);
     body = cached.body;
   } else {
     body = await fetchBatch(day, points);
@@ -108,6 +115,8 @@ async function batch(day, start, points) {
       windWave: value("wind_wave_height_max"),
       swell: value("swell_wave_height_max"),
       direction: value("wave_direction_dominant"),
+      windDirection: value("wind_wave_direction_dominant"),
+      swellDirection: value("swell_wave_direction_dominant"),
     };
   });
 }
@@ -152,7 +161,8 @@ const median = (xs) => {
 };
 const decoded = climate.decode(bytes);
 const sea = cells.flatMap((c, k) => (c === null ? [] : [decoded[k]]));
-const axis = sea.map((c) => Math.hypot(c.axisCos, c.axisSin));
+const settled = (h) => median(sea.map((c) => Math.hypot(c[`${h}Cos`], c[`${h}Sin`]))).toFixed(3);
 console.log(`${requests} requests; ${sea.length} of ${count} texels at sea`);
-console.log(`ocean medians: wind waves ${median(sea.map((c) => c.windWave)).toFixed(3)} m, swell ${median(sea.map((c) => c.swell)).toFixed(3)} m, axis length ${median(axis).toFixed(3)}`);
+console.log(`ocean medians: wind waves ${median(sea.map((c) => c.windWave)).toFixed(3)} m, swell ${median(sea.map((c) => c.swell)).toFixed(3)} m`);
+console.log(`heading lengths: dominant ${settled("wave")}, wind waves ${settled("wind")}, swell ${settled("swell")}`);
 console.log(`Wrote ${path.relative(root, output)} (${bytes.length} bytes)`);

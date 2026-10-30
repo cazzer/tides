@@ -6,24 +6,38 @@
 import * as THREE from 'three'
 import { bakeWaterNoise, NOISE_CELLS, NOISE_SIZE } from './waterNoise'
 import climateUrl from '../assets/earth-wave-climate.bin?url&inline'
-import { CLIMATE_BYTES, CLIMATE_COLS, CLIMATE_ROWS, coxMunkMss, GRAVITY, SWELL_MAX_M, SWELL_REF_M, WIND_WAVE_MAX_M, WIND_WAVE_REF_M } from './waterClimateLayout'
+import { CLIMATE_BYTES, CLIMATE_COLS, CLIMATE_PLANE_BYTES, CLIMATE_ROWS, coxMunkMss, GRAVITY, SWELL_MAX_M, SWELL_REF_M, WIND_WAVE_MAX_M, WIND_WAVE_REF_M } from './waterClimateLayout'
 
 export * from './waterClimateLayout'
 
 let texture: THREE.DataTexture | null = null
 
-/** The asset as a texture for waterClimateAt(): one for the page, made on
- * first use. */
+let bytes: Uint8Array | null = null
+
+/** The asset's bytes, both planes (./waterClimateLayout.ts decode()). */
+export function climateBytes(): Uint8Array {
+  bytes ??= readClimateBytes()
+  return bytes
+}
+
+function readClimateBytes(): Uint8Array {
+  const all = Uint8Array.from(atob(climateUrl.slice(climateUrl.indexOf(',') + 1)), (c) => c.charCodeAt(0))
+  if (all.length !== CLIMATE_BYTES) {
+    throw new Error(`wave climate: ${all.length} bytes, expected ${CLIMATE_BYTES}`)
+  }
+  return all
+}
+
+/** The asset's plane 0 as a texture for waterClimateAt(): one for the page,
+ * made on first use. Plane 1 (the wind waves' and the swell's headings) is
+ * the CPU's. */
 export function climateTexture(): THREE.DataTexture {
   texture ??= makeClimateTexture()
   return texture
 }
 
 function makeClimateTexture(): THREE.DataTexture {
-  const rgba = Uint8Array.from(atob(climateUrl.slice(climateUrl.indexOf(',') + 1)), (c) => c.charCodeAt(0))
-  if (rgba.length !== CLIMATE_BYTES) {
-    throw new Error(`wave climate: ${rgba.length} bytes, expected ${CLIMATE_BYTES}`)
-  }
+  const rgba = climateBytes().slice(0, CLIMATE_PLANE_BYTES)
   const texture = new THREE.DataTexture(rgba, CLIMATE_COLS, CLIMATE_ROWS, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.magFilter = texture.minFilter = THREE.LinearFilter
   texture.generateMipmaps = false
@@ -78,7 +92,8 @@ const f = (x: number) => x.toFixed(6)
 
 /** The texture's lookup: waterClimateAt(up) is the raw texel at a local unit
  * direction, waterClimateDecode() its wind-wave and swell heights (m) and
- * doubled-angle axis (cos 2θ, sin 2θ; θ clockwise from north toward east);
+ * the dominant waves' axis, doubled (cos 2θ, sin 2θ; θ clockwise from north
+ * toward east), as long as their heading is settled;
  * waterMssScale() and waterSwellScale() the scales of those heights. */
 export const WATER_CLIMATE_GLSL = /* glsl */ `
 uniform sampler2DArray uWaterSea;
@@ -104,10 +119,12 @@ vec4 waterNoiseAt(vec2 cells, float lod) {
 }
 
 vec4 waterClimateDecode(vec4 texel) {
+  vec2 heading = texel.gb * 2.0 - 1.0;
+  float settled = length(heading);
   return vec4(
     ${f(WIND_WAVE_MAX_M)} * texel.r * texel.r,
     ${f(SWELL_MAX_M)} * texel.a * texel.a,
-    texel.gb * 2.0 - 1.0
+    settled > 1e-4 ? vec2(heading.x * heading.x - heading.y * heading.y, 2.0 * heading.x * heading.y) / settled : vec2(0.0)
   );
 }
 
