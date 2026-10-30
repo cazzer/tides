@@ -168,17 +168,24 @@ describe('type grids', () => {
 })
 
 describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
-  /** A renderer that records what each pass draws, and into what. */
+  /** A renderer that records what each pass draws, and into what: its
+   * uniforms' values as they were then, as passes share a material. */
   function recorder() {
     let target: THREE.WebGLRenderTarget | null = null
-    const passes: { target: THREE.WebGLRenderTarget | null; material: THREE.ShaderMaterial }[] = []
+    const passes: {
+      target: THREE.WebGLRenderTarget | null
+      material: THREE.ShaderMaterial
+      uniforms: Record<string, unknown>
+    }[] = []
     const gl = {
       getRenderTarget: () => target,
       setRenderTarget: (t: THREE.WebGLRenderTarget | null) => {
         target = t
       },
       render: (mesh: THREE.Mesh) => {
-        passes.push({ target, material: mesh.material as THREE.ShaderMaterial })
+        const material = mesh.material as THREE.ShaderMaterial
+        const uniforms = Object.fromEntries(Object.entries(material.uniforms).map(([k, u]) => [k, u.value]))
+        passes.push({ target, material, uniforms })
       },
     }
     return { gl: gl as unknown as THREE.WebGLRenderer, passes }
@@ -197,7 +204,7 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     expect(types.target!.texture).toBe(out.typeTexture)
     expect(main.target!.texture).toBe(out.texture)
     // The output's own grid, just drawn; not the frozen output's.
-    expect(main.material.uniforms.uTypes.value).toBe(out.typeTexture)
+    expect(main.uniforms.uTypes).toBe(out.typeTexture)
     blender.release()
   })
 
@@ -228,7 +235,7 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     expect(src).toContain('cloudTops = cloudTypedTops(textureLod(uTypes, vUv, 0.0), c);')
     // A swap: the next pass fades from this output's map, not its tops.
     blender.update(gl, { a: new THREE.Texture(), b: new THREE.Texture(), mix: 0.5 }, new THREE.Texture(), 1000)
-    expect(passes[5].material.uniforms.uPrev.value).toBe(out.texture)
+    expect(passes[5].uniforms.uPrev).toBe(out.texture)
     blender.release()
   })
 
@@ -237,21 +244,25 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     const blender = createCloudBlender()
     const precip = new THREE.DataTexture(new Uint8Array(4), 1, 1)
     const a = new THREE.Texture()
+    a.userData.types = new THREE.DataTexture(new Uint8Array(4), 1, 1)
     const b = new THREE.Texture()
     b.userData.precip = precip
     const out = blender.update(gl, { a, b, mix: 0.25 }, new THREE.Texture(), 0)!
     expect(out.precip).toBe(true)
-    expect(out.typed).toBe(false)
+    expect(out.typed).toBe(true)
     const [types, wet] = passes
     expect(wet.target!.texture).toBe(out.precipTexture)
     expect(out.precipTexture).not.toBe(out.typeTexture)
     expect(wet.material).toBe(types.material)
-    // Uniforms are read at draw time: the recorder keeps the material, so
-    // these are the precipitation pass's, the last set.
-    const u = wet.material.uniforms
-    expect([u.uATyped.value, u.uBTyped.value, u.uB.value, u.uMix.value]).toEqual([0, 1, precip, 0.25])
-    expect(u.uA.value).toBe(neutralTypeTexture())
-    expect(u.uPrevTyped.value).toBe(0)
+    // Each grid's own: the types pass has a's types and no b's, the
+    // precipitation pass no a's and b's precipitation.
+    const typeTexture = a.userData.types as THREE.Texture
+    expect(types.uniforms).toMatchObject({ uATyped: 1, uBTyped: 0, uMix: 0.25, uPrevTyped: 0 })
+    expect(types.uniforms.uA).toBe(typeTexture)
+    expect(types.uniforms.uB).toBe(neutralTypeTexture())
+    expect(wet.uniforms).toMatchObject({ uATyped: 0, uBTyped: 1, uMix: 0.25, uPrevTyped: 0 })
+    expect(wet.uniforms.uA).toBe(neutralTypeTexture())
+    expect(wet.uniforms.uB).toBe(precip)
     blender.release()
   })
 

@@ -281,6 +281,32 @@ export function createCloudBlender() {
   let typeQuad: FullScreenQuad | null = null
   let typeMaterial: THREE.ShaderMaterial | null = null
 
+  /** One pass of the grid material (made by draw) into target: the frozen
+   * output's grid, then each frame's, a missing one as the neutral texel
+   * times 0. */
+  function drawGrid(
+    gl: THREE.WebGLRenderer,
+    target: THREE.WebGLRenderTarget,
+    prevGrid: THREE.Texture,
+    prevHas: boolean,
+    aGrid: THREE.Texture | null,
+    bGrid: THREE.Texture | null,
+    mix: number,
+    fade: number
+  ) {
+    const t = typeMaterial!.uniforms
+    t.uPrev.value = prevGrid
+    t.uPrevTyped.value = prevHas ? 1 : 0
+    t.uA.value = aGrid ?? neutralTypeTexture()
+    t.uATyped.value = aGrid ? 1 : 0
+    t.uB.value = bGrid ?? neutralTypeTexture()
+    t.uBTyped.value = bGrid ? 1 : 0
+    t.uMix.value = mix
+    t.uFade.value = fade
+    gl.setRenderTarget(target)
+    typeQuad!.render(gl)
+  }
+
   function draw(
     gl: THREE.WebGLRenderer,
     pick: { a: THREE.Texture; b: THREE.Texture; mix: number },
@@ -378,32 +404,9 @@ export function createCloudBlender() {
     out.typed = flags.typed
     out.hasPrecip = flags.precip
 
-    // One pass of the grid material: the frozen output's grid, then each
-    // frame's, a missing one as the neutral texel times 0.
-    const t = typeMaterial.uniforms
-    const gridQuad = typeQuad
-    function drawGrid(
-      target: THREE.WebGLRenderTarget,
-      prevGrid: THREE.Texture,
-      prevHas: boolean,
-      aGrid: THREE.Texture | null,
-      bGrid: THREE.Texture | null
-    ) {
-      t.uPrev.value = prevGrid
-      t.uPrevTyped.value = prevHas ? 1 : 0
-      t.uA.value = aGrid ?? neutralTypeTexture()
-      t.uATyped.value = aGrid ? 1 : 0
-      t.uB.value = bGrid ?? neutralTypeTexture()
-      t.uBTyped.value = bGrid ? 1 : 0
-      t.uMix.value = pick.mix
-      t.uFade.value = fade
-      gl.setRenderTarget(target)
-      gridQuad.render(gl)
-    }
-
     const restore = gl.getRenderTarget()
-    drawGrid(out.types, prev.types, prev.typed, aTypes, bTypes)
-    drawGrid(out.precip, prev.precip, prev.hasPrecip, aPrecip, bPrecip)
+    drawGrid(gl, out.types, prev.types, prev.typed, aTypes, bTypes, pick.mix, fade)
+    drawGrid(gl, out.precip, prev.precip, prev.hasPrecip, aPrecip, bPrecip, pick.mix, fade)
     gl.setRenderTarget(out.target)
     quad.render(gl)
     gl.setRenderTarget(restore)

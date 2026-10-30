@@ -10,6 +10,9 @@
 // by TYPE_FRAGMENT_SHADER (mix, texel for texel, a frame without a grid as 0)
 // a covered frame's rates hold against an uncovered one instead of being
 // pulled towards dry, and RGB / A gives them back. A of 0 is no data: dry.
+// Frames, and texels within a frame, mix in the square-root encoding, not
+// in mm/h, so a rate between two reads low: 0 and 20 mm/h at half way give
+// 5, not 10.
 // Pure; the build is renderers/cloudPipeline.ts.
 import { precipitationAt, sampleCoverSmooth, type CoverGrid, type CoverPrecip, type PrecipRate } from './forecast-clouds'
 import { TYPE_H, TYPE_W, typeTexelLat, typeTexelLon } from './cloud-types'
@@ -63,31 +66,47 @@ export function precipGridImage(
   return out
 }
 
-/** A grid's RGBA (0..1) at a point, bilinear between texel centres as a
- * LinearFilter samples it: wrapping across 180°, clamped at the poles. */
-function sampleGrid(grid: Uint8Array, latDeg: number, lonDeg: number): [number, number, number, number] {
-  const fx = (((lonDeg + 180) / 360) * TYPE_W - 0.5 + TYPE_W) % TYPE_W
+/** Where a point falls between the grids' texel centres, as a LinearFilter
+ * samples them: wrapping across 180°, clamped at the poles. Reused by every
+ * call (precipFromFrames is called often), so nothing is allocated. */
+const corner = { i00: 0, i10: 0, i01: 0, i11: 0, w00: 0, w10: 0, w01: 0, w11: 0 }
+
+function placeCorners(latDeg: number, lonDeg: number) {
+  const fx = (((((lonDeg + 180) / 360) * TYPE_W - 0.5) % TYPE_W) + TYPE_W) % TYPE_W
   const x0 = Math.floor(fx)
   const x1 = (x0 + 1) % TYPE_W
   const wx = fx - x0
   const fy = Math.min(TYPE_H - 1, Math.max(0, ((latDeg + 90) / 180) * TYPE_H - 0.5))
   const y0 = Math.min(TYPE_H - 2, Math.floor(fy))
-  const y1 = y0 + 1
   const wy = fy - y0
-  const out: [number, number, number, number] = [0, 0, 0, 0]
-  for (let c = 0; c < 4; c++) {
-    const at = (x: number, y: number) => grid[(y * TYPE_W + x) * 4 + c] / 255
-    const bottom = at(x0, y0) * (1 - wx) + at(x1, y0) * wx
-    const top = at(x0, y1) * (1 - wx) + at(x1, y1) * wx
-    out[c] = bottom * (1 - wy) + top * wy
-  }
-  return out
+  corner.i00 = (y0 * TYPE_W + x0) * 4
+  corner.i10 = (y0 * TYPE_W + x1) * 4
+  corner.i01 = ((y0 + 1) * TYPE_W + x0) * 4
+  corner.i11 = ((y0 + 1) * TYPE_W + x1) * 4
+  corner.w00 = (1 - wx) * (1 - wy)
+  corner.w10 = wx * (1 - wy)
+  corner.w01 = (1 - wx) * wy
+  corner.w11 = wx * wy
+}
+
+/** One channel of a grid (0..1) at the placed point. */
+function channelAt(grid: Uint8Array, c: number): number {
+  const { i00, i10, i01, i11, w00, w10, w01, w11 } = corner
+  return (grid[i00 + c] * w00 + grid[i10 + c] * w10 + grid[i01 + c] * w01 + grid[i11 + c] * w11) / 255
+}
+
+/** Channel c of a and b, mix of the way from a to b; a missing grid is 0. */
+function mixedAt(a: Uint8Array | null, b: Uint8Array | null, mix: number, c: number): number {
+  return (a ? (1 - mix) * channelAt(a, c) : 0) + (b ? mix * channelAt(b, c) : 0)
 }
 
 /**
  * The precipitation at a point between two frames' grids, mix of the way from
- * a to b: the CPU's copy of the GPU blend (a frame without a grid counts as
- * all 0). Null where neither has data there.
+ * a to b: the CPU's copy of the GPU's mix of the two frames (a frame without
+ * a grid counts as all 0). Null where neither has data there. It copies only
+ * that mix: not the blender's fade from its frozen output for FADE_MS after
+ * a swap (renderers/cloudBlend.ts), nor the rounding of the blended grid to
+ * 8 bits.
  */
 export function precipFromFrames(
   a: Uint8Array | null,
@@ -96,10 +115,13 @@ export function precipFromFrames(
   latDeg: number,
   lonDeg: number
 ): PrecipRate | null {
-  const none = [0, 0, 0, 0]
-  const sa = a ? sampleGrid(a, latDeg, lonDeg) : none
-  const sb = b ? sampleGrid(b, latDeg, lonDeg) : none
-  const [r, g, bl, alpha] = sa.map((v, c) => (1 - mix) * v + mix * sb[c])
+  if (!a && !b) return null
+  placeCorners(latDeg, lonDeg)
+  const alpha = mixedAt(a, b, mix, 3)
   if (!(alpha > 0)) return null
-  return { rain: decodePrecip(r / alpha), showers: decodePrecip(g / alpha), snow: decodePrecip(bl / alpha) }
+  return {
+    rain: decodePrecip(mixedAt(a, b, mix, 0) / alpha),
+    showers: decodePrecip(mixedAt(a, b, mix, 1) / alpha),
+    snow: decodePrecip(mixedAt(a, b, mix, 2) / alpha),
+  }
 }

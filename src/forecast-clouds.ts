@@ -24,7 +24,8 @@
 // cover, untyped.
 //
 // And the hour's precipitation (tides-bl3.1): rain, showers and snowfall,
-// each the total over the preceding hour, here as millimetres of water per
+// each the total over the preceding hour (so read half an hour on, the
+// middle of the hour it describes), here as millimetres of water per
 // hour (snowfall's centimetres of snow at 10/7 mm of water each, as
 // Open-Meteo's own precipitation total counts it). Where it falls is
 // ./cloud-precip.ts. It's optional too: any trouble with it leaves the grid
@@ -88,7 +89,8 @@ export const SNOW_CM_TO_MM = 10 / 7
 export const PRECIP_VALID_MAX = 500
 
 /** Every grid point at once, hourly, from COVER_PAST_DAYS back to
- * FORECAST_DAYS ahead, in UTC epoch seconds: total cover and its layers. */
+ * FORECAST_DAYS ahead, in UTC epoch seconds: total cover, its layers, and the
+ * hour's rain, showers and snowfall. */
 export function coverRequestBody(): URLSearchParams {
   const lats: number[] = []
   const lons: number[] = []
@@ -320,14 +322,17 @@ export function layersAt(grid: CoverGrid, tMs: number): CoverLayers | null {
   }
 }
 
-/** The precipitation at a time, linear between hours; null outside the grid
- * or without it. */
+/** The precipitation at a time, linear between hours. Each hour's value is
+ * the total over the hour before it, so it is read half an hour on, in the
+ * middle of the hour it describes: null where that is outside the grid (its
+ * first half hour and its last hour), or without precipitation. */
 export function precipitationAt(grid: CoverGrid, tMs: number): CoverPrecip | null {
-  if (!grid.precip || !gridCovers(grid, tMs)) return null
+  const at = tMs + HOUR_MS / 2
+  if (!grid.precip || !gridCovers(grid, at)) return null
   return {
-    rain: valuesAt(grid, grid.precip.rain, tMs)!,
-    showers: valuesAt(grid, grid.precip.showers, tMs)!,
-    snow: valuesAt(grid, grid.precip.snow, tMs)!,
+    rain: valuesAt(grid, grid.precip.rain, at)!,
+    showers: valuesAt(grid, grid.precip.showers, at)!,
+    snow: valuesAt(grid, grid.precip.snow, at)!,
   }
 }
 

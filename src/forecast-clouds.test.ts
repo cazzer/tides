@@ -277,14 +277,20 @@ test('layersAt: linear between hours, null outside the grid or without layers', 
   expect(layersAt(parseCoverGrid(response()), START + HOUR_MS)).toBeNull()
 })
 
-test('precipitationAt: linear between hours, null outside the grid or without precipitation', () => {
+test("precipitationAt: each hour's total in the middle of the hour before it, linear between, null outside the grid or without precipitation", () => {
   const grid = parseCoverGrid(precipResponse((key, i, h) => (key === 'rain' ? (h % 2 ? 3 : 1) : key === 'showers' ? 0.5 : 0.7)))
-  const at = precipitationAt(grid, START + 2.5 * HOUR_MS)!
+  // Hour 3's value is the rain from 2:00 to 3:00, centred on 2:30.
+  expect(precipitationAt(grid, START + 2.5 * HOUR_MS)!.rain[0]).toBeCloseTo(3)
+  expect(precipitationAt(grid, START + 3.5 * HOUR_MS)!.rain[0]).toBeCloseTo(1)
+  const at = precipitationAt(grid, START + 2 * HOUR_MS)!
   expect(at.rain[0]).toBeCloseTo(2)
   expect(at.showers[GRID_POINTS - 1]).toBeCloseTo(0.5)
   expect(at.snow[300]).toBeCloseTo(1)
-  expect(precipitationAt(grid, START - 1)).toBeNull()
-  expect(precipitationAt(grid, START + 47 * HOUR_MS + 1)).toBeNull()
+  // The grid's first half hour and last hour aren't covered.
+  expect(precipitationAt(grid, START - HOUR_MS / 2)!.rain[0]).toBeCloseTo(1)
+  expect(precipitationAt(grid, START - HOUR_MS / 2 - 1)).toBeNull()
+  expect(precipitationAt(grid, START + 46.5 * HOUR_MS)!.rain[0]).toBeCloseTo(3)
+  expect(precipitationAt(grid, START + 46.5 * HOUR_MS + 1)).toBeNull()
   expect(precipitationAt(parseCoverGrid(layeredResponse(() => 50)), START + HOUR_MS)).toBeNull()
 })
 
@@ -302,7 +308,7 @@ test("precipAt: the cell centre's value there, continuous across 180°, null wit
   const west = precipAt(grid, 10, 179.999, t)!
   const east = precipAt(grid, 10, -179.999, t)!
   expect(Math.abs(west.rain - east.rain)).toBeLessThan(0.01)
-  expect(precipAt(grid, 10, 0, START - 1)).toBeNull()
+  expect(precipAt(grid, 10, 0, START + 46.5 * HOUR_MS + 1)).toBeNull()
   expect(precipAt(parseCoverGrid(layeredResponse(() => 50)), 10, 0, t)).toBeNull()
 })
 
