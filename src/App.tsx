@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { forwardRef, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree, type CanvasProps } from '@react-three/fiber'
 import {
   View,
   OrbitControls,
@@ -30,6 +30,7 @@ import { ShipButton } from './ship/ShipButton'
 import { SurfaceCredit } from './ship/SurfaceCredit'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
+import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
 import { DepthInfo } from './renderers/DepthInfo'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { mainCameraPose, rememberMainCameraPose, takeMainCameraRestore } from './main-camera-session'
@@ -51,6 +52,14 @@ const PANEL_OPTIONS: { value: PanelKey; label: string }[] = [
 ]
 
 const matrix = new THREE.Matrix4()
+
+/**
+ * The root Canvas, its dpr following AdaptivePixelRatio (tides-nlk): read here
+ * so a change re-renders only the Canvas, not App.
+ */
+function RootCanvas(props: CanvasProps) {
+  return <Canvas {...props} dpr={usePixelRatio()} />
+}
 
 export default function App() {
   const [solarSystemView, earthView, moonView] = useRefs()
@@ -182,7 +191,7 @@ export default function App() {
       {!shipMode && !demo && <Controls />}
       {demo && <DemoBar />}
       <div className={single || shipMode ? 'viewports viewports--single' : 'viewports'}>
-        <Canvas
+        <RootCanvas
           shadows
           eventSource={document.getElementById('root')}
           className="canvas"
@@ -201,8 +210,9 @@ export default function App() {
           <DemoClock />
           <RenderDiagnostics />
           <DepthPrecisionProbe />
+          <AdaptivePixelRatio />
           <View.Port />
-        </Canvas>
+        </RootCanvas>
         {shipMode && (
           <ShipView>
             <Scene
