@@ -27,8 +27,12 @@ import { clamp01, positiveMod, smoothstep } from './dust'
 export type PrecipTier = 'high' | 'low'
 export type PrecipKind = 'rain' | 'snow'
 
-/** Drops allocated (and drawn at the full rate) per tier: one instanced draw. [TUNE] */
+/** Raindrops drawn at the full rate per tier: one instanced draw. [TUNE] */
 export const PRECIP_PARTICLES: Readonly<Record<PrecipTier, number>> = { high: 4000, low: 1500 }
+/** Snowflakes drawn at the full rate per tier, allocated with the drops:
+ * flakes are small, slow dots, so it takes more of them than of streaks
+ * for a fall to read as snow (tides-bl3.7: 4,000 drew a few dozen specks). */
+export const SNOW_PARTICLES: Readonly<Record<PrecipTier, number>> = { high: 12000, low: 4500 }
 /** The box around the eye, half its side, true metres. */
 export const PRECIP_HALF_METRES = 15
 export const PRECIP_HALF = PRECIP_HALF_METRES * EARTH_UNITS_PER_METRE
@@ -132,9 +136,20 @@ export function altitudeFade(eyeOverGround: number, base: number, band: number):
   return 1 - smoothstep(base, base + band, eyeOverGround)
 }
 
-/** Drops drawn at `amount` on `tier`. */
-export function particleCount(tier: PrecipTier, amount: number): number {
-  return Math.round(PRECIP_PARTICLES[tier] * clamp01(amount))
+/** Instances allocated on `tier`: enough for an all-snow fall. */
+export function particlePool(tier: PrecipTier): number {
+  return Math.max(PRECIP_PARTICLES[tier], SNOW_PARTICLES[tier])
+}
+
+/** Instances drawn at `amount` with `snowShare` of them snow (the shader
+ * makes about that share of the drawn instances flakes): the tier's flakes,
+ * but no more than leaves the rain share at the tier's drops, so all rain
+ * draws PRECIP_PARTICLES, all snow SNOW_PARTICLES, and a mix's rain never
+ * more than all rain's. */
+export function particleCount(tier: PrecipTier, amount: number, snowShare = 0): number {
+  const s = clamp01(snowShare)
+  const full = s < 1 ? Math.min(SNOW_PARTICLES[tier], PRECIP_PARTICLES[tier] / (1 - s)) : SNOW_PARTICLES[tier]
+  return Math.round(full * clamp01(amount))
 }
 
 /** Fall speed, scene units/s; none under reduced motion. */

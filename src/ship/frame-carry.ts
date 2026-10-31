@@ -377,12 +377,13 @@ const eyeOffset = new THREE.Vector3()
 const unspin = new THREE.Quaternion()
 
 /**
- * Fills telemetry.earthEye (tides-bl3.3): the ship's up from Earth's centre,
+ * Fills telemetry.earthEye (tides-bl3.3): the ship's (or the close-zoomed
+ * main camera's, FallingPrecip) up from Earth's centre,
  * in the world and in Earth's own frame (its spin undone), and its altitude
  * over the sea-level sphere, scene units. Without Earth's spin, or at its
  * centre, the altitude is Infinity: nothing reads where it is then.
  */
-export function fillEarthEye(telemetry: ShipTelemetry, position: THREE.Vector3, earth: Carrier): void {
+export function fillEarthEye(telemetry: Pick<ShipTelemetry, 'earthEye'>, position: THREE.Vector3, earth: Carrier): void {
   const eye = telemetry.earthEye
   eyeOffset.subVectors(position, earth.position)
   const distance = eyeOffset.length()
