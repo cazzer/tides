@@ -16,6 +16,7 @@ import {
   NIGHT_LIGHT,
   PRECIP_HALF,
   PRECIP_PARTICLES,
+  SNOW_PARTICLES,
   PRECIP_TOP,
   RAIN_FALL_MS,
   REDUCED_RAIN_STREAK_M,
@@ -28,6 +29,7 @@ import {
   daylight,
   fallSpeed,
   particleCount,
+  particlePool,
   precipIntensity,
   precipShown,
   shouldSample,
@@ -83,6 +85,16 @@ describe('how much falls (tides-bl3.3)', () => {
     expect(particleCount('high', 0)).toBe(0)
     expect(particleCount('low', 2)).toBe(PRECIP_PARTICLES.low)
     for (let a = 0; a < 1; a += 0.1) expect(particleCount('high', a + 0.1)).toBeGreaterThanOrEqual(particleCount('high', a))
+    // Snow draws its own, larger count (tides-bl3.7), within the pool.
+    expect(particleCount('high', 1, 1)).toBe(SNOW_PARTICLES.high)
+    expect(particleCount('low', 1, 1)).toBe(SNOW_PARTICLES.low)
+    expect(particleCount('high', 1, 0.5)).toBe(2 * PRECIP_PARTICLES.high)
+    for (const tier of ['high', 'low'] as const) {
+      expect(SNOW_PARTICLES[tier]).toBeGreaterThan(PRECIP_PARTICLES[tier])
+      for (const s of [0, 0.3, 1]) expect(particleCount(tier, 1, s)).toBeLessThanOrEqual(particlePool(tier))
+      // The rain drawn in a mix is never more than in an all-rain fall.
+      for (const s of [0.1, 0.5, 0.9]) expect(particleCount(tier, 1, s) * (1 - s)).toBeLessThanOrEqual(PRECIP_PARTICLES[tier] + 0.5)
+    }
   })
 })
 

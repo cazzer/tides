@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { useStore } from '../store'
-import { shipTelemetry } from './ship-telemetry'
+import { shipTelemetry, type ShipTelemetry } from './ship-telemetry'
+import { fillEarthEye, type Carrier } from './frame-carry'
 import { prefersReducedMotion } from './reduced-motion'
 import { EARTH_RADIUS } from './ship-bodies'
 import { fineGroundDepth } from './ship-session'
@@ -13,7 +14,6 @@ import {
   EDGE_FADE,
   NEAR_FADE,
   PRECIP_HALF,
-  PRECIP_PARTICLES,
   PRECIP_TOP,
   RAIN_OPACITY,
   RATE_TAU_S,
@@ -30,6 +30,7 @@ import {
   fallSpeed,
   glsl,
   particleCount,
+  particlePool,
   precipIntensity,
   precipShown,
   shouldSample,
@@ -57,8 +58,9 @@ const SEED = 0x7a1d
 // half-side), clamped: raindrops thin streaks, flakes soft dots.
 const DROP_SIZE = 0.375
 const DROP_RADIUS: readonly [number, number] = [1.2, 2.4]
-const FLAKE_SIZE = 0.9
-const FLAKE_RADIUS: readonly [number, number] = [2.25, 5.25]
+// Soft discs a few pixels wide far off, up to a dozen near (tides-bl3.7).
+const FLAKE_SIZE = 1.6
+const FLAKE_RADIUS: readonly [number, number] = [2.5, 7]
 const RAIN_COLOR: readonly [number, number, number] = [0.75, 0.8, 0.85]
 const SNOW_COLOR: readonly [number, number, number] = [0.95, 0.97, 1]
 // After the planets' translucent shells, as SpaceDust.
@@ -235,6 +237,35 @@ function cloudBytesOf(texture: THREE.Texture | 'static'): CloudBytes | null {
   return image?.data && image.width && image.height ? (image as CloudBytes) : null
 }
 
+// What the field reads of the eye: the ship's telemetry, or the main view's
+// own (createSystemEye).
+type EyeView = Pick<ShipTelemetry, 'earthEye'> & { air: Pick<ShipTelemetry['air'], 'speed' | 'velocity'> }
+
+function createSystemEye(): EyeView {
+  return {
+    earthEye: { up: new THREE.Vector3(0, 1, 0), local: new THREE.Vector3(0, 1, 0), altitude: Infinity },
+    // Earth carries the close-zoomed camera, so the air is still about it.
+    air: { speed: 0, velocity: new THREE.Vector3() },
+  }
+}
+
+const earthCarrier: Required<Carrier> = { position: new THREE.Vector3(), radius: 1, spin: new THREE.Quaternion() }
+
+// The main camera's place over Earth, in close zoom only (store.closeZoom);
+// elsewhere it is nowhere (altitude Infinity), and nothing falls.
+function fillSystemEye(view: EyeView, camera: THREE.Camera): void {
+  const { closeZoom, earth, earthRadius } = useStore.getState()
+  const body = earth?.current as THREE.Object3D | null | undefined
+  if (!closeZoom || !body || earthRadius == null) {
+    view.earthEye.altitude = Infinity
+    return
+  }
+  body.getWorldPosition(earthCarrier.position)
+  body.getWorldQuaternion(earthCarrier.spin)
+  earthCarrier.radius = earthRadius
+  fillEarthEye(view, camera.position, earthCarrier)
+}
+
 const viewport = new THREE.Vector4()
 const down = new THREE.Vector3()
 const toSun = new THREE.Vector3()
@@ -246,14 +277,18 @@ const latLon: [number, number] = [0, 0]
  * in a box around the eye, as many as the real weather's rate under the eye
  * asks, fading out over the cloud base. Hidden (no draw) when dry, over the
  * base, with the weather not 'real', or away from Earth. Mount in the ship
- * View after ShipController; it reads shipTelemetry.
+ * View after ShipController (`eye` 'ship': it reads shipTelemetry), or in the
+ * main view (`eye` 'system', tides-bl3.8): there it falls in close zoom only,
+ * around the main camera, which Earth carries (close-zoom.ts), so the air
+ * is still about it.
  */
-export function FallingPrecip() {
+export function FallingPrecip({ eye: source = 'ship' }: { eye?: 'ship' | 'system' }) {
+  const view: EyeView = useMemo(() => (source === 'ship' ? shipTelemetry : createSystemEye()), [source])
   const tier: PrecipTier = useMemo(() => {
     const coarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
     return FLAT || coarse ? 'low' : 'high'
   }, [])
-  const geometry = useMemo(() => createPrecipGeometry(PRECIP_PARTICLES[tier]), [tier])
+  const geometry = useMemo(() => createPrecipGeometry(particlePool(tier)), [tier])
   const material = useMemo(() => createPrecipMaterial(), [])
   const mesh = useRef<THREE.Mesh>(null)
   const gate = useRef({
@@ -285,16 +320,17 @@ export function FallingPrecip() {
       const ratio = renderer.getPixelRatio()
       uniforms.uResolution.value.set(viewport.z / ratio, viewport.w / ratio)
       uniforms.uNear.value = (camera as THREE.PerspectiveCamera).near
-      const sunUp = toSun.copy(camera.position).negate().normalize().dot(shipTelemetry.earthEye.up)
+      const sunUp = toSun.copy(camera.position).negate().normalize().dot(view.earthEye.up)
       uniforms.uLight.value = daylight(sunUp) * UNDER_CLOUD_LIGHT
     }
-  }, [material])
+  }, [material, view])
 
-  useFrame(({ gl, clock }, delta) => {
+  useFrame(({ gl, clock, camera }, delta) => {
     const target = mesh.current
     if (!target) return
     const g = gate.current
-    const eye = shipTelemetry.earthEye
+    if (source === 'system') fillSystemEye(view, camera)
+    const eye = view.earthEye
     const { weatherSource, timestamp, jumpDate } = useStore.getState()
     if (weatherSource !== 'real' || !Number.isFinite(eye.altitude)) {
       g.amount = 0
@@ -344,20 +380,20 @@ export function FallingPrecip() {
     g.amount = easeToward(g.amount, g.targetAmount, dt, RATE_TAU_S)
     g.snowShare = easeToward(g.snowShare, g.targetSnowShare, dt, RATE_TAU_S)
     if (g.targetAmount === 0 && g.amount < SHOWN_EPS) g.amount = 0
-    const fadeSpeed = speedFade(shipTelemetry.air.speed / EARTH_UNITS_PER_METRE)
+    const fadeSpeed = speedFade(view.air.speed / EARTH_UNITS_PER_METRE)
     const shown = precipShown(g.amount, fade, fadeSpeed)
     target.visible = shown
     if (!shown) return
 
     const reduced = prefersReducedMotion()
-    const air = shipTelemetry.air.velocity
+    const air = view.air.velocity
     down.copy(eye.up).negate()
     const rainFall = fallSpeed('rain', reduced)
     const snowFall = fallSpeed('snow', reduced)
     stepAnchor(g.rain, air, down, rainFall, dt, PRECIP_HALF)
     stepAnchor(g.snow, air, down, snowFall, dt, PRECIP_HALF)
     // Through the mesh: the memoized geometry and material are the hooks' own.
-    ;(target.geometry as THREE.InstancedBufferGeometry).instanceCount = particleCount(tier, g.amount)
+    ;(target.geometry as THREE.InstancedBufferGeometry).instanceCount = particleCount(tier, g.amount, g.snowShare)
 
     const u = (target.material as THREE.ShaderMaterial).uniforms
     u.uOffsetRain.value.copy(g.rain)

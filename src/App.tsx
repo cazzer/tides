@@ -28,6 +28,7 @@ import { MAIN_DISTANCE, MAIN_FOV } from './main-view'
 import { ShipView } from './ship/ShipView'
 import { ShipButton } from './ship/ShipButton'
 import { SurfaceCredit } from './ship/SurfaceCredit'
+import { FallingPrecip } from './ship/FallingPrecip'
 import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
@@ -256,6 +257,8 @@ export default function App() {
               onReady={readyHandler('main')}
             />
             <MainControls />
+            {/* Rain and snow round the eye in close zoom (tides-bl3.8). */}
+            <FallingPrecip eye="system" />
             <MainCameraSession />
             <DemoPlayer />
           </Panel>

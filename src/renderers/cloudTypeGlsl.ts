@@ -38,7 +38,15 @@ import {
   TYPED_TOPS_KM,
 } from '../cloud-types'
 import { MAX_CLOUD_TOP_KM, MIN_MEASURED_TOP_KM } from '../cloud-layer'
-import { PRECIP_DARK_BASE, PRECIP_DARK_FULL_MM_H, PRECIP_DARK_TOP, PRECIP_MAX_MM_H } from '../cloud-precip'
+import {
+  PRECIP_DARK_BELOW_DEPTH,
+  PRECIP_DARK_HEAVY,
+  PRECIP_DARK_HEAVY_MM_H,
+  PRECIP_DARK_LIGHT,
+  PRECIP_DARK_ON_MM_H,
+  PRECIP_DARK_TOP_SHARE,
+  PRECIP_MAX_MM_H,
+} from '../cloud-precip'
 
 const f = (x: number) => x.toFixed(6)
 
@@ -95,15 +103,23 @@ uniform float uCloudTyped;
 // B snow, each sqrt(rate / PRECIP_MAX) times A, the data's confidence; the neutral
 // texel (A 0) where there is none.
 uniform sampler2D uCloudPrecip;
-#define PRECIP_DARK_FULL ${f(Math.sqrt(PRECIP_DARK_FULL_MM_H / PRECIP_MAX_MM_H))}
-#define PRECIP_DARK_TOP ${f(PRECIP_DARK_TOP)}
-#define PRECIP_DARK_BASE ${f(PRECIP_DARK_BASE)}
-// How wet a column of shares s is (precipWetness()): rain on its low and mid
-// cloud, showers on its cumulus, snow on all but cirrus; 0 exactly where dry.
-float cloudWet(vec4 p, vec4 s) {
-  if (p.a <= 0.0) return 0.0;
-  vec3 f = smoothstep(0.0, PRECIP_DARK_FULL, min(p.rgb / p.a, vec3(1.0)));
-  return p.a * max(max(f.r * (s.z + s.w), f.g * s.y), f.b * (1.0 - s.x));
+#define PRECIP_DARK_ON ${f(Math.sqrt(PRECIP_DARK_ON_MM_H / PRECIP_MAX_MM_H))}
+#define PRECIP_DARK_HEAVY_E ${f(Math.sqrt(PRECIP_DARK_HEAVY_MM_H / PRECIP_MAX_MM_H))}
+#define PRECIP_DARK_LIGHT ${f(PRECIP_DARK_LIGHT)}
+#define PRECIP_DARK_HEAVY ${f(PRECIP_DARK_HEAVY)}
+#define PRECIP_DARK_TOP_SHARE ${f(PRECIP_DARK_TOP_SHARE)}
+#define PRECIP_DARK_BELOW_DEPTH ${f(PRECIP_DARK_BELOW_DEPTH)}
+// How wet a column of shares s is (precipWetness()), as how much of its light
+// it loses: x through its typed layers seen from above (rain on its low and
+// mid cloud, showers on its cumulus, snow on all but cirrus), y from under it
+// whatever caps it; each PRECIP_DARK_LIGHT at light rates on to
+// PRECIP_DARK_HEAVY at heavy ones (precipDarkOf()); 0 exactly where dry.
+vec2 cloudWet(vec4 p, vec4 s) {
+  if (p.a <= 0.0) return vec2(0.0);
+  vec3 e = min(p.rgb / p.a, vec3(1.0));
+  vec3 k = smoothstep(0.0, PRECIP_DARK_ON, e)
+    * mix(vec3(PRECIP_DARK_LIGHT), vec3(PRECIP_DARK_HEAVY), smoothstep(PRECIP_DARK_ON, PRECIP_DARK_HEAVY_E, e));
+  return p.a * vec2(max(max(k.r * (s.z + s.w), k.g * s.y), k.b * (1.0 - s.x)), max(max(k.r, k.g), k.b));
 }
 
 // The untyped look: the detail's own defines, so that it is the same
@@ -126,10 +142,10 @@ ${CLOUD_TYPE_SHARES_GLSL}
 // the hit's mip lod: lookOf(), and how wet the column is (cloudWet() times
 // the confidence). Untyped, or with no confidence, exactly the untyped look
 // and dry, and nothing is read. textureLod, as it runs past the discards.
-void cloudLook(vec2 st, float lod, out vec4 lookD, out vec4 lookL, out float wet) {
+void cloudLook(vec2 st, float lod, out vec4 lookD, out vec4 lookL, out vec2 wet) {
   lookD = LOOK_NEUTRAL_D;
   lookL = LOOK_NEUTRAL_L;
-  wet = 0.0;
+  wet = vec2(0.0);
   if (uCloudTyped < 0.5) return;
   vec4 t = textureLod(uCloudType, st, 0.0);
   if (t.a <= 0.0) return;
