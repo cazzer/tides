@@ -2,10 +2,14 @@ import { describe, expect, test } from 'vitest'
 import {
   decodePrecip,
   encodePrecip,
-  PRECIP_DARK_BASE,
-  PRECIP_DARK_FULL_MM_H,
-  PRECIP_DARK_TOP,
+  PRECIP_DARK_BELOW_DEPTH,
+  PRECIP_DARK_HEAVY,
+  PRECIP_DARK_HEAVY_MM_H,
+  PRECIP_DARK_LIGHT,
+  PRECIP_DARK_ON_MM_H,
+  PRECIP_DARK_TOP_SHARE,
   PRECIP_MAX_MM_H,
+  precipDarkOf,
   precipDarkening,
   precipFromFrames,
   precipGridImage,
@@ -13,7 +17,7 @@ import {
 } from './cloud-precip'
 import { TYPE_H, TYPE_W } from './cloud-types'
 import { GRID_LATS, GRID_POINTS, type CoverGrid } from './forecast-clouds'
-import { HOUR_MS } from './real-clouds'
+import { HOUR_MS, smoothstep } from './real-clouds'
 
 const START = Date.UTC(2026, 9, 24)
 
@@ -142,7 +146,7 @@ describe('precipFromFrames', () => {
   })
 })
 
-describe('the darkening of wet cloud (tides-bl3.2)', () => {
+describe('the darkening of wet cloud (tides-bl3.2, .6)', () => {
   type Texel = [number, number, number, number]
   type Shares = [number, number, number, number]
   // A covered texel (A 1) of rain, showers and snow in mm/h, as sampled.
@@ -157,55 +161,73 @@ describe('the darkening of wet cloud (tides-bl3.2)', () => {
   const ALTO: Shares = [0, 0, 1, 0]
   const STRATUS: Shares = [0, 0, 0, 1]
 
-  test('is dry where there is no data, no rate, or only cirrus', () => {
-    expect(precipWetness([0, 0, 0, 0], STRATUS, 1)).toBe(0)
-    expect(precipWetness([0.5, 0.5, 0.5, 0], STRATUS, 1)).toBe(0)
-    expect(precipWetness(texel(0, 0, 0), STRATUS, 1)).toBe(0)
-    expect(precipWetness(texel(20, 20, 20), CIRRUS, 1)).toBe(0)
+  const layered = (t: Texel, sh: Shares, c = 1) => precipWetness(t, sh, c).layered
+  const below = (t: Texel, sh: Shares, c = 1) => precipWetness(t, sh, c).below
+  // The first cut's (tides-bl3.2): full at 1 mm/h, 0.1 off a top, 0.5 off a base.
+  const firstCut = (rate: number) => smoothstep(0, Math.sqrt(1 / PRECIP_MAX_MM_H), Math.sqrt(rate / PRECIP_MAX_MM_H))
+
+  test('is dry where there is no data or no rate; only cirrus is dry from above', () => {
+    for (const t of [[0, 0, 0, 0], [0.5, 0.5, 0.5, 0], texel(0, 0, 0)] as Texel[]) {
+      expect(precipWetness(t, STRATUS, 1)).toEqual({ layered: 0, below: 0 })
+    }
+    expect(layered(texel(20, 20, 20), CIRRUS)).toBe(0)
+    // From under it, a raining base is dark whatever caps it.
+    expect(below(texel(20, 0, 0), CIRRUS)).toBeCloseTo(PRECIP_DARK_HEAVY, 9)
+    for (const depth of [0, 0.3, 1]) expect(precipDarkening({ layered: 0, below: 0 }, depth)).toBe(1)
   })
 
-  test('rain wets the low and mid cloud, showers the cumulus, snow all but cirrus', () => {
-    expect(precipWetness(texel(8, 0, 0), STRATUS, 1)).toBeGreaterThan(0)
-    expect(precipWetness(texel(8, 0, 0), ALTO, 1)).toBeGreaterThan(0)
-    expect(precipWetness(texel(8, 0, 0), CUMULUS, 1)).toBe(0)
-    expect(precipWetness(texel(0, 8, 0), CUMULUS, 1)).toBeGreaterThan(0)
-    expect(precipWetness(texel(0, 8, 0), STRATUS, 1)).toBe(0)
-    for (const shares of [CUMULUS, ALTO, STRATUS]) {
-      expect(precipWetness(texel(0, 0, 8), shares, 1)).toBeGreaterThan(0)
-    }
+  test('from above, rain wets the low and mid cloud, showers the cumulus, snow all but cirrus', () => {
+    expect(layered(texel(8, 0, 0), STRATUS)).toBeGreaterThan(0)
+    expect(layered(texel(8, 0, 0), ALTO)).toBeGreaterThan(0)
+    expect(layered(texel(8, 0, 0), CUMULUS)).toBe(0)
+    expect(layered(texel(0, 8, 0), CUMULUS)).toBeGreaterThan(0)
+    expect(layered(texel(0, 8, 0), STRATUS)).toBe(0)
+    for (const shares of [CUMULUS, ALTO, STRATUS]) expect(layered(texel(0, 0, 8), shares)).toBeGreaterThan(0)
     // Mixed kinds: the wettest reading wins.
-    expect(precipWetness(texel(8, 0, 0), [0, 0.5, 0, 0.5], 1)).toBeCloseTo(0.5, 2)
+    expect(layered(texel(8, 0, 0), [0, 0.5, 0, 0.5])).toBeCloseTo(PRECIP_DARK_HEAVY / 2, 6)
   })
 
-  test('grows with the rate, full from PRECIP_DARK_FULL_MM_H', () => {
+  test('a range by rate: light already dark, heavier darker, capped', () => {
+    expect(precipDarkOf(0)).toBe(0)
+    expect(precipDarkOf(Math.sqrt(PRECIP_DARK_ON_MM_H / PRECIP_MAX_MM_H))).toBeCloseTo(PRECIP_DARK_LIGHT, 9)
     let last = 0
-    for (const rate of [0.05, 0.1, 0.2, 0.4, 0.7]) {
+    for (const rate of [0.01, 0.05, 0.1, 0.3, 1, 2]) {
+      const k = below(texel(rate, 0, 0), STRATUS)
+      expect(k).toBeGreaterThan(last)
+      last = k
+    }
+    expect(below(texel(PRECIP_DARK_HEAVY_MM_H, 0, 0), STRATUS)).toBeCloseTo(PRECIP_DARK_HEAVY, 2)
+    expect(below(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS)).toBe(PRECIP_DARK_HEAVY)
+    expect(PRECIP_DARK_LIGHT).toBeLessThan(PRECIP_DARK_HEAVY)
+    expect(PRECIP_DARK_HEAVY).toBeLessThan(1)
+  })
+
+  test('darker than the first cut at every rate, top and base (tides-bl3.6)', () => {
+    for (const rate of [0.005, 0.01, 0.03, 0.1, 0.3, 1, 3, 10]) {
       const wet = precipWetness(texel(rate, 0, 0), STRATUS, 1)
-      expect(wet).toBeGreaterThan(last)
-      last = wet
+      expect(precipDarkening(wet, 0)).toBeLessThan(1 - 0.1 * firstCut(rate))
+      expect(precipDarkening(wet, 1)).toBeLessThan(1 - 0.5 * firstCut(rate))
     }
-    expect(last).toBeLessThan(1)
-    expect(precipWetness(texel(PRECIP_DARK_FULL_MM_H, 0, 0), STRATUS, 1)).toBeCloseTo(1, 2)
-    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 1)).toBe(1)
   })
 
-  test('scales with the data\'s coverage and the type\'s confidence', () => {
-    const full = precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 1)
+  test("scales with the data's coverage and the type's confidence", () => {
+    const full = below(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS)
     // Premultiplied: half covered, the same rate, half as wet.
-    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0, 0.5), STRATUS, 1)).toBeCloseTo(full / 2, 6)
-    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 0.25)).toBeCloseTo(full / 4, 6)
-    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 0)).toBe(0)
+    expect(below(texel(PRECIP_MAX_MM_H, 0, 0, 0.5), STRATUS)).toBeCloseTo(full / 2, 6)
+    expect(below(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 0.25)).toBeCloseTo(full / 4, 6)
+    expect(precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 0)).toEqual({ layered: 0, below: 0 })
   })
 
-  test('darkens slightly, a base more than a top, and dry not at all', () => {
-    for (const depth of [0, 0.3, 1]) expect(precipDarkening(0, depth)).toBe(1)
-    expect(precipDarkening(1, 0)).toBeCloseTo(1 - PRECIP_DARK_TOP, 9)
-    expect(precipDarkening(1, 1)).toBeCloseTo(1 - PRECIP_DARK_BASE, 9)
-    for (const wet of [0, 0.5, 1]) {
-      for (const depth of [0, 0.5, 1]) expect(precipDarkening(wet, depth)).toBeGreaterThanOrEqual(1 - PRECIP_DARK_BASE - 1e-12)
+  test('a base from below loses more than a top from above', () => {
+    const wet = precipWetness(texel(PRECIP_MAX_MM_H, 0, 0), STRATUS, 1)
+    expect(precipDarkening(wet, 0)).toBeCloseTo(1 - PRECIP_DARK_HEAVY * PRECIP_DARK_TOP_SHARE, 9)
+    expect(precipDarkening(wet, PRECIP_DARK_BELOW_DEPTH)).toBeCloseTo(1 - PRECIP_DARK_HEAVY, 9)
+    expect(precipDarkening(wet, 1)).toBeCloseTo(1 - PRECIP_DARK_HEAVY, 9)
+    let last = 1
+    for (const depth of [0, 0.1, 0.25, 0.4, 0.5]) {
+      const m = precipDarkening(wet, depth)
+      expect(m).toBeLessThanOrEqual(last)
+      last = m
     }
-    expect(PRECIP_DARK_TOP).toBeLessThan(PRECIP_DARK_BASE)
-    expect(PRECIP_DARK_TOP).toBeLessThanOrEqual(0.15)
-    expect(PRECIP_DARK_BASE).toBeLessThanOrEqual(0.5)
   })
 })

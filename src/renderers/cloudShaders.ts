@@ -1833,7 +1833,7 @@ void main() {
   // tides-tvr.3's program itself.
   vec4 lookD;
   vec4 lookL;
-  float wet;
+  vec2 wet;
   cloudLook(vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0)), lod, lookD, lookL, wet);
   vec2 slope = lookD.x * dz / h;
   // Cirrus's detail is drawn out east-west: the same noise with its scale
@@ -1926,9 +1926,14 @@ void main() {
     CLOUD_ECLIPSE_HIT);
 #endif
 #ifdef CLOUD_TYPED
-  // Raining or snowing (tides-bl3.2): a little darker, a base seen from under
-  // it (depth 1) more than a top from above (0); dry, wet is 0 and nothing changes.
-  if (wet > 0.0) radiance *= 1.0 - wet * mix(PRECIP_DARK_TOP, PRECIP_DARK_BASE, depth);
+  // Raining or snowing (tides-bl3.2, .6): darker, the heavier the darker, a
+  // base seen from under it (depth past PRECIP_DARK_BELOW_DEPTH) whatever caps
+  // it, a top from above (0) by its layers and PRECIP_DARK_TOP_SHARE as much
+  // (precipDarkening()); dry, wet is 0 and nothing changes.
+  if (wet.y > 0.0) {
+    float below = smoothstep(0.0, PRECIP_DARK_BELOW_DEPTH, depth);
+    radiance *= 1.0 - mix(wet.x * PRECIP_DARK_TOP_SHARE, wet.y, below);
+  }
 #endif
 
   float opacity = hitShow * uOpacity;

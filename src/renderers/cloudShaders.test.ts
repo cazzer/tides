@@ -5,7 +5,15 @@ import { neutralTypeTexture } from './cloudBlend'
 import { SKY_VIEW_GLSL } from './skyView'
 import { createGroundHaze, GROUND_HAZE_GLSL, groundHazeDepth, groundHazeWeights } from './groundHaze'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
-import { PRECIP_DARK_BASE, PRECIP_DARK_FULL_MM_H, PRECIP_DARK_TOP, PRECIP_MAX_MM_H } from '../cloud-precip'
+import {
+  PRECIP_DARK_BELOW_DEPTH,
+  PRECIP_DARK_HEAVY,
+  PRECIP_DARK_HEAVY_MM_H,
+  PRECIP_DARK_LIGHT,
+  PRECIP_DARK_ON_MM_H,
+  PRECIP_DARK_TOP_SHARE,
+  PRECIP_MAX_MM_H,
+} from '../cloud-precip'
 import { composePatches, createEclipseShadow } from './eclipseShadow'
 import {
   CLOUD_GROUND_GLSL,
@@ -1438,11 +1446,13 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       // both returns (dry until then) and once the shares are known.
       expect(src.match(/\buCloudPrecip\b/g)).toHaveLength(2)
       const tap = fn.indexOf('wet = t.a * cloudWet(textureLod(uCloudPrecip, st, 0.0), s);')
-      expect(fn.indexOf('wet = 0.0;')).toBeLessThan(fn.indexOf('if (uCloudTyped < 0.5) return;'))
+      expect(fn.indexOf('wet = vec2(0.0);')).toBeLessThan(fn.indexOf('if (uCloudTyped < 0.5) return;'))
       expect(tap).toBeGreaterThan(fn.indexOf('vec4 s = cloudTypeShares(t, raw);'))
       expect(tap).toBeGreaterThan(fn.indexOf('if (t.a <= 0.0) return;'))
       // And darkens the hit's light once it is shaded, before it shows.
-      const dark = main.indexOf('if (wet > 0.0) radiance *= 1.0 - wet * mix(PRECIP_DARK_TOP, PRECIP_DARK_BASE, depth);')
+      const dark = main.indexOf('radiance *= 1.0 - mix(wet.x * PRECIP_DARK_TOP_SHARE, wet.y, below);')
+      expect(main).toContain('if (wet.y > 0.0) {')
+      expect(main).toContain('float below = smoothstep(0.0, PRECIP_DARK_BELOW_DEPTH, depth);')
       expect(dark).toBeGreaterThan(main.indexOf('vec3 radiance = cloudRadiance('))
       expect(dark).toBeLessThan(main.indexOf('float opacity = hitShow * uOpacity;'))
       // Never in the vertex stage, where the march's phase must be the same
@@ -1496,17 +1506,23 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
     clouds.dispose()
   })
 
-  it('darkens wet cloud as precipWetness() and precipDarkening() do (tides-bl3.2)', () => {
+  it('darkens wet cloud as precipWetness() and precipDarkening() do (tides-bl3.2, .6)', () => {
     const clouds = createCloudLayer(createEclipseShadow('earth'), false)
     const src = preprocess(clouds.material.fragmentShader, new Set(['CLOUD_TYPED']))
     const define = (name: string) => src.match(new RegExp(`#define ${name} (\\S+)`))![1]
-    expect(define('PRECIP_DARK_FULL')).toBe(Math.sqrt(PRECIP_DARK_FULL_MM_H / PRECIP_MAX_MM_H).toFixed(6))
-    expect(define('PRECIP_DARK_TOP')).toBe(PRECIP_DARK_TOP.toFixed(6))
-    expect(define('PRECIP_DARK_BASE')).toBe(PRECIP_DARK_BASE.toFixed(6))
-    expect(src).toContain(`float cloudWet(vec4 p, vec4 s) {
-  if (p.a <= 0.0) return 0.0;
-  vec3 f = smoothstep(0.0, PRECIP_DARK_FULL, min(p.rgb / p.a, vec3(1.0)));
-  return p.a * max(max(f.r * (s.z + s.w), f.g * s.y), f.b * (1.0 - s.x));
+    const e = (mmH: number) => Math.sqrt(mmH / PRECIP_MAX_MM_H).toFixed(6)
+    expect(define('PRECIP_DARK_ON')).toBe(e(PRECIP_DARK_ON_MM_H))
+    expect(define('PRECIP_DARK_HEAVY_E')).toBe(e(PRECIP_DARK_HEAVY_MM_H))
+    expect(define('PRECIP_DARK_LIGHT')).toBe(PRECIP_DARK_LIGHT.toFixed(6))
+    expect(define('PRECIP_DARK_HEAVY')).toBe(PRECIP_DARK_HEAVY.toFixed(6))
+    expect(define('PRECIP_DARK_TOP_SHARE')).toBe(PRECIP_DARK_TOP_SHARE.toFixed(6))
+    expect(define('PRECIP_DARK_BELOW_DEPTH')).toBe(PRECIP_DARK_BELOW_DEPTH.toFixed(6))
+    expect(src).toContain(`vec2 cloudWet(vec4 p, vec4 s) {
+  if (p.a <= 0.0) return vec2(0.0);
+  vec3 e = min(p.rgb / p.a, vec3(1.0));
+  vec3 k = smoothstep(0.0, PRECIP_DARK_ON, e)
+    * mix(vec3(PRECIP_DARK_LIGHT), vec3(PRECIP_DARK_HEAVY), smoothstep(PRECIP_DARK_ON, PRECIP_DARK_HEAVY_E, e));
+  return p.a * vec2(max(max(k.r * (s.z + s.w), k.g * s.y), k.b * (1.0 - s.x)), max(max(k.r, k.g), k.b));
 }`)
     clouds.dispose()
   })
