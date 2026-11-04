@@ -74,6 +74,10 @@ export interface DemoLoop {
   to: string
   times: number
   holdMs?: number
+  /** Earth's spin held through each pass, turning less than half a turn
+   * from `from`'s to `to`'s (heldEarthSpin), so a pass of months doesn't
+   * strobe the globe (tides-zec.19). */
+  holdSpin?: boolean
 }
 
 /** The clock's speed from `at` (ISO 8601) on, within a step. */
@@ -115,6 +119,10 @@ export interface DemoAids {
   /** Main view: the Moon's umbra on Earth filled and ringed and the
    * penumbra's edge ringed, from the true shadow geometry (tides-zec.7). */
   moonShadow?: boolean
+  /** Main view: NSIDC's sea ice for the date's day of the year on the
+   * globe, its clouds hidden, and polar maps of it in the seasons readout
+   * (tides-zec.19). */
+  seaIce?: boolean
   /** Main view: the Moon is hidden, its body, refs and camera carrying on. */
   hideMoon?: boolean
   /** Main view: Earth's umbra and penumbra as circles at the Moon, from the

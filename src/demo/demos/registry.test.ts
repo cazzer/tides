@@ -248,27 +248,50 @@ describe('seasons', () => {
   const perihelion = SearchPlanetApsis(Body.Earth, new Date('2026-12-25T00:00:00Z')).time.date
   const instants = [year.mar_equinox, year.jun_solstice, year.sep_equinox, year.dec_solstice].map((t) => t.date)
 
-  it('steps through the 2026 equinoxes and solstices, then perihelion', () => {
+  const stops = demo.steps.slice(0, 5)
+  const yearStep = demo.steps[5]
+
+  it('steps through the 2026 equinoxes and solstices, then perihelion, then a year', () => {
     const expected = [...instants, perihelion]
-    expect(demo.steps).toHaveLength(expected.length)
-    demo.steps.forEach((step, i) => {
+    expect(demo.steps).toHaveLength(expected.length + 1)
+    stops.forEach((step, i) => {
       expect(Math.abs(Date.parse(step.date) - expected[i].getTime())).toBeLessThan(60_000)
     })
   })
 
-  it('plays one day at each, from the user’s own location', () => {
-    for (const step of demo.steps) {
+  it('plays one day at each stop, from the user’s own location', () => {
+    for (const step of stops) {
       expect(Date.parse(step.until!) - Date.parse(step.date)).toBe(86_400_000)
-      expect(step.location).toBeUndefined()
     }
+    for (const step of demo.steps) expect(step.location).toBeUndefined()
   })
 
   it('hides the Moon throughout and looks against the stars, so the axis keeps its lean on screen', () => {
     demo.steps.forEach((step, i) => {
       expect(demoAidAt(demo, i, 'hideMoon')).toBe(true)
       expect(step.camera?.frame).toBe('stars')
-      if (i > 0) expect(step.travel?.camera?.frame).toBe('stars')
+      if (i > 0 && step.travel) expect(step.travel.camera?.frame).toBe('stars')
     })
+  })
+
+  it('shows the sea ice at every step', () => {
+    demo.steps.forEach((_, i) => expect(demoAidAt(demo, i, 'seaIce')).toBe(true))
+  })
+
+  // tides-zec.19: the whole orbit, from where the last stop ends, the spin
+  // held so the globe doesn't strobe, about the Sun from the stops' side.
+  it('plays a whole year from where the last stop ends, twice, the spin held, about the Sun', () => {
+    expect(Date.parse(yearStep.date)).toBe(Date.parse(stops[4].until!))
+    const span = Date.parse(yearStep.loop!.to) - Date.parse(yearStep.loop!.from)
+    expect(span).toBe(365 * 86_400_000)
+    expect(yearStep.loop).toMatchObject({ from: yearStep.date, to: yearStep.until, holdSpin: true })
+    expect(yearStep.loop!.times).toBeGreaterThanOrEqual(2)
+    const seconds = span / 1000 / yearStep.timeScale!
+    expect(seconds).toBeGreaterThanOrEqual(20)
+    expect(seconds).toBeLessThanOrEqual(40)
+    expect(yearStep.camera).toMatchObject({ focus: 'sun', frame: 'stars', azimuth: stops[0].camera!.azimuth, elevation: stops[0].camera!.elevation })
+    // The orbit (50 units) and Earth's axis about it in view.
+    expect(yearStep.camera!.fit).toBeGreaterThan(50)
   })
 })
 

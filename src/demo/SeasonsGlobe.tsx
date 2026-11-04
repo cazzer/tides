@@ -17,7 +17,7 @@ import { latitudeCircle, seasonsLatitude, shownSubsolarPoint } from './seasons'
 // Sizes are × Earth's radius.
 const RING_LIFT = 1.012 // the tube's centre, clear of the ground
 const RING_WIDTH = 0.006
-const RING_COLOR = '#7FD6FF'
+export const RING_COLOR = '#7FD6FF'
 const RING_OPACITY = 0.9
 const EQUATOR_OPACITY = 0.15
 const DOT_SIZE = 0.06

@@ -20,9 +20,19 @@ import type { Demo, DemoPose, DemoTravel } from '../demo-script'
 // the March equinox, 484 at the June solstice (+63%), 120 at the December
 // solstice (−62%), and perihelion's 3.4% more sunlight is +4 W/m².
 //
-// Every step plays one day at an hour a second, so the dot slides west once
+// aids.seaIce (tides-zec.19) draws the sea ice on the globe for the date's
+// day of the year, from NSIDC's Sea Ice Index for 2025 (SeaIceGlobe.tsx,
+// sea-ice.ts), hides the clouds over it, and adds the Arctic and the
+// Antarctic seen from above to the readout, dimmed where the Sun is up for
+// little of the day (SeaIceMaps.tsx). 2025's numbers (the index's v4 daily
+// extents): the Arctic's peaks at 14.35 million km² on 21 March and bottoms
+// out at 4.54 on 8 September; the Antarctic's peaks at 17.85 on 15 September
+// and bottoms out at 1.96 on 1 March.
+//
+// Every stop plays one day at an hour a second, so the dot slides west once
 // round the globe; no step sets a location, so the user's pin stands. The
-// Moon is hidden throughout (aids.hideMoon): it is not part of the story.
+// last step plays a whole year twice, Earth's spin held. The Moon is hidden
+// throughout (aids.hideMoon): it is not part of the story.
 
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
@@ -45,19 +55,30 @@ function day(date: string) {
 // Earth's spin and the Moon are held on the way, so the globe doesn't strobe.
 const travel = (seconds: number): DemoTravel => ({ seconds, hold: ['spin', 'moon'], camera: WIDE })
 
+// The year of sea ice (tides-zec.19): from where the last stop ends round to
+// the same instant a year on, YEAR_SECONDS a pass, twice, Earth's spin held
+// (it would strobe at ~15 days a second), seen from the same side but about
+// the Sun, so the whole orbit is in view with the axis at every point of it.
+const YEAR_FROM = '2027-01-04T02:07:49Z'
+const YEAR_TO = '2028-01-04T02:07:49Z'
+const YEAR_SECONDS = 24
+const YEAR_SCALE = (Date.parse(YEAR_TO) - Date.parse(YEAR_FROM)) / 1000 / YEAR_SECONDS
+// fit: the orbit (50) and its distance labels past it, on a phone too.
+const ORBIT: DemoPose = { focus: 'sun', frame: 'stars', azimuth: 0, elevation: 45, distance: 150, fit: 72 }
+
 export const seasons: Demo = {
   id: 'seasons',
-  title: 'The seasons',
-  blurb: 'See why seasons come from Earth’s tilt, not its distance from the Sun, with the sunlight worked out for your latitude.',
+  title: 'Seasons',
+  blurb: 'See why seasons come from Earth’s tilt, not its distance from the Sun, and watch the sea ice at the poles melt and grow back.',
   steps: [
     {
       ...day('2026-03-20T14:45:42Z'),
       layout: 'single',
       mainPanel: 'main',
-      aids: { seasons: true, hideMoon: true },
+      aids: { seasons: true, hideMoon: true, seaIce: true },
       caption: {
         title: 'Earth’s tilted axis',
-        body: 'Earth’s axis (white) tilts 23° and always points the same way in space. Watch it as Earth circles the Sun.',
+        body: 'Earth’s axis (white arrow) tilts about 23.5° and always points the same way in space as Earth circles the Sun.',
       },
     },
     {
@@ -65,7 +86,7 @@ export const seasons: Demo = {
       travel: travel(6),
       caption: {
         title: 'June solstice',
-        body: 'The north tips toward the Sun: high Sun, long days, summer. The south gets winter.',
+        body: 'The Northern Hemisphere tilts toward the Sun: high Sun and long days make summer. Arctic sea ice melts.',
       },
     },
     {
@@ -76,7 +97,7 @@ export const seasons: Demo = {
       travel: travel(6),
       caption: {
         title: 'September equinox',
-        body: 'Neither pole tips toward the Sun. Day and night are about equal nearly everywhere.',
+        body: 'Neither hemisphere tilts toward the Sun; day and night are nearly equal. Arctic ice is near its smallest, Antarctic near its largest.',
       },
     },
     {
@@ -84,7 +105,7 @@ export const seasons: Demo = {
       travel: travel(6),
       caption: {
         title: 'December solstice',
-        body: 'Same axis, other side: now the south tips sunward. The north’s low Sun spreads thin over short days.',
+        body: 'Same axis, other side: the Southern Hemisphere tilts toward the Sun. The Arctic is dark all day, and its ice grows.',
       },
     },
     {
@@ -92,7 +113,18 @@ export const seasons: Demo = {
       travel: travel(3),
       caption: {
         title: 'Closest in January',
-        body: 'Earth is closest to the Sun in northern winter. For most places, distance barely matters; tilt does.',
+        body: 'Earth is closest to the Sun in the Northern Hemisphere’s winter. For most places, distance barely matters; tilt does.',
+      },
+    },
+    {
+      date: YEAR_FROM,
+      until: YEAR_TO,
+      timeScale: YEAR_SCALE,
+      loop: { from: YEAR_FROM, to: YEAR_TO, times: 2, holdMs: 2500, holdSpin: true },
+      camera: ORBIT,
+      caption: {
+        title: 'A year of ice',
+        body: 'Watch a year: each pole’s sea ice melts while it tilts toward the Sun and grows back while it tilts away.',
       },
     },
   ],

@@ -208,11 +208,14 @@ describe('the orbit aid', () => {
     expect(markerRadius(uppAt(tour.steps[0].camera!.distance, desk), radius, desk.width)).toBe(radius)
   })
 
-  it('shows on the tour’s way between stops and not at any stop, on a desktop and a phone', () => {
+  it('shows on the tour’s way between stops and through the year, not at any stop, on a desktop and a phone', () => {
     for (const view of [desk, phone]) {
       expect(wideFade(radius / uppAt(eyeAt(wide, view), view))).toBe(1)
       tour.steps.forEach((step) => {
-        expect(wideFade(radius / uppAt(eyeAt(step.camera!, view), view))).toBeLessThan(0.01)
+        const fade = wideFade(radius / uppAt(eyeAt(step.camera!, view), view))
+        // The year's view is about the Sun: Earth is farther still.
+        if (step.camera!.focus === 'sun') expect(fade).toBe(1)
+        else expect(fade).toBeLessThan(0.01)
       })
     }
   })

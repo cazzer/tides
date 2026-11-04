@@ -1,7 +1,10 @@
 import { Seasons } from 'astronomy-engine'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { gunzipSync } from 'node:zlib'
 import { SeasonsReadoutView } from './SeasonsReadout'
+import { MASK_HEIGHT, MASK_WIDTH, unpackSeaIce } from './sea-ice'
 
 const seasons = Seasons(2026)
 const june = seasons.jun_solstice.date.getTime()
@@ -94,5 +97,23 @@ describe('SeasonsReadoutView', () => {
 
   it('names the equator', () => {
     expect(text(0, true, june)).toContain('Sunlight at the equator your pin')
+  })
+
+  it('keys the globe’s dot and ring', () => {
+    expect(text(45, false, june)).toContain('Yellow dot: the Sun straight overhead. Blue ring: 45.0°N.')
+  })
+
+  it('shows both poles’ sea ice and its extent with the sea ice on, and says where it comes from', () => {
+    const seaIce = {
+      ice: unpackSeaIce(new Uint8Array(gunzipSync(readFileSync('src/assets/sea-ice-2025.bin')))),
+      mask: { rg: new Uint8Array(MASK_WIDTH * MASK_HEIGHT * 2), width: MASK_WIDTH, height: MASK_HEIGHT },
+    }
+    const markup = renderToStaticMarkup(<SeasonsReadoutView lat={45} pinned={false} timestamp={september} seaIce={seaIce} />)
+    const t = markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+    expect(t).toMatch(/Arctic 4\.\d million km²/)
+    expect(t).toMatch(/Antarctic 17\.\d million km²/)
+    expect(t).toContain('White: sea ice, from satellites on 23 Sept 2025.')
+    expect(markup).toContain('aria-label="Map of the Arctic’s sea ice"')
+    expect(text(45, false, september)).not.toContain('Arctic')
   })
 })

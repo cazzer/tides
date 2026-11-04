@@ -11,6 +11,9 @@ import { useStore } from '../store'
 import { useDemoAid } from './demo-aids'
 import { useDemoChromeRef } from './demo-chrome'
 import { insolation, seasonsLatitude, SUNRISE_ALTITUDE, sunForSeasons } from './seasons'
+import { useSeaIce, type SeaIceData } from './sea-ice-data'
+import { SeaIceMaps } from './SeaIceMaps'
+import { RING_COLOR } from './SeasonsGlobe'
 
 const HOUR_MS = 3_600_000
 const MINUS = '−'
@@ -22,8 +25,9 @@ export function SeasonsReadout() {
 function SeasonsReadoutLive() {
   const location = useStore((s) => s.location)
   const hour = useStore((s) => (s.timestamp == null ? null : Math.floor(s.timestamp / HOUR_MS)))
+  const seaIce = useSeaIce(useDemoAid('seaIce'))
   if (hour == null) return null
-  return <SeasonsReadoutView {...seasonsLatitude(location)} timestamp={hour * HOUR_MS} />
+  return <SeasonsReadoutView {...seasonsLatitude(location)} timestamp={hour * HOUR_MS} seaIce={seaIce} />
 }
 
 /** A signed number with a true minus sign, and never "−0". */
@@ -82,9 +86,11 @@ export interface SeasonsReadoutViewProps {
   lat: number
   pinned: boolean
   timestamp: number
+  /** The polar maps' data while the step shows sea ice; none without. */
+  seaIce?: SeaIceData | null
 }
 
-export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutViewProps) {
+export function SeasonsReadoutView({ lat, pinned, timestamp, seaIce }: SeasonsReadoutViewProps) {
   // The main view frames its bodies clear of the readout (DemoPlayer).
   const chromeRef = useDemoChromeRef<HTMLElement>()
   const sun = sunForSeasons(timestamp)
@@ -92,7 +98,7 @@ export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutVie
   return (
     <Panel ref={chromeRef} aria-label="Sunlight at this latitude">
       <Line>
-        Sunlight at {latitudeText(lat)} <Muted>{pinned ? 'your pin' : 'example'}</Muted>
+        Sunlight at <RingColour>{latitudeText(lat)}</RingColour> <Muted>{pinned ? 'your pin' : 'example'}</Muted>
       </Line>
       <Daylight>{daylightText(q.daylightHours)}</Daylight>
       <Small>Compared with an equinox day</Small>
@@ -101,7 +107,10 @@ export function SeasonsReadoutView({ lat, pinned, timestamp }: SeasonsReadoutVie
         <ShareBar label="Distance" share={q.distance.percent} digits={1} />
       </Shares>
       <Small>{noonText(q.noonAltitude)}</Small>
-      <Small $faint>Sizes and distances not to scale</Small>
+      {seaIce && <SeaIceMaps data={seaIce} timestamp={timestamp} />}
+      <Small $faint>
+        Yellow dot: the Sun straight overhead. Blue ring: {latitudeText(lat)}. Sizes and distances not to scale.
+      </Small>
     </Panel>
   )
 }
@@ -128,6 +137,11 @@ const Panel = styled.section`
 
 const Line = styled.p`
   margin: 0;
+`
+
+// The globe's ring's colour (SeasonsGlobe.tsx), so the two read as one.
+const RingColour = styled.span`
+  color: ${RING_COLOR};
 `
 
 const Muted = styled.span`

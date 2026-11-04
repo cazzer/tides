@@ -12,6 +12,7 @@ import type {
 } from '../store'
 import type { SkyLook } from '../sky-look'
 import type { Demo, DemoStep } from './demo-script'
+import { earthSpin } from '../ephemeris'
 import {
   DEMO_MAX_DELTA,
   shownEarthSpin,
@@ -199,7 +200,7 @@ export function stepSpeedAt(step: DemoStep, base: number, t: number): number {
 
 /** A step's loop and speed changes, parsed for DemoClock (tides-zec.15). */
 export interface DemoSpan {
-  loop: { from: number; to: number; times: number; holdSeconds: number } | null
+  loop: { from: number; to: number; times: number; holdSeconds: number; holdSpin: boolean } | null
   speeds: { at: number; timeScale: number }[]
   /** The speed a pass starts again at, from loop.from. */
   restartScale: number
@@ -214,6 +215,7 @@ export function demoStepSpan(saved: DemoSaved, demo: Demo, index: number, reduce
     to: Date.parse(step.loop.to),
     times: reduced ? 1 : step.loop.times,
     holdSeconds: reduced ? 0 : (step.loop.holdMs ?? 0) / 1000,
+    holdSpin: step.loop.holdSpin ?? false,
   }
   const base = stepPlayScale(saved, demo, index)
   return {
@@ -315,28 +317,29 @@ export function demoClockFrame(
   }
   const { span } = clock
   const loop = span?.loop
+  const hold = loopSpinHold(loop, timestamp)
   if (loop && track.rest != null) {
     // Paused, the rest waits too.
     if (clock.timeScale !== 0) track.rest -= Math.min(delta, DEMO_MAX_DELTA)
     if (track.rest > 0) {
       track.previous = loop.to
-      return { write: { timestamp: loop.to }, hold: null }
+      return { write: { timestamp: loop.to }, hold }
     }
-    return restartPass(track, span!)
+    return { ...restartPass(track, span!), hold }
   }
   if (loop && timestamp != null && reachedUntil(track.previous, timestamp, loop.to)) {
     track.passes += 1
     track.previous = loop.to
-    if (track.passes >= loop.times) return { write: { timestamp: loop.to, timeScale: 0 }, hold: null }
+    if (track.passes >= loop.times) return { write: { timestamp: loop.to, timeScale: 0 }, hold }
     if (loop.holdSeconds > 0) {
       track.rest = loop.holdSeconds
-      return { write: { timestamp: loop.to }, hold: null }
+      return { write: { timestamp: loop.to }, hold }
     }
-    return restartPass(track, span!)
+    return { ...restartPass(track, span!), hold }
   }
   if (until != null && timestamp != null && reachedUntil(track.previous, timestamp, until)) {
     track.previous = until
-    return { write: { timestamp: until, timeScale: 0 }, hold: null }
+    return { write: { timestamp: until, timeScale: 0 }, hold }
   }
   // The last change crossed this frame wins.
   let timeScale: number | undefined
@@ -346,8 +349,17 @@ export function demoClockFrame(
     }
   }
   track.previous = timestamp
-  if (timeScale !== undefined && timestamp != null) return { write: { timestamp, timeScale }, hold: null }
-  return { write: null, hold: null }
+  if (timeScale !== undefined && timestamp != null) return { write: { timestamp, timeScale }, hold }
+  return { write: null, hold }
+}
+
+/** A loop's spin hold while the clock is within it: the pass's span and its
+ * start's true spin. Played on past `to`, the true spin again. */
+function loopSpinHold(loop: DemoSpan['loop'] | undefined, timestamp: number | null): EarthSpinHold | null {
+  if (!loop?.holdSpin || timestamp == null) return null
+  const { from, to } = loop
+  if (timestamp < from || timestamp > to) return null
+  return { from, to, spinFrom: earthSpin(from) }
 }
 
 function restartPass(track: DemoClockTrack, span: DemoSpan) {

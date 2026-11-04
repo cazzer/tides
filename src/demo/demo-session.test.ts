@@ -597,7 +597,7 @@ describe('a step’s loop and speeds (tides-zec.15)', () => {
 
   it('parses the span, one pass and no rest under reduced motion', () => {
     const span = demoStepSpan(saved, loopDemo, 1)!
-    expect(span.loop).toEqual({ from: t0 + 10 * MIN, to: t0 + 40 * MIN, times: 3, holdSeconds: 0.5 })
+    expect(span.loop).toEqual({ from: t0 + 10 * MIN, to: t0 + 40 * MIN, times: 3, holdSeconds: 0.5, holdSpin: false })
     expect(span.restartScale).toBe(60)
     expect(demoStepSpan(saved, loopDemo, 1, true)!.loop).toMatchObject({ times: 1, holdSeconds: 0 })
     expect(demoStepSpan(saved, loopDemo, 0)).toBeNull()
@@ -642,6 +642,20 @@ describe('a step’s loop and speeds (tides-zec.15)', () => {
     for (let i = 0; i < 20; i++) {
       expect(demoClockFrame(track, null, to, null, 0.1, { span, replay: 0, timeScale: 0 }).write).toEqual({ timestamp: to })
     }
+  })
+
+  it('holds Earth’s spin through a pass that asks it, and only within the pass', () => {
+    const held: Demo = { ...loopDemo, steps: [loopDemo.steps[0], { ...loopDemo.steps[1], loop: { ...loopDemo.steps[1].loop!, holdSpin: true } }] }
+    const span = demoStepSpan(saved, held, 1)!
+    const from = span.loop!.from
+    const to = span.loop!.to
+    const at = (timestamp: number) => demoClockFrame(demoClockTrack(), null, timestamp, null, 0.1, { span, replay: 0, timeScale: 60 }).hold
+    expect(at(from + 5 * MIN)).toEqual({ from, to, spinFrom: earthSpin(from) })
+    expect(at(to + MIN)).toBeNull()
+    expect(at(from - MIN)).toBeNull()
+    // Without holdSpin, none.
+    const plain = demoStepSpan(saved, loopDemo, 1)!
+    expect(demoClockFrame(demoClockTrack(), null, from + MIN, null, 0.1, { span: plain, replay: 0, timeScale: 60 }).hold).toBeNull()
   })
 
   it('Replay starts the loop over, every pass again', () => {
