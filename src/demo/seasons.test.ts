@@ -20,7 +20,10 @@ import {
   northAxis,
   SEASONS_APSIDES,
   standInFade,
+  chromeBox,
+  viewShift,
   type LabelSideInput,
+  type ScreenSegment,
   wideFade,
   SOLAR_CONSTANT,
   labelSide,
@@ -257,8 +260,16 @@ describe('the orbit aid', () => {
       viewW: 1440,
       viewH: 900,
       obstacles: [],
+      segments: [],
+      passing: [],
+      passingSegments: [],
+      boxes: [],
+      held: null,
     }
-    const side = (input: Partial<LabelSideInput>) => labelSide({ ...base, ...input }, { x: 0, y: 0 })
+    const side = (input: Partial<LabelSideInput>) => {
+      const { x, y } = labelSide({ ...base, ...input }, { x: 0, y: 0, spot: 0 })
+      return { x, y }
+    }
 
     it('goes beside the dot, away from the Sun', () => {
       expect(side({})).toEqual({ x: 100 + 9 + 70, y: 0 })
@@ -282,6 +293,187 @@ describe('the orbit aid', () => {
 
     it('stays on the first side when none fits', () => {
       expect(side({ viewW: 120, viewH: 120 })).toEqual({ x: 179, y: 0 })
+    })
+
+    // The base's spots: right (179, 0), left (21, 0), above (100, 16), below
+    // (100, -16); a cross through the dot takes all four.
+    const cross: ScreenSegment[] = [
+      { ax: -100, ay: 0, bx: 300, by: 0, r: 2 },
+      { ax: 100, ay: -60, bx: 100, by: 60, r: 2 },
+    ]
+
+    it('keeps off the demo’s boxes, with a margin', () => {
+      expect(side({ boxes: [{ left: 150, right: 300, bottom: -20, top: 20 }] })).toEqual({ x: 21, y: 0 })
+      // The label's right edge is at 249: a box 5 px past it is within the margin.
+      expect(side({ boxes: [{ left: 254, right: 400, bottom: -20, top: 20 }] })).toEqual({ x: 21, y: 0 })
+      expect(side({ boxes: [{ left: 260, right: 400, bottom: -20, top: 20 }] })).toEqual({ x: 179, y: 0 })
+    })
+
+    it('keeps off an axis drawn through its spot', () => {
+      expect(side({ segments: [{ ax: 179, ay: -50, bx: 179, by: 50, r: 2 }] })).toEqual({ x: 21, y: 0 })
+      // Slanted, missing the label's box by more than its width: no matter.
+      expect(side({ segments: [{ ax: 260, ay: -50, bx: 300, by: 50, r: 2 }] })).toEqual({ x: 179, y: 0 })
+    })
+
+    it('goes to a corner with all four sides taken', () => {
+      const at = side({ segments: cross })
+      expect(at.x).toBeCloseTo(100 + 9 * Math.SQRT1_2 + 70)
+      expect(at.y).toBeCloseTo(9 * Math.SQRT1_2 + 7)
+    })
+
+    it('goes the next corner round when the first is taken', () => {
+      // The Sun on the first corner (toward +x, +y).
+      const at = side({ segments: cross, obstacles: [{ x: 200, y: 30, r: 15 }] })
+      expect(at.x).toBeCloseTo(100 + 9 * Math.SQRT1_2 + 70)
+      expect(at.y).toBeCloseTo(-9 * Math.SQRT1_2 - 7)
+    })
+
+    it('goes a ring farther out when the first ring is taken', () => {
+      // A thick bar along the dot's row takes every spot of the first ring
+      // but above and below, which the thin axis takes.
+      const segments: ScreenSegment[] = [
+        { ax: -100, ay: 0, bx: 300, by: 0, r: 8 },
+        { ax: 100, ay: -60, bx: 100, by: 60, r: 2 },
+      ]
+      const at = side({ segments })
+      const clear = 9 + 8
+      expect(at.x).toBeCloseTo(100 + clear * Math.SQRT1_2 + 70)
+      expect(at.y).toBeCloseTo(clear * Math.SQRT1_2 + 7)
+    })
+
+    it('covers a drawn shape rather than a box when it must', () => {
+      // Every spot crosses the bar; the first is under a box too.
+      const segments: ScreenSegment[] = [{ ax: -700, ay: 0, bx: 700, by: 0, r: 200 }]
+      expect(side({ segments, boxes: [{ left: 150, right: 300, bottom: -20, top: 20 }] })).toEqual({ x: 21, y: 0 })
+    })
+
+    it('would rather sit where Earth goes by than over the Sun', () => {
+      // A bar over every spot, and the Sun on the first.
+      const bar: ScreenSegment[] = [{ ax: -700, ay: 0, bx: 700, by: 0, r: 200 }]
+      const sun = [{ x: 250, y: 0, r: 30 }]
+      expect(side({ passingSegments: bar, obstacles: sun })).toEqual({ x: 21, y: 0 })
+      // A bar that stays put is no better than the Sun: the first spot.
+      expect(side({ segments: bar, obstacles: sun })).toEqual({ x: 179, y: 0 })
+    })
+
+    it('eases out round something just off the dot', () => {
+      // Earth 12 px above the dot, 10 px across: off it, but still widening.
+      expect(side({ passing: [{ x: 100, y: 12, r: 10 }] })).toEqual({ x: 100 + 18 + 70, y: 0 })
+      expect(side({ passing: [{ x: 100, y: 40, r: 10 }] })).toEqual({ x: 179, y: 0 })
+    })
+
+    it('slides a label above its dot into the view', () => {
+      // Straight up, the dot 70 px from the view's left edge.
+      expect(side({ dotX: -650, outX: 0.1, outY: 1 })).toEqual({ x: -720 + 8 + 70, y: 16 })
+    })
+
+    it('holds last frame’s spot while it is as clear as any', () => {
+      // Spot 1, the other side.
+      expect(side({ held: 1 })).toEqual({ x: 21, y: 0 })
+      expect(side({ held: 1, boxes: [{ left: -60, right: 60, bottom: -20, top: 20 }] })).toEqual({ x: 179, y: 0 })
+      // Earth over it, the first spot clear: the clear one.
+      const earth: ScreenSegment[] = [{ ax: 21, ay: -50, bx: 21, by: 50, r: 2 }]
+      expect(side({ held: 1, passingSegments: earth })).toEqual({ x: 179, y: 0 })
+      // Nothing clear of Earth: still held.
+      expect(side({ held: 1, passingSegments: [...earth, { ax: 179, ay: -50, bx: 179, by: 50, r: 200 }] })).toEqual({ x: 21, y: 0 })
+    })
+
+    it('finds a clear spot at a phone’s perihelion', () => {
+      // 390x844, the readout over the top, the caption over the bottom; the
+      // dot near the right edge with the January stop's axis through it, the
+      // December stop's 30 px below, the Sun up and to the left.
+      const axis = (x: number, y: number, reach: number): ScreenSegment[] => {
+        const ax = 0.35
+        const ay = 0.94
+        const tipX = x + ax * reach
+        const tipY = y + ay * reach
+        return [
+          { ax: x - ax * reach, ay: y - ay * reach, bx: tipX, by: tipY, r: 1.25 + 4 },
+          { ax: tipX, ay: tipY, bx: tipX + ax * 11, by: tipY + ay * 11, r: 5 + 4 },
+        ]
+      }
+      const input: LabelSideInput = {
+        ...base,
+        dotX: 150,
+        dotY: -40,
+        outX: 210,
+        outY: -60,
+        halfW: 68,
+        halfH: 6.5,
+        viewW: 390,
+        viewH: 844,
+        obstacles: [
+          { x: -60, y: 20, r: 30 },
+          { x: 150, y: -40, r: 8 },
+          { x: 145, y: -70, r: 8 },
+        ],
+        segments: [...axis(150, -40, 26), ...axis(145, -70, 22)],
+        boxes: [
+          { left: -179, right: 179, bottom: 140, top: 414 },
+          { left: -187, right: 187, bottom: -414, top: -250 },
+        ],
+      }
+      const at = labelSide(input, { x: 0, y: 0, spot: 0 })
+      const x0 = at.x - input.halfW
+      const x1 = at.x + input.halfW
+      const y0 = at.y - input.halfH
+      const y1 = at.y + input.halfH
+      expect(Math.abs(at.x) + input.halfW).toBeLessThanOrEqual(195 - 8)
+      expect(Math.abs(at.y) + input.halfH).toBeLessThanOrEqual(422 - 8)
+      for (const b of input.boxes) expect(x1 < b.left || x0 > b.right || y1 < b.bottom || y0 > b.top).toBe(true)
+      // Every shape's distance from the label's box, sampled.
+      const gap = (px: number, py: number) => Math.hypot(Math.max(x0 - px, 0, px - x1), Math.max(y0 - py, 0, py - y1))
+      for (const c of input.obstacles) expect(gap(c.x, c.y)).toBeGreaterThanOrEqual(c.r)
+      for (const s of input.segments) {
+        for (let t = 0; t <= 1; t += 1 / 64) {
+          expect(gap(s.ax + (s.bx - s.ax) * t, s.ay + (s.by - s.ay) * t)).toBeGreaterThanOrEqual(s.r)
+        }
+      }
+    })
+  })
+
+  describe('viewShift', () => {
+    it('is the shift setViewOffset gives the picture, px with y up', () => {
+      const width = 390
+      const height = 844
+      const camera = new THREE.PerspectiveCamera(MAIN_FOV, width / height, 0.1, 1000)
+      const point = new THREE.Vector3(1, 2, -10)
+      const onScreen = () => {
+        const ndc = point.clone().project(camera)
+        return { x: (ndc.x * width) / 2, y: (ndc.y * height) / 2 }
+      }
+      const centred = onScreen()
+      expect(viewShift(camera.view, { x: 1, y: 1 })).toEqual({ x: 0, y: 0 })
+      camera.setViewOffset(width, height, 0, -88, width, height)
+      const shift = viewShift(camera.view, { x: 0, y: 0 })
+      expect(shift).toEqual({ x: -0, y: -88 })
+      expect(onScreen().x).toBeCloseTo(centred.x + shift.x)
+      expect(onScreen().y).toBeCloseTo(centred.y + shift.y)
+      camera.setViewOffset(width, height, 30, 105, width, height)
+      viewShift(camera.view, shift)
+      expect(onScreen().x).toBeCloseTo(centred.x + shift.x)
+      expect(onScreen().y).toBeCloseTo(centred.y + shift.y)
+      camera.clearViewOffset()
+      expect(viewShift(camera.view, shift)).toEqual({ x: 0, y: 0 })
+    })
+  })
+
+  describe('chromeBox', () => {
+    const view = { left: 0, top: 0, width: 390, height: 844 }
+    const box = { left: 0, right: 0, bottom: 0, top: 0 }
+
+    it('measures a box from the view’s centre, y up', () => {
+      // A phone's readout over the top of the view.
+      expect(chromeBox({ left: 8, top: 8, right: 382, bottom: 288 }, view, box)).toBe(true)
+      expect(box).toEqual({ left: -187, right: 187, top: 414, bottom: 134 })
+      // A view lower down the page.
+      expect(chromeBox({ left: 8, top: 108, right: 382, bottom: 388 }, { ...view, top: 100 }, box)).toBe(true)
+      expect(box).toEqual({ left: -187, right: 187, top: 414, bottom: 134 })
+    })
+
+    it('says when a box is off the view', () => {
+      expect(chromeBox({ left: 8, top: 900, right: 382, bottom: 1000 }, view, box)).toBe(false)
+      expect(chromeBox({ left: 400, top: 8, right: 500, bottom: 100 }, view, box)).toBe(false)
     })
   })
 })

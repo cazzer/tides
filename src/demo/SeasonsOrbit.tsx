@@ -10,8 +10,13 @@
 // In world space, not under Earth's OrbitingBody: the ghosts sit where Earth
 // was, and every axis points along Earth's north (northAxis), which the spin
 // leaves be. All but Earth's axis fade out as the eye closes on the globe
-// (wideFade). Sizes, fades and where labels go are seasons.ts. Laid out in
-// the view's live size (useViewSize), not r3f's, which lags a layout change.
+// (wideFade). Sizes, fades and where labels go are seasons.ts: each label
+// keeps off the view's edge and the demo's caption and readouts
+// (demo-chrome.ts), and if it can off the Sun, Earth, the stops' globes and
+// every axis and arrow drawn, all measured on screen each frame into pools
+// made once. Laid out in the view's live rect (useViewSize), not r3f's,
+// which lags a layout change, and shifted as DemoPlayer's view offset shifts
+// the picture, so the screen positions meet the boxes' DOM rects.
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
@@ -21,20 +26,25 @@ import { useStore } from '../store'
 import { worldUnitsPerPixel } from '../system-aids/pixel-scale'
 import { findDemo } from './demos'
 import { AID_RENDER_ORDER } from './SeasonsGlobe'
-import type { ViewSize } from '../main-view'
 import { PHONE_VIEW_PX } from '../system-aids/label-style'
-import { useViewSize } from '../use-view-size'
+import { useViewSize, type ViewRect } from '../use-view-size'
+import { demoChromeRects } from './demo-chrome'
 import {
   SEASONS_APSIDES,
   apsisLabel,
+  chromeBox,
   ghostDates,
   labelSide,
   markerRadius,
   northAxis,
   standInFade,
+  viewShift,
   wideFade,
   type LabelSideInput,
+  type LabelSpot,
+  type ScreenBox,
   type ScreenCircle,
+  type ScreenSegment,
 } from './seasons'
 
 // CSS px on screen. [TUNE]
@@ -58,6 +68,8 @@ const LABEL_COLOR = '#AEB4C8'
 const LABEL_OPACITY = 0.8
 // One for every stop of a tour; past it, the earliest are kept.
 const MAX_GHOSTS = 8
+// The demo's boxes over the view a label can meet: its caption and readouts.
+const MAX_BOXES = 8
 // Below this a part is all but gone: hidden, so its globe writes no depth.
 const SHOWN = 0.004
 
@@ -137,10 +149,23 @@ const up = new THREE.Vector3()
 const earthAt = new THREE.Vector3()
 const offset = new THREE.Vector3()
 const sunAt = new THREE.Vector3()
-const earthDisc: ScreenCircle = { x: 0, y: 0, r: 0 }
-const sunDisc: ScreenCircle = { x: 0, y: 0, r: 0 }
-const obstacles: readonly ScreenCircle[] = [earthDisc, sunDisc]
-const labelAt = { x: 0, y: 0 }
+const shift = { x: 0, y: 0 }
+const labelAt: LabelSpot = { x: 0, y: 0, spot: 0 }
+// What the labels keep off, refilled each frame from pools made once: the
+// Sun's disc, and each marker's globe (a circle) and axis and arrow
+// (segments), Earth's apart as it goes by; the demo's boxes.
+const circlePool: ScreenCircle[] = Array.from({ length: 2 + MAX_GHOSTS }, () => ({ x: 0, y: 0, r: 0 }))
+const segmentPool: ScreenSegment[] = Array.from({ length: 2 * (1 + MAX_GHOSTS) }, () => ({ ax: 0, ay: 0, bx: 0, by: 0, r: 0 }))
+const boxPool: ScreenBox[] = Array.from({ length: MAX_BOXES }, () => ({ left: 0, right: 0, bottom: 0, top: 0 }))
+const obstacles: ScreenCircle[] = []
+const segments: ScreenSegment[] = []
+const passing: ScreenCircle[] = []
+const passingSegments: ScreenSegment[] = []
+const boxes: ScreenBox[] = []
+let circlesUsed = 0
+let segmentsUsed = 0
+// Each label's spot last frame, while it showed (labelSide's `held`).
+const labelHeld: (number | null)[] = SEASONS_APSIDES.map(() => null)
 const sideInput: LabelSideInput = {
   dotX: 0,
   dotY: 0,
@@ -152,15 +177,66 @@ const sideInput: LabelSideInput = {
   viewW: 0,
   viewH: 0,
   obstacles,
+  segments,
+  passing,
+  passingSegments,
+  boxes,
+  held: null,
 }
 
 // `point` on screen, px from the view's centre (y up), into `circle`, with
-// a radius of `radius` scene units there.
+// a radius of `radius` scene units there, padded. Needs eye, right, up and
+// shift set for the frame.
 function toScreen(point: THREE.Vector3, upp: number, radius: number, circle: ScreenCircle) {
   offset.subVectors(point, eye)
-  circle.x = offset.dot(right) / upp
-  circle.y = offset.dot(up) / upp
+  circle.x = offset.dot(right) / upp + shift.x
+  circle.y = offset.dot(up) / upp + shift.y
   circle.r = radius / upp + OBSTACLE_PAD_PX
+}
+
+function pushSegment(into: ScreenSegment[], ax: number, ay: number, bx: number, by: number, r: number) {
+  const segment = segmentPool[segmentsUsed++]
+  segment.ax = ax
+  segment.ay = ay
+  segment.bx = bx
+  segment.by = by
+  segment.r = r
+  into.push(segment)
+}
+
+// A marker drawn at `point`, as the labels keep off it: its globe
+// `globeRadius` scene units, its axis reaching `reachPx` CSS px each way
+// along `north` (the arrow past its north end), where a CSS px spans `upp`;
+// into `circles` and `strokes`.
+function pushMarker(
+  circles: ScreenCircle[],
+  strokes: ScreenSegment[],
+  point: THREE.Vector3,
+  upp: number,
+  globeRadius: number,
+  reachPx: number,
+  north: THREE.Vector3
+) {
+  const globe = circlePool[circlesUsed++]
+  toScreen(point, upp, globeRadius, globe)
+  circles.push(globe)
+  const axisX = north.dot(right)
+  const axisY = north.dot(up)
+  const { x, y } = globe
+  const tipX = x + axisX * reachPx
+  const tipY = y + axisY * reachPx
+  pushSegment(strokes, x - axisX * reachPx, y - axisY * reachPx, tipX, tipY, AXIS_WIDTH_PX / 2 + OBSTACLE_PAD_PX)
+  pushSegment(strokes, tipX, tipY, tipX + axisX * ARROW_LENGTH_PX, tipY + axisY * ARROW_LENGTH_PX, ARROW_RADIUS_PX + OBSTACLE_PAD_PX)
+}
+
+// The demo's boxes over the view, from their rects as last measured.
+function fillBoxes(view: ViewRect) {
+  boxes.length = 0
+  for (const rect of demoChromeRects()) {
+    if (boxes.length === MAX_BOXES) break
+    const box = boxPool[boxes.length]
+    if (chromeBox(rect, view, box)) boxes.push(box)
+  }
 }
 
 // A stand-in at `position`, sized by the scene units a CSS px spans there
@@ -211,8 +287,9 @@ interface Bodies {
 function place(
   placed: Placed,
   camera: THREE.Camera,
-  size: ViewSize,
+  size: ViewRect,
   bodies: Bodies,
+  north: THREE.Vector3,
   current: MarkerMaterials,
   ghostMaterials: readonly MarkerMaterials[],
   ghostAt: readonly THREE.Vector3[],
@@ -253,14 +330,32 @@ function place(
   const labelsShown = wide > SHOWN
   for (const dot of placed.dots) if (dot) dot.visible = labelsShown
   for (const label of placed.labels) if (label) label.visible = labelsShown
-  if (!labelsShown) return
+  if (!labelsShown) {
+    labelHeld.fill(null)
+    return
+  }
   dotMaterial.opacity = DOT_OPACITY * wide
   right.setFromMatrixColumn(camera.matrixWorld, 0)
   up.setFromMatrixColumn(camera.matrixWorld, 1)
   eye.setFromMatrixPosition(camera.matrixWorld)
-  toScreen(earthAt, upp, reach, earthDisc)
+  viewShift((camera as THREE.PerspectiveCamera).view, shift)
+  obstacles.length = 0
+  segments.length = 0
+  passing.length = 0
+  passingSegments.length = 0
+  circlesUsed = 0
+  segmentsUsed = 0
   sunAt.set(0, 0, 0)
+  const sunDisc = circlePool[circlesUsed++]
   toScreen(sunAt, worldUnitsPerPixel(camera, sunAt, size.height), bodies.sunRadius, sunDisc)
+  obstacles.push(sunDisc)
+  pushMarker(passing, passingSegments, earthAt, upp, earthRadius, reach / upp, north)
+  for (let i = 0; i < ghostAt.length; i++) {
+    if (!placed.ghosts[i]?.visible) continue
+    const ghostUpp = worldUnitsPerPixel(camera, ghostAt[i], size.height)
+    pushMarker(obstacles, segments, ghostAt[i], ghostUpp, GHOST_PX * ghostUpp, GHOST_AXIS_PX, north)
+  }
+  fillBoxes(size)
   sideInput.viewW = size.width
   sideInput.viewH = size.height
   const fontPx = size.width <= PHONE_VIEW_PX ? LABEL_PX.phone : LABEL_PX.desktop
@@ -273,14 +368,15 @@ function place(
     if (!label || !text) continue
     const bounds = text.textRenderInfo?.blockBounds
     offset.subVectors(at, eye)
-    sideInput.dotX = offset.dot(right) / dotUpp
-    sideInput.dotY = offset.dot(up) / dotUpp
+    sideInput.dotX = offset.dot(right) / dotUpp + shift.x
+    sideInput.dotY = offset.dot(up) / dotUpp + shift.y
     // The way out from the Sun (the origin).
     sideInput.outX = at.dot(right)
     sideInput.outY = at.dot(up)
     sideInput.halfW = bounds ? ((bounds[2] - bounds[0]) / 2) * fontPx : 7 * fontPx
     sideInput.halfH = bounds ? ((bounds[3] - bounds[1]) / 2) * fontPx : 0.6 * fontPx
-    labelSide(sideInput, labelAt)
+    sideInput.held = labelHeld[i]
+    labelHeld[i] = labelSide(sideInput, labelAt).spot
     label.position
       .copy(at)
       .addScaledVector(right, (labelAt.x - sideInput.dotX) * dotUpp)
@@ -329,10 +425,8 @@ export function SeasonsOrbit({ positionAt, radius, sunRadius }: Bodies) {
   }, [demoId, step, landed, positionAt])
   const dotAt = useMemo(() => SEASONS_APSIDES.map(({ t }) => new THREE.Vector3().fromArray(positionAt(t))), [positionAt])
   // Earth's north; it moves 0.0001° a year, so once.
-  const orientation = useMemo(() => {
-    const [x, y, z] = northAxis(earthTilt(simTime()))
-    return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(x, y, z))
-  }, [])
+  const north = useMemo(() => new THREE.Vector3(...northAxis(earthTilt(simTime()))), [])
+  const orientation = useMemo(() => new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), north), [north])
 
   const geometries = useMemo(() => createGeometries(), [])
   const materials = useMemo(
@@ -368,7 +462,7 @@ export function SeasonsOrbit({ positionAt, radius, sunRadius }: Bodies) {
   const viewSize = useViewSize()
   const bodies = useMemo(() => ({ positionAt, radius, sunRadius }), [positionAt, radius, sunRadius])
   useFrame(({ camera, size }) =>
-    place(placed.current, camera, viewSize(size), bodies, materials.current, materials.ghosts, ghostAt, dotAt, materials.dot)
+    place(placed.current, camera, viewSize(size), bodies, north, materials.current, materials.ghosts, ghostAt, dotAt, materials.dot)
   )
 
   return (

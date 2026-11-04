@@ -208,6 +208,24 @@ export interface ScreenCircle {
   r: number
 }
 
+/** A box on screen, CSS px from the view's centre (y up). */
+export interface ScreenBox {
+  left: number
+  right: number
+  bottom: number
+  top: number
+}
+
+/** A stroke on screen from (ax, ay) to (bx, by), `r` px either side of it,
+ * CSS px from the view's centre (y up). */
+export interface ScreenSegment {
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  r: number
+}
+
 export interface LabelSideInput {
   /** The dot, px from the view's centre (y up). */
   dotX: number
@@ -221,64 +239,215 @@ export interface LabelSideInput {
   clearPx: number
   viewW: number
   viewH: number
-  /** What the label must not cover: Earth, the Sun. */
+  /** Drawn shapes that stay put, the label keeps off if it can: the Sun
+   * and the stops' globes (circles), the stops' axes (segments). */
   obstacles: readonly ScreenCircle[]
+  segments: readonly ScreenSegment[]
+  /** Earth's own globe and axis, kept off too, but going by: a label
+   * would rather sit where Earth will pass than over the Sun or a stop. */
+  passing: readonly ScreenCircle[]
+  passingSegments: readonly ScreenSegment[]
+  /** The demo's boxes over the view, its caption and readouts: the label
+   * must keep off them, as off the view's edge. */
+  boxes: readonly ScreenBox[]
+  /** The spot the label took last frame (LabelSpot's), if it showed: kept
+   * while it stays as clear as any other, so the label doesn't hop back and
+   * forth as Earth goes by. */
+  held: number | null
 }
 
-// A label keeps this far inside the view's edge. [TUNE]
+/** Where labelSide puts a label: its centre, px from the view's centre (y
+ * up), and which of its spots round the dot that is. */
+export interface LabelSpot {
+  x: number
+  y: number
+  spot: number
+}
+
+// A label keeps this far inside the view's edge and off the demo's boxes. [TUNE]
 const LABEL_EDGE_MARGIN_PX = 8
 // Left or right of its dot while the way out is at least this much sideways
 // on screen (a cosine), else above or below. [TUNE]
 const LABEL_SIDEWAYS = 0.35
+// Rings of spots round the dot, each this much farther out than the last,
+// for when every spot of the first is taken. [TUNE]
+const LABEL_RINGS = 3
+const LABEL_RING_STEP_PX = 8
 
-function boxFits(x: number, y: number, input: LabelSideInput): boolean {
-  const { halfW, halfH, viewW, viewH, obstacles } = input
-  if (Math.abs(x) + halfW > viewW / 2 - LABEL_EDGE_MARGIN_PX) return false
-  if (Math.abs(y) + halfH > viewH / 2 - LABEL_EDGE_MARGIN_PX) return false
-  for (const { x: cx, y: cy, r } of obstacles) {
+// What a spot must keep off, strictest first: everything; all but Earth;
+// only the view's edge and the demo's boxes.
+const KEEP_ALL = 0
+const KEEP_FIXED = 1
+const KEEP_BOXES = 2
+
+// Whether the stroke from (ax, ay) to (bx, by) meets the box x0..x1, y0..y1
+// (Liang–Barsky's clip, slab by slab).
+function segmentMeetsBox(ax: number, ay: number, bx: number, by: number, x0: number, y0: number, x1: number, y1: number): boolean {
+  let t0 = 0
+  let t1 = 1
+  const dx = bx - ax
+  const dy = by - ay
+  if (dx === 0) {
+    if (ax < x0 || ax > x1) return false
+  } else {
+    const ta = (x0 - ax) / dx
+    const tb = (x1 - ax) / dx
+    t0 = Math.max(t0, Math.min(ta, tb))
+    t1 = Math.min(t1, Math.max(ta, tb))
+    if (t0 > t1) return false
+  }
+  if (dy === 0) return ay >= y0 && ay <= y1
+  const ta = (y0 - ay) / dy
+  const tb = (y1 - ay) / dy
+  t0 = Math.max(t0, Math.min(ta, tb))
+  t1 = Math.min(t1, Math.max(ta, tb))
+  return t0 <= t1
+}
+
+function offShapes(
+  x: number,
+  y: number,
+  halfW: number,
+  halfH: number,
+  circles: readonly ScreenCircle[],
+  segments: readonly ScreenSegment[]
+): boolean {
+  for (const { x: cx, y: cy, r } of circles) {
     const nearX = Math.min(Math.max(cx, x - halfW), x + halfW)
     const nearY = Math.min(Math.max(cy, y - halfH), y + halfH)
     if (Math.hypot(cx - nearX, cy - nearY) < r) return false
   }
+  for (const { ax, ay, bx, by, r } of segments) {
+    if (segmentMeetsBox(ax, ay, bx, by, x - halfW - r, y - halfH - r, x + halfW + r, y + halfH + r)) return false
+  }
   return true
 }
 
-/**
- * Where an apsis label's centre goes, px from the view's centre (into
- * `out`): beside its dot on the side away from the Sun (left or right
- * unless that is nearly straight up or down), else the other side, else
- * above or below, whichever first stays inside the view and off Earth and
- * the Sun; the first if none does. Anything over the dot is cleared all
- * round.
- */
-export function labelSide(input: LabelSideInput, out: { x: number; y: number }): { x: number; y: number } {
-  const { dotX, dotY, outX, outY, halfW, halfH, obstacles } = input
-  // Clear of anything over the dot too, as Earth at its closest.
-  let clearPx = input.clearPx
-  for (const { x, y, r } of obstacles) {
-    const d = Math.hypot(x - dotX, y - dotY)
-    if (d < r) clearPx = Math.max(clearPx, d + r)
+// Whether a label centred at (x, y) stays in the view and off the demo's
+// boxes, and off the drawn shapes `keep` asks for.
+function boxFits(x: number, y: number, input: LabelSideInput, keep: number): boolean {
+  const { halfW, halfH, viewW, viewH, boxes } = input
+  const m = LABEL_EDGE_MARGIN_PX
+  if (Math.abs(x) + halfW > viewW / 2 - m) return false
+  if (Math.abs(y) + halfH > viewH / 2 - m) return false
+  for (const box of boxes) {
+    if (x + halfW > box.left - m && x - halfW < box.right + m && y + halfH > box.bottom - m && y - halfH < box.top + m) {
+      return false
+    }
   }
+  if (keep === KEEP_BOXES) return true
+  if (!offShapes(x, y, halfW, halfH, input.obstacles, input.segments)) return false
+  return keep === KEEP_FIXED || offShapes(x, y, halfW, halfH, input.passing, input.passingSegments)
+}
+
+// A label above or below its dot slid along into the view (beside it, up
+// or down), so far as it still spans the dot: `at` is its centre on that
+// axis, `half` its half size, `viewHalf` the view's.
+function slideIn(at: number, half: number, viewHalf: number): number {
+  const room = viewHalf - LABEL_EDGE_MARGIN_PX - half
+  if (room < 0) return at
+  return Math.min(at + half, Math.max(at - half, Math.min(room, Math.max(-room, at))))
+}
+
+// `clearPx`, widened to clear any of `circles` over the dot at (x, y): by
+// the circle's far edge while it covers the dot, tapering off as it moves
+// away, so a label held beside Earth eases out and in rather than jumping.
+function clearOf(circles: readonly ScreenCircle[], x: number, y: number, clearPx: number): number {
+  for (const c of circles) {
+    const d = Math.hypot(c.x - x, c.y - y)
+    clearPx = Math.max(clearPx, d < c.r ? d + c.r : 3 * c.r - d)
+  }
+  return clearPx
+}
+
+/** How many spots labelSide tries round a dot. */
+const LABEL_SPOTS = 8 * LABEL_RINGS
+
+// Spot `spot` round the dot (into `out`), at `clearPx` from it: the sides,
+// then the corners, ring by ring.
+function spotAt(spot: number, input: LabelSideInput, clearPx: number, out: { x: number; y: number }) {
+  const { dotX, dotY, outX, outY, halfW, halfH, viewW, viewH } = input
   const sideways = Math.abs(outX) >= LABEL_SIDEWAYS * Math.hypot(outX, outY)
   const sx = Math.sign(outX) || 1
   const sy = Math.sign(outY) || 1
-  // Sides in turn: (dx, dy) unit steps, primary first.
-  for (let k = 0; k < 4; k++) {
+  const clear = clearPx + Math.floor(spot / 8) * LABEL_RING_STEP_PX
+  const k = spot % 8
+  if (k < 4) {
+    // The sides: (dx, dy) unit steps, primary first.
     const flip = k % 2 === 0 ? 1 : -1
     const along = k < 2 === sideways
     const dx = along ? sx * flip : 0
     const dy = along ? 0 : sy * flip
-    const x = dotX + dx * (clearPx + halfW)
-    const y = dotY + dy * (clearPx + halfH)
-    if (k === 0) {
-      out.x = x
-      out.y = y
-    }
-    if (boxFits(x, y, input)) {
-      out.x = x
-      out.y = y
-      return out
+    out.x = dx ? dotX + dx * (clear + halfW) : slideIn(dotX, halfW, viewW / 2)
+    out.y = dy ? dotY + dy * (clear + halfH) : slideIn(dotY, halfH, viewH / 2)
+  } else {
+    // The corners, the label's nearest corner `clear` from the dot.
+    const cx = k < 6 ? sx : -sx
+    const cy = k % 2 === 0 ? sy : -sy
+    out.x = dotX + cx * (clear * Math.SQRT1_2 + halfW)
+    out.y = dotY + cy * (clear * Math.SQRT1_2 + halfH)
+  }
+}
+
+/**
+ * Where an apsis label's centre goes, px from the view's centre (into
+ * `out`, with the spot's number). Spots in turn, round the dot: beside it
+ * on the side away from the Sun (left or right unless that is nearly
+ * straight up or down), the other side, above or below (each slid into the
+ * view so far as it still spans the dot), then the four corners; then the
+ * same a ring farther out, LABEL_RINGS rings. The first spot inside the
+ * view and off the demo's boxes and every drawn shape wins; else the first
+ * off all but Earth; else the first off the boxes alone; else the first
+ * spot. The spot it took last frame (`held`) goes before the rest at each
+ * of those, so it stays while it is as clear as any. Anything over the dot
+ * is cleared all round.
+ */
+export function labelSide(input: LabelSideInput, out: LabelSpot): LabelSpot {
+  const { dotX, dotY } = input
+  // Clear of anything over the dot too, as Earth at its closest.
+  const clearPx = clearOf(input.passing, dotX, dotY, clearOf(input.obstacles, dotX, dotY, input.clearPx))
+  const held = input.held
+  for (let keep = KEEP_ALL; keep <= KEEP_BOXES; keep++) {
+    for (let n = -1; n < LABEL_SPOTS; n++) {
+      // The held spot first, then the rest in turn.
+      const spot = n < 0 ? held : n
+      if (spot === null || (n >= 0 && n === held)) continue
+      spotAt(spot, input, clearPx, out)
+      if (boxFits(out.x, out.y, input, keep)) {
+        out.spot = spot
+        return out
+      }
     }
   }
+  spotAt(0, input, clearPx, out)
+  out.spot = 0
   return out
+}
+
+/** A camera's view offset (setViewOffset, as DemoPlayer frames the demo's
+ * band), as the shift it gives everything on screen, CSS px (y up): a point
+ * on the camera's axis shows this far from the view's centre. */
+export function viewShift(
+  view: { enabled: boolean; offsetX: number; offsetY: number } | null | undefined,
+  out: { x: number; y: number }
+): { x: number; y: number } {
+  out.x = view?.enabled ? -view.offsetX : 0
+  out.y = view?.enabled ? view.offsetY : 0
+  return out
+}
+
+/** A DOM rect (viewport px) as a box from the centre of the view at
+ * `view` (viewport px), into `out`; whether it overlaps the view at all. */
+export function chromeBox(
+  rect: { left: number; top: number; right: number; bottom: number },
+  view: { left: number; top: number; width: number; height: number },
+  out: ScreenBox
+): boolean {
+  const centreX = view.left + view.width / 2
+  const centreY = view.top + view.height / 2
+  out.left = rect.left - centreX
+  out.right = rect.right - centreX
+  out.top = centreY - rect.top
+  out.bottom = centreY - rect.bottom
+  return out.right > -view.width / 2 && out.left < view.width / 2 && out.top > -view.height / 2 && out.bottom < view.height / 2
 }

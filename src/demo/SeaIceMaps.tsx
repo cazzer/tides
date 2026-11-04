@@ -36,7 +36,8 @@ function PolarMap({ data, grid, ice, timestamp, dec, label }: PolarMapProps) {
 }
 
 function extentText(million: number): string {
-  return `${million.toFixed(1)} million km²`
+  // Kept whole when the caption wraps beside a phone's map.
+  return `${million.toFixed(1)} million\u00a0km²`
 }
 
 export function SeaIceMaps({ data, timestamp }: { data: SeaIceData; timestamp: number }) {
@@ -78,6 +79,10 @@ const Maps = styled.div`
   column-gap: 0.75em;
 `
 
+// On a phone (index.css's breakpoint, PHONE_VIEW_PX) each map is smaller
+// with its caption beside it, so the readout leaves the orbit room below.
+const PHONE = '@media only screen and (max-width: 600px)'
+
 const Figure = styled.figure`
   margin: 0;
   display: flex;
@@ -96,12 +101,27 @@ const Figure = styled.figure`
     color: #fff;
     font-weight: 600;
   }
+
+  ${PHONE} {
+    flex-direction: row;
+    column-gap: 0.5em;
+
+    figcaption {
+      margin-top: 0;
+      text-align: left;
+    }
+  }
 `
 
 const Disc = styled.canvas`
   display: block;
   width: min(100%, 8.5em);
   aspect-ratio: 1;
+
+  ${PHONE} {
+    flex: none;
+    width: 5.5em;
+  }
 `
 
 const Note = styled.p`

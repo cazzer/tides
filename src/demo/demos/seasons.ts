@@ -63,7 +63,8 @@ const YEAR_FROM = '2027-01-04T02:07:49Z'
 const YEAR_TO = '2028-01-04T02:07:49Z'
 const YEAR_SECONDS = 24
 const YEAR_SCALE = (Date.parse(YEAR_TO) - Date.parse(YEAR_FROM)) / 1000 / YEAR_SECONDS
-// fit: the orbit (50) and its distance labels past it, on a phone too.
+// fit: the orbit (50) and its distance labels past it, on a phone too; the
+// labels keep off the readout and caption on their own (labelSide).
 const ORBIT: DemoPose = { focus: 'sun', frame: 'stars', azimuth: 0, elevation: 45, distance: 150, fit: 72 }
 
 export const seasons: Demo = {
