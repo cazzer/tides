@@ -151,7 +151,8 @@ export function ShipView({ children }: { children: ReactNode }) {
       <TouchShipControls />
       <ShipHud />
       {/* The surface's credits, and under them the year the sea ice is
-          from (tides-6ru.2). */}
+          from (tides-6ru.2); on a phone, where the HUD's strip is under
+          them, at the view's foot (index.css .sea-ice-note--ship). */}
       <SurfaceCreditCorner>
         <SurfaceCredit stacked />
         <SeaIceNote

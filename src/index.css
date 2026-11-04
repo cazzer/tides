@@ -298,6 +298,18 @@ body {
   text-align: right;
 }
 
+@media only screen and (max-width: 600px) {
+  /* On a phone the credits fill the buttons' row (four lines) and the HUD's
+   * strip takes the row under them, so the note sits at the view's foot,
+   * below the touch sticks. */
+  .sea-ice-note.sea-ice-note--ship {
+    position: fixed;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    transform: translateX(-50%);
+  }
+}
+
 /* The top-right slot's label sits 6px off its bottom. */
 .viewports > .panel[data-area='top'] > .sea-ice-note {
   bottom: 31px;
