@@ -101,7 +101,7 @@ export function afterFrameWhenIdle(callback: () => void): () => void {
   }
 }
 
-/** The sea ice if something has loaded it, without asking for it. */
+/** The sea ice if something has loaded it, without asking for it (null if it failed). */
 export function useLoadedSeaIce(): SeaIceData | null {
   return useSyncExternalStore(subscribe, getLoaded, getLoaded)
 }
@@ -111,15 +111,21 @@ export function useLoadedSeaIce(): SeaIceData | null {
  * failed). `deferred` asks for it only after a frame and an idle moment
  * (afterFrameWhenIdle), so it never competes with the scene's first paint.
  */
-export function useSeaIce(enabled = true, deferred = false): SeaIceData | null {
+export function useSeaIce(enabled = true, { deferred = false }: { deferred?: boolean } = {}): SeaIceData | null {
   const data = useLoadedSeaIce()
-  useEffect(() => {
-    if (!enabled || pending) return
-    if (!deferred) {
-      void loadSeaIce()
-      return
-    }
-    return afterFrameWhenIdle(() => void loadSeaIce())
-  }, [enabled, deferred])
+  useEffect(() => (enabled ? askForSeaIce(deferred) : undefined), [enabled, deferred])
   return enabled ? data : null
+}
+
+/**
+ * useSeaIce's ask: the fetch at once, or after a frame and an idle moment
+ * when `deferred`; nothing once asked. Returns the cancel of a deferred ask.
+ */
+export function askForSeaIce(deferred: boolean): (() => void) | undefined {
+  if (pending) return
+  if (!deferred) {
+    void loadSeaIce()
+    return
+  }
+  return afterFrameWhenIdle(() => void loadSeaIce())
 }

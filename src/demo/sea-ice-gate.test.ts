@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { seaIceHidesClouds, seaIceNoteShown, seaIceOnGlobe, type SeaIceTour, type SeaIceView } from './sea-ice-gate'
+import { seaIceHidesClouds, seaIceMayShow, seaIceNoteShown, seaIceOnGlobe, type SeaIceTour, type SeaIceView } from './sea-ice-gate'
 
 const main: SeaIceView = { interactive: true, earthCamera: false, ship: false }
 const free: SeaIceTour = { running: false, seaIceAid: false }
@@ -22,6 +22,17 @@ describe('seaIceOnGlobe', () => {
       expect(seaIceOnGlobe({ ...main, earthCamera: true }, tour)).toBe(false)
       expect(seaIceOnGlobe({ ...main, ship: true }, tour)).toBe(false)
     }
+  })
+})
+
+describe('seaIceMayShow', () => {
+  it('keeps the shell on the main view whatever the tour, so a tour only hides it', () => {
+    expect(seaIceMayShow(main)).toBe(true)
+    for (const tour of [free, seasonsTour, otherTour]) {
+      if (seaIceOnGlobe(main, tour)) expect(seaIceMayShow(main)).toBe(true)
+    }
+    expect(seaIceMayShow({ ...main, ship: true })).toBe(false)
+    expect(seaIceMayShow({ ...main, interactive: false })).toBe(false)
   })
 })
 

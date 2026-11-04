@@ -37,7 +37,7 @@ import {
   skyDiscPositionsAt,
 } from './sky'
 import { useDemoAid, useSeaIceTour } from './demo/demo-aids'
-import { seaIceHidesClouds, seaIceOnGlobe } from './demo/sea-ice-gate'
+import { seaIceHidesClouds, seaIceMayShow, seaIceOnGlobe } from './demo/sea-ice-gate'
 import { EarthShadow } from './demo/EarthShadow'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
@@ -242,7 +242,12 @@ export default function SolarSystem({
         {/* The main view's first close zoom, compiled ahead (tides-tvr.7.4). */}
         {!earthCamera && !ship && <CloseZoomWarmup />}
         {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}
-        {seaIceOn && <SeaIceGlobe radius={EARTH_DIAMETER} />}
+        {seaIceMayShow(seaIceView) && (
+          <SeaIceGlobe
+            radius={EARTH_DIAMETER}
+            visible={seaIceOn}
+          />
+        )}
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
           <TidesSpot radius={EARTH_DIAMETER} />
         )}

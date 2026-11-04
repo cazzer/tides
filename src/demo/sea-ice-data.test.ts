@@ -32,7 +32,44 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   vi.useRealTimers()
+})
+
+// Each test gets a fresh module: what was asked for and loaded is module state.
+async function freshData() {
+  vi.resetModules()
+  return import('./sea-ice-data')
+}
+
+describe('askForSeaIce', () => {
+  it('fetches once for a deferred and an immediate caller', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }))
+    vi.stubGlobal('fetch', fetch)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const data = await freshData()
+    data.askForSeaIce(true)
+    expect(fetch).not.toHaveBeenCalled()
+    data.askForSeaIce(false)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    runFrame()
+    runIdle()
+    // The deferred ask finds it asked for already: the ice file and its mask, once each.
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(new Set(fetch.mock.calls.map((call: unknown[]) => String(call[0]))).size).toBe(2)
+  })
+
+  it('leaves the ice null when the fetch fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new Error('offline'))))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const data = await freshData()
+    data.askForSeaIce(false)
+    await expect(data.loadSeaIce()).resolves.toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+    // Asked once: a later caller doesn't fetch again.
+    data.askForSeaIce(false)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('afterFrameWhenIdle', () => {

@@ -5,7 +5,10 @@ import { SeaIceNoteLine } from './SeaIceNote'
 describe('SeaIceNoteLine', () => {
   it('names the year the ice is from', () => {
     const html = renderToStaticMarkup(<SeaIceNoteLine year={2025} />)
-    expect(html.replace(/<[^>]+>/g, '').replace(/<!-- -->/g, '')).toBe('Sea ice: 2025 data')
+    const visible = html.replace(/<span class="visually-hidden">.*?<\/span>/, '').replace(/<[^>]+>/g, '').replace(/<!-- -->/g, '')
+    expect(visible).toBe('Sea ice: 2025 data')
     expect(html).toContain('class="sea-ice-note"')
+    // Read out in full: what the year means for the date shown.
+    expect(html.replace(/<[^>]+>/g, '').replace(/<!-- -->/g, '')).toContain('2025’s sea ice for this day of the year')
   })
 })

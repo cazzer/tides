@@ -276,11 +276,12 @@ body {
 .sea-ice-note {
   position: absolute;
   left: calc(var(--dock-inset-left) + 2px);
+  /* The label's bottom (as above) plus its height and a 6px gap. */
   bottom: calc(var(--dock-clearance) + 25px);
   margin: 0;
-  font-size: 10px;
-  line-height: 12px;
-  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  line-height: 13px;
+  color: rgba(255, 255, 255, 0.78);
   text-shadow:
     0 0 2px #000,
     0 1px 3px #000;
@@ -289,10 +290,20 @@ body {
   z-index: 1;
 }
 
+/* The top-right slot's label sits 6px off its bottom. */
+.viewports > .panel[data-area='top'] > .sea-ice-note {
+  bottom: 31px;
+}
+
 @media only screen and (max-width: 600px) {
-  /* On a phone's triple layout the label sits 6px off the view's bottom. */
+  /* On a phone's triple layout the three-body view's label sits 6px off its
+   * bottom, and the bottom-left slot's on the dock clearance. */
   .viewports:not(.viewports--single) > .panel[data-area='main'] > .sea-ice-note {
     bottom: 31px;
+  }
+
+  .viewports > .panel[data-area='top'] > .sea-ice-note {
+    bottom: calc(var(--dock-clearance) + 25px);
   }
 
   /* The view menu's taller tap target. */

@@ -55,6 +55,10 @@ const PANEL_OPTIONS: { value: PanelKey; label: string }[] = [
 
 const matrix = new THREE.Matrix4()
 
+// The system view's Scene below (interactive, out of ship mode), as the sea
+// ice's gate reads it (demo/sea-ice-gate.ts).
+const SYSTEM_VIEW = { interactive: true, earthCamera: false, ship: false }
+
 /**
  * The root Canvas, its dpr following AdaptivePixelRatio (tides-nlk): read here
  * so a change re-renders only the Canvas, not App.
@@ -234,19 +238,22 @@ export default function App() {
             ref={solarSystemView}
             {...panelProps('main')}
             overlay={
-              panelProps('main').gridArea === 'main' ? (
-                <>
-                  {!demo && showPlanets && systemAids.scale && <ScaleReadout />}
-                  {!demo && <ShipButton />}
-                  {/* The close zoom tiles' credits (tides-tvr.7.2): none
-                      without tiles on screen. */}
-                  {SURFACE_TILES_ON && <SurfaceCredit />}
-                  {/* The year the globe's sea ice is from (tides-6ru.1). */}
-                  <SeaIceNote />
-                  {demo && <SeasonsReadout />}
-                  {demo && <TidesReadout />}
-                </>
-              ) : undefined
+              <>
+                {panelProps('main').gridArea === 'main' && (
+                  <>
+                    {!demo && showPlanets && systemAids.scale && <ScaleReadout />}
+                    {!demo && <ShipButton />}
+                    {/* The close zoom tiles' credits (tides-tvr.7.2): none
+                        without tiles on screen. */}
+                    {SURFACE_TILES_ON && <SurfaceCredit />}
+                    {demo && <SeasonsReadout />}
+                    {demo && <TidesReadout />}
+                  </>
+                )}
+                {/* The year the globe's sea ice is from (tides-6ru.1), in
+                    whichever slot the system view sits. */}
+                <SeaIceNote view={SYSTEM_VIEW} />
+              </>
             }
           >
             <MainCamera />

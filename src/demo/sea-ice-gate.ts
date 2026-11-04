@@ -21,14 +21,22 @@ export interface SeaIceTour {
 }
 
 /**
- * Whether the view's globe draws the date's sea ice: the main view's, out of
- * ship mode for now (tides-6ru.2). Every tour keeps its own look, so of the
- * tours only the seasons tour's aids.seaIce draws it. The other panels never
- * see the globe from outside (the Moon Phase camera sits inside its shells),
- * so they don't load or draw it.
+ * Whether the view's globe may draw the date's sea ice, tour or not: the main
+ * view's, out of ship mode for now (tides-6ru.2). The other panels never see
+ * the globe from outside (the Moon Phase camera sits inside its shells), so
+ * they don't load or draw it. The ice's shell stays mounted here, hidden
+ * while a tour has it off, so it isn't rebuilt on the way back.
+ */
+export function seaIceMayShow(view: SeaIceView): boolean {
+  return view.interactive && !view.earthCamera && !view.ship
+}
+
+/**
+ * Whether the view's globe draws the date's sea ice now. Every tour keeps
+ * its own look, so of the tours only the seasons tour's aids.seaIce draws it.
  */
 export function seaIceOnGlobe(view: SeaIceView, tour: SeaIceTour): boolean {
-  return view.interactive && !view.earthCamera && !view.ship && (!tour.running || tour.seaIceAid)
+  return seaIceMayShow(view) && (!tour.running || tour.seaIceAid)
 }
 
 /**
