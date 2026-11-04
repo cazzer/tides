@@ -11,4 +11,8 @@ describe('SeaIceNoteLine', () => {
     // Read out in full: what the year means for the date shown.
     expect(html.replace(/<[^>]+>/g, '').replace(/<!-- -->/g, '')).toContain('2025’s sea ice for this day of the year')
   })
+
+  it('takes ship mode\'s corner style there (tides-6ru.2)', () => {
+    expect(renderToStaticMarkup(<SeaIceNoteLine year={2025} ship />)).toContain('class="sea-ice-note sea-ice-note--ship"')
+  })
 })

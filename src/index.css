@@ -290,6 +290,14 @@ body {
   z-index: 1;
 }
 
+/* Ship mode: under the surface's credits, in their style (ShipView). */
+.sea-ice-note.sea-ice-note--ship {
+  position: static;
+  font-size: 10px;
+  line-height: 11px;
+  text-align: right;
+}
+
 /* The top-right slot's label sits 6px off its bottom. */
 .viewports > .panel[data-area='top'] > .sea-ice-note {
   bottom: 31px;

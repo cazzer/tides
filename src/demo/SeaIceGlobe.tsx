@@ -1,24 +1,29 @@
-// The sea ice on the globe (tides-zec.19), main view only: NSIDC's 2025 sea
-// ice (sea-ice.ts) for the sim date's day of the year, drawn as a thin shell
-// over both polar seas, in the seasons tour and, under the clouds, outside
-// the tours (tides-6ru.1; where, sea-ice-gate.ts). Mounted as a child of
-// Earth's OrbitingBody (solar-system.tsx), so it sits in the tilted, spinning
-// frame with the globe, and lit by the scene's Sun like the ground (a Lambert
-// material), so the polar night hides the ice as it hides the ground.
+// The sea ice on the globe (tides-zec.19): NSIDC's 2025 sea ice (sea-ice.ts)
+// for the sim date's day of the year, on the main view and in ship mode
+// (tides-6ru.1, tides-6ru.2; where, sea-ice-gate.ts). The ground's shader
+// draws it (renderers/seaIceGround.ts), under the clouds and their shadows,
+// at any height and on every tier, and the streamed tiles near the ground
+// (renderers/surface/tile-ice.ts), both from the sea texture's layers
+// (renderers/seaIceLayers.ts) this keeps on the date. In the seasons tour a
+// thin shell over both polar seas draws it from afar, the tour's look, lit
+// by the scene's Sun like the ground (a Lambert material), so the polar
+// night hides the ice as it hides the ground. Mounted as a child of Earth's
+// OrbitingBody (solar-system.tsx), so it sits in the tilted, spinning frame
+// with the globe.
 //
 // The day map paints the Arctic Ocean as ice all year; where the year's ice
 // is gone the layer repaints it as open water (the mask's green), elsewhere
 // it only adds ice over the sea (the mask's red: the elevation map's 0 m).
 // The grids are 25 km cells, blended between the two weekly frames either
 // side of the date (uMix), so a year played fast grows and melts smoothly.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type RefObject, useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import { SURFACE_TILES_ON } from '../surface'
 import { SEA_ICE_RENDER_ORDER } from '../renderers/earth-shells'
 import { composePatches, createEclipseShadow, type EclipseShadow, type MaterialPatch } from '../renderers/eclipseShadow'
-import { attachSeaIce, showSeaIceFrames } from '../renderers/seaIceLayers'
+import { attachSeaIce, seaIceSurface, showSeaIceFrames } from '../renderers/seaIceLayers'
 import { globeStencil } from '../renderers/surface/surface-scale'
 import { useLoadedSeaIce, useSeaIce, type SeaIceData } from './sea-ice-data'
 import { HUGHES_E, ICE_SRGB, MASK_HEIGHT, MASK_NORTH, MASK_NORTH_ROWS, MASK_PER_DEG, MASK_SOUTH, NORTH_GRID, OCEAN_SRGB, RHO_SCALE, SOUTH_GRID, seaIceDay, seaIceFrames } from './sea-ice'
@@ -164,12 +169,10 @@ function createIceMaterial(textures: IceTextures, mix: { value: number }, fade: 
 }
 
 // Module level, so the textures are written outside the hook: the weekly
-// frames either side of the sim date into A and B, only when they change.
-function showDate(t: number, data: SeaIceData, textures: IceTextures, mix: { value: number }, shown: { a: number; b: number }) {
+// frames either side of the date into A and B, only when they change.
+function showDate(frames: Frames, data: SeaIceData, textures: IceTextures, mix: { value: number }, shown: { a: number; b: number }) {
   const { ice } = data
-  const frames = seaIceFrames(seaIceDay(t), ice.stepDays, ice.north.frames.length)
   mix.value = frames.mix
-  showSeaIceFrames(ice, frames)
   if (frames.a !== shown.a) {
     shown.a = frames.a
     textures.northA.image.data = ice.north.frames[frames.a]
@@ -186,19 +189,117 @@ function showDate(t: number, data: SeaIceData, textures: IceTextures, mix: { val
   }
 }
 
-/**
- * The ice's shell, mounted wherever the globe may draw it (sea-ice-gate.ts
- * seaIceMayShow) and shown while `visible`, so that a tour hiding it keeps
- * its textures and program for the way back. The data is asked for the
- * first time it is visible, after the scene's first frame (tides-6ru.1).
- */
-export function SeaIceGlobe({ radius, visible }: { radius: number; visible: boolean }) {
-  useSeaIce(visible, { deferred: true })
-  const data = useLoadedSeaIce()
-  return data ? <SeaIceShell radius={radius} data={data} visible={visible} /> : null
+type Frames = ReturnType<typeof seaIceFrames>
+
+interface SeaIceGlobeProps {
+  radius: number
+  /** Whether the globe draws the ice now (sea-ice-gate.ts seaIceOnGlobe). */
+  visible: boolean
+  /** The seasons tour's shell: `mounted` (kept warm, seaIceShellMounts)
+   * and `on` (shown, seaIceHidesClouds: the tour's look). */
+  shell: { mounted: boolean; on: boolean }
 }
 
-function SeaIceShell({ radius, data, visible }: { radius: number; data: SeaIceData; visible: boolean }) {
+/**
+ * The date's sea ice, mounted wherever the globe may draw it (sea-ice-gate.ts
+ * seaIceMayShow): ship mode too, on every tier. The ground draws it
+ * (renderers/seaIceGround.ts) and the streamed tiles near it
+ * (renderers/surface/tile-ice.ts), from the layers this keeps on the date
+ * each frame while `visible`; in the seasons tour the shell draws it from
+ * afar as it always has, the ground taking over as the shell fades out
+ * near the ground. The data is asked for the first time it is visible,
+ * after the scene's first frame (tides-6ru.1).
+ */
+export function SeaIceGlobe({ radius, visible, shell }: SeaIceGlobeProps) {
+  useSeaIce(visible, { deferred: true })
+  const data = useLoadedSeaIce()
+  return data ? <SeaIceDriver radius={radius} data={data} visible={visible} shell={shell} /> : null
+}
+
+/** What the driver reads of the mounted shell, once it is built. */
+interface ShellHandle {
+  group: THREE.Group
+  textures: IceTextures
+  mix: { value: number }
+  fade: { value: number }
+  shown: { a: number; b: number }
+  eclipse: EclipseShadow
+  /** Its program linked and its mask uploaded. */
+  warm: boolean
+}
+
+function SeaIceDriver({ radius, data, visible, shell }: { radius: number; data: SeaIceData } & Omit<SeaIceGlobeProps, 'radius'>) {
+  const frame = useRef<THREE.Group>(null)
+  const handle = useRef<ShellHandle | null>(null)
+  // The layers the ground and the tiles read.
+  useEffect(() => attachSeaIce(data.ice, data.mask), [data])
+  useFrame(({ camera }) => {
+    if (frame.current) driveIce(frame.current, camera, radius, data, visible, shell.on ? handle.current : null, shell.mounted ? handle.current : null)
+  })
+  return (
+    <group ref={frame}>
+      {shell.mounted && (
+        <SeaIceShell
+          radius={radius}
+          data={data}
+          handleRef={handle}
+        />
+      )}
+    </group>
+  )
+}
+
+// Each frame: the date's frames to the layers while the ice shows, and in
+// the seasons tour the shell's share by the eye's height, the ground
+// drawing the ice wherever the shell isn't wholly over it. Module level, so
+// the uniforms and the groups aren't mutated in a hook.
+function driveIce(
+  frame: THREE.Object3D,
+  camera: THREE.Camera,
+  radius: number,
+  data: SeaIceData,
+  visible: boolean,
+  shown: ShellHandle | null,
+  mounted: ShellHandle | null
+) {
+  if (!visible) {
+    if (mounted) hideShell(mounted)
+    seaIceSurface.ground.value = 0
+    // Off: the ground and the streamed tiles drop the ice (tides-5oz).
+    showSeaIceFrames(data.ice, null)
+    return
+  }
+  const t = useStore.getState().timestamp ?? Date.now()
+  const frames = seaIceFrames(seaIceDay(t), data.ice.stepDays, data.ice.north.frames.length)
+  showSeaIceFrames(data.ice, frames)
+  let share = 0
+  if (shown?.warm) {
+    share = eyeFade(frame, camera, radius)
+    shown.fade.value = share
+    shown.group.visible = share > 0
+    if (shown.group.visible) {
+      showDate(frames, data, shown.textures, shown.mix, shown.shown)
+      shown.eclipse.update(t)
+    }
+  } else if (mounted) {
+    hideShell(mounted)
+  }
+  // Under the fading shell too, so the ice crossfades rather than gaps.
+  seaIceSurface.ground.value = share < 1 ? 1 : 0
+}
+
+function hideShell(shell: ShellHandle) {
+  shell.fade.value = 0
+  shell.group.visible = false
+}
+
+/**
+ * The seasons tour's shell (tides-zec.19): the ice as a thin Lambert shell
+ * over both polar seas, mounted on the main view (seaIceShellMounts) so its
+ * 7 MB mask and program are ready for the tour, shown only in it (the
+ * driver sets it each frame through `handleRef`).
+ */
+function SeaIceShell({ radius, data, handleRef }: { radius: number; data: SeaIceData; handleRef: RefObject<ShellHandle | null> }) {
   const gl = useThree((s) => s.gl)
   const camera = useThree((s) => s.camera)
   const scene = useThree((s) => s.scene)
@@ -207,7 +308,6 @@ function SeaIceShell({ radius, data, visible }: { radius: number; data: SeaIceDa
   const mix = useMemo(() => ({ value: 0 }), [])
   const fade = useMemo(() => ({ value: 1 }), [])
   const material = useMemo(() => createIceMaterial(textures, mix, fade, eclipse.material), [textures, mix, fade, eclipse])
-  const shown = useRef({ a: -1, b: -1 })
   const group = useRef<THREE.Group>(null)
   // Shown once its program is linked and its mask uploaded.
   const [warm, setWarm] = useState(false)
@@ -228,17 +328,16 @@ function SeaIceShell({ radius, data, visible }: { radius: number; data: SeaIceDa
     [material, textures]
   )
   useEffect(() => {
-    shown.current = { a: -1, b: -1 }
-  }, [textures])
-  useEffect(() => {
     if (group.current) return warmIce(gl, group.current, camera, scene, textures, () => setWarm(true))
   }, [gl, camera, scene, textures, material])
-  // The same ice on the streamed tiles while the shell shows.
-  useEffect(() => attachSeaIce(data.ice, data.mask), [data])
-
-  useFrame(({ camera }) => {
-    if (group.current) showShell(group.current, camera, radius, visible && warm, { data, textures, mix, fade, shown: shown.current, eclipse })
-  })
+  // Handed to the driver with fresh textures (their frames rewritten).
+  useEffect(() => {
+    if (!group.current) return
+    handleRef.current = { group: group.current, textures, mix, fade, shown: { a: -1, b: -1 }, eclipse, warm }
+    return () => {
+      handleRef.current = null
+    }
+  }, [handleRef, textures, mix, fade, eclipse, warm])
 
   return (
     <group
@@ -249,36 +348,6 @@ function SeaIceShell({ radius, data, visible }: { radius: number; data: SeaIceDa
       <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.south} material={material} raycast={noRaycast} />
     </group>
   )
-}
-
-interface ShellState {
-  data: SeaIceData
-  textures: IceTextures
-  mix: { value: number }
-  fade: { value: number }
-  shown: { a: number; b: number }
-  eclipse: EclipseShadow
-}
-
-// Each frame: the shell's share by the eye's height, and only while shown,
-// the textures for the date and the Moon's shadow. Module level, so the
-// uniforms and the group aren't mutated in a hook.
-function showShell(shell: THREE.Group, camera: THREE.Camera, radius: number, on: boolean, state: ShellState) {
-  if (!on) {
-    // Off: the streamed tiles drop the ice too (tides-5oz).
-    state.fade.value = 0
-    shell.visible = false
-    showSeaIceFrames(state.data.ice, null)
-    return
-  }
-  const share = eyeFade(shell, camera, radius)
-  state.fade.value = share
-  shell.visible = share > 0
-  // The date's frames even while the shell has faded out near the ground,
-  // where the tiles carry the ice (showDate hands them the frames).
-  const t = useStore.getState().timestamp ?? Date.now()
-  showDate(t, state.data, state.textures, state.mix, state.shown)
-  if (shell.visible) state.eclipse.update(t)
 }
 
 /**
@@ -312,15 +381,14 @@ function warmIce(
 }
 
 /**
- * The shell's share by the eye's height: its lift (SHELL_LIFT, ~10 km)
- * floats over the ground with parallax near it, and the eye would pass
- * through it, so it fades out from FADE_TOP_KM down to FADE_BOTTOM_KM.
- * Below, the globe's own map shows (low-tier close-zoom ice is a follow-up;
- * the streamed tiles' ice is tides-5oz).
+ * The shell's share by the eye's height (`frame` in the globe's frame): its
+ * lift (SHELL_LIFT, ~10 km) floats over the ground with parallax near it,
+ * and the eye would pass through it, so it fades out from FADE_TOP_KM down
+ * to FADE_BOTTOM_KM, over the ground's own ice (tides-6ru.2).
  */
-function eyeFade(shell: THREE.Object3D, camera: THREE.Camera, radius: number): number {
-  shell.getWorldPosition(centre)
-  shell.getWorldScale(scale)
+function eyeFade(frame: THREE.Object3D, camera: THREE.Camera, radius: number): number {
+  frame.getWorldPosition(centre)
+  frame.getWorldScale(scale)
   const worldRadius = radius * scale.x
   const heightKm = ((camera.getWorldPosition(eye).distanceTo(centre) - worldRadius) / worldRadius) * EARTH_RADIUS_KM
   return THREE.MathUtils.smoothstep(heightKm, FADE_BOTTOM_KM, FADE_TOP_KM)

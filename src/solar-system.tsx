@@ -37,7 +37,7 @@ import {
   skyDiscPositionsAt,
 } from './sky'
 import { useDemoAid, useSeaIceTour } from './demo/demo-aids'
-import { seaIceHidesClouds, seaIceMayShow, seaIceOnGlobe } from './demo/sea-ice-gate'
+import { seaIceHidesClouds, seaIceMayShow, seaIceOnGlobe, seaIceShellMounts } from './demo/sea-ice-gate'
 import { EarthShadow } from './demo/EarthShadow'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
@@ -131,8 +131,9 @@ export default function SolarSystem({
   const tides = useDemoAid('tides')
   // The globe's clouds give way to it (tides-zec.7.1).
   const moonShadowShown = useDemoAid('moonShadow') && interactive && !ship
-  // The date's sea ice (tides-6ru.1), under the clouds but in the seasons
-  // tour, whose clouds give way to it (tides-zec.19): sea-ice-gate.ts.
+  // The date's sea ice (tides-6ru.1), in ship mode too (tides-6ru.2), under
+  // the clouds but in the seasons tour, whose clouds give way to its shell
+  // (tides-zec.19): sea-ice-gate.ts.
   const seaIceTour = useSeaIceTour()
   const seaIceView = { interactive, earthCamera, ship }
   const seaIceOn = seaIceOnGlobe(seaIceView, seaIceTour)
@@ -246,6 +247,7 @@ export default function SolarSystem({
           <SeaIceGlobe
             radius={EARTH_DIAMETER}
             visible={seaIceOn}
+            shell={{ mounted: seaIceShellMounts(seaIceView), on: seaIceClearsClouds }}
           />
         )}
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (

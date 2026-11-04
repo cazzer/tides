@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { gridPoint, NORTH_GRID, sampleGrid, unpackSeaIce } from '../../demo/sea-ice'
 import { shippedSeaIceMask } from '../png-rgb-fixture'
-import { attachSeaIce, SEA_ICE_LAYER, SEA_ICE_LAYER_SIZE, seaIceSurface, showSeaIceFrames } from '../seaIceLayers'
+import { attachSeaIce, SEA_ICE_LAYER, SEA_ICE_LAYER_SIZE, SEA_ICE_TAP_GLSL, seaIceSurface, showSeaIceFrames } from '../seaIceLayers'
 import { waterSeaTexture, WATER_SEA_UNIFORM } from '../waterClimate'
 import { ICE_LINEAR, ICE_SEA, iceOnTile, OCEAN_LINEAR, tileIce, TILE_ICE_GLSL } from './tile-ice'
 import { TILE_GLINT_GLSL } from './tile-glint'
@@ -79,19 +79,23 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     expect(colour).toBeLessThan(at('totalEmissiveRadiance = uTileCityLights'))
     expect(colour).toBeLessThan(at('#include <lights_phong_fragment>'))
     expect(at(TILE_ICE_GLSL.head)).toBeLessThan(at('void main'))
-    // Switched by uniforms: on, the blend, and the tile's gate.
-    expect(TILE_ICE_GLSL.body).toContain('if (uSeaIceOn > 0.0 && uTileIce > 0.5) {')
+    // Switched by one uniform: the ice on and the tile's gate, folded.
+    expect(TILE_ICE_GLSL.body).toContain('if (uTileIce > 0.5) {')
+    expect(f).not.toContain('uSeaIceOn')
     expect(TILE_ICE_GLSL.body).toContain('specularStrength *= 1.0 - seaIceAlpha;')
-    expect(TILE_ICE_GLSL.body).toContain(`surfaceUp.y >= 0.0 ? ${SEA_ICE_LAYER.north.toFixed(6)} : ${SEA_ICE_LAYER.south.toFixed(6)}`)
-    expect(TILE_ICE_GLSL.body).toContain(`seaIceCells(surfaceUp) / ${SEA_ICE_LAYER_SIZE.toFixed(6)}`)
+    // The ground's tap and maths (seaIceLayers.ts): bounded to the grid.
+    expect(TILE_ICE_GLSL.body).toContain(SEA_ICE_TAP_GLSL('surfaceUp'))
+    expect(TILE_ICE_GLSL.body).toContain(`seaIceNorth ? ${SEA_ICE_LAYER.north.toFixed(6)} : ${SEA_ICE_LAYER.south.toFixed(6)}`)
+    expect(TILE_ICE_GLSL.body).toContain(`seaIceAt / ${SEA_ICE_LAYER_SIZE.toFixed(6)}`)
     expect(TILE_ICE_GLSL.body).toContain(`smoothstep(${ICE_SEA[0].toFixed(6)}, ${ICE_SEA[1].toFixed(6)}, seaIceTexel.b)`)
     expect(TILE_ICE_GLSL.head).toContain('vec2 seaIceCells(vec3 dir) {')
     expect(TILE_ICE_GLSL.colour).toContain('if (seaIceAlpha > 0.0)')
+    // Only the alpha and the ice's share live across the water's body.
+    expect(TILE_ICE_GLSL.head).not.toContain('vec3 seaIceAlbedo')
   })
 
-  it('shares the ice\'s switch and blend with the shell', () => {
+  it('shares the ice\'s blend with the ground', () => {
     const { shader } = allFeatures()
-    expect(shader.uniforms.uSeaIceOn).toBe(seaIceSurface.on)
     expect(shader.uniforms.uSeaIceMix).toBe(seaIceSurface.mix)
     // The probe (no tile) skips the block.
     const probe = createTileComposer(fakeLink(), TILE_FEATURES).material(tileMesh().material as THREE.MeshLambertMaterial)
@@ -151,9 +155,8 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     const arctic = allFeatures({ boundingVolume: { region: deg([-150, 80, -149, 81, 0, 0]) } })
     const sahara = allFeatures({ boundingVolume: { region: deg([5, 20, 6, 21, 0, 0]) } })
     const none = allFeatures({})
-    expect(arctic.shader.uniforms.uTileIce.value).toBe(1)
-    expect(sahara.shader.uniforms.uTileIce.value).toBe(0)
-    expect(none.shader.uniforms.uTileIce.value).toBe(1)
+    // Off until a tile draws with the ice on.
+    for (const t of [arctic, sahara, none]) expect(t.shader.uniforms.uTileIce.value).toBe(0)
     // A draw of an icy tile writes the date's frames and turns the ice on;
     // the Sahara's never does.
     showSeaIceFrames(ice, { a: SEPTEMBER, b: SEPTEMBER + 1, mix: 0 })
@@ -161,8 +164,21 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     expect(seaIceSurface.on.value).toBe(0)
     draw(sahara.mesh)
     expect(seaIceSurface.on.value).toBe(0)
+    expect(sahara.shader.uniforms.uTileIce.value).toBe(0)
     draw(arctic.mesh)
     expect(seaIceSurface.on.value).toBe(1)
+    expect(arctic.shader.uniforms.uTileIce.value).toBe(1)
+    draw(none.mesh)
+    expect(none.shader.uniforms.uTileIce.value).toBe(1)
+    draw(sahara.mesh)
+    expect(sahara.shader.uniforms.uTileIce.value).toBe(0)
+    // The globe hides the ice: the next draw turns the block off.
+    showSeaIceFrames(ice, null)
+    draw(arctic.mesh)
+    expect(arctic.shader.uniforms.uTileIce.value).toBe(0)
+    showSeaIceFrames(ice, { a: SEPTEMBER, b: SEPTEMBER + 1, mix: 0 })
+    draw(arctic.mesh)
+    expect(arctic.shader.uniforms.uTileIce.value).toBe(1)
     // A chained hook keeps the one before it.
     const before = vi.fn()
     const mesh = tileMesh()
@@ -170,10 +186,11 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     createTileComposer(fakeLink(), TILE_FEATURES).prepare(mesh, {})
     draw(mesh)
     expect(before).toHaveBeenCalledOnce()
-    // The gate's revision: a stale value is re-read at the next draw.
-    sahara.shader.uniforms.uTileIce.value = 1
+    // The gate's revision: re-read at the next draw.
     seaIceSurface.revision++
     draw(sahara.mesh)
     expect(sahara.shader.uniforms.uTileIce.value).toBe(0)
+    draw(arctic.mesh)
+    expect(arctic.shader.uniforms.uTileIce.value).toBe(1)
   })
 })

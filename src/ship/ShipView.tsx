@@ -15,7 +15,9 @@ import { ShipHud } from './ShipHud'
 import { ShipTargeting } from './ShipTargeting'
 import { WellRings } from './WellRings'
 import { ShipWarmup } from './ShipWarmup'
-import { SurfaceCredit } from './SurfaceCredit'
+import { SurfaceCredit, SurfaceCreditCorner } from './SurfaceCredit'
+import { SeaIceNote } from '../demo/SeaIceNote'
+import type { SeaIceView } from '../demo/sea-ice-gate'
 import { SHIP_FAR, SHIP_FOV } from './ship-session'
 import { TouchShipControls } from './TouchShipControls'
 import { releaseFlightTextures } from '../renderers/useFlightTexture'
@@ -41,6 +43,9 @@ const FILL = {
 } as const
 
 const ANNOUNCEMENT = 'Ship mode. Press Escape to exit.'
+
+// Ship mode's Scene, as App mounts it, for the sea ice note.
+const SHIP_SEA_ICE_VIEW: SeaIceView = { interactive: false, earthCamera: false, ship: true }
 const ANNOUNCE_DELAY_MS = 100
 
 /**
@@ -145,7 +150,15 @@ export function ShipView({ children }: { children: ReactNode }) {
       <DesktopShipControls />
       <TouchShipControls />
       <ShipHud />
-      <SurfaceCredit />
+      {/* The surface's credits, and under them the year the sea ice is
+          from (tides-6ru.2). */}
+      <SurfaceCreditCorner>
+        <SurfaceCredit stacked />
+        <SeaIceNote
+          view={SHIP_SEA_ICE_VIEW}
+          ship
+        />
+      </SurfaceCreditCorner>
     </div>
   )
 }
