@@ -35,8 +35,9 @@
 // ice on (seaIceSurface.on, while the globe shows it) times the tile's gate
 // from its bounding region (regionMayHoldIce, refreshed when the gate
 // changes), set as the tile draws; off, the block is skipped and the colour
-// left exactly as it was. Across the water's body only the alpha and the
-// ice's share of its colour stay live, the colour made after it.
+// left exactly as it was. (Carrying the ice's share of its colour across the
+// water's body instead of the colour timed no faster at the Grand Canyon,
+// tides-6ru.2.)
 import {
   ICE_LINEAR,
   ICE_SEA,
@@ -62,6 +63,7 @@ uniform float uSeaIceMix;
 uniform float uTileIce;
 float seaIceAlpha = 0.0;
 float seaIceShare = 0.0;
+vec3 seaIceAlbedo = vec3(0.0);
 ${SEA_ICE_TAP_HEAD}
 `
 
@@ -74,12 +76,13 @@ if (uTileIce > 0.5) {
     float seaIceElevation = 1.0e4;
   #endif
   ${SEA_ICE_OVER_GLSL('seaIceElevation')}
+  seaIceAlbedo = ${SEA_ICE_ALBEDO_GLSL};
   specularStrength *= 1.0 - seaIceAlpha;
 }
 `
 
 const COLOUR = /* glsl */ `
-if (seaIceAlpha > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, ${SEA_ICE_ALBEDO_GLSL}, seaIceAlpha);
+if (seaIceAlpha > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, seaIceAlbedo, seaIceAlpha);
 `
 
 /** The adapter's GLSL (the test checks it). */

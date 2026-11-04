@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { gridPoint, NORTH_GRID, sampleGrid, unpackSeaIce } from '../../demo/sea-ice'
 import { shippedSeaIceMask } from '../png-rgb-fixture'
-import { attachSeaIce, SEA_ICE_LAYER, SEA_ICE_LAYER_SIZE, SEA_ICE_TAP_GLSL, seaIceSurface, showSeaIceFrames } from '../seaIceLayers'
+import { attachSeaIce, SEA_ICE_ALBEDO_GLSL, SEA_ICE_LAYER, SEA_ICE_LAYER_SIZE, SEA_ICE_TAP_GLSL, seaIceSurface, showSeaIceFrames } from '../seaIceLayers'
 import { waterSeaTexture, WATER_SEA_UNIFORM } from '../waterClimate'
 import { ICE_LINEAR, ICE_SEA, iceOnTile, OCEAN_LINEAR, tileIce, TILE_ICE_GLSL } from './tile-ice'
 import { TILE_GLINT_GLSL } from './tile-glint'
@@ -90,8 +90,8 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     expect(TILE_ICE_GLSL.body).toContain(`smoothstep(${ICE_SEA[0].toFixed(6)}, ${ICE_SEA[1].toFixed(6)}, seaIceTexel.b)`)
     expect(TILE_ICE_GLSL.head).toContain('vec2 seaIceCells(vec3 dir) {')
     expect(TILE_ICE_GLSL.colour).toContain('if (seaIceAlpha > 0.0)')
-    // Only the alpha and the ice's share live across the water's body.
-    expect(TILE_ICE_GLSL.head).not.toContain('vec3 seaIceAlbedo')
+    // The colour made with the alpha, the ground's.
+    expect(TILE_ICE_GLSL.body).toContain(`seaIceAlbedo = ${SEA_ICE_ALBEDO_GLSL};`)
   })
 
   it('shares the ice\'s blend with the ground', () => {
