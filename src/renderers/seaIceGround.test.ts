@@ -103,8 +103,13 @@ describe('the sea ice on the globe\'s ground (tides-6ru.2)', () => {
     expect(colour).toBeGreaterThan(at('waterBody(diffuseColor.rgb)'))
     expect(colour).toBeLessThan(at('#include <lights_phong_fragment>'))
     // The elevation, not the specular mask (0 over the day map's ice).
-    expect(SEA_ICE_GROUND_GLSL.body).toContain('texture(displacementMap, vMapUv).r')
+    expect(SEA_ICE_GROUND_GLSL.body).toContain('textureLod(displacementMap, vMapUv, seaIceDemLod).r')
     expect(SEA_ICE_GROUND_GLSL.body).not.toContain('specularMap')
+    // Its level by the north-south slope, taken before the branch on the place.
+    const body = SEA_ICE_GROUND_GLSL.body
+    expect(body.indexOf('dFdx(vMapUv.y)')).toBeGreaterThan(-1)
+    expect(body.indexOf('dFdx(vMapUv.y)')).toBeLessThan(body.indexOf('if (abs(seaIceUp.y) > 0.5)'))
+    expect(body).not.toContain('dFdx(vMapUv.x)')
     // Off the uniforms: one program, the ice skipped where off.
     expect(SEA_ICE_GROUND_GLSL.body).toContain('if (uSeaIceOn * uSeaIceGround > 0.0)')
     // One varying of its own, set from the undisplaced position.

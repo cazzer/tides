@@ -57,14 +57,20 @@ float seaIceOpen = 0.0;
 ${SEA_ICE_TAP_HEAD}
 `
 
-// Only poleward of 30°: the grids reach no further.
+// Only poleward of 30°: the grids reach no further. The elevation's level
+// by the map's north-south slope alone: toward the poles its columns
+// converge, and the east-west slope would pick a level whose texels average
+// the coast's land into the sea, cutting the ice back by hundreds of km in
+// blocks. The derivative before the branch on the place.
 const BODY = /* glsl */ `
 #if defined(USE_MAP) && defined(GROUND_RELIEF)
 if (uSeaIceOn * uSeaIceGround > 0.0) {
+  float seaIceDemV = float(textureSize(displacementMap, 0).y) * max(abs(dFdx(vMapUv.y)), abs(dFdy(vMapUv.y)));
+  float seaIceDemLod = max(log2(max(seaIceDemV, 1e-6)), 0.0);
   vec3 seaIceUp = normalize(vSeaIceUp);
   if (abs(seaIceUp.y) > 0.5) {
     ${SEA_ICE_TAP_GLSL('seaIceUp')}
-    ${SEA_ICE_OVER_GLSL(`texture(displacementMap, vMapUv).r * ${DEM_METRES_PER_UNIT.toFixed(6)}`)}
+    ${SEA_ICE_OVER_GLSL(`textureLod(displacementMap, vMapUv, seaIceDemLod).r * ${DEM_METRES_PER_UNIT.toFixed(6)}`)}
     specularStrength *= 1.0 - seaIceAlpha;
     seaIceOpen = seaIceAlpha * (1.0 - seaIceShare);
   }
