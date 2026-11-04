@@ -208,7 +208,7 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(out.fragment)))).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(out.fragment))))).digest('hex')
   }
 
   // The cloud shadow's strength, a define until tides-l0z made it a uniform
@@ -239,6 +239,16 @@ uniform float uCloudUnitsPerKm;
         `#define CLOUD_CLEARANCE ${CLOUD_CLEARANCE.toFixed(6)}\n#define CLOUD_UNITS_PER_KM ${CLOUD_UNITS_PER_KM.toFixed(6)}\n`
       )
       .replace(DECK_SOFT[0], DECK_SOFT[1])
+  }
+
+  // The ground detail's two blocks for the ground's sea ice (tides-6ru.2,
+  // seaIceGround.ts), compiled only with it: taken out, so that the pins
+  // still hold the rest of the chain.
+  const SEA_ICE_BLOCK = /#ifdef SEA_ICE_GROUND\n[\s\S]*?#endif\n/g
+  function seaIceAsBefore(fragment: string) {
+    expect(fragment).not.toContain('#define SEA_ICE_GROUND')
+    expect(fragment.match(SEA_ICE_BLOCK)?.length).toBe(2)
+    return fragment.replace(SEA_ICE_BLOCK, '')
   }
 
   const SHADOW_UNIFORM = '// groundShadowStrength() for the camera drawn (faceCamera()).\nuniform float uGroundShadow;'

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { seaIceHidesClouds, seaIceMayShow, seaIceNoteShown, seaIceOnGlobe, type SeaIceTour, type SeaIceView } from './sea-ice-gate'
+import { seaIceHidesClouds, seaIceMayShow, seaIceNoteShown, seaIceOnGlobe, seaIceShellMounts, type SeaIceTour, type SeaIceView } from './sea-ice-gate'
 
 const main: SeaIceView = { interactive: true, earthCamera: false, ship: false }
 const free: SeaIceTour = { running: false, seaIceAid: false }
 const seasonsTour: SeaIceTour = { running: true, seaIceAid: true }
 const otherTour: SeaIceTour = { running: true, seaIceAid: false }
+// Ship mode's Scene, as App mounts it (not interactive).
+const ship: SeaIceView = { interactive: false, earthCamera: false, ship: true }
 
 describe('seaIceOnGlobe', () => {
   it('draws the ice on the main view outside the tours', () => {
@@ -16,12 +18,16 @@ describe('seaIceOnGlobe', () => {
     expect(seaIceOnGlobe(main, otherTour)).toBe(false)
   })
 
-  it('leaves out the other panels, the surface camera and ship mode', () => {
+  it('leaves out the other panels and the surface camera', () => {
     for (const tour of [free, seasonsTour]) {
       expect(seaIceOnGlobe({ ...main, interactive: false }, tour)).toBe(false)
       expect(seaIceOnGlobe({ ...main, earthCamera: true }, tour)).toBe(false)
-      expect(seaIceOnGlobe({ ...main, ship: true }, tour)).toBe(false)
     }
+  })
+
+  it('draws it in ship mode (tides-6ru.2)', () => {
+    expect(seaIceOnGlobe(ship, free)).toBe(true)
+    expect(seaIceOnGlobe({ ...ship, earthCamera: true }, free)).toBe(false)
   })
 })
 
@@ -31,8 +37,18 @@ describe('seaIceMayShow', () => {
     for (const tour of [free, seasonsTour, otherTour]) {
       if (seaIceOnGlobe(main, tour)) expect(seaIceMayShow(main)).toBe(true)
     }
-    expect(seaIceMayShow({ ...main, ship: true })).toBe(false)
+    expect(seaIceMayShow(ship)).toBe(true)
     expect(seaIceMayShow({ ...main, interactive: false })).toBe(false)
+  })
+})
+
+describe('seaIceShellMounts', () => {
+  it('mounts the tour\'s shell on the main view only, never in ship mode', () => {
+    expect(seaIceShellMounts(main)).toBe(true)
+    expect(seaIceShellMounts(ship)).toBe(false)
+    expect(seaIceShellMounts({ ...main, ship: true })).toBe(false)
+    expect(seaIceShellMounts({ ...main, interactive: false })).toBe(false)
+    expect(seaIceShellMounts({ ...main, earthCamera: true })).toBe(false)
   })
 })
 
@@ -44,7 +60,7 @@ describe('seaIceHidesClouds', () => {
   })
 
   it('never where the ice isn’t drawn', () => {
-    expect(seaIceHidesClouds({ ...main, ship: true }, seasonsTour)).toBe(false)
+    expect(seaIceHidesClouds({ ...main, earthCamera: true }, seasonsTour)).toBe(false)
     expect(seaIceHidesClouds({ ...main, interactive: false }, seasonsTour)).toBe(false)
   })
 })
@@ -52,7 +68,8 @@ describe('seaIceHidesClouds', () => {
 describe('seaIceNoteShown', () => {
   it('names the data’s year wherever the ice is drawn outside the tours', () => {
     expect(seaIceNoteShown(main, free)).toBe(true)
-    expect(seaIceNoteShown({ ...main, ship: true }, free)).toBe(false)
+    expect(seaIceNoteShown(ship, free)).toBe(true)
+    expect(seaIceNoteShown({ ...main, interactive: false }, free)).toBe(false)
   })
 
   it('leaves the seasons tour to its own readout', () => {

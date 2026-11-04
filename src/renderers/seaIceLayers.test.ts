@@ -5,17 +5,25 @@
 import { readFileSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
+import type * as THREE from 'three'
 import { gridLatLon, gridPoint, MASK_HEIGHT, MASK_WIDTH, maskRow, NORTH_GRID, unpackSeaIce, type SeaIceMask } from '../demo/sea-ice'
 import { shippedSeaIceMask } from './png-rgb-fixture'
 import {
   attachSeaIce,
+  ICE_LINEAR,
+  ICE_SEA_LEVEL,
+  OCEAN_LINEAR,
   regionMayHoldIce,
+  resetSeaIceUpload,
   SEA_ICE_LAYER,
   SEA_ICE_LAYER_SIZE,
+  SEA_ICE_TAP_GLSL,
+  seaIceOver,
   seaIceSurface,
   showSeaIceFrames,
   uploadSeaIceFrames,
 } from './seaIceLayers'
+import { GLINT_SEA_LEVEL } from './surface/tile-glint'
 import { waterSeaTexture } from './waterClimate'
 
 const ice = unpackSeaIce(new Uint8Array(gunzipSync(readFileSync('src/assets/sea-ice-2025.bin'))))
@@ -28,6 +36,8 @@ const texel = (layer: number, col: number, row: number) => {
   return Array.from(data.subarray(o, o + 4))
 }
 const deg = (r: number[]) => r.map((d) => (d * Math.PI) / 180)
+/** As the renderer does once it has uploaded the array (three passes the texture). */
+const uploadedByRenderer = () => (sea.onUpdate as ((t: THREE.Texture) => void) | null)?.(sea)
 
 /** Attaches, and waits for the static build (the revision's bump). */
 async function attached(mask: SeaIceMask) {
@@ -189,5 +199,61 @@ describe('the sea ice layers (tides-5oz)', () => {
     // Released: no draw turns it back on.
     uploadSeaIceFrames()
     expect(seaIceSurface.on.value).toBe(0)
+  })
+
+  it('goes up whole after a lost context, and passes the texture on to an earlier onUpdate', async () => {
+    const release = await attached(shipped)
+    showSeaIceFrames(ice, { a: 20, b: 21, mix: 0 })
+    uploadSeaIceFrames()
+    uploadedByRenderer()
+    sea.layerUpdates.clear()
+    showSeaIceFrames(ice, { a: 22, b: 23, mix: 0 })
+    uploadSeaIceFrames()
+    expect(sea.layerUpdates.size).toBe(2)
+    const version = sea.version
+    resetSeaIceUpload()
+    expect(sea.layerUpdates.size).toBe(0)
+    expect(sea.version).toBe(version + 1)
+    // Until the renderer has uploaded it again, a new week marks no layer.
+    showSeaIceFrames(ice, { a: 24, b: 25, mix: 0 })
+    uploadSeaIceFrames()
+    expect(sea.layerUpdates.size).toBe(0)
+    uploadedByRenderer()
+    showSeaIceFrames(ice, { a: 26, b: 27, mix: 0 })
+    uploadSeaIceFrames()
+    expect(sea.layerUpdates.size).toBe(2)
+    sea.layerUpdates.clear()
+    release()
+  })
+})
+
+describe('the ice over the ground, shared by the globe and the tiles (tides-6ru.2)', () => {
+  it('reads no ice off its grid: the array repeats, so the tap is bounded by each hemisphere\'s grid', () => {
+    const tap = SEA_ICE_TAP_GLSL('up')
+    expect(tap).toContain('vec4 seaIceTexel = vec4(0.0);')
+    expect(tap).toContain(`vec2(${ice.north.width.toFixed(6)}, ${ice.north.height.toFixed(6)})`)
+    expect(tap).toContain(`vec2(${ice.south.width.toFixed(6)}, ${ice.south.height.toFixed(6)})`)
+    expect(tap).toMatch(/if \(all\(greaterThanEqual\(seaIceAt, vec2\(0\.0\)\)\) && all\(lessThanEqual\(seaIceAt, seaIceSize\)\)\)/)
+    expect(tap).toContain('textureLod(uWaterSea,')
+  })
+
+  it('takes the glint\'s sea level', () => {
+    expect(ICE_SEA_LEVEL).toEqual(GLINT_SEA_LEVEL)
+  })
+
+  it('lays the ice and the repainted sea on the sea only', () => {
+    // Ice over the sea: the ice's colour, all of it.
+    const iced = seaIceOver([1, 1, 1, 0], 0, 0)
+    expect(iced.alpha).toBeCloseTo(1)
+    expect(iced.albedo.equals(ICE_LINEAR)).toBe(true)
+    // The day map's all-year ice where the year's has gone: open water.
+    const open = seaIceOver([0, 0, 1, 1], 0.5, 0)
+    expect(open.alpha).toBeCloseTo(1)
+    expect(open.albedo.equals(OCEAN_LINEAR)).toBe(true)
+    // Half the week's cover blended in.
+    expect(seaIceOver([0, 1, 1, 0], 0.5, 0).alpha).toBeCloseTo(0.5)
+    // Land a metre up, or off the grid's sea: none.
+    expect(seaIceOver([1, 1, 1, 1], 0, 1).alpha).toBe(0)
+    expect(seaIceOver([1, 1, 0, 1], 0, 0).alpha).toBe(0)
   })
 })

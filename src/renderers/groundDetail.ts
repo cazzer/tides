@@ -7,7 +7,9 @@
 // It keys off the material's own inputs after the albedo lookup: the specular
 // mask (open water, left to its own waves and glint, ./water.ts) and the
 // albedo's colour (ice, given a gentler grain). Night lights (emissive) and
-// the clouds' shadows (applied to the lit result) are untouched. A finer albedo source
+// the clouds' shadows (applied to the lit result) are untouched. The date's
+// sea ice (./seaIceGround.ts, SEA_ICE_GROUND) is ice to it, and the day
+// map's ice it repaints as open water no land. A finer albedo source
 // over part of the ground (the GIBS patch, tides-01v.7, ./gibsPatch.ts) sets
 // groundDetailFine and groundDetailFineTexel there, which fade out the
 // octaves it already resolves. Changing groundDetailTexel itself across the
@@ -157,6 +159,11 @@ vec3 groundUp = normal;
     : max(length(dFdx(eye)), length(dFdy(eye))) * length(vViewPosition)
       / max(abs(dot(eye, normal)), 0.05);
   float groundLand = 1.0 - specularStrength;
+#ifdef SEA_ICE_GROUND
+  // The day map's all-year ice repainted as the sea it is that week
+  // (./seaIceGround.ts): no land there, so flat.
+  groundLand *= 1.0 - seaIceOpen;
+#endif
 #ifdef GROUND_RELIEF
   if (groundLand > 0.0) {
 #ifdef GROUND_MESH_SLOPE
@@ -175,6 +182,10 @@ vec3 groundUp = normal;
     float chroma = max(albedo.r, max(albedo.g, albedo.b)) - min(albedo.r, min(albedo.g, albedo.b));
     float ice = smoothstep(0.3, 0.55, dot(albedo, vec3(0.2126, 0.7152, 0.0722)))
       * (1.0 - smoothstep(0.05, 0.12, chroma));
+#ifdef SEA_ICE_GROUND
+    // The date's ice over the sea, whose colour goes on after this.
+    ice = max(ice, seaIceAlpha - seaIceOpen);
+#endif
     diffuseColor.rgb *= 1.0 + groundLand * mix(GROUND_DETAIL_ALBEDO, GROUND_DETAIL_ALBEDO_ICE, ice) * detail.x;
     vec3 up = normalize(vGroundDetailPos);
     vec3 slope = (detail.yzw - dot(detail.yzw, up) * up)

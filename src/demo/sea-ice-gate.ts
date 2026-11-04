@@ -1,8 +1,9 @@
 // Where the globe draws the date's sea ice (tides-6ru.1): the one place it is
 // decided. SeaIceGlobe's mount and the globe's clouds (solar-system.tsx) and
-// the note naming the data's year (SeaIceNote.tsx) all read it; the ship's
-// view (tides-6ru.2) and the close-zoom tiles (tides-5oz) widen or follow it
-// here. Pure, so tests can run it.
+// the note naming the data's year (SeaIceNote.tsx) all read it. The ground
+// draws the ice itself (../renderers/seaIceGround.ts, tides-6ru.2), in the
+// main view and in ship mode; the floating shell only in the seasons tour,
+// whose look it keeps. Pure, so tests can run it.
 
 /** The view drawing the globe. */
 export interface SeaIceView {
@@ -22,12 +23,22 @@ export interface SeaIceTour {
 
 /**
  * Whether the view's globe may draw the date's sea ice, tour or not: the main
- * view's, out of ship mode for now (tides-6ru.2). The other panels never see
- * the globe from outside (the Moon Phase camera sits inside its shells), so
- * they don't load or draw it. The ice's shell stays mounted here, hidden
- * while a tour has it off, so it isn't rebuilt on the way back.
+ * view's and ship mode's (whose Scene isn't `interactive`, tides-6ru.2). The
+ * other panels never see the globe from outside (the Moon Phase camera sits
+ * inside its shells), so they don't load or draw it. The ice's driver
+ * (SeaIceGlobe) stays mounted here, so it isn't rebuilt on the way back from
+ * a tour that has it off.
  */
 export function seaIceMayShow(view: SeaIceView): boolean {
+  return (view.interactive || view.ship) && !view.earthCamera
+}
+
+/**
+ * Whether the seasons tour's floating shell is mounted (kept warm, shown
+ * only in the tour): the main view's alone. Ship mode never loads its 7 MB
+ * mask; the ground draws the ice there.
+ */
+export function seaIceShellMounts(view: SeaIceView): boolean {
   return view.interactive && !view.earthCamera && !view.ship
 }
 
@@ -49,8 +60,8 @@ export function seaIceHidesClouds(view: SeaIceView, tour: SeaIceTour): boolean {
 
 /**
  * Whether the note naming the data's year shows (once the ice has loaded):
- * wherever the globe draws the ice but in the seasons tour, whose readout
- * dates its own polar maps.
+ * wherever the globe draws the ice, ship mode too, but in the seasons tour,
+ * whose readout dates its own polar maps.
  */
 export function seaIceNoteShown(view: SeaIceView, tour: SeaIceTour): boolean {
   return !tour.running && seaIceOnGlobe(view, tour)

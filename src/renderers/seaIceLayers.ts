@@ -1,29 +1,33 @@
-// The seasons tour's sea ice for the streamed tiles (tides-5oz): NSIDC's
-// 2025 grids (../demo/sea-ice.ts) in two spare layers of the sea's texture
-// array (./waterClimate.ts waterSeaTexture()), which the tiles already bind
-// for the water: their program has no texture unit to spare (16 of 16). The
-// tile feature that reads them is ./surface/tile-ice.ts.
+// The date's sea ice for the ground's shaders (tides-5oz, tides-6ru.2):
+// NSIDC's 2025 grids (../demo/sea-ice.ts) in two spare layers of the sea's
+// texture array (./waterClimate.ts waterSeaTexture()), which the globe's
+// ground and the streamed tiles already bind for the water: neither program
+// has a texture unit to spare (the tiles' 16 of 16). The globe's ground
+// reads them through ./seaIceGround.ts, the tiles through
+// ./surface/tile-ice.ts, both with SEA_ICE_TAP_GLSL and seaIceOver's maths,
+// so the two draw the same ice where they meet. The layers are there on
+// every tier: the low tier's globe draws the ice too.
 //
 // Layer SEA_ICE_LAYER.north holds the north grid and .south the south's, each
 // in the layer's corner, a texel a cell (the grids' 304x448 and 316x332 fit
-// in 512²; the rest stays 0, so a read off the grid reads no ice, as
-// sampleGrid does):
+// in 512²; the rest stays 0, and the tap reads no ice off its grid: the
+// array repeats, so a read past the corner would wrap onto the grid):
 //   R  the cover on frame a, G on frame b (the weekly frames either side of
 //      the date; the shader blends them by seaIceSurface.mix), rewritten when
-//      the frames change and a tile that may hold ice draws;
+//      the frames change and a tile or the ground that may hold ice draws;
 //   B  the sea: the mask's red (the shipped elevation map's 0 m) at the cell,
 //      the most of it over the cell and its 8 neighbours, so the sea reaches
-//      a cell past every coast and the tile's own elevation (0 m) draws the
-//      coastline;
+//      a cell past every coast and the ground's own elevation (0 m) draws
+//      the coastline;
 //   A  the day map's all-year ice (the mask's green), the mean over the cell
 //      and its 8 neighbours, so the repainted open water fades in over a cell.
 // B and A don't change with the date: built once, in idle time, on the first
 // attach (attachSeaIce), with a 1° grid of where any frame holds ice or the
 // day map paints it over the sea, which gates the tiles (regionMayHoldIce):
 // a tile wholly elsewhere skips the ice's taps.
-import type * as THREE from 'three'
 import { whenIdle } from '../ship/limb-detail'
-import { gridLatLon, MASK_NORTH_ROWS, MASK_PER_DEG, maskRow, NORTH_GRID, SOUTH_GRID, type IceGrid, type PolarGrid, type SeaIce, type SeaIceMask } from '../demo/sea-ice'
+import * as THREE from 'three'
+import { gridLatLon, ICE_SRGB, MASK_NORTH_ROWS, MASK_PER_DEG, maskRow, NORTH_GRID, OCEAN_SRGB, SEA_ICE_GRID_GLSL, SOUTH_GRID, type IceGrid, type PolarGrid, type SeaIce, type SeaIceMask } from '../demo/sea-ice'
 import { waterSeaTexture } from './waterClimate'
 import { NOISE_SIZE } from './waterNoise'
 
@@ -38,16 +42,103 @@ const GATE_COLS = 360
 const GATE_ROWS = 180
 
 export interface SeaIceSurface {
-  /** 1 while the tour's ice is attached, its layers built and the date's
-   * frames written (at the first draw of a tile that may hold ice), else 0. */
+  /** 1 while the ice is attached, its layers built and the date's frames
+   * written (at the first draw of a tile or the ground that may hold ice),
+   * else 0. */
   on: THREE.IUniform<number>
   /** How far from frame a (R) to frame b (G). */
   mix: THREE.IUniform<number>
+  /** 1 while the globe's ground draws the ice (./seaIceGround.ts): outside
+   * the seasons tour, and in it under the shell as the shell fades out
+   * (../demo/SeaIceGlobe.tsx). */
+  ground: THREE.IUniform<number>
   /** Bumped when the gate changes: tiles then re-read regionMayHoldIce. */
   revision: number
 }
 
-export const seaIceSurface: SeaIceSurface = { on: { value: 0 }, mix: { value: 0 }, revision: 0 }
+export const seaIceSurface: SeaIceSurface = { on: { value: 0 }, mix: { value: 0 }, ground: { value: 0 }, revision: 0 }
+
+const f = (x: number) => x.toFixed(6)
+
+/** The grid's sea (B) over which the ice may lie: a cell past the coast. */
+export const ICE_SEA = [0.2, 0.6] as const
+
+/** |elevation| (m) over which the ground stops being the sea: the tiles'
+ * glint's GLINT_SEA_LEVEL (./surface/tile-glint.ts; a test holds them
+ * equal), not imported, so the globe's chunk doesn't take the tiles'. */
+export const ICE_SEA_LEVEL = [0.25, 0.75] as const
+
+const linear = (srgb: readonly number[]) => new THREE.Color().setRGB(srgb[0], srgb[1], srgb[2], THREE.SRGBColorSpace)
+
+/** The ice's and the repainted sea's colours, linear, as the shell's uniforms take them. */
+export const ICE_LINEAR = linear(ICE_SRGB)
+export const OCEAN_LINEAR = linear(OCEAN_SRGB)
+
+const glslColour = (c: THREE.Color) => `vec3(${f(c.r)}, ${f(c.g)}, ${f(c.b)})`
+
+/** The head SEA_ICE_TAP_GLSL needs, before main(): the grids' cells. */
+export const SEA_ICE_TAP_HEAD = SEA_ICE_GRID_GLSL('seaIceCells')
+
+/**
+ * Statements for main() that set `vec4 seaIceTexel` to the layers' texel at
+ * the unit direction `up` (a GLSL variable, the Earth's frame): the north's
+ * grid above the equator, the south's below, at level 0 (25 km cells: never
+ * minified near the ground, and the 1-cell sea and all-year ice need the
+ * cell's own value), and vec4(0) off the grid, where the repeating array
+ * would wrap onto it. Needs SEA_ICE_TAP_HEAD and uWaterSea declared.
+ */
+export function SEA_ICE_TAP_GLSL(up: string): string {
+  const size = (grid: PolarGrid) => `vec2(${f(grid.width)}, ${f(grid.height)})`
+  return /* glsl */ `
+vec4 seaIceTexel = vec4(0.0);
+{
+  bool seaIceNorth = ${up}.y >= 0.0;
+  vec2 seaIceAt = seaIceCells(${up});
+  vec2 seaIceSize = seaIceNorth ? ${size(NORTH_GRID)} : ${size(SOUTH_GRID)};
+  if (all(greaterThanEqual(seaIceAt, vec2(0.0))) && all(lessThanEqual(seaIceAt, seaIceSize))) {
+    seaIceTexel = textureLod(uWaterSea, vec3(seaIceAt / ${f(SEA_ICE_LAYER_SIZE)},
+      seaIceNorth ? ${f(SEA_ICE_LAYER.north)} : ${f(SEA_ICE_LAYER.south)}), 0.0);
+  }
+}
+`
+}
+
+/**
+ * Statements for main(), after SEA_ICE_TAP_GLSL, that set the globals
+ * `seaIceAlpha` (the ice's or the repainted sea's share of the albedo) and
+ * `seaIceShare` (the ice's share of its colour) for ground `elevation` (a
+ * GLSL float, metres) and the blend uSeaIceMix, as seaIceOver.
+ */
+export const SEA_ICE_OVER_GLSL = (elevation: string) => /* glsl */ `
+{
+  float seaIceCover = mix(seaIceTexel.r, seaIceTexel.g, uSeaIceMix);
+  float seaIceAny = max(seaIceCover, seaIceTexel.a);
+  float seaIceSea = (1.0 - smoothstep(${f(ICE_SEA_LEVEL[0])}, ${f(ICE_SEA_LEVEL[1])}, abs(${elevation})))
+    * smoothstep(${f(ICE_SEA[0])}, ${f(ICE_SEA[1])}, seaIceTexel.b);
+  seaIceAlpha = seaIceSea * seaIceAny;
+  seaIceShare = seaIceCover / max(seaIceAny, 1e-3);
+}
+`
+
+/** The albedo the ice lays over the ground (by seaIceAlpha), from seaIceShare. */
+export const SEA_ICE_ALBEDO_GLSL = `mix(${glslColour(OCEAN_LINEAR)}, ${glslColour(ICE_LINEAR)}, seaIceShare)`
+
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1)
+  return t * t * (3 - 2 * t)
+}
+
+/**
+ * The GLSL's alpha and colour (linear) for a texel of the layers (0..1
+ * channels), the blend `mix` and ground at `elevation` metres, while on.
+ */
+export function seaIceOver(texel: readonly number[], mix: number, elevation: number): { alpha: number; albedo: THREE.Color } {
+  const [r, g, b, a] = texel
+  const cover = r + (g - r) * mix
+  const sea = (1 - smoothstep(ICE_SEA_LEVEL[0], ICE_SEA_LEVEL[1], Math.abs(elevation))) * smoothstep(ICE_SEA[0], ICE_SEA[1], b)
+  const any = Math.max(cover, a)
+  return { alpha: sea * any, albedo: OCEAN_LINEAR.clone().lerp(ICE_LINEAR, cover / Math.max(any, 1e-3)) }
+}
 
 interface Attached {
   ice: SeaIce
@@ -77,11 +168,26 @@ let uploadHooked = false
 function hookUpload(texture: THREE.DataArrayTexture) {
   if (uploadHooked) return
   uploadHooked = true
-  const previous = texture.onUpdate
-  texture.onUpdate = () => {
+  // three passes the texture, which its types leave out.
+  type OnUpdate = ((texture: THREE.Texture) => void) | null
+  const previous = texture.onUpdate as OnUpdate
+  const onUpdate: OnUpdate = (t) => {
     uploaded = true
-    previous?.()
+    previous?.(t)
   }
+  texture.onUpdate = onUpdate as () => void
+}
+
+/**
+ * After the context is lost: the restored context has no storage for the
+ * array, so its next upload must be the whole of it (the layers hold every
+ * channel on the CPU), not just the changed layers.
+ */
+export function resetSeaIceUpload(): void {
+  uploaded = false
+  const texture = waterSeaTexture()
+  texture.layerUpdates.clear()
+  texture.needsUpdate = true
 }
 
 function markLayers(texture: THREE.DataArrayTexture) {

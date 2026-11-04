@@ -16,6 +16,8 @@ import { streamedPatch } from './gibsStream'
 import { nightLightsPatch, useNightFlight, type NightFlightUniforms } from './nightLights'
 import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { poleSmoothingPatch } from './poleSmoothing'
+import { resetSeaIceUpload, seaIceSurface, uploadSeaIceFrames } from './seaIceLayers'
+import { seaIceGroundPatch } from './seaIceGround'
 import { createWater, waterPatch } from './water'
 import { depthGridOf } from './waterRefraction'
 import { liveWaveGrids } from './liveWaveGrid'
@@ -122,6 +124,13 @@ export default function EarthRenderer({
     const restart = () => realCloudBlend.release()
     canvas.addEventListener('webglcontextrestored', restart)
     return () => canvas.removeEventListener('webglcontextrestored', restart)
+  }, [gl])
+  // And with no storage for the sea's texture array: the sea ice's layers
+  // go up whole again, not just the changed ones (tides-6ru.2).
+  useEffect(() => {
+    const canvas = gl.domElement
+    canvas.addEventListener('webglcontextlost', resetSeaIceUpload)
+    return () => canvas.removeEventListener('webglcontextlost', resetSeaIceUpload)
   }, [gl])
   // The Moon's shadow during solar eclipses, on the ground and the clouds.
   const eclipseShadow = useEclipseShadowState('earth')
@@ -407,6 +416,9 @@ export default function EarthRenderer({
         userData={{ warmProbes: groundWarmProbes }}
         onBeforeRender={(renderer, _scene, camera, geometry) => {
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
+          // The date's sea ice written before three binds the sea's array,
+          // while the ground draws it (seaIceGround.ts).
+          if (seaIceSurface.ground.value > 0) uploadSeaIceFrames()
           // The haze and the Sun are set per camera before anything draws
           // (cloudsFaceEachCamera, above).
           if (!cloudRef.current?.parent) return
@@ -479,6 +491,9 @@ function groundPatchOf(
     // After the shadows in the list, so its sky lands before they dim
     // directSpecular.
     waterPatch(water, haze.frame, low, waterDepth),
+    // After the water, which declares the sea's array it reads; its colour
+    // lands before the night lights'.
+    seaIceGroundPatch(water.uniforms.uWaterSea),
     gibs,
     gibsNight,
     haze.patch
