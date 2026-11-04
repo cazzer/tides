@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { gridPoint, NORTH_GRID, sampleGrid, unpackSeaIce } from '../../demo/sea-ice'
 import { shippedSeaIceMask } from '../png-rgb-fixture'
-import { attachSeaIce, SEA_ICE_ALBEDO_GLSL, SEA_ICE_LAYER, SEA_ICE_LAYER_SIZE, SEA_ICE_TAP_GLSL, seaIceSurface, showSeaIceFrames } from '../seaIceLayers'
+import { attachSeaIce, SEA_ICE_LAYER, SEA_ICE_LAYER_SIZE, SEA_ICE_OVER_GLSL, SEA_ICE_TAP_GLSL, seaIceSurface, showSeaIceFrames } from '../seaIceLayers'
 import { waterSeaTexture, WATER_SEA_UNIFORM } from '../waterClimate'
 import { ICE_LINEAR, ICE_SEA, iceOnTile, OCEAN_LINEAR, tileIce, TILE_ICE_GLSL } from './tile-ice'
 import { TILE_GLINT_GLSL } from './tile-glint'
@@ -59,10 +59,10 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     composer.prepare(mesh, {})
     expect(composer.key).toContain('+water-surface+sea-ice-surface+ground-haze-surface')
     expect(composer.features).toContain('ice')
-    expect(TILE_ICE_GLSL.head + TILE_ICE_GLSL.body + TILE_ICE_GLSL.colour).not.toMatch(/#define|#if(?!def USE_BUMPMAP)/)
+    expect(TILE_ICE_GLSL.head + TILE_ICE_GLSL.body).not.toMatch(/#define|#if(?!def USE_BUMPMAP)/)
   })
 
-  it('runs after the glint\'s strength and before the water\'s body, and paints before the night\'s lights', () => {
+  it('runs after the glint\'s strength and paints before the water\'s body', () => {
     const f = allFeatures().shader.fragmentShader
     const at = (text: string) => {
       const i = f.indexOf(text)
@@ -74,10 +74,10 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     expect(at('#include <normal_fragment_maps>')).toBeLessThan(body)
     expect(body).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
     expect(body).toBeLessThan(at('float glintDeep = specularStrength'))
-    const colour = at(TILE_ICE_GLSL.colour)
-    expect(at('#include <emissivemap_fragment>')).toBeLessThan(colour)
+    const colour = at('if (seaIceAlpha > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb,')
+    expect(colour).toBeGreaterThan(body)
+    expect(colour).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
     expect(colour).toBeLessThan(at('totalEmissiveRadiance = uTileCityLights'))
-    expect(colour).toBeLessThan(at('#include <lights_phong_fragment>'))
     expect(at(TILE_ICE_GLSL.head)).toBeLessThan(at('void main'))
     // Switched by one uniform: the ice on and the tile's gate, folded.
     expect(TILE_ICE_GLSL.body).toContain('if (uTileIce > 0.5) {')
@@ -89,9 +89,10 @@ describe('the sea ice on the tiles (tides-5oz)', () => {
     expect(TILE_ICE_GLSL.body).toContain(`seaIceAt / ${SEA_ICE_LAYER_SIZE.toFixed(6)}`)
     expect(TILE_ICE_GLSL.body).toContain(`smoothstep(${ICE_SEA[0].toFixed(6)}, ${ICE_SEA[1].toFixed(6)}, seaIceTexel.b)`)
     expect(TILE_ICE_GLSL.head).toContain('vec2 seaIceCells(vec3 dir) {')
-    expect(TILE_ICE_GLSL.colour).toContain('if (seaIceAlpha > 0.0)')
-    // The colour made with the alpha, the ground's.
-    expect(TILE_ICE_GLSL.body).toContain(`seaIceAlbedo = ${SEA_ICE_ALBEDO_GLSL};`)
+    // The ground's maths and colour, but the sea the tile's elevation alone.
+    expect(TILE_ICE_GLSL.body).toContain(SEA_ICE_OVER_GLSL({ elevation: 'seaIceElevation' }))
+    expect(TILE_ICE_GLSL.body).not.toContain('max((1.0 - smoothstep')
+    expect(TILE_ICE_GLSL.head).not.toMatch(/seaIceShare|seaIceAlbedo/)
   })
 
   it('shares the ice\'s blend with the ground', () => {

@@ -255,5 +255,10 @@ describe('the ice over the ground, shared by the globe and the tiles (tides-6ru.
     // Land a metre up, or off the grid's sea: none.
     expect(seaIceOver([1, 1, 1, 1], 0, 1).alpha).toBe(0)
     expect(seaIceOver([1, 1, 0, 1], 0, 0).alpha).toBe(0)
+    // The ground's own water mask reaches the coast where the elevation,
+    // blended a texel short of it, reads land: still on the grid's sea only.
+    expect(seaIceOver([1, 1, 1, 0], 0, 3, 1).alpha).toBeCloseTo(1)
+    expect(seaIceOver([1, 1, 1, 0], 0, 3, 0.5).alpha).toBeCloseTo(0.5)
+    expect(seaIceOver([1, 1, 0, 0], 0, 3, 1).alpha).toBe(0)
   })
 })

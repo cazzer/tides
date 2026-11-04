@@ -1,6 +1,6 @@
 // The date's sea ice in the globe's ground shader (tides-6ru.2): no texture
 // unit of its own on any tier or detail, its tap placed between the
-// specular mask and what reads it, its colour before the lights, the
+// specular mask and what reads it, its colour with it, the
 // ground detail's land kept off the repainted sea, and the layers' uniforms
 // shared.
 import { describe, expect, it } from 'vitest'
@@ -77,7 +77,7 @@ describe('the sea ice on the globe\'s ground (tides-6ru.2)', () => {
     expect(ground(true, true, true).key).toContain('+water-6+sea-ice-ground+')
   })
 
-  it('taps after the specular mask, before the ground detail and the water read it; colours before the lights', () => {
+  it('taps and colours after the specular mask, before the ground detail and the water read them', () => {
     const { shader, water } = ground(false, false, true)
     const f = shader.fragmentShader
     const at = (text: string) => {
@@ -96,14 +96,20 @@ describe('the sea ice on the globe\'s ground (tides-6ru.2)', () => {
     // The ground detail: the repainted sea no land, the ice as ice.
     expect(at('groundLand *= 1.0 - seaIceOpen;')).toBeLessThan(at('if (groundLand > 0.0)'))
     expect(at('ice = max(ice, seaIceAlpha - seaIceOpen);')).toBeGreaterThan(at('float ice = '))
-    // The colour after the water's body and the emissive map, before the
-    // night's lights and the lights take diffuseColor.
-    const colour = at(SEA_ICE_GROUND_GLSL.colour.trim())
-    expect(colour).toBeGreaterThan(at('#include <emissivemap_fragment>'))
-    expect(colour).toBeGreaterThan(at('waterBody(diffuseColor.rgb)'))
-    expect(colour).toBeLessThan(at('#include <lights_phong_fragment>'))
-    // The elevation, not the specular mask (0 over the day map's ice).
+    // The colour with the tap, before the ground detail's grain and the
+    // water's body: only the alpha and the repainted sea's share live past it.
+    const colour = at('if (seaIceAlpha > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb,')
+    expect(colour).toBeGreaterThan(tap)
+    expect(colour).toBeLessThan(at('float groundLand = 1.0 - specularStrength;'))
+    expect(colour).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
+    expect(f.split('diffuseColor.rgb = mix(diffuseColor.rgb, mix(').length - 1).toBe(1)
+    expect(SEA_ICE_GROUND_GLSL.head).not.toContain('seaIceShare')
+    // The sea: the elevation's 0 m, or the specular map's water (the day
+    // map's coast), read before the water gives way to the ice.
     expect(SEA_ICE_GROUND_GLSL.body).toContain('textureLod(displacementMap, vMapUv, seaIceDemLod).r')
+    expect(SEA_ICE_GROUND_GLSL.body).toMatch(/max\(\(1\.0 - smoothstep\([^;]*\), specularStrength\)/)
+    const body0 = SEA_ICE_GROUND_GLSL.body
+    expect(body0.indexOf(', specularStrength)')).toBeLessThan(body0.indexOf('specularStrength *= 1.0 - seaIceAlpha;'))
     expect(SEA_ICE_GROUND_GLSL.body).not.toContain('specularMap')
     // Its level by the north-south slope, taken before the branch on the place.
     const body = SEA_ICE_GROUND_GLSL.body
@@ -112,9 +118,10 @@ describe('the sea ice on the globe\'s ground (tides-6ru.2)', () => {
     expect(body).not.toContain('dFdx(vMapUv.x)')
     // Off the uniforms: one program, the ice skipped where off.
     expect(SEA_ICE_GROUND_GLSL.body).toContain('if (uSeaIceOn * uSeaIceGround > 0.0)')
-    // One varying of its own, set from the undisplaced position.
-    expect(shader.vertexShader).toContain('vSeaIceUp = position;')
-    expect(shader.vertexShader.indexOf('vSeaIceUp = position;')).toBeGreaterThan(shader.vertexShader.indexOf('#include <begin_vertex>'))
+    // No varying of its own: the ground detail's undisplaced position.
+    expect(SEA_ICE_GROUND_GLSL.body).toContain('normalize(vGroundDetailPos)')
+    expect(SEA_ICE_GROUND_GLSL.head).not.toContain('varying')
+    expect(shader.vertexShader.split('varying ').length).toBe(ground(false, false, false).shader.vertexShader.split('varying ').length)
     // The layers' uniforms, the same objects.
     expect(shader.uniforms.uSeaIceOn).toBe(seaIceSurface.on)
     expect(shader.uniforms.uSeaIceGround).toBe(seaIceSurface.ground)

@@ -232,9 +232,9 @@ function SeaIceDriver({ radius, data, visible, shell }: { radius: number; data: 
   const frame = useRef<THREE.Group>(null)
   const handle = useRef<ShellHandle | null>(null)
   // The layers the ground and the tiles read.
-  useEffect(() => attachSeaIce(data.ice, data.mask), [data])
+  useEffect(() => attachGround(data), [data])
   useFrame(({ camera }) => {
-    if (frame.current) driveIce(frame.current, camera, radius, data, visible, shell.on ? handle.current : null, shell.mounted ? handle.current : null)
+    if (frame.current) driveIce(frame.current, camera, radius, data, visible, shell.on, shell.mounted ? handle.current : null)
   })
   return (
     <group ref={frame}>
@@ -249,17 +249,28 @@ function SeaIceDriver({ radius, data, visible, shell }: { radius: number; data: 
   )
 }
 
+// The layers attached for `data`; the release drops the ground's ice too.
+// Module level, so the uniforms aren't mutated in a hook.
+function attachGround(data: SeaIceData): () => void {
+  const release = attachSeaIce(data.ice, data.mask)
+  return () => {
+    release()
+    seaIceSurface.ground.value = 0
+  }
+}
+
 // Each frame: the date's frames to the layers while the ice shows, and in
-// the seasons tour the shell's share by the eye's height, the ground
-// drawing the ice wherever the shell isn't wholly over it. Module level, so
-// the uniforms and the groups aren't mutated in a hook.
+// the seasons tour (`shellOn`) the shell's share by the eye's height, the
+// ground drawing the ice wherever the shell isn't wholly over it, and not at
+// all until the shell is warm (the tour as it was, no other look first).
+// Module level, so the uniforms and the groups aren't mutated in a hook.
 function driveIce(
   frame: THREE.Object3D,
   camera: THREE.Camera,
   radius: number,
   data: SeaIceData,
   visible: boolean,
-  shown: ShellHandle | null,
+  shellOn: boolean,
   mounted: ShellHandle | null
 ) {
   if (!visible) {
@@ -272,6 +283,7 @@ function driveIce(
   const t = useStore.getState().timestamp ?? Date.now()
   const frames = seaIceFrames(seaIceDay(t), data.ice.stepDays, data.ice.north.frames.length)
   showSeaIceFrames(data.ice, frames)
+  const shown = shellOn ? mounted : null
   let share = 0
   if (shown?.warm) {
     share = eyeFade(frame, camera, radius)
@@ -285,7 +297,7 @@ function driveIce(
     hideShell(mounted)
   }
   // Under the fading shell too, so the ice crossfades rather than gaps.
-  seaIceSurface.ground.value = share < 1 ? 1 : 0
+  seaIceSurface.ground.value = shellOn ? (shown?.warm && share < 1 ? 1 : 0) : 1
 }
 
 function hideShell(shell: ShellHandle) {

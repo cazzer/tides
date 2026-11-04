@@ -103,25 +103,41 @@ vec4 seaIceTexel = vec4(0.0);
 `
 }
 
+/** Where the ground is, for SEA_ICE_OVER_GLSL: GLSL floats. */
+export interface SeaIceGround {
+  /** The ground's elevation, metres. */
+  elevation: string
+  /** The ground's own water mask (0..1, the day map's coast; 0 over its
+   * all-year ice), if it has one: the sea where either says so, so the ice
+   * reaches the coast the colour map draws where the elevation's texels,
+   * blended, stop short of it (the globe's 2-4k map, tides-6ru.2). */
+  water?: string
+  /** Also set the global `seaIceOpen`: the repainted sea's share of the albedo. */
+  open?: boolean
+}
+
 /**
- * Statements for main(), after SEA_ICE_TAP_GLSL, that set the globals
- * `seaIceAlpha` (the ice's or the repainted sea's share of the albedo) and
- * `seaIceShare` (the ice's share of its colour) for ground `elevation` (a
- * GLSL float, metres) and the blend uSeaIceMix, as seaIceOver.
+ * Statements for main(), after SEA_ICE_TAP_GLSL, that set the global
+ * `seaIceAlpha` (the ice's or the repainted sea's share of the albedo) for
+ * `ground` and the blend uSeaIceMix, and lay the ice's colour over
+ * diffuseColor by it, as seaIceOver: before the ground's detail and the
+ * water's body, so the grain lands on the ice and only the alpha (and
+ * seaIceOpen) stay live past it.
  */
-export const SEA_ICE_OVER_GLSL = (elevation: string) => /* glsl */ `
+export function SEA_ICE_OVER_GLSL({ elevation, water, open = false }: SeaIceGround): string {
+  const level = `(1.0 - smoothstep(${f(ICE_SEA_LEVEL[0])}, ${f(ICE_SEA_LEVEL[1])}, abs(${elevation})))`
+  return /* glsl */ `
 {
   float seaIceCover = mix(seaIceTexel.r, seaIceTexel.g, uSeaIceMix);
   float seaIceAny = max(seaIceCover, seaIceTexel.a);
-  float seaIceSea = (1.0 - smoothstep(${f(ICE_SEA_LEVEL[0])}, ${f(ICE_SEA_LEVEL[1])}, abs(${elevation})))
+  float seaIceSea = ${water ? `max(${level}, ${water})` : level}
     * smoothstep(${f(ICE_SEA[0])}, ${f(ICE_SEA[1])}, seaIceTexel.b);
   seaIceAlpha = seaIceSea * seaIceAny;
-  seaIceShare = seaIceCover / max(seaIceAny, 1e-3);
+  float seaIceShare = seaIceCover / max(seaIceAny, 1e-3);${open ? '\n  seaIceOpen = seaIceAlpha * (1.0 - seaIceShare);' : ''}
+  if (seaIceAlpha > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, mix(${glslColour(OCEAN_LINEAR)}, ${glslColour(ICE_LINEAR)}, seaIceShare), seaIceAlpha);
 }
 `
-
-/** The albedo the ice lays over the ground (by seaIceAlpha), from seaIceShare. */
-export const SEA_ICE_ALBEDO_GLSL = `mix(${glslColour(OCEAN_LINEAR)}, ${glslColour(ICE_LINEAR)}, seaIceShare)`
+}
 
 const smoothstep = (a: number, b: number, x: number) => {
   const t = Math.min(Math.max((x - a) / (b - a), 0), 1)
@@ -130,12 +146,13 @@ const smoothstep = (a: number, b: number, x: number) => {
 
 /**
  * The GLSL's alpha and colour (linear) for a texel of the layers (0..1
- * channels), the blend `mix` and ground at `elevation` metres, while on.
+ * channels), the blend `mix`, ground at `elevation` metres and the ground's
+ * own `water` mask (0..1; none on the tiles), while on.
  */
-export function seaIceOver(texel: readonly number[], mix: number, elevation: number): { alpha: number; albedo: THREE.Color } {
+export function seaIceOver(texel: readonly number[], mix: number, elevation: number, water = 0): { alpha: number; albedo: THREE.Color } {
   const [r, g, b, a] = texel
   const cover = r + (g - r) * mix
-  const sea = (1 - smoothstep(ICE_SEA_LEVEL[0], ICE_SEA_LEVEL[1], Math.abs(elevation))) * smoothstep(ICE_SEA[0], ICE_SEA[1], b)
+  const sea = Math.max(1 - smoothstep(ICE_SEA_LEVEL[0], ICE_SEA_LEVEL[1], Math.abs(elevation)), water) * smoothstep(ICE_SEA[0], ICE_SEA[1], b)
   const any = Math.max(cover, a)
   return { alpha: sea * any, albedo: OCEAN_LINEAR.clone().lerp(ICE_LINEAR, cover / Math.max(any, 1e-3)) }
 }

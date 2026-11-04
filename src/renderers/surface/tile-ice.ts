@@ -21,13 +21,13 @@
 // all-year ice, and the colour the ice's where the cover is, open water's
 // where only the all-year ice is (the day map's ice repainted as the sea it
 // is that week). The water's glint and body give way under it, and it is lit
-// as the ground, after the colour feature has graded the imagery and before
-// the night's lights.
+// as the ground, after the colour feature has graded the imagery.
 //
-// Placement: the block runs after three's normal_fragment_maps, so after the
-// glint has set specularStrength (at the base's specular anchor) and before
-// the water's body (just before emissivemap_fragment) reads it; the colour
-// goes on just after emissivemap_fragment, before the night's. It comes after
+// Placement: the block, colour and all, runs after three's
+// normal_fragment_maps, so after the glint has set specularStrength (at the
+// base's specular anchor) and before the water's body (just before
+// emissivemap_fragment) reads it; only the alpha stays live past it, as on
+// the ground (the colour laid there too, before its detail). It comes after
 // the glint in TILE_FEATURES so that, composed with it, it finds the array
 // already declared and declares nothing of its own.
 //
@@ -35,15 +35,12 @@
 // ice on (seaIceSurface.on, while the globe shows it) times the tile's gate
 // from its bounding region (regionMayHoldIce, refreshed when the gate
 // changes), set as the tile draws; off, the block is skipped and the colour
-// left exactly as it was. (Carrying the ice's share of its colour across the
-// water's body instead of the colour timed no faster at the Grand Canyon,
-// tides-6ru.2.)
+// left exactly as it was.
 import {
   ICE_LINEAR,
   ICE_SEA,
   OCEAN_LINEAR,
   regionMayHoldIce,
-  SEA_ICE_ALBEDO_GLSL,
   SEA_ICE_OVER_GLSL,
   SEA_ICE_TAP_GLSL,
   SEA_ICE_TAP_HEAD,
@@ -62,8 +59,6 @@ const HEAD = /* glsl */ `
 uniform float uSeaIceMix;
 uniform float uTileIce;
 float seaIceAlpha = 0.0;
-float seaIceShare = 0.0;
-vec3 seaIceAlbedo = vec3(0.0);
 ${SEA_ICE_TAP_HEAD}
 `
 
@@ -75,18 +70,13 @@ if (uTileIce > 0.5) {
   #else
     float seaIceElevation = 1.0e4;
   #endif
-  ${SEA_ICE_OVER_GLSL('seaIceElevation')}
-  seaIceAlbedo = ${SEA_ICE_ALBEDO_GLSL};
+  ${SEA_ICE_OVER_GLSL({ elevation: 'seaIceElevation' })}
   specularStrength *= 1.0 - seaIceAlpha;
 }
 `
 
-const COLOUR = /* glsl */ `
-if (seaIceAlpha > 0.0) diffuseColor.rgb = mix(diffuseColor.rgb, seaIceAlbedo, seaIceAlpha);
-`
-
 /** The adapter's GLSL (the test checks it). */
-export const TILE_ICE_GLSL = { head: HEAD, body: BODY, colour: COLOUR }
+export const TILE_ICE_GLSL = { head: HEAD, body: BODY }
 
 /**
  * The GLSL's alpha and colour (linear) for a texel of the layer (0..1
@@ -110,9 +100,8 @@ export const tileIce: TileAdapter = (link) => {
         Object.assign(shader.uniforms, uniforms)
         // Composed after the glint, the array is declared: one declaration.
         const head = shader.fragmentShader.includes(WATER_SEA_UNIFORM) ? HEAD : `${WATER_SEA_UNIFORM}\n${HEAD}`
-        let fragment = surfaceInject(shader.fragmentShader, 'fragmentHead', head)
-        fragment = injectAfterChunk(fragment, 'normal_fragment_maps', BODY, WHAT)
-        shader.fragmentShader = injectAfterChunk(fragment, 'emissivemap_fragment', COLOUR, WHAT)
+        const fragment = surfaceInject(shader.fragmentShader, 'fragmentHead', head)
+        shader.fragmentShader = injectAfterChunk(fragment, 'normal_fragment_maps', BODY, WHAT)
       },
       customProgramCacheKey: () => 'sea-ice-surface',
     },
