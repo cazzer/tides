@@ -53,7 +53,8 @@ let sea: THREE.DataArrayTexture | null = null
 
 /** The texture array's layers: the climate, the noise, and the sea ice's
  * two grids (../renderers/seaIceLayers.ts SEA_ICE_LAYER), empty until it
- * fills them. */
+ * fills them. On every tier: the globe's ground reads the ice from them
+ * as well as the streamed tiles (tides-6ru.2). */
 export const WATER_SEA_LAYERS = 4
 
 /** The texture array's declaration, as WATER_CLIMATE_GLSL makes it: a tile
