@@ -183,7 +183,7 @@ vec3 groundUp = normal;
     float ice = smoothstep(0.3, 0.55, dot(albedo, vec3(0.2126, 0.7152, 0.0722)))
       * (1.0 - smoothstep(0.05, 0.12, chroma));
 #ifdef SEA_ICE_GROUND
-    // The date's ice over the sea, whose colour goes on after this.
+    // The date's ice over the sea (its colour already on): grain as ice.
     ice = max(ice, seaIceAlpha - seaIceOpen);
 #endif
     diffuseColor.rgb *= 1.0 + groundLand * mix(GROUND_DETAIL_ALBEDO, GROUND_DETAIL_ALBEDO_ICE, ice) * detail.x;

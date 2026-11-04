@@ -7,10 +7,11 @@
 // with no seam: the same layers, tap and maths (./seaIceLayers.ts).
 //
 // No texture unit of its own: the grids are two layers of the sea's texture
-// array the water already binds (uWaterSea), and the sea is the ground's own
-// elevation map (displacementMap), which the ground detail's relief already
-// reads in the fragment stage. Not the specular map: it is 0 over the day
-// map's all-year Arctic ice, which is sea the year's ice may have left.
+// array the water already binds (uWaterSea), and the sea is the elevation
+// map's 0 m (displacementMap, which the ground detail's relief already reads
+// in the fragment stage) or the specular map's water, where the elevation
+// stops a texel short of the day map's coast; the elevation alone carries
+// the day map's all-year Arctic ice, where the specular map is 0.
 //
 // As the tiles': the alpha is the sea times the most of the cover and the
 // all-year ice, and the colour the ice's where the cover is, open water's

@@ -297,7 +297,8 @@ function driveIce(
     hideShell(mounted)
   }
   // Under the fading shell too, so the ice crossfades rather than gaps.
-  seaIceSurface.ground.value = shellOn ? (shown?.warm && share < 1 ? 1 : 0) : 1
+  // With no shell mounted to draw the tour's look, the ground draws the ice.
+  seaIceSurface.ground.value = shellOn && mounted ? (shown?.warm && share < 1 ? 1 : 0) : 1
 }
 
 function hideShell(shell: ShellHandle) {
