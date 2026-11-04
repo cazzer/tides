@@ -8,6 +8,7 @@ import { NORTH_GRID, SOUTH_GRID, extentOn, seaIceDataDate, seaIceDay, seaIceFram
 import { drawPolarMap, polarMapLayout } from './sea-ice-map'
 import type { SeaIceData } from './sea-ice-data'
 import { sunForSeasons } from './seasons'
+import { PHONE_VIEW_PX } from '../system-aids/label-style'
 
 /** The canvases' pixels across; CSS scales them to the readout's em. */
 const MAP_PX = 192
@@ -79,9 +80,9 @@ const Maps = styled.div`
   column-gap: 0.75em;
 `
 
-// On a phone (index.css's breakpoint, PHONE_VIEW_PX) each map is smaller
-// with its caption beside it, so the readout leaves the orbit room below.
-const PHONE = '@media only screen and (max-width: 600px)'
+// On a phone (index.css's breakpoint) each map is smaller with its caption
+// beside it, so the readout leaves the orbit room below.
+const PHONE = `@media only screen and (max-width: ${PHONE_VIEW_PX}px)`
 
 const Figure = styled.figure`
   margin: 0;

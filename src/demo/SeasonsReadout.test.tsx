@@ -110,8 +110,10 @@ describe('SeasonsReadoutView', () => {
     }
     const markup = renderToStaticMarkup(<SeasonsReadoutView lat={45} pinned={false} timestamp={september} seaIce={seaIce} />)
     const t = markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
-    expect(t).toMatch(/Arctic 4\.\d million\skm²/)
-    expect(t).toMatch(/Antarctic 17\.\d million\skm²/)
+    expect(t).toMatch(/Arctic 4\.\d million km²/)
+    expect(t).toMatch(/Antarctic 17\.\d million km²/)
+    // Each extent's unit kept whole where the caption wraps.
+    expect(markup.match(/million\u00a0km²/g)).toHaveLength(2)
     expect(t).toContain('White: sea ice, from satellites on 23 Sept 2025.')
     expect(markup).toContain('aria-label="Map of the Arctic’s sea ice"')
     expect(text(45, false, september)).not.toContain('Arctic')

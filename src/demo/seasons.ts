@@ -250,18 +250,50 @@ export interface LabelSideInput {
   /** The demo's boxes over the view, its caption and readouts: the label
    * must keep off them, as off the view's edge. */
   boxes: readonly ScreenBox[]
-  /** The spot the label took last frame (LabelSpot's), if it showed: kept
-   * while it stays as clear as any other, so the label doesn't hop back and
-   * forth as Earth goes by. */
+  /** The spot the label holds (HeldSpot's), if it showed: kept while it
+   * stays as clear as any other, so the label doesn't hop back and forth as
+   * Earth goes by. */
   held: number | null
 }
 
 /** Where labelSide puts a label: its centre, px from the view's centre (y
- * up), and which of its spots round the dot that is. */
+ * up), which of its spots round the dot that is, and the first spot ranked
+ * before it that is as clear, if the held spot kept it from winning. */
 export interface LabelSpot {
   x: number
   y: number
   spot: number
+  better: number | null
+}
+
+/** A label's spot from frame to frame (holdSpot): the one it holds, and how
+ * long, s, a better-ranked spot (`better`) has been as clear. */
+export interface HeldSpot {
+  spot: number | null
+  better: number | null
+  betterFor: number
+}
+
+// How long a better-ranked spot must stay as clear as the held one before
+// the label goes back to it, s. [TUNE]
+const LABEL_GIVE_BACK_S = 0.3
+
+/** After labelSide has placed a label `dt` s on from the last frame, the
+ * spot it holds next frame: the one it took, or the better-ranked spot once
+ * that has been as clear for LABEL_GIVE_BACK_S. */
+export function holdSpot(held: HeldSpot, placed: LabelSpot, dt: number): HeldSpot {
+  if (placed.better !== null && placed.better === held.better) held.betterFor += dt
+  else {
+    held.better = placed.better
+    held.betterFor = 0
+  }
+  held.spot = placed.spot
+  if (held.better !== null && held.betterFor >= LABEL_GIVE_BACK_S) {
+    held.spot = held.better
+    held.better = null
+    held.betterFor = 0
+  }
+  return held
 }
 
 // A label keeps this far inside the view's edge and off the demo's boxes. [TUNE]
@@ -389,6 +421,17 @@ function spotAt(spot: number, input: LabelSideInput, clearPx: number, out: { x: 
   }
 }
 
+/** A label centred at `at` (px from the view's centre) moved, if it must,
+ * to lie inside the view's margin, as it eases between spots while the view
+ * moves; left be in a view too small for it. */
+export function keepInView(at: { x: number; y: number }, input: LabelSideInput): { x: number; y: number } {
+  const roomX = input.viewW / 2 - LABEL_EDGE_MARGIN_PX - input.halfW
+  const roomY = input.viewH / 2 - LABEL_EDGE_MARGIN_PX - input.halfH
+  if (roomX >= 0) at.x = Math.min(roomX, Math.max(-roomX, at.x))
+  if (roomY >= 0) at.y = Math.min(roomY, Math.max(-roomY, at.y))
+  return at
+}
+
 /**
  * Where an apsis label's centre goes, px from the view's centre (into
  * `out`, with the spot's number). Spots in turn, round the dot: beside it
@@ -398,9 +441,10 @@ function spotAt(spot: number, input: LabelSideInput, clearPx: number, out: { x: 
  * same a ring farther out, LABEL_RINGS rings. The first spot inside the
  * view and off the demo's boxes and every drawn shape wins; else the first
  * off all but Earth; else the first off the boxes alone; else the first
- * spot. The spot it took last frame (`held`) goes before the rest at each
- * of those, so it stays while it is as clear as any. Anything over the dot
- * is cleared all round.
+ * spot. The spot it holds (`held`) goes before the rest at each of those,
+ * so it stays while it is as clear as any; `better` says which spot ranked
+ * before it is as clear, for holdSpot to give it back to. Anything over the
+ * dot is cleared all round.
  */
 export function labelSide(input: LabelSideInput, out: LabelSpot): LabelSpot {
   const { dotX, dotY } = input
@@ -415,13 +459,29 @@ export function labelSide(input: LabelSideInput, out: LabelSpot): LabelSpot {
       spotAt(spot, input, clearPx, out)
       if (boxFits(out.x, out.y, input, keep)) {
         out.spot = spot
+        out.better = n < 0 ? firstFit(input, clearPx, keep, spot, out) : null
         return out
       }
     }
   }
   spotAt(0, input, clearPx, out)
   out.spot = 0
+  out.better = null
   return out
+}
+
+// The first spot ranked before `before` that fits at `keep`, if any; `out`
+// is left as it was.
+function firstFit(input: LabelSideInput, clearPx: number, keep: number, before: number, out: LabelSpot): number | null {
+  const { x, y } = out
+  let found: number | null = null
+  for (let spot = 0; spot < before && found === null; spot++) {
+    spotAt(spot, input, clearPx, out)
+    if (boxFits(out.x, out.y, input, keep)) found = spot
+  }
+  out.x = x
+  out.y = y
+  return found
 }
 
 /** A camera's view offset (setViewOffset, as DemoPlayer frames the demo's

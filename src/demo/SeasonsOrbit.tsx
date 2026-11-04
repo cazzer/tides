@@ -34,6 +34,8 @@ import {
   apsisLabel,
   chromeBox,
   ghostDates,
+  holdSpot,
+  keepInView,
   labelSide,
   markerRadius,
   northAxis,
@@ -41,12 +43,19 @@ import {
   viewShift,
   wideFade,
   type LabelSideInput,
+  type HeldSpot,
   type LabelSpot,
   type ScreenBox,
   type ScreenCircle,
   type ScreenSegment,
 } from './seasons'
 
+// A label moving to a new spot eases there, closing 1 - 1/e of the way
+// every this many s (95% in about 0.18 s). [TUNE]
+const LABEL_EASE_S = 0.06
+// A frame's time step counts no more than this, s, so a stalled tab
+// doesn't make the ease jump.
+const MAX_STEP_S = 0.1
 // CSS px on screen. [TUNE]
 const AXIS_WIDTH_PX = 2.5
 const ARROW_RADIUS_PX = 5
@@ -150,7 +159,7 @@ const earthAt = new THREE.Vector3()
 const offset = new THREE.Vector3()
 const sunAt = new THREE.Vector3()
 const shift = { x: 0, y: 0 }
-const labelAt: LabelSpot = { x: 0, y: 0, spot: 0 }
+const labelAt: LabelSpot = { x: 0, y: 0, spot: 0, better: null }
 // What the labels keep off, refilled each frame from pools made once: the
 // Sun's disc, and each marker's globe (a circle) and axis and arrow
 // (segments), Earth's apart as it goes by; the demo's boxes.
@@ -164,8 +173,20 @@ const passingSegments: ScreenSegment[] = []
 const boxes: ScreenBox[] = []
 let circlesUsed = 0
 let segmentsUsed = 0
-// Each label's spot last frame, while it showed (labelSide's `held`).
-const labelHeld: (number | null)[] = SEASONS_APSIDES.map(() => null)
+// Each label's spot from frame to frame (holdSpot), and its offset from its
+// dot as drawn, px (y up), easing toward where labelSide puts it.
+const labelHeld: HeldSpot[] = SEASONS_APSIDES.map(() => ({ spot: null, better: null, betterFor: 0 }))
+const labelDrawn = SEASONS_APSIDES.map(() => ({ x: 0, y: 0, shown: false }))
+
+// Each label starts afresh: first spot first, put there outright.
+function resetLabels() {
+  for (const held of labelHeld) {
+    held.spot = null
+    held.better = null
+    held.betterFor = 0
+  }
+  for (const drawn of labelDrawn) drawn.shown = false
+}
 const sideInput: LabelSideInput = {
   dotX: 0,
   dotY: 0,
@@ -294,7 +315,9 @@ function place(
   ghostMaterials: readonly MarkerMaterials[],
   ghostAt: readonly THREE.Vector3[],
   dotAt: readonly THREE.Vector3[],
-  dotMaterial: THREE.MeshBasicMaterial
+  dotMaterial: THREE.MeshBasicMaterial,
+  labelMaterials: readonly THREE.MeshBasicMaterial[],
+  dt: number
 ) {
   const { root } = placed
   if (!root || !placed.current) return
@@ -331,7 +354,7 @@ function place(
   for (const dot of placed.dots) if (dot) dot.visible = labelsShown
   for (const label of placed.labels) if (label) label.visible = labelsShown
   if (!labelsShown) {
-    labelHeld.fill(null)
+    resetLabels()
     return
   }
   dotMaterial.opacity = DOT_OPACITY * wide
@@ -375,14 +398,33 @@ function place(
     sideInput.outY = at.dot(up)
     sideInput.halfW = bounds ? ((bounds[2] - bounds[0]) / 2) * fontPx : 7 * fontPx
     sideInput.halfH = bounds ? ((bounds[3] - bounds[1]) / 2) * fontPx : 0.6 * fontPx
-    sideInput.held = labelHeld[i]
-    labelHeld[i] = labelSide(sideInput, labelAt).spot
+    const held = labelHeld[i]
+    sideInput.held = held.spot
+    holdSpot(held, labelSide(sideInput, labelAt), dt)
+    const drawn = labelDrawn[i]
+    const k = drawn.shown ? 1 - Math.exp(-dt / LABEL_EASE_S) : 1
+    // Eased about the dot, but never off the view's edge on the way.
+    labelAt.x = sideInput.dotX + drawn.x + (labelAt.x - sideInput.dotX - drawn.x) * k
+    labelAt.y = sideInput.dotY + drawn.y + (labelAt.y - sideInput.dotY - drawn.y) * k
+    keepInView(labelAt, sideInput)
+    drawn.x = labelAt.x - sideInput.dotX
+    drawn.y = labelAt.y - sideInput.dotY
+    drawn.shown = true
     label.position
       .copy(at)
-      .addScaledVector(right, (labelAt.x - sideInput.dotX) * dotUpp)
-      .addScaledVector(up, (labelAt.y - sideInput.dotY) * dotUpp)
+      .addScaledVector(right, drawn.x * dotUpp)
+      .addScaledVector(up, drawn.y * dotUpp)
     label.quaternion.copy(camera.quaternion)
     label.scale.setScalar(fontPx * dotUpp)
+    // Drawn over everything (Earth's marker passing by), but depth-tested
+    // over the Sun's disc, so the Sun hides what of it is behind; and gone
+    // with its dot when the Sun hides that, on the orbit's far side.
+    const sunDisc = obstacles[0]
+    const nearX = Math.min(Math.max(sunDisc.x, labelAt.x - sideInput.halfW), labelAt.x + sideInput.halfW)
+    const nearY = Math.min(Math.max(sunDisc.y, labelAt.y - sideInput.halfH), labelAt.y + sideInput.halfH)
+    labelMaterials[i].depthTest = Math.hypot(sunDisc.x - nearX, sunDisc.y - nearY) < sunDisc.r
+    const dotOnSun = Math.hypot(sunDisc.x - sideInput.dotX, sunDisc.y - sideInput.dotY) < sunDisc.r - OBSTACLE_PAD_PX
+    label.visible = !(dotOnSun && at.distanceTo(eye) > eye.length() - bodies.sunRadius)
     text.fillOpacity = LABEL_OPACITY * wide
     text.outlineOpacity = LABEL_OPACITY * wide
   }
@@ -434,8 +476,11 @@ export function SeasonsOrbit({ positionAt, radius, sunRadius }: Bodies) {
       current: createMarkerMaterials(EARTH_COLORS),
       ghosts: Array.from({ length: MAX_GHOSTS }, () => createMarkerMaterials(GHOST_COLORS)),
       dot: new THREE.MeshBasicMaterial({ color: DOT_COLOR, transparent: true, toneMapped: false, depthWrite: false }),
-      // Depth-tested so a globe in front hides a label, never written.
-      label: new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+      // One each, as each is depth-tested only over the Sun (place); never
+      // written. Over Earth's marker, its black outline keeps it readable;
+      // the labels are gone before the eye is close enough for the true
+      // globe to come between.
+      labels: SEASONS_APSIDES.map(() => new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false })),
     }),
     []
   )
@@ -452,7 +497,7 @@ export function SeasonsOrbit({ positionAt, radius, sunRadius }: Bodies) {
         marker.axis.dispose()
       }
       materials.dot.dispose()
-      materials.label.dispose()
+      for (const label of materials.labels) label.dispose()
     },
     [materials]
   )
@@ -461,8 +506,26 @@ export function SeasonsOrbit({ positionAt, radius, sunRadius }: Bodies) {
 
   const viewSize = useViewSize()
   const bodies = useMemo(() => ({ positionAt, radius, sunRadius }), [positionAt, radius, sunRadius])
-  useFrame(({ camera, size }) =>
-    place(placed.current, camera, viewSize(size), bodies, north, materials.current, materials.ghosts, ghostAt, dotAt, materials.dot)
+  // A new step or stop starts the labels afresh, as does leaving the tour.
+  useEffect(() => {
+    resetLabels()
+    return resetLabels
+  }, [demoId, step])
+  useFrame(({ camera, size }, delta) =>
+    place(
+      placed.current,
+      camera,
+      viewSize(size),
+      bodies,
+      north,
+      materials.current,
+      materials.ghosts,
+      ghostAt,
+      dotAt,
+      materials.dot,
+      materials.labels,
+      Math.min(delta, MAX_STEP_S)
+    )
   )
 
   return (
@@ -511,14 +574,14 @@ export function SeasonsOrbit({ positionAt, radius, sunRadius }: Bodies) {
               ref={(text: TroikaText | null) => {
                 placed.current.texts[i] = text
               }}
-              material={materials.label}
+              material={materials.labels[i]}
               color={LABEL_COLOR}
               fontSize={1}
               outlineWidth="8%"
               outlineColor="black"
               anchorX="center"
               anchorY="middle"
-              renderOrder={AID_RENDER_ORDER}
+              renderOrder={AID_RENDER_ORDER + 2}
               raycast={noRaycast}
             >
               {apsisLabel(kind, distanceAu)}

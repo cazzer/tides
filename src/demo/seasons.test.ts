@@ -22,7 +22,11 @@ import {
   standInFade,
   chromeBox,
   viewShift,
+  holdSpot,
+  keepInView,
+  type HeldSpot,
   type LabelSideInput,
+  type LabelSpot,
   type ScreenSegment,
   wideFade,
   SOLAR_CONSTANT,
@@ -267,7 +271,7 @@ describe('the orbit aid', () => {
       held: null,
     }
     const side = (input: Partial<LabelSideInput>) => {
-      const { x, y } = labelSide({ ...base, ...input }, { x: 0, y: 0, spot: 0 })
+      const { x, y } = labelSide({ ...base, ...input }, { x: 0, y: 0, spot: 0, better: null })
       return { x, y }
     }
 
@@ -368,14 +372,39 @@ describe('the orbit aid', () => {
     })
 
     it('holds last frame’s spot while it is as clear as any', () => {
-      // Spot 1, the other side.
+      // Spot 1, the other side; spot 0, the first, is as clear.
       expect(side({ held: 1 })).toEqual({ x: 21, y: 0 })
+      expect(labelSide({ ...base, held: 1 }, { x: 0, y: 0, spot: 0, better: null })).toMatchObject({ spot: 1, better: 0 })
+      expect(labelSide({ ...base, held: 0 }, { x: 0, y: 0, spot: 0, better: null })).toMatchObject({ spot: 0, better: null })
       expect(side({ held: 1, boxes: [{ left: -60, right: 60, bottom: -20, top: 20 }] })).toEqual({ x: 179, y: 0 })
       // Earth over it, the first spot clear: the clear one.
       const earth: ScreenSegment[] = [{ ax: 21, ay: -50, bx: 21, by: 50, r: 2 }]
       expect(side({ held: 1, passingSegments: earth })).toEqual({ x: 179, y: 0 })
       // Nothing clear of Earth: still held.
       expect(side({ held: 1, passingSegments: [...earth, { ax: 179, ay: -50, bx: 179, by: 50, r: 200 }] })).toEqual({ x: 21, y: 0 })
+    })
+
+    it('gives a held spot back to a better one once that has stayed clear', () => {
+      const held: HeldSpot = { spot: 1, better: null, betterFor: 0 }
+      const at: LabelSpot = { x: 0, y: 0, spot: 0, better: null }
+      const frame = (input: Partial<LabelSideInput> = {}) => {
+        labelSide({ ...base, ...input, held: held.spot }, at)
+        holdSpot(held, at, 1 / 60)
+        return { x: at.x, y: at.y }
+      }
+      // A box over the first spot for a while: the label holds the other side.
+      for (let i = 0; i < 30; i++) expect(frame({ boxes: [{ left: 150, right: 300, bottom: -20, top: 20 }] })).toEqual({ x: 21, y: 0 })
+      // The box gone: still held for 0.3 s, the first spot clear all along,
+      // then back to it.
+      let frames = 1
+      while (frame().x !== 179 && frames < 100) frames++
+      expect(frames / 60).toBeCloseTo(0.3 + 1 / 60, 1)
+      expect(held).toMatchObject({ spot: 0, better: null })
+      // Clear only now and then, it never wins back.
+      held.spot = 1
+      for (let i = 0; i < 120; i++) {
+        expect(frame(i % 10 === 0 ? { boxes: [{ left: 150, right: 300, bottom: -20, top: 20 }] } : {})).toEqual({ x: 21, y: 0 })
+      }
     })
 
     it('finds a clear spot at a phone’s perihelion', () => {
@@ -413,7 +442,7 @@ describe('the orbit aid', () => {
           { left: -187, right: 187, bottom: -414, top: -250 },
         ],
       }
-      const at = labelSide(input, { x: 0, y: 0, spot: 0 })
+      const at = labelSide(input, { x: 0, y: 0, spot: 0, better: null })
       const x0 = at.x - input.halfW
       const x1 = at.x + input.halfW
       const y0 = at.y - input.halfH
@@ -429,6 +458,17 @@ describe('the orbit aid', () => {
           expect(gap(s.ax + (s.bx - s.ax) * t, s.ay + (s.by - s.ay) * t)).toBeGreaterThanOrEqual(s.r)
         }
       }
+    })
+  })
+
+  describe('keepInView', () => {
+    const input = { halfW: 70, halfH: 7, viewW: 390, viewH: 844 } as LabelSideInput
+    it('moves a label inside the view’s margin, and only then', () => {
+      expect(keepInView({ x: 150, y: 0 }, input)).toEqual({ x: 195 - 8 - 70, y: 0 })
+      expect(keepInView({ x: -20, y: -500 }, input)).toEqual({ x: -20, y: -(422 - 8 - 7) })
+      expect(keepInView({ x: 50, y: 10 }, input)).toEqual({ x: 50, y: 10 })
+      // A view narrower than the label: left be.
+      expect(keepInView({ x: 50, y: 10 }, { ...input, viewW: 120 })).toEqual({ x: 50, y: 10 })
     })
   })
 
