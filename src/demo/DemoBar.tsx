@@ -154,7 +154,7 @@ export function DemoBarView({
   }, [caption.body])
 
   return (
-    <Bar ref={chromeRef} aria-label={`Demo: ${demo.title}`}>
+    <Bar ref={chromeRef} aria-label={`Tour: ${demo.title}`}>
       {/* Read out on each step; the ticking clock stays out of it. */}
       <Caption id={captionId} aria-live="polite">
         <Heading>
@@ -193,8 +193,8 @@ export function DemoBarView({
         <Button
           type="button"
           onClick={onTogglePlaying}
-          aria-label={playing ? 'Pause time' : 'Play time'}
-          title={playing ? 'Pause time' : 'Play time'}
+          aria-label={playing ? 'Pause' : 'Play'}
+          title={playing ? 'Pause' : 'Play'}
         >
           {playing ? <IconPlayerPause size={20} stroke={2} /> : <IconPlayerPlay size={20} stroke={2} />}
         </Button>
@@ -214,7 +214,7 @@ export function DemoBarView({
           {!last && <IconChevronRight size={18} stroke={2} />}
         </TextButton>
         <Spacer />
-        <Button type="button" onClick={onExit} aria-label="Exit demo" title="Exit demo">
+        <Button type="button" onClick={onExit} aria-label="Exit tour" title="Exit tour">
           <IconX size={20} stroke={2} />
         </Button>
       </Buttons>

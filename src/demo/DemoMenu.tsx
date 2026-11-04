@@ -42,8 +42,8 @@ export function DemoMenu() {
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-label="Demos"
-        title="Demos"
+        aria-label="Guided tours"
+        title="Guided tours"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         data-demo-button
@@ -51,7 +51,7 @@ export function DemoMenu() {
         <IconPresentation size={20} stroke={2} />
       </Trigger>
       {open && (
-        <Menu id={menuId} aria-label="Demos">
+        <Menu id={menuId} aria-label="Guided tours">
           {DEMOS.map((demo) => (
             <li key={demo.id}>
               <Option

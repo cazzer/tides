@@ -20,7 +20,7 @@ const WIDE: Omit<DemoPose, 'focus'> = { azimuth: 20, elevation: 25, distance: 17
 export const lunarEclipse: Demo = {
   id: 'lunar-eclipse',
   title: 'Total lunar eclipse',
-  blurb: 'Watch the Moon pass through Earth’s shadow and turn copper, 3 March 2026.',
+  blurb: 'Watch the Moon pass through Earth’s shadow and turn red, 3 March 2026.',
   steps: [
     {
       date: '2026-03-03T08:30:00Z',
@@ -32,7 +32,7 @@ export const lunarEclipse: Demo = {
       aids: { earthShadow: true },
       caption: {
         title: 'Sun, Earth, Moon aligned',
-        body: 'Full Moon, almost exactly behind Earth. Earth’s shadow points at it.',
+        body: 'Full moon, almost exactly opposite the Sun. Rings mark Earth’s shadow: faint inside the outer one, dark inside the inner.',
       },
     },
     {
@@ -45,7 +45,7 @@ export const lunarEclipse: Demo = {
       camera: { focus: 'moon', azimuth: 21, elevation: 6, distance: 23 },
       caption: {
         title: 'Into the shadow',
-        body: 'The Moon’s orbit carries it into Earth’s shadow, faint then dark. Gold dots: entering and leaving the dark core.',
+        body: 'The Moon follows the dotted line into Earth’s shadow, faint then dark. Gold dots: it starts going dark, then is fully dark.',
       },
     },
     {
@@ -56,8 +56,8 @@ export const lunarEclipse: Demo = {
       camera: { focus: 'moon', azimuth: 10, elevation: 3, distance: 5 },
       aids: { earthShadow: false },
       caption: {
-        title: 'Why copper?',
-        body: 'No direct sunlight now. Only light bent through Earth’s air: every sunrise and sunset at once.',
+        title: 'Why red?',
+        body: 'No direct sunlight now, only red light bent through Earth’s air: every sunrise and sunset at once.',
       },
     },
     {
@@ -73,8 +73,8 @@ export const lunarEclipse: Demo = {
       // copper Moon read on a phone.
       skyFov: 20,
       caption: {
-        title: 'From Honolulu, 1:33 am',
-        body: 'High in the south-west. All of Earth’s night side sees it now. (Moon enlarged)',
+        title: 'Honolulu, 1:33 am local',
+        body: 'Moon high in the south-west. Everyone on Earth’s night side sees this at the same moment. (Moon drawn 8× bigger)',
       },
     },
     {
@@ -87,7 +87,7 @@ export const lunarEclipse: Demo = {
       aids: { earthShadow: true, fullMoonGhosts: true },
       caption: {
         title: 'Out of the shadow',
-        body: 'The Moon slides out the other side. Most full Moons miss it, like the two small circles.',
+        body: 'The Moon slides out. Small circles: last and next month’s full moons, which miss the shadow, as most do.',
       },
     },
   ],

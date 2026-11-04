@@ -43,8 +43,8 @@ function held(date: string) {
 
 export const tides: Demo = {
   id: 'tides',
-  title: 'The tides',
-  blurb: 'See how the Moon and the Sun stretch Earth’s seas into two bulges, and why spring, neap and king tides differ.',
+  title: 'Tides',
+  blurb: 'See how the Moon and the Sun stretch Earth’s seas into two bulges, and why some tides are much bigger than others.',
   steps: [
     {
       ...held('2026-10-10T15:50:36Z'),
@@ -54,7 +54,7 @@ export const tides: Demo = {
       aids: { tides: true },
       caption: {
         title: 'Why two bulges',
-        body: 'The Moon (top) pulls the near side hardest and the far side least. The arrows sweep the sea into two bulges.',
+        body: 'The Moon (top) pulls near water more than Earth’s middle, far water less. The purple arrows stretch the sea into two bulges.',
       },
     },
     {
@@ -62,7 +62,7 @@ export const tides: Demo = {
       aids: { tidesSun: true },
       caption: {
         title: 'Spring tide',
-        body: 'New Moon: Sun and Moon in line, so their stretches add: big ‘spring’ tides (nothing to do with springtime).',
+        body: 'New moon: Sun and Moon line up, so the Sun’s gold arrows add to the Moon’s. Big ‘spring’ tides (not the season).',
       },
     },
     {
@@ -71,7 +71,7 @@ export const tides: Demo = {
       timeScale: 3000,
       caption: {
         title: 'A day of tides',
-        body: 'Earth turns the red dot under both bulges: two highs and two lows every 24 h 50 min.',
+        body: 'Earth turns the red dot under both bulges: two highs and two lows every 24 hours 50 minutes.',
       },
     },
     {
@@ -79,7 +79,7 @@ export const tides: Demo = {
       camera: camera(90),
       caption: {
         title: 'Neap tide',
-        body: 'Quarter Moon: the Sun pulls across the Moon’s line, so the stretches partly cancel. Range under a third of spring’s.',
+        body: 'Quarter moon: Sun and Moon pull at right angles, so their bulges partly cancel. High to low: under a third of spring’s.',
       },
     },
     {
@@ -87,7 +87,7 @@ export const tides: Demo = {
       camera: camera(180),
       caption: {
         title: 'King tide',
-        body: 'Full Moon at its closest, lined up with the Sun: tidal pull 25% up. A perigean spring, or ‘king’, tide.',
+        body: 'Full moon at its closest, lined up with the Sun: the Moon’s pull is 25% above average. Extra-big ‘king’ tides.',
       },
     },
   ],

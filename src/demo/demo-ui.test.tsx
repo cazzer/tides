@@ -7,7 +7,7 @@ import { DEMOS } from './demos'
 describe('DemoMenu', () => {
   it('is a named button that opens the list', () => {
     const html = renderToStaticMarkup(<DemoMenu />)
-    expect(html).toContain('aria-label="Demos"')
+    expect(html).toContain('aria-label="Guided tours"')
     expect(html).not.toContain('aria-haspopup')
     expect(html).toContain('aria-expanded="false"')
     // Only while open: it would name a list that isn't there.
@@ -30,7 +30,7 @@ describe('DemoBarView', () => {
 
   it('shows the step caption, its place and named controls', () => {
     const html = renderToStaticMarkup(<DemoBarView {...props()} />)
-    expect(html).toContain(`aria-label="Demo: ${demo.title}"`)
+    expect(html).toContain(`aria-label="Tour: ${demo.title}"`)
     expect(html).toContain(demo.steps[0].caption.title)
     expect(html).toContain(`1 / ${demo.steps.length}`)
     expect(html).toContain('aria-live="polite"')
@@ -40,15 +40,15 @@ describe('DemoBarView', () => {
     // The count is shown, and spoken as words.
     expect(html).toContain('Step 1 of ')
     expect(html).toMatch(/<button[^>]*aria-describedby="[^"]+"[^>]*>Next/)
-    expect(html).toContain('aria-label="Exit demo"')
-    expect(html).toContain('aria-label="Play time"')
+    expect(html).toContain('aria-label="Exit tour"')
+    expect(html).toContain('aria-label="Play"')
     expect(html).toContain('Next')
   })
 
   it('offers Pause while the clock runs, and Done on the last step', () => {
     const step = demo.steps.length - 1
     const html = renderToStaticMarkup(<DemoBarView {...props({ step, playing: true })} />)
-    expect(html).toContain('aria-label="Pause time"')
+    expect(html).toContain('aria-label="Pause"')
     expect(html).toContain('Done')
     expect(html).toContain(`${demo.steps.length} / ${demo.steps.length}`)
   })

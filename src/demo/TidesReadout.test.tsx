@@ -20,15 +20,15 @@ function text(timestamp: number, spot: Spot = DEFAULT, withSun = true): string {
 describe('TidesReadoutView', () => {
   it('is a named region', () => {
     const html = renderToStaticMarkup(<TidesReadoutView {...DEFAULT} timestamp={SPRING} withSun />)
-    expect(html).toContain('aria-label="Tide-raising pull"')
+    expect(html).toContain('aria-label="Tide readout"')
   })
 
   it('reads the spring tide at the default spot', () => {
     const t = text(SPRING)
     for (const part of [
       'Tide at the red dot +49 cm',
-      'Pull Moon 0.98× · Sun 0.46× · white: both · range 77 cm',
-      'Pull × the Moon’s average. Ideal all-ocean Earth, sea drawn ×3,000,000; real coasts lag hours.',
+      'Pull: Moon 0.98× · Sun 0.46× · white arrows: both · biggest high-to-low 77 cm',
+      '1× = the Moon’s average pull. All-ocean Earth, tide drawn 3,000,000× taller; real coasts lag by hours.',
     ])
       expect(t).toContain(part)
     expect(t).not.toContain('your pin')
@@ -37,13 +37,13 @@ describe('TidesReadoutView', () => {
   it('reads the Moon’s tide alone without the Sun', () => {
     const t = text(SPRING, DEFAULT, false)
     expect(t).toContain('Tide at the red dot +33 cm')
-    expect(t).toContain('Pull Moon 0.98× · range 52 cm')
+    expect(t).toContain('Pull: Moon 0.98× · biggest high-to-low 52 cm')
     expect(t).not.toContain('Sun')
   })
 
   it('reads the neap and king tides', () => {
-    expect(text(NEAP)).toContain('Pull Moon 0.87× · Sun 0.46× · white: both · range 22 cm')
-    expect(text(KING)).toContain('Pull Moon 1.25× · Sun 0.48× · white: both · range 93 cm')
+    expect(text(NEAP)).toContain('Pull: Moon 0.87× · Sun 0.46× · white arrows: both · biggest high-to-low 22 cm')
+    expect(text(KING)).toContain('Pull: Moon 1.25× · Sun 0.48× · white arrows: both · biggest high-to-low 93 cm')
   })
 
   it('names the user’s pin, with a true minus at a low', () => {

@@ -59,25 +59,25 @@ export function TidesReadoutView({ lat, lon, pinned, timestamp, withSun }: Tides
   const pulls = withSun ? all : moonAlone(all)
   const tide = spotTide(lat, lon, timestamp, withSun)
   return (
-    <Panel ref={chromeRef} aria-label="Tide-raising pull">
+    <Panel ref={chromeRef} aria-label="Tide readout">
       <Lead>
         Tide at the red dot <Strong>{signed(tide * 100)} cm</Strong>
         {pinned && <Muted> · your pin</Muted>}
       </Lead>
       <Line>
-        Pull <Moon>Moon {times(pulls.moon)}</Moon>
+        Pull: <Moon>Moon {times(pulls.moon)}</Moon>
         {withSun && (
           <>
             {' '}
-            · <Sun>Sun {times(pulls.sun)}</Sun> · <Strong>white: both</Strong>
+            · <Sun>Sun {times(pulls.sun)}</Sun> · <Strong>white arrows: both</Strong>
           </>
         )}{' '}
-        · range <Strong>{Math.round(rangeMetres(pulls.range) * 100)} cm</Strong>
+        · biggest high-to-low <Strong>{Math.round(rangeMetres(pulls.range) * 100)} cm</Strong>
       </Line>
       <Line>
         <Muted>
-          Pull × the Moon’s average. Ideal all-ocean Earth, sea drawn ×{thousands.format(TIDE_EXAGGERATION)}; real
-          coasts lag hours.
+          1× = the Moon’s average pull. All-ocean Earth, tide drawn {thousands.format(TIDE_EXAGGERATION)}× taller; real
+          coasts lag by hours.
         </Muted>
       </Line>
     </Panel>

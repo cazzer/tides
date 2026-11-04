@@ -33,7 +33,7 @@ const SUN_SIDE = { focus: 'earth', elevation: -22, distance: 30, fit: 4.2, keep:
 export const solarEclipse: Demo = {
   id: 'solar-eclipse',
   title: 'Total solar eclipse',
-  blurb: 'Follow the Moon’s shadow across North America and stand in totality, 8 April 2024.',
+  blurb: 'Follow the Moon’s shadow across North America then watch the Sun go dark from Mexico, 8 April 2024.',
   steps: [
     {
       // The umbra's axis meets Earth at sunrise on the Pacific limb at 16:40.
@@ -46,7 +46,7 @@ export const solarEclipse: Demo = {
       aids: { moonShadow: true, totalityPath: true },
       caption: {
         title: 'The Moon’s shadow lands',
-        body: 'Seen from the Sun’s side: the Moon (above) casts this shadow. Total in the dark dot, partial inside the ring.',
+        body: 'From the Sun’s side, the Moon (above) casts this shadow. Dark dot: total eclipse. Inside the wide ring: partial.',
       },
     },
     {
@@ -59,8 +59,8 @@ export const solarEclipse: Demo = {
       skyFov: null,
       aids: { solarEclipseSky: true },
       caption: {
-        title: 'Partial eclipse from Torreón',
-        body: 'The Moon slides over the Sun; the sky dims. Both drawn larger, true to each other.',
+        title: 'Partial eclipse in Mexico',
+        body: 'The Moon slides across the Sun; the sky dims. Both are shown bigger than real, by the same amount.',
       },
     },
     {
@@ -73,7 +73,7 @@ export const solarEclipse: Demo = {
       skyFov: 70,
       caption: {
         title: 'Totality',
-        body: 'For 4 minutes the Moon just covers the Sun. Stars come out; the corona appears.',
+        body: 'For 4 minutes the Moon barely covers the Sun. Stars come out, and the corona, the Sun’s glowing outer atmosphere, appears.',
       },
     },
     {
@@ -91,7 +91,7 @@ export const solarEclipse: Demo = {
       aids: { solarEclipseSky: false },
       caption: {
         title: 'The shadow sweeps north-east',
-        body: 'The Moon drags its shadow east, outrunning Earth’s spin. The dark band shows where totality fell.',
+        body: 'The Moon pulls its shadow east, faster than Earth’s spin moves the ground. The dark band marks where totality was seen.',
       },
     },
     {
@@ -103,8 +103,8 @@ export const solarEclipse: Demo = {
       timeScale: 120,
       camera: { focus: 'earth', frame: 'earth', azimuth: -88, elevation: 55, distance: 30, fit: 4.2 },
       caption: {
-        title: 'Turning with Earth',
-        body: 'Now we turn with Earth: the ground holds still, yet the shadow still runs east. The Moon carries it.',
+        title: 'Spinning with Earth',
+        body: 'The camera now spins with Earth, so the ground stays put. The shadow still runs east: the Moon moves it.',
       },
     },
     {
@@ -123,7 +123,7 @@ export const solarEclipse: Demo = {
       aids: { moonNodes: true, moonShadow: false, totalityPath: false },
       caption: {
         title: 'Why not every month?',
-        body: 'The Moon’s orbit (lilac) tilts 5°. May’s new moon shadow (grey) passes above Earth. Eclipses need a node (gold).',
+        body: 'The Moon’s orbit (purple) is tilted, so May’s new-moon shadow (grey) misses Earth. Eclipses need new moon where the orbits cross (gold).',
       },
     },
   ],
