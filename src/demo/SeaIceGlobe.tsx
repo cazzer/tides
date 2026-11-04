@@ -1,8 +1,9 @@
-// The seasons tour's sea ice on the globe (tides-zec.19), main view only:
-// NSIDC's 2025 sea ice (sea-ice.ts) for the sim date's day of the year, drawn
-// as a thin shell over both polar seas. Mounted as a child of Earth's
-// OrbitingBody (solar-system.tsx), so it sits in the tilted, spinning frame
-// with the globe, and lit by the scene's Sun like the ground (a Lambert
+// The sea ice on the globe (tides-zec.19), main view only: NSIDC's 2025 sea
+// ice (sea-ice.ts) for the sim date's day of the year, drawn as a thin shell
+// over both polar seas, in the seasons tour and, under the clouds, outside
+// the tours (tides-6ru.1; where, sea-ice-gate.ts). Mounted as a child of
+// Earth's OrbitingBody (solar-system.tsx), so it sits in the tilted, spinning
+// frame with the globe, and lit by the scene's Sun like the ground (a Lambert
 // material), so the polar night hides the ice as it hides the ground.
 //
 // The day map paints the Arctic Ocean as ice all year; where the year's ice
@@ -14,6 +15,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useStore } from '../store'
+import { SEA_ICE_RENDER_ORDER } from '../renderers/earth-shells'
 import { useSeaIce, type SeaIceData } from './sea-ice-data'
 import { HUGHES_E, MASK_HEIGHT, MASK_NORTH, MASK_NORTH_ROWS, MASK_PER_DEG, MASK_SOUTH, NORTH_GRID, RHO_SCALE, SOUTH_GRID, seaIceDay, seaIceFrames } from './sea-ice'
 
@@ -91,7 +93,14 @@ if (iceLatDeg >= ${MASK_NORTH.bottom.toFixed(1)}) {
 } else {
   discard;
 }
-vec2 iceMask = texture2D(uIceMask, vec2(iceLon / (2.0 * ICE_PI) + 0.5, maskV)).rg;
+// The mask's u wraps at the antimeridian, where its jump would pick the
+// smallest mip, a seam to the pole (tides-6ru.1): the mip goes by the
+// smaller of its slope and that of u cut half a turn away.
+float iceU = iceLon / (2.0 * ICE_PI) + 0.5;
+float iceUCut = fract(iceU + 0.5);
+float iceDux = abs(dFdx(iceU)) < abs(dFdx(iceUCut)) ? dFdx(iceU) : dFdx(iceUCut);
+float iceDuy = abs(dFdy(iceU)) < abs(dFdy(iceUCut)) ? dFdy(iceU) : dFdy(iceUCut);
+vec2 iceMask = textureGrad(uIceMask, vec2(iceU, maskV), vec2(iceDux, dFdx(maskV)), vec2(iceDuy, dFdy(maskV))).rg;
 // Over sea: the year's ice, and open water over the day map's all-year ice.
 float iceAlpha = iceMask.r * max(cover, iceMask.g);
 if (iceAlpha < 0.004) discard;
@@ -167,7 +176,8 @@ function showDate(data: SeaIceData, textures: IceTextures, mix: { value: number 
 }
 
 export function SeaIceGlobe({ radius }: { radius: number }) {
-  const data = useSeaIce()
+  // Asked for after the scene's first frame (tides-6ru.1).
+  const data = useSeaIce(true, true)
   return data ? <SeaIceShell radius={radius} data={data} /> : null
 }
 
@@ -200,8 +210,8 @@ function SeaIceShell({ radius, data }: { radius: number; data: SeaIceData }) {
 
   return (
     <>
-      <mesh geometry={caps.north} material={material} raycast={noRaycast} />
-      <mesh geometry={caps.south} material={material} raycast={noRaycast} />
+      <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.north} material={material} raycast={noRaycast} />
+      <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.south} material={material} raycast={noRaycast} />
     </>
   )
 }

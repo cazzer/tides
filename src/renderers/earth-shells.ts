@@ -29,6 +29,15 @@ export const ATMOSPHERE_RENDER_ORDER = 1
 export const AURORA_RENDER_ORDER = 2
 
 /**
+ * The sea ice's shell (demo/SeaIceGlobe.tsx, tides-6ru.1): before every other
+ * transparent shell, the clouds (0 from afar, CLOUD_REACH_RENDER_ORDER and
+ * after within reach) first among them, so the clouds lie over the ice. Both
+ * write no depth, and three's distance sort alone would put a polar cap,
+ * whose centre is nearer the eye than the cloud shell's, over the clouds.
+ */
+export const SEA_ICE_RENDER_ORDER = -1
+
+/**
  * The cloud shell's draw order within the ship camera's reach
  * (tides-01v.8.6): after the haze, which it lays over itself where in front
  * (cloudShaders.ts), so that the fog inside a cloud covers the rest; and

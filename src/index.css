@@ -270,6 +270,37 @@ body {
   }
 }
 
+/* The year the globe's sea ice is from (src/demo/SeaIceNote.tsx), one small
+ * line bottom-left, above the view's label or the view menu, which opens
+ * upward over it. It names, never takes taps. */
+.sea-ice-note {
+  position: absolute;
+  left: calc(var(--dock-inset-left) + 2px);
+  bottom: calc(var(--dock-clearance) + 25px);
+  margin: 0;
+  font-size: 10px;
+  line-height: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  text-shadow:
+    0 0 2px #000,
+    0 1px 3px #000;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@media only screen and (max-width: 600px) {
+  /* On a phone's triple layout the label sits 6px off the view's bottom. */
+  .viewports:not(.viewports--single) > .panel[data-area='main'] > .sea-ice-note {
+    bottom: 31px;
+  }
+
+  /* The view menu's taller tap target. */
+  .viewports--single > .panel > .sea-ice-note {
+    bottom: calc(var(--dock-clearance) + 38px);
+  }
+}
+
 .scale-readout__scale {
   display: flex;
   align-items: center;

@@ -1,8 +1,10 @@
-// The seasons tour's sea ice, fetched once on first use (tides-zec.19): the
-// year of grids (sea-ice.ts) and the mask of where the globe's layer draws
-// (scripts/build-sea-ice.py). Nothing loads outside the tour. A failure
-// warns and leaves the tour without ice, never a broken scene.
-import { useEffect, useState } from 'react'
+// The sea ice, fetched once on first use (tides-zec.19): the year of grids
+// (sea-ice.ts) and the mask of where the globe's layer draws
+// (scripts/build-sea-ice.py). The globe asks for it once the scene has drawn
+// a frame and gone idle (tides-6ru.1), so its 850 KB never holds up the
+// first paint. A failure warns and leaves the globe without ice, never a
+// broken scene.
+import { useEffect, useSyncExternalStore } from 'react'
 import { gunzip } from '../earth-dem'
 import { unpackSeaIce, type SeaIce, type SeaIceMask } from './sea-ice'
 import seaIceUrl from '../assets/sea-ice-2025.bin?url'
@@ -44,31 +46,80 @@ async function loadMask(): Promise<SeaIceMask> {
 }
 
 let pending: Promise<SeaIceData | null> | null = null
+// Once loaded, for every hook at once: a view mounted later starts with the
+// ice, not a frame without it.
+let loaded: SeaIceData | null = null
+const listeners = new Set<() => void>()
 
-/** The tour's sea ice, fetched on the first call; null if it failed to load. */
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+const getLoaded = () => loaded
+
+/** The sea ice, fetched on the first call; null if it failed to load. */
 export function loadSeaIce(): Promise<SeaIceData | null> {
   pending ??= Promise.all([loadIce(), loadMask()]).then(
-    ([ice, mask]) => ({ ice, mask }),
+    ([ice, mask]) => {
+      loaded = { ice, mask }
+      listeners.forEach((listener) => listener())
+      return loaded
+    },
     (error: unknown) => {
-      console.warn('Sea ice failed to load; the seasons tour goes on without it.', error)
+      console.warn('Sea ice failed to load; the globe goes on without it.', error)
       return null
     }
   )
   return pending
 }
 
-/** The sea ice once loaded while `enabled` (null until then, or if it failed). */
-export function useSeaIce(enabled = true): SeaIceData | null {
-  const [data, setData] = useState<SeaIceData | null>(null)
-  useEffect(() => {
-    if (!enabled) return
-    let alive = true
-    loadSeaIce().then((loaded) => {
-      if (alive) setData(loaded)
-    })
-    return () => {
-      alive = false
+// How long an idle moment is waited for after the frame, at most.
+const IDLE_TIMEOUT_MS = 2000
+
+/**
+ * Runs `callback` after the next frame is drawn, in an idle moment then
+ * (or after IDLE_TIMEOUT_MS of none): a timeout where the browser has no
+ * idle callbacks (Safari). Returns the cancel.
+ */
+export function afterFrameWhenIdle(callback: () => void): () => void {
+  let cancelIdle = () => {}
+  const frame = requestAnimationFrame(() => {
+    if (typeof requestIdleCallback === 'function') {
+      const idle = requestIdleCallback(callback, { timeout: IDLE_TIMEOUT_MS })
+      cancelIdle = () => cancelIdleCallback(idle)
+    } else {
+      const timeout = setTimeout(callback, 0)
+      cancelIdle = () => clearTimeout(timeout)
     }
-  }, [enabled])
+  })
+  return () => {
+    cancelAnimationFrame(frame)
+    cancelIdle()
+  }
+}
+
+/** The sea ice if something has loaded it, without asking for it. */
+export function useLoadedSeaIce(): SeaIceData | null {
+  return useSyncExternalStore(subscribe, getLoaded, getLoaded)
+}
+
+/**
+ * The sea ice once loaded while `enabled` (null until then, or if it
+ * failed). `deferred` asks for it only after a frame and an idle moment
+ * (afterFrameWhenIdle), so it never competes with the scene's first paint.
+ */
+export function useSeaIce(enabled = true, deferred = false): SeaIceData | null {
+  const data = useLoadedSeaIce()
+  useEffect(() => {
+    if (!enabled || pending) return
+    if (!deferred) {
+      void loadSeaIce()
+      return
+    }
+    return afterFrameWhenIdle(() => void loadSeaIce())
+  }, [enabled, deferred])
   return enabled ? data : null
 }

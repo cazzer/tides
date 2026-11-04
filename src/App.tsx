@@ -42,6 +42,7 @@ import { DemoBar } from './demo/DemoBar'
 import { DemoClock } from './demo/DemoClock'
 import { DemoPlayer } from './demo/DemoPlayer'
 import { SeasonsReadout } from './demo/SeasonsReadout'
+import { SeaIceNote } from './demo/SeaIceNote'
 import { TidesReadout } from './demo/TidesReadout'
 
 const PANEL_VALUES: PanelKey[] = ['main', 'top', 'bottom']
@@ -240,6 +241,8 @@ export default function App() {
                   {/* The close zoom tiles' credits (tides-tvr.7.2): none
                       without tiles on screen. */}
                   {SURFACE_TILES_ON && <SurfaceCredit />}
+                  {/* The year the globe's sea ice is from (tides-6ru.1). */}
+                  <SeaIceNote />
                   {demo && <SeasonsReadout />}
                   {demo && <TidesReadout />}
                 </>

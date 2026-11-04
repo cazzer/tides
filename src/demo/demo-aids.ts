@@ -6,6 +6,7 @@ import { useStore } from '../store'
 import type { Demo, DemoAids } from './demo-script'
 import type { DemoRun } from './demo-session'
 import { findDemo } from './demos'
+import type { SeaIceTour } from './sea-ice-gate'
 
 /**
  * Whether `key` is on at `step`: as the latest step up to it that sets it
@@ -38,4 +39,11 @@ export function mainViewHidesMoon(s: { demo: DemoRun | null; demoTravel: { hideM
 /** Whether the running step has `key` on; re-renders only when that changes. */
 export function useDemoAid(key: keyof DemoAids): boolean {
   return useStore((s) => demoAidOn(s, key))
+}
+
+/** The tour as the sea ice's gate reads it (sea-ice-gate.ts, tides-6ru.1). */
+export function useSeaIceTour(): SeaIceTour {
+  const running = useStore((s) => s.demo !== null)
+  const seaIceAid = useDemoAid('seaIce')
+  return { running, seaIceAid }
 }

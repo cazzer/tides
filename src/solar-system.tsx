@@ -36,7 +36,8 @@ import {
   everydaySkyScale,
   skyDiscPositionsAt,
 } from './sky'
-import { useDemoAid } from './demo/demo-aids'
+import { useDemoAid, useSeaIceTour } from './demo/demo-aids'
+import { seaIceHidesClouds, seaIceOnGlobe } from './demo/sea-ice-gate'
 import { EarthShadow } from './demo/EarthShadow'
 import { MoonOrbitTilt } from './demo/MoonOrbitTilt'
 import { MoonShadowGlobe } from './demo/MoonShadowGlobe'
@@ -130,8 +131,12 @@ export default function SolarSystem({
   const tides = useDemoAid('tides')
   // The globe's clouds give way to it (tides-zec.7.1).
   const moonShadowShown = useDemoAid('moonShadow') && interactive && !ship
-  // As do the seasons tour's sea ice (tides-zec.19), so the ice shows.
-  const seaIceShown = useDemoAid('seaIce') && interactive && !earthCamera && !ship
+  // The date's sea ice (tides-6ru.1), under the clouds but in the seasons
+  // tour, whose clouds give way to it (tides-zec.19): sea-ice-gate.ts.
+  const seaIceTour = useSeaIceTour()
+  const seaIceView = { interactive, earthCamera, ship }
+  const seaIceOn = seaIceOnGlobe(seaIceView, seaIceTour)
+  const seaIceClearsClouds = seaIceHidesClouds(seaIceView, seaIceTour)
   // A demo travel may hide the Moon, which a fast clock would smear round
   // Earth, and a demo's aids.hideMoon the main view's; only its look goes, so
   // its body, refs and camera carry on.
@@ -229,7 +234,7 @@ export default function SolarSystem({
           <EarthRenderer
             diameter={EARTH_DIAMETER}
             texture={earthTexture}
-            hideClouds={moonShadowShown || seaIceShown}
+            hideClouds={moonShadowShown || seaIceClearsClouds}
           />
         )}
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
@@ -237,7 +242,7 @@ export default function SolarSystem({
         {/* The main view's first close zoom, compiled ahead (tides-tvr.7.4). */}
         {!earthCamera && !ship && <CloseZoomWarmup />}
         {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}
-        {seaIceShown && <SeaIceGlobe radius={EARTH_DIAMETER} />}
+        {seaIceOn && <SeaIceGlobe radius={EARTH_DIAMETER} />}
         {tides && interactive && !earthCamera && !moonCamera && !ship && distanceScale === 'system' && (
           <TidesSpot radius={EARTH_DIAMETER} />
         )}
