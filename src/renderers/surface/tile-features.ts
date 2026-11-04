@@ -3,10 +3,12 @@
 // cloud shadows, night (city lights, night fill, GIBS night), colour (sky
 // fill, groundDetail; source grading), terrain shadows (groundShadow), the
 // glint (the globe's water, ../water.ts, its strength the globe's map's),
-// and the haze last. The composer applies them in this order, so text injected at a
+// the seasons tour's sea ice (no globe patch: the globe's is a shell,
+// ../../demo/SeaIceGlobe.tsx; after the glint, whose texture array it
+// reads), and the haze last. The composer applies them in this order, so text injected at a
 // shared anchor lands as on the globe. Each slot is its own module, owned by
 // one bead: tides-zmw.9.16 eclipse, 9.12 clouds, 9.13 night, 9.11 colour,
-// 9.15 shadow, 9.14 glint; the haze is tides-zmw.9.7's.
+// 9.15 shadow, 9.14 glint, tides-5oz ice; the haze is tides-zmw.9.7's.
 //
 // Within a slot, keep the globe's order too: the night slot applies
 // nightLightsPatch's code before the GIBS night patch's (both inject after
@@ -18,6 +20,7 @@ import { tileColour } from './tile-colour'
 import { tileEclipse } from './tile-eclipse'
 import { tileGlint } from './tile-glint'
 import { tileHaze } from './tile-haze'
+import { tileIce } from './tile-ice'
 import { tileNight } from './tile-night'
 import { tileShadow } from './tile-shadow'
 
@@ -28,5 +31,6 @@ export const TILE_FEATURES: readonly TileFeatureSlot[] = [
   { name: 'colour', adapter: tileColour },
   { name: 'shadow', adapter: tileShadow },
   { name: 'glint', adapter: tileGlint },
+  { name: 'ice', adapter: tileIce },
   { name: 'haze', adapter: tileHaze },
 ]

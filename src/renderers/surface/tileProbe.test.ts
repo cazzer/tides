@@ -80,7 +80,7 @@ describe('the tiles\' warm-up probes (tides-tvr.7.7)', () => {
     const { probes, dispose } = createTileProbes(link)
     expect(probes).toHaveLength(2)
     // The program the cold descent linked (tides-tvr.7.4's audit).
-    const tail = 'night-surface-flight-gibs8+colour-surface+shadow-surface+water-surface+ground-haze-surface'
+    const tail = 'night-surface-flight-gibs8+colour-surface+shadow-surface+water-surface+sea-ice-surface+ground-haze-surface'
     for (const { object } of probes) {
       expect(((object as THREE.Mesh).material as THREE.Material).customProgramCacheKey().endsWith(tail)).toBe(true)
     }

@@ -169,7 +169,7 @@ describe('renameInSnippet (tides-zmw.9.16)', () => {
 
 describe('the composer (tides-zmw.9.16)', () => {
   it('lists the features in the globe\'s composePatches order', () => {
-    expect(TILE_FEATURES.map((s) => s.name)).toEqual(['eclipse', 'clouds', 'night', 'colour', 'shadow', 'glint', 'haze'])
+    expect(TILE_FEATURES.map((s) => s.name)).toEqual(['eclipse', 'clouds', 'night', 'colour', 'shadow', 'glint', 'ice', 'haze'])
   })
 
   it('applies the base, then the features in order, skipping nulls, under one key', () => {

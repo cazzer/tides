@@ -126,6 +126,70 @@ export function gridPoint(grid: PolarGrid, latDeg: number, lonDeg: number, out =
   return out
 }
 
+// The inverse's series for the latitude from the conformal one (Snyder 3-5).
+const E2 = HUGHES_E * HUGHES_E
+const CHI_TO_PHI = [
+  E2 / 2 + (5 * E2 ** 2) / 24 + E2 ** 3 / 12 + (13 * E2 ** 4) / 360,
+  (7 * E2 ** 2) / 48 + (29 * E2 ** 3) / 240 + (811 * E2 ** 4) / 11520,
+  (7 * E2 ** 3) / 120 + (81 * E2 ** 4) / 1120,
+  (4279 * E2 ** 4) / 161280,
+]
+
+/**
+ * The (lat, lon) in degrees at a cell position on `grid` (cells from its
+ * top-left corner, a cell's centre at +0.5): gridPoint's inverse (Snyder,
+ * Map Projections, 21-39 and 3-5), lon in -180..180.
+ */
+export function gridLatLon(grid: PolarGrid, col: number, row: number, out = { lat: 0, lon: 0 }) {
+  // gridPoint's x and y, the south's turned back over to the north's.
+  const x = grid.sign * (grid.x0 + col * grid.cell)
+  const y = grid.sign * (grid.y0 - row * grid.cell)
+  const chi = Math.PI / 2 - 2 * Math.atan(Math.hypot(x, y) / RHO_SCALE)
+  const phi =
+    chi +
+    CHI_TO_PHI[0] * Math.sin(2 * chi) +
+    CHI_TO_PHI[1] * Math.sin(4 * chi) +
+    CHI_TO_PHI[2] * Math.sin(6 * chi) +
+    CHI_TO_PHI[3] * Math.sin(8 * chi)
+  const lon = grid.lon0 + (grid.sign * Math.atan2(x, -y)) / DEG
+  out.lat = (grid.sign * phi) / DEG
+  out.lon = ((((lon + 180) % 360) + 360) % 360) - 180
+  return out
+}
+
+/**
+ * GLSL: `vec2 <name>(vec3 dir)`, the cells (gridPoint's col, row) of a unit
+ * direction in Earth's local frame (Y north, lon 0 at +X, east towards -Z,
+ * the latitude its own: the globe's and the tiles' sphere) on the north grid
+ * where dir.y >= 0, else the south's. No asin or atan: the projection's
+ * tan(45° - φ/2) is cos φ / (1 + sin φ), and cos φ times the longitude's sine
+ * and cosine are the direction's own components, so the poles are regular.
+ */
+export function SEA_ICE_GRID_GLSL(name: string): string {
+  const f = (v: number) => v.toFixed(9)
+  const g = (grid: PolarGrid) => ({
+    lon0: `vec2(${f(Math.cos(grid.lon0 * DEG))}, ${f(Math.sin(grid.lon0 * DEG))})`,
+    corner: `vec2(${f(grid.x0)}, ${f(grid.y0)})`,
+  })
+  const n = g(NORTH_GRID)
+  const s = g(SOUTH_GRID)
+  return /* glsl */ `
+vec2 ${name}(vec3 dir) {
+  bool north = dir.y >= 0.0;
+  float sgn = north ? 1.0 : -1.0;
+  float sinLat = abs(dir.y);
+  vec2 lon0 = north ? ${n.lon0} : ${s.lon0};
+  vec2 corner = north ? ${n.corner} : ${s.corner};
+  float k = ${f(RHO_SCALE)} / ((1.0 + sinLat) * pow((1.0 - ${f(HUGHES_E)} * sinLat) / (1.0 + ${f(HUGHES_E)} * sinLat), ${f(HUGHES_E / 2)}));
+  // cos φ sin(λ - λ0) and cos φ cos(λ - λ0).
+  float east = -dir.z * lon0.x - dir.x * lon0.y;
+  float along = dir.x * lon0.x - dir.z * lon0.y;
+  vec2 xy = k * vec2(east, -sgn * along);
+  return vec2(xy.x - corner.x, corner.y - xy.y) / ${f(NORTH_GRID.cell)};
+}
+`
+}
+
 /** A grid's cover (0..1) at a cell position, blended between its four nearest cells; 0 off the grid. */
 export function sampleGrid(cells: Uint8Array, width: number, height: number, col: number, row: number): number {
   const x = col - 0.5
@@ -141,6 +205,15 @@ export function sampleGrid(cells: Uint8Array, width: number, height: number, col
   const bottom = at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx
   return (top * (1 - fy) + bottom * fy) / 255
 }
+
+// --- The ice's colours ------------------------------------------------------
+
+// sRGB: the day map's own all-year ice, and its open sea at 55-68°N
+// (scripts/build-sea-ice.py prints it), so the repainted water matches. The
+// globe's shell (SeaIceGlobe.tsx) and the tiles' (renderers/surface/tile-ice.ts)
+// paint with both.
+export const ICE_SRGB = [0.86, 0.9, 0.95] as const
+export const OCEAN_SRGB = [0.0774, 0.2186, 0.3016] as const
 
 // --- The mask (src/assets/sea-ice-mask.png) --------------------------------
 

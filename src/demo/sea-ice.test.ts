@@ -2,10 +2,14 @@ import { readFileSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import {
+  HUGHES_E,
   NORTH_GRID,
+  RHO_SCALE,
+  SEA_ICE_GRID_GLSL,
   SOUTH_GRID,
   dayShare,
   extentOn,
+  gridLatLon,
   gridPoint,
   sampleGrid,
   seaIceDataDate,
@@ -42,6 +46,85 @@ describe('gridPoint', () => {
   it('puts the poles where the grids have them', () => {
     expect(gridPoint(NORTH_GRID, 90, 0)).toEqual({ col: expect.closeTo(154, 6), row: expect.closeTo(234, 6) })
     expect(gridPoint(SOUTH_GRID, -90, 0)).toEqual({ col: expect.closeTo(158, 6), row: expect.closeTo(174, 6) })
+  })
+})
+
+describe('gridLatLon', () => {
+  it('inverts gridPoint to a hundredth of a cell over both grids', () => {
+    for (const grid of [NORTH_GRID, SOUTH_GRID]) {
+      for (let row = 0.5; row < grid.height; row += 13) {
+        for (let col = 0.5; col < grid.width; col += 11) {
+          const { lat, lon } = gridLatLon(grid, col, row)
+          expect(Math.sign(lat)).toBe(grid.sign)
+          const p = gridPoint(grid, lat, lon)
+          expect(Math.abs(p.col - col)).toBeLessThan(0.01)
+          expect(Math.abs(p.row - row)).toBeLessThan(0.01)
+        }
+      }
+    }
+  })
+
+  it('finds the poles at the grids\' poles and the corners at NSIDC\'s', () => {
+    expect(gridLatLon(NORTH_GRID, 154, 234).lat).toBeCloseTo(90, 6)
+    expect(gridLatLon(SOUTH_GRID, 158, 174).lat).toBeCloseTo(-90, 6)
+    const corner = gridLatLon(NORTH_GRID, 0, 0)
+    expect(corner.lat).toBeCloseTo(30.98, 1)
+    expect(corner.lon).toBeCloseTo(168.35, 1)
+    expect(gridLatLon(SOUTH_GRID, 316, 332).lon).toBeCloseTo(135, 1)
+  })
+})
+
+// SEA_ICE_GRID_GLSL's sums, line for line, in double.
+function gridCellsMirror(dir: [number, number, number]) {
+  const [x, y, z] = dir
+  const north = y >= 0
+  const sgn = north ? 1 : -1
+  const grid = north ? NORTH_GRID : SOUTH_GRID
+  const sinLat = Math.abs(y)
+  const lon0 = [Math.cos((grid.lon0 * Math.PI) / 180), Math.sin((grid.lon0 * Math.PI) / 180)]
+  const k = RHO_SCALE / ((1 + sinLat) * Math.pow((1 - HUGHES_E * sinLat) / (1 + HUGHES_E * sinLat), HUGHES_E / 2))
+  const east = -z * lon0[0] - x * lon0[1]
+  const along = x * lon0[0] - z * lon0[1]
+  const xy = [k * east, k * -sgn * along]
+  return { col: (xy[0] - grid.x0) / grid.cell, row: (grid.y0 - xy[1]) / grid.cell }
+}
+
+/** The unit direction at (lat, lon) degrees in Earth's local frame (Y north, lon 0 at +X, east towards -Z). */
+function direction(lat: number, lon: number): [number, number, number] {
+  const la = (lat * Math.PI) / 180
+  const lo = (lon * Math.PI) / 180
+  return [Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)]
+}
+
+describe('SEA_ICE_GRID_GLSL', () => {
+  const glsl = SEA_ICE_GRID_GLSL('cellsOf')
+
+  it('is a function of the direction alone, with no asin or atan', () => {
+    expect(glsl).toContain('vec2 cellsOf(vec3 dir) {')
+    expect(glsl).not.toMatch(/\basin\b|\batan\b/)
+    expect(glsl).toContain(RHO_SCALE.toFixed(9))
+    expect(glsl).toContain(HUGHES_E.toFixed(9))
+    expect(glsl).toContain(`vec2(${NORTH_GRID.x0.toFixed(9)}, ${NORTH_GRID.y0.toFixed(9)})`)
+    expect(glsl).toContain(`vec2(${SOUTH_GRID.x0.toFixed(9)}, ${SOUTH_GRID.y0.toFixed(9)})`)
+    expect(NORTH_GRID.cell).toBe(SOUTH_GRID.cell)
+  })
+
+  it('puts a direction on the grids where gridPoint puts its latitude and longitude, at both poles', () => {
+    let checked = 0
+    for (let lat = -89.75; lat <= 89.75; lat += 2.5) {
+      if (Math.abs(lat) < 30) continue
+      for (let lon = -180; lon < 180; lon += 7.5) {
+        const got = gridCellsMirror(direction(lat, lon))
+        const want = gridPoint(lat >= 0 ? NORTH_GRID : SOUTH_GRID, lat, lon)
+        expect(Math.abs(got.col - want.col)).toBeLessThan(1e-3)
+        expect(Math.abs(got.row - want.row)).toBeLessThan(1e-3)
+        checked++
+      }
+    }
+    expect(checked).toBeGreaterThan(1000)
+    // The poles themselves: no singularity.
+    expect(gridCellsMirror([0, 1, 0])).toEqual({ col: expect.closeTo(154, 6), row: expect.closeTo(234, 6) })
+    expect(gridCellsMirror([0, -1, 0])).toEqual({ col: expect.closeTo(158, 6), row: expect.closeTo(174, 6) })
   })
 })
 

@@ -51,10 +51,20 @@ function makeClimateTexture(): THREE.DataTexture {
 
 let sea: THREE.DataArrayTexture | null = null
 
+/** The texture array's layers: the climate, the noise, and the sea ice's
+ * two grids (../renderers/seaIceLayers.ts SEA_ICE_LAYER), empty until it
+ * fills them. */
+export const WATER_SEA_LAYERS = 4
+
+/** The texture array's declaration, as WATER_CLIMATE_GLSL makes it: a tile
+ * feature that reads the array declares it only if no other has. */
+export const WATER_SEA_UNIFORM = 'uniform sampler2DArray uWaterSea;'
+
 /** The climate and the noise as one texture array, one for the page: layer
  * 0 the climate in its corner, padded so a bilinear read at level 0 is the
  * climate texture's own (its longitude wraps, its latitude clamps), layer 1
- * the noise. Mipmapped, repeating, for the noise. */
+ * the noise, layers 2 and 3 zeros for the sea ice (./seaIceLayers.ts).
+ * Mipmapped, repeating, for the noise. */
 export function waterSeaTexture(): THREE.DataArrayTexture {
   sea ??= makeSeaTexture()
   return sea
@@ -63,7 +73,7 @@ export function waterSeaTexture(): THREE.DataArrayTexture {
 function makeSeaTexture(): THREE.DataArrayTexture {
   const climate = climateTexture().image.data as Uint8Array
   const layer = NOISE_SIZE * NOISE_SIZE * 4
-  const data = new Uint8Array(layer * 2)
+  const data = new Uint8Array(layer * WATER_SEA_LAYERS)
   // A climate texel (column wrapped, row clamped) into the layer at (x, y).
   const put = (x: number, y: number, col: number, row: number) => {
     const from = (Math.min(Math.max(row, 0), CLIMATE_ROWS - 1) * CLIMATE_COLS + ((col + CLIMATE_COLS) % CLIMATE_COLS)) * 4
@@ -75,7 +85,7 @@ function makeSeaTexture(): THREE.DataArrayTexture {
     }
   }
   data.set(bakeWaterNoise(), layer)
-  const texture = new THREE.DataArrayTexture(data, NOISE_SIZE, NOISE_SIZE, 2)
+  const texture = new THREE.DataArrayTexture(data, NOISE_SIZE, NOISE_SIZE, WATER_SEA_LAYERS)
   texture.format = THREE.RGBAFormat
   texture.type = THREE.UnsignedByteType
   texture.magFilter = THREE.LinearFilter
@@ -96,7 +106,7 @@ const f = (x: number) => x.toFixed(6)
  * toward east), as long as their heading is settled;
  * waterMssScale() and waterSwellScale() the scales of those heights. */
 export const WATER_CLIMATE_GLSL = /* glsl */ `
-uniform sampler2DArray uWaterSea;
+${WATER_SEA_UNIFORM}
 
 // A local direction's longitude (from -180 deg, radians) and latitude.
 vec2 waterLonLat(vec3 up) {

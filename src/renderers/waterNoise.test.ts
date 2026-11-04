@@ -65,7 +65,10 @@ describe('the sea\'s texture array', () => {
 
   it('holds the climate in layer 0 and the noise in layer 1, mipmapped and repeating', () => {
     expect(sea).toBeInstanceOf(THREE.DataArrayTexture)
-    expect(sea.image.depth).toBe(2)
+    // Layers 2 and 3 are the sea ice's (./seaIceLayers.ts), empty until it fills them.
+    expect(sea.image.depth).toBe(4)
+    expect(data.length).toBe(4 * layer)
+    expect(data.subarray(2 * layer).every((v) => v === 0)).toBe(true)
     expect(sea.generateMipmaps).toBe(true)
     expect(sea.wrapS).toBe(THREE.RepeatWrapping)
     expect(sea.wrapT).toBe(THREE.RepeatWrapping)

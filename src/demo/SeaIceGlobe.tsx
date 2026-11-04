@@ -15,17 +15,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useStore } from '../store'
+import { SURFACE_TILES_ON } from '../surface'
 import { SEA_ICE_RENDER_ORDER } from '../renderers/earth-shells'
 import { composePatches, createEclipseShadow, type EclipseShadow, type MaterialPatch } from '../renderers/eclipseShadow'
+import { attachSeaIce, showSeaIceFrames } from '../renderers/seaIceLayers'
+import { globeStencil } from '../renderers/surface/surface-scale'
 import { useLoadedSeaIce, useSeaIce, type SeaIceData } from './sea-ice-data'
-import { HUGHES_E, MASK_HEIGHT, MASK_NORTH, MASK_NORTH_ROWS, MASK_PER_DEG, MASK_SOUTH, NORTH_GRID, RHO_SCALE, SOUTH_GRID, seaIceDay, seaIceFrames } from './sea-ice'
+import { HUGHES_E, ICE_SRGB, MASK_HEIGHT, MASK_NORTH, MASK_NORTH_ROWS, MASK_PER_DEG, MASK_SOUTH, NORTH_GRID, OCEAN_SRGB, RHO_SCALE, SOUTH_GRID, seaIceDay, seaIceFrames } from './sea-ice'
 
 // × Earth's radius: clear of the sea, a hair, so no limb rim shows.
 const SHELL_LIFT = 1.0015
-// sRGB: the day map's own all-year ice, and its open sea at 55-68°N
-// (scripts/build-sea-ice.py prints it), so the repainted water matches.
-const ICE_SRGB = [0.86, 0.9, 0.95] as const
-const OCEAN_SRGB = [0.0774, 0.2186, 0.3016] as const
 // The caps' reach from each pole (deg of colatitude), to the mask's edges.
 const NORTH_CAP = 90 - MASK_NORTH.bottom
 const SOUTH_CAP = 90 + MASK_SOUTH.top
@@ -136,6 +135,9 @@ function createIceTextures({ ice, mask }: SeaIceData): IceTextures {
 
 function createIceMaterial(textures: IceTextures, mix: { value: number }, fade: { value: number }, eclipse: MaterialPatch) {
   const material = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false })
+  // Only where no streamed tile drew: the tiles draw the ice themselves
+  // (renderers/surface/tile-ice.ts), so the shell never floats over them.
+  globeStencil(material, SURFACE_TILES_ON)
   const ice: MaterialPatch = {
     onBeforeCompile(shader) {
       Object.assign(shader.uniforms, {
@@ -167,6 +169,7 @@ function showDate(t: number, data: SeaIceData, textures: IceTextures, mix: { val
   const { ice } = data
   const frames = seaIceFrames(seaIceDay(t), ice.stepDays, ice.north.frames.length)
   mix.value = frames.mix
+  showSeaIceFrames(ice, frames)
   if (frames.a !== shown.a) {
     shown.a = frames.a
     textures.northA.image.data = ice.north.frames[frames.a]
@@ -230,6 +233,8 @@ function SeaIceShell({ radius, data, visible }: { radius: number; data: SeaIceDa
   useEffect(() => {
     if (group.current) return warmIce(gl, group.current, camera, scene, textures, () => setWarm(true))
   }, [gl, camera, scene, textures, material])
+  // The same ice on the streamed tiles while the shell shows.
+  useEffect(() => attachSeaIce(data.ice, data.mask), [data])
 
   useFrame(({ camera }) => {
     if (group.current) showShell(group.current, camera, radius, visible && warm, { data, textures, mix, fade, shown: shown.current, eclipse })
@@ -259,13 +264,21 @@ interface ShellState {
 // the textures for the date and the Moon's shadow. Module level, so the
 // uniforms and the group aren't mutated in a hook.
 function showShell(shell: THREE.Group, camera: THREE.Camera, radius: number, on: boolean, state: ShellState) {
-  const share = on ? eyeFade(shell, camera, radius) : 0
+  if (!on) {
+    // Off: the streamed tiles drop the ice too (tides-5oz).
+    state.fade.value = 0
+    shell.visible = false
+    showSeaIceFrames(state.data.ice, null)
+    return
+  }
+  const share = eyeFade(shell, camera, radius)
   state.fade.value = share
   shell.visible = share > 0
-  if (!shell.visible) return
+  // The date's frames even while the shell has faded out near the ground,
+  // where the tiles carry the ice (showDate hands them the frames).
   const t = useStore.getState().timestamp ?? Date.now()
   showDate(t, state.data, state.textures, state.mix, state.shown)
-  state.eclipse.update(t)
+  if (shell.visible) state.eclipse.update(t)
 }
 
 /**
