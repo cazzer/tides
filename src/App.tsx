@@ -34,6 +34,8 @@ import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
 import { DepthInfo } from './renderers/DepthInfo'
 import { GlowPass } from './renderers/glow/GlowPass'
+import { CompileGate } from './renderers/CompileGate'
+import { allShownReady } from './renderers/compile-gate'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { mainCameraPose, rememberMainCameraPose, takeMainCameraRestore } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
@@ -71,6 +73,7 @@ function RootCanvas(props: CanvasProps) {
 export default function App() {
   const [solarSystemView, earthView, moonView] = useRefs()
   const [sceneReady, setSceneReady] = useState(false)
+  const [readyViews, setReadyViews] = useState<ReadonlySet<string>>(() => new Set())
   const cameraFocus = useStore((s) => s.cameraFocus)
   const setCameraFocus = useStore((s) => s.setCameraFocus)
   const mainPanel = useStore((s) => s.mainPanel)
@@ -171,13 +174,17 @@ export default function App() {
     }
   }
 
-  const handleSceneReady = useCallback(() => {
-    setSceneReady(true)
+  const markReady = useCallback((key: string) => {
+    setReadyViews((ready) => (ready.has(key) ? ready : new Set(ready).add(key)))
   }, [])
 
   // Single layout mounts only the chosen panel, so the others never render.
   const single = layout === 'single'
   const showPanel = (panelKey: PanelKey) => !single || panelKey === mainPanel
+  // The first load ends once every View on screen has compiled and drawn
+  // (CompileGate); the clock and the opening wait for it.
+  const shownViews = shipMode ? ['ship'] : PANEL_VALUES.filter(showPanel)
+  if (!sceneReady && allShownReady(shownViews, readyViews)) setSceneReady(true)
   const panelProps = (panelKey: PanelKey) => ({
     gridArea: single ? 'main' : getGridArea(panelKey, mainPanel),
     // Single layout swaps views through the ViewMenu instead.
@@ -187,9 +194,6 @@ export default function App() {
     panelKey,
     onSwap: handlePanelSwap,
   })
-  // The clock waits for the main scene; in single layout that is the shown one.
-  const readyHandler = (panelKey: PanelKey) =>
-    single || panelKey === 'main' ? handleSceneReady : undefined
 
   return (
     <div className="container">
@@ -230,7 +234,8 @@ export default function App() {
               starRadius={SHIP_STAR_RADIUS}
               distanceScale="flight"
               ship
-              onReady={handleSceneReady}
+              hold={!sceneReady}
+              onReady={() => markReady('ship')}
             />
           </ShipView>
         )}
@@ -265,7 +270,8 @@ export default function App() {
               interactive
               mainSlot={panelProps('main').gridArea === 'main'}
               showOrbitLabels
-              onReady={readyHandler('main')}
+              hold={!sceneReady}
+              onReady={() => markReady('main')}
             />
             <MainControls />
             {/* Rain and snow round the eye in close zoom (tides-bl3.8). */}
@@ -287,7 +293,8 @@ export default function App() {
               background="black"
               matrix={matrix}
               earthCamera
-              onReady={readyHandler('top')}
+              hold={!sceneReady}
+              onReady={() => markReady('top')}
             />
           </Panel>
         )}
@@ -300,7 +307,8 @@ export default function App() {
               background="black"
               matrix={matrix}
               moonCamera
-              onReady={readyHandler('bottom')}
+              hold={!sceneReady}
+              onReady={() => markReady('bottom')}
             />
           </Panel>
         )}
@@ -327,6 +335,7 @@ function Scene({
   distanceScale = 'system',
   ship = false,
   mainSlot = false,
+  hold = false,
   onReady,
   ...props
 }: {
@@ -337,6 +346,8 @@ function Scene({
   distanceScale?: DistanceScale
   ship?: boolean
   mainSlot?: boolean
+  /** Hide the scene until its shaders are linked (CompileGate). */
+  hold?: boolean
   onReady?: () => void
   [key: string]: any
 }) {
@@ -347,22 +358,26 @@ function Scene({
         args={[background]}
       />
       <Suspense fallback={null}>
-        <group
-          matrixAutoUpdate={false}
-          onUpdate={(self) => (self.matrix = matrix)}
-          {...props}
+        <CompileGate
+          hold={hold}
+          onReady={onReady}
         >
-          <SolarSystem
-            earthCamera={earthCamera}
-            moonCamera={moonCamera}
-            interactive={interactive}
-            distanceScale={distanceScale}
-            ship={ship}
-            mainSlot={mainSlot}
+          <group
+            matrixAutoUpdate={false}
+            onUpdate={(self) => (self.matrix = matrix)}
             {...props}
-          />
-          {onReady ? <SceneReadySignal onReady={onReady} /> : null}
-        </group>
+          >
+            <SolarSystem
+              earthCamera={earthCamera}
+              moonCamera={moonCamera}
+              interactive={interactive}
+              distanceScale={distanceScale}
+              ship={ship}
+              mainSlot={mainSlot}
+              {...props}
+            />
+          </group>
+        </CompileGate>
       </Suspense>
     </>
   )
@@ -405,23 +420,6 @@ function SimClock({ running }: { running: boolean }) {
     useStore.setState({ timestamp: next.timestamp })
     if (next.jumpDone) setJumpDate(null)
   }, -1)
-  return null
-}
-
-function SceneReadySignal({ onReady }: { onReady: () => void }) {
-  const hasSignaledRef = useRef(false)
-  const frameCountRef = useRef(0)
-
-  useFrame(() => {
-    if (hasSignaledRef.current) return
-
-    frameCountRef.current += 1
-    if (frameCountRef.current >= 2) {
-      hasSignaledRef.current = true
-      onReady()
-    }
-  })
-
   return null
 }
 

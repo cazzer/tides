@@ -4,6 +4,7 @@ import bakeFragment from '../shaders/sun-bake/fragment.frag'
 import coronaBakeFragment from '../shaders/sun-bake/corona.frag'
 import plasmaBakeFragment from '../shaders/sun-bake/plasma.frag'
 import { activeRegions, type ActiveRegion } from './sun-activity'
+import { COMPILE_TIMEOUT_MS, withTimeout } from './compile-gate'
 
 /*
  * The disc's EUV detail and churn and the corona's pattern, baked once
@@ -12,7 +13,9 @@ import { activeRegions, type ActiveRegion } from './sun-activity'
  * tides-d9x a CubeCamera re-rendered six 256 px faces of 4D noise every
  * frame; this bakes one face per frame for the first eighteen frames after
  * load, and then the disc costs three cube lookups per pixel and the
- * corona one. One bake per renderer, shared by every view that draws the
+ * corona one. Its three programs are compiled in the background
+ * (compileAsync) as the bakes are made, and the bake waits for them, so
+ * its first face doesn't link them on the frame (tides-0oi.6). One bake per renderer, shared by every view that draws the
  * Sun, kept for the renderer's life (~13 MB on the low tier): views mount and unmount as panels change, and rebaking each
  * time would cost more than holding it.
  */
@@ -40,7 +43,15 @@ interface CubeBake {
   faces: number
 }
 
-const bakes = new WeakMap<THREE.WebGLRenderer, CubeBake[]>()
+interface SunBakes {
+  cubes: CubeBake[]
+  /** Whether the bake programs are linked (or the wait timed out). */
+  compiled: boolean
+  /** Holds on the bake (hold()). */
+  holds: number
+}
+
+const bakes = new WeakMap<THREE.WebGLRenderer, SunBakes>()
 
 /**
  * The bake's uniforms: each region of activeRegions() as its centre and
@@ -59,6 +70,8 @@ export function surfaceBakeUniforms(regions: ActiveRegion[] = activeRegions()) {
     regionCount: regions.length,
   }
 }
+
+const NOTHING = new THREE.Scene()
 
 // A cube target whose faces `material` (BackSide, on a unit sphere round
 // the cube camera) fills, cleared to `blank` until each face is baked.
@@ -92,9 +105,29 @@ function createCubeBake(
     renderer.setRenderTarget(target, face)
     renderer.clear(true, false, false)
   }
+  // The chain from the blank faces, so an unbaked level reads blank too:
+  // three regenerates a target's mips after a render into it, here of
+  // nothing. Then only once more, after the sixth face (step()).
+  renderer.setRenderTarget(target, 5)
+  renderer.render(NOTHING, camera.children[5] as THREE.Camera)
+  target.texture.generateMipmaps = false
   renderer.setClearColor(clear, alpha)
   renderer.setRenderTarget(previous)
   return { target, scene, camera, faces: 0 }
+}
+
+// Links `bake`'s program in the background. Into its own target, as three
+// keys a program's output colour space by the target it draws into.
+function precompile(renderer: THREE.WebGLRenderer, bake: CubeBake): Promise<unknown> {
+  const previous = renderer.getRenderTarget()
+  const previousFace = renderer.getActiveCubeFace()
+  const previousLevel = renderer.getActiveMipmapLevel()
+  renderer.setRenderTarget(bake.target, 0)
+  try {
+    return renderer.compileAsync(bake.scene, bake.camera.children[0] as THREE.Camera)
+  } finally {
+    renderer.setRenderTarget(previous, previousFace, previousLevel)
+  }
 }
 
 function bakeMaterial(fragmentShader: string, extra: Partial<THREE.ShaderMaterialParameters> = {}) {
@@ -109,13 +142,13 @@ function bakeMaterial(fragmentShader: string, extra: Partial<THREE.ShaderMateria
   })
 }
 
-function createBakes(renderer: THREE.WebGLRenderer, low: boolean): CubeBake[] {
+function createBakes(renderer: THREE.WebGLRenderer, low: boolean): SunBakes {
   const { regionCount, ...uniforms } = surfaceBakeUniforms()
   const surface = bakeMaterial(bakeFragment, {
     defines: { SUN_REGIONS: regionCount },
     uniforms,
   })
-  return [
+  const cubes = [
     // Unbaked, the disc reads as plain quiet Sun...
     createCubeBake(renderer, SUN_SURFACE_SIZE[low ? 'low' : 'high'], surface, new THREE.Color(0, 0, 1)),
     // ...and the corona as even, middling streamers.
@@ -123,6 +156,18 @@ function createBakes(renderer: THREE.WebGLRenderer, low: boolean): CubeBake[] {
     // ...and the plasma as even, featureless.
     createCubeBake(renderer, SUN_PLASMA_SIZE[low ? 'low' : 'high'], bakeMaterial(plasmaBakeFragment), new THREE.Color(0.5, 0.5, 0.5)),
   ]
+  const own: SunBakes = { cubes, compiled: false, holds: 0 }
+  const linked = Promise.all(cubes.map((bake) => precompile(renderer, bake)))
+  withTimeout(linked, COMPILE_TIMEOUT_MS).then(
+    () => {
+      own.compiled = true
+    },
+    (error: unknown) => {
+      console.error('Sun bake: compile failed; baking anyway', error)
+      own.compiled = true
+    }
+  )
+  return own
 }
 
 /**
@@ -135,22 +180,36 @@ export function sunSurface(renderer: THREE.WebGLRenderer, low: boolean) {
     own = createBakes(renderer, low)
     bakes.set(renderer, own)
   }
-  const [surface, corona, plasma] = own
+  const [surface, corona, plasma] = own.cubes
   return {
     surface: surface.target.texture,
     corona: corona.target.texture,
     plasma: plasma.target.texture,
-    /** Bakes the next face, if any; true once all are. */
+    /** Holds the bake back until the release it returns is called. */
+    hold(): () => void {
+      own.holds++
+      let held = true
+      return () => {
+        if (held) own.holds--
+        held = false
+      }
+    },
+    /** Bakes the next face, if any, once the programs are linked and nothing holds it; true once all are. */
     step(): boolean {
-      const bake = own.find((b) => b.faces < 6)
+      if (!own.compiled || own.holds > 0) return false
+      const bake = own.cubes.find((b) => b.faces < 6)
       if (!bake) return true
       const previous = renderer.getRenderTarget()
       const previousFace = renderer.getActiveCubeFace()
       const previousLevel = renderer.getActiveMipmapLevel()
       const xr = renderer.xr.enabled
       renderer.xr.enabled = false
+      // three regenerates a target's mips after each draw into it that
+      // asks: only the last face's.
+      bake.target.texture.generateMipmaps = bake.faces === 5
       renderer.setRenderTarget(bake.target, bake.faces)
       renderer.render(bake.scene, bake.camera.children[bake.faces] as THREE.Camera)
+      bake.target.texture.generateMipmaps = false
       renderer.setRenderTarget(previous, previousFace, previousLevel)
       renderer.xr.enabled = xr
       bake.faces++

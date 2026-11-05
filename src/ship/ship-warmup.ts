@@ -29,12 +29,12 @@ export type Warmup =
   | { object: THREE.Object3D; side?: THREE.Side; defines?: readonly string[] }
   | { owner: THREE.Object3D; probe: WarmProbe }
 
-function materialsOf(object: THREE.Object3D): THREE.Material[] {
+export function materialsOf(object: THREE.Object3D): THREE.Material[] {
   const { material } = object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }
   return material ? [material].flat() : []
 }
 
-function texturesOf(material: THREE.Material): THREE.Texture[] {
+export function texturesOf(material: THREE.Material): THREE.Texture[] {
   const uniforms = (material as THREE.ShaderMaterial).uniforms ?? {}
   return [...Object.values(material), ...Object.values(uniforms).map((u) => u?.value)].filter(
     (value): value is THREE.Texture => (value as THREE.Texture | null)?.isTexture === true

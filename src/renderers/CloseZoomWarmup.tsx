@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import type * as THREE from 'three'
 import { useStore } from '../store'
+import { useSceneShown } from './scene-shown'
 import { whenIdle } from '../ship/limb-detail'
 import { coldWork, createWarmed, runWarmup, type Warmup } from '../ship/ship-warmup'
 
@@ -33,6 +34,7 @@ export function CloseZoomWarmup() {
   const scannedAt = useRef(-Infinity)
   const armed = useRef<'no' | 'waiting' | 'yes'>('no')
   const cancelIdle = useRef<(() => void) | null>(null)
+  const sceneShown = useSceneShown()
   useEffect(
     () => () => {
       cancelIdle.current?.()
@@ -45,7 +47,7 @@ export function CloseZoomWarmup() {
 
   useFrame(({ gl, scene, camera, clock, controls }) => {
     const root = anchor.current?.parent
-    if (!root || !controls || useStore.getState().shipMode || !(camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+    if (!sceneShown || !root || !controls || useStore.getState().shipMode || !(camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
       return
     }
     if (armed.current !== 'yes') {
