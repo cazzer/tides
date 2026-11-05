@@ -83,9 +83,9 @@ export interface AdaptiveDprState {
   lastMedianMs: number | null
 }
 
-/** The ceiling: R3F's default [1, 2] applied to the display's ratio. */
-export function maxDpr(devicePixelRatio: number): number {
-  return Math.min(Math.max(devicePixelRatio || 1, 1), 2)
+/** The ceiling: R3F's default [1, 2] applied to the display's ratio (cap 2). */
+export function maxDpr(devicePixelRatio: number, cap = 2): number {
+  return Math.min(Math.max(devicePixelRatio || 1, 1), cap)
 }
 
 /** max, then each multiple of DPR_STEP below it down to DPR_FLOOR. */
