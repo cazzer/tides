@@ -507,14 +507,15 @@ const QUANTILES = 1024
  * The observation's cloud alpha by quantile, area-weighted: entry i is the
  * alpha (0..255) that a fraction i / (QUANTILES - 1) of the globe is below.
  * Mapping a uniform rank through it gives cloud with the observation's mean
- * and its mix of clear sky, veils and thick cloud. observed is RGBA (alpha in
- * green).
+ * and its mix of clear sky, veils and thick cloud. alpha is the
+ * observation's cloud alpha, a byte per pixel (its G, ./renderers/cloudCover.ts
+ * alphaBytes).
  */
-export function alphaQuantiles(observed: ArrayLike<number>): Float32Array {
+export function alphaQuantiles(alpha: ArrayLike<number>): Float32Array {
   const hist = new Float64Array(256)
   for (let y = 0; y < OUT_H; y++) {
     const weight = Math.cos((pixelLat(y) * Math.PI) / 180)
-    for (let x = 0, i = y * OUT_W * 4 + 1; x < OUT_W; x++, i += 4) hist[observed[i]] += weight
+    for (let x = 0, p = y * OUT_W; x < OUT_W; x++, p++) hist[alpha[p]] += weight
   }
   const total = hist.reduce((a, b) => a + b, 0)
   const table = new Float32Array(QUANTILES)
@@ -550,7 +551,8 @@ export function forecastAlpha(a0: number, c0: number, ct: number, s: number, w: 
 
 /** Scale from the model's cover to the satellite's cloud alpha (how much a
  * change in cover changes the cloud): area-weighted mean alpha over mean
- * cover, clamped to CALIBRATION_RANGE. observed is RGBA (alpha in green).
+ * cover, clamped to CALIBRATION_RANGE. observed is the cloud alpha, a byte
+ * per pixel.
  * Worked out once per observation, not per frame. */
 export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<number>): number {
   let alpha = 0
@@ -563,7 +565,7 @@ export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<numb
     let rowCover = 0
     // Every 8th column is plenty for a global mean.
     for (let x = 0; x < OUT_W; x += 8) {
-      rowAlpha += observed[(y * OUT_W + x) * 4 + 1] / 255
+      rowAlpha += observed[y * OUT_W + x] / 255
       rowCover += bilinear(c0, row, colLerp(pixelLon(x)))
     }
     alpha += weight * rowAlpha
@@ -575,8 +577,8 @@ export function coverCalibration(observed: ArrayLike<number>, c0: ArrayLike<numb
 
 /**
  * Writes a forecast frame into out (RGBA, top row first, alpha in green, no
- * heights). observed is the latest observation's RGBA (top row first, alpha
- * in green), quantiles its alphaQuantiles, c0 and ct the grid's cover then
+ * heights). observed is the latest observation's cloud alpha (its G, a byte
+ * per pixel, top row first), quantiles its alphaQuantiles, c0 and ct the grid's cover then
  * and at the frame's time, rank from structureRank, leadMs the time between
  * them, calibration from coverCalibration.
  */
@@ -618,7 +620,7 @@ export function synthesiseForecast(
       const ra = rank[y * OUT_W + from] / 65535
       const q = b > 0 ? mixUniform(ra, rank[rowB + ((from + OUT_W / 2) % OUT_W)] / 65535, b) : ra
       const s = quantileAt(quantiles, q + ctk - c0k) / 255
-      const a = forecastAlpha(observed[p * 4 + 1] / 255, Math.min(1, c0k), Math.min(1, ctk), s, w)
+      const a = forecastAlpha(observed[p] / 255, Math.min(1, c0k), Math.min(1, ctk), s, w)
       const i = p * 4
       out[i] = 0
       out[i + 1] = Math.round(255 * a)

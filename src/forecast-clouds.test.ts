@@ -35,6 +35,7 @@ import {
   type FetchBackoff,
 } from './forecast-clouds'
 import { FORECAST_TTL_MS, HOUR_MS, OUT_H, OUT_W } from './real-clouds'
+import { alphaBytes } from './renderers/cloudCover'
 
 const NOW = Date.UTC(2026, 9, 18, 15, 30)
 const START = Date.UTC(2026, 9, 17)
@@ -456,8 +457,9 @@ describe('synthesis', () => {
     { rank = uniformRank(), leadMs = LONG, calibration = 1 } = {}
   ) => {
     const out = new Uint8ClampedArray(pixels * 4)
+    const alpha = alphaBytes(observed)
     synthesiseForecast(
-      { observed, quantiles: alphaQuantiles(observed), c0, ct, rank, leadMs, calibration },
+      { observed: alpha, quantiles: alphaQuantiles(alpha), c0, ct, rank, leadMs, calibration },
       out
     )
     return out
@@ -514,7 +516,7 @@ describe('synthesis', () => {
   })
 
   test('calibration scales cover to the observed alpha, within bounds', () => {
-    const observed = (a: number) => new Uint8ClampedArray(pixels * 4).fill(Math.round(a * 255))
+    const observed = (a: number) => new Uint8Array(pixels).fill(Math.round(a * 255))
     const cover = (c: number) => new Float32Array(GRID_POINTS).fill(c)
     expect(coverCalibration(observed(0.5), cover(0.5))).toBeCloseTo(1, 2)
     expect(coverCalibration(observed(0.45), cover(0.5))).toBeCloseTo(0.9, 2)
@@ -523,10 +525,43 @@ describe('synthesis', () => {
     expect(coverCalibration(observed(0.5), cover(0))).toBe(1)
   })
 
+  test('a frame from the G plane is byte for byte the one the RGBA observation gave (tides-0oi.23)', () => {
+    // Golden values from the RGBA-reading functions before tides-0oi.23, on an
+    // observation with R, B (and G) all different, so neither leaks in.
+    const at = (p: number, seed: number) => (Math.imul(p ^ seed, 2654435761) >>> 0) / 4294967296
+    const fnv = (bytes: ArrayLike<number>) => {
+      let h = 0x811c9dc5
+      for (let i = 0; i < bytes.length; i++) h = Math.imul(h ^ bytes[i], 16777619)
+      return (h >>> 0).toString(16)
+    }
+    const rgba = new Uint8ClampedArray(pixels * 4)
+    for (let p = 0; p < pixels; p++) {
+      rgba[p * 4] = 255 * at(p, 1)
+      rgba[p * 4 + 1] = 255 * at(p, 2) ** 2
+      rgba[p * 4 + 2] = 255 * at(p, 3)
+      rgba[p * 4 + 3] = 255
+    }
+    const c0 = Float32Array.from({ length: GRID_POINTS }, (_, i) => at(i, 4))
+    const ct = Float32Array.from({ length: GRID_POINTS }, (_, i) => at(i, 5))
+    const rank = new Uint16Array(pixels)
+    for (let p = 0; p < pixels; p++) rank[p] = 65535 * at(p, 6)
+    const alpha = alphaBytes(rgba)
+    const quantiles = alphaQuantiles(alpha)
+    const calibration = coverCalibration(alpha, c0)
+    const out = new Uint8ClampedArray(pixels * 4)
+    synthesiseForecast(
+      { observed: alpha, quantiles, c0, ct, rank, leadMs: 7 * HOUR_MS, calibration },
+      out
+    )
+    expect(calibration).toBe(0.6666317468950079)
+    expect(fnv(new Uint8Array(quantiles.buffer))).toBe('520d5431')
+    expect(fnv(out)).toBe('9ffdcc18')
+  })
+
   test('a long forecast at the observed cover keeps the observed mean alpha', () => {
     const observed = skewed()
     const cover = new Float32Array(GRID_POINTS).fill(0.66)
-    const calibration = coverCalibration(observed, cover)
+    const calibration = coverCalibration(alphaBytes(observed), cover)
     for (const leadMs of [24 * HOUR_MS, 5 * 24 * HOUR_MS]) {
       const out = synthesise(observed, cover, cover, { leadMs, calibration })
       expect(Math.abs(mean(alphas(out)) - mean(alphas(observed)))).toBeLessThan(0.035)

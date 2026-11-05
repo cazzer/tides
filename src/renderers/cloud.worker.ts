@@ -21,7 +21,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const { id, source, staticUrl, assets } = message
   const abort = new AbortController()
   jobs.set(id, abort)
-  buildCloudImage(source, staticUrl, assets, abort.signal).then(
+  buildCloudImage(source, staticUrl, assets, abort.signal, { deflateBase: true }).then(
     (image) => {
       jobs.delete(id)
       if (abort.signal.aborted) return
