@@ -1697,6 +1697,23 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
     return fragment.replace(FLAT_ENTRY[0] + SHEET_GROUND_EXIT, FLAT_ENTRY[1])
   }
 
+  // The map's channel select (tides-0oi.11): its uniform taken out and the
+  // read put back as it was, so the rest is pinned.
+  const RED_UNIFORM = `// 1 where the map is one channel (the static clouds, R8, tides-0oi.11), its
+// grey in R alone; 0 for an RGBA map (the blend's output).
+uniform float uCloudMapRed;
+`
+  const RED_READ =
+    / {2}\/\/ Smoothed near the poles \(\.\/poleSmoothing\.ts\)\. A one-channel map is\n {2}\/\/ grey, R = G = B, as its RGBA texel was\.\n {2}vec4 raw = ([^;]*);\n {2}vec3 c = uCloudMapRed > 0\.5 \? raw\.rrr : raw\.rgb;\n/
+  const asBeforeRedMap = (text: string) => {
+    const declared = text.split(RED_UNIFORM).length - 1
+    expect(declared).toBeLessThanOrEqual(1)
+    expect(text.split('vec4 cloudColumn(').length - 1).toBe(declared)
+    const read = text.replace(RED_UNIFORM, '').replace(RED_READ, '  // Smoothed near the poles (./poleSmoothing.ts).\n  vec3 c = $1.rgb;\n')
+    expect(read).not.toContain('uCloudMapRed')
+    return read
+  }
+
   for (const flat of [false, true]) {
     const name = `${flat ? 'flat' : 'relief'}-full`
     it(`leaves the untyped programs exactly as tides-tvr.4.2 left them (${name})`, () => {
@@ -1709,8 +1726,8 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
             ...(side === 'back' ? ['FLIP_SIDED'] : []),
             ...(ease === 'ease' ? ['FOG_EASE'] : []),
           ])
-          const vertex = preprocess(vertexShader, defines)
-          const fragment = asBeforeFlatEntry(withoutSkyView(preprocess(fragmentShader, defines)))
+          const vertex = asBeforeRedMap(preprocess(vertexShader, defines))
+          const fragment = asBeforeRedMap(asBeforeFlatEntry(withoutSkyView(preprocess(fragmentShader, defines))))
           expect(vertex + fragment).not.toMatch(TYPED_WORDS)
           expect(sha256(vertex + '\n' + fragment), `${name}-${side}-${ease}`).toBe(
             UNTYPED_SHELL_SHA256[`${name}-${side}-${ease}`]
@@ -1720,7 +1737,7 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
       // The ground's shadow, the globe's and the tiles', is untyped
       // whatever the map, and its text is as it was but for its strength,
       // a uniform since tides-l0z.
-      const head = CLOUD_GROUND_GLSL.head(flat)
+      const head = asBeforeRedMap(CLOUD_GROUND_GLSL.head(flat))
       expect(head).not.toMatch(TYPED_WORDS)
       const asDefine = head
         .replace(
@@ -1767,12 +1784,12 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
         const before = columnOf(preprocess(clouds.material[stage], untyped))
         // The map read as untyped, and the tops read the same way beside
         // it: the same place, mip and smoothing near the poles.
-        const mapRead = before.match(/vec3 c = (cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\))\.rgb;/)
+        const mapRead = before.match(/vec4 raw = (cloudPoleSmoothed\(uCloudMap, st,[^;]*textureLod\(uCloudMap, st, lod\)\));/)
         expect(mapRead).not.toBeNull()
-        expect(column).toContain(`vec3 c = ${mapRead![1]}.rgb;`)
+        expect(column).toContain(`vec4 raw = ${mapRead![1]};\n  vec3 c = uCloudMapRed > 0.5 ? raw.rrr : raw.rgb;`)
         expect(column).toContain(`vec3 typedTop = ${mapRead![1].replace(/uCloudMap/g, 'uCloudTops')}.rgb;`)
         // Nothing from the map's alpha, nor the byte's codes, any more.
-        expect(column).not.toMatch(/\bc\.a\b|TYPED_ZERO|vec4 c = /)
+        expect(column).not.toMatch(/\bc\.a\b|\braw\.a\b|TYPED_ZERO|vec4 c = /)
         // Untyped tops, the untyped column exactly; else the top mixed
         // toward it by how far the texel is untyped, under the map's
         // tallest, and the base lifted, never over it.
@@ -2373,5 +2390,40 @@ describe('the flat sheet from under it (tides-0oi.3)', () => {
       clearLimbView()
       clouds.dispose()
     }
+  })
+})
+
+describe('the static map in one channel (tides-0oi.11)', () => {
+  it('reads a one-channel map as grey, in the shell, typed or not, and the ground', () => {
+    const select = 'vec3 c = uCloudMapRed > 0.5 ? raw.rrr : raw.rgb;'
+    for (const flat of [false, true]) {
+      const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+      for (const defines of [new Set<string>(), new Set(['CLOUD_TYPED'])]) {
+        if (flat) defines.add('CLOUD_FLAT')
+        const src = preprocess(clouds.material.fragmentShader, defines)
+        expect(src).toContain('uniform float uCloudMapRed;')
+        expect(src.split(select).length).toBe(2)
+      }
+      const head = CLOUD_GROUND_GLSL.head(flat)
+      expect(head).toContain('uniform float uCloudMapRed;')
+      expect(head.split(select).length).toBe(2)
+      clouds.dispose()
+    }
+  })
+
+  it('setMap marks a one-channel map, and the uniform is the one the ground and the tiles share', () => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), false)
+    expect(clouds.uniforms.uCloudMapRed.value).toBe(0)
+    const grey = new THREE.Texture()
+    grey.format = THREE.RedFormat
+    clouds.setMap(grey, false, null)
+    expect(clouds.uniforms.uCloudMapRed.value).toBe(1)
+    clouds.setMap(new THREE.Texture(), true, null)
+    expect(clouds.uniforms.uCloudMapRed.value).toBe(0)
+    clouds.setMap(grey, false, null)
+    const shader = { uniforms: {} as Record<string, THREE.IUniform>, vertexShader: '', fragmentShader: '' }
+    Object.assign(shader.uniforms, clouds.uniforms)
+    expect(shader.uniforms.uCloudMapRed).toBe(clouds.uniforms.uCloudMapRed)
+    clouds.dispose()
   })
 })

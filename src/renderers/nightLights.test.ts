@@ -208,7 +208,24 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(out.fragment)))))).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(cloudMapAsBefore(out.fragment))))))).digest('hex')
+  }
+
+  // The cloud map's channel select (tides-0oi.11, cloudShaders.ts
+  // cloudColumn(): the static map is one channel): taken out, its read put
+  // back as it was, so that the pins still hold the rest of the chain.
+  const CLOUD_MAP_RED = `// 1 where the map is one channel (the static clouds, R8, tides-0oi.11), its
+// grey in R alone; 0 for an RGBA map (the blend's output).
+uniform float uCloudMapRed;
+`
+  const CLOUD_MAP_RED_READ =
+    / {2}\/\/ Smoothed near the poles \(\.\/poleSmoothing\.ts\)\. A one-channel map is\n {2}\/\/ grey, R = G = B, as its RGBA texel was\.\n {2}vec4 raw = ([^;]*);\n {2}vec3 c = uCloudMapRed > 0\.5 \? raw\.rrr : raw\.rgb;\n/
+  function cloudMapAsBefore(fragment: string): string {
+    expect(fragment.split(CLOUD_MAP_RED).length).toBe(2)
+    expect(fragment).toMatch(CLOUD_MAP_RED_READ)
+    return fragment
+      .replace(CLOUD_MAP_RED, '')
+      .replace(CLOUD_MAP_RED_READ, '  // Smoothed near the poles (./poleSmoothing.ts).\n  vec3 c = $1.rgb;\n')
   }
 
   // The cloud shadow's strength, a define until tides-l0z made it a uniform

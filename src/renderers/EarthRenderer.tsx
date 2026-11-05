@@ -109,8 +109,8 @@ export default function EarthRenderer({
   const gl = useThree((s) => s.gl)
   prepareMaps(
     gl.capabilities.getMaxAnisotropy(),
-    [earthTexture, nightTexture, cloudsTexture],
-    [specularMap, demTexture, depthMap]
+    [earthTexture, nightTexture],
+    [specularMap, demTexture, depthMap, cloudsTexture]
   )
   // Its columns run on round the date line, as the globe's uv does.
   depthMap.wrapS = THREE.RepeatWrapping
@@ -129,11 +129,17 @@ export default function EarthRenderer({
     return () => canvas.removeEventListener('webglcontextrestored', restart)
   }, [gl])
   // And with no storage for the sea's texture array: the sea ice's layers
-  // go up whole again, not just the changed ones (tides-6ru.2).
+  // go up whole again, not just the changed ones (tides-6ru.2). The real
+  // clouds' frames dropped their pixels once uploaded, so they build afresh
+  // (tides-0oi.11).
   useEffect(() => {
     const canvas = gl.domElement
-    canvas.addEventListener('webglcontextlost', resetSeaIceUpload)
-    return () => canvas.removeEventListener('webglcontextlost', resetSeaIceUpload)
+    const lost = () => {
+      resetSeaIceUpload()
+      realClouds.evictAll()
+    }
+    canvas.addEventListener('webglcontextlost', lost)
+    return () => canvas.removeEventListener('webglcontextlost', lost)
   }, [gl])
   // The Moon's shadow during solar eclipses, on the ground and the clouds.
   const eclipseShadow = useEclipseShadowState('earth')
@@ -461,6 +467,7 @@ export default function EarthRenderer({
         lightsMap={nightTexture}
         seaMask={specularMap}
         cloudMap={clouds.uniforms.uCloudMap}
+        cloudMapRed={clouds.uniforms.uCloudMapRed}
         cloudShift={clouds.uniforms.uCloudShift}
         clouds={!hideClouds}
       />
@@ -633,9 +640,11 @@ function sunInEarthFrame(earth: THREE.Object3D | null | undefined, target: THREE
 /**
  * Sets what three reads at a map's first upload (tides-01v.1): the full
  * anisotropy, which grazing views of the ground need, and one channel for
- * the grey data maps (the specular mask, the elevation map and the sea's
- * depth), a quarter of the VRAM. The material, the cloud shader and the
- * water read their red channel.
+ * the grey data maps (the specular mask, the elevation map, the sea's
+ * depth and the static clouds, tides-0oi.11), a quarter of the VRAM. The
+ * material, the cloud shader and the water read their red channel; the
+ * clouds' programs, which also read the RGBA real-weather maps, pick it by
+ * uCloudMapRed (cloudBlend.ts isRedOnly()).
  */
 function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Texture[]) {
   for (const map of colour) map.anisotropy = anisotropy

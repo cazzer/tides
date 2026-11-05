@@ -278,6 +278,16 @@ export function createRealCloudController<T>({ build, dispose, isCold }: CloudCo
       pump()
       publish()
     },
+    /** Frees every cached frame, for a lost context (their pixels went once
+     * uploaded: realCloudTextures.ts): the plan's frames build afresh. Builds
+     * in flight run on. */
+    evictAll() {
+      for (const entry of cache.values()) dispose(entry.texture)
+      cache.clear()
+      failed.clear()
+      publish()
+      pump()
+    },
     /** Stops fetching; the cache is kept for when Real weather comes back. */
     deactivate() {
       for (const b of inFlight.values()) b.abort.abort()

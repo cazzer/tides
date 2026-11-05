@@ -12,7 +12,7 @@ import * as THREE from 'three'
 import { OUT_H, OUT_W } from '../real-clouds'
 import { TYPE_H, TYPE_W } from '../cloud-types'
 import { buildCloudImage, type CloudAssets, type CloudImage, type GeoTextureInfo } from './cloudPipeline'
-import { createCloudBlender } from './cloudBlend'
+import { coverOf, createCloudBlender, releasePixelsOnUpload } from './cloudBlend'
 import { createCloudImageBuilder, type CloudWorker } from './cloudWorkerClient'
 import { createRealCloudController, type CloudSnapshot, type ImagerySource } from './realCloudController'
 import earthSpecular from '../assets/earth-specular-2k.jpg'
@@ -86,6 +86,10 @@ function textureOf({ rgba, geo, cold, held, types, precip }: CloudImage): THREE.
   texture.userData.held = Boolean(held)
   texture.userData.types = types ? gridTextureOf(types) : null
   texture.userData.precip = precip ? gridTextureOf(precip) : null
+  // Its alpha alone stays for the CPU (falling precipitation), a quarter of
+  // the pixels, which go once uploaded (tides-0oi.11).
+  texture.userData.cover = coverOf(rgba, OUT_W, OUT_H)
+  releasePixelsOnUpload(texture)
   texture.needsUpdate = true
   return texture
 }

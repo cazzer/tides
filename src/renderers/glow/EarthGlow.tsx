@@ -46,6 +46,7 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D emissiveMap;
   uniform sampler2D tSea;
   uniform sampler2D uCloudMap;
+  uniform float uCloudMapRed;
   uniform float uCloudShift;
   uniform float uClouds;
   uniform vec3 uNightLightsSun;
@@ -86,7 +87,8 @@ const fragmentShader = /* glsl */ `
 
     // Under cloud both are hidden, as the deck hides them on screen.
     vec2 st = vec2(fract(vUv.x - uCloudShift), vUv.y);
-    float cover = texture2D(uCloudMap, st).g * uClouds;
+    vec4 cloud = texture2D(uCloudMap, st);
+    float cover = (uCloudMapRed > 0.5 ? cloud.r : cloud.g) * uClouds;
     float through = mix(1.0, ${f(GLOW_CLOUD_FLOOR)},
       smoothstep(${f(GLOW_CLOUD_COVER[0])}, ${f(GLOW_CLOUD_COVER[1])}, cover));
 
@@ -99,8 +101,10 @@ export interface EarthGlowProps {
   /** The ground's night map and its water (specular) mask. */
   lightsMap: THREE.Texture
   seaMask: THREE.Texture
-  /** The cloud layer's map and its drift. */
+  /** The cloud layer's map, whether it is one channel (its grey in R), and
+   * its drift. */
   cloudMap: THREE.IUniform<THREE.Texture | null>
+  cloudMapRed: THREE.IUniform<number>
   cloudShift: THREE.IUniform<number>
   /** Whether the cloud deck is drawn. */
   clouds: boolean
@@ -141,7 +145,7 @@ function setSun(material: THREE.ShaderMaterial, mesh: THREE.Object3D) {
 const lightsColor = new THREE.Color(CITY_LIGHTS_COLOR).multiplyScalar(CITY_LIGHTS_INTENSITY * CITY_GLOW_GAIN)
 const sunWorld = new THREE.Vector3()
 
-function EarthGlowOn({ geometry, lightsMap, seaMask, cloudMap, cloudShift, clouds }: EarthGlowProps) {
+function EarthGlowOn({ geometry, lightsMap, seaMask, cloudMap, cloudMapRed, cloudShift, clouds }: EarthGlowProps) {
   const mesh = useRef<THREE.Mesh>(null)
   useGlowSource(mesh, GLOW_ORDER.opaque)
   const material = useMemo(
@@ -153,6 +157,7 @@ function EarthGlowOn({ geometry, lightsMap, seaMask, cloudMap, cloudShift, cloud
           emissiveMap: { value: lightsMap },
           tSea: { value: seaMask },
           uCloudMap: cloudMap,
+          uCloudMapRed: cloudMapRed,
           uCloudShift: cloudShift,
           uClouds: { value: clouds ? 1 : 0 },
           uNightLightsSun: { value: new THREE.Vector3(1, 0, 0) },
