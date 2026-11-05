@@ -107,10 +107,10 @@ function setViewHeight(looks: readonly { userData: MoonPickData }[], height: num
 // Switches a moon's material to its map (one shared compiled program for
 // every textured moon). Module level, like placeMoons.
 function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
+  material.userData.compileLater = false
   if (material.uniforms.uMap.value === map) return
   material.uniforms.uMap.value = map
   material.defines.USE_PLANET_MAP = ''
-  material.userData.compileLater = false
   material.needsUpdate = true
 }
 

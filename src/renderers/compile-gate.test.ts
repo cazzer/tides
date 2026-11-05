@@ -85,16 +85,26 @@ describe('allShownReady', () => {
 
 describe('afterRound', () => {
   const round = (over: Partial<Parameters<typeof afterRound>[0]>) =>
-    afterRound({ outcome: 'done', added: false, loaded: true, quiet: 0, ...over }, 2)
+    afterRound({ outcome: 'done', added: false, loaded: true, quiet: 0, deferred: false, final: false, ...over }, 2)
 
   it('warms after two quiet rounds in a row', () => {
-    expect(round({ quiet: 0 })).toEqual({ next: 'compile', quiet: 1 })
-    expect(round({ quiet: 1 })).toEqual({ next: 'warm', quiet: 2 })
+    expect(round({ quiet: 0 })).toEqual({ next: 'compile', quiet: 1, final: false })
+    expect(round({ quiet: 1 })).toEqual({ next: 'warm', quiet: 2, final: false })
+  })
+
+  it('runs one last round with what was left out, then warms', () => {
+    expect(round({ quiet: 0, deferred: true })).toEqual({ next: 'compile', quiet: 1, final: false })
+    expect(round({ quiet: 1, deferred: true })).toEqual({ next: 'compile', quiet: 2, final: true })
+    expect(round({ quiet: 2, deferred: true, final: true, added: true })).toEqual({ next: 'warm', quiet: 2, final: true })
+  })
+
+  it('shows the scene when the last round times out', () => {
+    expect(round({ quiet: 2, final: true, outcome: 'timeout' })).toEqual({ next: 'reveal', quiet: 2, final: true })
   })
 
   it('starts the count again on a round that added programs or with assets still loading', () => {
-    expect(round({ quiet: 1, added: true })).toEqual({ next: 'compile', quiet: 0 })
-    expect(round({ quiet: 1, loaded: false })).toEqual({ next: 'compile', quiet: 0 })
+    expect(round({ quiet: 1, added: true })).toEqual({ next: 'compile', quiet: 0, final: false })
+    expect(round({ quiet: 1, loaded: false })).toEqual({ next: 'compile', quiet: 0, final: false })
   })
 
   it('shows the scene after a round that timed out', () => {

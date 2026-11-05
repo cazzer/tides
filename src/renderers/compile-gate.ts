@@ -89,20 +89,34 @@ export interface RoundOutcome {
   next: 'compile' | 'warm' | 'reveal'
   /** Quiet rounds in a row so far. */
   quiet: number
+  /** Whether the next round takes in what compilesAhead leaves out. */
+  final: boolean
 }
 
 /**
  * After a compile round: another round, unless `quietRounds` in a row have
  * found nothing new (`added`) with every asset in (`loaded`); then the warm.
+ * If one of those rounds left an object out (`deferred`, compilesAhead), one
+ * last round (`final`) compiles it as it is, since it will draw so: its map
+ * didn't arrive in time, and its draw on the reveal frame mustn't link it.
  * A round that timed out shows the scene as it is.
  */
 export function afterRound(
-  { outcome, added, loaded, quiet }: { outcome: 'done' | 'timeout'; added: boolean; loaded: boolean; quiet: number },
+  {
+    outcome,
+    added,
+    loaded,
+    quiet,
+    deferred,
+    final,
+  }: { outcome: 'done' | 'timeout'; added: boolean; loaded: boolean; quiet: number; deferred: boolean; final: boolean },
   quietRounds: number
 ): RoundOutcome {
-  if (outcome === 'timeout') return { next: 'reveal', quiet }
+  if (outcome === 'timeout') return { next: 'reveal', quiet, final }
+  if (final) return { next: 'warm', quiet, final }
   const now = added || !loaded ? 0 : quiet + 1
-  return { next: now >= quietRounds ? 'warm' : 'compile', quiet: now }
+  if (now < quietRounds) return { next: 'compile', quiet: now, final: false }
+  return { next: deferred ? 'compile' : 'warm', quiet: now, final: deferred }
 }
 
 /**
