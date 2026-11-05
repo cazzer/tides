@@ -37,7 +37,7 @@ import { GlowPass } from './renderers/glow/GlowPass'
 import { GlowView } from './renderers/glow/glowSources'
 import { CompileGate } from './renderers/CompileGate'
 import { HeldPanel, usePanelsPaced } from './renderers/HeldPanel'
-import { IdleCameraWatch, IdleRate, rootFrameloop } from './renderers/IdleRate'
+import { IdleCameraWatch, IdleRate, ROOT_FRAMELOOP } from './renderers/IdleRate'
 import { isLowQuality } from './quality'
 import { allShownReady } from './renderers/compile-gate'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
@@ -221,7 +221,7 @@ export default function App() {
         <RootCanvas
           shadows
           // 'never' with ?idlehz=auto on the low tier: IdleRate drives the frame (tides-0oi.31).
-          frameloop={rootFrameloop()}
+          frameloop={ROOT_FRAMELOOP}
           eventSource={document.getElementById('root')}
           className="canvas"
           gl={{

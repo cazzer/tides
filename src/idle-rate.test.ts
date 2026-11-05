@@ -44,6 +44,7 @@ describe('isIdle', () => {
     sceneReady: true,
     openingDone: true,
     dprSettled: true,
+    busy: false,
   }
   it('is idle 2 s after the last activity at real time, paused or reversed', () => {
     expect(isIdle(still)).toBe(true)
@@ -61,6 +62,7 @@ describe('isIdle', () => {
     ['before the scene is ready', { sceneReady: false }],
     ['during the opening move', { openingDone: false }],
     ['while the paced dpr can still climb', { dprSettled: false }],
+    ['while per-frame work is queued', { busy: true }],
   ]
   for (const [name, change] of cases) {
     it(`is not idle ${name}`, () => expect(isIdle({ ...still, ...change })).toBe(false))

@@ -324,7 +324,8 @@ const IN_PAGE = async () => {
   // Stop/restart R3F's loop: pause after settling so this page draws nothing while others time (replays still work).
   H.root = rootState
   // With ?idlehz=auto the frameloop is already 'never' and IdleRate's rAF driver draws (tides-0oi.31): hold that
-  // instead (setFrameloop would also zero the clock under it).
+  // instead (setFrameloop would also zero the clock under it). With the driver, resume's first frame gets one delta
+  // covering the whole pause (its clock runs on with wall time): fine after __H.freeze, which stops sim time.
   H.pause = () => (window.__idleRate ? window.__idleRate.hold(true) : H.root().setFrameloop('never'))
   H.resume = () => (window.__idleRate ? window.__idleRate.hold(false) : H.root().setFrameloop('always'))
   H.freeze = () => {

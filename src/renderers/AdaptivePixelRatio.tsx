@@ -16,7 +16,7 @@ import {
   type PacedDprState,
 } from '../paced-dpr'
 import { createGpuFrameTimer, type GpuFrameTimer } from './gpu-frame-timer'
-import { idleCapHeld, reportDprSettled } from './IdleRate'
+import { idleCapHeld, reportDprSettled } from '../idle-driver'
 import { isLowQuality } from '../quality'
 import { useStore } from '../store'
 
@@ -138,7 +138,7 @@ function runFixed(get: GetRoot, dpr: number): () => void {
  * the frame before it (from the global before-effect to the after-effect,
  * around every root's and View's useFrame and draws) go to stepPacedDpr.
  */
-function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
+export function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   const state = createPacedDprState(window.devicePixelRatio, get().viewport.dpr, config)
   const debug = window.__dprctl
   if (debug) debug.state = state

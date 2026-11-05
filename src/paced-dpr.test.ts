@@ -454,6 +454,7 @@ describe('pacedDprSettled: when the idle cap may engage (tides-0oi.31)', () => {
     sceneReady: true,
     openingDone: true,
     dprSettled: true,
+    busy: false,
   }
   /** Steps `s` seconds, half a second at a time, logging the ratio and whether a still view would be idle. */
   function track(state: PacedDprState, clock: { at: number }, log: PacedDprChange[], s: number, run: Omit<Run, 's'> = {}) {

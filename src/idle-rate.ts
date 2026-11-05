@@ -49,6 +49,8 @@ export interface IdleInput {
   openingDone: boolean
   /** The paced dpr controller has stopped climbing (paced-dpr.ts pacedDprSettled): it can't climb under the cap. */
   dprSettled: boolean
+  /** Fixed-per-frame work is queued (tile uploads, shader warm-ups): the cap would halve its pace. */
+  busy: boolean
 }
 
 /** Whether this frame may be held to the idle rate. */
@@ -57,6 +59,7 @@ export function isIdle(input: IdleInput): boolean {
     input.sceneReady &&
     input.openingDone &&
     input.dprSettled &&
+    !input.busy &&
     !input.jumping &&
     !input.demo &&
     !input.ship &&
@@ -108,4 +111,25 @@ export function cameraMoving(turnRad: number, moveShare: number, dtMs: number): 
   if (!(dtMs > 0)) return false
   const s = dtMs / 1000
   return (turnRad * 180) / Math.PI / s > CAMERA_TURN_DEG_S || moveShare / s > CAMERA_MOVE_PER_S
+}
+
+/**
+ * What a store change counts as: the first changed key but `timestamp` (the
+ * sim clock's own tick, every frame), or null. A tick changes only
+ * `timestamp`, so it checks every key and finds nothing.
+ */
+export function storeActivity<T extends object>(state: T, previous: T): string | null {
+  if (state === previous) return null
+  for (const key in state) {
+    if (key !== 'timestamp' && state[key] !== previous[key]) return key
+  }
+  return null
+}
+
+/** Whether the canvas resized or its pixel ratio changed (R3F's root state): setSize clears it, so the next tick must draw. */
+export function sizeActivity(
+  state: { size: unknown; viewport: { dpr: number } },
+  previous: { size: unknown; viewport: { dpr: number } }
+): boolean {
+  return state.size !== previous.size || state.viewport.dpr !== previous.viewport.dpr
 }
