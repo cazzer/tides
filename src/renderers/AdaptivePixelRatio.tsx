@@ -6,6 +6,7 @@ import {
   createPacedDprState,
   DEFAULT_PACED_DPR_CONFIG,
   hasPacedTuning,
+  pacedDprSettled,
   parsePacedDprConfig,
   stepPacedDpr,
   viewKindOf,
@@ -15,7 +16,7 @@ import {
   type PacedDprState,
 } from '../paced-dpr'
 import { createGpuFrameTimer, type GpuFrameTimer } from './gpu-frame-timer'
-import { idleCapHeld } from './IdleRate'
+import { idleCapHeld, reportDprSettled } from './IdleRate'
 import { isLowQuality } from '../quality'
 import { useStore } from '../store'
 
@@ -163,6 +164,7 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
       // The idle cap's 30 Hz isn't a missed frame: paused while it holds (tides-0oi.31).
       sample.capped = idleCapHeld()
       stepPacedDpr(state, sample, config)
+      reportDprSettled(pacedDprSettled(state, config))
       // Every change, and the events that keep the ratio ('capped').
       if (state.last !== before && state.last) {
         debug?.changes.push(state.last)
@@ -184,9 +186,12 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   const unsubscribeAfter = addAfterEffect(() => {
     lastCpuMs = performance.now() - cpuStart
   })
+  // Climbing until it says otherwise: the idle cap waits (tides-0oi.31).
+  reportDprSettled(false)
   return () => {
     unsubscribeBefore()
     unsubscribeAfter()
+    reportDprSettled(true)
   }
 }
 

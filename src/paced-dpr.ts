@@ -467,6 +467,33 @@ function change(
   restart(state, at, config)
 }
 
+const DROP_REASONS: ReadonlySet<PacedDprChange['reason']> = new Set(['drop', 'fast', 'held', 'thermal', 'probe'])
+
+/**
+ * Whether the controller has stopped climbing, so frames held to the idle
+ * cap (tides-0oi.31), which it can't judge, cost it nothing: off or fixed;
+ * at the current view's ceiling once the raise there has held a window; after a raise bounced or heat lengthened
+ * the dwell (dwellMs over the base); held after a CPU probe or on a capped
+ * display; or after a drop, with a full window since that isn't good enough
+ * to start a raise. Until then it needs uncapped frames to climb, and the
+ * cap waits.
+ */
+export function pacedDprSettled(state: PacedDprState, config: PacedDprConfig = DEFAULT_PACED_DPR_CONFIG): boolean {
+  if (config.off || config.fixed != null) return true
+  // A raise not yet judged (its first full window) could still bounce.
+  if (state.kind == null || state.levelsKind !== state.kind || state.probation) return false
+  if (state.dpr >= state.levels[0] - 1e-9) return true
+  if (state.dwellMs > config.raiseDwellMs || state.capped) return true
+  const reason = state.last?.reason
+  if (reason === 'cpu' || reason === 'capped') return true
+  return (
+    reason != null &&
+    DROP_REASONS.has(reason) &&
+    state.kept >= config.minSamples &&
+    state.goodSince === null
+  )
+}
+
 export interface PacedDprSample {
   /** The rAF timestamp of the frame that ends the interval. */
   at: number

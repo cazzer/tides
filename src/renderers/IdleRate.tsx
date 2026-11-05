@@ -19,6 +19,9 @@ declare global {
       skips: number
       /** What last counted as activity: an event type, a store key, or 'camera'. */
       lastActivity: string
+      /** Whether the cap holds now, and whether the paced dpr has stopped climbing. */
+      readonly capHeld: boolean
+      readonly dprSettled: boolean
     }
   }
 }
@@ -33,10 +36,17 @@ export function rootFrameloop(): 'always' | 'never' {
 // Module state, shared by the driver, the camera watch and the paced dpr.
 let activityAt = -Infinity
 let capHeld = false
+// The paced dpr controller's pacedDprSettled, reported by AdaptivePixelRatio; true when it doesn't run.
+let dprSettled = true
 
 function markActivity(what: string) {
   activityAt = performance.now()
   if (window.__idleRate) window.__idleRate.lastActivity = what
+}
+
+/** AdaptivePixelRatio's paced controller reports whether it has stopped climbing (the cap waits until then). */
+export function reportDprSettled(settled: boolean): void {
+  dprSettled = settled
 }
 
 /** Whether the idle cap holds this frame: the paced dpr controller pauses meanwhile (paced-dpr.ts). */
@@ -90,6 +100,12 @@ export function IdleRate({ sceneReady }: { sceneReady: boolean }): null {
       draws: 0,
       skips: 0,
       lastActivity: '',
+      get capHeld() {
+        return capHeld
+      },
+      get dprSettled() {
+        return dprSettled
+      },
     })
     const onActivity = (event: Event) => markActivity(event.type)
     for (const type of ACTIVITY_EVENTS) {
@@ -126,6 +142,7 @@ export function IdleRate({ sceneReady }: { sceneReady: boolean }): null {
           ship: shipMode,
           sceneReady: ready.current,
           openingDone: opening.done,
+          dprSettled,
         })
       capHeld = idle
       if (!idleTick(schedule, ts, idle, periodMs)) {

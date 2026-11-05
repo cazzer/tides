@@ -47,6 +47,8 @@ export interface IdleInput {
   sceneReady: boolean
   /** The opening move has played or been cut short. */
   openingDone: boolean
+  /** The paced dpr controller has stopped climbing (paced-dpr.ts pacedDprSettled): it can't climb under the cap. */
+  dprSettled: boolean
 }
 
 /** Whether this frame may be held to the idle rate. */
@@ -54,6 +56,7 @@ export function isIdle(input: IdleInput): boolean {
   return (
     input.sceneReady &&
     input.openingDone &&
+    input.dprSettled &&
     !input.jumping &&
     !input.demo &&
     !input.ship &&
@@ -89,12 +92,16 @@ export function idleTick(schedule: IdleSchedule, ts: number, idle: boolean, peri
 
 /** Camera motion over these marks activity: turning (degrees a second)... */
 export const CAMERA_TURN_DEG_S = 0.05
+/** Earth's spin, rad/s (one sidereal day). */
+const EARTH_SPIN_RAD_S = (2 * Math.PI) / 86164.1
+
 /**
  * ...or the eye moving about its target (a share of its distance from it, a
- * second): over Earth's spin (7.3e-5 rad/s), which close zoom follows, so a
- * still close-zoom view stays capped.
+ * second). Close zoom follows Earth's spin, which turns that offset at
+ * EARTH_SPIN_RAD_S (7.3e-5/s): three times that (2.2e-4/s) keeps a still
+ * close-zoom view capped with room for frame-to-frame noise.
  */
-export const CAMERA_MOVE_PER_S = 1e-4
+export const CAMERA_MOVE_PER_S = 3 * EARTH_SPIN_RAD_S
 
 /** Whether a camera turning `turnRad` and moving `moveShare` (of its target distance) over `dtMs` is moving. */
 export function cameraMoving(turnRad: number, moveShare: number, dtMs: number): boolean {

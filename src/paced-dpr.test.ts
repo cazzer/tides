@@ -3,6 +3,7 @@ import {
   createPacedDprState,
   DEFAULT_PACED_DPR_CONFIG,
   hasPacedTuning,
+  pacedDprSettled,
   parsePacedDprConfig,
   stepPacedDpr,
   viewKindOf,
@@ -12,6 +13,7 @@ import {
   type ViewKind,
 } from './paced-dpr'
 import { dprControllerMode } from './renderers/AdaptivePixelRatio'
+import { isIdle, type IdleInput } from './idle-rate'
 
 const VSYNC = 1000 / 60
 
@@ -438,6 +440,72 @@ describe('paced dpr under the idle cap (tides-0oi.31)', () => {
       stepPacedDpr(state, sample(clock.at, 1000 / 30, false))
     }
     expect(state.dpr).toBeLessThan(dpr)
+  })
+})
+
+describe('pacedDprSettled: when the idle cap may engage (tides-0oi.31)', () => {
+  const still: IdleInput = {
+    now: 0,
+    activityAt: -Infinity,
+    timeScale: 1,
+    jumping: false,
+    demo: false,
+    ship: false,
+    sceneReady: true,
+    openingDone: true,
+    dprSettled: true,
+  }
+  /** Steps `s` seconds, half a second at a time, logging the ratio and whether a still view would be idle. */
+  function track(state: PacedDprState, clock: { at: number }, log: PacedDprChange[], s: number, run: Omit<Run, 's'> = {}) {
+    const out: { dpr: number; idle: boolean }[] = []
+    for (let i = 0; i < s * 2; i++) {
+      sim(state, clock, log, { ...run, s: 0.5 })
+      out.push({ dpr: state.dpr, idle: isIdle({ ...still, dprSettled: pacedDprSettled(state, run.config) }) })
+    }
+    return out
+  }
+
+  it('holds idle off while the system view climbs from 2 to 3, and engages once at 3', () => {
+    const { state, clock, log } = setup(3, 2)
+    const steps = track(state, clock, log, 60, { gpu: () => 5 })
+    const top = steps.findIndex((x) => x.dpr === 3)
+    expect(top).toBeGreaterThan(0)
+    expect(steps.slice(0, top).every((x) => !x.idle)).toBe(true)
+    expect(steps.slice(0, top).some((x) => x.dpr > 2)).toBe(true)
+    // Not on the raise to 3 itself: its first full window must hold first.
+    expect(steps[top].idle).toBe(false)
+    expect(steps.slice(top + 6).every((x) => x.idle)).toBe(true)
+    expect(state.dpr).toBe(3)
+  })
+
+  it('engages after a raise bounces', () => {
+    const { state, clock, log } = setup(3, 2)
+    // 2.5 and up miss the 60 Hz budget: the raise to 2.5 drops back.
+    const steps = track(state, clock, log, 60, { gpu: (dpr) => (dpr >= 2.5 ? 22 : 5) })
+    const bounce = log.findIndex((c) => c.bounced)
+    expect(bounce).toBeGreaterThanOrEqual(0)
+    expect(state.dpr).toBeLessThan(2.5)
+    expect(steps[steps.length - 1].idle).toBe(true)
+    // ...and was off before the bounce settled it.
+    expect(steps.slice(0, 4).every((x) => !x.idle)).toBe(true)
+  })
+
+  it('engages at once under fixed or off', () => {
+    const state = createPacedDprState(3, 2)
+    expect(pacedDprSettled(state, parsePacedDprConfig('?dprctl=fixed:2', () => {})!)).toBe(true)
+    expect(pacedDprSettled(state, parsePacedDprConfig('?dprctl=off', () => {})!)).toBe(true)
+    expect(pacedDprSettled(state)).toBe(false)
+  })
+
+  it('stays put under capped samples: the settled verdict holds through the cap', () => {
+    const { state, clock, log } = setup(3, 2)
+    track(state, clock, log, 3, { gpu: () => 5 })
+    const before = pacedDprSettled(state)
+    for (let i = 0; i < 300; i++) {
+      clock.at += 1000 / 30
+      stepPacedDpr(state, { at: clock.at, intervalMs: 1000 / 30, cpuMs: 4, lagMs: 0.5, kind: 'system', nativeDpr: 3, capped: true })
+    }
+    expect(pacedDprSettled(state)).toBe(before)
   })
 })
 

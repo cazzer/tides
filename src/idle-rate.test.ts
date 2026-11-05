@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CAMERA_MOVE_PER_S,
   cameraMoving,
   createIdleSchedule,
   IDLE_AFTER_MS,
@@ -42,6 +43,7 @@ describe('isIdle', () => {
     ship: false,
     sceneReady: true,
     openingDone: true,
+    dprSettled: true,
   }
   it('is idle 2 s after the last activity at real time, paused or reversed', () => {
     expect(isIdle(still)).toBe(true)
@@ -58,6 +60,7 @@ describe('isIdle', () => {
     ['in ship mode', { ship: true }],
     ['before the scene is ready', { sceneReady: false }],
     ['during the opening move', { openingDone: false }],
+    ['while the paced dpr can still climb', { dprSettled: false }],
   ]
   for (const [name, change] of cases) {
     it(`is not idle ${name}`, () => expect(isIdle({ ...still, ...change })).toBe(false))
@@ -114,14 +117,15 @@ describe('idleTick', () => {
 
 describe('cameraMoving', () => {
   const frame = 1000 / 30
-  it("ignores Earth's spin (close zoom follows it)", () => {
+  it("ignores Earth's spin (close zoom follows it), with room to spare", () => {
     const spin = (2 * Math.PI) / 86164 // rad/s
-    expect(cameraMoving(spin * (frame / 1000), spin * (frame / 1000), frame)).toBe(false)
+    expect(cameraMoving(spin * (frame / 1000), 2 * spin * (frame / 1000), frame)).toBe(false)
+    expect(CAMERA_MOVE_PER_S).toBeGreaterThan(2e-4)
   })
   it('catches a slow turn or move', () => {
     const turn = ((0.1 * Math.PI) / 180) * (frame / 1000) // 0.1 deg/s
     expect(cameraMoving(turn, 0, frame)).toBe(true)
-    expect(cameraMoving(0, 2e-4 * (frame / 1000), frame)).toBe(true)
+    expect(cameraMoving(0, 5e-4 * (frame / 1000), frame)).toBe(true)
   })
   it('is still with no time passed', () => {
     expect(cameraMoving(1, 1, 0)).toBe(false)
