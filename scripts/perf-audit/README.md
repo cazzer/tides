@@ -17,6 +17,7 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
 | `sphere-lod.cjs` | tides-0oi.16's proof: the body spheres sized to the screen against the 128x128 top level, swapped in the same tick: levels per View, pixel stats and board composites per pose, triangles per View, paired timing. |
+| `glow-ab.cjs` | CLI: same-tick pixel A/B/A2 and paired wall timing of the real glow pass with one of its `glowPassSwitches` off (scissor, depth invalidate, compact targets), plus a no-glow control and board composites (tides-0oi.15). |
 | `cold-start.cjs` | CLI: the cold start's longest main-thread block, from a CDP Profiler run started before the page loads, with each program's first use, the Sun bake's first face, mip passes and the loading screen's reveal (tides-0oi.6). |
 
 ## Setup
@@ -86,6 +87,18 @@ A pair's `from` is a string (every occurrence) or `{ re, flags }`.
 - `K`, `N`: renders per round and number of rounds.
 - `SHOT=<png>`: screenshot the pose. Check it before trusting a number.
 - `NOTIME=1`: pixels only, no timing.
+
+## The glow pass: exact? how much?
+
+```bash
+cd scripts/perf-audit
+VARS=noScissor,glowOff PARAMS='{"quality":"high"}' NOTIME=1 node glow-ab.cjs
+VARS=noScissor,noInvalidate,half,glowOff PARAMS='{"quality":"low","glow":"1"}' K=24 N=16 node glow-ab.cjs
+```
+
+It draws a fresh `createGlowPass()` around the recorded View draws, so it measures the shipped code, not a port.
+A vs B is a switch off against all of them on; `glowOff` is the control (no glow at all) and the glow's total cost.
+`PASSONLY=1` times the pass without the View draws, where the composite's fill shows; read `dWall`.
 
 ## Cold start: how long does the main thread block?
 

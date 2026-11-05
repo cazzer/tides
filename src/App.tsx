@@ -34,6 +34,7 @@ import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
 import { DepthInfo } from './renderers/DepthInfo'
 import { GlowPass } from './renderers/glow/GlowPass'
+import { GlowView } from './renderers/glow/glowSources'
 import { CompileGate } from './renderers/CompileGate'
 import { allShownReady } from './renderers/compile-gate'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
@@ -273,16 +274,19 @@ export default function App() {
           >
             <MainCamera />
             <EnablePinLayerForCamera />
-            <Scene
-              background="black"
-              matrix={matrix}
-              interactive
-              mainSlot={panelProps('main').gridArea === 'main'}
-              showOrbitLabels
-              hold={!sceneReady}
-              onReady={() => markReady('main')}
-              onUnready={() => markUnready('main')}
-            />
+            {/* Its sources glow (GlowPass below); the side panels' don't. */}
+            <GlowView>
+              <Scene
+                background="black"
+                matrix={matrix}
+                interactive
+                mainSlot={panelProps('main').gridArea === 'main'}
+                showOrbitLabels
+                hold={!sceneReady}
+                onReady={() => markReady('main')}
+                onUnready={() => markUnready('main')}
+              />
+            </GlowView>
             <MainControls />
             {/* Rain and snow round the eye in close zoom (tides-bl3.8). */}
             <FallingPrecip eye="system" />
