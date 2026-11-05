@@ -14,7 +14,7 @@ import { CdpConnection, CdpPage, browserWsUrl, sleep } from './cdp.mjs'
 import { INIT_SCRIPT, PROBE_SCRIPT } from './inpage.mjs'
 import { POSES, expandPoses, poseUrl, roundOrder } from './poses.mjs'
 import { writeReport } from './report.mjs'
-import { summariseFrames } from './stats.mjs'
+import { estimateRefreshPeriod, summariseFrames } from './stats.mjs'
 import { TRACE_CATEGORIES, summariseProfile, summariseTrace } from './trace.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -50,6 +50,8 @@ const config = {
 
 const log = (...args) => console.log(...args)
 const children = []
+// What shutdown() must undo however the run ends (error, Ctrl-C).
+const active = { device: null, connection: null, page: null }
 
 async function main() {
   if (!['phone', 'desktop'].includes(config.target)) throw new Error(`TARGET must be phone or desktop, not ${config.target}`)
@@ -62,7 +64,9 @@ async function main() {
   if (config.serve !== 'none') await startServer()
 
   const device = config.target === 'phone' ? await openPhone() : await openDesktop()
+  active.device = device
   const connection = await CdpConnection.open((await browserWsUrl(config.cdpPort)).url)
+  active.connection = connection
   const browserVersion = await connection.send('Browser.getVersion')
   log(`browser: ${browserVersion.product} (${config.target})`)
 
@@ -92,8 +96,6 @@ async function main() {
     fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify({ meta, results }, null, 1))
     const report = writeReport(outDir, { meta, results })
     log(`\nreport: ${report}`)
-    connection.close()
-    await device.close()
   }
 }
 
@@ -122,6 +124,7 @@ async function measureWithGuards(connection, device, item, base, round) {
 
 async function measurePose(connection, device, item, base) {
   const page = await CdpPage.create(connection)
+  active.page = page
   try {
     if (device.emulate) await device.emulate(page)
     await page.send('Page.addScriptToEvaluateOnNewDocument', {
@@ -145,6 +148,12 @@ async function measurePose(connection, device, item, base) {
       })
     }
     await sleep(item.settleMs * config.settleScale)
+    if (item.setup && /__(main|ship)Pose/.test(item.setup)) {
+      // The hook must have run every frame of the settle, or the pose
+      // measured the default view.
+      const hits = await page.evaluate('window.__ppPoseHits ?? 0')
+      if (hits < 30) throw new Error(`Pose hook ran ${hits} times during the settle; the pose did not take`)
+    }
     const visibility = await page.evaluate('document.visibilityState')
     if (visibility !== 'visible') throw new Error(`Page is ${visibility}; rAF would not run (is the screen on and the tab in front?)`)
 
@@ -153,13 +162,19 @@ async function measurePose(connection, device, item, base) {
     const sample = await page.evaluate(`window.__ppProbe.sample(${config.durationMs})`, {
       timeoutMs: config.durationMs + 30000,
     })
-    const refreshHz = config.refreshHz ?? device.info.displayFps
-    const frames = summariseFrames(sample.deltas, refreshHz ? 1000 / refreshHz : undefined)
+    // The display's rate can change under adaptive refresh, so the faster of
+    // the reported rate and the fastest steady frames sets the vsync period.
+    const reportedHz = config.refreshHz ?? (device.serial ? await adb.displayFps(device.serial) : null)
+    const estimated = estimateRefreshPeriod(sample.deltas)
+    const periodMs = reportedHz ? Math.min(1000 / reportedHz, estimated ?? Infinity) : estimated
+    const frames = summariseFrames(sample.deltas, periodMs)
     const gpu = sample.gpuMs.length ? summariseFrames(sample.gpuMs) : null
 
     log(`  tracing ${config.traceMs} ms`)
-    const { trace, traceFrames } = await captureTrace(connection, page)
-    const traceSummary = summariseTrace(trace, { urlFragment: '/tides/', frames: traceFrames })
+    const marks = [`pp:trace:start:${process.pid}:${Date.now()}`, `pp:trace:end:${process.pid}:${Date.now()}`]
+    const { trace, traceFrames } = await captureTrace(connection, page, marks)
+    const traceSummary = summariseTrace(trace, { targetId: page.targetId, url, frames: traceFrames, marks })
+    if (traceSummary.error) log(`  trace: ${traceSummary.error}`)
     if (config.keepTrace) {
       fs.writeFileSync(path.join(config.out ?? os.tmpdir(), `trace-${item.key}-${Date.now()}.json`), JSON.stringify(trace))
     }
@@ -187,11 +202,12 @@ async function measurePose(connection, device, item, base) {
     )
     return result
   } finally {
+    active.page = null
     await page.close()
   }
 }
 
-async function captureTrace(connection, page) {
+async function captureTrace(connection, page, marks) {
   const events = []
   const offData = connection.on('Tracing.dataCollected', ({ value }) => events.push(...value))
   await connection.send('Tracing.start', {
@@ -200,7 +216,10 @@ async function captureTrace(connection, page) {
   })
   let traceFrames
   try {
-    const sample = await page.evaluate(`window.__ppProbe.sample(${config.traceMs})`, { timeoutMs: config.traceMs + 30000 })
+    const sample = await page.evaluate(
+      `window.__ppProbe.sample(${config.traceMs}, ${JSON.stringify(marks)})`,
+      { timeoutMs: config.traceMs + 30000 }
+    )
     traceFrames = sample.deltas.length
   } finally {
     const complete = connection.waitFor('Tracing.tracingComplete', undefined, 120000)
@@ -304,13 +323,20 @@ async function openDesktop() {
 async function openPhone() {
   const serial = adb.pickSerial(await adb.adb(null, "devices", "-l"), env.ADB_SERIAL ?? env.ANDROID_SERIAL)
   log(`phone: ${serial}`)
-  const prepared = await adb.prepareDevice(serial, { cdpPort: config.cdpPort, vitePort: config.vitePort })
+  const ports = { cdpPort: config.cdpPort, vitePort: config.vitePort }
+  let prepared
+  try {
+    prepared = await adb.prepareDevice(serial, ports)
+  } catch (error) {
+    await adb.releaseDevice(serial, ports)
+    throw error
+  }
   const info = { kind: 'phone', serial, ...(await adb.deviceInfo(serial)), thermalAtStart: await adb.readThermal(serial) }
   log(`  ${info.model}, Android ${info.android}, Chrome ${info.chrome}, battery ${info.battery}%, ${adb.thermalLine(info.thermalAtStart)}`)
   return {
     serial,
     info,
-    close: () => adb.releaseDevice(serial, { cdpPort: config.cdpPort, vitePort: config.vitePort, stayOn: prepared.stayOn }),
+    close: () => adb.releaseDevice(serial, { ...ports, stayOn: prepared.stayOn }),
   }
 }
 
@@ -327,14 +353,42 @@ async function withGpuLock(lock, fn, { staleMs = 180000 } = {}) {
       fs.writeFileSync(owner, `${who} ${Date.now()}`)
       break
     } catch {
-      try {
-        const [holder, at] = fs.readFileSync(owner, 'utf8').split(' ')
-        if (Date.now() - Number(at) > staleMs) fs.rmSync(lock, { recursive: true, force: true })
-        else if (Date.now() - waitedSince > 30000) {
-          log(`  waiting for GPU lock (held by ${holder})`)
-          waitedSince = Date.now()
+      // A lock whose owner file is missing (its holder died between mkdir and
+      // write) ages from the directory's own time.
+      const readHolder = () => {
+        try {
+          const [holder, at] = fs.readFileSync(owner, 'utf8').split(' ')
+          return { holder, at: Number(at) }
+        } catch {
+          try {
+            return { holder: '?', at: fs.statSync(lock).mtimeMs }
+          } catch {
+            return null
+          }
         }
-      } catch {}
+      }
+      const seen = readHolder()
+      if (!seen) continue
+      const { holder, at } = seen
+      if (Date.now() - at > staleMs) {
+        // Moved aside (atomic) rather than deleted in place, and only if it is
+        // still the same stale lock just before the move, so a waiter that saw
+        // it stale earlier does not remove a lock another has just taken
+        // (a narrow window remains between the re-check and the move).
+        const again = readHolder()
+        if (!again || again.at !== at) continue
+        const tomb = `${lock}.stale-${process.pid}-${Date.now()}`
+        try {
+          fs.renameSync(lock, tomb)
+          fs.rmSync(tomb, { recursive: true, force: true })
+          log(`  removed a stale GPU lock (held by ${holder})`)
+        } catch {}
+        continue
+      }
+      if (Date.now() - waitedSince > 30000) {
+        log(`  waiting for GPU lock (held by ${holder})`)
+        waitedSince = Date.now()
+      }
       await sleep(500)
     }
   }
@@ -372,24 +426,31 @@ async function gitHead() {
 const fmt = (v) => (typeof v === 'number' ? v.toFixed(1) : '–')
 const pct = (v) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '–')
 
-function cleanup() {
-  for (const child of children) if (child.exitCode === null) child.kill()
+let shuttingDown = null
+function shutdown() {
+  shuttingDown ??= (async () => {
+    if (active.page) await active.page.close().catch(() => {})
+    active.connection?.close()
+    if (active.device) {
+      log('releasing the device…')
+      await active.device.close().catch((error) => log(`  release failed: ${error.message}`))
+    }
+    for (const child of children) if (child.exitCode === null) child.kill()
+  })()
+  return shuttingDown
 }
-process.on('exit', cleanup)
+process.on('exit', () => {
+  for (const child of children) if (child.exitCode === null) child.kill()
+})
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    cleanup()
-    process.exit(130)
-  })
+  process.on(signal, () => shutdown().finally(() => process.exit(130)))
 }
 
-main().then(
-  () => {
-    cleanup()
-    process.exit(0)
-  }
-).catch((error) => {
-  console.error(error.stack ?? error.message)
-  cleanup()
-  process.exit(1)
-})
+main()
+  .then(() => shutdown())
+  .then(() => process.exit(0))
+  .catch(async (error) => {
+    console.error(error.stack ?? error.message)
+    await shutdown()
+    process.exit(1)
+  })

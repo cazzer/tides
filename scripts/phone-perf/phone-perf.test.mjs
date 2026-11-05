@@ -86,33 +86,66 @@ describe('trace summary', () => {
     expect(slices).toEqual([{ start: 0, end: 500, name: 'FunctionCall' }])
   })
 
-  it('finds the page renderer and the GPU threads', () => {
-    const events = [
-      { ph: 'M', name: 'process_name', pid: 2, args: { name: 'Renderer' } },
-      { ph: 'M', name: 'thread_name', pid: 2, tid: 20, args: { name: 'CrRendererMain' } },
-      { ph: 'M', name: 'thread_name', pid: 3, tid: 30, args: { name: 'CrRendererMain' } },
-      { ph: 'M', name: 'process_name', pid: 9, args: { name: 'GPU Process' } },
-      { ph: 'M', name: 'thread_name', pid: 9, tid: 90, args: { name: 'CrGpuMain' } },
-      {
-        ph: 'I',
-        name: 'TracingStartedInBrowser',
-        pid: 1,
-        tid: 1,
-        ts: 0,
-        args: { data: { frames: [{ url: 'http://x/tides/?a', processId: 2 }] } },
+  const tracedTabs = () => [
+    { ph: 'M', name: 'process_name', pid: 2, args: { name: 'Renderer' } },
+    { ph: 'M', name: 'thread_name', pid: 2, tid: 20, args: { name: 'CrRendererMain' } },
+    { ph: 'M', name: 'thread_name', pid: 3, tid: 30, args: { name: 'CrRendererMain' } },
+    { ph: 'M', name: 'process_name', pid: 9, args: { name: 'GPU Process' } },
+    { ph: 'M', name: 'thread_name', pid: 9, tid: 90, args: { name: 'CrGpuMain' } },
+    {
+      ph: 'I',
+      name: 'TracingStartedInBrowser',
+      pid: 1,
+      tid: 1,
+      ts: 0,
+      args: {
+        data: {
+          frames: [
+            // Another tab with the same site comes first in the list.
+            { frame: 'OTHER', url: 'https://x/tides/', processId: 3 },
+            { frame: 'T1', url: 'http://localhost:5393/tides/?t=1', processId: 2 },
+          ],
+        },
       },
-      { ph: 'X', name: 'FunctionCall', pid: 2, tid: 20, ts: 0, dur: 4000 },
-      { ph: 'X', name: 'FunctionCall', pid: 3, tid: 30, ts: 0, dur: 9000 },
-      { ph: 'X', name: 'GpuChannel::ExecuteDeferredRequest', pid: 9, tid: 90, ts: 0, dur: 6000 },
-      { ph: 'X', name: 'RunTask', pid: 2, tid: 20, ts: 1e6 - 1, dur: 1 },
-    ]
-    const summary = summariseTrace(events, { frames: 2 })
+    },
+    { ph: 'I', name: 'TimeStamp', pid: 2, tid: 20, ts: 1000, args: { data: { message: 'pp:trace:start' } } },
+    { ph: 'X', name: 'RunTask', pid: 2, tid: 20, ts: 0, dur: 900 },
+    { ph: 'X', name: 'FunctionCall', pid: 2, tid: 20, ts: 1000, dur: 4000 },
+    { ph: 'X', name: 'FunctionCall', pid: 3, tid: 30, ts: 1000, dur: 9000 },
+    { ph: 'X', name: 'GpuChannel::ExecuteDeferredRequest', pid: 9, tid: 90, ts: 1000, dur: 6000 },
+    { ph: 'X', name: 'GPUTask', cat: 'disabled-by-default-gpu.device', pid: 9, tid: 91, ts: 1000, dur: 3000 },
+    { ph: 'X', name: 'GPUTask', cat: 'disabled-by-default-gpu.device', pid: 9, tid: 91, ts: 1500, dur: 1000 },
+    { ph: 'I', name: 'TimeStamp', pid: 2, tid: 20, ts: 9000, args: { data: { message: 'pp:trace:end' } } },
+    { ph: 'X', name: 'FunctionCall', pid: 2, tid: 20, ts: 9500, dur: 400000 },
+  ]
+
+  it('measures the tab by target id, inside the sampler marks only', () => {
+    const summary = summariseTrace(tracedTabs(), { targetId: 'T1', frames: 2 })
     expect(summary.rendererPid).toBe(2)
+    expect(summary.seconds).toBeCloseTo(0.008)
     expect(summary.main.categoriesPerFrameMs.script).toBe(2)
+    expect(summary.main.categoriesPerFrameMs.other).toBeUndefined()
     expect(summary.gpuThreads).toEqual([
       expect.objectContaining({ thread: 'CrGpuMain', process: 'GPU Process', busyPerFrameMs: 3 }),
     ])
-    expect(summary.gpuDevicePerFrameMs).toBeNull()
+    // Nested device slices count once: 3 ms over 2 frames.
+    expect(summary.gpuDevicePerFrameMs).toBe(1.5)
+  })
+
+  it('finds the tab from its start mark when the trace lists no frames (Android)', () => {
+    const android = tracedTabs().map((e) =>
+      e.name === 'TracingStartedInBrowser' ? { ...e, args: {} } : e
+    )
+    const summary = summariseTrace(android, { targetId: 'T1', frames: 2 })
+    expect(summary.rendererPid).toBe(2)
+    expect(summary.main.categoriesPerFrameMs.script).toBe(2)
+  })
+
+  it('refuses to guess when the tab or the marks are missing', () => {
+    const noMarks = { targetId: 'NOPE', frames: 2, marks: ['nope:start', 'nope:end'] }
+    expect(summariseTrace(tracedTabs(), noMarks).error).toMatch(/tab not found/)
+    const unmarked = tracedTabs().filter((e) => e.name !== 'TimeStamp')
+    expect(summariseTrace(unmarked, { targetId: 'T1', frames: 2 }).error).toMatch(/marks missing/)
   })
 })
 

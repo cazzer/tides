@@ -61,13 +61,14 @@ export function aggregate(results) {
         gpu: noiseBand(ok.map((r) => r.gpu?.p50)),
       },
       gpuMs: median(ok.map((r) => r.gpu?.p50)),
-      gpuSource: last?.gpu?.source ?? 'none',
+      gpuSource: [...new Set(ok.map((r) => r.gpu?.source).filter(Boolean))].join('+') || 'none',
       gpuDeviceMs: median(ok.map((r) => r.trace?.gpuDevicePerFrameMs)),
       gpuThreadsMs: Object.fromEntries(Object.entries(gpuThreads).map(([t, list]) => [t, median(list)])),
       mainBusyMs: median(ok.map((r) => r.trace?.main?.busyPerFrameMs)),
       replayMs: median(ok.map((r) => r.replay?.ms)),
       noiseReplay: noiseBand(ok.map((r) => r.replay?.ms)),
       mainBusyShare: median(ok.map((r) => r.trace?.main?.busyShare)),
+      traceErrors: [...new Set(ok.map((r) => r.trace?.error).filter(Boolean))],
       categoriesMs: categoryMedians,
       topFunctionsMsPerS: Object.entries(functions)
         .map(([fn, list]) => ({ fn, msPerS: median(list) }))
@@ -97,7 +98,7 @@ export function renderMarkdown({ meta, results }) {
     ''
   )
   lines.push(
-    '| pose | tier | dpr | canvas | p50 | p95 | p99 | dropped | Hz | main ms/frame | replay ms | GPU ms | GPU-process ms/frame | VRAM MB (compressed) | p50 noise |',
+    '| pose | tier | dpr | canvas | p50 | p95 | p99 | dropped | Hz | main ms/frame | replay ms | GPU ms | GPU-process ms/frame | GPU mem MB (compressed) | p50 noise |',
     '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'
   )
   for (const r of rows) {
@@ -106,13 +107,14 @@ export function renderMarkdown({ meta, results }) {
       .map(([t, ms]) => `${t.replace('VizCompositorThread', 'Viz')} ${f1(ms)}`)
       .join(', ')
     lines.push(
-      `| ${r.key} | ${info.quality ?? r.tier} | ${info.dpr ?? '–'} | ${info.canvas?.join('x') ?? '–'} | ${f1(r.p50)} | ${f1(r.p95)} | ${f1(r.p99)} | ${pct(r.dropped)} | ${r.refreshHz ?? '–'} | ${f1(r.mainBusyMs)} | ${f1(r.replayMs)}${r.noiseReplay && r.noiseReplay.runs > 1 ? ` ±${f1(r.noiseReplay.spreadPct / 2)}%` : ''} | ${r.gpuMs !== null ? `${f1(r.gpuMs)} (${r.gpuSource})` : r.gpuDeviceMs !== null ? `${f1(r.gpuDeviceMs)} (trace)` : 'n/a'} | ${gpuProc || '–'} | ${info.vramMB ? `${info.vramMB.total} (${info.vramMB.compressed})` : '–'} | ${r.noise.p50 ? `±${f1(r.noise.p50.spreadPct / 2)}%` : '–'} |`
+      `| ${r.key} | ${info.quality ?? r.tier} | ${info.dpr ?? '–'} | ${info.canvas?.join('x') ?? '–'} | ${f1(r.p50)} | ${f1(r.p95)} | ${f1(r.p99)} | ${pct(r.dropped)} | ${r.refreshHz ?? '–'} | ${f1(r.mainBusyMs)} | ${f1(r.replayMs)}${r.noiseReplay && r.noiseReplay.runs > 1 ? ` ±${f1(r.noiseReplay.spreadPct / 2)}%` : ''} | ${r.gpuMs !== null ? `${f1(r.gpuMs)} (${r.gpuSource})` : r.gpuDeviceMs !== null ? `${f1(r.gpuDeviceMs)} (trace)` : 'n/a'} | ${gpuProc || '–'} | ${info.vramMB ? `${info.vramMB.total} (${info.vramMB.compressed})` : '–'} | ${r.noise.p50 && r.noise.p50.runs > 1 ? `±${f1(r.noise.p50.spreadPct / 2)}%` : '–'} |`
     )
   }
   lines.push('', '## Main thread by category (ms per frame, self time)', '')
   for (const r of rows) {
     const parts = Object.entries(r.categoriesMs).map(([c, ms]) => `${c} ${f1(ms)}`)
-    lines.push(`- **${r.key}**: busy ${f1(r.mainBusyMs)} ms/frame (${pct(r.mainBusyShare)} of wall); ${parts.join(', ') || '–'}`)
+    const note = r.traceErrors.length ? ` (trace: ${r.traceErrors.join('; ')})` : ''
+    lines.push(`- **${r.key}**: busy ${f1(r.mainBusyMs)} ms/frame (${pct(r.mainBusyShare)} of wall); ${parts.join(', ') || '–'}${note}`)
   }
   lines.push('', '## Heaviest script functions (self ms per second)', '')
   for (const r of rows) {
@@ -128,7 +130,7 @@ export function renderMarkdown({ meta, results }) {
       .map(([fmt, mb]) => `${fmt} ${mb}`)
       .join(', ')
     lines.push(
-      `- **${r.key}**: ${info.render.calls} draws / ${info.render.triangles} tris per frame over ${info.render.passes} render passes, ${info.memory.textures} textures, ${info.memory.geometries} geometries, ${info.programs} programs (${info.programLinks} links); VRAM ${info.vramMB.total} MB of which ${info.vramMB.compressed} compressed (${formats}); load ${f1(r.loadMs / 1000)} s; ${info.renderer}`
+      `- **${r.key}**: ${info.render.calls} draws / ${info.render.triangles} tris per frame over ${info.render.passes} render passes, ${info.memory.textures} textures, ${info.memory.geometries} geometries, ${info.programs} programs (${info.programLinks} links); resident GPU memory ${info.vramMB.total} MB (textures ${info.vramMB.textures} in ${info.vramMB.liveTextures}, of which ${info.vramMB.compressed} compressed; renderbuffers ${info.vramMB.renderbuffers}; ${info.vramMB.uploaded} MB uploaded since load; ${formats}); load ${f1(r.loadMs / 1000)} s; ${info.renderer}`
     )
   }
   if (device.kind === 'phone') {

@@ -115,54 +115,63 @@ export function attributeThread(slices, from = -Infinity, to = Infinity) {
   return { busyMs: busyUs / 1000, categoriesMs: ms }
 }
 
-// The renderer process that loaded the page: from TracingStartedInBrowser's
-// frame list when the URL matches, else the busiest CrRendererMain.
-export function findRendererPid(events, urlFragment, names, byThread) {
+// The renderer process of the measured tab. First choice: the process that
+// logged the sampler's start mark (the marks carry a per-pose nonce, so no
+// other tab can have logged it; Android Chrome's trace lists no frames).
+// Then the frame list in TracingStartedInBrowser, by target id (a URL match
+// could pick another tab with the same site open) or exact URL. Null when
+// nothing matches: no guessing.
+export function findRendererPid(events, { targetId, url, startMark } = {}) {
+  if (startMark) {
+    const mark = events.find((e) => e.name === 'TimeStamp' && e.args?.data?.message === startMark)
+    if (mark) return mark.pid
+  }
   for (const event of events) {
     const frames = event.args?.data?.frames
     if (event.name !== 'TracingStartedInBrowser' || !Array.isArray(frames)) continue
-    const frame = frames.find((f) => f.url?.includes(urlFragment) && f.processId)
-    if (frame) return frame.processId
+    const byTarget = targetId && frames.find((f) => f.frame === targetId && f.processId)
+    if (byTarget) return byTarget.processId
+    const byUrl = url && frames.find((f) => f.url === url && f.processId)
+    if (byUrl) return byUrl.processId
   }
+  return null
+}
+
+// The measurement window: console.timeStamp marks the sampler leaves in the
+// renderer at its first and last rAF callback, so time spent starting and
+// flushing the trace is not divided among the window's frames.
+export function markWindow(events, pid, startMessage, endMessage) {
+  let from = null
+  let to = null
   for (const event of events) {
-    const data = event.args?.data
-    if (
-      (event.name === 'CommitLoad' || event.name === 'FrameCommittedInBrowser') &&
-      data?.url?.includes(urlFragment)
-    ) {
-      return data.processId ?? event.pid
-    }
+    if (event.name !== 'TimeStamp' || event.pid !== pid) continue
+    const message = event.args?.data?.message
+    if (message === startMessage) from = event.ts
+    if (message === endMessage) to = event.ts
   }
-  let best = null
-  let bestCount = -1
-  for (const [key, name] of names.threads) {
-    if (name !== 'CrRendererMain') continue
-    const count = byThread.get(key)?.length ?? 0
-    if (count > bestCount) {
-      best = Number(key.split(':')[0])
-      bestCount = count
-    }
-  }
-  return best
+  return from !== null && to !== null && to > from ? { from, to } : null
 }
 
 const GPU_THREAD_NAMES = ['CrGpuMain', 'VizCompositorThread', 'Chrome_InProcGpuThread']
 
-// Main-thread categories and GPU-process thread busy time, per frame and
-// per second, over the trace's own extent.
-export function summariseTrace(events, { urlFragment = '/tides/', frames } = {}) {
+// Main-thread categories and GPU-process thread busy time per frame, over the
+// window between the sampler's marks.
+export function summariseTrace(
+  events,
+  { targetId, url, frames, marks = ['pp:trace:start', 'pp:trace:end'] } = {}
+) {
   const names = threadNames(events)
   const byThread = slicesByThread(events)
-  const rendererPid = findRendererPid(events, urlFragment, names, byThread)
-  let from = Infinity
-  let to = -Infinity
-  for (const slices of byThread.values()) {
-    for (const s of slices) {
-      if (s.start < from) from = s.start
-      if (s.end > to) to = s.end
-    }
+  const rendererPid = findRendererPid(events, { targetId, url, startMark: marks[0] })
+  if (rendererPid === null) {
+    return { error: 'measured tab not found in the trace', rendererPid, main: null, gpuThreads: [], gpuDevicePerFrameMs: null }
   }
-  const seconds = Number.isFinite(from) ? (to - from) / 1e6 : 0
+  const window = markWindow(events, rendererPid, marks[0], marks[1])
+  if (!window) {
+    return { error: 'sampler marks missing from the trace', rendererPid, main: null, gpuThreads: [], gpuDevicePerFrameMs: null }
+  }
+  const { from, to } = window
+  const seconds = (to - from) / 1e6
   const perFrame = (ms) => (frames ? ms / frames : null)
 
   let main = null
@@ -196,11 +205,11 @@ export function summariseTrace(events, { urlFragment = '/tides/', frames } = {})
   }
 
   // Device-side GPU slices appear only where Chrome can time the GPU itself
-  // (disabled-by-default-gpu.device); most Android drivers expose none.
-  let deviceUs = 0
-  for (const event of events) {
-    if (event.cat?.includes('gpu.device') && event.ph === 'X' && event.dur) deviceUs += event.dur
-  }
+  // (disabled-by-default-gpu.device); most Android drivers expose none. They
+  // nest, so take the union per track, not the sum.
+  const deviceSlices = slicesByThread(events.filter((e) => e.cat?.includes('gpu.device')))
+  let deviceMs = 0
+  for (const slices of deviceSlices.values()) deviceMs += attributeThread(slices, from, to).busyMs
 
   return {
     seconds,
@@ -208,7 +217,7 @@ export function summariseTrace(events, { urlFragment = '/tides/', frames } = {})
     main,
     gpuThreads,
     // A handful of zero-length device slices is not a GPU timing.
-    gpuDevicePerFrameMs: frames && deviceUs / 1000 / frames > 0.1 ? perFrame(deviceUs / 1000) : null,
+    gpuDevicePerFrameMs: frames && deviceMs / frames > 0.1 ? perFrame(deviceMs) : null,
   }
 }
 

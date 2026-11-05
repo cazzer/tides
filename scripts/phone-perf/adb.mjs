@@ -132,6 +132,12 @@ export async function deviceInfo(serial) {
     battery: (await adb(serial, 'shell', 'dumpsys', 'battery')).match(/level: (\d+)/)?.[1] ?? null,
     // Samsung: refresh_rate_mode 0 = standard 60 Hz, 1 = adaptive (up to 120 Hz).
     refreshRateMode: (await adb(serial, 'shell', 'settings', 'get', 'secure', 'refresh_rate_mode')).trim(),
-    displayFps: Number((await adb(serial, 'shell', 'dumpsys', 'display')).match(/renderFrameRate ([\d.]+)/)?.[1] ?? NaN) || null,
+    displayFps: await displayFps(serial),
   }
+}
+
+// The rate the display renders at now (Samsung adaptive refresh moves it).
+export async function displayFps(serial) {
+  const dump = await adb(serial, 'shell', 'dumpsys', 'display').catch(() => '')
+  return Number(dump.match(/renderFrameRate ([\d.]+)/)?.[1] ?? NaN) || null
 }

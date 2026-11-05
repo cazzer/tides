@@ -68,13 +68,24 @@ export class CdpConnection {
     for (const handler of this.listeners.get(key) ?? []) handler(message.params)
   }
 
-  send(method, params = {}, sessionId) {
+  // Every call is raced against a timer: Runtime.evaluate's own timeout does
+  // not cover an awaited promise, and a page whose rAF stops (screen covered,
+  // app backgrounded, wireless adb half-dropped) would otherwise hang the run.
+  send(method, params = {}, sessionId, timeoutMs = 120000) {
     if (this.closed) return Promise.reject(new Error(`CDP socket closed before ${method}`))
     const id = this.nextId++
     const payload = { id, method, params }
     if (sessionId) payload.sessionId = sessionId
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, method })
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`${method} got no answer in ${timeoutMs} ms`))
+      }, timeoutMs)
+      const settle = (fn) => (value) => {
+        clearTimeout(timer)
+        fn(value)
+      }
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject), method })
       this.ws.send(JSON.stringify(payload))
     })
   }
@@ -130,8 +141,8 @@ export class CdpPage {
     this.sessionId = sessionId
   }
 
-  send(method, params = {}) {
-    return this.connection.send(method, params, this.sessionId)
+  send(method, params = {}, timeoutMs) {
+    return this.connection.send(method, params, this.sessionId, timeoutMs)
   }
 
   on(method, handler) {
@@ -152,12 +163,11 @@ export class CdpPage {
   // Evaluates an expression (or an async function body as a string) in the page
   // and returns its JSON value; a thrown error in the page throws here.
   async evaluate(expression, { timeoutMs = 60000 } = {}) {
-    const result = await this.send('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      timeout: timeoutMs,
-    })
+    const result = await this.send(
+      'Runtime.evaluate',
+      { expression, awaitPromise: true, returnByValue: true, timeout: timeoutMs },
+      timeoutMs + 5000
+    )
     if (result.exceptionDetails) {
       const detail = result.exceptionDetails
       const message = detail.exception?.description ?? detail.text

@@ -6,7 +6,7 @@
 //   window.__ship = { state, bodies, input, telemetry, earth }, then
 //   window.__shipPose?.(state, earth)       after stepShip in ShipController
 // plus handles the harness reads, so it works on a production build too:
-//   window.__ppHandles = { getState (R3F root), THREE, useStore, qualityTier, savedQualityChoice }
+//   window.__ppHandles = { getState (R3F root), THREE, addEffect, addAfterEffect, useStore, qualityTier, savedQualityChoice }
 import { mergeConfig } from 'vite'
 import base from '../../vite.config.ts'
 
@@ -20,10 +20,11 @@ const HOOKS = [
   {
     file: /\/src\/App\.tsx$/,
     anchor: /<Canvas \{\.\.\.props\} dpr=\{usePixelRatio\(\)\} \/>/,
+    prepend: `import { addEffect as __ppAddEffect, addAfterEffect as __ppAddAfterEffect } from '@react-three/fiber'\n`,
     replace: () =>
       `<Canvas {...props} dpr={usePixelRatio()} onCreated={(root) => {\n` +
       `  const w = window as any\n` +
-      `  w.__ppHandles = { ...w.__ppHandles, getState: root.get, THREE }\n` +
+      `  w.__ppHandles = { ...w.__ppHandles, getState: root.get, THREE, addEffect: __ppAddEffect, addAfterEffect: __ppAddAfterEffect }\n` +
       `  props.onCreated?.(root)\n` +
       `}} />`,
   },
@@ -48,10 +49,23 @@ const HOOKS = [
   },
 ]
 
+const fired = new Set()
+
 function poseHooks() {
+  let command = 'serve'
   return {
     name: 'phone-perf-pose-hooks',
     enforce: 'pre',
+    configResolved(resolved) {
+      command = resolved.command
+    },
+    // A renamed or moved file would leave its hook out without an anchor
+    // error; in a build every hooked file must have been transformed.
+    buildEnd(error) {
+      if (error || command !== 'build') return
+      const missing = HOOKS.filter((h) => !fired.has(h.file.source)).map((h) => h.file.source)
+      if (missing.length) throw new Error(`phone-perf: hooked files never transformed: ${missing.join(', ')}`)
+    },
     transform(code, id) {
       const path = id.split('?')[0]
       const hook = HOOKS.find((h) => h.file.test(path))
@@ -60,7 +74,8 @@ function poseHooks() {
         // Fail loudly: a silently missing hook would leave every pose at its default.
         throw new Error(`phone-perf: pose hook anchor not found in ${path}; update scripts/phone-perf/vite.config.mjs`)
       }
-      return { code: code.replace(hook.anchor, hook.replace), map: null }
+      fired.add(hook.file.source)
+      return { code: (hook.prepend ?? '') + code.replace(hook.anchor, hook.replace), map: null }
     },
   }
 }

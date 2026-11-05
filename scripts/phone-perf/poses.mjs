@@ -20,12 +20,14 @@ function mainPose(pose) {
     const pose = ${JSON.stringify(pose)}
     const { THREE: T, store } = window.__ppProbe
     const d = Math.PI / 180
+    window.__ppPoseHits = 0
     window.__mainPose = (camera) => {
       const earth = store.getState().earth?.current
       if (!earth) return
       let ground = null
       earth.traverse((o) => { if (!ground && o.isMesh && o.material?.isMeshPhongMaterial) ground = o })
       if (!ground) return
+      window.__ppPoseHits++
       ground.updateWorldMatrix(true, false)
       const c = new T.Vector3().setFromMatrixPosition(ground.matrixWorld)
       if (!ground.geometry.boundingSphere) ground.geometry.computeBoundingSphere()
@@ -58,8 +60,10 @@ function shipPose(pose) {
     const p = ${JSON.stringify(pose)}
     const { THREE: T } = window.__ppProbe
     const d = Math.PI / 180
+    window.__ppPoseHits = 0
     window.__shipPose = (state, earth) => {
       if (!earth) return
+      window.__ppPoseHits++
       const la = p.lat * d, lo = p.lon * d
       const up = new T.Vector3(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)).applyQuaternion(earth.spin)
       const north0 = new T.Vector3(0, 1, 0).applyQuaternion(earth.spin)
