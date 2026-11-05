@@ -142,6 +142,16 @@ describe('paced dpr', () => {
     expect(log[1]).toMatchObject({ from: 3, to: 2.75, bounced: false, dwellMs: 4000 })
   })
 
+  it('does not count a drop as a bounce when the raised level ran heldMs without a decision', () => {
+    const { state, clock, log } = setup(3, 2.75)
+    sim(state, clock, log, { s: 6 })
+    expect(state.dpr).toBe(3)
+    // 15 s all CPU-bound (no decision), then heavy at 3.
+    sim(state, clock, log, { s: 15, cpu: () => 20 })
+    sim(state, clock, log, { s: 4, gpu: (dpr) => (dpr >= 3 ? 20 : 5) })
+    expect(log[1]).toMatchObject({ from: 3, to: 2.75, reason: 'held', bounced: false, dwellMs: 4000 })
+  })
+
   it('caps the doubled dwell', () => {
     const { state, clock, log } = setup(3, 2.25)
     const config = { ...DEFAULT_PACED_DPR_CONFIG, raiseDwellMs: 1000, dwellCapMs: 4000 }

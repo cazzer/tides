@@ -471,14 +471,16 @@ export function stepPacedDpr(
   // p95 over dropMs: more than 5% of the kept intervals are.
   const slow = full && down != null && keptOver(state, dropMs) > 0.05 * state.kept
   if (fast || slow) {
-    const bounced = state.probation
+    const held = at - state.levelSince >= config.heldMs
+    // The raise's first decision, unless the level ran heldMs without one
+    // (all CPU-bound): a drop that late isn't the raise's doing.
+    const bounced = state.probation && !held
     if (bounced) state.dwellMs = Math.min(state.dwellMs * 2, config.dwellCapMs)
     const heat =
       state.heatRefEwma != null &&
       at - state.heatRefAt >= config.heatMs &&
       state.cpuEwma > state.heatRefEwma * config.heatRise
     if (heat) state.dwellMs = Math.max(state.dwellMs, config.thermalDwellMs)
-    const held = at - state.levelSince >= config.heldMs
     state.probation = false
     change(state, down!, at, heat ? 'thermal' : held ? 'held' : fast ? 'fast' : 'drop', config, bounced)
     return state
