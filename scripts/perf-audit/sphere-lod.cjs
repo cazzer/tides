@@ -37,7 +37,7 @@ const DEFAULT_POSES = [
   { name: 'moon-reset2', body: 'moon', px: 500, az: 70, reset: true },
   { name: 'ctl-moon-close', body: 'moon', px: 420, az: 70 },
   { name: 'ctl-earth-100km', km: 100, lat: 30, lon: -100 },
-  { name: 'ctl-sheet-20km', km: 20, lat: 30, lon: -100 },
+  { name: 'ctl-sheet-20km', km: 20, lat: 30, lon: -100, sheet: true },
   // From the system view straight under the sheet: the first frame at the top level.
   { name: 'jump-sheet-20km', to: { km: 20, lat: 30, lon: -100 } },
 ]
@@ -113,6 +113,21 @@ const SETUP = () => {
       swapped = []
     }
   )
+  // tides-0oi.3's control: the flat cloud sheet drawn from under it even where its early out skips it (the view
+  // meets only the ground), to prove that skip still 0 px with the sized spheres about.
+  let sheets = []
+  __H.reg(
+    'sheetDrawn',
+    () => {
+      sheets = L.allMeshes().filter((o) => o.material?.defines && 'CLOUD_UNDER_SHEET' in o.material.defines)
+      for (const o of sheets) Object.defineProperty(o.material, 'visible', { configurable: true, get: () => true, set() {} })
+    },
+    () => {
+      for (const o of sheets) { delete o.material.visible }
+      sheets = []
+    }
+  )
+  L.sheetState = () => L.allMeshes().filter((o) => o.material?.defines && 'CLOUD_UNDER_SHEET' in o.material.defines).map((o) => o.material.visible)
   // Each body's level per View (the call drawing its scene).
   L.levels = () => {
     const out = {}
@@ -364,9 +379,19 @@ async function poseBody(page, pose) {
       const centre = [vx + vw / 2, canvasH - (vy + vh / 2)]
       const crop = pose.body ? [...centre, Math.max(200, Math.min(vw, Math.round(pose.px * 5)))] : null
       const m = await page.evaluate((o) => __L.measure(o), { crop, cropScale: pose.body ? 2 : 1, full: !!pose.system, mainVp: info.mainVp })
+      let sheet = null
+      if (pose.sheet) {
+        sheet = await page.evaluate(async () => {
+          const sum = (xs) => xs.reduce((a, b) => a + b, 0)
+          // The override draws the sheet: more triangles than the skip.
+          const drawnTriangles = sum(await __L.triangles('sheetDrawn')) - sum(await __L.triangles('base'))
+          return { skipped: __L.sheetState(), drawnTriangles, ...(await __H.pixels(['sheetDrawn'])).sheetDrawn }
+        })
+        console.log(pose.name.padEnd(18), 'sheet', JSON.stringify(sheet))
+      }
       const triBefore = await page.evaluate(() => __L.triangles('top'))
       const triAfter = await page.evaluate(() => __L.triangles('base'))
-      const row = { pose: pose.name, ...info, AA: m.AA, AB: m.AB, ABmain: m.ABmain, triBefore, triAfter }
+      const row = { pose: pose.name, ...info, AA: m.AA, AB: m.AB, ABmain: m.ABmain, triBefore, triAfter, sheet }
       for (const [k, b64] of [['img', m.img], ['full', m.full], ['worstImg', m.worstImg]]) {
         if (!b64) continue
         const file = path.join(OUT, `${pose.name}${k === 'img' ? '' : '-' + k}.png`)

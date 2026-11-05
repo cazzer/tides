@@ -41,6 +41,7 @@ import { FULL_RANGE, limbRowRange } from '../ship/limb-rows'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
 import { useSceneShown } from './scene-shown'
+import { addSceneBeforeRender } from './scene-hooks'
 import { createGroundProbe, syncGroundProbe } from './groundProbe'
 import { useTileWarmProbes } from './tileWarmProbes'
 import { EarthDemLoader } from './earthDemTexture'
@@ -626,9 +627,7 @@ function cloudsFaceEachCamera(
   cloudRef: RefObject<THREE.Mesh | null>,
   each?: (renderer: THREE.WebGLRenderer, camera: THREE.Camera) => void
 ) {
-  const previous = scene.onBeforeRender
-  scene.onBeforeRender = function (renderer, renderScene, camera, target) {
-    previous.call(this, renderer, renderScene, camera, target)
+  return addSceneBeforeRender(scene, (renderer, camera) => {
     if (cloudRef.current) {
       sunInEarthFrame(cloudRef.current.parent, clouds.uniforms.uSunDir.value)
       // FINE_DECK only where the depth buffer can part its base from the
@@ -636,10 +635,7 @@ function cloudsFaceEachCamera(
       clouds.faceCamera(cloudRef.current, camera, fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(renderer)))
     }
     each?.(renderer, camera)
-  }
-  return () => {
-    scene.onBeforeRender = previous
-  }
+  })
 }
 
 // The Sun's direction in the Earth's frame, from `earth`'s final transform

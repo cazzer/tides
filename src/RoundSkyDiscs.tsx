@@ -2,6 +2,7 @@ import { useEffect, type RefObject } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { roundDiscMatrix } from './sky'
+import { addSceneBeforeRender } from './renderers/scene-hooks'
 
 const center = new THREE.Vector3()
 const squash = new THREE.Matrix4()
@@ -33,8 +34,7 @@ function roundDiscsBeforeRender(
   camera: THREE.Camera,
   bodies: RefObject<THREE.Object3D | null>[]
 ) {
-  const previous = scene.onBeforeRender
-  scene.onBeforeRender = (_renderer, _scene, renderCamera) => {
+  const remove = addSceneBeforeRender(scene, (_renderer, renderCamera) => {
     if (renderCamera !== camera) return
     for (const body of bodies) {
       const group = body.current?.parent
@@ -46,9 +46,9 @@ function roundDiscsBeforeRender(
       group.matrix.multiplyMatrices(parentInverse, squash).multiply(group.parent.matrixWorld)
       group.updateMatrixWorld(true)
     }
-  }
+  })
   return () => {
-    scene.onBeforeRender = previous
+    remove()
     for (const body of bodies) {
       const group = body.current?.parent
       if (!group) continue

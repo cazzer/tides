@@ -20,6 +20,7 @@ import { limbFacetPx, type SphereSegments } from './limb-detail'
 import { offAxisScale } from './body-map-residency'
 import { useViewSize } from '../use-view-size'
 import { COLLISION_MARGIN } from './flight'
+import { addSceneBeforeRender } from '../renderers/scene-hooks'
 
 /** The bound on a level's facets off the true limb, device px. */
 export const SPHERE_LOD_FACET_PX = 0.25
@@ -310,18 +311,13 @@ export function useSphereLevel(
   })
   useEffect(() => {
     if (levels.length === 1) return
-    const previous = scene.onBeforeRender
-    scene.onBeforeRender = function (renderer, renderScene, camera, target) {
-      previous.call(this, renderer, renderScene, camera, target)
+    return addSceneBeforeRender(scene, (_renderer, camera) => {
       const body = object.current
       if (!body || !drawsCoarseWhereTopForced(camera, body, radius, [width, height], topWithin)) return
       forceTopSphere(body, topSphere())
       current.current = { levels, index: 0 }
       setLevel(current.current)
-    }
-    return () => {
-      scene.onBeforeRender = previous
-    }
+    })
   }, [scene, object, radius, width, height, topWithin, topSphere, levels])
   return levels[level.levels === levels ? level.index : 0]
 }
