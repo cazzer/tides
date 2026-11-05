@@ -28,8 +28,19 @@ export function compileAndWait(
   camera: THREE.Camera,
   target: THREE.Scene | null = null
 ): Promise<void> {
+  // Mirrors three r180's compileAsync (WebGLRenderer.js, its compile() then
+  // checkMaterialsReady): on a three upgrade, re-check that it still is.
   const waiting = renderer.compile(scene, camera, target)
   const properties = renderer.properties as unknown as ProgramProperties
+  if (import.meta.env.DEV) {
+    // compile() gives every material it returns a program; one without is
+    // a three that changed underneath, which this would then skip unawaited.
+    for (const material of waiting) {
+      if (properties.has(material) && properties.get(material).currentProgram === undefined) {
+        console.warn('compileAndWait: a material has no program right after compile(); check against three’s compileAsync', material)
+      }
+    }
+  }
   const linked = (material: THREE.Material) => {
     if (!properties.has(material)) return true
     const program = properties.get(material).currentProgram

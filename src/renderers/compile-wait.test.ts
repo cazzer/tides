@@ -84,6 +84,33 @@ describe('compileAndWait', () => {
     expect(state).toEqual({ settled: true, error: undefined })
   })
 
+  it('still waits on a material disposed and then given a new, unlinked program', async () => {
+    const { renderer, materials, link } = fakeRenderer()
+    const state = track(compileAndWait(renderer, scene, camera))
+    materials[0].dispose()
+    // Drawn again before the next check: three builds it a fresh program.
+    let relinked = false
+    renderer.properties.get(materials[0]).currentProgram = { isReady: () => relinked }
+    link(...materials)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(state.settled).toBe(false)
+    relinked = true
+    await vi.advanceTimersByTimeAsync(10)
+    expect(state).toEqual({ settled: true, error: undefined })
+  })
+
+  it('warns in development when compile() leaves a live material without a program', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { renderer, compile, materials } = fakeRenderer()
+    compile.mockImplementation(() => {
+      renderer.properties.get(materials[0])
+      return new Set(materials.slice(0, 1))
+    })
+    void compileAndWait(renderer, scene, camera)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
   it('counts a material whose properties hold no program as done', async () => {
     const { renderer, materials, link } = fakeRenderer()
     const state = track(compileAndWait(renderer, scene, camera))
