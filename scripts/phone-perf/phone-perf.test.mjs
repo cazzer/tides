@@ -204,3 +204,59 @@ describe('profile summary', async () => {
     ])
   })
 })
+
+describe('build comparison', async () => {
+  const { compareBuilds } = await import('./report.mjs')
+  const { expandPoses, POSES, roundOrder } = await import('./poses.mjs')
+  const run = (build, round, replay, extra = {}) => ({
+    key: `p#${build}`,
+    poseKey: 'p',
+    build,
+    round,
+    replay: { ms: replay },
+    frames: { p50: 16.7, p95: 16.8, droppedShare: 0 },
+    ...extra,
+  })
+
+  it('pairs runs by round and reports the median per-round delta and its range', () => {
+    const results = [run('a', 0, 20), run('b', 0, 18), run('b', 1, 19), run('a', 1, 22), run('a', 2, 21), run('b', 2, 20)]
+    const [c] = compareBuilds(results, ['a', 'b'])
+    const replay = c.metrics.find((m) => m.name === 'replay ms')
+    expect(c.pairs).toBe(3)
+    expect(replay.before).toBe(21)
+    expect(replay.after).toBe(19)
+    expect(replay.delta).toBe(-2)
+    expect([replay.deltaMin, replay.deltaMax]).toEqual([-3, -1])
+    expect(replay.consistent).toBe(true)
+  })
+
+  it('drops a round where either build failed', () => {
+    const results = [run('a', 0, 20), run('b', 0, 18), run('a', 1, 22), { ...run('b', 1, 0), error: 'Target closed' }]
+    const [c] = compareBuilds(results, ['a', 'b'])
+    expect(c.pairs).toBe(1)
+    expect(c.metrics.find((m) => m.name === 'replay ms').consistent).toBe(false)
+  })
+
+  it('leaves out a round whose builds rendered at a different tier', () => {
+    const low = { info: { quality: 'low', dpr: 2, canvas: [720, 1450] } }
+    const high = { info: { quality: 'high', dpr: 2, canvas: [720, 1450] } }
+    const results = [run('a', 0, 20, low), run('b', 0, 18, low), run('a', 1, 20, low), run('b', 1, 40, high)]
+    const [c] = compareBuilds(results, ['a', 'b'])
+    expect([c.pairs, c.mismatched]).toEqual([1, 1])
+    expect(c.metrics.find((m) => m.name === 'replay ms').diffs).toEqual([-2])
+  })
+
+  it('compares nothing for a single build', () => {
+    expect(compareBuilds([run('a', 0, 20)], ['a'])).toEqual([])
+  })
+
+  it('leaves the extra poses out of the default set but runs them by name', () => {
+    expect(expandPoses(POSES).some((p) => p.extra)).toBe(false)
+    expect(expandPoses(POSES, { only: ['cz-sheet'] }).map((p) => p.key)).toEqual(['cz-sheet'])
+  })
+
+  it('alternates the build order each round', () => {
+    expect(roundOrder(['a', 'b'], 0)).toEqual(['a', 'b'])
+    expect(roundOrder(['a', 'b'], 1)).toEqual(['b', 'a'])
+  })
+})

@@ -4,6 +4,7 @@
 //
 //   npm run perf:phone                        # the phone over adb
 //   TARGET=desktop npm run perf:phone         # desktop Chrome, 390x844 @3, low tier
+//   BUILDS=before=../a,after=../b npm run perf:phone   # A/B two source trees, interleaved
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -46,6 +47,17 @@ const config = {
   headed: env.HEADED === '1',
   keepTrace: env.KEEP_TRACE === '1',
   out: env.OUT,
+  // name=path,name=path: source trees to build and compare, each served on
+  // its own port (VITE_PORT, +1, ...); the first is the "before".
+  builds: env.BUILDS ? env.BUILDS.split(',').map(parseBuild) : null,
+}
+
+function parseBuild(spec) {
+  const at = spec.indexOf('=')
+  if (at < 1) throw new Error(`BUILDS entries are name=path, not ${spec}`)
+  const name = spec.slice(0, at).trim()
+  if (!/^[\w.-]+$/.test(name)) throw new Error(`Build name ${name} must be letters, digits, . _ or -`)
+  return { name, root: path.resolve(spec.slice(at + 1).trim()) }
 }
 
 const log = (...args) => console.log(...args)
@@ -60,10 +72,23 @@ async function main() {
   const outDir = config.out ?? path.join(HERE, 'runs', `${stamp}-${config.target}`)
   fs.mkdirSync(outDir, { recursive: true })
 
-  const base = config.baseUrl ?? `http://localhost:${config.vitePort}/tides/`
-  if (config.serve !== 'none') await startServer()
+  if (config.builds && config.serve !== 'build') {
+    // dev servers would share one optimizer cache through a symlinked node_modules.
+    throw new Error('BUILDS builds and previews each tree; it needs SERVE=build')
+  }
+  if (config.builds && config.runs % 2) log(`note: RUNS=${config.runs} is odd, so the build order is not balanced across rounds`)
+  if (config.builds && new Set(config.builds.map((b) => b.name)).size !== config.builds.length) {
+    throw new Error('BUILDS names must be unique')
+  }
+  const builds = (config.builds ?? [{ name: null, root: REPO }]).map((b, i) => {
+    const port = config.vitePort + i
+    const base = !config.builds && config.baseUrl ? config.baseUrl : `http://localhost:${port}/tides/`
+    return { ...b, port, base }
+  })
+  for (const build of builds) checkTree(build)
+  if (config.serve !== 'none') for (const build of builds) await startServer(build)
 
-  const device = config.target === 'phone' ? await openPhone() : await openDesktop()
+  const device = config.target === 'phone' ? await openPhone(builds.map((b) => b.port)) : await openDesktop()
   active.device = device
   const connection = await CdpConnection.open((await browserWsUrl(config.cdpPort)).url)
   active.connection = connection
@@ -73,9 +98,12 @@ async function main() {
   const meta = {
     startedAt: new Date().toISOString(),
     target: config.target,
-    git: await gitHead(),
+    git: await gitHead(REPO),
     serve: config.serve,
-    base,
+    base: builds[0].base,
+    builds: config.builds
+      ? await Promise.all(builds.map(async (b) => ({ name: b.name, root: b.root, git: await gitHead(b.root), base: b.base })))
+      : null,
     browser: browserVersion.product,
     userAgent: browserVersion.userAgent,
     device: device.info,
@@ -85,10 +113,14 @@ async function main() {
   try {
     for (let round = 0; round < config.runs; round++) {
       for (const item of roundOrder(items, round)) {
-        const record = await measureWithGuards(connection, device, item, base, round)
-        results.push(record)
-        fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify({ meta, results }, null, 1))
-        if (config.gapMs) await sleep(config.gapMs)
+        // Builds run back to back per pose, the order alternating each
+        // round, so a before/after pair sees the same phone state.
+        for (const build of roundOrder(builds, round)) {
+          const record = await measureWithGuards(connection, device, item, build, round)
+          results.push(record)
+          fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify({ meta, results }, null, 1))
+          if (config.gapMs) await sleep(config.gapMs)
+        }
       }
     }
   } finally {
@@ -99,7 +131,8 @@ async function main() {
   }
 }
 
-async function measureWithGuards(connection, device, item, base, round) {
+async function measureWithGuards(connection, device, item, build, round) {
+  const key = build.name ? `${item.key}#${build.name}` : item.key
   let thermalBefore = null
   if (device.serial) {
     const cooled = await adb.coolDown(device.serial, {
@@ -109,8 +142,8 @@ async function measureWithGuards(connection, device, item, base, round) {
     })
     thermalBefore = { ...cooled.thermal, waitedMs: cooled.waitedMs, cool: cooled.cool }
   }
-  log(`\n[round ${round + 1}/${config.runs}] ${item.key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)})` : ''}`)
-  const measure = () => measurePose(connection, device, item, base)
+  log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)})` : ''}`)
+  const measure = () => measurePose(connection, device, item, build.base)
   let record
   try {
     record = config.gpuLock && !device.serial ? await withGpuLock(config.gpuLock, measure) : await measure()
@@ -119,7 +152,18 @@ async function measureWithGuards(connection, device, item, base, round) {
     record = { error: error.message }
   }
   const thermalAfter = device.serial ? await adb.readThermal(device.serial).catch(() => null) : null
-  return { key: item.key, pose: item.id, label: item.label, tier: item.tier, round, thermalBefore, thermalAfter, ...record }
+  return {
+    key,
+    poseKey: item.key,
+    build: build.name,
+    pose: item.id,
+    label: item.label,
+    tier: item.tier,
+    round,
+    thermalBefore,
+    thermalAfter,
+    ...record,
+  }
 }
 
 async function measurePose(connection, device, item, base) {
@@ -245,29 +289,47 @@ async function captureProfile(page) {
   return { seconds, topSelfMs: summariseProfile(profile, 20) }
 }
 
-async function startServer() {
+// Builds a source tree with the harness's config and serves it. Another tree
+// (BUILDS) is built with its own working directory as the root, so its src/
+// is what gets hooked and bundled; the app config the harness merges is this
+// checkout's, so the tree's own vite.config.ts must match it.
+function checkTree(build) {
+  if (build.root !== REPO) {
+    const own = fs.readFileSync(path.join(build.root, 'vite.config.ts'), 'utf8')
+    if (own !== fs.readFileSync(path.join(REPO, 'vite.config.ts'), 'utf8')) {
+      throw new Error(`${build.root}/vite.config.ts differs from this checkout's; the harness would build it with the wrong config`)
+    }
+    if (!fs.existsSync(path.join(build.root, 'node_modules'))) {
+      throw new Error(`${build.root} has no node_modules (install, or symlink a checkout's with the same package-lock.json)`)
+    }
+  }
+}
+
+async function startServer(build) {
   const vite = path.join(REPO, 'node_modules/.bin/vite')
   const configFile = path.join(HERE, 'vite.config.mjs')
-  const dist = path.join(HERE, '.dist')
+  const dist = path.join(HERE, build.name ? `.dist-${build.name}` : '.dist')
+  const label = build.name ? ` ${build.name} (${build.root})` : ''
   if (config.serve === 'build') {
-    log('building (vite build with the harness hooks)…')
-    await runToEnd(vite, ['build', '--config', configFile, '--outDir', dist, '--emptyOutDir'], { cwd: REPO })
+    log(`building${label} (vite build with the harness hooks)…`)
+    await runToEnd(vite, ['build', '--config', configFile, '--outDir', dist, '--emptyOutDir'], { cwd: build.root })
   }
+  const port = String(build.port)
   const args =
     config.serve === 'build'
-      ? ['preview', '--config', configFile, '--outDir', dist, '--port', String(config.vitePort), '--strictPort', '--host']
-      : ['--config', configFile, '--port', String(config.vitePort), '--strictPort', '--host']
-  const server = spawn(vite, args, { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] })
+      ? ['preview', '--config', configFile, '--outDir', dist, '--port', port, '--strictPort', '--host']
+      : ['--config', configFile, '--port', port, '--strictPort', '--host']
+  const server = spawn(vite, args, { cwd: build.root, stdio: ['ignore', 'pipe', 'pipe'] })
   children.push(server)
   let output = ''
   server.stdout.on('data', (d) => (output += d))
   server.stderr.on('data', (d) => (output += d))
-  const url = `http://localhost:${config.vitePort}/tides/`
+  const url = `http://localhost:${build.port}/tides/`
   const deadline = Date.now() + 60000
   while (Date.now() < deadline) {
     if (server.exitCode !== null) throw new Error(`vite exited (${server.exitCode}):\n${output}`)
     if (await fetch(url).then((r) => r.ok).catch(() => false)) {
-      log(`serving ${url} (${config.serve})`)
+      log(`serving${label} ${url} (${config.serve})`)
       return
     }
     await sleep(300)
@@ -321,14 +383,16 @@ async function openDesktop() {
   }
 }
 
-async function openPhone() {
+async function openPhone(vitePorts) {
   const serial = adb.pickSerial(await adb.adb(null, "devices", "-l"), env.ADB_SERIAL ?? env.ANDROID_SERIAL)
   log(`phone: ${serial}`)
-  const ports = { cdpPort: config.cdpPort, vitePort: config.vitePort }
-  const prepared = await adb.prepareDevice(serial, ports)
-  const device = { serial, info: null, close: () => adb.releaseDevice(serial, { ...ports, stayOn: prepared.stayOn }) }
-  // Released by shutdown() from here on, even if reading the device fails.
+  const ports = { cdpPort: config.cdpPort, vitePorts }
+  // Released by shutdown() from before the first change, so Ctrl-C mid-prepare
+  // or a failed device read still removes the forwards and restores stay-on.
+  const pending = { stayOn: null }
+  const device = { serial, info: null, close: () => adb.releaseDevice(serial, { ...ports, stayOn: pending.stayOn }) }
   active.device = device
+  await adb.prepareDevice(serial, ports, pending)
   device.info = { kind: 'phone', serial, ...(await adb.deviceInfo(serial)), thermalAtStart: await adb.readThermal(serial) }
   const info = device.info
   log(`  ${info.model}, Android ${info.android}, Chrome ${info.chrome}, battery ${info.battery}%, ${adb.thermalLine(info.thermalAtStart)}`)
@@ -409,11 +473,11 @@ function runToEnd(command, args, options) {
   })
 }
 
-async function gitHead() {
+async function gitHead(root) {
   const { execFileSync } = await import('node:child_process')
   try {
-    const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO }).toString().trim()
-    const dirty = execFileSync('git', ['status', '--porcelain', '--', 'src'], { cwd: REPO }).toString().trim()
+    const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root }).toString().trim()
+    const dirty = execFileSync('git', ['status', '--porcelain', '--', 'src'], { cwd: root }).toString().trim()
     return dirty ? `${sha}+dirty` : sha
   } catch {
     return null

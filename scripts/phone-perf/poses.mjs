@@ -145,6 +145,39 @@ export const POSES = [
     settleMs: 15000,
     tiers: ['auto', 'high'],
   },
+  // The poses below are the sprint's fixes' own (tides-0oi.3, .4, .10), for
+  // before/after runs; `extra` keeps them out of the default baseline set,
+  // so they run only when POSES names them.
+  {
+    // tides-0oi.3: the low tier's flat cloud sheet seen from under it, the
+    // ground filling the view (the audit's Himalaya 20 km pose).
+    id: 'cz-sheet',
+    label: 'Close zoom under the cloud sheet (Himalaya 27.9N 86.9E, 20 km, tilt 60)',
+    params: { focus: 'earth' },
+    setup: mainPose({ lat: 27.9, lon: 86.9, km: 20, tilt: 60 }),
+    settleMs: 15000,
+    extra: true,
+  },
+  {
+    // tides-0oi.10: open ocean at local 01:00 two days after new Moon, so the
+    // Sun and the Moon are both well below the water's horizon.
+    id: 'night-ocean',
+    label: 'Night close zoom over ocean (Indian Ocean 0N 90E, 100 km, looking down)',
+    params: { focus: 'earth' },
+    setup: mainPose({ lat: 0, lon: 90, km: 100, tilt: 0 }),
+    settleMs: 15000,
+    extra: true,
+  },
+  {
+    // tides-0oi.4: night equatorward of the oval, looking down, where the
+    // march gate skips the most (the ticket's 65N 120E 400 km, 23:00 local).
+    id: 'aurora-gate',
+    label: 'Night close zoom equatorward of the oval (65N 120E, 400 km, looking down, 15:00 UTC)',
+    params: { focus: 'earth', t: '2026-03-20T15:00:00Z' },
+    setup: mainPose({ lat: 65, lon: 120, km: 400, tilt: 0 }),
+    settleMs: 15000,
+    extra: true,
+  },
   {
     id: 'seasons',
     label: 'Seasons tour, step 1 (June solstice)',
@@ -165,7 +198,7 @@ export const POSES = [
 
 // One measurement per (pose, tier), in a stable order.
 export function expandPoses(poses, { tiers: forcedTiers, only } = {}) {
-  const wanted = only?.length ? poses.filter((p) => only.includes(p.id)) : poses
+  const wanted = only?.length ? poses.filter((p) => only.includes(p.id)) : poses.filter((p) => !p.extra)
   if (only?.length && wanted.length !== only.length) {
     const known = poses.map((p) => p.id).join(', ')
     throw new Error(`Unknown pose in POSES=${only.join(',')} (known: ${known})`)

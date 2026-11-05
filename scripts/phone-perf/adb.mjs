@@ -93,15 +93,19 @@ export async function coolDown(serial, { maxC, timeoutMs, log }) {
 // Keeps the screen on for the run ('stayon usb' only holds while the phone is
 // on USB power, and wireless adb may run on battery), and returns the
 // previous setting so releaseDevice can put it back.
-export async function prepareDevice(serial, { cdpPort, vitePort }) {
+// vitePorts: one adb reverse per served build. `pending.stayOn` gets the
+// previous setting before anything changes, so a caller's Ctrl-C handler can
+// undo a half-done prepare.
+export async function prepareDevice(serial, { cdpPort, vitePorts }, pending = {}) {
   const stayOn = (await adb(serial, 'shell', 'settings', 'get', 'global', 'stay_on_while_plugged_in')).trim()
+  pending.stayOn = stayOn
   try {
     await adb(serial, 'shell', 'svc', 'power', 'stayon', 'true')
     await wakeAndUnlock(serial)
-    await adb(serial, 'reverse', `tcp:${vitePort}`, `tcp:${vitePort}`)
+    for (const port of vitePorts) await adb(serial, 'reverse', `tcp:${port}`, `tcp:${port}`)
     await adb(serial, 'forward', `tcp:${cdpPort}`, 'localabstract:chrome_devtools_remote')
   } catch (error) {
-    await releaseDevice(serial, { cdpPort, vitePort, stayOn })
+    await releaseDevice(serial, { cdpPort, vitePorts, stayOn })
     throw error
   }
   return { stayOn }
@@ -118,9 +122,9 @@ export async function wakeAndUnlock(serial) {
   }
 }
 
-export async function releaseDevice(serial, { cdpPort, vitePort, stayOn }) {
+export async function releaseDevice(serial, { cdpPort, vitePorts, stayOn }) {
   await adb(serial, 'forward', '--remove', `tcp:${cdpPort}`).catch(() => {})
-  await adb(serial, 'reverse', '--remove', `tcp:${vitePort}`).catch(() => {})
+  for (const port of vitePorts) await adb(serial, 'reverse', '--remove', `tcp:${port}`).catch(() => {})
   if (/^\d+$/.test(stayOn ?? '')) {
     await adb(serial, 'shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', stayOn).catch(() => {})
   }

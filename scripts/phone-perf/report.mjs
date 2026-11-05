@@ -82,6 +82,67 @@ export function aggregate(results) {
   })
 }
 
+const gpuProcessMs = (r) => {
+  const threads = r.trace?.gpuThreads
+  return threads?.length ? threads.reduce((sum, t) => sum + t.busyPerFrameMs, 0) : null
+}
+
+const COMPARED = [
+  ['replay ms', (r) => r.replay?.ms],
+  ['GPU-process ms/frame', gpuProcessMs],
+  ['main ms/frame', (r) => r.trace?.main?.busyPerFrameMs],
+  ['p50 ms', (r) => r.frames?.p50],
+  ['p95 ms', (r) => r.frames?.p95],
+  ['dropped %', (r) => (typeof r.frames?.droppedShare === 'number' ? r.frames.droppedShare * 100 : null)],
+  ['GPU mem MB', (r) => r.info?.vramMB?.total],
+]
+
+// Before/after per pose across builds (BUILDS): each later build against the
+// first, paired by round (the two ran back to back), so the delta is the
+// median of per-round differences and its range shows the noise.
+export function compareBuilds(results, buildNames) {
+  if (!buildNames || buildNames.length < 2) return []
+  const [before, ...afters] = buildNames
+  const poseKeys = [...new Set(results.filter((r) => r.build).map((r) => r.poseKey))]
+  const out = []
+  for (const poseKey of poseKeys) {
+    for (const after of afters) {
+      const find = (build, round) => results.find((r) => r.poseKey === poseKey && r.build === build && r.round === round && !r.error)
+      const rounds = [...new Set(results.filter((r) => r.poseKey === poseKey).map((r) => r.round))]
+      const all = rounds.map((round) => [find(before, round), find(after, round)]).filter(([a, b]) => a && b)
+      // A pair that rendered differently (tier from a saved choice, dpr,
+      // canvas) compares two different frames, not two builds.
+      const same = ([a, b]) =>
+        a.info?.quality === b.info?.quality && a.info?.dpr === b.info?.dpr && a.info?.canvas?.join('x') === b.info?.canvas?.join('x')
+      const pairs = all.filter(same)
+      const mismatched = all.length - pairs.length
+      const metrics = COMPARED.map(([name, get]) => {
+        const deltas = pairs
+          .map(([a, b]) => [get(a), get(b)])
+          .filter(([a, b]) => typeof a === 'number' && typeof b === 'number' && Number.isFinite(a) && Number.isFinite(b))
+        const a = median(deltas.map(([x]) => x))
+        const b = median(deltas.map(([, y]) => y))
+        const diffs = deltas.map(([x, y]) => y - x)
+        return {
+          name,
+          before: a,
+          after: b,
+          delta: median(diffs),
+          deltaMin: diffs.length ? Math.min(...diffs) : null,
+          deltaMax: diffs.length ? Math.max(...diffs) : null,
+          deltaPct: a ? (median(diffs) / a) * 100 : null,
+          pairs: diffs.length,
+          diffs,
+          // Every paired round moved the same way.
+          consistent: diffs.length > 1 && (diffs.every((d) => d < 0) || diffs.every((d) => d > 0)),
+        }
+      })
+      out.push({ poseKey, before, after, pairs: pairs.length, mismatched, metrics })
+    }
+  }
+  return out
+}
+
 export function renderMarkdown({ meta, results }) {
   const rows = aggregate(results)
   const lines = []
@@ -94,6 +155,9 @@ export function renderMarkdown({ meta, results }) {
       : `- desktop emulation ${device.emulation?.width}x${device.emulation?.height} @${device.emulation?.deviceScaleFactor}, mobile UA`,
     `- ${meta.config.runs} rounds, pose order rotated each round; frames over ${meta.config.durationMs} ms, trace ${meta.config.traceMs} ms, profile ${meta.config.profileMs} ms per pose per round`,
     `- values are medians over rounds; noise = ±half of (max - min) / mean across rounds`,
+    ...(meta.builds
+      ? [`- builds: ${meta.builds.map((b) => `${b.name} = ${b.git} (${b.root})`).join('; ')}; per pose the builds ran back to back, order alternating each round`]
+      : []),
     `- replay ms = the frame's recorded renders re-run ${meta.config.replayK}x back to back then synced by a 1-pixel readPixels, per frame: CPU submit + GPU, without vsync. The headroom figure where the GPU has no timer`,
     ''
   )
@@ -109,6 +173,21 @@ export function renderMarkdown({ meta, results }) {
     lines.push(
       `| ${r.key} | ${info.quality ?? r.tier} | ${info.dpr ?? '–'} | ${info.canvas?.join('x') ?? '–'} | ${f1(r.p50)} | ${f1(r.p95)} | ${f1(r.p99)} | ${pct(r.dropped)} | ${r.refreshHz ?? '–'} | ${f1(r.mainBusyMs)} | ${f1(r.replayMs)}${r.noiseReplay && r.noiseReplay.runs > 1 ? ` ±${f1(r.noiseReplay.spreadPct / 2)}%` : ''} | ${r.gpuMs !== null ? `${f1(r.gpuMs)} (${r.gpuSource})` : r.gpuDeviceMs !== null ? `${f1(r.gpuDeviceMs)} (trace)` : 'n/a'} | ${gpuProc || '–'} | ${info.vramMB ? `${info.vramMB.total} (${info.vramMB.compressed})` : '–'} | ${r.noise.p50 && r.noise.p50.runs > 1 ? `±${f1(r.noise.p50.spreadPct / 2)}%` : '–'} |`
     )
+  }
+  const comparisons = compareBuilds(results, meta.builds?.map((b) => b.name))
+  if (comparisons.length) {
+    lines.push('', '## Before / after (paired by round: median of after - before, with the range over rounds)', '')
+    lines.push('| pose | builds | metric | before | after | delta | delta % | range | rounds |', '|---|---|---|---|---|---|---|---|---|')
+    for (const c of comparisons) {
+      if (c.mismatched) lines.push(`| ${c.poseKey} | ${c.before} → ${c.after} | ${c.mismatched} round(s) left out: tier, dpr or canvas differed | | | | | | |`)
+      for (const m of c.metrics) {
+        if (m.pairs === 0) continue
+        lines.push(
+          `| ${c.poseKey} | ${c.before} → ${c.after} | ${m.name} | ${f1(m.before)} | ${f1(m.after)} | ${m.delta > 0 ? '+' : ''}${f1(m.delta)}${m.consistent ? ' *' : ''} | ${m.deltaPct === null ? '–' : `${m.deltaPct > 0 ? '+' : ''}${m.deltaPct.toFixed(1)}%`} | ${f1(m.deltaMin)}..${f1(m.deltaMax)} | ${m.pairs} |`
+        )
+      }
+    }
+    lines.push('', '`*` every paired round moved the same way.')
   }
   lines.push('', '## Main thread by category (ms per frame, self time)', '')
   for (const r of rows) {

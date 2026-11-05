@@ -11,7 +11,22 @@ npm run perf:phone                                    # phone over adb (needs on
 ANDROID_SERIAL=192.168.68.56:36979 npm run perf:phone # pick the device
 TARGET=desktop npm run perf:phone                     # desktop Chrome, 390x844 @3, mobile UA
 POSES=ship-sea,aurora-night RUNS=1 npm run perf:phone # a subset, one round
+BUILDS=before=../wt-a,after=../wt-b POSES=system npm run perf:phone  # before/after
 ```
+
+## Before / after (`BUILDS`)
+
+`BUILDS=name=path,name=path` builds each source tree with this harness's hooks
+(the tree is the build root, so its `src/` is what gets bundled) and serves
+them on `VITE_PORT`, `+1`, ... Per pose the builds run back to back, their
+order alternating each round, each after its own cool-down. The report adds a
+before/after table: each later build against the first, the median of the
+per-round differences and their range, starred when every round moved the
+same way. Use detached worktrees pinned to the commits you compare
+(`git worktree add --detach <path> <sha>`), with `node_modules` installed or
+symlinked from a checkout with the same `package-lock.json`; the tree's
+`vite.config.ts` must match this checkout's (checked). On a pose that already
+holds 60 fps the p50 can't move; compare replay ms and GPU-process ms.
 
 No dependencies beyond Node 22 (built-in WebSocket) and `adb` on the PATH.
 
@@ -59,9 +74,10 @@ No dependencies beyond Node 22 (built-in WebSocket) and `adb` on the PATH.
      is CPU submit plus GPU without vsync, the headroom figure where the GPU
      has no timer;
    - **scene**: tier, dpr, canvas size, draws and triangles summed over the
-     frame's render passes, programs, and texture memory by format (summed
-     from texStorage/texImage/compressedTexImage calls, so it counts uploads,
-     not what the driver keeps).
+     frame's render passes, programs, and resident GPU memory by format
+     (tracked from the GL calls: a re-upload replaces, a delete frees,
+     compressed formats count at their block size, renderbuffers incl. MSAA;
+     bytes uploaded since load are reported apart).
 
 ## Poses (`poses.mjs`)
 
@@ -80,6 +96,14 @@ the high pass shows what a phone pays for the high tier's look.
 | seasons | seasons tour, step 1 (June solstice), step clock replayed before timing | auto |
 | solar-eclipse | solar eclipse tour, step 0, step clock replayed before timing | auto |
 
+Extra poses, run only when `POSES` names them (the sprint fixes' own poses):
+
+| id | what | for |
+|---|---|---|
+| cz-sheet | close zoom 20 km under the cloud sheet, Himalaya 27.9N 86.9E, tilt 60 | tides-0oi.3 |
+| night-ocean | close zoom 100 km over the Indian Ocean (0N 90E) at local 01:00, looking down | tides-0oi.10 |
+| aurora-gate | close zoom 400 km at 65N 120E, 15:00 UTC (23:00 local), looking down | tides-0oi.4 |
+
 `POSES` filters by id; `TIERS=auto,high` forces tiers on every pose.
 
 ## Hooks (`vite.config.mjs`)
@@ -90,7 +114,7 @@ perf-audit stream's hooked tree:
 - `window.__mainPose?.(camera, controls)` after the main view's `controls.update()`
 - `window.__ship = { state, bodies, input, telemetry, earth }` and
   `window.__shipPose?.(state, earth)` after `stepShip`
-- `window.__ppHandles = { getState, THREE, useStore, qualityTier, savedQualityChoice }`
+- `window.__ppHandles = { getState, THREE, addEffect, addAfterEffect, useStore, qualityTier, savedQualityChoice }`
 
 A hook whose anchor text moves fails the build with a message naming this
 file.
