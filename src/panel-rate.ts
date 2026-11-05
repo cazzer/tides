@@ -4,7 +4,7 @@
 // (renderers/HeldPanel.tsx); anything that moves them quickly brings back the
 // full rate.
 
-/** ?panelhz=: auto (the rule below), 60 (every frame, as before), or a fixed rate. */
+/** ?panelhz=: 60 (every frame, as before; the default), auto (the rule below), or a fixed rate. */
 export type PanelRateConfig = { mode: 'auto'; hz: number } | { mode: 'fixed'; hz: number }
 
 const FIXED_RATES = [60, 30, 20, 15]
@@ -18,12 +18,17 @@ export const PANEL_FULL_RATE_SPEED = 60 * 60
 /** How long after an input on a panel it stays at the full rate. */
 export const PANEL_INPUT_MS = 500
 
-/** The URL's ?panelhz=, auto when absent or unreadable. */
+/**
+ * The URL's ?panelhz=. Off (60: drei draws every frame, as before) when
+ * absent or unreadable, until the S21 shows a gain (tides-0oi.18); auto or a
+ * fixed rate turns pacing on.
+ */
 export function parsePanelRate(search: string): PanelRateConfig {
   const raw = new URLSearchParams(search).get('panelhz')
+  if (raw === 'auto') return { mode: 'auto', hz: PANEL_HZ }
   const hz = Number(raw)
   if (raw && FIXED_RATES.includes(hz)) return { mode: 'fixed', hz }
-  return { mode: 'auto', hz: PANEL_HZ }
+  return { mode: 'fixed', hz: 60 }
 }
 
 /** Whether panels are paced at all: ?panelhz=60 draws them every frame through drei, as before. */

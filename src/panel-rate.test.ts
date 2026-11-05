@@ -10,14 +10,18 @@ import {
   type PanelRateInput,
 } from './panel-rate'
 
-const AUTO = parsePanelRate('')
+const AUTO = parsePanelRate('?panelhz=auto')
 const still: PanelRateInput = { timeScale: 1, jumping: false, demo: false, interactingAt: null, now: 10_000 }
 
 describe('parsePanelRate', () => {
-  it('is auto at 15 Hz by default and for unreadable values', () => {
-    for (const search of ['', '?panelhz=auto', '?panelhz=7', '?panelhz=abc', '?panelhz=']) {
-      expect(parsePanelRate(search)).toEqual({ mode: 'auto', hz: 15 })
+  it('is off (every frame) by default and for unreadable values', () => {
+    for (const search of ['', '?panelhz=7', '?panelhz=abc', '?panelhz=']) {
+      expect(parsePanelRate(search)).toEqual({ mode: 'fixed', hz: 60 })
+      expect(panelsPaced(parsePanelRate(search))).toBe(false)
     }
+  })
+  it('is auto at 15 Hz with ?panelhz=auto', () => {
+    expect(parsePanelRate('?panelhz=auto')).toEqual({ mode: 'auto', hz: 15 })
   })
   it('takes the fixed rates', () => {
     for (const hz of [60, 30, 20, 15]) expect(parsePanelRate(`?panelhz=${hz}`)).toEqual({ mode: 'fixed', hz })
