@@ -54,13 +54,34 @@ void main() {
 }
 `
 
+// The shader reads only .r: uploaded as one R8 channel, the 1792² atlas and
+// its mips take 4 MiB on the GPU instead of RGBA8's 16.
+class RedTextureLoader extends THREE.TextureLoader {
+  load(
+    url: string,
+    onLoad?: (texture: THREE.Texture) => void,
+    onProgress?: (event: ProgressEvent) => void,
+    onError?: (error: unknown) => void
+  ): THREE.Texture {
+    const texture = super.load(url, onLoad, onProgress, onError)
+    texture.format = THREE.RedFormat
+    return texture
+  }
+}
+
 function Figures({ radius }: { radius: number }) {
-  const atlas = useLoader(THREE.TextureLoader, artAtlasUrl)
+  const atlas = useLoader(RedTextureLoader, artAtlasUrl)
   const geometry = useMemo(() => constellationArtGeometry(art), [])
 
   useEffect(() => {
     return () => geometry.dispose()
   }, [geometry])
+
+  // Turning the art off frees the atlas on the GPU; the loader keeps the
+  // image, so turning it back on uploads it again without a fetch.
+  useEffect(() => {
+    return () => atlas.dispose()
+  }, [atlas])
 
   const uniforms = useMemo(
     () => ({

@@ -1,18 +1,23 @@
 import * as THREE from 'three'
 import { describe, expect, test } from 'vitest'
 import {
+  coverBytesOf,
+
   createCloudBlender,
   FADE_MS,
+  isRedOnly,
   neutralTypeTexture,
   outputFlags,
   planBlendPass,
   precipBytesOf,
   precipOf,
+  releasePixelsOnUpload,
   typesOf,
   type BlendPassState,
   TYPE_FRAGMENT_SHADER,
 } from './cloudBlend'
 import { CLOUD_TYPED_TOP_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
+import { coverOf } from './cloudCover'
 import {
   CUMULUS_TOP_KM,
   TYPE_SHAPES,
@@ -315,5 +320,61 @@ describe('typed tops in the blend (tides-tvr.4.3, tides-tvr.4.9)', () => {
     ]) {
       expect(fn).toContain(line)
     }
+  })
+})
+
+describe('memory (tides-0oi.11)', () => {
+  test("a frame's pixels go once uploaded; its size, cover and grids stay", () => {
+    const rgba = new Uint8Array([10, 20, 30, 255, 40, 50, 60, 255])
+    const texture = new THREE.DataTexture(rgba, 2, 1)
+    const precipBytes = new Uint8Array([1, 2, 3, 255])
+    texture.userData.precip = new THREE.DataTexture(precipBytes, 1, 1)
+    texture.userData.cover = coverOf(rgba, 2, 1)
+    releasePixelsOnUpload(texture)
+    expect(texture.image.data).toBe(rgba)
+    // As three's upload calls it.
+    texture.onUpdate!()
+    expect(texture.image.data).toBeNull()
+    expect([texture.image.width, texture.image.height]).toEqual([2, 1])
+    expect(texture.onUpdate).toBeNull()
+    expect(precipBytesOf(texture)).toBe(precipBytes)
+    expect(coverBytesOf(texture)).toEqual({ data: new Uint8Array([20, 50]), width: 2, height: 1 })
+    expect(coverBytesOf('static')).toBeNull()
+    expect(coverBytesOf(new THREE.Texture())).toBeNull()
+  })
+
+  test('a one-channel map is the static clouds, read as grey', () => {
+    const grey = new THREE.Texture()
+    grey.format = THREE.RedFormat
+    expect(isRedOnly(grey)).toBe(true)
+    expect(isRedOnly(new THREE.Texture())).toBe(false)
+    expect(isRedOnly(new THREE.DataTexture(new Uint8Array(4), 1, 1))).toBe(false)
+  })
+
+  test('the blend reads each input by its channels', () => {
+    let target: THREE.WebGLRenderTarget | null = null
+    const passes: Record<string, unknown>[] = []
+    const gl = {
+      getRenderTarget: () => target,
+      setRenderTarget: (t: THREE.WebGLRenderTarget | null) => {
+        target = t
+      },
+      render: (mesh: THREE.Mesh) => {
+        const material = mesh.material as THREE.ShaderMaterial
+        passes.push(Object.fromEntries(Object.entries(material.uniforms).map(([k, u]) => [k, u.value])))
+      },
+    } as unknown as THREE.WebGLRenderer
+    const staticMap = new THREE.Texture()
+    staticMap.format = THREE.RedFormat
+    const frame = new THREE.Texture()
+    const blender = createCloudBlender()
+    blender.update(gl, { a: staticMap, b: frame, mix: 0.5 }, staticMap, 0)
+    const main = passes[2]
+    expect(main.uPrev).toBe(staticMap)
+    expect([main.uPrevRed, main.uARed, main.uBRed]).toEqual([1, 1, 0])
+    blender.update(gl, { a: frame, b: staticMap, mix: 0.5 }, staticMap, 1000)
+    const next = passes[5]
+    expect([next.uPrevRed, next.uARed, next.uBRed]).toEqual([0, 0, 1])
+    blender.release()
   })
 })

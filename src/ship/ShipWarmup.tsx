@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import type * as THREE from 'three'
 import { coldWork, createWarmed, runWarmup, type Warmup } from './ship-warmup'
+import { isRetiredMap, uploadSlot } from './body-map-residency'
 
 // How often the scene is searched for newly loaded maps and new materials.
 const RESCAN_S = 0.5
@@ -23,7 +24,14 @@ export function ShipWarmup() {
 
   useFrame(({ gl, scene, camera, clock }) => {
     const materialKey = (material: THREE.Material) => gl.properties.get(material)
-    const next = queue.current.shift()
+    let next = queue.current.shift()
+    // An upload shares the frame's budget with the body maps' (tides-0oi.7),
+    // and a map a proxy has replaced since it was queued stays off the GPU.
+    if (next && 'texture' in next && isRetiredMap(next.texture)) next = undefined
+    else if (next && 'texture' in next && !uploadSlot.take(gl.info.render.frame)) {
+      queue.current.unshift(next)
+      return
+    }
     if (next) runWarmup(gl, next, camera, scene, warmed, materialKey)
     if (queue.current.length > 0 || clock.elapsedTime - scannedAt.current < RESCAN_S) return
     scannedAt.current = clock.elapsedTime

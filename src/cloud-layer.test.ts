@@ -31,6 +31,7 @@ import {
   horizonDipSin,
   MAX_CLOUD_TOP_KM,
   maxTopKm,
+  raysMeetSphere,
   shadowCaster,
   sunbeamAirMass,
   sunbeamTangentKm,
@@ -443,5 +444,59 @@ describe('one deck at every altitude (tides-45y)', () => {
     expect(fine.origin).toBe(0)
     expect(fine.end).toBeCloseTo(FINE_DECK.clearance, 12)
     expect(marchSpanFromEye(eye, down, 1, outer)!.end).toBeCloseTo(2 * FINE_DECK.clearance, 12)
+  })
+})
+
+describe('a view that sees nothing but a sphere (tides-0oi.3)', () => {
+  const r = 3
+  const eye: Vec3 = [0, r + 0.01, 0]
+  const turn = (down: number): Vec3 => [0, -Math.cos(down), -Math.sin(down)]
+
+  it('takes rays that meet the sphere ahead, and no others', () => {
+    expect(raysMeetSphere(eye, [[0, -1, 0]], r)).toBe(true)
+    // Its length doesn't count.
+    expect(raysMeetSphere(eye, [[0, -1e-6, 0], [0, -40, 1]], r)).toBe(true)
+    // Up, level, and over the horizon (its dip from here is under 5 deg).
+    expect(raysMeetSphere(eye, [[0, 1, 0]], r)).toBe(false)
+    expect(raysMeetSphere(eye, [[0, 0, -1]], r)).toBe(false)
+    const dip = Math.acos(r / (r + 0.01))
+    expect(raysMeetSphere(eye, [turn(Math.PI / 2 - dip * 1.01)], r)).toBe(true)
+    expect(raysMeetSphere(eye, [turn(Math.PI / 2 - dip * 0.99)], r)).toBe(false)
+    // One ray that misses is enough.
+    expect(raysMeetSphere(eye, [[0, -1, 0], [0, 0, -1]], r)).toBe(false)
+    expect(raysMeetSphere(eye, [[0, 0, 0]], r)).toBe(false)
+  })
+
+  it('takes none from the sphere or inside it', () => {
+    expect(raysMeetSphere([0, r, 0], [[0, -1, 0]], r)).toBe(false)
+    expect(raysMeetSphere([0, r * 0.5, 0], [[0, -1, 0]], r)).toBe(false)
+    expect(raysMeetSphere([0, 0, 0], [[0, -1, 0]], r)).toBe(false)
+  })
+
+  it('finds every ray between corners that meet it meeting it too', () => {
+    // Convexity: the corners of views turned every which way, and rays
+    // between them, by bilinear blends of the corners.
+    let rng = 7
+    const random = () => ((rng = (rng * 16807) % 2147483647) / 2147483647)
+    let held = 0
+    for (let k = 0; k < 400; k++) {
+      const down = random() * Math.PI * 0.55
+      const heading = random() * Math.PI * 2
+      const spread = 0.05 + random() * 0.6
+      const forward = new THREE.Vector3(...turn(down)).applyAxisAngle(new THREE.Vector3(0, 1, 0), heading)
+      const right = new THREE.Vector3(0, 1, 0).cross(forward).normalize()
+      const up = forward.clone().cross(right).normalize()
+      const ray = (x: number, y: number): Vec3 => {
+        const d = forward.clone().addScaledVector(right, x * spread).addScaledVector(up, y * spread * 1.8)
+        return [d.x, d.y, d.z]
+      }
+      const corners = [ray(-1, -1), ray(1, -1), ray(1, 1), ray(-1, 1)]
+      if (!raysMeetSphere(eye, corners, r)) continue
+      held++
+      for (let j = 0; j < 50; j++) {
+        expect(raysMeetSphere(eye, [ray(random() * 2 - 1, random() * 2 - 1)], r)).toBe(true)
+      }
+    }
+    expect(held).toBeGreaterThan(50)
   })
 })

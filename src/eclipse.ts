@@ -88,22 +88,36 @@ export interface EclipseBodies {
   moon: THREE.Vector3 // geocentric, km, scene axes
 }
 
+// Every eclipse-shadowed body in every View asks for the same timestamp each
+// frame, and astronomy-engine allocates heavily per call (half the app's
+// garbage): the last instant's bodies are kept and copied out.
+let cachedT = NaN
+const cached: EclipseBodies = {
+  sun: new THREE.Vector3(),
+  moon: new THREE.Vector3(),
+}
+
 // Geocentric Sun (apparent, i.e. with aberration, as eclipse predictions use)
 // and Moon, in km along the scene's axes (ecliptic of date, +Y north).
 export function eclipseBodies(
   t: number,
   out: EclipseBodies = { sun: new THREE.Vector3(), moon: new THREE.Vector3() }
 ): EclipseBodies {
-  const date = new Date(t)
-  const toEcliptic = Rotation_EQJ_ECT(date)
-  eclipticToScene(
-    RotateVector(toEcliptic, GeoVector(Body.Sun, date, true)),
-    out.sun
-  ).multiplyScalar(KM_PER_AU)
-  eclipticToScene(
-    RotateVector(toEcliptic, GeoMoon(date)),
-    out.moon
-  ).multiplyScalar(KM_PER_AU)
+  if (t !== cachedT) {
+    const date = new Date(t)
+    const toEcliptic = Rotation_EQJ_ECT(date)
+    eclipticToScene(
+      RotateVector(toEcliptic, GeoVector(Body.Sun, date, true)),
+      cached.sun
+    ).multiplyScalar(KM_PER_AU)
+    eclipticToScene(
+      RotateVector(toEcliptic, GeoMoon(date)),
+      cached.moon
+    ).multiplyScalar(KM_PER_AU)
+    cachedT = t
+  }
+  out.sun.copy(cached.sun)
+  out.moon.copy(cached.moon)
   return out
 }
 

@@ -5,7 +5,7 @@
 // the sim time (see ../aurora-kp.ts), and near the present the ovals' extent
 // and brightness follow SWPC's OVATION nowcast (see ../aurora-ovation.ts).
 import { useEffect, useMemo, useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import {
@@ -20,6 +20,7 @@ import {
 import { blendOvalTable, ovationWeight, type OvationFit } from '../aurora-ovation'
 import { kpFeed } from './kpFeed'
 import { ovationFeed } from './ovationFeed'
+import { auroraCurtain, CURTAIN_ROWS, CURTAIN_WIDTH } from './auroraCurtain'
 import { AURORA_GAIN } from '../lighting'
 import { isLowQuality } from '../quality'
 import { GLOW_LAYER } from './glow/glow'
@@ -46,7 +47,7 @@ function auroraGlowMaterial(material: THREE.ShaderMaterial): THREE.ShaderMateria
   return new THREE.ShaderMaterial({
     vertexShader: material.vertexShader,
     fragmentShader: material.fragmentShader,
-    defines: { STEPS: AURORA_GLOW_STEPS },
+    defines: { ...material.defines, STEPS: AURORA_GLOW_STEPS },
     uniforms: material.uniforms,
     transparent: true,
     depthWrite: false,
@@ -106,13 +107,20 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
   const pole = useMemo(() => new THREE.Vector3(), [])
   // Uniforms are updated through the mesh, not the memoised material.
   const mesh = useRef<THREE.Mesh>(null)
+  // The curtains' slow noise, baked once a frame (null: the march's own).
+  const curtain = auroraCurtain(useThree((s) => s.gl))
 
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
         vertexShader: shellVertex,
         fragmentShader: auroraFragment,
-        defines: { STEPS: low ? 10 : 24 },
+        // The baked noise paid for more steps on the low tier (tides-0oi.5);
+        // without it the march is exactly as before.
+        defines: {
+          STEPS: low ? (curtain ? 14 : 10) : 24,
+          ...(curtain && { CURTAIN_BAKE: 1, CURTAIN_WIDTH, CURTAIN_ROWS }),
+        },
         uniforms: {
           uInner: { value: 0 },
           uOuter: { value: 0 },
@@ -126,6 +134,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
           uGain: { value: AURORA_GAIN },
           // Where rays from below the shell meet the ground (DOUBLE_SIDED).
           uGround: { value: 0 },
+          uCurtain: { value: curtain?.texture ?? null },
         },
         transparent: true,
         depthWrite: false,
@@ -140,7 +149,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         forceSinglePass: true,
         userData: { warmSides: [THREE.DoubleSide] },
       }),
-    [low]
+    [low, curtain]
   )
 
   // From inside the shell (or where the near plane clips it) a ray leaves by
@@ -221,6 +230,11 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
       : kp.current
     // Wall-clock, so the shimmer runs at the same pace at any time speed.
     u.uTime.value = state.clock.elapsedTime
+    // Before any View draws (they render at priority 1), so the table's
+    // target switch never splits a View's pass (a tile flush on the phone's
+    // GPU); the other View's call finds it done. The shell meshes always
+    // draw while this is mounted, so there is no frame to skip.
+    curtain?.bake(u.uTime.value)
     sunDirectionLocal(timestamp, u.uSun.value)
     // Ease the daily sway out (and back) over a few frames rather than
     // popping when the speed changes.

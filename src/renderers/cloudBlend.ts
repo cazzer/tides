@@ -25,6 +25,7 @@ import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import { OUT_H, OUT_W, smoothstep } from '../real-clouds'
 import { TYPE_H, TYPE_W } from '../cloud-types'
 import { CLOUD_TYPED_TOP_GLSL } from './cloudTypeGlsl'
+import type { CloudCover } from './cloudCover'
 
 export const FADE_MS = 500
 /** A bigger step in mix than this (between two frames) is a discontinuity. */
@@ -96,13 +97,18 @@ uniform sampler2D uTypes;
 uniform float uPrevGeo;
 uniform float uAGeo;
 uniform float uBGeo;
+uniform float uPrevRed;
+uniform float uARed;
+uniform float uBRed;
 uniform float uMix;
 uniform float uFade;
 varying vec2 vUv;
 ${CLOUD_TYPED_TOP_GLSL}
 
-vec3 cloudTexel(sampler2D t, float geo) {
-  vec3 c = textureLod(t, vUv, 0.0).rgb;
+// red: a one-channel input (the static clouds, isRedOnly()), grey in R.
+vec3 cloudTexel(sampler2D t, float geo, float red) {
+  vec4 raw = textureLod(t, vUv, 0.0);
+  vec3 c = red > 0.5 ? raw.rrr : raw.rgb;
   return vec3(c.r * geo, c.g, c.b * geo);
 }
 
@@ -115,8 +121,8 @@ vec3 blendCloud(vec3 x, vec3 y, float t) {
 }
 
 void main() {
-  vec3 frames = blendCloud(cloudTexel(uA, uAGeo), cloudTexel(uB, uBGeo), uMix);
-  vec3 c = blendCloud(cloudTexel(uPrev, uPrevGeo), frames, uFade);
+  vec3 frames = blendCloud(cloudTexel(uA, uAGeo, uARed), cloudTexel(uB, uBGeo, uBRed), uMix);
+  vec3 c = blendCloud(cloudTexel(uPrev, uPrevGeo, uPrevRed), frames, uFade);
   cloudMap = vec4(c, 1.0);
   cloudTops = cloudTypedTops(textureLod(uTypes, vUv, 0.0), c);
 }
@@ -179,6 +185,41 @@ export function precipOf(texture: THREE.Texture): THREE.Texture | null {
 export function precipBytesOf(texture: THREE.Texture | 'static'): Uint8Array | null {
   if (texture === 'static') return null
   return ((texture.userData.precip as THREE.DataTexture | null | undefined)?.image.data as Uint8Array | undefined) ?? null
+}
+
+/** A frame's drawn cloud alpha (its map's G), one byte per texel, bottom row
+ * first, which falling precipitation reads on the CPU
+ * (../ship/falling-precip.ts cloudCoverAt), kept in userData.cover once the
+ * map's own pixels are dropped (releasePixelsOnUpload; ./cloudCover.ts);
+ * null for the static
+ * clouds, whose image the CPU can't read. */
+export function coverBytesOf(texture: THREE.Texture | 'static'): CloudCover | null {
+  if (texture === 'static') return null
+  return (texture.userData.cover as CloudCover | null | undefined) ?? null
+}
+
+/**
+ * Drops a frame's pixel array (13.1 MB at 2560 x 1280) once three has sent it
+ * to the GPU (tides-0oi.11): the texture is uploaded once and never changed,
+ * so nothing reads them again. Its size stays for whatever reads it. Such a
+ * frame must never be uploaded again (needsUpdate, or a renderer's
+ * initTexture() on it), as it would go up blank: a lost context, which would
+ * send it again, evicts the frames, rebuilt then (realCloudController.ts
+ * evictAll()). The warm-ups (CompileGate.tsx warmJobs(), ship-warmup.ts)
+ * init only the maps materials hold, and none holds a frame: the cloud
+ * layer is shown the blend's output, a render target.
+ */
+export function releasePixelsOnUpload(texture: THREE.DataTexture): void {
+  texture.onUpdate = () => {
+    ;(texture.image as { data: unknown }).data = null
+    texture.onUpdate = null
+  }
+}
+
+/** Whether a map is one channel, its grey in R (the static clouds, uploaded
+ * R8 by EarthRenderer.tsx prepareMaps()): read as R = G = B. */
+export function isRedOnly(texture: THREE.Texture): boolean {
+  return texture.format === THREE.RedFormat
 }
 
 /**
@@ -323,6 +364,9 @@ export function createCloudBlender() {
         uPrevGeo: { value: 0 },
         uAGeo: { value: 0 },
         uBGeo: { value: 0 },
+        uPrevRed: { value: 0 },
+        uARed: { value: 0 },
+        uBRed: { value: 0 },
         uMix: { value: 0 },
         uFade: { value: 0 },
       },
@@ -383,10 +427,13 @@ export function createCloudBlender() {
     const u = material.uniforms
     u.uPrev.value = prev.texture
     u.uPrevGeo.value = prev.geo ? 1 : 0
+    u.uPrevRed.value = isRedOnly(prev.texture) ? 1 : 0
     u.uA.value = pick.a
     u.uAGeo.value = isGeo(pick.a) ? 1 : 0
+    u.uARed.value = isRedOnly(pick.a) ? 1 : 0
     u.uB.value = pick.b
     u.uBGeo.value = isGeo(pick.b) ? 1 : 0
+    u.uBRed.value = isRedOnly(pick.b) ? 1 : 0
     u.uMix.value = pick.mix
     u.uFade.value = fade
     u.uTypes.value = out.types.texture

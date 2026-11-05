@@ -38,7 +38,6 @@ import {
   stepAnchor,
   streakVector,
   swayAmplitude,
-  type CloudBytes,
   type PrecipTier,
 } from './falling-precip'
 import { EARTH_UNITS_PER_METRE } from '../surface-handover'
@@ -48,7 +47,7 @@ import { isLowQuality } from '../quality'
 import { SURFACE_TILES_ON } from '../surface'
 import { pickBlend } from '../cloud-frames'
 import { precipFromFrames } from '../cloud-precip'
-import { precipBytesOf } from '../renderers/cloudBlend'
+import { coverBytesOf, precipBytesOf } from '../renderers/cloudBlend'
 import { realClouds } from '../renderers/realCloudTextures'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 
@@ -229,14 +228,6 @@ function createPrecipMaterial(): THREE.ShaderMaterial {
   })
 }
 
-// A frame's cloud map bytes (its DataTexture's image), or null for the
-// static clouds, whose image the CPU can't read.
-function cloudBytesOf(texture: THREE.Texture | 'static'): CloudBytes | null {
-  if (texture === 'static') return null
-  const image = texture.image as Partial<CloudBytes> | undefined
-  return image?.data && image.width && image.height ? (image as CloudBytes) : null
-}
-
 // What the field reads of the eye: the ship's telemetry, or the main view's
 // own (createSystemEye).
 type EyeView = Pick<ShipTelemetry, 'earthEye'> & { air: Pick<ShipTelemetry['air'], 'speed' | 'velocity'> }
@@ -371,7 +362,7 @@ export function FallingPrecip({ eye: source = 'ship' }: { eye?: 'ship' | 'system
       // Only under the cloud drawn overhead: the rate's grid is 10° coarse.
       const cover =
         pick && amount > 0
-          ? cloudCoverAt(cloudBytesOf(pick.a), cloudBytesOf(pick.b), pick.mix, latLon[0] * RAD_TO_DEG, latLon[1] * RAD_TO_DEG)
+          ? cloudCoverAt(coverBytesOf(pick.a), coverBytesOf(pick.b), pick.mix, latLon[0] * RAD_TO_DEG, latLon[1] * RAD_TO_DEG)
           : 0
       g.targetAmount = amount * coverGate(cover)
       // Dry keeps the last split, so the field doesn't turn to rain as it eases out.

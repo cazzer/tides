@@ -41,18 +41,26 @@ export function starDirectionsEQJ(floatData: Float32Array, stride: number) {
 
 const axisImages = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]
 const toScene = new THREE.Matrix4()
+// The stars, the stick figures and the art all turn by the same instant each
+// frame: the last instant's orientation is kept and copied.
+let orientedT = NaN
+const oriented = new THREE.Quaternion()
 
 // Turns J2000 equatorial into the scene's ecliptic of date (precession is
 // ~0.36° by 2026, so the J2000 catalog can't be used as-is).
 export function orientStarfield(stars: THREE.Object3D, t: number) {
-  const time = MakeTime(new Date(t))
-  const rotation = Rotation_EQJ_ECT(time)
-  axisImages.forEach((image, axis) => {
-    const unit = new Vector(+(axis === 0), +(axis === 1), +(axis === 2), time)
-    eclipticToScene(RotateVector(rotation, unit), image)
-  })
-  toScene.makeBasis(axisImages[0], axisImages[1], axisImages[2])
-  stars.quaternion.setFromRotationMatrix(toScene)
+  if (t !== orientedT) {
+    const time = MakeTime(new Date(t))
+    const rotation = Rotation_EQJ_ECT(time)
+    axisImages.forEach((image, axis) => {
+      const unit = new Vector(+(axis === 0), +(axis === 1), +(axis === 2), time)
+      eclipticToScene(RotateVector(rotation, unit), image)
+    })
+    toScene.makeBasis(axisImages[0], axisImages[1], axisImages[2])
+    oriented.setFromRotationMatrix(toScene)
+    orientedT = t
+  }
+  stars.quaternion.copy(oriented)
 }
 
 const cameraPosition = new THREE.Vector3()

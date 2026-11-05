@@ -36,14 +36,17 @@ import { reversedFloatDepth } from './depth-precision'
 import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
 import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
+import { FULL_RANGE, limbRowRange } from '../ship/limb-rows'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
+import { useSceneShown } from './scene-shown'
 import { createGroundProbe, syncGroundProbe } from './groundProbe'
 import { useTileWarmProbes } from './tileWarmProbes'
 import { EarthDemLoader } from './earthDemTexture'
 import { earthHorizon } from './earthHorizonTexture'
 import {
   EARTH_LIMB_SWAP_FLOOR,
+  GROUND_HEIGHT_MAX,
   createGroundDisplacement,
   groundLod,
   groundMorph,
@@ -107,8 +110,8 @@ export default function EarthRenderer({
   const gl = useThree((s) => s.gl)
   prepareMaps(
     gl.capabilities.getMaxAnisotropy(),
-    [earthTexture, nightTexture, cloudsTexture],
-    [specularMap, demTexture, depthMap]
+    [earthTexture, nightTexture],
+    [specularMap, demTexture, depthMap, cloudsTexture]
   )
   // Its columns run on round the date line, as the globe's uv does.
   depthMap.wrapS = THREE.RepeatWrapping
@@ -127,11 +130,17 @@ export default function EarthRenderer({
     return () => canvas.removeEventListener('webglcontextrestored', restart)
   }, [gl])
   // And with no storage for the sea's texture array: the sea ice's layers
-  // go up whole again, not just the changed ones (tides-6ru.2).
+  // go up whole again, not just the changed ones (tides-6ru.2). The real
+  // clouds' frames dropped their pixels once uploaded, so they build afresh
+  // (tides-0oi.11).
   useEffect(() => {
     const canvas = gl.domElement
-    canvas.addEventListener('webglcontextlost', resetSeaIceUpload)
-    return () => canvas.removeEventListener('webglcontextlost', resetSeaIceUpload)
+    const lost = () => {
+      resetSeaIceUpload()
+      realClouds.evictAll()
+    }
+    canvas.addEventListener('webglcontextlost', lost)
+    return () => canvas.removeEventListener('webglcontextlost', lost)
   }, [gl])
   // The Moon's shadow during solar eclipses, on the ground and the clouds.
   const eclipseShadow = useEclipseShadowState('earth')
@@ -146,7 +155,11 @@ export default function EarthRenderer({
   // StrictMode's replayed effects do in dev); and whether the shell has
   // been faced to a camera yet, which sets the defines it draws with.
   const warmedDefines = useRef(new WeakSet<object>())
+  const warmedUnderSheet = useRef(new WeakSet<object>())
   const cloudsFaced = useRef(false)
+  // The warm-ups below compile against the scene's lights, which a first
+  // load's hidden scene (CompileGate) doesn't show them.
+  const sceneShown = useSceneShown()
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
@@ -375,6 +388,14 @@ export default function EarthRenderer({
   // prefers-reduced-motion.
   useFrame(({ clock, gl, camera }, delta) => {
     water.advance(delta, prefersReducedMotion())
+    // The flat sheet's program from under it, compiled ahead of close zoom's
+    // first descent there (CloudLayer.warmUnderSheet()). Here, as three's
+    // compile must not run mid-render.
+    const cloudKey = gl.properties.get(clouds.material)
+    if (sceneShown && cloudsFaced.current && cloudRef.current?.parent && !warmedUnderSheet.current.has(cloudKey)) {
+      warmedUnderSheet.current.add(cloudKey)
+      clouds.warmUnderSheet(gl, cloudRef.current, camera, scene)
+    }
     if (!real) {
       drift.current += STATIC_DRIFT_PER_FRAME
       clouds.uniforms.uCloudShift.value = driftOffset(drift.current)
@@ -402,7 +423,7 @@ export default function EarthRenderer({
     // the frame that turns to it: else that frame links it, tens of ms, in
     // each View the ship's warm-up (ShipWarmup) doesn't run in, the
     // overview's panels. Here, as three's compile must not run mid-render.
-    if (cloudsFaced.current && cloudRef.current?.parent) {
+    if (sceneShown && cloudsFaced.current && cloudRef.current?.parent) {
       warmDefinesOnce(gl, cloudRef.current, camera, scene, warmedDefines.current, (material) => gl.properties.get(material))
     }
   })
@@ -415,8 +436,9 @@ export default function EarthRenderer({
         geometry={groundSphere}
         raycast={meshBounds}
         userData={{ warmProbes: groundWarmProbes }}
-        onBeforeRender={(renderer, _scene, camera, geometry) => {
+        onBeforeRender={(renderer, _scene, camera, geometry, material) => {
           setGroundDisplacement(displacement, groundTexture, groundRef.current, renderer, camera, geometry, diameter)
+          setGroundRows(groundRef.current, camera, geometry, material, diameter)
           // The date's sea ice written before three binds the sea's array,
           // while the ground draws it (seaIceGround.ts).
           if (seaIceSurface.ground.value > 0) uploadSeaIceFrames()
@@ -425,6 +447,8 @@ export default function EarthRenderer({
           if (!cloudRef.current?.parent) return
           nightFlight?.update(groundRef.current!, camera, diameter)
         }}
+        // The glow draws the same sphere whole (setGroundRows).
+        onAfterRender={(_renderer, _scene, _camera, geometry) => geometry.setDrawRange(FULL_RANGE.start, FULL_RANGE.count)}
       >
         <meshPhongMaterial
           ref={groundMaterial}
@@ -447,6 +471,7 @@ export default function EarthRenderer({
         lightsMap={nightTexture}
         seaMask={specularMap}
         cloudMap={clouds.uniforms.uCloudMap}
+        cloudMapRed={clouds.uniforms.uCloudMapRed}
         cloudShift={clouds.uniforms.uCloudShift}
         clouds={!hideClouds}
       />
@@ -619,9 +644,11 @@ function sunInEarthFrame(earth: THREE.Object3D | null | undefined, target: THREE
 /**
  * Sets what three reads at a map's first upload (tides-01v.1): the full
  * anisotropy, which grazing views of the ground need, and one channel for
- * the grey data maps (the specular mask, the elevation map and the sea's
- * depth), a quarter of the VRAM. The material, the cloud shader and the
- * water read their red channel.
+ * the grey data maps (the specular mask, the elevation map, the sea's
+ * depth and the static clouds, tides-0oi.11), a quarter of the VRAM. The
+ * material, the cloud shader and the water read their red channel; the
+ * clouds' programs, which also read the RGBA real-weather maps, pick it by
+ * uCloudMapRed (cloudBlend.ts isRedOnly()).
  */
 function prepareMaps(anisotropy: number, colour: THREE.Texture[], grey: THREE.Texture[]) {
   for (const map of colour) map.anisotropy = anisotropy
@@ -663,7 +690,35 @@ function setGroundDisplacement(
   )
 }
 
+/**
+ * The limb sphere's draw for `camera` (tides-0oi.8): only its rows that can
+ * be seen (limbRowRange), from the eye in the mesh's own frame, which turns
+ * with the Earth; the base sphere whole. The sphere is shared with the glow,
+ * so the ground's onAfterRender puts the whole range back.
+ */
+function setGroundRows(
+  mesh: THREE.Mesh | null,
+  camera: THREE.Camera,
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  radius: number
+) {
+  if (!mesh || !isLimbSphere(geometry) || !(material instanceof THREE.MeshPhongMaterial)) return
+  // The cap is a perspective eye's; any other camera draws it whole.
+  if (!(camera instanceof THREE.PerspectiveCamera)) return
+  _eye.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(_inverse.copy(mesh.matrixWorld).invert())
+  const bias = material.displacementMap ? material.displacementBias : 0
+  const scale = material.displacementMap ? material.displacementScale : 0
+  _lift.min = bias + Math.min(0, scale * GROUND_HEIGHT_MAX)
+  _lift.max = bias + Math.max(0, scale * GROUND_HEIGHT_MAX)
+  const { start, count } = limbRowRange(_eye, radius, LIMB_SEGMENTS, _lift, _rows)
+  geometry.setDrawRange(start, count)
+}
+
 const _eye = new THREE.Vector3()
+const _inverse = new THREE.Matrix4()
+const _lift = { min: 0, max: 0 }
+const _rows = { start: 0, count: 0 }
 const _centre = new THREE.Vector3()
 const _buffer = new THREE.Vector2()
 const _position = new THREE.Vector3()

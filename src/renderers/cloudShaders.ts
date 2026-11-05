@@ -54,6 +54,8 @@ import {
   FOG_SOFT,
   MAX_CLOUD_TOP_KM,
   MIN_MEASURED_TOP_KM,
+  raysMeetSphere,
+  SHEET_GROUND_SPHERE,
   SUNBEAM_FLOOR_KM,
   SUNLIGHT_EXTINCTION,
   SUNSET_FLOOR,
@@ -65,7 +67,7 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { smoothstep } from '../night-flight'
 import { sceneRadius } from '../planets'
-import { neutralTypeTexture } from './cloudBlend'
+import { isRedOnly, neutralTypeTexture } from './cloudBlend'
 import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
@@ -83,6 +85,7 @@ import {
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
+import { compileSide, createWarmed, sortDefines } from '../ship/ship-warmup'
 import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
@@ -275,6 +278,9 @@ ${RELIEF_DECK_GLSL}${RELIEF_SHELL_LENGTHS_GLSL}#endif
 // before types.
 const field = (typed: boolean, deck: string) => /* glsl */ `
 uniform sampler2D uCloudMap;
+// 1 where the map is one channel (the static clouds, R8, tides-0oi.11), its
+// grey in R alone; 0 for an RGBA map (the blend's output).
+uniform float uCloudMapRed;
 uniform sampler2D uTerrainMap;
 uniform float uCloudShift;
 uniform float uCloudMeasured;
@@ -316,8 +322,10 @@ float cloudTerrain(vec2 uv) {
 // ground (km).
 vec4 cloudColumn(vec2 uv, float lod, float terrain) {
   vec2 st = vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0));
-  // Smoothed near the poles (./poleSmoothing.ts).
-  vec3 c = ${COLUMN_READ}.rgb;
+  // Smoothed near the poles (./poleSmoothing.ts). A one-channel map is
+  // grey, R = G = B, as its RGBA texel was.
+  vec4 raw = ${COLUMN_READ};
+  vec3 c = uCloudMapRed > 0.5 ? raw.rrr : raw.rgb;
   float trust = c.b * uCloudMeasured;
   float km = mix(1.5 + 7.0 * c.g * c.g, max(c.r * ${f(MAX_CLOUD_TOP_KM)}, ${f(MIN_MEASURED_TOP_KM)}), trust);
   float base = terrain + CLOUD_CLEARANCE;
@@ -752,7 +760,9 @@ void cloudOut(vec4 color, float z, vec3 haze, float share, float cover) {
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
   gl_FragColor.rgb = gl_FragColor.rgb * (gl_FragColor.a - cover * share) + share * hazeOut;
+#ifndef CLOUD_UNDER_SHEET
   gl_FragDepth = z;
+#endif
 }
 #else
 #define CLOUD_MISS discard
@@ -1133,6 +1143,13 @@ void main() {
   // at it (below).
   float sFlat = sIn > 0.0 ? sIn : sOut;
   if (sFlat <= 0.0) CLOUD_MISS;
+  // From under the sheet, a ray down to the ground meets it only on its far
+  // side, past the globe, shaded only for the ground's depth to hide it: it
+  // ends where it meets a sphere under any ground drawn (tides-0oi.3), short
+  // of the sheet. From over the sheet, the sheet comes first.
+  float rGround = uSeaLevel * ${f(SHEET_GROUND_SPHERE)};
+  float discGround = be * be - (dot(eye, eye) - rGround * rGround);
+  if (discGround > 0.0 && -be - sqrt(discGround) > 0.0 && -be - sqrt(discGround) < sFlat) discard;
   vec3 p = eye + d * sFlat;
   float terrain = 0.0;
 #elif defined(CLOUD_FLAT)
@@ -2142,6 +2159,9 @@ export interface CloudLayer {
   /** Shared by both; set each frame. */
   uniforms: {
     uCloudMap: THREE.IUniform<THREE.Texture | null>
+    /** 1 where uCloudMap is one channel (isRedOnly()), read as grey; set by
+     * setMap. */
+    uCloudMapRed: THREE.IUniform<number>
     uTerrainMap: THREE.IUniform<THREE.Texture | null>
     uCloudShift: THREE.IUniform<number>
     uCloudMeasured: THREE.IUniform<number>
@@ -2185,6 +2205,17 @@ export interface CloudLayer {
    * `fine` where the depth buffer can draw FINE_DECK
    * (ship/ship-session.ts fineGroundDepth()). */
   faceCamera(mesh: THREE.Object3D, camera: THREE.Camera, fine?: boolean): void
+  /** Compiles the flat sheet's back faces' programs, from under it
+   * (CLOUD_UNDER_SHEET, which faceCamera() turns on) and over it, typed
+   * (CLOUD_TYPED) or not, so that the first frame drawn with each finds it
+   * linked; the relief shell has none. Only from a frame callback, as
+   * ../ship/ship-warmup.ts compileSide(). */
+  warmUnderSheet(
+    renderer: Pick<THREE.WebGLRenderer, 'compile'>,
+    mesh: THREE.Object3D,
+    camera: THREE.Camera,
+    scene: THREE.Scene
+  ): void
   dispose(): void
 }
 
@@ -2193,6 +2224,29 @@ const eyeDir = new THREE.Vector3()
 const viewport = new THREE.Vector4()
 const forward = new THREE.Vector3()
 const toLocal = new THREE.Matrix4()
+const corner = new THREE.Vector3()
+const NDC_CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const
+
+// Whether every ray `camera` draws meets the sphere of `radius` round the
+// mesh's origin: its four corner rays do (raysMeetSphere()), in the mesh's
+// frame, from `eyeLocal`, the camera there. Each through a point on its
+// corner's line of sight, mid-depth, which either depth buffer's NDC holds
+// (a reversed one's -1 lies behind the eye), taken ahead of the eye.
+function viewMeetsSphere(
+  camera: THREE.Camera,
+  mesh: THREE.Object3D,
+  eyeLocal: THREE.Vector3,
+  radius: number
+): boolean {
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera !== true) return false
+  const directions = NDC_CORNERS.map(([x, y]): Vec3 => {
+    corner.set(x, y, 0.5).applyMatrix4(camera.projectionMatrixInverse)
+    if (corner.z > 0) corner.negate()
+    mesh.worldToLocal(corner.applyMatrix4(camera.matrixWorld))
+    return [corner.x - eyeLocal.x, corner.y - eyeLocal.y, corner.z - eyeLocal.z]
+  })
+  return raysMeetSphere([eyeLocal.x, eyeLocal.y, eyeLocal.z], directions, radius)
+}
 
 // The cloud ceiling's texture (cloudCeiling(), built by
 // scripts/build-cloud-ceiling.mjs); until it has loaded, a
@@ -2220,6 +2274,7 @@ async function fetchCeiling(): Promise<THREE.DataTexture> {
 export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLayer {
   const uniforms: CloudLayer['uniforms'] = {
     uCloudMap: { value: null },
+    uCloudMapRed: { value: 0 },
     uTerrainMap: { value: null },
     uCloudShift: { value: 0 },
     uCloudMeasured: { value: 0 },
@@ -2327,6 +2382,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         : CLOUD_REACH_RENDER_ORDER
     // The ease is its own program, so that without it the march pays nothing.
     const ease = !flat && prefersReducedMotion()
+    // The defines' version before they turn (sorted below where they do).
+    const definesFrom = material.version
     if (('FOG_EASE' in material.defines) !== ease) {
       if (ease) material.defines.FOG_EASE = ''
       else delete material.defines.FOG_EASE
@@ -2340,6 +2397,26 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       else delete material.defines.CLOUD_TYPED
       material.needsUpdate = true
     }
+    // Under the flat sheet (tides-0oi.3), the program that writes no
+    // gl_FragDepth (cloudOut()), so that the depth test runs ahead of the
+    // shader: there the back face drawn is the hit, off its depth by no more
+    // than the facets' sag (7.7 km), and the depth serves only the sheet's
+    // own test (the material writes none), against ground that stands over
+    // 38 km under the sheet. For this camera alone: the Moon Phase panel
+    // draws the same mesh from outside.
+    const underSheet = flat && reach && eyeRadius < seaLevel + shellAltitude
+    if (('CLOUD_UNDER_SHEET' in material.defines) !== underSheet) {
+      if (underSheet) material.defines.CLOUD_UNDER_SHEET = ''
+      else delete material.defines.CLOUD_UNDER_SHEET
+      material.needsUpdate = true
+    }
+    // Where any turned, in order, as the warm-ups compile them
+    // (compileSide()): three keys a program by their order.
+    if (material.version !== definesFrom) sortDefines(material.defines)
+    // And no draw where the view sees only the ground, every ray of which
+    // the shader would end at once (SHEET_GROUND_SPHERE): zoomed all the way
+    // in, looking down.
+    material.visible = !(underSheet && viewMeetsSphere(camera, mesh, eye, seaLevel * SHEET_GROUND_SPHERE))
     // The eye's path among the clouds: in their frame, as they drift.
     if (ease && reach) {
       const t = performance.now() / 1000
@@ -2400,12 +2477,23 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   }
   const setMap = (map: THREE.Texture, measured: boolean, types: CloudTypes | null) => {
     uniforms.uCloudMap.value = map
+    uniforms.uCloudMapRed.value = isRedOnly(map) ? 1 : 0
     uniforms.uCloudMeasured.value = measured ? 1 : 0
     uniforms.uCloudMaxKm.value = maxTopKm(measured)
     uniforms.uCloudTyped.value = types ? 1 : 0
     uniforms.uCloudType.value = types?.grid ?? neutralTypeTexture()
     uniforms.uCloudTops.value = types?.tops ?? neutralTypeTexture()
     uniforms.uCloudPrecip.value = types?.precip ?? neutralTypeTexture()
+  }
+  // The back faces' programs, typed or not, under the sheet or not, from
+  // the defines as they are: all four, whichever this frame draws, as the
+  // types reach the clouds only later (real weather), and close zoom can
+  // start under the sheet.
+  const warmUnderSheet: CloudLayer['warmUnderSheet'] = (renderer, mesh, camera, scene) => {
+    if (!flat) return
+    for (const turned of [[], ['CLOUD_UNDER_SHEET'], ['CLOUD_TYPED'], ['CLOUD_TYPED', 'CLOUD_UNDER_SHEET']]) {
+      compileSide(renderer, mesh, THREE.BackSide, camera, scene, createWarmed(), (m) => m, turned)
+    }
   }
   return {
     material,
@@ -2414,6 +2502,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     setMap,
     shellAltitude,
     faceCamera,
+    warmUnderSheet,
     dispose: () => {
       material.uniforms.uCloudCeiling.value.dispose()
       material.dispose()
