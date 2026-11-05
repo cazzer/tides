@@ -1,30 +1,29 @@
 import { useProgress } from '@react-three/drei'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { startOpening } from './opening'
+import { prefersReducedMotion } from './ship/reduced-motion'
 
-const FADE_OUT_MS = 450
+/**
+ * How long the overlay takes to fade into the scene, ms: long enough to
+ * overlap the opening move's start (opening.ts), which begins with it. Under
+ * reduced motion, a short plain fade.
+ */
+export const FADE_OUT_MS = 1200
+export const REDUCED_FADE_OUT_MS = 400
 
-function getItemName(item?: string) {
-  if (!item) return ''
-  try {
-    const pathname = item.includes('://') ? new URL(item).pathname : item
-    const segments = pathname.split('/')
-    return decodeURIComponent(segments[segments.length - 1] || item)
-  } catch {
-    const segments = item.split('/')
-    return segments[segments.length - 1] || item
-  }
-}
+const MARK_URL = `${import.meta.env.BASE_URL}icon.svg`
 
 export default function LoadingOverlay({
   sceneReady,
 }: {
   sceneReady: boolean
 }) {
-  const { active, progress, item, loaded, total } = useProgress()
+  const { active, progress, loaded, total } = useProgress()
   const [isVisible, setIsVisible] = useState(true)
   const [isFadingOut, setIsFadingOut] = useState(false)
   const assetsLoaded = total > 0 && loaded >= total && !active
   const canHide = assetsLoaded && sceneReady
+  const fadeMs = prefersReducedMotion() ? REDUCED_FADE_OUT_MS : FADE_OUT_MS
 
   useEffect(() => {
     // Only the first load covers the app; a view mounted later (single
@@ -37,55 +36,51 @@ export default function LoadingOverlay({
 
     if (canHide) {
       setIsFadingOut(true)
+      startOpening(performance.now())
       const timeout = window.setTimeout(() => {
         setIsVisible(false)
-      }, FADE_OUT_MS)
+      }, fadeMs)
 
       return () => {
         window.clearTimeout(timeout)
       }
     }
-  }, [active, sceneReady, canHide])
+  }, [active, sceneReady, canHide, fadeMs])
 
-  const clampedProgress = Math.max(0, Math.min(100, progress || 0))
-
-  const statusText = useMemo(() => {
-    if (active && total > 0) {
-      const assetName = getItemName(item)
-      if (assetName) {
-        return `Loading ${Math.min(loaded, total)}/${total}: ${assetName}`
-      }
-      return `Loading ${Math.min(loaded, total)}/${total} assets...`
-    }
-
-    if (assetsLoaded && !sceneReady) {
-      return 'Spinning up orbits...'
-    }
-
-    if (active) {
-      return 'Painting the planets...'
-    }
-
-    return 'Done'
-  }, [active, assetsLoaded, item, loaded, sceneReady, total])
+  // Assets are most of the wait; the last stretch is the scene compiling.
+  const shown = assetsLoaded ? 100 : Math.max(0, Math.min(100, progress || 0)) * 0.9
 
   if (!isVisible) return null
 
   return (
     <div
       className={`loading-overlay ${isFadingOut ? 'loading-overlay--hidden' : ''}`}
-      aria-live="polite"
-      aria-busy={active}
+      style={{ transitionDuration: `${fadeMs}ms` }}
+      aria-busy={!isFadingOut}
       role="status"
     >
       <div className="loading-overlay__content">
-        <div className="loading-overlay__bar-bg">
+        <img
+          className="loading-overlay__mark"
+          src={MARK_URL}
+          alt=""
+          width={96}
+          height={96}
+        />
+        <div className="loading-overlay__name">Tides</div>
+        <div
+          className="loading-overlay__bar-bg"
+          role="progressbar"
+          aria-label="Loading"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(shown)}
+        >
           <div
             className="loading-overlay__bar-fill"
-            style={{ width: `${clampedProgress}%` }}
+            style={{ transform: `scaleX(${shown / 100})` }}
           />
         </div>
-        <div className="loading-overlay__subtext">{statusText}</div>
       </div>
     </div>
   )
