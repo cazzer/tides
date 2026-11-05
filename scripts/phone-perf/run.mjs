@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import * as adb from './adb.mjs'
 import { CdpConnection, CdpPage, browserWsUrl, sleep } from './cdp.mjs'
 import { INIT_SCRIPT, PROBE_SCRIPT } from './inpage.mjs'
-import { POSES, expandPoses, poseUrl, roundOrder } from './poses.mjs'
+import { POSES, expandPoses, parseVariants, poseUrl, roundOrder, withVariants } from './poses.mjs'
 import { writeReport } from './report.mjs'
 import { estimateRefreshPeriod, summariseFrames } from './stats.mjs'
 import { TRACE_CATEGORIES, summariseProfile, summariseTrace } from './trace.mjs'
@@ -52,6 +52,9 @@ const config = {
   builds: env.BUILDS ? env.BUILDS.split(',').map(parseBuild) : null,
   // A query string added to every pose URL (overrides): PARAMS='dprctl=systemMax:3'.
   params: env.PARAMS ?? '',
+  // name=query;name=query: each pose runs once per variant per round, its
+  // query added after PARAMS (a dprctl sweep on one build).
+  variants: env.VARIANTS ? parseVariants(env.VARIANTS) : null,
 }
 
 function parseBuild(spec) {
@@ -78,7 +81,7 @@ async function main() {
     // dev servers would share one optimizer cache through a symlinked node_modules.
     throw new Error('BUILDS builds and previews each tree; it needs SERVE=build')
   }
-  if (config.builds && config.runs % 2) log(`note: RUNS=${config.runs} is odd, so the build order is not balanced across rounds`)
+  if ((config.builds || config.variants) && config.runs % 2) log(`note: RUNS=${config.runs} is odd, so the build order is not balanced across rounds`)
   if (config.builds && new Set(config.builds.map((b) => b.name)).size !== config.builds.length) {
     throw new Error('BUILDS names must be unique')
   }
@@ -89,6 +92,7 @@ async function main() {
   })
   for (const build of builds) checkTree(build)
   if (config.serve !== 'none') for (const build of builds) await startServer(build)
+  const runs = withVariants(builds, config.variants)
 
   const device = config.target === 'phone' ? await openPhone(builds.map((b) => b.port)) : await openDesktop()
   active.device = device
@@ -103,8 +107,10 @@ async function main() {
     git: await gitHead(REPO),
     serve: config.serve,
     base: builds[0].base,
-    builds: config.builds
-      ? await Promise.all(builds.map(async (b) => ({ name: b.name, root: b.root, git: await gitHead(b.root), base: b.base })))
+    builds: runs.some((b) => b.name)
+      ? await Promise.all(
+          runs.map(async (b) => ({ name: b.name, root: b.root, git: await gitHead(b.root), base: b.base, params: b.params ?? null }))
+        )
       : null,
     browser: browserVersion.product,
     userAgent: browserVersion.userAgent,
@@ -117,7 +123,7 @@ async function main() {
       for (const item of roundOrder(items, round)) {
         // Builds run back to back per pose, the order alternating each
         // round, so a before/after pair sees the same phone state.
-        for (const build of roundOrder(builds, round)) {
+        for (const build of roundOrder(runs, round)) {
           const record = await measureSurvivingDrops(device, item, build, round)
           results.push(record)
           fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify({ meta, results }, null, 1))
@@ -166,7 +172,7 @@ async function measureWithGuards(connection, device, item, build, round) {
     thermalBefore = { ...cooled.thermal, waitedMs: cooled.waitedMs, cool: cooled.cool }
   }
   log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)})` : ''}`)
-  const measure = () => measurePose(connection, device, item, build.base)
+  const measure = () => measurePose(connection, device, item, build)
   let record
   try {
     record = config.gpuLock && !device.serial ? await withGpuLock(config.gpuLock, measure) : await measure()
@@ -189,7 +195,7 @@ async function measureWithGuards(connection, device, item, build, round) {
   }
 }
 
-async function measurePose(connection, device, item, base) {
+async function measurePose(connection, device, item, { base, params }) {
   const page = await CdpPage.create(connection)
   active.page = page
   try {
@@ -199,7 +205,7 @@ async function measurePose(connection, device, item, base) {
       source: `${INIT_SCRIPT};try{sessionStorage.setItem('tides.shipControlsSeen','1')}catch{}`,
     })
     await page.send('Page.bringToFront')
-    const url = poseUrl(base, item, config.params)
+    const url = poseUrl(base, item, [config.params, params].filter(Boolean).join('&'))
     // A cold start: the HTTP cache is emptied (the GPU's own shader cache on
     // disk is not reachable from the protocol and stays warm).
     if (item.coldStart) await page.send('Network.clearBrowserCache')

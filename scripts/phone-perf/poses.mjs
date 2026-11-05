@@ -179,6 +179,16 @@ export const POSES = [
     extra: true,
   },
   {
+    // tides-0oi.15: city lights under the night glow (Tokyo at 04:00 local on
+    // the equinox), for glow on/off reads on the low tier.
+    id: 'night-city',
+    label: 'Night close zoom over a city (Tokyo 35.7N 139.8E, 100 km, tilt 30)',
+    params: { focus: 'earth' },
+    setup: mainPose({ lat: 35.7, lon: 139.8, km: 100, tilt: 30 }),
+    settleMs: 15000,
+    extra: true,
+  },
+  {
     // Startup with the HTTP cache emptied: time to the first frame after the
     // loader leaves, and the longest main-thread block (tides-0oi.6), then
     // the system view as usual.
@@ -228,6 +238,33 @@ export function expandPoses(poses, { tiers: forcedTiers, only } = {}) {
 export function roundOrder(items, round) {
   const n = items.length
   return items.map((_, i) => items[(i + round) % n])
+}
+
+// VARIANTS='off=dprctl=off;fixed2=dprctl=fixed:2': named query strings, split
+// on ';' (dprctl values carry commas), each one's name before its first '='.
+export function parseVariants(spec) {
+  const variants = spec
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const at = entry.indexOf('=')
+      if (at < 1) throw new Error(`VARIANTS entries are name=query, not ${entry}`)
+      const name = entry.slice(0, at).trim()
+      if (!/^[\w.-]+$/.test(name)) throw new Error(`Variant name ${name} must be letters, digits, . _ or -`)
+      return { name, params: entry.slice(at + 1).trim() }
+    })
+  if (new Set(variants.map((v) => v.name)).size !== variants.length) throw new Error('VARIANTS names must be unique')
+  return variants
+}
+
+// Every build under every variant, each run like a build of its own (back
+// to back per pose, order alternating each round) on its build's server.
+export function withVariants(builds, variants) {
+  if (!variants?.length) return builds
+  return builds.flatMap((b) =>
+    variants.map((v) => ({ ...b, name: b.name ? `${b.name}+${v.name}` : v.name, params: v.params }))
+  )
 }
 
 // extra: a query string (PARAMS) set on every pose URL last, so it can

@@ -149,6 +149,20 @@ export function compareBuilds(results, buildNames) {
   return out
 }
 
+// The paced dpr controller's log (window.__dprctl.changes): counts by
+// reason, how many drops undid the raise before them, and the last ratio.
+export function summariseDprTimeline(changes) {
+  const byReason = {}
+  for (const c of changes) byReason[c.reason] = (byReason[c.reason] ?? 0) + 1
+  return {
+    changes: changes.length,
+    byReason,
+    bounced: changes.filter((c) => c.bounced).length,
+    finalDpr: changes.length ? changes[changes.length - 1].to : null,
+    list: changes,
+  }
+}
+
 export function renderMarkdown({ meta, results }) {
   const rows = aggregate(results)
   const lines = []
@@ -162,7 +176,7 @@ export function renderMarkdown({ meta, results }) {
     `- ${meta.config.runs} rounds, pose order rotated each round; frames over ${meta.config.durationMs} ms, trace ${meta.config.traceMs} ms, profile ${meta.config.profileMs} ms per pose per round`,
     `- values are medians over rounds; noise = ±half of (max - min) / mean across rounds`,
     ...(meta.builds
-      ? [`- builds: ${meta.builds.map((b) => `${b.name} = ${b.git} (${b.root})`).join('; ')}; per pose the builds ran back to back, order alternating each round`]
+      ? [`- builds: ${meta.builds.map((b) => `${b.name} = ${b.git} (${b.root})${b.params ? ` ?${b.params}` : ''}`).join('; ')}; per pose the builds ran back to back, order alternating each round`]
       : []),
     `- replay ms = the frame's recorded renders re-run ${meta.config.replayK}x back to back then synced by a 1-pixel readPixels, per frame: CPU submit + GPU, without vsync. The headroom figure where the GPU has no timer`,
     ''
@@ -237,6 +251,22 @@ export function renderMarkdown({ meta, results }) {
       lines.push(
         `- **${r.key}** round ${r.round + 1}: first frame ${f1(s.firstFrameMs)}, loader gone (first interactive frame) ${f1(s.loaderGoneMs)}, ${s.longTasks} long tasks totalling ${f1(s.longTaskTotalMs)}, longest ${f1(s.longestTaskMs)} (before loader ${f1(s.longestTaskBeforeLoaderMs)}, after ${f1(s.longestTaskAfterLoaderMs)}), longest frame in the ${'6 s'} after the loader ${f1(s.longestFrameAfterLoaderMs)}, ${s.framesOver50AfterLoader} frames over 50`
       )
+    }
+  }
+  const dpr = results.filter((r) => Array.isArray(r.dprTimeline))
+  if (dpr.length) {
+    lines.push('', '## dpr controller changes (tides-0oi.13)', '')
+    for (const r of dpr) {
+      const s = summariseDprTimeline(r.dprTimeline)
+      const counts = Object.entries(s.byReason).map(([k, n]) => `${k} ${n}`).join(', ')
+      lines.push(
+        `- **${r.key}** round ${r.round + 1}: ${s.changes} changes${counts ? ` (${counts}${s.bounced ? `; ${s.bounced} bounced` : ''})` : ''}, final dpr ${s.finalDpr ?? r.info?.dpr ?? '–'}, the canvas at ${r.info?.dpr ?? '–'} when sampled`
+      )
+      for (const c of s.list) {
+        lines.push(
+          `  - ${f1(c.at / 1000)} s ${c.reason}${c.bounced ? ' (bounced)' : ''} ${c.from}→${c.to}: p50 ${f1(c.p50)}, p95 ${f1(c.p95)}, misses ${c.misses ?? '–'}/${c.n ?? '–'}, cpuShare ${c.cpuShare === null || c.cpuShare === undefined ? '–' : c.cpuShare.toFixed(2)}, cpuMedian ${f1(c.cpuMedian)}, lagMedian ${f1(c.lagMedian)}, budget ${f1(c.budgetMs)}`
+        )
+      }
     }
   }
   const failed = rows.filter((r) => r.failed)

@@ -271,3 +271,36 @@ describe('pose URLs', async () => {
     expect(url.searchParams.get('focus')).toBe('earth')
   })
 })
+
+describe('variants', async () => {
+  const { parseVariants, withVariants, poseUrl } = await import('./poses.mjs')
+  const { summariseDprTimeline } = await import('./report.mjs')
+  it('splits on ; and keeps commas and = in the query', () => {
+    expect(parseVariants('off=dprctl=off; tuned=dprctl=systemMax:2.5,closeMax:2')).toEqual([
+      { name: 'off', params: 'dprctl=off' },
+      { name: 'tuned', params: 'dprctl=systemMax:2.5,closeMax:2' },
+    ])
+    expect(() => parseVariants('a=x;a=y')).toThrow(/unique/)
+    expect(() => parseVariants('=x')).toThrow(/name=query/)
+  })
+  it('runs every build under every variant on its own server', () => {
+    const builds = [{ name: 'w2', root: '/r', port: 5393, base: 'http://localhost:5393/tides/' }]
+    const runs = withVariants(builds, parseVariants('off=dprctl=off;glow=quality=low&glow=1'))
+    expect(runs.map((r) => [r.name, r.port, r.params])).toEqual([
+      ['w2+off', 5393, 'dprctl=off'],
+      ['w2+glow', 5393, 'quality=low&glow=1'],
+    ])
+    expect(withVariants(builds, null)).toBe(builds)
+    const url = new URL(poseUrl(runs[1].base, { params: {}, tier: 'auto' }, runs[1].params))
+    expect(url.searchParams.get('glow')).toBe('1')
+    expect(url.searchParams.get('quality')).toBe('low')
+  })
+  it('summarises the dpr log by reason', () => {
+    const s = summariseDprTimeline([
+      { reason: 'drop', from: 2, to: 1.5, bounced: false },
+      { reason: 'raise', from: 1.5, to: 2, bounced: false },
+      { reason: 'drop', from: 2, to: 1.5, bounced: true },
+    ])
+    expect(s).toMatchObject({ changes: 3, byReason: { drop: 2, raise: 1 }, bounced: 1, finalDpr: 1.5 })
+  })
+})
