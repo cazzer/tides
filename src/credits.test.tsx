@@ -1,6 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'vitest'
-import { COPERNICUS_DEM_NOTICE, COPERNICUS_MARINE_WAVES_URL, Credits, ETOPO_URL, GIBS_ACKNOWLEDGEMENT } from './Credits'
+import {
+  COPERNICUS_DEM_NOTICE,
+  COPERNICUS_MARINE_WAVES_URL,
+  Credits,
+  ETOPO_URL,
+  GIBS_ACKNOWLEDGEMENT,
+  NSIDC_SEA_ICE_CITATION,
+} from './Credits'
 import { OPEN_METEO_SITE } from './forecast-clouds'
 
 // The credits the views used to draw over the scene, now in settings (tides-1qv).
@@ -18,6 +25,13 @@ describe('Credits', () => {
   test('credits NOAA NCEI\'s ETOPO 2022 for the ocean\'s depth', () => {
     expect(hrefs).toContain(ETOPO_URL)
     expect(html).toContain('ETOPO 2022')
+  })
+
+  test("credits NSIDC's Sea Ice Index v4 with its DOI and required citation (tides-6ru.6)", () => {
+    const line = html.match(/<li>Sea ice:.*?<\/li>/)?.[0] ?? ''
+    expect(line).toContain('href="https://doi.org/10.7265/a98x-0f50"')
+    expect(line).toContain('NSIDC Sea Ice Index, Version 4 (G02135)')
+    expect(line).toContain(NSIDC_SEA_ICE_CITATION.replace(/&/g, '&amp;'))
   })
 
   test('credits Open-Meteo, Solar System Scope and Stellarium with their licences', () => {

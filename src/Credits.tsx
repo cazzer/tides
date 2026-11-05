@@ -18,6 +18,11 @@ const STELLARIUM_URL = 'https://github.com/Stellarium/stellarium/tree/master/sky
 const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
 export const MAPTERHORN_URL = 'https://mapterhorn.com/'
 export const ETOPO_URL = 'https://www.ncei.noaa.gov/products/etopo-global-relief-model'
+export const NSIDC_SEA_ICE_INDEX_URL = 'https://doi.org/10.7265/a98x-0f50'
+// The data citation NSIDC requires (nsidc.org/data/g02135/versions/4), with the
+// subset scripts/build-sea-ice.py takes; fetched by 2026-11-03 (tides-zec.19).
+export const NSIDC_SEA_ICE_CITATION =
+  'Fetterer, F., Knowles, K., Meier, W. N., Savoie, M., Windnagel, A. K. & Stafford, T. (2025). Sea Ice Index. (G02135, Version 4). [Data Set]. Boulder, Colorado USA. National Snow and Ice Data Center. https://doi.org/10.7265/a98x-0f50. Daily sea ice concentration, both hemispheres, every 7 days of 2025, and the daily extents. Date Accessed 11-03-2026.'
 // Zoom 4 mixes Copernicus GLO-30 with national CC BY DEMs, each listed there.
 export const MAPTERHORN_ATTRIBUTION_URL = 'https://mapterhorn.com/attribution/'
 // Wording required by the Copernicus DEM licence.
@@ -29,6 +34,7 @@ export const COPERNICUS_DEM_NOTICE =
 export function Credits({ children }: { children?: ReactNode }) {
   const acknowledgementId = useId()
   const copernicusId = useId()
+  const seaIceId = useId()
   return (
     <CreditList>
       <li>
@@ -66,6 +72,23 @@ export function Credits({ children }: { children?: ReactNode }) {
       </li>
       <li>
         Ocean depth: <Link href={ETOPO_URL}>NOAA NCEI ETOPO 2022</Link> (public domain)
+      </li>
+      <li>
+        Sea ice:{' '}
+        <Link
+          href={NSIDC_SEA_ICE_INDEX_URL}
+          title={NSIDC_SEA_ICE_CITATION}
+          aria-describedby={seaIceId}
+        >
+          NSIDC Sea Ice Index, Version 4 (G02135)
+        </Link>
+        <span
+          id={seaIceId}
+          className="visually-hidden"
+        >
+          {NSIDC_SEA_ICE_CITATION}
+        </span>
+        {', 2025'}
       </li>
       <li>
         Ground imagery in the US: <Link href={USGS_URL}>{USGS_CREDIT}</Link> (public domain)
