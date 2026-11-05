@@ -18,6 +18,7 @@ import * as THREE from 'three'
 import type { MaterialPatch } from './eclipseShadow'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
 import { LIMB_FACET_PX, LIMB_HYSTERESIS, limbFacetPx, type SphereSegments } from '../ship/limb-detail'
+import { DEM_METRES_PER_UNIT } from '../earth-dem'
 
 /** The texture level whose rows match a mesh's `meshRows` rows, for a
  * texture `textureRows` tall. */
@@ -55,6 +56,13 @@ export const MORPH_TOP = 2 * MORPH_FLOOR
  * in LIMB_HYSTERESIS steps, so the swap comes at MORPH_TOP or above.
  */
 export const EARTH_LIMB_SWAP_FLOOR = LIMB_HYSTERESIS * MORPH_TOP
+
+/**
+ * The highest the ground's heights reach, in displacement units: Everest's
+ * 8849 m and some, for the rows of the limb sphere that can be seen
+ * (limbRowRange). Heights are metres above sea level, never below 0.
+ */
+export const GROUND_HEIGHT_MAX = 9000 / DEM_METRES_PER_UNIT
 
 const smoothstep = (e0: number, e1: number, x: number) => {
   const t = THREE.MathUtils.clamp((x - e0) / (e1 - e0), 0, 1)
