@@ -17,6 +17,7 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
 | `cold-start.cjs` | CLI: the cold start's longest main-thread block, from a CDP Profiler run started before the page loads, with each program's first use, the Sun bake's first face, mip passes and the loading screen's reveal (tides-0oi.6). |
+| `dprctl.cjs` | tides-0oi.13's proof: the low tier's paced pixel ratio (`src/paced-dpr.ts`) end to end with vsync on, each phase under the GPU lock. The system view climbs to dpr 3; x30 CPU throttling doesn't drop it; a fill-heavy quad drops it to 1.5-1.75 and it climbs back once the quad is removed. Logs `window.__dprctl.changes` and the longest frame after each change. Tune the controller with `DPRCTL` (the `?dprctl=key:val,...` value; `off` and `fixed:x` pin the ratio). |
 
 ## Setup
 
