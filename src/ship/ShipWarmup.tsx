@@ -28,7 +28,7 @@ export function ShipWarmup() {
     // An upload shares the frame's budget with the body maps' (tides-0oi.7),
     // and a map a proxy has replaced since it was queued stays off the GPU.
     if (next && 'texture' in next && isRetiredMap(next.texture)) next = undefined
-    else if (next && 'texture' in next && !uploadSlot.take(clock.elapsedTime)) {
+    else if (next && 'texture' in next && !uploadSlot.take(gl.info.render.frame)) {
       queue.current.unshift(next)
       return
     }

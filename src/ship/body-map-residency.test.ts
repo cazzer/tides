@@ -5,12 +5,17 @@ import {
   PROXY_WIDTH,
   URGENT_RADIUS_PX,
   bodyMapTier,
+  bodyRadiusPx,
   buildMapProxy,
   createUploadBudget,
   fullMapOf,
+  offAxisScale,
   projectedRadiusPx,
   proxyBaseLevel,
+  shipMapStep,
   shouldUploadNow,
+  systemMapStep,
+  type SystemMapStep,
 } from './body-map-residency'
 import { limbFacetPx } from './limb-detail'
 import { SHIP_FOV } from './ship-session'
@@ -181,6 +186,131 @@ describe('the proxy stays exact up to promotion', () => {
     for (const screen of SCREENS) {
       const x = eyeOverR(4 * URGENT_RADIUS_PX, screen)
       expect(Math.log2(proxyTexel / centreFootprint(x, screen))).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+describe('offAxisScale', () => {
+  it('is 1 on the axis and 1/cos² toward the corners', () => {
+    expect(offAxisScale(1, 60, 16 / 9)).toBe(1)
+    const cos = Math.cos((30 * Math.PI) / 180)
+    expect(offAxisScale(cos, 60, 16 / 9)).toBeCloseTo(1 / (cos * cos), 12)
+  })
+
+  it('is 1 past the corner and behind the eye', () => {
+    // A 60° view at 16:9 reaches ~49.7° in its corners.
+    expect(offAxisScale(Math.cos((49 * Math.PI) / 180), 60, 16 / 9)).toBeGreaterThan(2)
+    expect(offAxisScale(Math.cos((51 * Math.PI) / 180), 60, 16 / 9)).toBe(1)
+    expect(offAxisScale(-0.5, 60, 16 / 9)).toBe(1)
+  })
+})
+
+describe('bodyRadiusPx', () => {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9)
+  camera.updateMatrixWorld()
+
+  it('is projectedRadiusPx on the axis', () => {
+    expect(bodyRadiusPx(camera, new THREE.Vector3(0, 0, -100), 1, 1000)).toBeCloseTo(
+      projectedRadiusPx(100, 1, 1000, 60),
+      9
+    )
+  })
+
+  it('counts the stretch off the axis', () => {
+    const centre = new THREE.Vector3(0, 100 * Math.tan(0.4), -100)
+    const cos = Math.cos(0.4)
+    expect(bodyRadiusPx(camera, centre, 1, 1000)).toBeCloseTo(
+      projectedRadiusPx(centre.length(), 1, 1000, 60) / (cos * cos),
+      9
+    )
+  })
+})
+
+describe('shipMapStep', () => {
+  const step = (radiusPx: number, over: Partial<Parameters<typeof shipMapStep>[0]> = {}) =>
+    shipMapStep({ promoted: false, radiusPx, slotFree: true, showsProxy: false, proxyCached: false, ...over })
+
+  it('does nothing more once promoted', () => {
+    expect(step(50, { promoted: true })).toBe('none')
+  })
+
+  it('promotes a body past PROMOTE_RADIUS_PX straight from its full map, never reading it back', () => {
+    expect(step(PROMOTE_RADIUS_PX)).toBe('promote')
+    expect(step(PROMOTE_RADIUS_PX, { proxyCached: true })).toBe('promote')
+    expect(step(PROMOTE_RADIUS_PX, { showsProxy: true })).toBe('promote')
+  })
+
+  it('waits for the slot up to URGENT_RADIUS_PX, then takes no turn', () => {
+    expect(step(URGENT_RADIUS_PX, { slotFree: false })).toBe('wait')
+    expect(step(URGENT_RADIUS_PX + 0.01, { slotFree: false })).toBe('promote')
+  })
+
+  it('binds a cached proxy without the slot, and builds one with it', () => {
+    expect(step(2, { proxyCached: true, slotFree: false })).toBe('proxy')
+    expect(step(2)).toBe('build')
+    expect(step(2, { slotFree: false })).toBe('wait')
+    expect(step(2, { showsProxy: true, proxyCached: true })).toBe('none')
+  })
+})
+
+describe('systemMapStep', () => {
+  it('leaves a full map be', () => {
+    expect(systemMapStep({ showsProxy: false, retired: true, slotFree: true })).toBe('none')
+  })
+
+  it('brings retired maps back one a frame, every View showing each as it returns', () => {
+    // 26 maps, each drawn by three Views (the system view and its panels).
+    const budget = createUploadBudget()
+    const retired = new Set(Array.from({ length: 26 }, (_, i) => i))
+    const showsProxy = [0, 1, 2].map(() => new Set(retired))
+    const restoredAt: number[] = []
+    let frame = 0
+    while (showsProxy.some((views) => views.size > 0) && frame < 100) {
+      frame++
+      for (const views of showsProxy) {
+        for (const map of [...views]) {
+          const step: SystemMapStep = systemMapStep({
+            showsProxy: true,
+            retired: retired.has(map),
+            slotFree: budget.free(frame),
+          })
+          if (step === 'restore') {
+            budget.take(frame)
+            retired.delete(map)
+            restoredAt.push(frame)
+          }
+          if (step === 'restore' || step === 'show') views.delete(map)
+        }
+      }
+    }
+    expect(restoredAt).toEqual(Array.from({ length: 26 }, (_, i) => i + 1))
+    expect(frame).toBe(26)
+  })
+})
+
+describe('the proxy stays exact off the view axis', () => {
+  // Phone portrait, desktop 16:9, at the ship's FOV, its speed kick (70°) and a wide 100°.
+  const VIEWS = [390 / 844, 16 / 9].flatMap((aspect) => [SHIP_FOV, 70, 100].map((fov) => ({ aspect, fov })))
+
+  it('keeps two levels of LOD margin into the corners at URGENT_RADIUS_PX', () => {
+    for (const { aspect, fov } of VIEWS) {
+      for (const rows of [600, 1688]) {
+        const screen = { rows, fov }
+        const tanHalf = Math.tan(((fov / 2) * Math.PI) / 180)
+        const corner = Math.atan(tanHalf * Math.sqrt(1 + aspect * aspect))
+        for (let k = 0; k <= 10; k++) {
+          const phi = ((corner * k) / 10) * 0.999
+          const cos2 = Math.cos(phi) ** 2
+          expect(offAxisScale(Math.cos(phi), fov, aspect)).toBeCloseTo(1 / cos2, 9)
+          // bodyRadiusPx = URGENT there: on-axis it measures URGENT · cos²φ.
+          const x = eyeOverR(URGENT_RADIUS_PX * cos2, screen)
+          // A pixel there spans cos²φ of an on-axis one, radially.
+          const footprint = centreFootprint(x, screen) * cos2
+          expect(Math.log2(footprint / ((2 * Math.PI) / PROXY_WIDTH))).toBeGreaterThan(1.9)
+          const gateFootprint = centreFootprint(eyeOverR(4 * URGENT_RADIUS_PX * cos2, screen), screen) * cos2
+          expect(Math.log2(Math.PI / (PROXY_WIDTH / 2) / gateFootprint)).toBeLessThanOrEqual(1)
+        }
+      }
     }
   })
 })
