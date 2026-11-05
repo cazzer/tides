@@ -146,6 +146,7 @@ export default function EarthRenderer({
   // StrictMode's replayed effects do in dev); and whether the shell has
   // been faced to a camera yet, which sets the defines it draws with.
   const warmedDefines = useRef(new WeakSet<object>())
+  const warmedUnderSheet = useRef(new WeakSet<object>())
   const cloudsFaced = useRef(false)
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
@@ -375,6 +376,14 @@ export default function EarthRenderer({
   // prefers-reduced-motion.
   useFrame(({ clock, gl, camera }, delta) => {
     water.advance(delta, prefersReducedMotion())
+    // The flat sheet's program from under it, compiled ahead of close zoom's
+    // first descent there (CloudLayer.warmUnderSheet()). Here, as three's
+    // compile must not run mid-render.
+    const cloudKey = gl.properties.get(clouds.material)
+    if (cloudsFaced.current && cloudRef.current?.parent && !warmedUnderSheet.current.has(cloudKey)) {
+      warmedUnderSheet.current.add(cloudKey)
+      clouds.warmUnderSheet(gl, cloudRef.current, camera, scene)
+    }
     if (!real) {
       drift.current += STATIC_DRIFT_PER_FRAME
       clouds.uniforms.uCloudShift.value = driftOffset(drift.current)

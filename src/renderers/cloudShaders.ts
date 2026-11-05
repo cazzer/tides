@@ -54,6 +54,8 @@ import {
   FOG_SOFT,
   MAX_CLOUD_TOP_KM,
   MIN_MEASURED_TOP_KM,
+  raysMeetSphere,
+  SHEET_GROUND_SPHERE,
   SUNBEAM_FLOOR_KM,
   SUNLIGHT_EXTINCTION,
   SUNSET_FLOOR,
@@ -83,6 +85,7 @@ import {
 import { POLE_SMOOTH_CLOUD_TAPS, poleSmoothingGlsl, poleSmoothingLod } from './poleSmoothing'
 import { LIMB_SEGMENTS, limbBody } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
+import { compileSide, createWarmed, sortDefines } from '../ship/ship-warmup'
 import { earthTerrain, TERRAIN_MAP_SIZE, terrainFloorRadius } from '../ship/terrain-floor'
 import ceilingUrl from '../assets/earth-cloud-ceiling.bin?url'
 import hazeGlsl from '../shaders/atmosphere/haze.glsl'
@@ -752,7 +755,9 @@ void cloudOut(vec4 color, float z, vec3 haze, float share, float cover) {
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
   gl_FragColor.rgb = gl_FragColor.rgb * (gl_FragColor.a - cover * share) + share * hazeOut;
+#ifndef CLOUD_UNDER_SHEET
   gl_FragDepth = z;
+#endif
 }
 #else
 #define CLOUD_MISS discard
@@ -1133,6 +1138,13 @@ void main() {
   // at it (below).
   float sFlat = sIn > 0.0 ? sIn : sOut;
   if (sFlat <= 0.0) CLOUD_MISS;
+  // From under the sheet, a ray down to the ground meets it only on its far
+  // side, past the globe, shaded only for the ground's depth to hide it: it
+  // ends where it meets a sphere under any ground drawn (tides-0oi.3), short
+  // of the sheet. From over the sheet, the sheet comes first.
+  float rGround = uSeaLevel * ${f(SHEET_GROUND_SPHERE)};
+  float discGround = be * be - (dot(eye, eye) - rGround * rGround);
+  if (discGround > 0.0 && -be - sqrt(discGround) > 0.0 && -be - sqrt(discGround) < sFlat) discard;
   vec3 p = eye + d * sFlat;
   float terrain = 0.0;
 #elif defined(CLOUD_FLAT)
@@ -2185,6 +2197,16 @@ export interface CloudLayer {
    * `fine` where the depth buffer can draw FINE_DECK
    * (ship/ship-session.ts fineGroundDepth()). */
   faceCamera(mesh: THREE.Object3D, camera: THREE.Camera, fine?: boolean): void
+  /** Compiles the flat sheet's program from under it (CLOUD_UNDER_SHEET,
+   * which faceCamera() turns on), so that the first frame drawn there finds
+   * it linked; the relief shell has none. Only from a frame callback, as
+   * ../ship/ship-warmup.ts compileSide(). */
+  warmUnderSheet(
+    renderer: Pick<THREE.WebGLRenderer, 'compile'>,
+    mesh: THREE.Object3D,
+    camera: THREE.Camera,
+    scene: THREE.Scene
+  ): void
   dispose(): void
 }
 
@@ -2193,6 +2215,29 @@ const eyeDir = new THREE.Vector3()
 const viewport = new THREE.Vector4()
 const forward = new THREE.Vector3()
 const toLocal = new THREE.Matrix4()
+const corner = new THREE.Vector3()
+const NDC_CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const
+
+// Whether every ray `camera` draws meets the sphere of `radius` round the
+// mesh's origin: its four corner rays do (raysMeetSphere()), in the mesh's
+// frame, from `eyeLocal`, the camera there. Each through a point on its
+// corner's line of sight, mid-depth, which either depth buffer's NDC holds
+// (a reversed one's -1 lies behind the eye), taken ahead of the eye.
+function viewMeetsSphere(
+  camera: THREE.Camera,
+  mesh: THREE.Object3D,
+  eyeLocal: THREE.Vector3,
+  radius: number
+): boolean {
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera !== true) return false
+  const directions = NDC_CORNERS.map(([x, y]): Vec3 => {
+    corner.set(x, y, 0.5).applyMatrix4(camera.projectionMatrixInverse)
+    if (corner.z > 0) corner.negate()
+    mesh.worldToLocal(corner.applyMatrix4(camera.matrixWorld))
+    return [corner.x - eyeLocal.x, corner.y - eyeLocal.y, corner.z - eyeLocal.z]
+  })
+  return raysMeetSphere([eyeLocal.x, eyeLocal.y, eyeLocal.z], directions, radius)
+}
 
 // The cloud ceiling's texture (cloudCeiling(), built by
 // scripts/build-cloud-ceiling.mjs); until it has loaded, a
@@ -2340,6 +2385,26 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       else delete material.defines.CLOUD_TYPED
       material.needsUpdate = true
     }
+    // Under the flat sheet (tides-0oi.3), the program that writes no
+    // gl_FragDepth (cloudOut()), so that the depth test runs ahead of the
+    // shader: there the back face drawn is the hit, off its depth by no more
+    // than the facets' sag (7.7 km), and the depth serves only the sheet's
+    // own test (the material writes none), against ground that stands over
+    // 38 km under the sheet. For this camera alone: the Moon Phase panel
+    // draws the same mesh from outside.
+    const underSheet = flat && reach && eyeRadius < seaLevel + shellAltitude
+    if (('CLOUD_UNDER_SHEET' in material.defines) !== underSheet) {
+      if (underSheet) material.defines.CLOUD_UNDER_SHEET = ''
+      else delete material.defines.CLOUD_UNDER_SHEET
+      material.needsUpdate = true
+    }
+    // The defines in order, as the warm-ups compile them (compileSide()):
+    // three keys a program by their order.
+    if (sortDefines(material.defines)) material.needsUpdate = true
+    // And no draw where the view sees only the ground, every ray of which
+    // the shader would end at once (SHEET_GROUND_SPHERE): zoomed all the way
+    // in, looking down.
+    material.visible = !(underSheet && viewMeetsSphere(camera, mesh, eye, seaLevel * SHEET_GROUND_SPHERE))
     // The eye's path among the clouds: in their frame, as they drift.
     if (ease && reach) {
       const t = performance.now() / 1000
@@ -2407,6 +2472,10 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uniforms.uCloudTops.value = types?.tops ?? neutralTypeTexture()
     uniforms.uCloudPrecip.value = types?.precip ?? neutralTypeTexture()
   }
+  const warmUnderSheet: CloudLayer['warmUnderSheet'] = (renderer, mesh, camera, scene) => {
+    if (!flat || 'CLOUD_UNDER_SHEET' in material.defines) return
+    compileSide(renderer, mesh, THREE.BackSide, camera, scene, createWarmed(), (m) => m, ['CLOUD_UNDER_SHEET'])
+  }
   return {
     material,
     groundPatch,
@@ -2414,6 +2483,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     setMap,
     shellAltitude,
     faceCamera,
+    warmUnderSheet,
     dispose: () => {
       material.uniforms.uCloudCeiling.value.dispose()
       material.dispose()
