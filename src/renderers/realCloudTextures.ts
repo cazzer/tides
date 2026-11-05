@@ -12,7 +12,8 @@ import * as THREE from 'three'
 import { OUT_H, OUT_W } from '../real-clouds'
 import { TYPE_H, TYPE_W } from '../cloud-types'
 import { buildCloudImage, type CloudAssets, type CloudImage, type GeoTextureInfo } from './cloudPipeline'
-import { coverOf, createCloudBlender, releasePixelsOnUpload } from './cloudBlend'
+import { createCloudBlender, releasePixelsOnUpload } from './cloudBlend'
+import { coverOf } from './cloudCover'
 import { createCloudImageBuilder, type CloudWorker } from './cloudWorkerClient'
 import { createRealCloudController, type CloudSnapshot, type ImagerySource } from './realCloudController'
 import earthSpecular from '../assets/earth-specular-2k.jpg'
@@ -73,7 +74,7 @@ function gridTextureOf(grid: Uint8Array<ArrayBuffer>): THREE.DataTexture {
   return texture
 }
 
-function textureOf({ rgba, geo, cold, held, types, precip }: CloudImage): THREE.DataTexture {
+function textureOf({ rgba, geo, cold, held, types, precip, cover }: CloudImage): THREE.DataTexture {
   // Bottom row first, so no flipY; filtered and mipmapped like an image.
   const texture = new THREE.DataTexture(rgba, OUT_W, OUT_H, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearMipmapLinearFilter
@@ -87,8 +88,9 @@ function textureOf({ rgba, geo, cold, held, types, precip }: CloudImage): THREE.
   texture.userData.types = types ? gridTextureOf(types) : null
   texture.userData.precip = precip ? gridTextureOf(precip) : null
   // Its alpha alone stays for the CPU (falling precipitation), a quarter of
-  // the pixels, which go once uploaded (tides-0oi.11).
-  texture.userData.cover = coverOf(rgba, OUT_W, OUT_H)
+  // the pixels, which go once uploaded (tides-0oi.11); worked out in the
+  // build (the worker), else here.
+  texture.userData.cover = cover ? { data: cover, width: OUT_W, height: OUT_H } : coverOf(rgba, OUT_W, OUT_H)
   releasePixelsOnUpload(texture)
   texture.needsUpdate = true
   return texture

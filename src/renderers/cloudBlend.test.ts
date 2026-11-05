@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, test } from 'vitest'
 import {
   coverBytesOf,
-  coverOf,
+
   createCloudBlender,
   FADE_MS,
   isRedOnly,
@@ -17,6 +17,7 @@ import {
   TYPE_FRAGMENT_SHADER,
 } from './cloudBlend'
 import { CLOUD_TYPED_TOP_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
+import { coverOf } from './cloudCover'
 import {
   CUMULUS_TOP_KM,
   TYPE_SHAPES,

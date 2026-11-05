@@ -151,8 +151,13 @@ void cloudLook(vec2 st, float lod, out vec4 lookD, out vec4 lookL, out vec2 wet)
   if (t.a <= 0.0) return;
   // The map's own texel there, no further than a mip down: further, its
   // heights average with clear texels' 0 and the type would change with
-  // the zoom. The heights are only there where the map is measured.
-  vec3 raw = uCloudMeasured > 0.5 ? textureLod(uCloudMap, st, min(lod, 1.0)).rgb : vec3(0.0);
+  // the zoom. The heights are only there where the map is measured. A
+  // one-channel map (uCloudMapRed, tides-0oi.11) is grey, read as such.
+  vec3 raw = vec3(0.0);
+  if (uCloudMeasured > 0.5) {
+    vec4 mapTexel = textureLod(uCloudMap, st, min(lod, 1.0));
+    raw = uCloudMapRed > 0.5 ? mapTexel.rrr : mapTexel.rgb;
+  }
   vec4 s = cloudTypeShares(t, raw);
   wet = t.a * cloudWet(textureLod(uCloudPrecip, st, 0.0), s);
   lookD += t.a * (LOOK_D * s - LOOK_NEUTRAL_D);

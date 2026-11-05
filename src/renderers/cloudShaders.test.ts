@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { neutralTypeTexture } from './cloudBlend'
+import { asBeforeRedMap as asBeforeRedText, RED_UNIFORM } from './cloud-map-red-fixture'
 import { SKY_VIEW_GLSL } from './skyView'
 import { createGroundHaze, GROUND_HAZE_GLSL, groundHazeDepth, groundHazeWeights } from './groundHaze'
 import { TYPED_TOPS_GLSL } from './cloudTypeGlsl'
@@ -1443,7 +1444,11 @@ describe('cloud look by type (tides-tvr.4.2)', () => {
       const fn = src.slice(src.indexOf('void cloudLook('))
       expect(fn.indexOf('if (uCloudTyped < 0.5) return;')).toBeLessThan(fn.indexOf('textureLod(uCloudType'))
       expect(fn.indexOf('if (t.a <= 0.0) return;')).toBeLessThan(fn.indexOf('textureLod(uCloudMap'))
-      expect(fn).toContain('uCloudMeasured > 0.5 ? textureLod(uCloudMap, st, min(lod, 1.0)).rgb : vec3(0.0)')
+      expect(fn).toContain(`  vec3 raw = vec3(0.0);
+  if (uCloudMeasured > 0.5) {
+    vec4 mapTexel = textureLod(uCloudMap, st, min(lod, 1.0));
+    raw = uCloudMapRed > 0.5 ? mapTexel.rrr : mapTexel.rgb;
+  }`)
       // The precipitation (tides-bl3.2) once, at the type's own texel, past
       // both returns (dry until then) and once the shares are known.
       expect(src.match(/\buCloudPrecip\b/g)).toHaveLength(2)
@@ -1699,17 +1704,11 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
 
   // The map's channel select (tides-0oi.11): its uniform taken out and the
   // read put back as it was, so the rest is pinned.
-  const RED_UNIFORM = `// 1 where the map is one channel (the static clouds, R8, tides-0oi.11), its
-// grey in R alone; 0 for an RGBA map (the blend's output).
-uniform float uCloudMapRed;
-`
-  const RED_READ =
-    / {2}\/\/ Smoothed near the poles \(\.\/poleSmoothing\.ts\)\. A one-channel map is\n {2}\/\/ grey, R = G = B, as its RGBA texel was\.\n {2}vec4 raw = ([^;]*);\n {2}vec3 c = uCloudMapRed > 0\.5 \? raw\.rrr : raw\.rgb;\n/
   const asBeforeRedMap = (text: string) => {
     const declared = text.split(RED_UNIFORM).length - 1
     expect(declared).toBeLessThanOrEqual(1)
     expect(text.split('vec4 cloudColumn(').length - 1).toBe(declared)
-    const read = text.replace(RED_UNIFORM, '').replace(RED_READ, '  // Smoothed near the poles (./poleSmoothing.ts).\n  vec3 c = $1.rgb;\n')
+    const read = asBeforeRedText(text)
     expect(read).not.toContain('uCloudMapRed')
     return read
   }

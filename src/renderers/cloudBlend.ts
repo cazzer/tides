@@ -25,6 +25,7 @@ import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import { OUT_H, OUT_W, smoothstep } from '../real-clouds'
 import { TYPE_H, TYPE_W } from '../cloud-types'
 import { CLOUD_TYPED_TOP_GLSL } from './cloudTypeGlsl'
+import type { CloudCover } from './cloudCover'
 
 export const FADE_MS = 500
 /** A bigger step in mix than this (between two frames) is a discontinuity. */
@@ -189,32 +190,22 @@ export function precipBytesOf(texture: THREE.Texture | 'static'): Uint8Array | n
 /** A frame's drawn cloud alpha (its map's G), one byte per texel, bottom row
  * first, which falling precipitation reads on the CPU
  * (../ship/falling-precip.ts cloudCoverAt), kept in userData.cover once the
- * map's own pixels are dropped (releasePixelsOnUpload); null for the static
+ * map's own pixels are dropped (releasePixelsOnUpload; ./cloudCover.ts);
+ * null for the static
  * clouds, whose image the CPU can't read. */
 export function coverBytesOf(texture: THREE.Texture | 'static'): CloudCover | null {
   if (texture === 'static') return null
   return (texture.userData.cover as CloudCover | null | undefined) ?? null
 }
 
-export interface CloudCover {
-  data: Uint8Array
-  width: number
-  height: number
-}
-
-/** The G of an RGBA map, one byte per texel in the same order. */
-export function coverOf(rgba: ArrayLike<number>, width: number, height: number): CloudCover {
-  const data = new Uint8Array(width * height)
-  for (let i = 0; i < data.length; i++) data[i] = rgba[4 * i + 1]
-  return { data, width, height }
-}
-
 /**
  * Drops a frame's pixel array (13.1 MB at 2560 x 1280) once three has sent it
  * to the GPU (tides-0oi.11): the texture is uploaded once and never changed,
- * so nothing reads them again. Its size stays for whatever reads it. A lost
- * context would send the dropped array, blank: the frames are evicted and
- * rebuilt then (realCloudController.ts evictAll()).
+ * so nothing reads them again. Its size stays for whatever reads it. Such a
+ * frame must never be uploaded again (needsUpdate, or a renderer's
+ * initTexture() on it), as it would go up blank: a lost context, which would
+ * send it again, evicts the frames, rebuilt then (realCloudController.ts
+ * evictAll()), and nothing warms them ahead (ship/CompileGate).
  */
 export function releasePixelsOnUpload(texture: THREE.DataTexture): void {
   texture.onUpdate = () => {
