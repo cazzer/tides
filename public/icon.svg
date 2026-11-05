@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The Tides mark (tides-6m0.1): Earth and Moon in the same phase, lit by
+       one Sun from the left. The PWA PNGs are rendered from it, square for
+       icon-192/512 and the apple-touch-icon, inside the safe zone for the
+       maskable one. -->
+  <defs>
+    <linearGradient id="lit" x1="0" x2="1"><stop offset="0" stop-color="#6cbcff"/><stop offset="1" stop-color="#1f5fcf"/></linearGradient>
+    <mask id="em"><rect width="64" height="64" fill="#000"/><circle cx="27" cy="34" r="17" fill="#fff"/><ellipse cx="27" cy="34" rx="6" ry="17" fill="#000"/><rect x="27" y="10" width="20" height="50" fill="#000"/></mask>
+    <mask id="mm"><rect width="64" height="64" fill="#000"/><circle cx="51" cy="17" r="6.5" fill="#fff"/><ellipse cx="51" cy="17" rx="2.3" ry="6.5" fill="#000"/><rect x="51" y="8" width="10" height="20" fill="#000"/></mask>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#000"/>
+  <circle cx="27" cy="34" r="17" fill="#0d2350"/>
+  <rect width="64" height="64" fill="url(#lit)" mask="url(#em)"/>
+  <circle cx="51" cy="17" r="6.5" fill="#2b2f36"/>
+  <rect width="64" height="64" fill="#e9edf2" mask="url(#mm)"/>
+</svg>
