@@ -734,8 +734,8 @@ async function buildGeoRgba(
 // The latest observation every forecast frame of the hour evolves, built once
 // and kept until the base changes or it goes unused for BASE_IDLE_MS. A
 // failure is kept for BASE_RETRY_MS, so a missing base isn't retried by every
-// frame. Kept packed (./observedBase.ts): G as is, the rest deflated for a
-// held frame (tides-0oi.23).
+// frame. Kept packed (./observedBase.ts): G as is, and in the worker the rest
+// deflated for a held frame (tides-0oi.23).
 const BASE_RETRY_MS = 2 * 60_000
 const BASE_IDLE_MS = 5 * 60_000
 
@@ -774,7 +774,11 @@ function keepBase(entry: BaseEntry) {
 }
 
 /** Rejects when a newer base replaces this one before it is built. */
-function acquireBase(source: GeoSource | GibsSource, staticUrl: string): Promise<Observed | null> {
+function acquireBase(
+  source: GeoSource | GibsSource,
+  staticUrl: string,
+  deflate: boolean
+): Promise<Observed | null> {
   const key = `${sourceKey(source)}|${staticUrl}`
   const retry = base?.failedAt != null && performance.now() - base.failedAt >= BASE_RETRY_MS
   if (base?.key === key && !retry) {
@@ -791,7 +795,7 @@ function acquireBase(source: GeoSource | GibsSource, staticUrl: string): Promise
         )
   // Only read: the daily composite in a gibs base is shared.
   const build: Promise<Observed | null> = built.then(
-    (b) => b && { ...packObservation(b.rgba), geo: b.geo }
+    (b) => b && { ...packObservation(b.rgba, { deflate }), geo: b.geo }
   )
   const entry: BaseEntry = { key, promise: build, abort, settled: false, failedAt: null }
   entry.promise = shared(
@@ -832,12 +836,13 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 async function buildForecastImage(
   source: ForecastSource,
   staticUrl: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  deflate: boolean
 ): Promise<CloudImage | null> {
   const fromMs = observedTimeMs(source.base)
   const toMs = Date.parse(source.time)
   const [observed, grid, rank] = await Promise.all([
-    untilAborted(acquireBase(source.base, staticUrl), signal),
+    untilAborted(acquireBase(source.base, staticUrl, deflate), signal),
     coverGrids.get(fromMs, toMs).catch((err: unknown) => {
       console.warn('[clouds] no cloud cover forecast', err)
       return null
@@ -853,8 +858,7 @@ async function buildForecastImage(
   const ct = grid && coverAt(grid, toMs)
   if (!c0 || !ct || !rank) {
     console.warn(`[clouds] no forecast for ${source.time}; holding the latest observation`)
-    const rgba = await unpackObservation(observed)
-    signal.throwIfAborted()
+    const rgba = await unpackObservation(observed, signal)
     return { ...imageOf(rgba, observed.geo), held: true }
   }
   if (observed.calibration?.grid !== grid) {
@@ -885,19 +889,21 @@ async function buildForecastImage(
 
 /** The texture's pixels for a source, or null when there's neither imagery
  * nor a daily composite to fall back on. Throws when aborted. staticUrl must
- * be absolute. */
+ * be absolute. deflateBase: keep the forecast base deflated (the worker); off
+ * the worker it is kept whole, so no frame waits on deflating it. */
 export async function buildCloudImage(
   source: ImagerySource,
   staticUrl: string,
   urls: CloudAssets,
-  signal: AbortSignal
+  signal: AbortSignal,
+  { deflateBase }: { deflateBase: boolean }
 ): Promise<CloudImage | null> {
   assets = urls
   const waiting = sharedPending > 0
   const started = sharedStarted
   const image =
     source.kind === 'forecast'
-      ? await buildForecastImage(source, staticUrl, signal)
+      ? await buildForecastImage(source, staticUrl, signal, deflateBase)
       : source.kind === 'geo'
         ? await buildGeoImage(source, staticUrl, signal)
         : await buildDailyImage(source, staticUrl, signal)
