@@ -67,7 +67,7 @@ import {
 import { CLOUD_AMBIENT, CLOUD_EXPOSURE, SUNLIGHT_INTENSITY } from '../lighting'
 import { smoothstep } from '../night-flight'
 import { sceneRadius } from '../planets'
-import { neutralTypeTexture } from './cloudBlend'
+import { isRedOnly, neutralTypeTexture } from './cloudBlend'
 import { CLOUD_LOOK_GLSL, TYPED_TOPS_GLSL } from './cloudTypeGlsl'
 import { DETAIL_NOISE_GLSL, detailTurnsGlsl } from './detailNoise'
 import { ECLIPSE_GLSL, type EclipseShadow, type MaterialPatch } from './eclipseShadow'
@@ -278,6 +278,9 @@ ${RELIEF_DECK_GLSL}${RELIEF_SHELL_LENGTHS_GLSL}#endif
 // before types.
 const field = (typed: boolean, deck: string) => /* glsl */ `
 uniform sampler2D uCloudMap;
+// 1 where the map is one channel (the static clouds, R8, tides-0oi.11), its
+// grey in R alone; 0 for an RGBA map (the blend's output).
+uniform float uCloudMapRed;
 uniform sampler2D uTerrainMap;
 uniform float uCloudShift;
 uniform float uCloudMeasured;
@@ -319,8 +322,10 @@ float cloudTerrain(vec2 uv) {
 // ground (km).
 vec4 cloudColumn(vec2 uv, float lod, float terrain) {
   vec2 st = vec2(fract(uv.x - uCloudShift), clamp(uv.y, 0.0, 1.0));
-  // Smoothed near the poles (./poleSmoothing.ts).
-  vec3 c = ${COLUMN_READ}.rgb;
+  // Smoothed near the poles (./poleSmoothing.ts). A one-channel map is
+  // grey, R = G = B, as its RGBA texel was.
+  vec4 raw = ${COLUMN_READ};
+  vec3 c = uCloudMapRed > 0.5 ? raw.rrr : raw.rgb;
   float trust = c.b * uCloudMeasured;
   float km = mix(1.5 + 7.0 * c.g * c.g, max(c.r * ${f(MAX_CLOUD_TOP_KM)}, ${f(MIN_MEASURED_TOP_KM)}), trust);
   float base = terrain + CLOUD_CLEARANCE;
@@ -2154,6 +2159,9 @@ export interface CloudLayer {
   /** Shared by both; set each frame. */
   uniforms: {
     uCloudMap: THREE.IUniform<THREE.Texture | null>
+    /** 1 where uCloudMap is one channel (isRedOnly()), read as grey; set by
+     * setMap. */
+    uCloudMapRed: THREE.IUniform<number>
     uTerrainMap: THREE.IUniform<THREE.Texture | null>
     uCloudShift: THREE.IUniform<number>
     uCloudMeasured: THREE.IUniform<number>
@@ -2266,6 +2274,7 @@ async function fetchCeiling(): Promise<THREE.DataTexture> {
 export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLayer {
   const uniforms: CloudLayer['uniforms'] = {
     uCloudMap: { value: null },
+    uCloudMapRed: { value: 0 },
     uTerrainMap: { value: null },
     uCloudShift: { value: 0 },
     uCloudMeasured: { value: 0 },
@@ -2468,6 +2477,7 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
   }
   const setMap = (map: THREE.Texture, measured: boolean, types: CloudTypes | null) => {
     uniforms.uCloudMap.value = map
+    uniforms.uCloudMapRed.value = isRedOnly(map) ? 1 : 0
     uniforms.uCloudMeasured.value = measured ? 1 : 0
     uniforms.uCloudMaxKm.value = maxTopKm(measured)
     uniforms.uCloudTyped.value = types ? 1 : 0

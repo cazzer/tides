@@ -70,6 +70,7 @@ import { coverGrids } from './forecastGrid'
 import { gridWithin, typeGridLoad } from './cloudTypeGrid'
 import { decodeEarthDem, halveDem, resampleDem, type EarthDem } from '../earth-dem'
 import type { ImagerySource } from './realCloudController'
+import { alphaBytes } from './cloudCover'
 
 /** Absolute URLs of the static textures the masks come from. A worker
  * resolves relative URLs against its own script, so the page resolves
@@ -527,6 +528,9 @@ export interface CloudImage {
   /** The precipitation grid (../cloud-precip.ts, TYPE_W x TYPE_H RGBA,
    * bottom row first) where the cover grid has it for the frame's time. */
   precip?: Uint8Array<ArrayBuffer>
+  /** The image's G alone, a byte per texel in its order (./cloudCover.ts),
+   * for the CPU once the texture's pixels are dropped (tides-0oi.11). */
+  cover?: Uint8Array<ArrayBuffer>
 }
 
 /** Reverses the rows of an OUT_W-wide RGBA image in place. */
@@ -543,10 +547,11 @@ export function flipRows(rgba: Uint8ClampedArray): void {
   }
 }
 
-/** rgba is the build's own (top row first), which this flips. */
-function imageOf(rgba: Uint8ClampedArray<ArrayBuffer>, geo: GeoTextureInfo | null): CloudImage {
+/** rgba is the build's own (top row first), which this flips; every
+ * finished image is made here, with its cover. */
+export function imageOf(rgba: Uint8ClampedArray<ArrayBuffer>, geo: GeoTextureInfo | null): CloudImage {
   flipRows(rgba)
-  return { rgba, geo }
+  return { rgba, geo, cover: alphaBytes(rgba) }
 }
 
 /** The image with the grid's type and precipitation grids for it, those it

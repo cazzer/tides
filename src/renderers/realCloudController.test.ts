@@ -231,6 +231,47 @@ describe('realCloudController', () => {
     expect(snap()).toMatchObject({ texture: a, status: 'ready' })
   })
 
+  test("evictAll frees every frame and builds the plan's afresh (a lost context, tides-0oi.11)", async () => {
+    const { controller, builds, go, snap } = setup()
+    go('2024-10-09T12:00:00Z')
+    const wanted = builds.map((b) => b.key)
+    expect(wanted.length).toBeGreaterThan(0)
+    const before = wanted.map((k) => texture(k))
+    builds.forEach((b, i) => finish(b, before[i]))
+    await flush()
+    expect(snap().frames.every((f) => f.status === 'ready')).toBe(true)
+    const started = builds.length
+    controller.evictAll()
+    expect(before.every((t) => t.disposed)).toBe(true)
+    expect(snap().frames.map((f) => f.status)).toEqual(wanted.map(() => 'loading'))
+    expect(snap()).toMatchObject({ texture: null, status: 'loading' })
+    expect(builds.slice(started).map((b) => b.key)).toEqual(wanted)
+    const after = texture('again')
+    finish(builds[started], after)
+    await flush()
+    expect(snap()).toMatchObject({ texture: after, status: 'ready' })
+  })
+
+  test('evictAll retries a failed frame, and after deactivate only empties the cache', async () => {
+    const { controller, builds, go, snap } = setup()
+    go('2024-10-09T12:00:00Z')
+    finish(builds[0], null)
+    await flush()
+    expect(snap().status).toBe('failed')
+    const started = builds.length
+    controller.evictAll()
+    expect(builds.slice(started).map((b) => b.key)).toContain(builds[0].key)
+    const kept = texture('kept')
+    finish(builds[started], kept)
+    await flush()
+    controller.deactivate()
+    const count = builds.length
+    controller.evictAll()
+    expect(kept.disposed).toBe(true)
+    expect(builds.length).toBe(count)
+    expect(snap()).toEqual({ frames: [], texture: null, source: null, status: 'loading' })
+  })
+
   test('the snapshot is the same object across ticks with no change', async () => {
     const { controller, builds, go, tick, snap, setWall } = setup()
     go('2024-10-09T12:00:00Z')

@@ -234,8 +234,8 @@ export function shouldSample(nowMs: number, lastMs: number): boolean {
   return !(nowMs - lastMs < SAMPLE_MS)
 }
 
-/** A cloud map's bytes: RGBA, bottom row first, alpha in green
- * (renderers/cloudPipeline.ts CloudImage). */
+/** A cloud map's alpha (the G of renderers/cloudPipeline.ts CloudImage), a
+ * byte per texel, bottom row first (renderers/cloudBlend.ts coverOf()). */
 export interface CloudBytes {
   data: ArrayLike<number>
   width: number
@@ -250,7 +250,7 @@ function alphaAt(map: CloudBytes, latDeg: number, lonDeg: number): number {
   const v = clamp01((latDeg + 90) / 180)
   const x = Math.min(map.width - 1, Math.floor(u * map.width))
   const y = Math.min(map.height - 1, Math.floor(v * map.height))
-  return map.data[(y * map.width + x) * 4 + 1] / 255
+  return map.data[y * map.width + x] / 255
 }
 
 /**

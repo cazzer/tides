@@ -13,6 +13,8 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `lib.cjs` | The harness. Opens headless Chrome with ANGLE-Metal (390x844 at dpr 3, which the app caps to a 780x1688 canvas), poses the camera, records one frame's `gl.render` calls and replays them. Provides interleaved paired A/B timing, same-tick pixel diffs, a per-object breakdown, a VRAM log, a CPU profile, and a shared GPU lock. |
 | `ab.cjs` | CLI: same-tick pixel A/B/A2 and paired timing for named shader variants at one pose. |
 | `variants/top10.cjs` | The exact shader-text variants behind the top-10's shader items: clouds-1, aurora gate, aurora noise floor, ground detail gate, night water, plus skip controls. |
+| `body-maps.cjs` | Ship-mode body maps (tides-0oi.7): resident texture memory at named poses, same-tick A/B of the mip-tail proxies against their full maps, and approach runs that log the switch to a full map. |
+| `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
 | `cold-start.cjs` | CLI: the cold start's longest main-thread block, from a CDP Profiler run started before the page loads, with each program's first use, the Sun bake's first face, mip passes and the loading screen's reveal (tides-0oi.6). |
 
@@ -114,7 +116,8 @@ Read `lib.cjs`'s header, then follow the shape of `ab.cjs`. The in-page `__H` gi
 - `reg(name, on, off)` for any JS-side variant (uniforms, geometry draw ranges, visibility).
 - `breakdown(K, N)` to hide each group of drawn objects and time the frame without it. It hides with
   `layers.mask = 0`; `visible = false` would also hide the object's children.
-- `vram()` and `window.__vram.list`, which record allocations since load, not resident memory.
+- `vram()` and `window.__vram.list`, which record allocations since load (`totalMB`), and `liveMB`, the texture
+  bytes resident now (`window.__vram.live`, less each `deleteTexture`; `__vram.liveOf(webglTexture)` for one).
 - `H.cpuProfile(page, ms)` for a sampled main-thread profile.
 
 Wrap every timing call in `H.withGpuLock`. It's a mkdir lock, shared with phone-perf's `GPU_LOCK`.

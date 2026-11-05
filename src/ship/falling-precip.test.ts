@@ -124,12 +124,12 @@ describe('where it falls (tides-bl3.3)', () => {
 
   it('falls only under the cloud drawn overhead, read as the shell lays out its map', () => {
     // A small map, bottom row first: cloud over the northern hemisphere's
-    // eastern half only (lon 0..180, the map's right half), alpha in green.
+    // eastern half only (lon 0..180, the map's right half), its alpha alone.
     const width = 72
     const height = 36
-    const data = new Uint8Array(width * height * 4)
+    const data = new Uint8Array(width * height)
     for (let y = height / 2; y < height; y++) {
-      for (let x = width / 2; x < width; x++) data[(y * width + x) * 4 + 1] = 255
+      for (let x = width / 2; x < width; x++) data[y * width + x] = 255
     }
     const map = { data, width, height }
     expect(cloudCoverAt(map, map, 0.4, 45, 90)).toBe(1)

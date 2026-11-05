@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { asBeforeRedMap, RED_READ, RED_UNIFORM } from './cloud-map-red-fixture'
 import * as THREE from 'three'
 import { createHash } from 'node:crypto'
 import { useStore } from '../store'
@@ -208,7 +209,16 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(out.fragment)))))).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(cloudMapAsBefore(out.fragment))))))).digest('hex')
+  }
+
+  // The cloud map's channel select (tides-0oi.11, cloudShaders.ts
+  // cloudColumn(): the static map is one channel): taken out, its read put
+  // back as it was, so that the pins still hold the rest of the chain.
+  function cloudMapAsBefore(fragment: string): string {
+    expect(fragment.split(RED_UNIFORM).length).toBe(2)
+    expect(fragment).toMatch(RED_READ)
+    return asBeforeRedMap(fragment)
   }
 
   // The cloud shadow's strength, a define until tides-l0z made it a uniform
