@@ -84,9 +84,15 @@ describe('ground shadow patch', () => {
     )
     expect(at('vec4 hTop4 = max(hA, hB);')).toBeLessThan(top)
     expect(at('vec4 hB = texture(uGroundHorizon, vec3(vMapUv, 1.0))')).toBeLessThan(top)
-    const gate = at(`if (fade > 0.0 && elevation < top + ${(HORIZON_SOFTNESS + HORIZON_CLEAR_MARGIN).toFixed(6)}) {`)
+    const gate = at(`if (elevation < top + ${(HORIZON_SOFTNESS + HORIZON_CLEAR_MARGIN).toFixed(6)}) {`)
     expect(top).toBeLessThan(gate)
-    expect(at('float elevation = asin(clamp(dot(sun, up), -1.0, 1.0));')).toBeLessThan(gate)
+    // The bound itself only where the shadows show at all (not at night,
+    // nor toward the poles or in the system view).
+    const fade = at('if (fade > 0.0) {\n    float k = ')
+    for (const s of ['float elevation = asin(clamp(dot(sun, up), -1.0, 1.0));', 'vec4 hTop4 = max(hA, hB);']) {
+      expect(at(s)).toBeGreaterThan(fade)
+      expect(at(s)).toBeLessThan(top)
+    }
     // Everything else inside it.
     for (const s of ['float sky = dot(', 'float toward = atan(', 'reflectedLight.directDiffuse *= sunLit;']) {
       expect(at(s)).toBeGreaterThan(gate)

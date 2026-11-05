@@ -9,6 +9,7 @@ import {
   HORIZON_CLEAR_MARGIN,
   HORIZON_CURVE_RELIEF,
   HORIZON_DIRECTIONS,
+  HORIZON_MAX_ANGLE,
   HORIZON_RADIUS_KM,
   HORIZON_SOFTNESS,
   HORIZON_TRUE_CURVE_RELIEF,
@@ -280,6 +281,30 @@ describe('skipping the shading once the Sun clears every horizon (tides-0oi.17)'
         expect(skyOcclusionWeight(angles, k, e)).toBe(0)
       }
     }
+  })
+
+  it("leaves the shader's float32 blend under the gate's margin", () => {
+    // The shader's blend toward the Sun, as the GPU rounds it (float32 at
+    // every step): its weights sum to 1 only to rounding, so the blend can
+    // poke past the highest horizon by an ulp or so; the margin covers that
+    // many times over.
+    const f = Math.fround
+    let worst = 0
+    for (const { angles, k } of cases) {
+      const top = horizonTop(angles, k)
+      for (let a = 0; a < 256; a++) {
+        const bin = f(f(rand() * 2 * Math.PI) * f(8 / (2 * Math.PI)))
+        let blend = 0
+        for (let d = 0; d < 8; d++) {
+          const gap = f(Math.abs(f(bin - d)))
+          const w = f(Math.max(f(1 - Math.min(gap, f(8 - gap))), 0))
+          blend = f(blend + f(w * f(angles[d])))
+        }
+        const toward = f(Math.atan(f(k * f(Math.tan(Math.min(blend, f(HORIZON_MAX_ANGLE)))))))
+        worst = Math.max(worst, toward - top)
+      }
+    }
+    expect(worst).toBeLessThan(HORIZON_CLEAR_MARGIN / 100)
   })
 
   it("keeps the sky's occlusion in full below the highest horizon's soft edge, fading it smoothly across", () => {
