@@ -29,6 +29,19 @@ export const CORONA_MAX_ANGLE = 1.4
 export const CORONA_OUTER_PERSPECTIVE = 1.6
 export const CORONA_OUTER_MAIN = 3
 
+/**
+ * How far the main view's corona is drawn, in limb radii: short of its outer
+ * edge, where the fade has already taken the glow under a display step.
+ * After tone mapping and sRGB the brightest the corona gets, over every
+ * streamer, ray and latitude the bake can make, is 2.7 LSB at 2.0R, 0.44 at
+ * 2.2R and 0 from 2.3R (tides-0oi.2, sun-1); 2.4 leaves room for the night
+ * flight's exposure. The draw is scissored to it (coronaClipRect), which
+ * skips ~36% of the quad's pixels; the quad and its fade still reach
+ * CORONA_OUTER_MAIN. Shrinking the quad itself instead moves its vertices,
+ * which rounds the varyings differently and shifts the limb by 1 LSB.
+ */
+export const CORONA_QUAD_MAIN = 2.4
+
 export interface CoronaQuad {
   /** Quad centre, view-space x and y at the Sun's depth (before `push`). */
   centre: [number, number]
@@ -93,4 +106,44 @@ export function coronaLimbNormal(
   const z = (u[0] * quad.centre[0] + u[1] * quad.centre[1] + quad.limb) / depth
   const length = Math.hypot(u[0], u[1], z)
   return [u[0] / length, u[1] / length, z / length]
+}
+
+/**
+ * The device-px rectangle [x, y, width, height] (y up, as gl.scissor takes
+ * it) holding every pixel of the perspective corona quad within `extent`
+ * limb radii of its centre, or null when the shader collapses the quad.
+ * `projection` is the camera's column-major projection matrix and
+ * `viewport` the draw's device-px viewport. The quad lies in a plane
+ * parallel to the screen, so its square of half-width `extent` projects to
+ * an axis-aligned box: outside it every pixel is at least `extent` limb
+ * radii out. Rounded outward with a pixel to spare for the shader's float
+ * maths.
+ */
+export function coronaClipRect(
+  c: readonly [number, number, number],
+  radius: number,
+  extent: number,
+  projection: ArrayLike<number>,
+  viewport: readonly [number, number, number, number]
+): [number, number, number, number] | null {
+  const quad = perspectiveCoronaQuad(c, radius)
+  if (!quad) return null
+  const z = c[2] * quad.push
+  const xs: number[] = []
+  const ys: number[] = []
+  for (const u of [-extent, extent]) {
+    for (const v of [-extent, extent]) {
+      const x = (quad.centre[0] + u * quad.limb) * quad.push
+      const y = (quad.centre[1] + v * quad.limb) * quad.push
+      const p = projection
+      const w = p[3] * x + p[7] * y + p[11] * z + p[15]
+      xs.push(viewport[0] + (0.5 + (0.5 * (p[0] * x + p[4] * y + p[8] * z + p[12])) / w) * viewport[2])
+      ys.push(viewport[1] + (0.5 + (0.5 * (p[1] * x + p[5] * y + p[9] * z + p[13])) / w) * viewport[3])
+    }
+  }
+  const x0 = Math.floor(Math.min(...xs)) - 1
+  const y0 = Math.floor(Math.min(...ys)) - 1
+  const x1 = Math.ceil(Math.max(...xs)) + 1
+  const y1 = Math.ceil(Math.max(...ys)) + 1
+  return [x0, y0, x1 - x0, y1 - y0]
 }

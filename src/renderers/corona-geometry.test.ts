@@ -4,6 +4,8 @@ import {
   CORONA_MAX_ANGLE,
   CORONA_OUTER_MAIN,
   CORONA_OUTER_PERSPECTIVE,
+  CORONA_QUAD_MAIN,
+  coronaClipRect,
   coronaLimbNormal,
   perspectiveCoronaQuad,
   type CoronaQuad,
@@ -201,8 +203,81 @@ describe('the corona\'s outer edge', () => {
     expect(CORONA_OUTER_MAIN).toBe(3)
     expect(CORONA_OUTER_PERSPECTIVE).toBe(1.6)
     expect(vertex).toMatch(/uniform float uOuter;/)
-    expect(vertex).toMatch(/vPlane = position\.xy \* uOuter;/)
     expect(vertex).not.toMatch(/isOrthographic \? 3\.0/)
+  })
+
+  it('fades out to uOuter, though the main view is drawn only to 2.4R', () => {
+    // The glow is 0 LSB from 2.3R (tides-0oi.2, sun-1): the cut changes no pixel
+    // only while the quad and its fade keep their 3R reach.
+    expect(CORONA_QUAD_MAIN).toBe(2.4)
+    expect(CORONA_QUAD_MAIN).toBeGreaterThanOrEqual(2.3)
+    expect(CORONA_QUAD_MAIN).toBeLessThan(CORONA_OUTER_MAIN)
+    expect(vertex).toMatch(/vPlane = position\.xy \* uOuter;/)
+    expect(vertex).toMatch(/vOuter = uOuter;/)
+    const fragment = readFileSync(new URL('../shaders/sun-corona/fragment.frag', import.meta.url), 'utf8')
+    expect(fragment).toContain('float fade = 1.0 - smoothstep(1.0 + 0.35 * (vOuter - 1.0), vOuter, r);')
+    const renderer = readFileSync(new URL('./SunRenderer.tsx', import.meta.url), 'utf8')
+    expect(renderer).toContain('uOuter: { value: interactive ? CORONA_OUTER_MAIN : CORONA_OUTER_PERSPECTIVE }')
+    expect(renderer).toContain('if (interactive) clipCorona(renderer, camera, mesh.current, diameter)')
+  })
+})
+
+describe('coronaClipRect', () => {
+  // A 30° perspective camera (the main view's) on a 780x1286 device-px viewport.
+  const fov = 30 * DEG
+  const f = 1 / Math.tan(fov / 2)
+  const aspect = 780 / 1286
+  const near = 1
+  const far = 4000
+  const projection = [
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) / (near - far), -1,
+    0, 0, (2 * far * near) / (near - far), 0,
+  ]
+  const viewport: [number, number, number, number] = [0, 402, 780, 1286]
+  const toPx = (p: number[]): [number, number] => {
+    const [x, y, z] = p
+    const w = -z
+    return [viewport[0] + (0.5 + (0.5 * (projection[0] * x)) / w) * viewport[2], viewport[1] + (0.5 + (0.5 * (projection[5] * y)) / w) * viewport[3]]
+  }
+
+  it('holds every point of the quad within the extent, and none much past it', () => {
+    for (const deg of [0, 3, 8, 14]) {
+      for (const distance of [40, 200, 900]) {
+        for (const roll of [0, 1.1, 2.5, 4]) {
+          const c = sunAt(deg, distance, roll)
+          const quad = perspectiveCoronaQuad(c, R)!
+          const rect = coronaClipRect(c, R, CORONA_QUAD_MAIN, projection, viewport)!
+          const at = (u: number, v: number) => toPx([
+            (quad.centre[0] + u * quad.limb) * quad.push,
+            (quad.centre[1] + v * quad.limb) * quad.push,
+            c[2] * quad.push,
+          ])
+          for (let i = 0; i <= 8; i++) {
+            for (let j = 0; j <= 8; j++) {
+              const [x, y] = at(CORONA_QUAD_MAIN * (i / 4 - 1), CORONA_QUAD_MAIN * (j / 4 - 1))
+              expect(x).toBeGreaterThan(rect[0])
+              expect(y).toBeGreaterThan(rect[1])
+              expect(x).toBeLessThan(rect[0] + rect[2])
+              expect(y).toBeLessThan(rect[1] + rect[3])
+            }
+          }
+          // Its edges are within 2 px of the extent's.
+          const [x0, y0] = at(-CORONA_QUAD_MAIN, -CORONA_QUAD_MAIN)
+          const [x1, y1] = at(CORONA_QUAD_MAIN, CORONA_QUAD_MAIN)
+          expect(x0 - rect[0]).toBeLessThan(2)
+          expect(y0 - rect[1]).toBeLessThan(2)
+          expect(rect[0] + rect[2] - x1).toBeLessThan(2)
+          expect(rect[1] + rect[3] - y1).toBeLessThan(2)
+        }
+      }
+    }
+  })
+
+  it('is null where the shader collapses the quad', () => {
+    expect(coronaClipRect([0, 0, 5], R, CORONA_QUAD_MAIN, projection, viewport)).toBeNull()
+    expect(coronaClipRect(sunAt(85, 100), R, CORONA_QUAD_MAIN, projection, viewport)).toBeNull()
   })
 })
 
