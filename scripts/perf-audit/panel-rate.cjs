@@ -5,9 +5,11 @@
 //                unpaced (drei) vs the paced draw frame vs the held frames after it, then again after a dpr change,
 //                plus a control (the sim moved on: held panels keep the old frame, a fresh draw differs).
 //   MODE=time    paired blocks of real rAF frames, pacing on vs off, each frame timed before-effect -> after-effect
-//                (cpu) and to a 1 px readPixels after it (sync: the GPU's part too), split into the paced arm's draw
+//                (cpu, and gpu: a TIME_ELAPSED query over the same span), split into the paced arm's draw
 //                frames (a panel drew) and held frames (both filled from their copies). Under the GPU lock.
 //                Frame replay (lib.cjs __H.replay) can't show held frames: it replays one recorded frame.
+//   MODE=replay  recorded frames replayed at one tick: drei's frame vs a held frame vs a paced draw frame (drei's draws
+//                and the two copies), for the draws' own cost without the rAF loop.
 //   MODE=board   12-frame strips of the two panels (frames stepped at 60 Hz) at speed 1 and x86400, paced under
 //                auto vs every frame vs a forced 15 Hz, as PNGs in OUT (default ./panel-rate-board).
 // Env: lib.cjs's BASE_URL / PLAYWRIGHT_CORE / GPU_LOCK / WHO, DPR (2), BLOCK_MS (2000), PAIRS (8), OUT.
@@ -47,8 +49,8 @@ const SETUP = () => {
   window.__commit = () => new Promise((r) => setTimeout(() => { __H.pause(); r() }, 120))
 }
 
-async function openPage(params = {}) {
-  const { browser, page } = await H.launch({ phone: true })
+async function openPage(params = {}, { vsync = true } = {}) {
+  const { browser, page } = await H.launch({ phone: true, vsync })
   await H.open(page, { dprctl: `fixed:${DPR}`, panelhz: 'auto', ...params })
   await H.hook(page)
   await H.settle(page, 3000)
@@ -101,24 +103,39 @@ async function pixels() {
 }
 
 async function time() {
-  const { browser, page } = await openPage({ speed: '1' })
+  // VSYNC=0: rAF unthrottled, so the frame interval is the frame's whole cost (CPU and GPU, the copy's resolve too).
+  const { browser, page } = await openPage({ speed: '1' }, { vsync: process.env.VSYNC !== '0' })
   try {
     await page.evaluate(() => {
-      const { ctx } = __H
+      const { ctx, ext } = __H
       const fx = window.__ppHandles?.addEffect ? window.__ppHandles : __H.fiber
-      const px = new Uint8Array(4)
       window.__log = null
-      let t0 = 0
-      fx.addEffect(() => { t0 = performance.now(); __panelRate.draws = 0; __panelRate.held = 0 })
+      // Each frame: cpu (before-effect -> after-effect) and gpu (a TIME_ELAPSED query around the same span, read
+      // back a few frames later). The low tier runs no other timer query.
+      const pending = []
+      let t0 = 0, q = null, lastEnd = null
+      fx.addEffect(() => {
+        t0 = performance.now(); __panelRate.draws = 0; __panelRate.held = 0
+        if (window.__log && ext) { q = ctx.createQuery(); ctx.beginQuery(ext.TIME_ELAPSED_EXT, q) }
+      })
       fx.addAfterEffect(() => {
-        if (!window.__log) return
-        const t1 = performance.now()
-        ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, px)
-        window.__log.push([t1 - t0, performance.now() - t0, __panelRate.draws, __panelRate.held])
+        if (!window.__log) { lastEnd = null; if (q) { ctx.endQuery(ext.TIME_ELAPSED_EXT); ctx.deleteQuery(q); q = null } return }
+        const now = performance.now()
+        const row = [now - t0, ext ? null : 0, __panelRate.draws, __panelRate.held, lastEnd === null ? null : now - lastEnd]
+        lastEnd = now
+        window.__log.push(row)
+        if (q) { ctx.endQuery(ext.TIME_ELAPSED_EXT); pending.push([q, row]); q = null }
+        for (let i = pending.length - 1; i >= 0; i--) {
+          const [pq, pr] = pending[i]
+          if (ctx.getQueryParameter(pq, ctx.QUERY_RESULT_AVAILABLE)) {
+            if (!ctx.getParameter(ext.GPU_DISJOINT_EXT)) pr[1] = ctx.getQueryParameter(pq, ctx.QUERY_RESULT) / 1e6
+            ctx.deleteQuery(pq); pending.splice(i, 1)
+          }
+        }
       })
       window.__block = (on, ms) => new Promise((res) => {
         __panelRate.setPaced(on)
-        setTimeout(() => { window.__log = []; setTimeout(() => { const l = window.__log; window.__log = null; res(l) }, ms) }, 300)
+        setTimeout(() => { window.__log = []; setTimeout(() => { const l = window.__log; window.__log = null; setTimeout(() => res(l.filter((r) => r[1] !== null && r[4] !== null)), 200) }, ms) }, 300)
       })
     })
     const BLOCK = +(process.env.BLOCK_MS || 2000), PAIRS = +(process.env.PAIRS || 8)
@@ -133,18 +150,76 @@ async function time() {
     const pick = (on, f) => blocks.filter((b) => b.on === on).flatMap((b) => b.log.filter(f))
     const off = pick(false, () => true), on = pick(true, () => true)
     const draw = pick(true, (l) => l[2] > 0), held = pick(true, (l) => l[2] === 0)
-    const row = (name, l) => ({ name, n: l.length, cpuMed: med(l.map((x) => x[0])), cpuMean: mean(l.map((x) => x[0])), syncMed: med(l.map((x) => x[1])), syncMean: mean(l.map((x) => x[1])) })
+    const row = (name, l) => ({ name, n: l.length, cpuMed: med(l.map((x) => x[0])), cpuMean: mean(l.map((x) => x[0])), gpuMed: med(l.map((x) => x[1])), gpuMean: mean(l.map((x) => x[1])), intervalMed: med(l.map((x) => x[4])), intervalMean: mean(l.map((x) => x[4])) })
     // Paired per-block mean differences (on - off), the noise-robust number.
     const pairs = []
     for (let i = 0; i < blocks.length; i += 2) {
       const [a, b] = blocks[i].on ? [blocks[i], blocks[i + 1]] : [blocks[i + 1], blocks[i]]
-      pairs.push({ dCpu: mean(a.log.map((x) => x[0])) - mean(b.log.map((x) => x[0])), dSync: mean(a.log.map((x) => x[1])) - mean(b.log.map((x) => x[1])) })
+      pairs.push({ dCpu: mean(a.log.map((x) => x[0])) - mean(b.log.map((x) => x[0])), dGpu: mean(a.log.map((x) => x[1])) - mean(b.log.map((x) => x[1])), dInterval: mean(a.log.map((x) => x[4])) - mean(b.log.map((x) => x[4])) })
     }
     console.log(JSON.stringify({
       dpr: DPR, rows: [row('off (drei every frame)', off), row('on (all)', on), row('on: draw frames', draw), row('on: held frames', held)],
       drawShare: +(draw.length / on.length).toFixed(3), panelDrawsPerFrame: +(on.reduce((s, x) => s + x[2], 0) / on.length).toFixed(3),
-      paired: { dCpuMed: med(pairs.map((p) => p.dCpu)), dSyncMed: med(pairs.map((p) => p.dSync)), pairs: pairs.map((p) => [+p.dCpu.toFixed(3), +p.dSync.toFixed(3)]) },
+      paired: { dCpuMed: med(pairs.map((p) => p.dCpu)), dGpuMed: med(pairs.map((p) => p.dGpu)), dIntervalMed: med(pairs.map((p) => p.dInterval)), pairs: pairs.map((p) => [+p.dCpu.toFixed(3), +p.dGpu.toFixed(3), +p.dInterval.toFixed(3)]) },
     }, null, 1))
+  } finally { await browser.close() }
+}
+
+// Recorded frames replayed (lib.cjs __H.replay) at one tick: drei's frame vs a held frame (the recorded fill quads,
+// their copies bound) vs a paced draw frame (drei's calls plus the two copies), interleaved under the GPU lock.
+async function replay() {
+  const { browser, page } = await openPage()
+  try {
+    await page.evaluate(() => { __H.freeze(); __H.pause(); window.__dt = 0 })
+    const frames = await page.evaluate(async () => {
+      const raf = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      __panelRate.setPaced(false); await __commit(); __step(); __step(); await raf()
+      window.__callsOff = __H.frame.slice()
+      __panelRate.setPaced(true); await __commit(); __step(); __step(); await raf()
+      window.__callsHeld = __H.frame.slice()
+      const rects = __rects()
+      const texs = rects.map((r) => new __H.T.FramebufferTexture(r.w, r.h))
+      window.__copy = (n = 2) => { __H.gl.setRenderTarget(null); rects.slice(0, n).forEach((r, i) => __H.gl.copyFramebufferToTexture(texs[i], new __H.T.Vector2(r.x, r.y))) }
+      return { off: __callsOff.length, held: __callsHeld.length, heldCams: __callsHeld.map((c) => c.camera.type) }
+    })
+    console.log(JSON.stringify(frames))
+    const K = +(process.env.K || 12), N = +(process.env.N || 16)
+    const rows = await H.withGpuLock(() => page.evaluate(async ({ K, N }) => {
+      const arms = {
+        off: () => __H.replayOnce(__callsOff),
+        held: () => __H.replayOnce(__callsHeld),
+        draw: () => { __H.replayOnce(__callsOff); __copy() },
+        // one copy: the cost is the default framebuffer's resolve the first copy forces, not each copy's blit
+        draw1: () => { __H.replayOnce(__callsOff); __copy(1) },
+      }
+      const time = async (fn) => {
+        fn(); __H.sync()
+        const q = __H.ctx.createQuery(); __H.ctx.beginQuery(__H.ext.TIME_ELAPSED_EXT, q)
+        const t0 = performance.now()
+        for (let i = 0; i < K; i++) fn()
+        __H.ctx.endQuery(__H.ext.TIME_ELAPSED_EXT); __H.sync()
+        const wall = (performance.now() - t0) / K
+        for (let i = 0; i < 400 && !__H.ctx.getQueryParameter(q, __H.ctx.QUERY_RESULT_AVAILABLE); i++) await new Promise((r) => setTimeout(r, 4))
+        const gpu = __H.ctx.getQueryParameter(q, __H.ctx.QUERY_RESULT) / 1e6 / K
+        __H.ctx.deleteQuery(q)
+        return { wall, gpu }
+      }
+      const out = []
+      const names = Object.keys(arms)
+      for (let n = 0; n < N; n++) {
+        const row = {}
+        for (const nm of names.map((_, i) => names[(i + n) % names.length])) row[nm] = await time(arms[nm])
+        out.push(row)
+      }
+      return out
+    }, { K, N }))
+    const med = (a) => { a = a.slice().sort((x, y) => x - y); return +a[a.length >> 1].toFixed(3) }
+    const res = {}
+    for (const nm of ['off', 'held', 'draw', 'draw1']) {
+      res[nm] = { gpu: med(rows.map((r) => r[nm].gpu)), wall: med(rows.map((r) => r[nm].wall)) }
+      if (nm !== 'off') Object.assign(res[nm], { dGpu: med(rows.map((r) => r[nm].gpu - r.off.gpu)), dWall: med(rows.map((r) => r[nm].wall - r.off.wall)) })
+    }
+    console.log(JSON.stringify(res))
   } finally { await browser.close() }
 }
 
@@ -211,4 +286,4 @@ async function board() {
   }
 }
 
-;({ pixels, time, board })[MODE]().catch((e) => { console.error(e); process.exit(1) })
+;({ pixels, time, replay, board })[MODE]().catch((e) => { console.error(e); process.exit(1) })
