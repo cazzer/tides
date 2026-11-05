@@ -14,7 +14,9 @@ import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
 import { createNightFlight, nightLightsPatch } from './nightLights'
 import { MOON_UP_FROM } from '../night-flight'
-import { phongShader } from './surface/tile-test-fixtures'
+import { compiled, fakeLink, phongShader, tileMesh } from './surface/tile-test-fixtures'
+import { createTileComposer, type TerrainPhongMaterial } from './surface/tile-material'
+import { TILE_FEATURES } from './surface/tile-features'
 import { WATER_DEPTH_SAMPLE, WATER_KEEP, waterTinted } from './waterDepth'
 import { NOISE_CELLS } from './waterNoise'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
@@ -1239,8 +1241,36 @@ describe('the night sea skips the Sun\'s terms (tides-0oi.10)', () => {
       } else {
         expect(define).toBe(-1)
       }
-      // The flight's light reads the normal after the waves bend it.
+      // The Moon's sin is taken in main, and the flight's moonlight reads the
+      // normal after the waves bend it.
       expect(fs.indexOf('#ifdef NIGHT_FLIGHT_MOON')).toBeGreaterThan(main)
+      const bend = fs.indexOf('normal = normalize(normal - specularStrength')
+      expect(bend).toBeGreaterThan(main)
+      if (night.customProgramCacheKey!() === 'night-lights-flight') {
+        expect(fs.indexOf('max(dot(normal, uNightMoonView)')).toBeGreaterThan(bend)
+      }
     }
+  })
+
+  it("sees the flight's Moon on the tiles too, the night's head before the waves", () => {
+    const link = fakeLink()
+    link.nightFlight = createNightFlight({ value: new THREE.Vector3(1, 0, 0) }, { value: 0 }).uniforms
+    const slots = TILE_FEATURES.filter((s) => s.name === 'night' || s.name === 'glint')
+    expect(slots.map((s) => s.name)).toEqual(['night', 'glint'])
+    const mesh = tileMesh()
+    createTileComposer(link, slots).prepare(mesh, {})
+    const fs = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
+    const main = fs.indexOf('void main')
+    const moon = fs.indexOf('waterMoonSin = dot(')
+    expect(main).toBeGreaterThan(-1)
+    expect(moon).toBeGreaterThan(main)
+    for (const head of ['#define NIGHT_FLIGHT_MOON', 'uniform vec3 uNightMoonLight;', 'uniform vec3 uNightMoonView;']) {
+      const i = fs.indexOf(head)
+      expect(i, head).toBeGreaterThan(-1)
+      expect(i, head).toBeLessThan(main)
+      expect(i, head).toBeLessThan(moon)
+    }
+    const bend = fs.indexOf('normal = normalize(normal - specularStrength')
+    expect(fs.indexOf('max(dot(normal, uNightMoonView)')).toBeGreaterThan(bend)
   })
 })

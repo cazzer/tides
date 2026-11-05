@@ -135,7 +135,8 @@ export const WATER_GLINT_HORIZON = 0.02
  * on a facet steeper than this slope and the night fill's sky term, at
  * second order, changes no pixel at night, a Moon just set, dusk and a low
  * Sun (tides-0oi.10). -0.05 is not: 1-11 px off by 1 at dusk (tides-0oi.2,
- * water-4). */
+ * water-4). Light 0 (the Sun) is the only light that can glint, so the
+ * gate reads only directionalLights[0]. */
 export const WATER_WAVES_LIGHT_MIN = -0.2
 /** The elevation (deg) the sky's light on the body is read at, 90 deg round
  * from the Sun: there hazeSky()'s radiance is its cosine-weighted mean over
