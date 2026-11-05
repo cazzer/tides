@@ -117,7 +117,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         fragmentShader: auroraFragment,
         // The baked noise paid for more steps on the low tier (tides-0oi.5).
         defines: {
-          STEPS: low ? 16 : 24,
+          STEPS: low ? 14 : 24,
           ...(curtain && { CURTAIN_BAKE: 1, CURTAIN_WIDTH, CURTAIN_ROWS }),
         },
         uniforms: {

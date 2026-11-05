@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { CURTAIN_ROWS, CURTAIN_WIDTH } from './auroraCurtain'
 
 const fragment = readFileSync(new URL('../shaders/aurora/fragment.frag', import.meta.url), 'utf8')
 
@@ -131,7 +132,7 @@ describe('the aurora curtain table', () => {
     // The tap, mirrored: x = x0 + (x1 - x0) * r / (N - 1) lands on texel r's
     // centre in its hemisphere's half, and the bake's row (floor of
     // gl_FragCoord.y there) gives back the same r.
-    const N = 256, W = 512
+    const N = CURTAIN_ROWS, W = CURTAIN_WIDTH
     for (const hemiRow of [0, N]) {
       for (const r of [0, 1, 127, N - 2, N - 1]) {
         const x = D_MIN + ((D_MAX - D_MIN) * r) / (N - 1)
@@ -140,7 +141,7 @@ describe('the aurora curtain table', () => {
         expect(fragY).toBeCloseTo(r + hemiRow + 0.5, 9)
       }
     }
-    for (const i of [0, 255, 511]) {
+    for (const i of [0, W / 2 - 1, W - 1]) {
       const ang = ((i + 0.5) / W - 0.5) * 2 * Math.PI
       expect((ang / (2 * Math.PI) + 0.5) * W).toBeCloseTo(i + 0.5, 9)
     }

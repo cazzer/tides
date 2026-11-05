@@ -8,8 +8,9 @@ import curtainBakeFragment from '../shaders/aurora/curtainBake.frag'
 
 /** The table's MLT angles (the seam wraps). */
 export const CURTAIN_WIDTH = 512
-/** The table's rows per hemisphere. */
-export const CURTAIN_ROWS = 256
+/** The table's rows per hemisphere: 256 moved 0.2% of an oblique view's
+ * pixels by more than 2/255 (the fold's 0.2° rows), 512 none to speak of. */
+export const CURTAIN_ROWS = 512
 
 export interface AuroraCurtain {
   /** CURTAIN_WIDTH x 2 CURTAIN_ROWS, RGBA = (meander, fold, breaks, breaks2) * 0.5 + 0.5. */
@@ -76,7 +77,7 @@ function createCurtain(renderer: THREE.WebGLRenderer): AuroraCurtain {
 }
 
 /** The curtain table for `renderer`, set up on first use; null where it
- * can't be drawn. It lives as long as the renderer (2 MiB). */
+ * can't be drawn. It lives as long as the renderer (4 MiB). */
 export function auroraCurtain(renderer: THREE.WebGLRenderer): AuroraCurtain | null {
   if (!curtains.has(renderer)) curtains.set(renderer, curtainDrawable(renderer) ? createCurtain(renderer) : null)
   return curtains.get(renderer)!

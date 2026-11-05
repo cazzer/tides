@@ -13,6 +13,7 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `lib.cjs` | The harness. Opens headless Chrome with ANGLE-Metal (390x844 at dpr 3, which the app caps to a 780x1688 canvas), poses the camera, records one frame's `gl.render` calls and replays them. Provides interleaved paired A/B timing, same-tick pixel diffs, a per-object breakdown, a VRAM log, a CPU profile, and a shared GPU lock. |
 | `ab.cjs` | CLI: same-tick pixel A/B/A2 and paired timing for named shader variants at one pose. |
 | `variants/top10.cjs` | The exact shader-text variants behind the top-10's shader items: clouds-1, aurora gate, aurora noise floor, ground detail gate, night water, plus skip controls. |
+| `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
 
 ## Setup
