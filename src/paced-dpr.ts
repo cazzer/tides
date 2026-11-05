@@ -295,6 +295,9 @@ function restart(state: PacedDprState, at: number, config: PacedDprConfig) {
   state.levelSince = at
   state.cpuEwma = NaN
   state.heatRefEwma = null
+  // A raise is judged only by its own level's frames: a gap or a view switch
+  // before its first decision leaves it unjudged, not bounced.
+  state.probation = false
 }
 
 function shift(state: PacedDprState) {
@@ -421,7 +424,6 @@ export function stepPacedDpr(
     if (state.kind != null) state.levelByKind[state.kind] = state.dpr
     const first = state.kind == null
     state.kind = kind
-    state.probation = false
     const to = snap(levels, state.levelByKind[kind] ?? state.dpr)
     if (to !== state.dpr) change(state, to, at, first ? 'ceiling' : 'kind', config)
     else restart(state, at, config)

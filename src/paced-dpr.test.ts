@@ -131,6 +131,17 @@ describe('paced dpr', () => {
     expect(drops.length).toBeLessThanOrEqual(4)
   })
 
+  it('does not count a drop after a gap as the raise bouncing', () => {
+    const { state, clock, log } = setup(3, 2.75)
+    sim(state, clock, log, { s: 6 })
+    expect(state.dpr).toBe(3)
+    // Hidden right after the raise, then heavy at 3 when it comes back.
+    clock.at += 5000
+    stepPacedDpr(state, { at: clock.at, intervalMs: 5000, cpuMs: 4, lagMs: 0.5, kind: 'system', nativeDpr: 3 })
+    sim(state, clock, log, { s: 4, gpu: (dpr) => (dpr >= 3 ? 20 : 5) })
+    expect(log[1]).toMatchObject({ from: 3, to: 2.75, bounced: false, dwellMs: 4000 })
+  })
+
   it('caps the doubled dwell', () => {
     const { state, clock, log } = setup(3, 2.25)
     const config = { ...DEFAULT_PACED_DPR_CONFIG, raiseDwellMs: 1000, dwellCapMs: 4000 }
