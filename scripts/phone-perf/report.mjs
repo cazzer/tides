@@ -163,6 +163,43 @@ export function summariseDprTimeline(changes) {
   }
 }
 
+// The TELEMETRY_MS polls: skin temperature over the window, mean battery
+// current, the charge counter's change and the idle cap's draws and skips.
+export function summariseTelemetry(entries) {
+  const skins = entries.map((e) => e.thermal?.skin?.c).filter((c) => typeof c === 'number')
+  const currents = entries.map((e) => e.battery?.currentMa).filter((c) => typeof c === 'number')
+  const charges = entries.map((e) => e.battery?.chargeCounterUah).filter((c) => typeof c === 'number')
+  const idles = entries.filter((e) => e.idle)
+  let idle = null
+  if (idles.length) {
+    const first = idles[0]
+    const last = idles[idles.length - 1]
+    const seconds = (last.t - first.t) / 1000
+    const draws = last.idle.draws - first.idle.draws
+    idle = {
+      draws,
+      skips: last.idle.skips - first.idle.skips,
+      drawHz: seconds > 0 ? draws / seconds : null,
+      capHeldFromS: (() => {
+        const e = idles.find((x) => x.idle.capHeld)
+        return e ? e.t / 1000 : null
+      })(),
+      lastActivity: last.idle.lastActivity,
+    }
+  }
+  const statuses = entries.map((e) => e.thermal?.status).filter((s) => typeof s === 'number')
+  return {
+    skinStart: skins[0] ?? null,
+    skinEnd: skins[skins.length - 1] ?? null,
+    skinMax: skins.length ? Math.max(...skins) : null,
+    statusMax: statuses.length ? Math.max(...statuses) : null,
+    currentMeanMa: currents.length ? currents.reduce((a, b) => a + b, 0) / currents.length : null,
+    chargeDeltaUah: charges.length > 1 ? charges[charges.length - 1] - charges[0] : null,
+    ac: entries.some((e) => e.battery?.ac),
+    idle,
+  }
+}
+
 export function renderMarkdown({ meta, results }) {
   const rows = aggregate(results)
   const lines = []
@@ -267,6 +304,19 @@ export function renderMarkdown({ meta, results }) {
           `  - ${f1(c.at / 1000)} s ${c.reason}${c.bounced ? ' (bounced)' : ''} ${c.from}→${c.to}: p50 ${f1(c.p50)}, p95 ${f1(c.p95)}, misses ${c.misses ?? '–'}/${c.n ?? '–'}, cpuShare ${c.cpuShare === null || c.cpuShare === undefined ? '–' : c.cpuShare.toFixed(2)}, cpuMedian ${f1(c.cpuMedian)}, lagMedian ${f1(c.lagMedian)}, budget ${f1(c.budgetMs)}`
         )
       }
+    }
+  }
+  const tele = results.filter((r) => r.telemetry?.length)
+  if (tele.length) {
+    lines.push('', '## Telemetry while sampling (TELEMETRY_MS)', '')
+    for (const r of tele) {
+      const t = summariseTelemetry(r.telemetry)
+      const idle = t.idle
+        ? `; idle cap: ${t.idle.draws} draws, ${t.idle.skips} skips over the window (${t.idle.drawHz === null ? '–' : f1(t.idle.drawHz)} draws/s), cap held from ${t.idle.capHeldFromS === null ? 'never' : `${f1(t.idle.capHeldFromS)} s`} into sampling, last activity ${t.idle.lastActivity}`
+        : ''
+      lines.push(
+        `- **${r.key}** round ${r.round + 1}: skin ${f1(t.skinStart)}→${f1(t.skinEnd)}°C (max ${f1(t.skinMax)}, status max ${t.statusMax ?? '–'}); battery current ${f1(t.currentMeanMa)} mA mean${t.ac ? ' (on AC: net charge current)' : ''}, charge counter ${t.chargeDeltaUah === null ? '–' : `${t.chargeDeltaUah > 0 ? '+' : ''}${t.chargeDeltaUah}`} µAh${idle}`
+      )
     }
   }
   const failed = rows.filter((r) => r.failed)

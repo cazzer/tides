@@ -304,3 +304,22 @@ describe('variants', async () => {
     expect(s).toMatchObject({ changes: 3, byReason: { drop: 2, raise: 1 }, bounced: 1, finalDpr: 1.5 })
   })
 })
+
+describe('telemetry', async () => {
+  const { parseBattery } = await import('./adb.mjs')
+  const { summariseTelemetry } = await import('./report.mjs')
+  it('reads Samsung dumpsys battery', () => {
+    const b = parseBattery('  AC powered: true\n  level: 69\n  voltage: 4237\n  temperature: 364\n  current now: 1954\n  Charge counter: 2585722\n  charge counter: 2585722\n')
+    expect(b).toEqual({ ac: true, level: 69, voltageMv: 4237, currentMa: 1954, chargeCounterUah: 2585722, tempC: 36.4 })
+  })
+  it('summarises skin, current, charge and the idle cap', () => {
+    const e = (t, skin, ma, uah, idle) => ({ t, thermal: { status: 0, skin: { c: skin } }, battery: { ac: true, currentMa: ma, chargeCounterUah: uah }, idle })
+    const s = summariseTelemetry([
+      e(0, 33, 1000, 100, { draws: 10, skips: 0, capHeld: false, lastActivity: 'size' }),
+      e(5000, 34, 1200, 150, { draws: 40, skips: 270, capHeld: true, lastActivity: 'size' }),
+      e(10000, 35, 1400, 220, { draws: 60, skips: 550, capHeld: true, lastActivity: 'camera' }),
+    ])
+    expect(s).toMatchObject({ skinStart: 33, skinEnd: 35, skinMax: 35, currentMeanMa: 1200, chargeDeltaUah: 120, ac: true })
+    expect(s.idle).toMatchObject({ draws: 50, skips: 550, drawHz: 5, capHeldFromS: 5, lastActivity: 'camera' })
+  })
+})

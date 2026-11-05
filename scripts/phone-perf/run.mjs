@@ -55,6 +55,9 @@ const config = {
   // name=query;name=query: each pose runs once per variant per round, its
   // query added after PARAMS (a dprctl sweep on one build).
   variants: env.VARIANTS ? parseVariants(env.VARIANTS) : null,
+  // Every N ms during sampling: thermal, battery (phone) and the idle cap's
+  // counters (window.__idleRate, tides-0oi.31). 0 = off.
+  telemetryMs: num('TELEMETRY_MS', 0),
 }
 
 function parseBuild(spec) {
@@ -196,6 +199,42 @@ async function measureWithGuards(connection, device, item, build, round) {
   }
 }
 
+const IDLE_SNAPSHOT = `(() => {
+  const r = window.__idleRate
+  return r ? { draws: r.draws, skips: r.skips, lastActivity: r.lastActivity, capHeld: r.capHeld, dprSettled: r.dprSettled } : null
+})()`
+
+// Polls thermal, battery and the idle cap every intervalMs while the page
+// samples; a poll still running skips the next tick. The adb reads cost the
+// phone a little CPU, the same for every build or variant.
+function startTelemetry(page, device, intervalMs) {
+  const t0 = Date.now()
+  const entries = []
+  let running = null
+  const poll = async () => {
+    const entry = { t: Date.now() - t0 }
+    if (device.serial) {
+      entry.thermal = await adb.readThermal(device.serial).catch(() => null)
+      entry.battery = await adb.readBattery(device.serial).catch(() => null)
+    }
+    entry.idle = await page.evaluate(IDLE_SNAPSHOT).catch(() => null)
+    entries.push(entry)
+  }
+  const tick = () => {
+    if (!running) running = poll().finally(() => (running = null))
+  }
+  tick()
+  const id = setInterval(tick, intervalMs)
+  return {
+    entries,
+    async stop() {
+      clearInterval(id)
+      await running
+      await poll()
+    },
+  }
+}
+
 async function measurePose(connection, device, item, { base, params }) {
   const page = await CdpPage.create(connection)
   active.page = page
@@ -252,9 +291,15 @@ async function measurePose(connection, device, item, { base, params }) {
     const activityPanels = item.activity ? await page.evaluate(item.activity) : null
     if (item.activity && !activityPanels) throw new Error('The activity found no .panel to touch')
     log(`  sampling ${config.durationMs} ms`)
-    const sample = await page.evaluate(`window.__ppProbe.sample(${config.durationMs})`, {
-      timeoutMs: config.durationMs + 30000,
-    })
+    const telemetry = config.telemetryMs ? startTelemetry(page, device, config.telemetryMs) : null
+    let sample
+    try {
+      sample = await page.evaluate(`window.__ppProbe.sample(${config.durationMs})`, {
+        timeoutMs: config.durationMs + 30000,
+      })
+    } finally {
+      await telemetry?.stop()
+    }
     // The display's rate can change under adaptive refresh, so the faster of
     // the reported rate and the fastest steady frames sets the vsync period.
     const reportedHz = config.refreshHz ?? (device.serial ? await adb.displayFps(device.serial) : null)
@@ -288,6 +333,7 @@ async function measurePose(connection, device, item, { base, params }) {
       startup,
       memoryAtReady,
       dprTimeline,
+      telemetry: telemetry?.entries ?? null,
       activity,
       panelRate: await page.evaluate('window.__panelRate ? { config: window.__panelRate.config, draws: window.__panelRate.draws, held: window.__panelRate.held } : null'),
       info: sample.info,

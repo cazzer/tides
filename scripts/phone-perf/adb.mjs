@@ -140,6 +140,28 @@ export async function wakeAndUnlock(serial) {
   }
 }
 
+// `dumpsys battery`: Samsung's `current now` (mA, positive while charging:
+// on AC it is the net charge current, so a lighter load shows as more
+// charge, not as less drain), the charge counter (µAh), level and voltage.
+export function parseBattery(text) {
+  const num = (re) => {
+    const m = re.exec(text)
+    return m ? Number(m[1]) : null
+  }
+  return {
+    ac: /AC powered: true/.test(text),
+    level: num(/^\s*level: (-?\d+)/m),
+    voltageMv: num(/^\s*voltage: (-?\d+)/m),
+    currentMa: num(/^\s*current now: (-?\d+)/m),
+    chargeCounterUah: num(/^\s*Charge counter: (-?\d+)/m),
+    tempC: num(/^\s*temperature: (-?\d+)/m) === null ? null : num(/^\s*temperature: (-?\d+)/m) / 10,
+  }
+}
+
+export async function readBattery(serial) {
+  return parseBattery(await adb(serial, 'shell', 'dumpsys', 'battery'))
+}
+
 const CHROME = 'com.android.chrome/com.google.android.apps.chrome.Main'
 
 // Chrome must be the foreground app, or its rAF stops and no pose loads

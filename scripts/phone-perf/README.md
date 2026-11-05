@@ -116,6 +116,12 @@ result records it as `dprTimeline` (last 500 entries) in `results.json`, and
 the report lists each change with its reason, window stats, cpuShare,
 cpuMedian and lagMedian.
 
+`TELEMETRY_MS=5000` polls, every 5 s while sampling, the phone's thermal
+state and `dumpsys battery` (`current now` in mA and the charge counter; on
+AC that is the net charge current, so a lighter load shows as more charge)
+and the idle cap's `window.__idleRate` counters (tides-0oi.31); the report
+summarises them per pose and round.
+
 `VARIANTS='off=dprctl=off;fixed2=dprctl=fixed:2'` runs each pose once per
 named query string per round (split on `;`, since dprctl values carry
 commas), back to back and alternating like builds, on the same build and
