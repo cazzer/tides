@@ -168,6 +168,46 @@ function init() {
     }
     return value
   }
+
+  // Startup: long tasks from document start, and every rAF until
+  // STARTUP_AFTER_MS after the loader leaves the DOM, so a cold start's first
+  // interactive frame and the hitches right after it are known. Times are
+  // from navigation start (performance.now's origin).
+  const STARTUP_AFTER_MS = 6000
+  const startup = (pp.startup = { longTasks: [], frames: [], loaderSeen: false, loaderGoneAt: null, afterMs: STARTUP_AFTER_MS })
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) startup.longTasks.push([+e.startTime.toFixed(1), +e.duration.toFixed(1)])
+    }).observe({ type: 'longtask', buffered: true })
+  } catch {}
+  const tick = (t) => {
+    if (document.querySelector('.loading-overlay')) startup.loaderSeen = true
+    else if (startup.loaderSeen && startup.loaderGoneAt === null) startup.loaderGoneAt = t
+    startup.frames.push(+t.toFixed(1))
+    if (startup.loaderGoneAt === null || t - startup.loaderGoneAt < STARTUP_AFTER_MS) requestAnimationFrame(tick)
+    else startup.done = true
+  }
+  requestAnimationFrame(tick)
+  pp.startupSummary = () => {
+    const gone = startup.loaderGoneAt
+    const tasks = startup.longTasks
+    const longest = (list) => (list.length ? Math.max(...list.map(([, d]) => d)) : 0)
+    const after = startup.frames.filter((t) => t >= gone)
+    let longestFrame = 0
+    for (let i = 1; i < after.length; i++) longestFrame = Math.max(longestFrame, after[i] - after[i - 1])
+    return {
+      firstFrameMs: startup.frames[0] ?? null,
+      loaderGoneMs: gone,
+      longTasks: tasks.length,
+      longTaskTotalMs: +tasks.reduce((s, [, d]) => s + d, 0).toFixed(1),
+      longestTaskMs: longest(tasks),
+      longestTaskBeforeLoaderMs: longest(tasks.filter(([t]) => t < gone)),
+      longestTaskAfterLoaderMs: longest(tasks.filter(([t]) => t >= gone)),
+      longestFrameAfterLoaderMs: +longestFrame.toFixed(1),
+      framesOver50AfterLoader: after.filter((t, i) => i > 0 && t - after[i - 1] > 50).length,
+      tasks,
+    }
+  }
 }
 
 // Installs window.__ppProbe: app handles (store, renderer) and the sampler.

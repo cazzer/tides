@@ -177,6 +177,9 @@ async function measurePose(connection, device, item, base) {
     })
     await page.send('Page.bringToFront')
     const url = poseUrl(base, item)
+    // A cold start: the HTTP cache is emptied (the GPU's own shader cache on
+    // disk is not reachable from the protocol and stays warm).
+    if (item.coldStart) await page.send('Network.clearBrowserCache')
     const loadStart = Date.now()
     await page.navigate(url, 120000)
     await page.waitForExpression(
@@ -184,6 +187,15 @@ async function measurePose(connection, device, item, base) {
       { timeoutMs: 120000 }
     )
     const loadMs = Date.now() - loadStart
+    let startup = null
+    if (item.coldStart) {
+      await page.waitForExpression('window.__pp.startup.done === true', { timeoutMs: 60000 })
+      startup = await page.evaluate('window.__pp.startupSummary()')
+      log(
+        `  cold start: first frame ${fmt(startup.firstFrameMs)} ms, loader gone ${fmt(startup.loaderGoneMs)} ms, longest block ${fmt(startup.longestTaskMs)} ms` +
+          ` (after loader ${fmt(startup.longestTaskAfterLoaderMs)}), longest frame after loader ${fmt(startup.longestFrameAfterLoaderMs)} ms`
+      )
+    }
     await page.evaluate(PROBE_SCRIPT)
     if (item.setup) await page.evaluate(item.setup)
     if (item.params.ship) {
@@ -191,6 +203,9 @@ async function measurePose(connection, device, item, base) {
         throw new Error('Ship mode never stepped (no window.__ship): did ?ship=1 enter ship mode?')
       })
     }
+    // Resident GPU memory once the pose is up, before the settle: in ship mode
+    // that is what entry uploads.
+    const memoryAtReady = await page.evaluate('window.__ppProbe.info().vramMB')
     await sleep(item.settleMs * config.settleScale)
     if (item.setup && /__(main|ship)Pose/.test(item.setup)) {
       // The hook must have run every frame of the settle, or the pose
@@ -231,6 +246,8 @@ async function measurePose(connection, device, item, base) {
     const result = {
       url,
       loadMs,
+      startup,
+      memoryAtReady,
       info: sample.info,
       frames,
       gpu: gpu && { source: sample.gpuSource, p50: gpu.p50, p95: gpu.p95, frames: gpu.frames },

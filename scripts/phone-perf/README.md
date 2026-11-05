@@ -77,7 +77,8 @@ No dependencies beyond Node 22 (built-in WebSocket) and `adb` on the PATH.
      frame's render passes, programs, and resident GPU memory by format
      (tracked from the GL calls: a re-upload replaces, a delete frees,
      compressed formats count at their block size, renderbuffers incl. MSAA;
-     bytes uploaded since load are reported apart).
+     bytes uploaded since load are reported apart), also read once the pose is up and
+     before the settle (`memoryAtReady`: in ship mode, what entry uploads).
 
 ## Poses (`poses.mjs`)
 
@@ -103,6 +104,7 @@ Extra poses, run only when `POSES` names them (the sprint fixes' own poses):
 | cz-sheet | close zoom 20 km under the cloud sheet, Himalaya 27.9N 86.9E, tilt 60 | tides-0oi.3 |
 | night-ocean | close zoom 100 km over the Indian Ocean (0N 90E) at local 01:00, looking down | tides-0oi.10 |
 | aurora-gate | close zoom 400 km at 65N 120E, 15:00 UTC (23:00 local), looking down | tides-0oi.4 |
+| cold-start | the system view loaded with the HTTP cache cleared: first frame, first frame after the loader leaves (first interactive), long tasks (longest, before/after the loader, total) and the longest frame in the 6 s after; the GPU's disk shader cache is not reachable over CDP and stays warm | tides-0oi.6 |
 
 `POSES` filters by id; `TIERS=auto,high` forces tiers on every pose.
 

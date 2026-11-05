@@ -179,6 +179,17 @@ export const POSES = [
     extra: true,
   },
   {
+    // Startup with the HTTP cache emptied: time to the first frame after the
+    // loader leaves, and the longest main-thread block (tides-0oi.6), then
+    // the system view as usual.
+    id: 'cold-start',
+    label: 'Cold start to the system view (HTTP cache cleared)',
+    params: {},
+    coldStart: true,
+    settleMs: 4000,
+    extra: true,
+  },
+  {
     id: 'seasons',
     label: 'Seasons tour, step 1 (June solstice)',
     params: {},

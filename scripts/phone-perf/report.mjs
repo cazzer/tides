@@ -95,6 +95,12 @@ const COMPARED = [
   ['p95 ms', (r) => r.frames?.p95],
   ['dropped %', (r) => (typeof r.frames?.droppedShare === 'number' ? r.frames.droppedShare * 100 : null)],
   ['GPU mem MB', (r) => r.info?.vramMB?.total],
+  ['GPU mem at ready MB', (r) => r.memoryAtReady?.total],
+  ['first interactive frame ms', (r) => r.startup?.loaderGoneMs],
+  ['longest main-thread block ms', (r) => r.startup?.longestTaskMs],
+  ['longest block after loader ms', (r) => r.startup?.longestTaskAfterLoaderMs],
+  ['long-task total ms', (r) => r.startup?.longTaskTotalMs],
+  ['longest frame after loader ms', (r) => r.startup?.longestFrameAfterLoaderMs],
 ]
 
 // Before/after per pose across builds (BUILDS): each later build against the
@@ -221,6 +227,16 @@ export function renderMarkdown({ meta, results }) {
           : '–'
       )
       lines.push(`- **${r.key}**: ${parts.join('; ')}`)
+    }
+  }
+  const cold = results.filter((r) => r.startup)
+  if (cold.length) {
+    lines.push('', '## Cold starts (ms from navigation start)', '')
+    for (const r of cold) {
+      const s = r.startup
+      lines.push(
+        `- **${r.key}** round ${r.round + 1}: first frame ${f1(s.firstFrameMs)}, loader gone (first interactive frame) ${f1(s.loaderGoneMs)}, ${s.longTasks} long tasks totalling ${f1(s.longTaskTotalMs)}, longest ${f1(s.longestTaskMs)} (before loader ${f1(s.longestTaskBeforeLoaderMs)}, after ${f1(s.longestTaskAfterLoaderMs)}), longest frame in the ${'6 s'} after the loader ${f1(s.longestFrameAfterLoaderMs)}, ${s.framesOver50AfterLoader} frames over 50`
+      )
     }
   }
   const failed = rows.filter((r) => r.failed)
