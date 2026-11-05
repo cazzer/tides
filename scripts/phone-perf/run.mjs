@@ -247,6 +247,10 @@ async function measurePose(connection, device, item, { base, params }) {
     if (visibility !== 'visible') throw new Error(`Page is ${visibility}; rAF would not run (is the screen on and the tab in front?)`)
 
     if (item.beforeSample) await page.evaluate(item.beforeSample)
+    // A pose's activity (input, speed changes) runs through sampling, trace
+    // and profile, and stops before the replay.
+    const activityPanels = item.activity ? await page.evaluate(item.activity) : null
+    if (item.activity && !activityPanels) throw new Error('The activity found no .panel to touch')
     log(`  sampling ${config.durationMs} ms`)
     const sample = await page.evaluate(`window.__ppProbe.sample(${config.durationMs})`, {
       timeoutMs: config.durationMs + 30000,
@@ -271,6 +275,7 @@ async function measurePose(connection, device, item, { base, params }) {
     log(`  profiling ${config.profileMs} ms`)
     const profile = await captureProfile(page)
 
+    const activity = item.activity ? { panels: activityPanels, touches: await page.evaluate('window.__ppActivityStop()') } : null
     const replay = await page.evaluate(`window.__ppProbe.replay(${config.replayK}, 7)`, { timeoutMs: 120000 })
     // The low tier's dpr controller (tides-0oi.13) logs its changes when present.
     const dprTimeline = await page.evaluate(
@@ -283,6 +288,8 @@ async function measurePose(connection, device, item, { base, params }) {
       startup,
       memoryAtReady,
       dprTimeline,
+      activity,
+      panelRate: await page.evaluate('window.__panelRate ? { config: window.__panelRate.config, draws: window.__panelRate.draws, held: window.__panelRate.held } : null'),
       info: sample.info,
       frames,
       gpu: gpu && { source: sample.gpuSource, p50: gpu.p50, p95: gpu.p95, frames: gpu.frames },

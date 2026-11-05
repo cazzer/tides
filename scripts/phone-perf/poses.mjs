@@ -189,6 +189,49 @@ export const POSES = [
     extra: true,
   },
   {
+    // tides-0oi.18: the system view while it is used, a 30 s cycle repeated
+    // from the start of sampling through the trace and profile (stopped
+    // before the replay): a pointermove on each side panel every 5 s (the
+    // panels' input rule: full rate for 500 ms) and x3600 from 10 s to 20 s
+    // (the full-rate speed), real time otherwise.
+    id: 'system-touch',
+    label: 'System view in use (panel touch every 5 s, x3600 for 10 s of every 30)',
+    params: {},
+    settleMs: 8000,
+    activity: `(() => {
+      const store = window.__ppProbe.store
+      const speed = store.getState().timeScale
+      const t0 = performance.now()
+      // The side panels; the main view is never paced.
+      const panels = () => document.querySelectorAll('.panel:not([data-area="main"])')
+      let touches = 0
+      const tick = () => {
+        const s = ((performance.now() - t0) / 1000) % 30
+        const fast = s >= 10 && s < 20
+        if ((store.getState().timeScale === 3600) !== fast) store.getState().setTimeScale(fast ? 3600 : speed)
+        const due = Math.floor((performance.now() - t0) / 5000)
+        if (due >= touches) {
+          touches = due + 1
+          for (const panel of panels()) {
+            // The View's own element (HeldPanel listens there), not the .panel around it.
+            const el = panel.querySelector(':scope > div') ?? panel
+            const r = el.getBoundingClientRect()
+            el.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'touch', clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }))
+          }
+        }
+      }
+      const id = setInterval(tick, 100)
+      tick()
+      window.__ppActivityStop = () => {
+        clearInterval(id)
+        store.getState().setTimeScale(speed)
+        return touches
+      }
+      return panels().length
+    })()`,
+    extra: true,
+  },
+  {
     // Startup with the HTTP cache emptied: time to the first frame after the
     // loader leaves, and the longest main-thread block (tides-0oi.6), then
     // the system view as usual.

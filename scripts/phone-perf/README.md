@@ -105,6 +105,7 @@ Extra poses, run only when `POSES` names them (the sprint fixes' own poses):
 | night-ocean | close zoom 100 km over the Indian Ocean (0N 90E) at local 01:00, looking down | tides-0oi.10 |
 | aurora-gate | close zoom 400 km at 65N 120E, 15:00 UTC (23:00 local), looking down | tides-0oi.4 |
 | night-city | close zoom 100 km over Tokyo (35.7N 139.8E) at 04:00 local, tilt 30: city lights under the night glow | tides-0oi.15 |
+| system-touch | the system view in use: a pointermove on each side panel every 5 s and x3600 for 10 s of every 30, through sampling, trace and profile (stopped before the replay); use DURATION_MS=30000 and TRACE_MS=30000 so each window sees the whole cycle | tides-0oi.18 |
 | cold-start | the system view loaded with the HTTP cache cleared: first frame, first frame after the loader leaves (first interactive), long tasks (longest, before/after the loader, total) and the longest frame in the 6 s after; the GPU's disk shader cache is not reachable over CDP and stays warm | tides-0oi.6 |
 
 `POSES` filters by id; `TIERS=auto,high` forces tiers on every pose.
