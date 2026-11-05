@@ -56,10 +56,19 @@ export default function LoadingOverlay({
     <div
       className={`loading-overlay ${isFadingOut ? 'loading-overlay--hidden' : ''}`}
       style={{ transitionDuration: `${fadeMs}ms` }}
-      aria-busy={!isFadingOut}
-      role="status"
     >
-      <div className="loading-overlay__content">
+      {/* Said once as it loads and once as it's ready; the bar's value
+          changes are attributes, which a live region doesn't read out. */}
+      <p
+        className="visually-hidden"
+        aria-live="polite"
+      >
+        {isFadingOut ? 'Tides is ready' : 'Loading Tides'}
+      </p>
+      <div
+        className="loading-overlay__content"
+        aria-hidden={isFadingOut || undefined}
+      >
         <img
           className="loading-overlay__mark"
           src={MARK_URL}

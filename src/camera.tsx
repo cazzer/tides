@@ -50,9 +50,11 @@ import { CLOCK_HALF_WIDTH } from './clock-size'
 import { mainCameraPose, takeFocusSnap, takeMainCameraRestore } from './main-camera-session'
 import {
   endOpening,
+  interruptOpening,
   NO_OFFSET,
   OPENING_MOVE,
   opening,
+  openingAllowed,
   openingOffset,
   shiftOpening,
   type OpeningOffset,
@@ -467,11 +469,8 @@ function useEyeDistance(
 
 /**
  * Plays the opening move (opening.ts) once the loading overlay starts to
- * fade: the default view only, as the clock ride eases nothing else in and
- * leaves the eye's pose to it. Earth focus is left out because tiltControls
- * takes an outside write as a new pose; a planet's because it would end the
- * framing ease. Reduced motion, a restored pose, or the user touching or
- * scrolling the view ends it where it is. Call it after CameraProvider's frame.
+ * fade, where openingAllowed lets it; anything else, or the user touching or
+ * scrolling the view, ends it where it is. Call it after CameraProvider's frame.
  */
 function useOpeningMove(
   camera: Camera,
@@ -483,21 +482,26 @@ function useOpeningMove(
 
   useEffect(() => {
     if (!dom || opening.done) return
-    dom.addEventListener('pointerdown', endOpening)
-    dom.addEventListener('wheel', endOpening)
+    // Each panel's provider listens on the same element: a listener of its
+    // own, so one unmounting doesn't take the others' with it.
+    const stop = () => interruptOpening()
+    dom.addEventListener('pointerdown', stop)
+    dom.addEventListener('wheel', stop)
     return () => {
-      dom.removeEventListener('pointerdown', endOpening)
-      dom.removeEventListener('wheel', endOpening)
+      dom.removeEventListener('pointerdown', stop)
+      dom.removeEventListener('wheel', stop)
     }
   }, [dom])
 
   useFrame(() => {
     if (opening.done || !controls) return
     if (
-      cameraFocus !== 'clock' ||
-      prefersReducedMotion() ||
-      mainCameraPose() !== null ||
-      !(camera as PerspectiveCamera).isPerspectiveCamera
+      !openingAllowed({
+        focus: cameraFocus,
+        reducedMotion: prefersReducedMotion(),
+        restored: mainCameraPose() !== null,
+        perspective: (camera as PerspectiveCamera).isPerspectiveCamera === true,
+      })
     ) {
       endOpening()
       return

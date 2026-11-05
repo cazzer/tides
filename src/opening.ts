@@ -101,3 +101,40 @@ export function startOpening(now: number): void {
 export function endOpening(): void {
   opening.done = true
 }
+
+/**
+ * The user touching or scrolling the view: ends a move that has started,
+ * where it is. A tap on the loading screen (pointer-events: none, so it
+ * reaches the view) doesn't, so a phone user waiting on a slow load still
+ * gets the opening.
+ */
+export function interruptOpening(): void {
+  if (opening.startedAt !== null) endOpening()
+}
+
+/** For tests: back to before the overlay faded. */
+export function resetOpening(): void {
+  opening.startedAt = null
+  opening.done = false
+}
+
+/**
+ * Whether the main view may play the opening: the default (clock) view only,
+ * as the clock ride eases nothing else in and leaves the eye's pose to it.
+ * Earth focus is left out because tiltControls takes an outside write as a
+ * new pose, a planet's because it would end the framing ease. Not under
+ * reduced motion, nor over a restored pose, nor through an orthographic camera.
+ */
+export function openingAllowed(view: {
+  focus: string
+  reducedMotion: boolean
+  restored: boolean
+  perspective: boolean
+}): boolean {
+  return (
+    view.focus === 'clock' &&
+    !view.reducedMotion &&
+    !view.restored &&
+    view.perspective
+  )
+}

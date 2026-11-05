@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { Vector3 } from 'three'
 import {
   NO_OFFSET,
   OPENING_MOVE,
+  interruptOpening,
+  opening,
+  openingAllowed,
   openingOffset,
+  resetOpening,
   shiftOpening,
+  startOpening,
 } from './opening'
 
 describe('openingOffset', () => {
@@ -62,5 +67,40 @@ describe('shiftOpening', () => {
       .applyAxisAngle(new Vector3(0, 1, 0), 0.1)
       .add(target)
     expect(eye.distanceTo(expected)).toBeLessThan(1e-9)
+  })
+})
+
+describe('openingAllowed', () => {
+  const view = { focus: 'clock', reducedMotion: false, restored: false, perspective: true }
+
+  it('plays in the default clock view only', () => {
+    expect(openingAllowed(view)).toBe(true)
+    for (const focus of ['earth', 'location', 'sun', 'moon', 'jupiter']) {
+      expect(openingAllowed({ ...view, focus })).toBe(false)
+    }
+  })
+
+  it('not under reduced motion, over a restored pose, or through an orthographic camera', () => {
+    expect(openingAllowed({ ...view, reducedMotion: true })).toBe(false)
+    expect(openingAllowed({ ...view, restored: true })).toBe(false)
+    expect(openingAllowed({ ...view, perspective: false })).toBe(false)
+  })
+})
+
+describe('the opening state', () => {
+  afterEach(resetOpening)
+
+  it('starts once, at the first fade', () => {
+    startOpening(100)
+    startOpening(900)
+    expect(opening.startedAt).toBe(100)
+  })
+
+  it('ignores a touch on the loading screen, before the move starts', () => {
+    interruptOpening()
+    expect(opening.done).toBe(false)
+    startOpening(100)
+    interruptOpening()
+    expect(opening.done).toBe(true)
   })
 })

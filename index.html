@@ -2,17 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      href="/icon.svg"
-    />
-    <!-- For browsers without SVG favicons. -->
+    <!-- The PNG for browsers without SVG favicons; the SVG last, as browsers
+         that take it pick the last icon that fits. -->
     <link
       rel="icon"
       type="image/png"
       sizes="192x192"
       href="/icon-192.png"
+    />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/icon.svg"
+    />
+    <!-- The loading screen shows the mark (LoadingOverlay). -->
+    <link
+      rel="preload"
+      as="image"
+      type="image/svg+xml"
+      href="/icon.svg"
     />
     <!-- viewport-fit=cover lets the canvas run behind the notch and the home
          indicator; overlays keep clear of them with env(safe-area-inset-*). -->
@@ -112,6 +120,10 @@
     <meta
       name="twitter:image"
       content="https://cazzer.github.io/tides/og-image.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="The Sun, Earth and Moon in Tides, with the year's months round Earth's orbit"
     />
   </head>
   <body>
