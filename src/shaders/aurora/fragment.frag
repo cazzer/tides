@@ -167,7 +167,7 @@ void main() {
     // min(diffuseLat - 1, eqLat - 4.2): band is 0 below diffuseLat - 1; the
     // arcs need d > -2.5, i.e. mlat > eqLat - 2.5 + 1.2 * meander + foldAmp
     // * fold >= eqLat - 4.2 (|noise| <= 1, foldAmp <= 0.5); and red needs
-    // the storm or the arcs. Less 0.3 for the noise's overshoot.
+    // the storm or the arcs. Less 0.3 as a safety margin.
     if (mlat < (storm > 0.0 ? sarLat - 4.0 : min(diffuseLat - 1.0, eqLat - 4.2) - 0.3) || mlat > polLat + 1.5) continue;
 
     float hgt = clamp((r - uInner) / thickness, 0.0, 1.0);
