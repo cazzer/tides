@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { afterRound, allShownReady, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
+import { afterRound, allShownReady, compilesAhead, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
 
 describe('withTimeout', () => {
   afterEach(() => {
@@ -125,5 +125,16 @@ describe('phaseAfterUnmount', () => {
 
   it('leaves any other phase as it is', () => {
     expect(phaseAfterUnmount('warm')).toEqual({ phase: 'warm', unready: false })
+  })
+})
+
+describe('compilesAhead', () => {
+  it('compiles materials with nothing on the way', () => {
+    expect(compilesAhead([{ userData: {} }, { userData: { compileLater: false } }])).toBe(true)
+    expect(compilesAhead([])).toBe(true)
+  })
+
+  it('leaves an object to its draw while one of its materials waits for what changes its program', () => {
+    expect(compilesAhead([{ userData: {} }, { userData: { compileLater: true } }])).toBe(false)
   })
 })

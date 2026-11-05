@@ -104,3 +104,14 @@ export function afterRound(
   const now = added || !loaded ? 0 : quiet + 1
   return { next: now >= quietRounds ? 'warm' : 'compile', quiet: now }
 }
+
+/**
+ * Whether an object's materials are compiled ahead of their draw
+ * (CompileGate): not when one waits for something that changes its program
+ * on arrival (userData.compileLater, a moon's map that adds USE_PLANET_MAP,
+ * tides-0oi.25). That one would build a program its draw never uses; its draw
+ * compiles the one it needs.
+ */
+export function compilesAhead(materials: readonly { userData: Record<string, unknown> }[]): boolean {
+  return !materials.some((material) => material.userData.compileLater === true)
+}

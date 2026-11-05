@@ -3,7 +3,7 @@ import { useFrame, type RootState } from '@react-three/fiber'
 import { useProgress } from '@react-three/drei'
 import type * as THREE from 'three'
 import { materialsOf, texturesOf } from '../ship/ship-warmup'
-import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
+import { afterRound, assetsLoaded, compilesAhead, phaseAfterUnmount, readyNow, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
 import { SceneGateContext, type SceneGate } from './scene-shown'
 
 /**
@@ -132,7 +132,7 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
     // against from what is visible.
     root.visible = true
     try {
-      linked = gl.compileAsync(shownOnly(scene), camera, scene)
+      linked = gl.compileAsync(shownOnly(root), camera, scene)
     } catch (error) {
       console.error('CompileGate: compile failed; showing the scene', error)
       phase.current = 'reveal'
@@ -186,14 +186,22 @@ function visitDrawn(object: THREE.Object3D, visit: (object: THREE.Object3D) => v
 }
 
 /**
- * `scene` as compile() should see it: three takes the materials to compile
- * from every object under its first argument, shown or not, but the first
- * frames draw only the shown ones (visitDrawn). The lights come from `scene`
- * itself, passed as compile's target, so this one has none of its own to add.
+ * What the gate holds (`root`), as compile() should see it: three takes the
+ * materials to compile from every object under its first argument, shown or
+ * not, but the first frames draw only the shown ones (visitDrawn), and not
+ * an object whose material is about to change (compilesAhead). What is
+ * outside the gate in the same scene (ship mode's dust, rain and well rings)
+ * draws all along with the lights hidden, so it has its programs already:
+ * compiled again here, with the lights, it would get a second one the draw
+ * never uses (tides-0oi.25). The lights come from `scene`, passed as
+ * compile's target, so this one has none of its own to add.
  */
-function shownOnly(scene: THREE.Object3D): THREE.Object3D {
+function shownOnly(root: THREE.Object3D): THREE.Object3D {
   const view = {
-    traverse: (visit: (object: THREE.Object3D) => void) => visitDrawn(scene, visit),
+    traverse: (visit: (object: THREE.Object3D) => void) =>
+      visitDrawn(root, (object) => {
+        if (compilesAhead(materialsOf(object))) visit(object)
+      }),
     traverseVisible: () => {},
   }
   return view as unknown as THREE.Object3D
