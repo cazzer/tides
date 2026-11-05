@@ -3,7 +3,7 @@
 // stand-in, a black occluder, or a copy of the real thing (the aurora's).
 // Keyed by the View's scene (drei's portal scene), which GlowPass in the same
 // View reads, so the panels' scenes never mix.
-import { useEffect, type RefObject } from 'react'
+import { createContext, createElement, useContext, useEffect, type ReactNode, type RefObject } from 'react'
 import { useThree } from '@react-three/fiber'
 import type * as THREE from 'three'
 import { qualityTier } from '../../quality'
@@ -31,6 +31,24 @@ let on: boolean | null = null
 export function glowOn(): boolean {
   if (on == null) on = typeof window === 'undefined' ? false : resolveGlow(window.location.search, qualityTier())
   return on
+}
+
+const GlowViewContext = createContext(false)
+
+/**
+ * Wraps the scene of a View that mounts a GlowPass (the main View, the
+ * ship's): only inside it do sources make their stand-ins. The side panels
+ * have no pass, so stand-ins there would never draw (tides-64u.6). Mount
+ * inside the drei View: its children are tunnelled, so context from outside
+ * doesn't reach them.
+ */
+export function GlowView({ children }: { children: ReactNode }) {
+  return createElement(GlowViewContext.Provider, { value: true }, children)
+}
+
+/** Whether this View's sources glow: on for the page and inside a GlowView. */
+export function useGlowOn(): boolean {
+  return useContext(GlowViewContext) && glowOn()
 }
 
 /** Registers `object` in `scene`'s glow; returns the unregister. */

@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import * as THREE from 'three'
 import { GLOW_LAYER } from './glow'
-import { GLOW_ORDER, glowOn, useGlowSource } from './glowSources'
+import { GLOW_ORDER, useGlowOn, useGlowSource } from './glowSources'
 
 const black = new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false })
 
@@ -13,7 +13,7 @@ const black = new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false }
  * Mount in the body's frame.
  */
 export function GlowOccluder({ geometry }: { geometry: THREE.BufferGeometry }) {
-  return glowOn() ? <GlowOccluderOn geometry={geometry} /> : null
+  return useGlowOn() ? <GlowOccluderOn geometry={geometry} /> : null
 }
 
 function GlowOccluderOn({ geometry }: { geometry: THREE.BufferGeometry }) {
