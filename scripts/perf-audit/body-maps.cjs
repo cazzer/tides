@@ -291,22 +291,28 @@ async function reentry(phone) {
   const { browser, page } = await openAt(POSES.sea, { phone })
   try {
     await H.settle(page, SETTLE)
+    // Jupiter's full map, from its proxy in this first flight.
+    await page.evaluate(() => {
+      const m = __B.meshesAll().find((x) => __B.nameOf(x) === 'jupiter')
+      window.__jupiterMap = m.material.uniforms.uMap.value.userData.fullMap ?? m.material.uniforms.uMap.value
+    })
     await exitShip(page, between)
     await page.waitForTimeout(6000)
     const retiredAtEntry = await page.evaluate(async () => {
       const mod = await import('/tides/src/ship/body-map-residency.ts')
-      const m = __B.meshesAll().find((x) => __B.nameOf(x) === 'jupiter')
-      return m ? mod.isRetiredMap(m.material.uniforms.uMap.value?.userData?.fullMap ?? m.material.uniforms.uMap.value) : 'no system-view jupiter'
+      return mod.isRetiredMap(window.__jupiterMap)
     })
     await holdAt(page, 'jupiter')
     await page.evaluate((r) => { window.__approachPx = r }, +(process.env.RPX || 20))
+    // Recording from the frame before entry, so the first ship frame's time is in the log.
+    const pending = record(page, 14, 'jupiter')
     await enterShip(page)
-    const rows = await record(page, 12, 'jupiter')
+    const rows = (await pending).filter((r) => r.ship && r.views <= 2)
     await page.evaluate(() => __H.pause())
     const pixels = await page.evaluate(() => __H.pixels(['fullMaps', 'proxyBlack']))
     const list = await page.evaluate(() => __B.list())
     console.log(JSON.stringify({ mode: 'reentry', phone, planetsBetween: between, retiredAtEntry,
-      frames: rows.map((r) => `${r.watch ?? '-'}@${r.r ?? '-'}${r.on ? ':on' : ':off'}${r.placed ? '' : ':unplaced'}`), jupiter: list.find((b) => b.body === 'jupiter'), pixels }))
+      frames: rows.map((r) => `${r.watch ?? '-'}@${r.r ?? '-'}${r.on ? ':on' : ':off'}${r.placed ? '' : ':unplaced'}:${r.dt}ms`), jupiter: list.find((b) => b.body === 'jupiter'), pixels }))
   } finally {
     await browser.close()
   }
