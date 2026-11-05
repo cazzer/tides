@@ -117,8 +117,13 @@ vec4 groundDetail(vec3 p, float footprint, float texel, float fineTexel, float f
     float weight = 1.0 - smoothstep(${f(DETAIL_FADE_START)}, ${f(DETAIL_FADE_END)}, footprint / wavelength);
     if (weight <= 0.0) break;
     weight *= 1.0 - fine * smoothstep(0.5, 1.0, wavelength / (${f(DETAIL_BASE_TEXELS)} * fineTexel));
-    vec4 o = detailNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 23.17);
-    sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
+    // Weight is 0 where the finer source covers fully (GIBS deep in its
+    // patch), and a zero-weight octave adds nothing: skip its noise. No
+    // derivatives in here (the footprint's are taken before the loop).
+    if (weight > 0.0) {
+      vec4 o = detailNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 23.17);
+      sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
+    }
     wavelength *= 0.5;
     amp *= 0.5;
     rough *= 0.5 * GROUND_DETAIL_ROUGH;

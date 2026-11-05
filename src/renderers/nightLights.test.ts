@@ -208,7 +208,7 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(out.fragment))))).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(out.fragment)))))).digest('hex')
   }
 
   // The cloud shadow's strength, a define until tides-l0z made it a uniform
@@ -249,6 +249,18 @@ uniform float uCloudUnitsPerKm;
     expect(fragment).not.toContain('#define SEA_ICE_GROUND')
     expect(fragment.match(SEA_ICE_BLOCK)?.length).toBe(2)
     return fragment.replace(SEA_ICE_BLOCK, '')
+  }
+
+  // The detail's skip of a zero-weight octave (tides-0oi.8, exact): taken
+  // out, so that the pins still hold the rest of the chain.
+  const DETAIL_OCTAVE = `vec4 o = detailNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 23.17);
+    sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
+`
+  const DETAIL_GATE = /    \/\/ Weight is 0 where[^\n]*\n(    \/\/[^\n]*\n)*    if \(weight > 0\.0\) \{\n      vec4 o = detailNoise\([^\n]*\n      sum \+= weight \*[^\n]*\n    \}\n/
+  function detailGateAsBefore(fragment: string) {
+    expect(fragment.split('if (weight > 0.0) {').length).toBe(2)
+    expect(fragment).toMatch(DETAIL_GATE)
+    return fragment.replace(DETAIL_GATE, '    ' + DETAIL_OCTAVE)
   }
 
   const SHADOW_UNIFORM = '// groundShadowStrength() for the camera drawn (faceCamera()).\nuniform float uGroundShadow;'
