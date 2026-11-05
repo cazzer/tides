@@ -143,7 +143,10 @@ const IN_PAGE = async () => {
   H.replayOnce = (calls = H.frame) => {
     H.recording = false
     for (const c of calls) {
-      gl.setRenderTarget(c.target); gl.setViewport(c.vp); gl.setScissor(c.sc); gl.setScissorTest(c.scissorTest)
+      // A render target's pass keeps the target's own viewport and scissor, as setRenderTarget sets them live
+      // (the recorded ones are the canvas's): else a bake replays into the wrong texels (tides-0oi.5).
+      gl.setRenderTarget(c.target)
+      if (!c.target) { gl.setViewport(c.vp); gl.setScissor(c.sc); gl.setScissorTest(c.scissorTest) }
       const ac = gl.autoClear; gl.autoClear = c.autoClear
       orig.call(gl, c.scene, c.camera)
       gl.autoClear = ac

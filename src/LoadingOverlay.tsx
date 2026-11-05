@@ -2,6 +2,7 @@ import { useProgress } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import { startOpening } from './opening'
 import { prefersReducedMotion } from './ship/reduced-motion'
+import { assetsLoaded as allAssetsLoaded } from './renderers/compile-gate'
 
 /**
  * How long the overlay takes to fade into the scene, ms: long enough to
@@ -21,7 +22,7 @@ export default function LoadingOverlay({
   const { active, progress, loaded, total } = useProgress()
   const [isVisible, setIsVisible] = useState(true)
   const [isFadingOut, setIsFadingOut] = useState(false)
-  const assetsLoaded = total > 0 && loaded >= total && !active
+  const assetsLoaded = allAssetsLoaded({ active, loaded, total })
   const canHide = assetsLoaded && sceneReady
   const fadeMs = prefersReducedMotion() ? REDUCED_FADE_OUT_MS : FADE_OUT_MS
 
@@ -35,6 +36,8 @@ export default function LoadingOverlay({
     }
 
     if (canHide) {
+      // For the cold-start profile (scripts/perf-audit/cold-start.cjs).
+      performance.mark('tides:ready')
       setIsFadingOut(true)
       startOpening(performance.now())
       const timeout = window.setTimeout(() => {

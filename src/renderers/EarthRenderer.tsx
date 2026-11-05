@@ -39,6 +39,7 @@ import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
 import { FULL_RANGE, limbRowRange } from '../ship/limb-rows'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
+import { useSceneShown } from './scene-shown'
 import { createGroundProbe, syncGroundProbe } from './groundProbe'
 import { useTileWarmProbes } from './tileWarmProbes'
 import { EarthDemLoader } from './earthDemTexture'
@@ -156,6 +157,9 @@ export default function EarthRenderer({
   const warmedDefines = useRef(new WeakSet<object>())
   const warmedUnderSheet = useRef(new WeakSet<object>())
   const cloudsFaced = useRef(false)
+  // The warm-ups below compile against the scene's lights, which a first
+  // load's hidden scene (CompileGate) doesn't show them.
+  const sceneShown = useSceneShown()
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
@@ -388,7 +392,7 @@ export default function EarthRenderer({
     // first descent there (CloudLayer.warmUnderSheet()). Here, as three's
     // compile must not run mid-render.
     const cloudKey = gl.properties.get(clouds.material)
-    if (cloudsFaced.current && cloudRef.current?.parent && !warmedUnderSheet.current.has(cloudKey)) {
+    if (sceneShown && cloudsFaced.current && cloudRef.current?.parent && !warmedUnderSheet.current.has(cloudKey)) {
       warmedUnderSheet.current.add(cloudKey)
       clouds.warmUnderSheet(gl, cloudRef.current, camera, scene)
     }
@@ -419,7 +423,7 @@ export default function EarthRenderer({
     // the frame that turns to it: else that frame links it, tens of ms, in
     // each View the ship's warm-up (ShipWarmup) doesn't run in, the
     // overview's panels. Here, as three's compile must not run mid-render.
-    if (cloudsFaced.current && cloudRef.current?.parent) {
+    if (sceneShown && cloudsFaced.current && cloudRef.current?.parent) {
       warmDefinesOnce(gl, cloudRef.current, camera, scene, warmedDefines.current, (material) => gl.properties.get(material))
     }
   })
