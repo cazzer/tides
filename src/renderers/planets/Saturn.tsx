@@ -10,6 +10,7 @@ import {
 } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import saturnTexture from '../../assets/saturn-2k.jpg'
+import saturnCompressed from '../../assets/bodies/saturn-2k.ktx2?url'
 import ringTexture from '../../assets/saturn-ring-2k.png'
 import type { PlanetRendererProps } from './index'
 
@@ -50,6 +51,7 @@ export function Saturn({ planet }: PlanetRendererProps) {
       <PlanetSurface
         planet={planet}
         texture={saturnTexture}
+        compressedTexture={saturnCompressed}
         flightTexture="saturn"
         limbDarkening={1.1}
         ringShadow={RINGS}

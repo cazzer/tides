@@ -24,20 +24,20 @@ import {
   sunDirection,
   type PlanetDetail,
 } from '../renderers/planetMaterials'
-import { loadColorTexture } from '../renderers/planetTextures'
+import { loadBodyMap } from '../renderers/planetTextures'
 import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
-import { moonTextureUrl } from './moon-textures'
+import { moonTextureUrls, type MoonTextureUrls } from './moon-textures'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 import { useLimbBodyAmong, useLimbSphere, useWantsLimbSphere, type SphereSegments } from '../ship/limb-detail'
 import {
   bodyRadiusPx,
-  cachedMapProxy,
   fullMapOf,
   initialBodyMap,
   isRetiredMap,
   mapProxy,
   promoteMap,
+  readyMapProxy,
   retireMap,
   shipMapStep,
   uploadSlot,
@@ -60,18 +60,18 @@ const SPHERE = new THREE.SphereGeometry(1, ...SPHERE_SEGMENTS)
 // Ridged rock below the maps' resolution, as on Mercury and Mars, for a
 // close pass. Not on Titan, whose map is its haze.
 const MOON_DETAIL: PlanetDetail = { style: 'rock', strength: 0.25, bump: 0.08 }
-const URLS = MOON_KEYS.map((key) => moonTextureUrl(key, isLowQuality()))
+const URLS = MOON_KEYS.map((key) => moonTextureUrls(key, isLowQuality()))
 
-// The maps by url, kept for the app's life as useLoader keeps the planets',
+// The maps by JPEG url, kept for the app's life as useLoader keeps the planets',
 // so a remount (planets toggled, a panel leaving the Earth's camera) shows
 // them at once instead of reloading.
 const loadedMaps = new Map<string, THREE.Texture>()
 const pendingMaps = new Map<string, Promise<THREE.Texture>>()
 
-function moonMap(url: string, anisotropy: number): Promise<THREE.Texture> {
+function moonMap({ jpeg: url, ktx2 }: MoonTextureUrls, gl: THREE.WebGLRenderer, anisotropy: number): Promise<THREE.Texture> {
   let pending = pendingMaps.get(url)
   if (!pending) {
-    pending = new Promise((resolve, reject) => loadColorTexture(url, anisotropy, resolve, reject))
+    pending = new Promise((resolve, reject) => loadBodyMap(url, ktx2, gl, anisotropy, resolve, reject))
     pending.then(
       (map) => loadedMaps.set(url, map),
       () => pendingMaps.delete(url)
@@ -140,7 +140,7 @@ function stepMoonMaps(
     if (promoted.has(map)) continue
     mesh.getWorldPosition(_moonPosition)
     const radiusPx = bodyRadiusPx(camera, _moonPosition, mesh.getWorldScale(_moonScale).x, screenPx)
-    const proxy = cachedMapProxy(map)
+    const proxy = readyMapProxy(gl, map)
     const step = shipMapStep(false, radiusPx, uploadSlot.free(frame), bound !== map, proxy !== undefined)
     if (step === 'promote') {
       uploadSlot.take(frame)
@@ -182,7 +182,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     () =>
       MOON_KEYS.map((key, i) => {
         const sun = sunDirection()
-        const loaded = loadedMaps.get(URLS[i])
+        const loaded = loadedMaps.get(URLS[i].jpeg)
         // Its proxy while a flight has the map retired (initialBodyMap).
         const map = loaded ? initialBodyMap(loaded) : null
         const material = planetSurfaceMaterial(sun.uniform, { map })
@@ -224,11 +224,12 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // mode unmounts the main panel's. Were it to happen, the new materials
   // still take every map (loadedMaps, and this effect re-queues the rest).
   const arrived = useRef<{ material: THREE.ShaderMaterial; map: THREE.Texture }[]>([])
-  const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
+  const gl = useThree((s) => s.gl)
+  const maxAnisotropy = gl.capabilities.getMaxAnisotropy()
   useEffect(() => {
     let mounted = true
     MOON_KEYS.forEach((key, i) => {
-      moonMap(URLS[i], maxAnisotropy).then(
+      moonMap(URLS[i], gl, maxAnisotropy).then(
         (map) => {
           if (mounted) arrived.current.push({ material: looks[i].material, map })
         },
@@ -242,7 +243,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     return () => {
       mounted = false
     }
-  }, [looks, maxAnisotropy])
+  }, [looks, gl, maxAnisotropy])
 
   // Only the main panel's camera focuses bodies; the store keys are the moons'.
   useEffect(() => {
@@ -251,14 +252,8 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     return () => MOON_KEYS.forEach((key) => setPlanet(key, undefined))
   }, [interactive, refs, setPlanet])
 
-  useFrame(({ gl, camera, size, viewport }) => {
-    const t = useStore.getState().timestamp
-    if (t != null) placeMoons(refs, t, distanceScale)
-    // Uploads and read-backs share the page's one-a-frame budget.
-    const frame = gl.info.render.frame
-    if (shipMode && t != null) {
-      stepMoonMaps(gl, refs, looks, promoted, camera as THREE.PerspectiveCamera, size.height * viewport.dpr, frame)
-    }
+  // Binds the next arrived map, one a frame.
+  const takeArrivedMap = (gl: THREE.WebGLRenderer, frame: number) => {
     const next = arrived.current[0]
     if (!next) return
     const shown = initialBodyMap(next.map)
@@ -266,6 +261,13 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
       // A retired map's proxy, or a promoted map already bound: no upload.
       arrived.current.shift()
       if (!promoted.has(next.map)) applyMap(next.material, shown)
+    } else if (shipMode && readyMapProxy(gl, next.map)) {
+      // A compressed map: stepMoonMaps, after this, binds its proxy or
+      // promotes it before the frame draws, so the full map uploads only for
+      // a moon already past PROMOTE_RADIUS_PX (at its draw, with the slot
+      // taken, as a waiting promotion's would).
+      arrived.current.shift()
+      applyMap(next.material, next.map)
     } else if (shipMode || !isRetiredMap(next.map)) {
       // A new map's upload, one a frame as ever (system view), or within the
       // budget (ship mode, where stepMoonMaps then picks its tier).
@@ -278,6 +280,17 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
       arrived.current.shift()
       promoteMap(gl, next.map)
       applyMap(next.material, next.map)
+    }
+  }
+
+  useFrame(({ gl, camera, size, viewport }) => {
+    const t = useStore.getState().timestamp
+    if (t != null) placeMoons(refs, t, distanceScale)
+    // Uploads and read-backs share the page's one-a-frame budget.
+    const frame = gl.info.render.frame
+    takeArrivedMap(gl, frame)
+    if (shipMode && t != null) {
+      stepMoonMaps(gl, refs, looks, promoted, camera as THREE.PerspectiveCamera, size.height * viewport.dpr, frame)
     }
   })
 

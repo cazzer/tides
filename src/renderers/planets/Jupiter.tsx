@@ -5,6 +5,7 @@
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import jupiterTexture from '../../assets/jupiter-2k.jpg'
+import jupiterCompressed from '../../assets/bodies/jupiter-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
 import { JUPITER_HAZE_OUTER } from './haze-shells'
 
@@ -21,6 +22,7 @@ export function Jupiter({ planet }: PlanetRendererProps) {
       <PlanetSurface
         planet={planet}
         texture={jupiterTexture}
+        compressedTexture={jupiterCompressed}
         flightTexture="jupiter"
         limbDarkening={LIMB_DARKENING}
         detail={DETAIL}
