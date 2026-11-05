@@ -5,7 +5,7 @@ import sunVertex from '../shaders/sun/vertex.glsl'
 import sunFragment from '../shaders/sun/fragment.frag'
 import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
-import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE } from './corona-geometry'
+import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE, CORONA_QUAD_MAIN, coronaClipRect } from './corona-geometry'
 import { SunGlare } from './SunGlare'
 import { SunGlow } from './glow/SunGlow'
 import { sunRaycast } from './sun-pick'
@@ -58,6 +58,55 @@ function setCoronaAir(corona: THREE.ShaderMaterial, camera: THREE.Camera, sun: T
   }
   towardSun(camera, sun)
   tint.setRGB(...sunDiscTint(sunWorld.dot(eyeSky.up), eyeSky.heightKm))
+}
+
+const coronaCentre = new THREE.Vector3()
+const coronaViewport = new THREE.Vector4()
+const coronaScissor = new THREE.Vector4()
+const coronaFloor = new THREE.Vector4()
+const coronaClip = new THREE.Vector4()
+let coronaScissorTest = false
+let coronaClipped = false
+
+// The main view's corona is drawn only out to CORONA_QUAD_MAIN limb radii,
+// a scissor inside the current one: past it the glow is under a display
+// step. That holds for exposures within the bake's range (CORONA_QUAD_MAIN
+// keeps a margin for the night flight's); a brighter one could lift the
+// cut-off glow over a step. Only into the canvas with a perspective camera:
+// a render target keeps its own scissor, and an ortho main view is drawn
+// whole.
+function clipCorona(renderer: THREE.WebGLRenderer, camera: THREE.Camera, sun: THREE.Object3D, radius: number) {
+  coronaClipped = false
+  if (renderer.getRenderTarget() || !(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return
+  // The scissor in effect: three applies the CSS one in device px, rounded
+  // by setScissor but floored after a render target switch. Clip only
+  // where the two agree, so it's known to the pixel and restored exactly.
+  const ratio = renderer.getPixelRatio()
+  renderer.getScissor(coronaScissor).multiplyScalar(ratio)
+  coronaFloor.copy(coronaScissor).floor()
+  if (!coronaScissor.round().equals(coronaFloor)) return
+  coronaCentre.setFromMatrixPosition(sun.matrixWorld).applyMatrix4(camera.matrixWorldInverse)
+  renderer.getCurrentViewport(coronaViewport)
+  if (!coronaClipRect(coronaCentre.x, coronaCentre.y, coronaCentre.z, radius, CORONA_QUAD_MAIN, camera.projectionMatrix.elements, coronaViewport, coronaClip)) return
+  coronaScissorTest = renderer.getScissorTest()
+  if (coronaScissorTest) {
+    const x0 = Math.max(coronaClip.x, coronaScissor.x)
+    const y0 = Math.max(coronaClip.y, coronaScissor.y)
+    const x1 = Math.min(coronaClip.x + coronaClip.z, coronaScissor.x + coronaScissor.z)
+    const y1 = Math.min(coronaClip.y + coronaClip.w, coronaScissor.y + coronaScissor.w)
+    coronaClip.set(x0, y0, Math.max(x1 - x0, 0), Math.max(y1 - y0, 0))
+  }
+  // Straight to the GL state, in device px: three's own scissor stays as it was.
+  renderer.state.scissor(coronaClip)
+  renderer.state.setScissorTest(true)
+  coronaClipped = true
+}
+
+function unclipCorona(renderer: THREE.WebGLRenderer) {
+  if (!coronaClipped) return
+  coronaClipped = false
+  renderer.state.scissor(coronaScissor)
+  renderer.state.setScissorTest(coronaScissorTest)
 }
 
 function fadeCorona(corona: THREE.ShaderMaterial, fade: number) {
@@ -185,12 +234,13 @@ export default function SunRenderer({ diameter, interactive = false, coronaFade 
     [sunMaterial]
   )
   const onBeforeCoronaRender = useCallback(
-    (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
+    (renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
       if (!mesh.current) return
       setCoronaAir(coronaMaterial, camera, mesh.current)
       if (coronaFade) fadeCorona(coronaMaterial, coronaFade())
+      if (interactive) clipCorona(renderer, camera, mesh.current, diameter)
     },
-    [coronaMaterial, coronaFade]
+    [coronaMaterial, coronaFade, interactive, diameter]
   )
 
   return (
@@ -211,6 +261,7 @@ export default function SunRenderer({ diameter, interactive = false, coronaFade 
         frustumCulled={false}
         renderOrder={-1}
         onBeforeRender={onBeforeCoronaRender}
+        onAfterRender={unclipCorona}
         raycast={() => null}
       >
         <planeGeometry args={[2, 2]} />
