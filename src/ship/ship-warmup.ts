@@ -185,10 +185,27 @@ function compileProbe(renderer: WarmupRenderer, probe: WarmProbe, camera: THREE.
 }
 
 /**
+ * Puts `defines` in order by name, in place; true where they weren't. three
+ * keys a program by its defines in their order, so a material that turns
+ * several on and off at draw time (cloudShaders.ts faceCamera()) keeps them
+ * so, as compileSide() turns them, and either way finds the one program.
+ */
+export function sortDefines(defines: Record<string, unknown>): boolean {
+  const names = Object.keys(defines)
+  const sorted = [...names].sort()
+  if (sorted.every((name, i) => name === names[i])) return false
+  const values = { ...defines }
+  for (const name of names) delete defines[name]
+  for (const name of sorted) defines[name] = values[name]
+  return true
+}
+
+/**
  * Compiles `object`'s materials turned to `side` (undefined: as they are),
- * with `defines` turned over (each on where it is off, off where it is on),
- * then turns them back. three keeps a material's programs by key, so the
- * draw that turns it so later finds that program linked. Compiling makes it
+ * with `defines` turned over (each on where it is off, off where it is on,
+ * then all in order by name: sortDefines()), then turns them back. three
+ * keeps a material's programs by key, so the draw that turns it so later
+ * finds that program linked. Compiling makes it
  * the material's current program, though, and three's draw doesn't check
  * the side or defines again while the version holds: the version moves on,
  * and `warmed` with it.
@@ -219,6 +236,7 @@ export function compileSide(
       if (define in own) delete own[define]
       else own[define] = ''
     }
+    if (defines.length > 0) sortDefines(own)
   }
   try {
     renderer.compile(object, camera, scene)

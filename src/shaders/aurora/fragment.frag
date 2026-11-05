@@ -161,7 +161,14 @@ void main() {
     float polLat = oval.z;
     float intensity = oval.w;
     float sarLat = diffuseLat - SAR_OFFSET;
-    if (mlat < sarLat - 4.0 || mlat > polLat + 1.5) continue;
+    // Below this nothing can emit, so skip the step's noise (tides-0oi.4).
+    // In a storm the SAR arc reaches down to sarLat - 4. Without one
+    // (storm == 0, Kp <= 5.5) there is no SAR arc and the floor is
+    // min(diffuseLat - 1, eqLat - 4.2): band is 0 below diffuseLat - 1; the
+    // arcs need d > -2.5, i.e. mlat > eqLat - 2.5 + 1.2 * meander + foldAmp
+    // * fold >= eqLat - 4.2 (|noise| <= 1, foldAmp <= 0.5); and red needs
+    // the storm or the arcs. Less 0.3 as a safety margin.
+    if (mlat < (storm > 0.0 ? sarLat - 4.0 : min(diffuseLat - 1.0, eqLat - 4.2) - 0.3) || mlat > polLat + 1.5) continue;
 
     float hgt = clamp((r - uInner) / thickness, 0.0, 1.0);
     // This step's horizontal reach, in degrees: arcs narrower than that are
