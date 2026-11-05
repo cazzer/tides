@@ -11,11 +11,11 @@
 // Every consumer asks for its own View's camera, so an overview panel
 // drawing the same scene keeps its own spheres and front faces.
 
-import { useEffect, useSyncExternalStore, type RefObject } from 'react'
+import { useCallback, useEffect, useSyncExternalStore, type RefObject } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Body } from './flight'
-import { useRetainedBodySphere, useSphereLevel } from './sphere-lod'
+import { bodySphereGeometry, useRetainedBodySphere, useSphereLevel } from './sphere-lod'
 
 /** Width and height segments of a SphereGeometry. */
 export type SphereSegments = readonly [width: number, height: number]
@@ -469,21 +469,45 @@ export function useLimbSphere(radius: number, wanted: boolean): THREE.BufferGeom
 }
 
 /**
- * Body `key`'s sphere of `radius`: its own sphere, at `top` segments or, with
- * `lodOf` (the object it is drawn by), at the level this View's camera sees
- * it at (sphere-lod.ts useSphereLevel, the top within `topWithin` of its
- * surface); or the shared limb sphere while it wants one for this View's
- * camera (wantsLimbSphere by the top segments, with `swapFloor`) and that is
- * built.
+ * Body `key`'s sphere of `radius`: its own, of `segments`, or the shared limb
+ * sphere while it wants one for this View's camera (wantsLimbSphere, with
+ * `swapFloor`) and that is built.
  */
 export function useBodySphere(
   key: string,
   radius: number,
   [width, height]: SphereSegments,
-  swapFloor = 0,
-  lodOf?: RefObject<THREE.Object3D | null>,
+  swapFloor = 0
+): THREE.BufferGeometry {
+  return useBodySphereAt(key, radius, [width, height], [width, height], swapFloor)
+}
+
+/**
+ * useBodySphere sized to the body on this View's screen (sphere-lod.ts
+ * useSphereLevel): its own sphere at the level `lodOf`, the mesh drawing
+ * it, is seen at, from `top` down; the top within `topWithin` of its
+ * surface. The limb sphere still swaps in by the top's facets.
+ */
+export function useSizedBodySphere(
+  key: string,
+  radius: number,
+  [width, height]: SphereSegments,
+  swapFloor: number,
+  lodOf: RefObject<THREE.Mesh | null>,
   topWithin = 0
 ): THREE.BufferGeometry {
-  const base = useRetainedBodySphere(radius, useSphereLevel(lodOf, radius, [width, height], topWithin))
-  return useLimbSphere(radius, useWantsLimbSphere(key, radius, [width, height], swapFloor)) ?? base
+  const topSphere = useCallback(() => bodySphereGeometry(radius, [width, height]), [radius, width, height])
+  const level = useSphereLevel(lodOf, radius, [width, height], topWithin, topSphere)
+  return useBodySphereAt(key, radius, [width, height], level, swapFloor)
+}
+
+function useBodySphereAt(
+  key: string,
+  radius: number,
+  top: SphereSegments,
+  level: SphereSegments,
+  swapFloor: number
+): THREE.BufferGeometry {
+  const base = useRetainedBodySphere(radius, level)
+  return useLimbSphere(radius, useWantsLimbSphere(key, radius, top, swapFloor)) ?? base
 }

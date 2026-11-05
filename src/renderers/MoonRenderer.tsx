@@ -4,7 +4,7 @@ import { meshBounds, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { useEclipseShadow } from './eclipseShadow'
 import { MOON_ALBEDO } from '../lighting'
-import { useBodySphere } from '../ship/limb-detail'
+import { useSizedBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
 
 const MOON_COLOR = new THREE.Color().setScalar(MOON_ALBEDO)
@@ -21,7 +21,7 @@ export default function MoonRenderer({ diameter, texture }: MoonRendererProps) {
   const eclipseShadow = useEclipseShadow('moon')
   // Sized to the Moon on this View's screen (tides-0oi.16).
   const meshRef = useRef<THREE.Mesh>(null)
-  const geometry = useBodySphere('moon', diameter, [128, 128], 0, meshRef)
+  const geometry = useSizedBodySphere('moon', diameter, [128, 128], 0, meshRef)
 
   return (
     <>

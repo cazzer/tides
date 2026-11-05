@@ -11,7 +11,8 @@
 // Poses: {name, system:true} the default view; {name, body:'earth'|'moon'|'sun', px, az} the main camera put so the
 // body's radius is `px` device px at the main view's centre, `az` degrees round from the body's sunward side
 // (90 = half lit); {name, km, lat, lon, tilt} close zoom over Earth (poseMain); reset:true poses aren't measured
-// (they put the body back at its top level, so each body's sizes run from large to small).
+// (they put the body back at its top level, so each body's sizes run from large to small); {name, to: {km, lat,
+// lon}} the jump below.
 const fs = require('fs')
 const path = require('path')
 const H = require('./lib.cjs')
@@ -37,6 +38,8 @@ const DEFAULT_POSES = [
   { name: 'ctl-moon-close', body: 'moon', px: 420, az: 70 },
   { name: 'ctl-earth-100km', km: 100, lat: 30, lon: -100 },
   { name: 'ctl-sheet-20km', km: 20, lat: 30, lon: -100 },
+  // From the system view straight under the sheet: the first frame at the top level.
+  { name: 'jump-sheet-20km', to: { km: 20, lat: 30, lon: -100 } },
 ]
 const POSES = process.env.POSES ? JSON.parse(process.env.POSES) : DEFAULT_POSES
 const TIME_POSES = (process.env.TIME_POSES || 'system,earth-40,moon-40,sun-40').split(',')
@@ -244,6 +247,54 @@ const SETUP = () => {
   }
 }
 
+// The jump: from the system view (Earth at its coarsest in the main view), the main camera straight under the
+// sheet, then ONE frame (r3f's advance, the loop paused) with no React commit in between. The main view's ground
+// must have drawn the top level that very frame (forced at draw time), and the frame must match a replay of it
+// with every body at the top level ("before") over the main view.
+async function jump(page, pose) {
+  await page.evaluate(() => { window.__mainPose = null })
+  await page.evaluate(() => __H.resume())
+  await page.waitForTimeout(3500)
+  await page.evaluate(() => __H.pause())
+  await page.waitForTimeout(200)
+  await H.poseMain(page, pose.to)
+  return page.evaluate(async () => {
+    const pr = __H.gl.getPixelRatio()
+    const mainCall = () => __H.frame.filter((c) => !c.target).sort((a, b) => b.vp.w - a.vp.w)[0]
+    const groundOf = (scene) => {
+      let g = null
+      scene.traverse((o) => { if (!g && o.isMesh && o.material?.isMeshPhongMaterial && o.material.displacementMap) g = o })
+      return g
+    }
+    const call = mainCall()
+    const ground = groundOf(call.scene)
+    const segs = (m) => (m.geometry.userData.limbSphere ? 'limb' : m.geometry.userData.segments?.[0])
+    const before = segs(ground)
+    const w = __H.ctx.drawingBufferWidth, h = __H.ctx.drawingBufferHeight
+    const grab = () => { __H.gl.setRenderTarget(null); const b = new Uint8Array(w * h * 4); __H.ctx.readPixels(0, 0, w, h, __H.ctx.RGBA, __H.ctx.UNSIGNED_BYTE, b); return b }
+    __H.root().advance(performance.now())
+    // Same task: no React commit has happened since the frame callbacks asked for a level.
+    const drawn = segs(ground)
+    const first = grab()
+    await new Promise((r) => requestAnimationFrame(() => r()))
+    const vp = [call.vp.x, call.vp.y, call.vp.z, call.vp.w].map((v) => Math.round(v * pr))
+    const diff = (a, b) => {
+      let n = 0, mx = 0
+      for (let y = vp[1]; y < vp[1] + vp[3]; y++) for (let x = vp[0]; x < vp[0] + vp[2]; x++) {
+        const i = (y * w + x) * 4
+        const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]))
+        if (d) n++
+        if (d > mx) mx = d
+      }
+      return { px: n, max: mx }
+    }
+    const replay = async (nm) => { const v = __H.variants[nm]; v.on(); await new Promise((r) => setTimeout(r, 0)); __H.replayOnce(); const b = grab(); v.off(); return b }
+    const top = await replay('top')
+    const base = await replay('base')
+    return { groundBefore: before, groundDrawnFirstFrame: drawn, firstVsTopMain: diff(first, top), firstVsReplayMain: diff(first, base), sheetDrawn: (() => { let v = null; call.scene.traverse((o) => { if (o.material?.uniforms?.uCloudShift && v === null) v = o.material.visible }); return v })() }
+  })
+}
+
 // Main camera put so `body`'s radius is `px` device px at the main view's centre, `az` degrees from sunward.
 async function poseBody(page, pose) {
   await page.evaluate((pose) => {
@@ -284,6 +335,12 @@ async function poseBody(page, pose) {
     await H.settle(page, +(process.env.SETTLE || 12000))
     await page.evaluate(() => __H.freeze())
     for (const pose of POSES) {
+      if (pose.to) {
+        const r = await jump(page, pose)
+        console.log(pose.name.padEnd(18), JSON.stringify(r))
+        results.push({ pose: pose.name, ...r })
+        continue
+      }
       await page.evaluate(() => __H.resume())
       if (pose.system) await page.evaluate(() => { window.__mainPose = null })
       else if (pose.body) await poseBody(page, pose)

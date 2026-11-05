@@ -35,7 +35,7 @@ import { fineGroundDepth } from '../ship/ship-session'
 import { reversedFloatDepth } from './depth-precision'
 import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
-import { LIMB_SEGMENTS, isLimbSphere, useBodySphere, type SphereSegments } from '../ship/limb-detail'
+import { LIMB_SEGMENTS, isLimbSphere, useBodySphere, useSizedBodySphere, type SphereSegments } from '../ship/limb-detail'
 import { EARTH_TOP_LEVEL_ALTITUDE } from '../ship/ship-bodies'
 import { FULL_RANGE, limbRowRange } from '../ship/limb-rows'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
@@ -165,7 +165,7 @@ export default function EarthRenderer({
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
   // Sized to Earth on this View's screen (tides-0oi.16), whole at and under
   // the cloud tops and near the ship's stop (EARTH_TOP_LEVEL_ALTITUDE).
-  const groundSphere = useBodySphere(
+  const groundSphere = useSizedBodySphere(
     'earth',
     diameter,
     EARTH_BASE_SEGMENTS,

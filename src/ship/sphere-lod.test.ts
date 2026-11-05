@@ -14,11 +14,14 @@ import {
   STOP_TOP_LEVEL_SHARE,
   bodySphereGeometry,
   bodySphereUsers,
+  drawsCoarseWhereTopForced,
+  forceTopSphere,
   forcesTopLevel,
   pickSphereLevel,
   retainBodySphere,
   screenFacetPx,
   sphereLevelFor,
+  sphereLevelStep,
   sphereLevels,
 } from './sphere-lod'
 
@@ -208,6 +211,65 @@ describe('the top level where it must be drawn', () => {
   })
 })
 
+describe("a frame's level, by the camera and the body as they stand", () => {
+  // Earth's ground as the system view holds it: in a scaled parent.
+  function earthAt(levelSegments: SphereSegments) {
+    const parent = new THREE.Group()
+    parent.scale.setScalar(2)
+    parent.position.set(50, 0, 0)
+    const ground = new THREE.Mesh(bodySphereGeometry(EARTH_RADIUS, levelSegments))
+    const glow = new THREE.Mesh(ground.geometry)
+    const other = new THREE.Mesh(new THREE.SphereGeometry(1))
+    parent.add(ground, glow, other)
+    parent.updateMatrixWorld(true)
+    return { ground, glow, other }
+  }
+  // Looking at Earth's centre from `altitude` over its ground, its own units.
+  const eyeAt = (altitude: number) => {
+    const camera = new THREE.PerspectiveCamera(FOV, 390 / 844, 1e-4, 1e6)
+    camera.position.set(50, 0, 2 * (EARTH_RADIUS + altitude))
+    camera.lookAt(50, 0, 0)
+    camera.updateMatrixWorld()
+    return camera
+  }
+  // Earth's radius in device px, from where its centre is `distance` (world units) away.
+  const altitudeForPx = (px: number) => {
+    const pxPerRadian = SCREEN_PX / 2 / Math.tan((FOV / 2) * (Math.PI / 180))
+    return EARTH_RADIUS / Math.sin(px / pxPerRadian) - EARTH_RADIUS
+  }
+
+  it('is the top under the sheet whatever the level drawn, and coarse far off', () => {
+    const { ground } = earthAt([32, 32])
+    for (const altitude of [0.5 * CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP]) {
+      expect(sphereLevelStep(LEVELS, 2, eyeAt(altitude), ground, EARTH_RADIUS, EARTH_TOP_LEVEL_ALTITUDE, SCREEN_PX)).toBe(0)
+    }
+    expect(sphereLevelStep(LEVELS, 0, eyeAt(altitudeForPx(20)), ground, EARTH_RADIUS, EARTH_TOP_LEVEL_ALTITUDE, SCREEN_PX)).toBe(2)
+    expect(sphereLevelStep(LEVELS, 0, eyeAt(altitudeForPx(80)), ground, EARTH_RADIUS, EARTH_TOP_LEVEL_ALTITUDE, SCREEN_PX)).toBe(1)
+    expect(sphereLevelStep(LEVELS, 2, eyeAt(altitudeForPx(400)), ground, EARTH_RADIUS, EARTH_TOP_LEVEL_ALTITUDE, SCREEN_PX)).toBe(0)
+  })
+
+  it('catches a jump under the sheet at draw time and puts the top on every mesh drawing that sphere', () => {
+    const { ground, glow, other } = earthAt([32, 32])
+    const coarse = ground.geometry
+    const otherSphere = other.geometry
+    const top = bodySphereGeometry(EARTH_RADIUS, TOP)
+    // Far off, a coarse level stands.
+    expect(drawsCoarseWhereTopForced(eyeAt(altitudeForPx(20)), ground, EARTH_RADIUS, TOP, EARTH_TOP_LEVEL_ALTITUDE)).toBe(false)
+    // Jumped straight under the sheet: caught before the draw.
+    const under = eyeAt(0.5 * CLOUD_FLAT_ALTITUDE)
+    expect(drawsCoarseWhereTopForced(under, ground, EARTH_RADIUS, TOP, EARTH_TOP_LEVEL_ALTITUDE)).toBe(true)
+    forceTopSphere(ground, top)
+    expect(ground.geometry).toBe(top)
+    expect(glow.geometry).toBe(top)
+    expect(other.geometry).toBe(otherSphere)
+    expect(coarse).not.toBe(top)
+    // Drawing the top, or a limb sphere (no segments), there's nothing to catch.
+    expect(drawsCoarseWhereTopForced(under, ground, EARTH_RADIUS, TOP, EARTH_TOP_LEVEL_ALTITUDE)).toBe(false)
+    ground.geometry = new THREE.BufferGeometry()
+    expect(drawsCoarseWhereTopForced(under, ground, EARTH_RADIUS, TOP, EARTH_TOP_LEVEL_ALTITUDE)).toBe(false)
+  })
+})
+
 describe("the Sun's shell per level", () => {
   it('holds the tallest jets over every level, the top at SUN_SHELL', () => {
     const levels = sphereLevels(SUN_SEGMENTS)
@@ -217,10 +279,16 @@ describe("the Sun's shell per level", () => {
       const shell = sunShellScale(segments)
       expect(shell * lowestFacet(segments)).toBeGreaterThanOrEqual(1 + SUN_FRINGE)
     }
+    // Each level culls and picks by its own shell, which its draw sets uShell to.
+    for (const segments of levels) {
+      const shell = sunShellScale(segments)
+      const sphere = bodySphereGeometry(7, segments, shell)
+      expect(sphere.userData.shell).toBe(shell)
+      expect(sphere.boundingSphere!.radius).toBeCloseTo(7 * shell, 5)
+      expect(sphere).not.toBe(bodySphereGeometry(7, segments))
+    }
     const renderer = readFileSync(new URL('../renderers/SunRenderer.tsx', import.meta.url), 'utf8')
-    // Each level draws, culls and picks by its own shell.
-    expect(renderer).toMatch(/boundingSphere!\.radius \*= shell/)
-    expect(renderer).toMatch(/uShell\.value = geometry\.userData\.sunShell/)
+    expect(renderer).toMatch(/uShell\.value = geometry\.userData\.shell/)
   })
 })
 
@@ -249,8 +317,11 @@ describe('the shared body spheres', () => {
 
   it("swap to the limb sphere by the top level's segments, whatever the level drawn", () => {
     const source = readFileSync(new URL('./limb-detail.ts', import.meta.url), 'utf8')
-    const body = source.slice(source.indexOf('export function useBodySphere('))
-    expect(body).toMatch(/useSphereLevel\(lodOf, radius, \[width, height\], topWithin\)/)
-    expect(body).toMatch(/useWantsLimbSphere\(key, radius, \[width, height\], swapFloor\)/)
+    // (No hook renderer in the tests: the wiring, by its text.)
+    const sized = source.slice(source.indexOf('export function useSizedBodySphere('))
+    expect(sized).toMatch(/useBodySphereAt\(key, radius, \[width, height\], level, swapFloor\)/)
+    const at = source.slice(source.indexOf('function useBodySphereAt('))
+    expect(at).toMatch(/useRetainedBodySphere\(radius, level\)/)
+    expect(at).toMatch(/useWantsLimbSphere\(key, radius, top, swapFloor\)/)
   })
 })

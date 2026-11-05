@@ -147,15 +147,22 @@ const sphereKey = (radius: number, [width, height]: SphereSegments) => `${radius
 /**
  * The shared sphere of `radius` and `segments`, built now if need be, with
  * its segments in userData.segments (EarthRenderer's displacement reads
- * them). Retain it (retainBodySphere) while it may be drawn; never dispose it.
+ * them). With `shell`, one a vertex shader draws scaled out to that (the
+ * Sun's, sunShellScale): culled and picked by it, and with it in
+ * userData.shell for the shader's uniform. Retain it (retainBodySphere) while it may be drawn; never dispose it.
  */
-export function bodySphereGeometry(radius: number, segments: SphereSegments): THREE.BufferGeometry {
-  const key = sphereKey(radius, segments)
+export function bodySphereGeometry(radius: number, segments: SphereSegments, shell?: number): THREE.BufferGeometry {
+  const key = sphereKey(radius, segments) + (shell === undefined ? '' : `@${shell}`)
   let entry = bodySpheres.get(key)
   if (!entry) {
     const sphere = new THREE.SphereGeometry(radius, segments[0], segments[1])
     sphere.userData.segments = [segments[0], segments[1]] as SphereSegments
     sphere.userData.bodySphereKey = key
+    if (shell !== undefined) {
+      sphere.computeBoundingSphere()
+      sphere.boundingSphere!.radius *= shell
+      sphere.userData.shell = shell
+    }
     entry = { sphere, users: 0 }
     bodySpheres.set(key, entry)
   }
@@ -191,8 +198,8 @@ export function bodySphereUsers(radius: number, segments: SphereSegments): numbe
   return bodySpheres.get(sphereKey(radius, segments))?.users ?? 0
 }
 
-// The body useSphereLevel's frame callback is measuring (they run one at a
-// time), read by measuredFacetPx: no closure per frame.
+// The body sphereLevelStep is measuring (one at a time), read by
+// measuredFacetPx: no closure per frame.
 const _measured = {
   camera: null as THREE.Camera | null,
   centre: new THREE.Vector3(),
@@ -203,17 +210,82 @@ const _measured = {
 const measuredFacetPx = (segments: SphereSegments) =>
   screenFacetPx(segments, _measured.camera!, _measured.centre, _measured.worldRadius, _measured.screenPx)
 
+/** From `camera`'s eye to `body`'s centre in `body`'s own units, by their world matrices. */
+function eyeDistance(camera: THREE.Camera, body: THREE.Object3D): number {
+  _measured.centre.setFromMatrixPosition(body.matrixWorld)
+  const distance = _measured.eye.setFromMatrixPosition(camera.matrixWorld).distanceTo(_measured.centre)
+  return distance / body.matrixWorld.getMaxScaleOnAxis()
+}
+
 /**
- * The segments `object`'s sphere of `radius` (in its own units) draws in this
- * View: the top level on the first frame, with no object, and within
- * `topWithin` of its surface (forcesTopLevel), else pickSphereLevel by this
- * View's camera. Re-renders only on a change of level.
+ * One frame's level for `body`'s sphere of `radius` (its own units), now at
+ * `current` in `levels`, seen by `camera` over `screenPx` device rows, by
+ * their world matrices as they stand: sphereLevelFor, the top within
+ * `topWithin` of its surface.
  */
-export function useSphereLevel(
-  object: RefObject<THREE.Object3D | null> | undefined,
+export function sphereLevelStep(
+  levels: readonly SphereSegments[],
+  current: number,
+  camera: THREE.Camera,
+  body: THREE.Object3D,
+  radius: number,
+  topWithin: number,
+  screenPx: number
+): number {
+  const distance = eyeDistance(camera, body)
+  _measured.camera = camera
+  _measured.worldRadius = radius * body.matrixWorld.getMaxScaleOnAxis()
+  _measured.screenPx = screenPx
+  return sphereLevelFor(levels, current, distance, radius, topWithin, measuredFacetPx)
+}
+
+/**
+ * At draw time, with `camera`'s and `body`'s world matrices final: whether
+ * `body` (a mesh) draws a coarser level than `top` where forcesTopLevel
+ * wants the top, a limb sphere aside. Then the frame's camera has jumped
+ * into the band since the level was last picked, and the top must be
+ * swapped in before this draw (forceTopSphere).
+ */
+export function drawsCoarseWhereTopForced(
+  camera: THREE.Camera,
+  body: THREE.Mesh,
   radius: number,
   top: SphereSegments,
-  topWithin = 0
+  topWithin: number
+): boolean {
+  const segments = body.geometry.userData.segments as SphereSegments | undefined
+  if (!segments || (segments[0] === top[0] && segments[1] === top[1])) return false
+  return forcesTopLevel(eyeDistance(camera, body), radius, topWithin)
+}
+
+/**
+ * Puts `top` on `body`, and on every mesh in its parent's tree drawing the
+ * same sphere (the glow's occluder and lights), for this draw, ahead of
+ * the re-render that makes it their prop too.
+ */
+export function forceTopSphere(body: THREE.Mesh, top: THREE.BufferGeometry): void {
+  const drawn = body.geometry
+  ;(body.parent ?? body).traverse((object) => {
+    if ((object as THREE.Mesh).isMesh && (object as THREE.Mesh).geometry === drawn) (object as THREE.Mesh).geometry = top
+  })
+}
+
+/**
+ * The segments `object`'s sphere of `radius` (in its own units) draws in this
+ * View: the top level on the first frame, and within `topWithin` of its
+ * surface (forcesTopLevel), else pickSphereLevel by this View's camera.
+ * Re-renders only on a change of level. Within `topWithin` the top is
+ * drawn the frame the eye gets there: a camera that jumps in after the
+ * frame callbacks, or that they measured a frame late, is caught as the
+ * View's scene draws, which puts `topSphere()` on the mesh at once (the
+ * flat sheet's early out decides at that moment too, cloudShaders.ts).
+ */
+export function useSphereLevel(
+  object: RefObject<THREE.Mesh | null>,
+  radius: number,
+  top: SphereSegments,
+  topWithin: number,
+  topSphere: () => THREE.BufferGeometry
 ): SphereSegments {
   const [width, height] = top
   const levels = useMemo(() => sphereLevels([width, height]), [width, height])
@@ -222,27 +294,41 @@ export function useSphereLevel(
   const current = useRef(level)
   const viewSize = useViewSize()
   const gl = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
   useFrame(({ camera, size }) => {
-    const body = object?.current
+    const body = object.current
     if (!body || levels.length === 1) return
     if (current.current.levels !== levels) current.current = { levels, index: 0 }
-    _measured.centre.setFromMatrixPosition(body.matrixWorld)
-    const scale = body.matrixWorld.getMaxScaleOnAxis()
-    const distance = _measured.eye.setFromMatrixPosition(camera.matrixWorld).distanceTo(_measured.centre) / scale
-    _measured.camera = camera
-    _measured.worldRadius = radius * scale
-    _measured.screenPx = viewSize(size).height * gl.getPixelRatio()
-    const next = sphereLevelFor(levels, current.current.index, distance, radius, topWithin, measuredFacetPx)
+    // This frame's pose, as far as the callbacks before this one set it.
+    camera.updateMatrixWorld()
+    body.updateWorldMatrix(true, false)
+    const screenPx = viewSize(size).height * gl.getPixelRatio()
+    const next = sphereLevelStep(levels, current.current.index, camera, body, radius, topWithin, screenPx)
     if (next === current.current.index) return
     current.current = { levels, index: next }
     setLevel(current.current)
   })
+  useEffect(() => {
+    if (levels.length === 1) return
+    const previous = scene.onBeforeRender
+    scene.onBeforeRender = function (renderer, renderScene, camera, target) {
+      previous.call(this, renderer, renderScene, camera, target)
+      const body = object.current
+      if (!body || !drawsCoarseWhereTopForced(camera, body, radius, [width, height], topWithin)) return
+      forceTopSphere(body, topSphere())
+      current.current = { levels, index: 0 }
+      setLevel(current.current)
+    }
+    return () => {
+      scene.onBeforeRender = previous
+    }
+  }, [scene, object, radius, width, height, topWithin, topSphere, levels])
   return levels[level.levels === levels ? level.index : 0]
 }
 
-/** The shared sphere of `radius` and `segments`, retained while this component shows it. */
-export function useRetainedBodySphere(radius: number, [width, height]: SphereSegments): THREE.BufferGeometry {
-  const sphere = useMemo(() => bodySphereGeometry(radius, [width, height]), [radius, width, height])
+/** The shared sphere of `radius`, `segments` and `shell` (bodySphereGeometry), retained while this component shows it. */
+export function useRetainedBodySphere(radius: number, [width, height]: SphereSegments, shell?: number): THREE.BufferGeometry {
+  const sphere = useMemo(() => bodySphereGeometry(radius, [width, height], shell), [radius, width, height, shell])
   useEffect(() => retainBodySphere(sphere), [sphere])
   return sphere
 }
