@@ -2,10 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- The PNG for browsers without SVG favicons; the SVG last, as browsers
+         that take it pick the last icon that fits. -->
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="192x192"
+      href="/tides/icon-192.png"
+    />
     <link
       rel="icon"
       type="image/svg+xml"
-      href="/tides/vite.svg"
+      href="/tides/icon.svg"
+    />
+    <!-- The loading screen shows the mark (LoadingOverlay). -->
+    <link
+      rel="preload"
+      as="image"
+      type="image/svg+xml"
+      href="/tides/icon.svg"
     />
     <!-- viewport-fit=cover lets the canvas run behind the notch and the home
          indicator; overlays keep clear of them with env(safe-area-inset-*). -->
@@ -43,9 +58,75 @@
       rel="apple-touch-icon"
       href="/tides/apple-touch-icon.png"
     />
-    <title>Tides (Clock)</title>
-    <script type="module" crossorigin src="/tides/assets/index-CYtEqDzB.js"></script>
-    <link rel="stylesheet" crossorigin href="/tides/assets/index-CfdeuU3-.css">
+    <title>Tides</title>
+    <meta
+      name="description"
+      content="The Earth, Moon and planets as they are now, and the tides they raise."
+    />
+    <!-- Link previews. Vite leaves meta content alone, so these are absolute
+         URLs under the GitHub Pages base (vite.config.ts base: /tides/). -->
+    <meta
+      property="og:type"
+      content="website"
+    />
+    <meta
+      property="og:site_name"
+      content="Tides"
+    />
+    <meta
+      property="og:title"
+      content="Tides"
+    />
+    <meta
+      property="og:description"
+      content="The Earth, Moon and planets as they are now, and the tides they raise."
+    />
+    <meta
+      property="og:url"
+      content="https://cazzer.github.io/tides/"
+    />
+    <meta
+      property="og:image"
+      content="https://cazzer.github.io/tides/og-image.png"
+    />
+    <meta
+      property="og:image:type"
+      content="image/png"
+    />
+    <meta
+      property="og:image:width"
+      content="1200"
+    />
+    <meta
+      property="og:image:height"
+      content="630"
+    />
+    <meta
+      property="og:image:alt"
+      content="The Sun, Earth and Moon in Tides, with the year's months round Earth's orbit"
+    />
+    <meta
+      name="twitter:card"
+      content="summary_large_image"
+    />
+    <meta
+      name="twitter:title"
+      content="Tides"
+    />
+    <meta
+      name="twitter:description"
+      content="The Earth, Moon and planets as they are now, and the tides they raise."
+    />
+    <meta
+      name="twitter:image"
+      content="https://cazzer.github.io/tides/og-image.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="The Sun, Earth and Moon in Tides, with the year's months round Earth's orbit"
+    />
+    <script type="module" crossorigin src="/tides/assets/index-BL5qEiMb.js"></script>
+    <link rel="stylesheet" crossorigin href="/tides/assets/index-BfFjJPOB.css">
   </head>
   <body>
     <div id="root"></div>
