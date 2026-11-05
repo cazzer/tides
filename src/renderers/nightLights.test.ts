@@ -209,7 +209,29 @@ describe('night lights in flight', () => {
     clouds.dispose()
     expect(out.fragment).not.toMatch(/uNightMoon|uNightFill|uGibsNight/)
     expect(out.uniforms).not.toEqual(expect.arrayContaining(['uNightMoon']))
-    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(cloudMapAsBefore(out.fragment))))))).digest('hex')
+    return createHash('sha256').update(out.vertex + '\n' + skyAsBefore(groundShadowAsDefine(deckAsDefines(seaIceAsBefore(detailGateAsBefore(cloudMapAsBefore(horizonGateAsBefore(out.fragment)))))))).digest('hex')
+  }
+
+  // The horizon shadow's gate once the Sun clears every horizon, and the
+  // sky occlusion's fade toward it (tides-0oi.17, an approximation): taken
+  // out, so that the pins still hold the rest of the chain.
+  const HORIZON_GATE =
+    /  \/\/ Vector maths[^\n]*\n  (float k = [^\n]*\n)  (float elevation = [^\n]*\n)(  \/\/[^\n]*\n)  vec4 hTop4 = [^\n]*\n  float top = [^\n]*\n(  \/\/[^\n]*\n)*  if \(fade > 0\.0 && elevation < top \+ [0-9.]+\) \{\n/
+  const HORIZON_SKY_WEIGHT =
+    /(    \/\/[^\n]*\n){3}    float skyWeight = [^\n]*\n(    groundHorizonSky = mix\(1\.0, pow\(sky \/ 8\.0, [0-9.]+\), fade)( \* skyWeight)\);\n/
+  function horizonGateAsBefore(fragment: string): string {
+    expect(fragment).toMatch(HORIZON_GATE)
+    expect(fragment).toMatch(HORIZON_SKY_WEIGHT)
+    expect(fragment.split('    // A horizon of a step').length).toBe(2)
+    // The elevation went back inside the branch, just before the step's gate.
+    let elevation = ''
+    return fragment
+      .replace(HORIZON_GATE, (_, k: string, e: string) => {
+        elevation = e
+        return `  if (fade > 0.0) {\n    // Vector maths, no arrays: dynamically indexed, those spill on some GPUs.\n    ${k}`
+      })
+      .replace('    // A horizon of a step', () => `    ${elevation}    // A horizon of a step`)
+      .replace(HORIZON_SKY_WEIGHT, '$2);\n')
   }
 
   // The cloud map's channel select (tides-0oi.11, cloudShaders.ts

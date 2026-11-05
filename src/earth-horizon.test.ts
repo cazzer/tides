@@ -6,6 +6,7 @@ import type { DemLevel } from './earth-dem'
 import {
   HORIZON_BAKE_RELIEF,
   HORIZON_BITS,
+  HORIZON_CLEAR_MARGIN,
   HORIZON_CURVE_RELIEF,
   HORIZON_DIRECTIONS,
   HORIZON_RADIUS_KM,
@@ -19,9 +20,12 @@ import {
   horizonCurveRelief,
   horizonSoftness,
   horizonTangentScale,
+  horizonTop,
   packEarthHorizon,
+  skyOcclusionWeight,
   skyVisibility,
   sunAzimuth,
+  sunClearsHorizon,
   sunVisibility,
   unpackEarthHorizon,
   type EarthHorizon,
@@ -252,6 +256,62 @@ describe('shading from the horizon', () => {
     // Half-way to the next direction, the horizon is half as high.
     expect(sunVisibility(range, 1, 292.5 * D, 10 * D)).toBeCloseTo(0.5, 6)
     expect(sunVisibility(range, 1, 315 * D, 3 * D)).toBe(1)
+  })
+})
+
+describe('skipping the shading once the Sun clears every horizon (tides-0oi.17)', () => {
+  // A small LCG, so the sweep is the same every run.
+  let seed = 17
+  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32)
+  const cases = Array.from({ length: 400 }, () => ({
+    // Up to the steepest stored angle, often a few flat directions.
+    angles: Array.from({ length: 8 }, () => (rand() < 0.3 ? 0 : horizonAngle(Math.floor(rand() * 64), HORIZON_BITS))),
+    k: [0.08, 0.5, 1, 2][Math.floor(rand() * 4)],
+  }))
+
+  it('is exact for the Sun: past the gate, every azimuth is fully lit and the sky unoccluded', () => {
+    for (const { angles, k } of cases) {
+      const gate = horizonTop(angles, k) + HORIZON_SOFTNESS + HORIZON_CLEAR_MARGIN
+      expect(sunClearsHorizon(angles, k, gate)).toBe(true)
+      expect(sunClearsHorizon(angles, k, gate - 2 * HORIZON_CLEAR_MARGIN)).toBe(false)
+      // (A Sun can't be past 90°: a horizon that steep is never cleared.)
+      for (const e of [gate, gate + 0.01, (gate + Math.PI / 2) / 2, Math.PI / 2].filter((e) => e >= gate)) {
+        for (let a = 0; a < 64; a++) expect(sunVisibility(angles, k, (a / 64) * 2 * Math.PI + 0.01, e)).toBe(1)
+        expect(skyOcclusionWeight(angles, k, e)).toBe(0)
+      }
+    }
+  })
+
+  it("keeps the sky's occlusion in full below the highest horizon's soft edge, fading it smoothly across", () => {
+    for (const { angles, k } of cases) {
+      const top = horizonTop(angles, k)
+      for (const e of [-0.2, top - HORIZON_SOFTNESS - 0.01, top - HORIZON_SOFTNESS]) {
+        expect(skyOcclusionWeight(angles, k, e)).toBe(1)
+      }
+      expect(skyOcclusionWeight(angles, k, top)).toBeCloseTo(0.5, 12)
+      let last = 1
+      for (let i = 0; i <= 40; i++) {
+        const w = skyOcclusionWeight(angles, k, top - HORIZON_SOFTNESS + (i / 20) * HORIZON_SOFTNESS)
+        expect(w).toBeLessThanOrEqual(last)
+        // no step bigger than smoothstep's steepest over 1/40 of the edge
+        expect(last - w).toBeLessThan(1.5 / 40 + 1e-12)
+        last = w
+      }
+      expect(last).toBe(0)
+    }
+  })
+
+  it('gates flat ground just above the soft edge, where nothing changes', () => {
+    const flat = new Array(8).fill(0)
+    expect(horizonTop(flat, 1)).toBe(0)
+    expect(sunClearsHorizon(flat, 1, HORIZON_SOFTNESS + 2 * HORIZON_CLEAR_MARGIN)).toBe(true)
+    expect(sunClearsHorizon(flat, 1, HORIZON_SOFTNESS)).toBe(false)
+    expect(skyVisibility(flat, 1)).toBe(1)
+    const range = [0, 0, 0, 0, 0, 0, 20 * D, 0]
+    expect(horizonTop(range, 1)).toBeCloseTo(20 * D, 12)
+    expect(sunClearsHorizon(range, 1, 20 * D + HORIZON_SOFTNESS)).toBe(false)
+    expect(sunClearsHorizon(range, 1, 20 * D + HORIZON_SOFTNESS + 2 * HORIZON_CLEAR_MARGIN)).toBe(true)
+    expect(sunVisibility(range, 1, 270 * D, 20 * D + HORIZON_SOFTNESS)).toBe(1)
   })
 })
 
