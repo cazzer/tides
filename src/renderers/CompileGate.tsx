@@ -33,7 +33,7 @@ interface CompileGateProps {
  * 1.47 s. Instead, while the loading screen is up, it compiles the scene
  * with compileAsync (KHR_parallel_shader_compile links in the background),
  * again until a round finds nothing new and the assets are in, then gives
- * each linked program its first use and each map its upload a few per frame
+ * each map its upload and each linked program its first use a few per frame
  * (WARM_BUDGET_MS), and only then shows the scene. A compile that doesn't
  * finish in COMPILE_TIMEOUT_MS shows it anyway.
  *
@@ -165,22 +165,20 @@ function shownOnly(scene: THREE.Object3D): THREE.Object3D {
 }
 
 /**
- * The first-draw work left once every program is compiled: each linked
- * program's first use (where ANGLE-Metal finishes the link, 2-9 ms each,
- * tides-warmup-findings) and each shown map's upload. A program not linked
- * yet by its turn is left to its draw, as one gone since is.
+ * The first-draw work left once every program is compiled: each shown map's
+ * upload, then each linked program's first use (where ANGLE-Metal finishes
+ * the link, 2-9 ms each, tides-warmup-findings). A program not linked yet by
+ * its turn is left to its draw, as one gone since is. Maps only from the
+ * material itself: one an onBeforeCompile adds is uploaded at its draw
+ * (warming those changed a far Earth by 1 LSB on ~15 px, tides-0oi.6).
  */
 function warmJobs(gl: THREE.WebGLRenderer, root: THREE.Group): (() => void)[] {
   const maps = new Set<THREE.Texture>()
   for (const child of root.children) {
     child.traverseVisible((object) => {
       for (const material of materialsOf(object)) {
-        // With the uniforms its program was compiled with: those an
-        // onBeforeCompile adds aren't on the material.
-        const { uniforms } = gl.properties.get(material) as { uniforms?: Record<string, THREE.IUniform | undefined> }
-        const compiled = Object.values(uniforms ?? {}).map((uniform) => uniform?.value as THREE.Texture | undefined)
-        for (const texture of [...texturesOf(material), ...compiled]) {
-          if (texture?.isTexture && texture.version > 0 && !texture.isRenderTargetTexture) maps.add(texture)
+        for (const texture of texturesOf(material)) {
+          if (texture.version > 0 && !texture.isRenderTargetTexture) maps.add(texture)
         }
       }
     })
