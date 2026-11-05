@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import * as THREE from 'three'
-import { coldWork, compileSide, createWarmed, runWarmup, warmDefinesOnce, type WarmProbe } from './ship-warmup'
+import { coldWork, compileSide, createWarmed, runWarmup, sortDefines, warmDefinesOnce, type WarmProbe } from './ship-warmup'
 
 function loaded(): THREE.Texture {
   const texture = new THREE.Texture()
@@ -169,7 +169,8 @@ describe('coldWork', () => {
 
     warmDefinesOnce(renderer, mesh, camera, scene, done, () => record)
     warmDefinesOnce(renderer, mesh, camera, scene, done, () => record)
-    expect(compiled).toEqual([{ side: THREE.FrontSide, defines: ['CLOUD_FLAT', 'FOG_EASE', 'CLOUD_TYPED'] }])
+    // In order by name, as the draw keeps them (sortDefines()).
+    expect(compiled).toEqual([{ side: THREE.FrontSide, defines: ['CLOUD_FLAT', 'CLOUD_TYPED', 'FOG_EASE'] }])
     // Turned back, in their order, for the draw to pick its own program.
     expect(Object.keys(material.defines)).toEqual(['CLOUD_FLAT', 'FOG_EASE'])
     // Once more under a new record, as after a dispose drops the programs.
@@ -292,5 +293,15 @@ describe('runWarmup', () => {
 
     expect(calls).toEqual([{ object: mesh, scene, target: null }])
     expect(uploaded).toEqual([map])
+  })
+})
+
+describe('sortDefines (tides-0oi.3)', () => {
+  test('puts defines in order by name, in place, and says whether they were out of it', () => {
+    const defines: Record<string, unknown> = { FOG_EASE: '', CLOUD_UNDER_SHEET: '', CLOUD_FLAT: '1' }
+    expect(sortDefines(defines)).toBe(true)
+    expect(Object.entries(defines)).toEqual([['CLOUD_FLAT', '1'], ['CLOUD_UNDER_SHEET', ''], ['FOG_EASE', '']])
+    expect(sortDefines(defines)).toBe(false)
+    expect(sortDefines({})).toBe(false)
   })
 })

@@ -54,6 +54,7 @@ import {
   CLOUD_FLAT_ALTITUDE,
   CLOUD_LAYER_TOP,
   CLOUD_MIN_ALPHA,
+  SHEET_GROUND_SPHERE,
   CLOUD_UNITS_PER_KM,
   cloudPathClear,
   defaultTopKm,
@@ -99,9 +100,10 @@ import {
 } from '../cloud-types'
 import { sceneRadius } from '../planets'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
-import { clearLimbView, updateLimbView } from '../ship/limb-detail'
+import { clearLimbView, LIMB_SEGMENTS, updateLimbView } from '../ship/limb-detail'
 import { prefersReducedMotion } from '../ship/reduced-motion'
 import {
+  EARTH_BASE_SEGMENTS,
   setEarthTerrain,
   TERRAIN_GREY_MARGIN,
   TERRAIN_MAP_SIZE,
@@ -1679,9 +1681,20 @@ describe('typed tops in the march (tides-tvr.4.3)', () => {
   float sFlat = sIn >= sNear ? sIn : sOut;
   if (sFlat < sNear) CLOUD_MISS;`,
   ]
+  // And the rays from under it that meet the ground, ended at once
+  // (tides-0oi.3): taken out.
+  const SHEET_GROUND_EXIT = `
+  // From under the sheet, a ray down to the ground meets it only on its far
+  // side, past the globe, shaded only for the ground's depth to hide it: it
+  // ends where it meets a sphere under any ground drawn (tides-0oi.3), short
+  // of the sheet. From over the sheet, the sheet comes first.
+  float rGround = uSeaLevel * ${SHEET_GROUND_SPHERE.toFixed(6)};
+  float discGround = be * be - (dot(eye, eye) - rGround * rGround);
+  if (discGround > 0.0 && -be - sqrt(discGround) > 0.0 && -be - sqrt(discGround) < sFlat) discard;`
   const asBeforeFlatEntry = (fragment: string) => {
     expect(fragment.split(FLAT_ENTRY[0]).length).toBeLessThanOrEqual(2)
-    return fragment.replace(FLAT_ENTRY[0], FLAT_ENTRY[1])
+    expect(fragment.split(FLAT_ENTRY[0] + SHEET_GROUND_EXIT).length).toBe(fragment.split(FLAT_ENTRY[0]).length)
+    return fragment.replace(FLAT_ENTRY[0] + SHEET_GROUND_EXIT, FLAT_ENTRY[1])
   }
 
   for (const flat of [false, true]) {
@@ -2148,6 +2161,217 @@ describe('the deck by depth buffer, the same at every altitude (tides-d9f.10, ti
       const next = share(eye.clone().addScaledVector(d, f * sSea))
       expect(next).toBeGreaterThan(last)
       last = next
+    }
+  })
+})
+
+describe('the flat sheet from under it (tides-0oi.3)', () => {
+  const sea = sceneRadius(12742000)
+  const km = 1 / EARTH_KM_PER_UNIT
+  const earth = { key: 'earth', position: new THREE.Vector3(), radius: sea }
+  // The main view's camera in close zoom, the phone's portrait: down `tilt`
+  // degrees from straight down (toward -Z) at `altitude` km over the mesh.
+  const pose = (camera: THREE.PerspectiveCamera, mesh: THREE.Object3D, altitude: number, tilt: number) => {
+    const at = new THREE.Vector3(0, sea + altitude * km, 0)
+    const down = THREE.MathUtils.degToRad(tilt)
+    const look = at.clone().add(new THREE.Vector3(0, -Math.cos(down), -Math.sin(down)))
+    camera.up.set(0, Math.sin(down), -Math.cos(down)).applyQuaternion(mesh.quaternion)
+    camera.position.copy(mesh.localToWorld(at))
+    camera.lookAt(mesh.localToWorld(look))
+    camera.updateMatrixWorld()
+  }
+  const setup = (flat: boolean) => {
+    const clouds = createCloudLayer(createEclipseShadow('earth'), flat)
+    clouds.uniforms.uSeaLevel.value = sea
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), clouds.material)
+    const main = new THREE.PerspectiveCamera(30, 390 / 844, 2e-4, 100)
+    updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.01, 0), 800, 30, main)
+    return { clouds, mesh, main }
+  }
+
+  it('writes no depth from under the sheet, and as before elsewhere', () => {
+    const { fragmentShader } = createCloudLayer(createEclipseShadow('earth'), true).material
+    const back = new Set(['CLOUD_FLAT', 'FLIP_SIDED'])
+    expect(preprocess(fragmentShader, back)).toContain('gl_FragDepth = z;')
+    expect(preprocess(fragmentShader, new Set([...back, 'CLOUD_UNDER_SHEET']))).not.toMatch(/gl_FragDepth\s*=/)
+    // And but for that, the same program.
+    expect(preprocess(fragmentShader, new Set([...back, 'CLOUD_UNDER_SHEET']))).toBe(
+      preprocess(fragmentShader, back).replace('\n  gl_FragDepth = z;', '')
+    )
+  })
+
+  it('ends rays at a sphere every ground drawn encloses', () => {
+    // Each facet's nearest point to the centre, on the coarsest globe and the
+    // limb's (the ground is only ever raised over them).
+    for (const [width, height] of [EARTH_BASE_SEGMENTS, LIMB_SEGMENTS]) {
+      const sphere = new THREE.SphereGeometry(1, width, height)
+      const position = sphere.getAttribute('position')
+      const index = sphere.getIndex()!
+      const triangle = new THREE.Triangle()
+      const nearest = new THREE.Vector3()
+      const origin = new THREE.Vector3()
+      let lowest = Infinity
+      for (let i = 0; i < index.count; i += 3) {
+        triangle.setFromAttributeAndIndices(position, index.getX(i), index.getX(i + 1), index.getX(i + 2))
+        lowest = Math.min(lowest, triangle.closestPointToPoint(origin, nearest).length())
+      }
+      expect(lowest, `${width}x${height}`).toBeGreaterThan(SHEET_GROUND_SPHERE)
+      sphere.dispose()
+    }
+    // The coarsest sags past 0.9998 of sea level, the limb sphere's bound.
+    expect(SHEET_GROUND_SPHERE).toBeLessThan(1 - (1 - Math.cos(Math.PI / EARTH_BASE_SEGMENTS[1])))
+  })
+
+  it('turns to the program without depth for the camera under the sheet alone, its defines in order', () => {
+    const { clouds, mesh, main } = setup(true)
+    const panel = new THREE.PerspectiveCamera(30, 1, 2e-4, 100)
+    const defined = () => Object.keys(clouds.material.defines)
+    try {
+      pose(main, mesh, 20, 60)
+      clouds.faceCamera(mesh, main)
+      expect(clouds.material.side).toBe(THREE.BackSide)
+      expect(defined()).toEqual(['CLOUD_FLAT', 'CLOUD_UNDER_SHEET'])
+      // Typed after it, in order by name, as the warm-ups turn them
+      // (compileSide()): three keys a program by their order.
+      clouds.uniforms.uCloudTyped.value = 1
+      clouds.faceCamera(mesh, main)
+      expect(defined()).toEqual(['CLOUD_FLAT', 'CLOUD_TYPED', 'CLOUD_UNDER_SHEET'])
+      const version = clouds.material.version
+      clouds.faceCamera(mesh, main)
+      expect(clouds.material.version).toBe(version)
+      // The Moon Phase panel's camera, at the same place, keeps its program.
+      pose(panel, mesh, 20, 60)
+      clouds.faceCamera(mesh, panel)
+      expect(defined()).toEqual(['CLOUD_FLAT', 'CLOUD_TYPED'])
+      // Over the sheet, within reach of it or not.
+      pose(main, mesh, CLOUD_FLAT_ALTITUDE * EARTH_KM_PER_UNIT + 1e-3, 60)
+      clouds.faceCamera(mesh, main)
+      expect(clouds.material.side).toBe(THREE.BackSide)
+      expect(defined()).not.toContain('CLOUD_UNDER_SHEET')
+      pose(main, mesh, 400, 60)
+      clouds.faceCamera(mesh, main)
+      expect(defined()).not.toContain('CLOUD_UNDER_SHEET')
+    } finally {
+      clearLimbView()
+      clouds.dispose()
+    }
+  })
+
+  it('never turns the relief shell to it', () => {
+    const { clouds, mesh, main } = setup(false)
+    try {
+      pose(main, mesh, 8, 0)
+      clouds.faceCamera(mesh, main)
+      expect(clouds.material.side).toBe(THREE.BackSide)
+      expect(clouds.material.defines).not.toHaveProperty('CLOUD_UNDER_SHEET')
+      expect(clouds.material.visible).toBe(true)
+      const renderer = { compile: vi.fn() }
+      clouds.warmUnderSheet(renderer, mesh, main, new THREE.Scene())
+      expect(renderer.compile).not.toHaveBeenCalled()
+    } finally {
+      clearLimbView()
+      clouds.dispose()
+    }
+  })
+
+  it('skips the draw for a camera that sees only ground, and only for it', () => {
+    const { clouds, mesh, main } = setup(true)
+    // Turned and moved, as the Earth is: the test is in the mesh's frame.
+    mesh.position.set(40, -3, 7)
+    mesh.rotation.set(0.4, 1.1, -0.3)
+    mesh.updateMatrixWorld()
+    const panel = new THREE.PerspectiveCamera(30, 1, 2e-4, 100)
+    const drawnAt = (camera: THREE.PerspectiveCamera, altitude: number, tilt: number) => {
+      pose(camera, mesh, altitude, tilt)
+      clouds.faceCamera(mesh, camera)
+      return clouds.material.visible
+    }
+    try {
+      // Straight down at the zoom floor, and at the audit's ground-filled
+      // poses; the horizon, up, and over the sheet draw.
+      expect(drawnAt(main, 1, 0)).toBe(false)
+      expect(drawnAt(main, 8, 0)).toBe(false)
+      expect(drawnAt(main, 20, 60)).toBe(false)
+      expect(drawnAt(main, 12, 70)).toBe(false)
+      expect(drawnAt(main, 20, 90)).toBe(true)
+      expect(drawnAt(main, 15, 80)).toBe(true)
+      expect(drawnAt(main, 20, 150)).toBe(true)
+      expect(drawnAt(main, 400, 0)).toBe(true)
+      // The panel's camera, drawn between the main view's, keeps drawing.
+      expect(drawnAt(main, 2, 0)).toBe(false)
+      expect(drawnAt(panel, 2, 0)).toBe(true)
+      expect(drawnAt(main, 2, 0)).toBe(false)
+      // On a reversed depth buffer too.
+      const reversed = new THREE.PerspectiveCamera(30, 390 / 844, 2e-4, 100)
+      // As three's renderer sets it, for a reversed depth buffer.
+      ;(reversed as unknown as { _reversedDepth: boolean })._reversedDepth = true
+      clearLimbView()
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.01, 0), 800, 30, reversed)
+      reversed.updateProjectionMatrix()
+      expect(drawnAt(reversed, 20, 60)).toBe(false)
+      expect(drawnAt(reversed, 20, 90)).toBe(true)
+      // An orthographic camera is never skipped.
+      const ortho = new THREE.OrthographicCamera()
+      clearLimbView()
+      updateLimbView('earth', [earth], new THREE.Vector3(0, sea + 0.01, 0), 800, 30, ortho)
+      ortho.position.copy(mesh.localToWorld(new THREE.Vector3(0, sea + km, 0)))
+      ortho.updateMatrixWorld()
+      clouds.faceCamera(mesh, ortho)
+      expect(clouds.material.visible).toBe(true)
+    } finally {
+      clearLimbView()
+      clouds.dispose()
+    }
+  })
+
+  it('compiles the back faces\' programs ahead, under the sheet and over it, typed or not, and turns back', () => {
+    const { clouds, mesh, main } = setup(true)
+    let seen: { side: THREE.Side; defines: string[] }[] = []
+    const renderer = {
+      compile: vi.fn(() => {
+        seen.push({ side: clouds.material.side, defines: Object.keys(clouds.material.defines) })
+        return new Set<THREE.Material>()
+      }),
+    }
+    // In order by name, as faceCamera() draws them.
+    const ALL = [
+      ['CLOUD_FLAT'],
+      ['CLOUD_FLAT', 'CLOUD_UNDER_SHEET'],
+      ['CLOUD_FLAT', 'CLOUD_TYPED'],
+      ['CLOUD_FLAT', 'CLOUD_TYPED', 'CLOUD_UNDER_SHEET'],
+    ]
+    const compiled = () => seen.map(({ side, defines }) => [side, defines.join('+')].join(' ')).sort()
+    const expected = ALL.map((defines) => [THREE.BackSide, defines.join('+')].join(' ')).sort()
+    try {
+      const version = clouds.material.version
+      clouds.warmUnderSheet(renderer, mesh, main, new THREE.Scene())
+      expect(compiled()).toEqual(expected)
+      expect(clouds.material.side).toBe(THREE.FrontSide)
+      expect(Object.keys(clouds.material.defines)).toEqual(['CLOUD_FLAT'])
+      expect(clouds.material.version).toBeGreaterThan(version)
+      // From under the sheet, typed, the same four, and back as it was.
+      clouds.uniforms.uCloudTyped.value = 1
+      pose(main, mesh, 8, 0)
+      clouds.faceCamera(mesh, main)
+      seen = []
+      clouds.warmUnderSheet(renderer, mesh, main, new THREE.Scene())
+      expect(compiled()).toEqual(expected)
+      expect(clouds.material.side).toBe(THREE.BackSide)
+      expect(Object.keys(clouds.material.defines)).toEqual(ALL[3])
+      // Each as faceCamera() draws it, under the sheet and just over it.
+      const over = CLOUD_FLAT_ALTITUDE * EARTH_KM_PER_UNIT + 1e-3
+      const drawn = new Set<string>()
+      for (const [altitude, typed] of [[8, 0], [over, 1], [over, 0], [8, 1]] as const) {
+        clouds.uniforms.uCloudTyped.value = typed
+        pose(main, mesh, altitude, 0)
+        clouds.faceCamera(mesh, main)
+        expect(clouds.material.side).toBe(THREE.BackSide)
+        drawn.add([THREE.BackSide, Object.keys(clouds.material.defines).join('+')].join(' '))
+      }
+      expect([...drawn].sort()).toEqual(expected)
+    } finally {
+      clearLimbView()
+      clouds.dispose()
     }
   })
 })

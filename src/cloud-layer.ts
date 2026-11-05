@@ -107,6 +107,35 @@ export const CLOUD_LAYER_TOP =
 export const CLOUD_FLAT_ALTITUDE =
   TERRAIN_DISPLACEMENT * TERRAIN_MAX_GREY + CLOUD_CLEARANCE + CLOUD_UNITS_PER_KM * 1.5
 
+/**
+ * A sphere, as a share of sea level, that every ground drawn encloses
+ * (tides-0oi.3): the ground is only ever raised over sea level, but its
+ * facets cut under it between the vertices, by 1.9 km on the coarsest globe
+ * (128x128) and 0.5 km on the limb's; this is 3.2 km under. From under the
+ * flat sheet, a ray that meets it meets the ground first, and the sheet only
+ * on its far side, past the globe, where the ground's depth hides it.
+ */
+export const SHEET_GROUND_SPHERE = 0.9995
+
+/**
+ * Whether every ray from `eye` along `directions` meets the sphere of
+ * `radius` round the origin ahead of the eye (the eye outside it). The rays
+ * that do fill a cone, which is convex, so where a view's four corner rays
+ * all meet it, every ray between them does too: the view sees nothing but
+ * that sphere (the flat sheet's draw is skipped there, tides-0oi.3). The
+ * test cloudShaders.ts makes of each ray against SHEET_GROUND_SPHERE.
+ */
+export function raysMeetSphere(eye: Vec3, directions: readonly Vec3[], radius: number): boolean {
+  const c = eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2] - radius * radius
+  if (!(c > 0)) return false
+  return directions.every((d) => {
+    const length = Math.hypot(d[0], d[1], d[2])
+    if (!(length > 0)) return false
+    const b = (eye[0] * d[0] + eye[1] * d[1] + eye[2] * d[2]) / length
+    return b < 0 && b * b - c > 0
+  })
+}
+
 /** Where no satellite measured a top: thicker (brighter) cloud, taller tops. */
 export function defaultTopKm(alpha: number): number {
   return 1.5 + 7 * alpha * alpha
