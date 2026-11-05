@@ -3,8 +3,8 @@
 // for the rest of the flight (ship/body-map-residency.ts). Outside it: the
 // map, or, while a flight has left it retired, its proxy until its turn to
 // come back (one upload a frame).
-import { flushSync, useFrame } from '@react-three/fiber'
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { flushSync, useFrame, useThree } from '@react-three/fiber'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import * as THREE from 'three'
 import { useStore } from '../store'
 import {
@@ -14,6 +14,7 @@ import {
   initialBodyMap,
   isRetiredMap,
   mapProxy,
+  promoteAtDraw,
   promoteMap,
   retireMap,
   shipMapStep,
@@ -23,16 +24,33 @@ import {
 
 const _position = new THREE.Vector3()
 const _scale = new THREE.Vector3()
+const _drawPosition = new THREE.Vector3()
+const _drawScale = new THREE.Vector3()
+
+/** The globe mesh's draw-time check (Object3D.onBeforeRender's arguments). */
+export type BodyMapDrawCheck = (this: THREE.Object3D, ...args: Parameters<THREE.Object3D['onBeforeRender']>) => void
+
+export interface ShipBodyMap {
+  /** What uMap samples. */
+  shown: THREE.Texture | null
+  /**
+   * For the globe mesh's onBeforeRender in ship mode: a planet the frame
+   * callbacks couldn't measure yet (its first frame, before its orbit places
+   * it) that draws past DRAW_PROMOTE_RADIUS_PX on its proxy gets its full map
+   * before that draw.
+   */
+  onBeforeDraw: BodyMapDrawCheck | undefined
+}
 
 /**
  * The texture standing in for `map`, or `map`. `anchor` sits at the body's
- * centre; `radius` is in its local units.
+ * centre; `radius` is in its local units, as is the globe mesh's.
  */
 export function useShipBodyMap(
   map: THREE.Texture | null,
   anchor: RefObject<THREE.Object3D | null>,
   radius: number
-): THREE.Texture | null {
+): ShipBodyMap {
   const shipMode = useStore((s) => s.shipMode)
   const [held, setHeld] = useState<THREE.Texture | null>(() => map && initialBodyMap(map))
   const shown = held && (held === map || fullMapOf(held) === map) ? held : map
@@ -89,5 +107,25 @@ export function useShipBodyMap(
     if (shipMode && showsProxy && map && !isRetiredMap(map)) retireMap(map)
   }, [shipMode, showsProxy, map])
 
-  return shown
+  const screenPx = useThree((s) => s.size.height * s.viewport.dpr)
+  const onBeforeDraw = useMemo<BodyMapDrawCheck | undefined>(() => {
+    if (!shipMode || !map) return undefined
+    return function (renderer, _scene, camera, _geometry, material) {
+      if (promoted.current) return
+      const uniform = (material as THREE.ShaderMaterial).uniforms?.uMap
+      if (!uniform || fullMapOf(uniform.value as THREE.Texture | null) !== map) return
+      _drawPosition.setFromMatrixPosition(this.matrixWorld)
+      const worldRadius = radius * _drawScale.setFromMatrixScale(this.matrixWorld).x
+      const radiusPx = bodyRadiusPx(camera as THREE.PerspectiveCamera, _drawPosition, worldRadius, screenPx)
+      if (!promoteAtDraw(radiusPx)) return
+      // Uniforms upload after onBeforeRender, so this draw samples the map;
+      // the state follows, and the frame callback sees it promoted.
+      promoted.current = true
+      promoteMap(renderer, map)
+      uniform.value = map
+      setHeld(map)
+    }
+  }, [shipMode, map, radius, screenPx])
+
+  return { shown, onBeforeDraw }
 }

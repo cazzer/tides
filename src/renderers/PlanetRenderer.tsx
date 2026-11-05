@@ -22,7 +22,7 @@ import {
 } from './planetFrame'
 import { usePlanetTextures } from './planetTextures'
 import { useFlightTexture } from './useFlightTexture'
-import { useShipBodyMap } from './useShipBodyMap'
+import { useShipBodyMap, type BodyMapDrawCheck } from './useShipBodyMap'
 import type { FlightTextureKey } from '../flight-textures'
 import { SUNLIGHT_INTENSITY } from '../lighting'
 import { isLowQuality } from '../quality'
@@ -139,7 +139,8 @@ function TexturedSurface(props: PlanetSurfaceProps) {
         {...props}
         map={map}
         ringMap={ringMap}
-        shownMap={flightMap ?? shipMap}
+        shownMap={flightMap ?? shipMap.shown}
+        onBeforeDraw={shipMap.onBeforeDraw}
       />
     </group>
   )
@@ -154,14 +155,24 @@ function SurfaceMesh({
   map,
   ringMap,
   shownMap = map,
+  onBeforeDraw,
 }: PlanetSurfaceProps & {
   /** Picks the material's variant (textured or not). */
   map: THREE.Texture | null
   ringMap: THREE.Texture | null
   /** What uMap samples: the flight map, ship mode's stand-in, or `map`. */
   shownMap?: THREE.Texture | null
+  /** Runs after the Sun's direction is set, before each draw. */
+  onBeforeDraw?: BodyMapDrawCheck
 }) {
   const sun = useSunDirection()
+  const onBeforeRender = useMemo<BodyMapDrawCheck>(() => {
+    if (!onBeforeDraw) return sun.onBeforeRender
+    return function (...args) {
+      sun.onBeforeRender.call(this)
+      onBeforeDraw.apply(this, args)
+    }
+  }, [sun, onBeforeDraw])
   const shadowed = ringShadow !== undefined
   const material = useMemo(
     () => planetSurfaceMaterial(sun.uniform, { map, ringMap, shadowed }),
@@ -199,7 +210,7 @@ function SurfaceMesh({
         geometry={geometry}
         material={material}
         raycast={meshBounds}
-        onBeforeRender={sun.onBeforeRender}
+        onBeforeRender={onBeforeRender}
       />
       {/* Hides the glow behind it, a planet across the Sun (tides-64u.3). */}
       <GlowOccluder geometry={geometry} />

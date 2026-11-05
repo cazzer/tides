@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
+  DRAW_PROMOTE_RADIUS_PX,
   PROMOTE_RADIUS_PX,
   PROXY_WIDTH,
   URGENT_RADIUS_PX,
@@ -11,6 +12,7 @@ import {
   fullMapOf,
   offAxisScale,
   projectedRadiusPx,
+  promoteAtDraw,
   proxyBaseLevel,
   shipMapStep,
   shouldUploadNow,
@@ -309,6 +311,33 @@ describe('the proxy stays exact off the view axis', () => {
           expect(Math.log2(footprint / ((2 * Math.PI) / PROXY_WIDTH))).toBeGreaterThan(1.9)
           const gateFootprint = centreFootprint(eyeOverR(4 * URGENT_RADIUS_PX * cos2, screen), screen) * cos2
           expect(Math.log2(Math.PI / (PROXY_WIDTH / 2) / gateFootprint)).toBeLessThanOrEqual(1)
+        }
+      }
+    }
+  })
+})
+
+describe('promoteAtDraw', () => {
+  it('leaves the frame callbacks the promotions they can make in time', () => {
+    expect(promoteAtDraw(URGENT_RADIUS_PX + 1)).toBe(false)
+    expect(promoteAtDraw(DRAW_PROMOTE_RADIUS_PX)).toBe(false)
+    expect(promoteAtDraw(DRAW_PROMOTE_RADIUS_PX + 0.01)).toBe(true)
+    expect(promoteAtDraw(80)).toBe(true)
+  })
+
+  it('swaps while the proxy is still exact, a level of LOD margin left, into the corners', () => {
+    for (const aspect of [390 / 844, 16 / 9]) {
+      for (const fov of [SHIP_FOV, 70, 100]) {
+        for (const rows of [600, 1688]) {
+          const screen = { rows, fov }
+          const tanHalf = Math.tan(((fov / 2) * Math.PI) / 180)
+          const corner = Math.atan(tanHalf * Math.sqrt(1 + aspect * aspect))
+          for (let k = 0; k <= 10; k++) {
+            const cos2 = Math.cos(((corner * k) / 10) * 0.999) ** 2
+            const x = eyeOverR(DRAW_PROMOTE_RADIUS_PX * cos2, screen)
+            const footprint = centreFootprint(x, screen) * cos2
+            expect(Math.log2(footprint / ((2 * Math.PI) / PROXY_WIDTH))).toBeGreaterThan(0.9)
+          }
         }
       }
     }

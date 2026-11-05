@@ -32,6 +32,13 @@ export const PROXY_WIDTH = 256
 export const PROMOTE_RADIUS_PX = 8
 /** Past this a promotion skips the frame's upload budget. */
 export const URGENT_RADIUS_PX = 10
+/**
+ * Past this a planet still bound to its proxy at draw time swaps in its full
+ * map right then (promoteAtDraw): the proxy keeps a level of LOD margin up to
+ * here, and only a frame where the frame callbacks couldn't measure the body
+ * (its first, before its orbit placed it) or a jump past URGENT reaches it.
+ */
+export const DRAW_PROMOTE_RADIUS_PX = 2 * URGENT_RADIUS_PX
 
 /**
  * The radius in screen px of a sphere of `radius` whose centre is `distance`
@@ -73,6 +80,14 @@ export function bodyRadiusPx(
   const distance = _toBody.length()
   const cos = distance > 0 ? camera.getWorldDirection(_forward).dot(_toBody) / distance : 1
   return projectedRadiusPx(distance, radius, screenPx, camera.fov) * offAxisScale(cos, camera.fov, camera.aspect)
+}
+
+/**
+ * Whether a body drawn at `radiusPx` while bound to its proxy must swap in
+ * its full map before this draw (onBeforeRender), outside the frame budget.
+ */
+export function promoteAtDraw(radiusPx: number): boolean {
+  return radiusPx > DRAW_PROMOTE_RADIUS_PX
 }
 
 export type BodyMapTier = 'proxy' | 'full'
