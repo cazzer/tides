@@ -26,7 +26,7 @@ interface Run {
   gpu?: (dpr: number, at: number) => number
   /** The frame's CPU time between the effects (timed). */
   cpu?: (at: number) => number
-  /** Main-thread work before the frame's effects start (timed as lag). */
+  /** Main-thread work before the frame's effects start (timed as lag; Chrome: it stretches the next interval). */
   lag?: (at: number) => number
   /** Main-thread work nothing times (a GC pause the lag misses). */
   hitch?: (at: number) => number
@@ -39,16 +39,19 @@ function sim(state: PacedDprState, clock: { at: number }, log: PacedDprChange[],
   const config = run.config ?? DEFAULT_PACED_DPR_CONFIG
   const end = clock.at + run.s * 1000
   let lastCpu = cpu(clock.at)
+  let lastLag = 0.5
   while (clock.at < end) {
     const v = vsync(clock.at)
-    const lagMs = lag(clock.at)
-    const busy = Math.max(gpu(state.dpr, clock.at), lastCpu + lagMs + hitch(clock.at))
+    // The previous frame started lastLag late and ran lastCpu: this interval is the longer of that and the GPU.
+    const busy = Math.max(gpu(state.dpr, clock.at), lastCpu + lastLag + hitch(clock.at))
     const intervalMs = Math.max(1, Math.ceil(busy / v - 1e-9)) * v
     clock.at += intervalMs
-    const before = state.dpr
+    const lagMs = lag(clock.at)
+    const before = state.last
     stepPacedDpr(state, { at: clock.at, intervalMs, cpuMs: lastCpu, lagMs, kind, nativeDpr: native }, config)
-    if (state.dpr !== before && state.last) log.push(state.last)
+    if (state.last !== before && state.last) log.push(state.last)
     lastCpu = cpu(clock.at)
+    lastLag = lagMs
   }
 }
 
@@ -92,16 +95,19 @@ describe('paced dpr', () => {
 
   it('drops fast on sustained 30 fps, a level at a time, down to the floor', () => {
     const { state, clock, log } = setup()
-    sim(state, clock, log, { s: 20, kind: 'close', gpu: () => 20 })
-    expect(log.map((c) => [c.to, c.reason])).toEqual([
+    // Fill-bound: 28 ms at 2, 21 at 1.75, 16 at 1.5.
+    sim(state, clock, log, { s: 20, kind: 'close', gpu: (dpr) => 28 * (dpr / 2) ** 2 })
+    expect(log.slice(0, 2).map((c) => [c.to, c.reason])).toEqual([
       [1.75, 'fast'],
       [1.5, 'fast'],
     ])
+    // Raises back to 1.75 bounce.
+    expect(log.slice(2).filter((c) => c.to === 1.5).every((c) => c.bounced)).toBe(true)
     // 20 intervals of 33 ms, not a 60-sample window.
     expect(log[0].at - 1000).toBeLessThan(1000)
     expect(log[1].at - log[0].at).toBeLessThan(750 + 1000)
     expect(log[0].p50).toBeCloseTo(2 * VSYNC)
-    expect(state.dpr).toBe(1.5)
+    expect(log[log.length - 1].to).toBe(log[log.length - 1].reason === 'raise' ? 1.75 : 1.5)
   })
 
   it('drops on a full window when only some frames miss', () => {
@@ -114,7 +120,7 @@ describe('paced dpr', () => {
   it('climbs back to the ceiling once frames fit again', () => {
     const { state, clock, log } = setup()
     const heavyUntil = 1000 + 6000
-    sim(state, clock, log, { s: 30, kind: 'close', gpu: (_, at) => (at < heavyUntil ? 20 : 5) })
+    sim(state, clock, log, { s: 30, kind: 'close', gpu: (dpr, at) => (at < heavyUntil ? 28 * (dpr / 2) ** 2 : 5) })
     expect(log.map((c) => c.to)).toEqual([1.75, 1.5, 1.75, 2])
     expect(state.dpr).toBe(2)
   })
@@ -146,9 +152,10 @@ describe('paced dpr', () => {
     const { state, clock, log } = setup(3, 2.75)
     sim(state, clock, log, { s: 6 })
     expect(state.dpr).toBe(3)
-    // 15 s all CPU-bound (no decision), then heavy at 3.
-    sim(state, clock, log, { s: 15, cpu: () => 20 })
-    sim(state, clock, log, { s: 4, gpu: (dpr) => (dpr >= 3 ? 20 : 5) })
+    // 15 s all CPU-bound (no decision, no probe), then heavy at 3.
+    const config = { ...DEFAULT_PACED_DPR_CONFIG, cpuProbeMs: 600000 }
+    sim(state, clock, log, { s: 15, cpu: () => 20, config })
+    sim(state, clock, log, { s: 4, gpu: (dpr) => (dpr >= 3 ? 20 : 5), config })
     expect(log[1]).toMatchObject({ from: 3, to: 2.75, reason: 'held', bounced: false, dwellMs: 4000 })
   })
 
@@ -179,11 +186,24 @@ describe('paced dpr', () => {
     expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'held', dwellMs: 4000 })
   })
 
-  it('ignores misses after CPU-bound frames', () => {
+  it('ignores misses after CPU-bound frames: one probe, restored, then a long hold', () => {
     const { state, clock, log } = setup()
-    sim(state, clock, log, { s: 20, kind: 'close', gpu: () => 5, cpu: () => 20 })
-    expect(log).toEqual([])
+    sim(state, clock, log, { s: 60, kind: 'close', gpu: () => 5, cpu: () => 20 })
+    expect(log.map((c) => [c.from, c.to, c.reason])).toEqual([
+      [2, 1.75, 'probe'],
+      [1.75, 2, 'cpu'],
+    ])
+    expect(log[1].cpuShare).toBeGreaterThan(0.5)
+    expect(log[1].cpuMedian).toBeCloseTo(20)
     expect(state.dpr).toBe(2)
+  })
+
+  it('keeps a probe drop when the "CPU" time scales with pixels (GPU backpressure)', () => {
+    const { state, clock, log } = setup()
+    // The main thread blocks in WebGL calls for the GPU: 20 ms at 2, 15.3 at 1.75.
+    sim(state, clock, log, { s: 30, kind: 'close', gpu: () => 5, cpu: () => 20 * (state.dpr / 2) ** 2 })
+    expect(log.map((c) => c.reason)).toEqual(['probe'])
+    expect(state.dpr).toBe(1.75)
   })
 
   it('ignores stalls before the effects (lag) at ~3 a second, and still raises', () => {
@@ -207,7 +227,8 @@ describe('paced dpr', () => {
     let n = 0
     // 2 of 3 frames run long on the CPU; the rest hold the budget.
     sim(state, clock, log, { s: 30, cpu: () => (n++ % 3 ? 20 : 4) })
-    expect(log).toEqual([])
+    expect(log.every((c) => c.reason === 'probe' || c.reason === 'cpu')).toBe(true)
+    expect(state.dpr).toBe(2)
   })
 
   it('goes from 3 in the system view to 2 at close zoom in one step, and back', () => {
@@ -219,6 +240,110 @@ describe('paced dpr', () => {
     sim(state, clock, log, { s: 5 })
     expect(state.dpr).toBe(3)
     expect(log[1]).toMatchObject({ from: 2, to: 3, reason: 'kind' })
+  })
+
+  it('restores and holds on a display capped at 30 Hz (iOS Low Power Mode), cheap frames', () => {
+    const { state, clock, log } = setup()
+    sim(state, clock, log, { s: 120, vsync: () => 2 * VSYNC, gpu: () => 3 })
+    expect(log.map((c) => [c.to, c.reason])).toEqual([
+      [1.75, 'fast'],
+      [1.5, 'fast'],
+      [2, 'capped'],
+    ])
+    expect(log[2].at - 1000).toBeLessThan(5000)
+    expect(state.capped).toBe(true)
+    // The cap lifts: frames fit again and it climbs.
+    sim(state, clock, log, { s: 30 })
+    expect(state.capped).toBe(false)
+    expect(state.dpr).toBeGreaterThan(2)
+  })
+
+  it('keeps the floor when it shortened the frames (pixels were the limit)', () => {
+    const { state, clock, log } = setup()
+    // 50 ms at 2 (3 vsyncs), 33 at 1.5: still missing at the floor, but faster.
+    sim(state, clock, log, { s: 20, kind: 'close', gpu: (dpr) => 45 * (dpr / 2) ** 2 })
+    expect(log.map((c) => c.reason)).toEqual(['fast', 'fast'])
+    expect(state.dpr).toBe(1.5)
+  })
+
+  it('rides out a view switch\'s heavy transition without a drop', () => {
+    const { state, clock, log } = setup(3, 3)
+    sim(state, clock, log, { s: 5 })
+    const switchAt = clock.at
+    // 1.3 s of 30 fps right after zooming in, then fine.
+    sim(state, clock, log, { s: 15, kind: 'close', gpu: (_, at) => (at - switchAt < 1300 ? 20 : 5) })
+    expect(log.map((c) => [c.to, c.reason])).toEqual([[2, 'kind']])
+  })
+
+  it('needs a full window for the first decision after a view switch', () => {
+    const { state, clock, log } = setup(3, 3)
+    sim(state, clock, log, { s: 5 })
+    const switchAt = clock.at
+    sim(state, clock, log, { s: 10, kind: 'close', gpu: (dpr) => 28 * (dpr / 2) ** 2 })
+    expect(log[1]).toMatchObject({ to: 1.75, reason: 'drop', n: 60 })
+    expect(log[1].at - switchAt).toBeGreaterThan(1500 + 60 * VSYNC)
+  })
+
+  it('clears a raise\'s probation on a view switch', () => {
+    const { state, clock, log } = setup(3, 2.75)
+    sim(state, clock, log, { s: 6 })
+    expect(state.probation).toBe(true)
+    sim(state, clock, log, { s: 0.2, kind: 'close' })
+    expect(state.probation).toBe(false)
+    sim(state, clock, log, { s: 6, kind: 'close', gpu: (dpr) => 28 * (dpr / 2) ** 2 })
+    expect(log.find((c) => c.reason === 'drop' || c.reason === 'fast')).toMatchObject({ bounced: false })
+  })
+
+  it('raises past an untimed hitch a second only with raiseMaxMisses 2', () => {
+    for (const [misses, climbs] of [
+      [1, false],
+      [2, true],
+    ] as const) {
+      const { state, clock, log } = setup()
+      const hitch = every(60)
+      const config = { ...DEFAULT_PACED_DPR_CONFIG, raiseMaxMisses: misses }
+      sim(state, clock, log, { s: 30, config, hitch: () => (hitch() ? 25 : 0) })
+      expect(log.some((c) => c.reason === 'raise')).toBe(climbs)
+      expect(log.every((c) => c.reason === 'raise')).toBe(true)
+    }
+  })
+
+  it('fast-drops only when more than half the latest intervals miss', () => {
+    const state = createPacedDprState(3, 2)
+    const config = { ...DEFAULT_PACED_DPR_CONFIG, settleMs: 0 }
+    let at = 1000
+    const step = (intervalMs: number) => {
+      at += intervalMs
+      stepPacedDpr(state, { at, intervalMs, cpuMs: 2, lagMs: 0, kind: 'close', nativeDpr: 3 }, config)
+    }
+    step(VSYNC)
+    // 20 intervals over 500 ms, exactly half over the drop line.
+    for (let i = 0; i < 10; i++) {
+      step(2 * VSYNC)
+      step(VSYNC)
+    }
+    expect(state.dpr).toBe(2)
+    step(2 * VSYNC)
+    step(2 * VSYNC)
+    expect(state.dpr).toBe(1.75)
+    expect(state.last?.reason).toBe('fast')
+  })
+
+  it('keeps the ring consistent at capacity', () => {
+    const state = createPacedDprState(3, 2)
+    let at = 1000
+    for (let i = 0; i < 3000; i++) {
+      at += 1000 / 120
+      const cpuMs = i % 10 < 9 ? 14 : 3
+      stepPacedDpr(state, { at, intervalMs: 1000 / 120, cpuMs, lagMs: 0, kind: 'system', nativeDpr: 3 })
+    }
+    expect(state.count).toBe(512)
+    let kept = 0
+    for (let k = 0; k < state.count; k++) if (!state.cpuBound[(state.head + k) % 512]) kept++
+    expect(kept).toBe(state.kept)
+    for (let k = 1; k < state.count; k++) {
+      expect(state.times[(state.head + k) % 512]).toBeGreaterThan(state.times[(state.head + k - 1) % 512])
+    }
   })
 
   it('holds its level when an adaptive display goes from 120 to 60 Hz', () => {
@@ -284,6 +409,7 @@ describe('parsePacedDprConfig', () => {
 
   it('clamps out-of-range values and skips garbage with a warning', () => {
     const warn = vi.fn()
+    expect(parsePacedDprConfig('?dprctl=minSamples:1000', vi.fn())?.minSamples).toBe(256)
     const config = parsePacedDprConfig('?dprctl=floor:9,minSamples:2.7,fixed:-1,bogus:3,windowMs:abc,,:,dropP95,%00', warn)
     expect(config).toEqual({ ...DEFAULT_PACED_DPR_CONFIG, floor: 4, minSamples: 5, fixed: 0.5 })
     expect(warn).toHaveBeenCalledTimes(8)

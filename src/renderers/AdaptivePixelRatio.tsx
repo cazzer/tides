@@ -150,7 +150,7 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   const unsubscribeBefore = addEffect((timestamp) => {
     const startedAt = performance.now()
     if (lastAt != null) {
-      const before = state.dpr
+      const before = state.last
       sample.at = timestamp
       sample.intervalMs = timestamp - lastAt
       sample.cpuMs = lastCpuMs
@@ -160,7 +160,8 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
       sample.kind = viewKindOf(useStore.getState())
       sample.nativeDpr = window.devicePixelRatio
       stepPacedDpr(state, sample, config)
-      if (state.dpr !== before && state.last) {
+      // Every change, and the events that keep the ratio ('capped').
+      if (state.last !== before && state.last) {
         debug?.changes.push(state.last)
         if (import.meta.env.DEV) {
           const { from, to, reason, p50, p95, misses, n } = state.last

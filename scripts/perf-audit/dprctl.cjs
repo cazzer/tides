@@ -2,7 +2,8 @@
 // (390x844, native dpr 3, quality=low, system view). Three phases, each under the GPU lock, as the controller reads
 // frame intervals that other streams' GPU work would disturb:
 //   a) raise:    the system view climbs from R3F's 2 to the display's 3.
-//   c) negative: CDP CPU throttling (x30) makes frames miss on the main thread; the ratio must not drop.
+//   c) negative: CDP CPU throttling (x30) makes frames miss on the main thread; the ratio must not drop (one CPU
+//                probe a level down, restored as 'cpu' when the CPU time doesn't fall, is expected).
 //   b) drop:     a fill-heavy full-screen quad is added to the main view, sized
 //                so the frame misses vsync at dpr 2 (alpha ~1e-5, so it blends to the same pixels); the ratio should fall to 1.5-1.75, then climb back to 3 once the
 //                quad is removed.
