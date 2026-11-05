@@ -32,12 +32,12 @@ import { moonRaycast, type MoonPickData } from './moon-pick'
 import { useLimbBodyAmong, useLimbSphere, useWantsLimbSphere, type SphereSegments } from '../ship/limb-detail'
 import {
   bodyRadiusPx,
-  cachedMapProxy,
   fullMapOf,
   initialBodyMap,
   isRetiredMap,
   mapProxy,
   promoteMap,
+  readyMapProxy,
   retireMap,
   shipMapStep,
   uploadSlot,
@@ -139,7 +139,7 @@ function stepMoonMaps(
     if (promoted.has(map)) continue
     mesh.getWorldPosition(_moonPosition)
     const radiusPx = bodyRadiusPx(camera, _moonPosition, mesh.getWorldScale(_moonScale).x, screenPx)
-    const proxy = cachedMapProxy(map)
+    const proxy = readyMapProxy(gl, map)
     const step = shipMapStep(false, radiusPx, uploadSlot.free(frame), bound !== map, proxy !== undefined)
     if (step === 'promote') {
       uploadSlot.take(frame)
@@ -245,14 +245,8 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     return () => MOON_KEYS.forEach((key) => setPlanet(key, undefined))
   }, [interactive, refs, setPlanet])
 
-  useFrame(({ gl, camera, size, viewport }) => {
-    const t = useStore.getState().timestamp
-    if (t != null) placeMoons(refs, t, distanceScale)
-    // Uploads and read-backs share the page's one-a-frame budget.
-    const frame = gl.info.render.frame
-    if (shipMode && t != null) {
-      stepMoonMaps(gl, refs, looks, promoted, camera as THREE.PerspectiveCamera, size.height * viewport.dpr, frame)
-    }
+  // Binds the next arrived map, one a frame.
+  const takeArrivedMap = (gl: THREE.WebGLRenderer, frame: number) => {
     const next = arrived.current[0]
     if (!next) return
     const shown = initialBodyMap(next.map)
@@ -260,6 +254,11 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
       // A retired map's proxy, or a promoted map already bound: no upload.
       arrived.current.shift()
       if (!promoted.has(next.map)) applyMap(next.material, shown)
+    } else if (shipMode && readyMapProxy(gl, next.map)) {
+      // A compressed map: stepMoonMaps, after this, binds its proxy or
+      // promotes it before the frame draws, so nothing uploads it first.
+      arrived.current.shift()
+      applyMap(next.material, next.map)
     } else if (shipMode || !isRetiredMap(next.map)) {
       // A new map's upload, one a frame as ever (system view), or within the
       // budget (ship mode, where stepMoonMaps then picks its tier).
@@ -272,6 +271,17 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
       arrived.current.shift()
       promoteMap(gl, next.map)
       applyMap(next.material, next.map)
+    }
+  }
+
+  useFrame(({ gl, camera, size, viewport }) => {
+    const t = useStore.getState().timestamp
+    if (t != null) placeMoons(refs, t, distanceScale)
+    // Uploads and read-backs share the page's one-a-frame budget.
+    const frame = gl.info.render.frame
+    takeArrivedMap(gl, frame)
+    if (shipMode && t != null) {
+      stepMoonMaps(gl, refs, looks, promoted, camera as THREE.PerspectiveCamera, size.height * viewport.dpr, frame)
     }
   })
 

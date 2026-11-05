@@ -3,12 +3,17 @@
 // pixels across in the ship's frustum draw every frame, so holding a 2k map
 // off the GPU means not binding it. Until a body grows past PROMOTE_RADIUS_PX
 // its material samples a mip-tail proxy instead: a PROXY_WIDTH-wide texture
-// holding the full map's own GPU mip levels from that width down, read back
-// once from the uploaded map, which is then disposed (126 MB of maps on the
-// low tier, against ~4 MB of proxies).
+// holding the full map's own GPU mip levels from that width down, and the
+// full map is freed from the GPU (126 MB of maps on the low tier as RGBA,
+// ~33 MB GPU-compressed, against ~4 MB or ~1 MB of proxies).
+// A GPU-compressed map (tides-0oi.14, body-maps.ts) keeps its transcoded
+// levels in memory, so its proxy is those levels' tail, built with no GL
+// call and before the map is ever uploaded; an RGBA map's proxy is read
+// back once from the uploaded map.
 //
 // The proxy is exact, not an approximation: its level k is the full map's
-// level N + k, and a sample's LOD in it is the full map's less exactly N (the
+// level N + k (the very blocks, for a compressed map), and a sample's LOD in
+// it is the full map's less exactly N (the
 // texel scale is a power of two smaller), so trilinear and anisotropic
 // filtering read the same texels with the same weights, as long as the full
 // map's LOD stays at or above N everywhere on the disk. That holds while the
@@ -20,9 +25,9 @@
 // footprint from textureSize(uMap), is shut for both maps below ~80 px
 // (pinned in body-map-residency.test.ts).
 //
-// Promotion uploads the full map (7-27 ms at 2k on an M4) and is a uniform
-// swap, so the program doesn't change; it is sticky for the flight. Outside
-// ship mode the retired maps come back the same way, one a frame
+// Promotion uploads the full map (7-27 ms at 2k as RGBA on an M4) and is a
+// uniform swap, so the program doesn't change; it is sticky for the flight.
+// Outside ship mode the retired maps come back the same way, one a frame
 // (systemMapStep), so leaving a flight doesn't upload them all at once.
 import * as THREE from 'three'
 
@@ -212,20 +217,23 @@ const MIPMAP_FILTERS: readonly THREE.TextureFilter[] = [
 ]
 
 /**
- * The proxy for `map` from its GPU mip levels, `readLevel` giving a level's
- * RGBA bytes (null to give up), or null where the map can't have one: no
- * mip chain, a size that isn't a power of two, or too small to save.
+ * The proxy for `map` from its GPU mip levels, or null where the map can't
+ * have one: no mip chain, a size that isn't a power of two, or too small to
+ * save. A compressed map's are its own `mipmaps` (the chain must be full);
+ * any other's come from `readLevel`, a level's RGBA bytes (null to give up).
  * The sampler state is the map's; the level count follows from the chain.
  */
 export function buildMapProxy(
   map: THREE.Texture,
   readLevel: (level: number, width: number, height: number) => Uint8Array<ArrayBuffer> | null
-): THREE.DataTexture | null {
+): THREE.Texture | null {
   const { width, height } = map.image as { width: number; height: number }
   const base = proxyBaseLevel(width)
   if (base === null || !isPowerOfTwo(height) || height >> base < 1) return null
-  if (!map.generateMipmaps || !MIPMAP_FILTERS.includes(map.minFilter)) return null
+  if (!MIPMAP_FILTERS.includes(map.minFilter)) return null
   const levels = Math.log2(Math.max(width, height)) + 1
+  if (map instanceof THREE.CompressedTexture) return compressedProxy(map, base, levels)
+  if (!map.generateMipmaps) return null
   const mipmaps: { data: Uint8Array<ArrayBuffer>; width: number; height: number }[] = []
   for (let level = base; level < levels; level++) {
     const w = Math.max(1, width >> level)
@@ -240,6 +248,21 @@ export function buildMapProxy(
   proxy.generateMipmaps = false
   proxy.flipY = false
   proxy.premultiplyAlpha = false
+  return withMapSampling(proxy, map)
+}
+
+// The map's own levels from `base` down: the same data arrays, so nothing
+// is copied or re-encoded.
+function compressedProxy(map: THREE.CompressedTexture, base: number, levels: number): THREE.CompressedTexture | null {
+  const mipmaps = map.mipmaps as THREE.CompressedTextureMipmap[] | undefined
+  if (mipmaps?.length !== levels) return null
+  const tail = mipmaps.slice(base)
+  const proxy = new THREE.CompressedTexture(tail, tail[0].width, tail[0].height, map.format, map.type)
+  proxy.premultiplyAlpha = map.premultiplyAlpha
+  return withMapSampling(proxy, map)
+}
+
+function withMapSampling<T extends THREE.Texture>(proxy: T, map: THREE.Texture): T {
   proxy.colorSpace = map.colorSpace
   proxy.anisotropy = map.anisotropy
   proxy.wrapS = map.wrapS
@@ -308,15 +331,26 @@ export function readTextureLevel(
 // By Source: the planets' maps come from useLoader's cache and the moons'
 // from MoonBodies' loadedMaps, so a remount or a later flight finds its
 // proxy built. Its levels stay in memory, so a restored context re-uploads it.
-const proxies = new WeakMap<THREE.Source, THREE.DataTexture>()
+const proxies = new WeakMap<THREE.Source, THREE.Texture>()
 
 /** `map`'s proxy if one was built. */
-export function cachedMapProxy(map: THREE.Texture): THREE.DataTexture | undefined {
+export function cachedMapProxy(map: THREE.Texture): THREE.Texture | undefined {
   return proxies.get(map.source)
 }
 
-/** `map`'s proxy, built (one heavy operation) and cached if need be; null where it can't have one. */
-export function mapProxy(gl: THREE.WebGLRenderer, map: THREE.Texture): THREE.DataTexture | null {
+/**
+ * `map`'s proxy if one was built or it costs nothing to build (a compressed
+ * map's, from its own levels), so the frame a compressed body enters ship
+ * mode binds its proxy without waiting for the upload budget, before
+ * anything (ShipWarmup, a draw) uploads the full map.
+ */
+export function readyMapProxy(gl: THREE.WebGLRenderer, map: THREE.Texture): THREE.Texture | undefined {
+  if (!(map instanceof THREE.CompressedTexture)) return cachedMapProxy(map)
+  return mapProxy(gl, map) ?? undefined
+}
+
+/** `map`'s proxy, built (one heavy operation for an RGBA map) and cached if need be; null where it can't have one. */
+export function mapProxy(gl: THREE.WebGLRenderer, map: THREE.Texture): THREE.Texture | null {
   const cached = proxies.get(map.source)
   if (cached) return cached
   const proxy = buildMapProxy(map, (level, width, height) => readTextureLevel(gl, map, level, width, height))
