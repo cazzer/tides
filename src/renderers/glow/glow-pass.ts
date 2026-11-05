@@ -26,8 +26,10 @@ import { glowSourcesOf, shownInWorld, type GlowSource } from './glowSources'
  * scissor: the composite only over what the sources' glow can reach.
  * invalidateDepth: the glow target's depth is dropped once the sources have
  * drawn, so a tiled GPU never writes it back to memory.
+ * compactTargets: R11F_G11F_B10F targets (4 bytes a texel) for RGBA16F's 8,
+ * where they are renderable (EXT_color_buffer_float).
  */
-export const glowPassSwitches = { scissor: true, invalidateDepth: true }
+export const glowPassSwitches = { scissor: true, invalidateDepth: true, compactTargets: true }
 
 /** gl.DEPTH_ATTACHMENT, as invalidateFramebuffer takes it. */
 const DEPTH_ATTACHMENT = [0x8d00]
@@ -134,14 +136,22 @@ function quadMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUn
   })
 }
 
-function levelTarget(size: Size): THREE.WebGLRenderTarget {
-  return new THREE.WebGLRenderTarget(size.width, size.height, {
+/**
+ * A float colour target. Compact: R11F_G11F_B10F, half RGBA16F's bytes and
+ * bandwidth, a 6-bit mantissa (5 in blue) for 10, and no alpha, which nothing
+ * in the glow reads. Both render and blend under EXT_color_buffer_float.
+ */
+function glowTarget(size: Size, compact: boolean, depthBuffer: boolean): THREE.WebGLRenderTarget {
+  const target = new THREE.WebGLRenderTarget(size.width, size.height, {
     type: THREE.HalfFloatType,
-    depthBuffer: false,
+    format: compact ? THREE.RGBFormat : THREE.RGBAFormat,
+    depthBuffer,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
     generateMipmaps: false,
   })
+  if (compact) target.texture.internalFormat = 'R11F_G11F_B10F'
+  return target
 }
 
 export interface GlowPass {
@@ -212,23 +222,19 @@ export function createGlowPass(): GlowPass {
   )
   const quad = new FullScreenQuad(down)
 
-  const size = (view: Size) => {
+  let compact = false
+  const size = (view: Size, wantCompact: boolean) => {
     const want = glowTargetSize(view)
-    if (target && target.width === want.width && target.height === want.height) return
+    if (target && target.width === want.width && target.height === want.height && compact === wantCompact) return
     target?.depthTexture?.dispose()
     target?.dispose()
     levels.forEach((l) => l.dispose())
-    target = new THREE.WebGLRenderTarget(want.width, want.height, {
-      type: THREE.HalfFloatType,
-      depthBuffer: true,
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      generateMipmaps: false,
-    })
+    compact = wantCompact
+    target = glowTarget(want, compact, true)
     // Float depth: reversed-Z (shaders/depth.glsl) keeps its precision from
     // the ship's metres out to the Sun only in a float buffer.
     target.depthTexture = new THREE.DepthTexture(want.width, want.height, THREE.FloatType)
-    levels = glowLevelSizes(want).map(levelTarget)
+    levels = glowLevelSizes(want).map((s) => glowTarget(s, compact, false))
   }
 
   const blur = (gl: THREE.WebGLRenderer, source: THREE.WebGLRenderTarget): THREE.Texture => {
@@ -270,7 +276,10 @@ export function createGlowPass(): GlowPass {
       for (const s of sources) if (shownInWorld(s.object)) any = true
       if (!any) return
       const ratio = gl.getPixelRatio()
-      size({ width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) })
+      size(
+        { width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) },
+        glowPassSwitches.compactTargets && gl.extensions.has('EXT_color_buffer_float')
+      )
       const glowTarget = target!
       // The View hasn't drawn yet this frame: bring the camera's and each
       // source's world matrices up to date, as its scene render would.
