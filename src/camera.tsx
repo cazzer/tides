@@ -49,6 +49,18 @@ import { LABEL_KEYS } from './system-aids/label-visibility'
 import { CLOCK_HALF_WIDTH } from './clock-size'
 import { mainCameraPose, takeFocusSnap, takeMainCameraRestore } from './main-camera-session'
 import {
+  endOpening,
+  interruptOpening,
+  NO_OFFSET,
+  OPENING_MOVE,
+  opening,
+  openingAllowed,
+  openingOffset,
+  shiftOpening,
+  type OpeningOffset,
+} from './opening'
+import { prefersReducedMotion } from './ship/reduced-motion'
+import {
   canPivot,
   clampTilt,
   pivotDepth,
@@ -455,6 +467,55 @@ function useEyeDistance(
   })
 }
 
+/**
+ * Plays the opening move (opening.ts) once the loading overlay starts to
+ * fade, where openingAllowed lets it; anything else, or the user touching or
+ * scrolling the view, ends it where it is. Call it after CameraProvider's frame.
+ */
+function useOpeningMove(
+  camera: Camera,
+  controls: OrbitControlsImpl | null,
+  cameraFocus: CameraFocus,
+  dom: HTMLElement | undefined
+) {
+  const applied = useRef<OpeningOffset>(NO_OFFSET)
+
+  useEffect(() => {
+    if (!dom || opening.done) return
+    // Each panel's provider listens on the same element: a listener of its
+    // own, so one unmounting doesn't take the others' with it.
+    const stop = () => interruptOpening()
+    dom.addEventListener('pointerdown', stop)
+    dom.addEventListener('wheel', stop)
+    return () => {
+      dom.removeEventListener('pointerdown', stop)
+      dom.removeEventListener('wheel', stop)
+    }
+  }, [dom])
+
+  useFrame(() => {
+    if (opening.done || !controls) return
+    if (
+      !openingAllowed({
+        focus: cameraFocus,
+        reducedMotion: prefersReducedMotion(),
+        restored: mainCameraPose() !== null,
+        perspective: (camera as PerspectiveCamera).isPerspectiveCamera === true,
+      })
+    ) {
+      endOpening()
+      return
+    }
+    if (opening.startedAt === null) return
+    const elapsed = performance.now() - opening.startedAt
+    const next = openingOffset(OPENING_MOVE, elapsed)
+    shiftOpening(camera.position, controls.target, applied.current, next)
+    camera.lookAt(controls.target)
+    applied.current = next
+    if (elapsed >= OPENING_MOVE.duration) endOpening()
+  })
+}
+
 export const useCamera = () => useContext(CameraContext)
 
 export const CameraProvider = ({ children }: { children: any }) => {
@@ -611,6 +672,7 @@ export const CameraProvider = ({ children }: { children: any }) => {
       controls.update()
     }
   })
+  useOpeningMove(camera, controls as OrbitControlsImpl | null, cameraFocus, connected || canvas)
   useEyeDistance(cameraFocus, connected || canvas, anchor.current, outsideMoveRef)
   useMainNearFar()
 
