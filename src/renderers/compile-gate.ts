@@ -62,6 +62,28 @@ export function allShownReady(shown: readonly string[], ready: ReadonlySet<strin
  */
 export const GATE_DEADLINE_MS = 20000
 
+/**
+ * Whether a shown scene is ready (CompileGate's onReady): drawn twice, with
+ * nothing it waits for pending, or past the deadline whatever is.
+ */
+export function readyNow({ drawn, pending, late }: { drawn: number; pending: boolean; late: boolean }): boolean {
+  return drawn >= 2 && (late || !pending)
+}
+
+/**
+ * A gate's phase across an unmount (a suspend, or StrictMode's replay): a
+ * round compiling is dropped and run again; a ready scene is unready
+ * (`unready`) and readied again once drawn twice more.
+ */
+export function phaseAfterUnmount<P extends string>(phase: P | 'compiling' | 'compile' | 'ready' | 'shown'): {
+  phase: P | 'compile' | 'shown'
+  unready: boolean
+} {
+  if (phase === 'compiling') return { phase: 'compile', unready: false }
+  if (phase === 'ready') return { phase: 'shown', unready: true }
+  return { phase: phase as P | 'compile' | 'shown', unready: false }
+}
+
 /** What a compile round leads to. */
 export interface RoundOutcome {
   next: 'compile' | 'warm' | 'reveal'

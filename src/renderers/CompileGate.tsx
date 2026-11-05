@@ -3,7 +3,7 @@ import { useFrame, type RootState } from '@react-three/fiber'
 import { useProgress } from '@react-three/drei'
 import type * as THREE from 'three'
 import { materialsOf, texturesOf } from '../ship/ship-warmup'
-import { afterRound, assetsLoaded, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
+import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
 import { SceneGateContext, type SceneGate } from './scene-shown'
 
 /**
@@ -68,13 +68,17 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
   })
   useLayoutEffect(() => {
     // The refs themselves: counters, not nodes React swaps.
-    const [live, rounds, at, calls] = [alive, generation, phase, callbacks]
+    const [live, rounds, at, calls, frames] = [alive, generation, phase, callbacks, drawn]
     live.current = true
     return () => {
       live.current = false
       rounds.current++
-      if (at.current === 'compiling') at.current = 'compile'
-      if (at.current === 'ready') calls.current.onUnready?.()
+      const after = phaseAfterUnmount(at.current)
+      at.current = after.phase
+      if (after.unready) {
+        frames.current = 0
+        calls.current.onUnready?.()
+      }
     }
   }, [])
   const gate = useMemo<SceneGate>(
@@ -111,8 +115,8 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
         reveal(root)
         return
       case 'shown':
-        if (++drawn.current < 2) return
-        if (!late && [...waiting.current].some((done) => !done())) return
+        drawn.current++
+        if (!readyNow({ drawn: drawn.current, pending: [...waiting.current].some((done) => !done()), late })) return
         phase.current = 'ready'
         callbacks.current.onReady?.()
         return
@@ -148,7 +152,7 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
         phase.current = round.next
       },
       (error: unknown) => {
-        if (generation.current !== generationAtStart) return
+        if (generation.current !== generationAtStart || phase.current !== 'compiling') return
         console.error('CompileGate: compile failed; showing the scene', error)
         phase.current = 'reveal'
       }

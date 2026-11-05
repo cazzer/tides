@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { afterRound, allShownReady, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
+import { afterRound, allShownReady, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
 
 describe('withTimeout', () => {
   afterEach(() => {
@@ -99,5 +99,31 @@ describe('afterRound', () => {
 
   it('shows the scene after a round that timed out', () => {
     expect(round({ outcome: 'timeout', quiet: 1 }).next).toBe('reveal')
+  })
+})
+
+describe('readyNow', () => {
+  it('waits for two drawn frames and anything pending', () => {
+    expect(readyNow({ drawn: 1, pending: false, late: false })).toBe(false)
+    expect(readyNow({ drawn: 2, pending: true, late: false })).toBe(false)
+    expect(readyNow({ drawn: 2, pending: false, late: false })).toBe(true)
+  })
+
+  it('stops waiting on what is pending past the deadline', () => {
+    expect(readyNow({ drawn: 2, pending: true, late: true })).toBe(true)
+  })
+})
+
+describe('phaseAfterUnmount', () => {
+  it('unreadies a ready scene, to be readied again once drawn', () => {
+    expect(phaseAfterUnmount('ready')).toEqual({ phase: 'shown', unready: true })
+  })
+
+  it('runs a round still compiling again', () => {
+    expect(phaseAfterUnmount('compiling')).toEqual({ phase: 'compile', unready: false })
+  })
+
+  it('leaves any other phase as it is', () => {
+    expect(phaseAfterUnmount('warm')).toEqual({ phase: 'warm', unready: false })
   })
 })
