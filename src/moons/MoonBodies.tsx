@@ -107,6 +107,7 @@ function setViewHeight(looks: readonly { userData: MoonPickData }[], height: num
 // Switches a moon's material to its map (one shared compiled program for
 // every textured moon). Module level, like placeMoons.
 function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
+  material.userData.compileLater = false
   if (material.uniforms.uMap.value === map) return
   material.uniforms.uMap.value = map
   material.defines.USE_PLANET_MAP = ''
@@ -185,6 +186,9 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         // Its proxy while a flight has the map retired (initialBodyMap).
         const map = loaded ? initialBodyMap(loaded) : null
         const material = planetSurfaceMaterial(sun.uniform, { map })
+        // Its map on the way changes its program (applyMap): the first
+        // load's compile gate leaves it to its draw (tides-0oi.25).
+        material.userData.compileLater = !map
         material.uniforms.uColor.value.set(MOONS[key].color)
         if (key !== 'titan') setPlanetDetail(material, MOON_DETAIL)
         // The camera frames a focused moon by `radius`; moonRaycast reads
@@ -228,8 +232,11 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         (map) => {
           if (mounted) arrived.current.push({ material: looks[i].material, map })
         },
-        // The moon keeps its catalog colour.
-        (err) => console.warn(`Moon texture for ${key} failed to load`, err)
+        // The moon keeps its catalog colour, and its program.
+        (err) => {
+          looks[i].material.userData.compileLater = false
+          console.warn(`Moon texture for ${key} failed to load`, err)
+        }
       )
     })
     return () => {

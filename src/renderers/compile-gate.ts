@@ -89,18 +89,43 @@ export interface RoundOutcome {
   next: 'compile' | 'warm' | 'reveal'
   /** Quiet rounds in a row so far. */
   quiet: number
+  /** Whether the next round takes in what compilesAhead leaves out. */
+  final: boolean
 }
 
 /**
  * After a compile round: another round, unless `quietRounds` in a row have
  * found nothing new (`added`) with every asset in (`loaded`); then the warm.
+ * If one of those rounds left an object out (`deferred`, compilesAhead), one
+ * last round (`final`) compiles it as it is, since it will draw so: its map
+ * didn't arrive in time, and its draw on the reveal frame mustn't link it.
  * A round that timed out shows the scene as it is.
  */
 export function afterRound(
-  { outcome, added, loaded, quiet }: { outcome: 'done' | 'timeout'; added: boolean; loaded: boolean; quiet: number },
+  {
+    outcome,
+    added,
+    loaded,
+    quiet,
+    deferred,
+    final,
+  }: { outcome: 'done' | 'timeout'; added: boolean; loaded: boolean; quiet: number; deferred: boolean; final: boolean },
   quietRounds: number
 ): RoundOutcome {
-  if (outcome === 'timeout') return { next: 'reveal', quiet }
+  if (outcome === 'timeout') return { next: 'reveal', quiet, final }
+  if (final) return { next: 'warm', quiet, final }
   const now = added || !loaded ? 0 : quiet + 1
-  return { next: now >= quietRounds ? 'warm' : 'compile', quiet: now }
+  if (now < quietRounds) return { next: 'compile', quiet: now, final: false }
+  return { next: deferred ? 'compile' : 'warm', quiet: now, final: deferred }
+}
+
+/**
+ * Whether an object's materials are compiled ahead of their draw
+ * (CompileGate): not when one waits for something that changes its program
+ * on arrival (userData.compileLater, a moon's map that adds USE_PLANET_MAP,
+ * tides-0oi.25). That one would build a program its draw never uses; its draw
+ * compiles the one it needs.
+ */
+export function compilesAhead(materials: readonly { userData: Record<string, unknown> }[]): boolean {
+  return !materials.some((material) => material.userData.compileLater === true)
 }
