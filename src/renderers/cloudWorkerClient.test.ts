@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import type { CloudImage } from './cloudPipeline'
+import { coverOf } from './cloudCover'
 import { createCloudImageBuilder, imageTransfer, type CloudWorker, type WorkerReply, type WorkerRequest } from './cloudWorkerClient'
 import type { ImagerySource } from './realCloudController'
 
@@ -144,3 +145,28 @@ describe('imageTransfer', () => {
     expect(copy.precip![1000]).toBe(1000 % 241)
   })
 })
+
+describe('the cover (tides-0oi.11)', () => {
+  test("a finished image's cover is its G, bottom row first, byte for byte as the main thread would work it out, and moves", async () => {
+    const { imageOf } = await import('./cloudPipeline')
+    const { OUT_W, OUT_H } = await import('../real-clouds')
+    const top = new Uint8ClampedArray(OUT_W * OUT_H * 4)
+    for (let i = 0; i < top.length; i++) top[i] = (i * 7 + (i >> 12)) % 256
+    const image = imageOf(new Uint8ClampedArray(top), null)
+    // Byte for byte (a loop: toEqual on 3.3 M bytes is slow).
+    const main = coverOf(image.rgba, OUT_W, OUT_H).data
+    expect(image.cover!.length).toBe(main.length)
+    let differ = 0
+    for (let i = 0; i < main.length; i++) if (image.cover![i] !== main[i]) differ++
+    expect(differ).toBe(0)
+    // Bottom row first, as the texture's.
+    expect(image.cover![0]).toBe(top[(OUT_H - 1) * OUT_W * 4 + 1])
+    const transfer = imageTransfer(image)
+    expect(transfer).toContain(image.cover!.buffer)
+    const copy = structuredClone(image, { transfer })
+    expect(image.cover!.byteLength).toBe(0)
+    expect(copy.cover!.length).toBe(main.length)
+    expect([copy.cover![0], copy.cover![main.length - 1]]).toEqual([main[0], main[main.length - 1]])
+  })
+})
+

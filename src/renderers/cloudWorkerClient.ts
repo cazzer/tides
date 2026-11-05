@@ -18,11 +18,12 @@ export type WorkerReply =
 
 /** The buffers a finished image moves (not copies) out of the worker with:
  * its pixels, and its cloud-type (tides-tvr.4.1) and precipitation
- * (tides-bl3.1) grids where it has them. */
+ * (tides-bl3.1) grids and its cover (tides-0oi.11) where it has them. */
 export function imageTransfer(image: CloudImage): ArrayBuffer[] {
   const buffers = [image.rgba.buffer]
   if (image.types) buffers.push(image.types.buffer)
   if (image.precip) buffers.push(image.precip.buffer)
+  if (image.cover) buffers.push(image.cover.buffer)
   return buffers
 }
 
