@@ -11,6 +11,23 @@ export async function adb(serial, ...args) {
   return stdout
 }
 
+// Whether adb still reaches the phone.
+export async function attached(serial) {
+  return (await adb(serial, 'get-state').catch(() => '')).trim() === 'device'
+}
+
+// After a wireless drop: `adb connect` the ip:port again (never re-pairs),
+// waiting up to tries x intervalMs for it to come back.
+export async function reconnect(serial, { tries = 6, intervalMs = 10000, log = () => {} } = {}) {
+  for (let i = 0; i < tries; i++) {
+    if (serial.includes(':')) await adb(null, 'connect', serial).catch(() => {})
+    if (await attached(serial)) return true
+    log(`  adb: ${serial} not back yet (${i + 1}/${tries})`)
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  return false
+}
+
 // Picks the device: ADB_SERIAL if set, else the only attached one. The same
 // phone can be listed twice (an ip:port and an mDNS _adb-tls-connect entry);
 // both reach one device, so prefer the ip:port form.

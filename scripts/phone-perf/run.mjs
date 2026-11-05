@@ -118,7 +118,7 @@ async function main() {
         // Builds run back to back per pose, the order alternating each
         // round, so a before/after pair sees the same phone state.
         for (const build of roundOrder(builds, round)) {
-          const record = await measureWithGuards(connection, device, item, build, round)
+          const record = await measureSurvivingDrops(device, item, build, round)
           results.push(record)
           fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify({ meta, results }, null, 1))
           if (config.gapMs) await sleep(config.gapMs)
@@ -131,6 +131,27 @@ async function main() {
     const report = writeReport(outDir, { meta, results })
     log(`\nreport: ${report}`)
   }
+}
+
+// A wireless drop kills adb's reverse and forward and the CDP socket: on one,
+// reconnect (adb connect, never a re-pair), plumb the ports again, reopen
+// CDP and retry the pose once; a phone that stays gone ends the run.
+async function measureSurvivingDrops(device, item, build, round) {
+  const attempt = () => measureWithGuards(active.connection, device, item, build, round).catch((thrown) => ({ thrown }))
+  let record = await attempt()
+  if ((record.thrown || record.error) && device.serial && !(await adb.attached(device.serial))) {
+    log(`  the phone dropped off adb; reconnecting ${device.serial}…`)
+    if (!(await adb.reconnect(device.serial, { log }))) {
+      throw new Error(`The phone dropped and did not come back (adb connect ${device.serial}); not re-pairing`)
+    }
+    await adb.prepareDevice(device.serial, device.ports, {})
+    active.connection?.close()
+    active.connection = await CdpConnection.open((await browserWsUrl(config.cdpPort)).url)
+    log('  reconnected; retrying the pose')
+    record = await attempt()
+  }
+  if (record.thrown) throw record.thrown
+  return record
 }
 
 async function measureWithGuards(connection, device, item, build, round) {
@@ -414,7 +435,7 @@ async function openPhone(vitePorts) {
   // Released by shutdown() from before the first change, so Ctrl-C mid-prepare
   // or a failed device read still removes the forwards and restores stay-on.
   const pending = { stayOn: null }
-  const device = { serial, info: null, close: () => adb.releaseDevice(serial, { ...ports, stayOn: pending.stayOn }) }
+  const device = { serial, ports, info: null, close: () => adb.releaseDevice(serial, { ...ports, stayOn: pending.stayOn }) }
   active.device = device
   await adb.prepareDevice(serial, ports, pending)
   device.info = { kind: 'phone', serial, ...(await adb.deviceInfo(serial)), thermalAtStart: await adb.readThermal(serial) }
