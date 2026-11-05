@@ -122,6 +122,22 @@ export const WATER_DEEP: readonly [number, number, number] = [0.008, 0.022, 0.04
  * -0.10 (the night fill and the Moon have the night sea as they did), all
  * at 0.05. */
 export const SKY_DAY = [-0.1, 0.05] as const
+/** sin(the light's elevation) over the level sea across which the glint
+ * comes in, from -this to +this. The GLSL returns 0 at once under it: the
+ * fade's own 0, so exact (tides-0oi.10). Per light (waterGlint()'s `l`). */
+export const WATER_GLINT_HORIZON = 0.02
+/** sin(the elevation) under which, for both the Sun and the night flight's
+ * Moon, the GLSL skips the waves (the bent normal and the glint's roughness
+ * and sparkle). The Moon counts only where the flight's light is in the
+ * program (NIGHT_FLIGHT_MOON) and has any strength. Under it the glint and
+ * the sky are out (-WATER_GLINT_HORIZON, SKY_DAY[0]) and so is the Moon's
+ * light (MOON_UP_FROM); what still reads the bent normal, the Sun's diffuse
+ * on a facet steeper than this slope and the night fill's sky term, at
+ * second order, changes no pixel at night, a Moon just set, dusk and a low
+ * Sun (tides-0oi.10). -0.05 is not: 1-11 px off by 1 at dusk (tides-0oi.2,
+ * water-4). Light 0 (the Sun) is the only light that can glint, so the
+ * gate reads only directionalLights[0]. */
+export const WATER_WAVES_LIGHT_MIN = -0.2
 /** The elevation (deg) the sky's light on the body is read at, 90 deg round
  * from the Sun: there hazeSky()'s radiance is its cosine-weighted mean over
  * the dome (the skylight's irradiance over pi) within a few percent from
@@ -583,7 +599,7 @@ export function waterGlint(l: Vec3, v: Vec3, n: Vec3, up: Vec3, slope: WaterSlop
     return s > 1e-12 ? (2 * (slope.along * xa * xa + slope.cross * xc * xc)) / s : slope.along + slope.cross
   }
   const g1 = (x: number, a2: number) => (2 * x) / (x + Math.sqrt(a2 + (1 - a2) * x * x))
-  return (smoothstep(-0.02, 0.02, dot(up, l)) * fresnel * d * g1(nl, projected(l)) * g1(nv, projected(v))) / (4 * Math.max(nv, 1e-3))
+  return (smoothstep(-WATER_GLINT_HORIZON, WATER_GLINT_HORIZON, dot(up, l)) * fresnel * d * g1(nl, projected(l)) * g1(nv, projected(v))) / (4 * Math.max(nv, 1e-3))
 }
 
 /** A pixel's expected count of facets catching the Sun: `facets` of them,
@@ -743,6 +759,8 @@ float waterSparkle(float lambda, vec2 slope) {
 // variances are equal), Schlick, Smith, out under the level horizon. No NaN
 // with l = -v (h 0).
 float waterGlint(vec3 l, vec3 v, vec3 n) {
+  float sunSin = dot(waterUpView, l);
+  if (sunSin <= ${f(-WATER_GLINT_HORIZON)}) return 0.0;
   vec3 hv = l + v;
   vec3 h = hv * inversesqrt(max(dot(hv, hv), 1e-12));
   vec3 a = waterAxisView - n * dot(waterAxisView, n);
@@ -762,13 +780,12 @@ float waterGlint(vec3 l, vec3 v, vec3 n) {
   float vh = 1.0 - vdh;
   float vh2 = vh * vh;
   float fresnel = ${f(WATER_F0)} + ${f(1 - WATER_F0)} * vh2 * vh2 * vh;
-  float sunSin = dot(waterUpView, l);
   float sparkle = 1.0;
   if (waterFacets > 0.0) {
     float glow = ${f(WATER_SPARKLE_GLOW)} * (1.0 - smoothstep(${f(Math.sin((WATER_SPARKLE_GLOW_DEG[0] * Math.PI) / 180))}, ${f(Math.sin((WATER_SPARKLE_GLOW_DEG[1] * Math.PI) / 180))}, sunSin));
     sparkle = mix(waterSparkle(waterFacets * d * nh * ${e(WATER_SUN_SR / 4)} / max(vdh, 1e-3), vec2(ha, hc) / max(nh, 1e-3)), 1.0, glow);
   }
-  return smoothstep(-0.02, 0.02, sunSin) * fresnel * d * sparkle
+  return smoothstep(${f(-WATER_GLINT_HORIZON)}, ${f(WATER_GLINT_HORIZON)}, sunSin) * fresnel * d * sparkle
     * waterG1(nl, waterProjected(l, a, c)) * waterG1(nv, waterProjected(v, a, c)) / (4.0 * max(nv, 1e-3));
 }
 ${WATER_DEPTH_GLSL}
@@ -872,14 +889,21 @@ waterVarAlong = ${f(WATER_MSS / 2)};
 waterVarCross = ${f(WATER_MSS / 2)};
 waterAxisView = vec3(0.0);
 waterFacets = 0.0;
+float waterSunSin = 1.0;
 #if NUM_DIR_LIGHTS > 0
+waterSunSin = dot(waterUpView, directionalLights[0].direction);
 diffuseColor.rgb = mix(diffuseColor.rgb, waterBody(diffuseColor.rgb),
-  specularStrength * smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, dot(waterUpView, directionalLights[0].direction)));
+  specularStrength * smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, waterSunSin));
 #endif
 {
   vec3 waterRx = dFdx(waterRay);
   vec3 waterRy = dFdy(waterRay);
-  if (specularStrength > 0.0) {
+  // The flight's Moon lights the sea by the bent normal (nightLights.ts).
+  float waterMoonSin = -1.0;
+#ifdef NIGHT_FLIGHT_MOON
+  if (dot(uNightMoonLight, vec3(1.0)) > 0.0) waterMoonSin = dot(waterUpView, uNightMoonView);
+#endif
+  if (specularStrength > 0.0 && max(waterSunSin, waterMoonSin) > ${f(WATER_WAVES_LIGHT_MIN)}) {
     float waterPx = max(length(waterRx), length(waterRy));
     vec2 waterLL = waterLonLat(waterUpGround);
     vec4 waterClimate = waterClimateDecode(waterClimateAt(waterLL));

@@ -12,7 +12,11 @@ import { earthHorizon } from './earthHorizonTexture'
 import { createGroundHaze } from './groundHaze'
 import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
-import { phongShader } from './surface/tile-test-fixtures'
+import { createNightFlight, nightLightsPatch } from './nightLights'
+import { MOON_UP_FROM } from '../night-flight'
+import { compiled, fakeLink, phongShader, tileMesh } from './surface/tile-test-fixtures'
+import { createTileComposer, type TerrainPhongMaterial } from './surface/tile-material'
+import { TILE_FEATURES } from './surface/tile-features'
 import { WATER_DEPTH_SAMPLE, WATER_KEEP, waterTinted } from './waterDepth'
 import { NOISE_CELLS } from './waterNoise'
 import { EARTH_RADIUS_KM } from '../cloud-layer'
@@ -35,6 +39,8 @@ import {
   WATER_FADE_END,
   WATER_FADE_START,
   WATER_GLINT_HARMONIC,
+  WATER_GLINT_HORIZON,
+  WATER_WAVES_LIGHT_MIN,
   WATER_GLOBE_VERTEX,
   WATER_PRELUDE,
   WATER_SKY_LIGHT_ELEVATION,
@@ -370,7 +376,7 @@ describe('the glint\'s sparkle (tides-d9f.5)', () => {
     const glsl = WATER_GLSL(WATER_WAVE_TABLE)
     expect(glsl.head).toContain('waterSparkle(waterFacets * d * nh')
     expect(glsl.normal).toContain('waterFacets = 0.0;')
-    expect(glsl.normal.indexOf('waterFacets = 0.0;')).toBeLessThan(glsl.normal.indexOf('if (specularStrength > 0.0)'))
+    expect(glsl.normal.indexOf('waterFacets = 0.0;')).toBeLessThan(glsl.normal.indexOf('if (specularStrength > 0.0'))
     expect(glsl.normal).toContain('waterSparkleKey = uvec4(')
   })
 
@@ -1082,7 +1088,7 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
     // day only (the Sun over this sea's level).
     expect(at('#include <specularmap_fragment>')).toBeLessThan(at('waterBody(diffuseColor.rgb)'))
     expect(at('waterBody(diffuseColor.rgb)')).toBeLessThan(at('#include <lights_phong_fragment>'))
-    expect(glsl.normal).toMatch(/waterBody\(diffuseColor\.rgb\),\s*specularStrength \* smoothstep\([^)]*dot\(waterUpView, directionalLights\[0\]\.direction\)\)/)
+    expect(glsl.normal).toMatch(/waterSunSin = dot\(waterUpView, directionalLights\[0\]\.direction\);\s*diffuseColor\.rgb = mix\(diffuseColor\.rgb, waterBody\(diffuseColor\.rgb\),\s*specularStrength \* smoothstep\([^)]*waterSunSin\)\)/)
     // Its uniforms: the phases and the haze's frame, the same objects.
     expect(shader.uniforms.uWavePhase).toBe(water.uniforms.uWavePhase)
     expect(shader.uniforms.uWaterViewToGround).toBe(haze.frame.uGroundHazeViewToLocal)
@@ -1144,7 +1150,7 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       // Nothing in the glint, the noise or the climate's lookup asks for derivatives.
       expect(glsl.head).not.toMatch(/dFd|fwidth|texture2D|texture\(/)
       expect(glsl.head).toContain('textureLod(uWaterSea')
-      expect(normal).toContain('if (specularStrength > 0.0) {')
+      expect(normal).toContain(`if (specularStrength > 0.0 && max(waterSunSin, waterMoonSin) > ${WATER_WAVES_LIGHT_MIN.toFixed(6)}) {`)
       // Each wave's sine only where it's drawn; its variance everywhere on water.
       const count = low ? WATER_WAVES_LOW : WATER_WAVES
       // Each wave twice: drawn, or where it and every shorter wave have
@@ -1161,5 +1167,110 @@ describe('the water\'s GLSL on the globe (tides-07z)', () => {
       expect(normal).not.toContain('isOrthographic')
     }
     expect(WATER_GLSL(WATER_WAVE_TABLE).sky).toContain('if (material.specularStrength > 0.0) {')
+  })
+})
+
+describe('the night sea skips the Sun\'s terms (tides-0oi.10)', () => {
+  const f = (x: number) => x.toFixed(6)
+
+  it('takes the glint out per light under its own fade, and the waves only well under every term that lights them', () => {
+    // The early-out sits at the fade's 0, so it changes no pixel.
+    expect(WATER_GLINT_HORIZON).toBe(0.02)
+    // -0.2 is 0 px at night, a Moon just set, full Moon, dusk and a low Sun
+    // (tides-0oi.10); -0.05 is 1-11 px off by 1 at dusk (tides-0oi.2).
+    expect(WATER_WAVES_LIGHT_MIN).toBe(-0.2)
+    expect(WATER_WAVES_LIGHT_MIN).toBeLessThan(SKY_DAY[0])
+    expect(WATER_WAVES_LIGHT_MIN).toBeLessThan(-WATER_GLINT_HORIZON)
+    expect(WATER_WAVES_LIGHT_MIN).toBeLessThan(MOON_UP_FROM)
+  })
+
+  it('returns from the glint at once under the horizon, on the light it was given', () => {
+    const head = WATER_GLSL(WATER_WAVE_TABLE).head
+    const glint = head.slice(head.indexOf('float waterGlint(vec3 l, vec3 v, vec3 n) {'))
+    expect(glint).toMatch(
+      new RegExp(`^float waterGlint\\(vec3 l, vec3 v, vec3 n\\) \\{\\n  float sunSin = dot\\(waterUpView, l\\);\\n  if \\(sunSin <= ${f(-WATER_GLINT_HORIZON)}\\) return 0\\.0;\\n`)
+    )
+    expect(glint).toContain(`return smoothstep(${f(-WATER_GLINT_HORIZON)}, ${f(WATER_GLINT_HORIZON)}, sunSin) * fresnel`)
+    expect(glint.split('float sunSin').length - 1).toBe(1)
+    // The TS mirror fades on the same edge: 0 there.
+    const l = norm([1, -WATER_GLINT_HORIZON, 0])
+    expect(waterGlint(l, norm([-1, 0.3, 0]), UP, UP, iso(WATER_MSS))).toBe(0)
+    expect(waterGlint(norm([1, 0.1, 0]), norm([-1, 0.1, 0]), UP, UP, iso(WATER_MSS))).toBeGreaterThan(0)
+  })
+
+  it("gates the waves on the Sun and the flight's Moon over the level sea, with no directional light as by day", () => {
+    for (const low of [false, true]) {
+      const normal = WATER_GLSL(waterWaves(low)).normal
+      const sun = 'waterSunSin = dot(waterUpView, directionalLights[0].direction);'
+      expect(normal).toContain(`float waterSunSin = 1.0;\n#if NUM_DIR_LIGHTS > 0\n${sun}\n`)
+      expect(normal.indexOf(sun)).toBeLessThan(normal.indexOf('#endif'))
+      expect(normal).toContain(`smoothstep(${f(SKY_DAY[0])}, ${f(SKY_DAY[1])}, waterSunSin));`)
+      // The Moon only with the flight's light in the program and any strength in it.
+      expect(normal).toContain(
+        'float waterMoonSin = -1.0;\n#ifdef NIGHT_FLIGHT_MOON\n  if (dot(uNightMoonLight, vec3(1.0)) > 0.0) waterMoonSin = dot(waterUpView, uNightMoonView);\n#endif\n'
+      )
+      const gate = `if (specularStrength > 0.0 && max(waterSunSin, waterMoonSin) > ${f(WATER_WAVES_LIGHT_MIN)}) {`
+      expect(normal.split(gate).length - 1).toBe(1)
+      expect(normal.indexOf('waterMoonSin = dot(')).toBeLessThan(normal.indexOf(gate))
+      // The gate holds the whole wave block: the roughness and sparkle the
+      // glint reads, and the bent normal.
+      const block = normal.slice(normal.indexOf(gate))
+      expect(block.indexOf('waterFacets = length(')).toBeGreaterThan(0)
+      expect(block.indexOf('normal = normalize(normal - specularStrength')).toBeGreaterThan(0)
+    }
+  })
+
+  it("sees the flight's Moon where its light is in the program, before the waves", () => {
+    const sun = { value: new THREE.Vector3(1, 0, 0) }
+    const haze = createGroundHaze(sun, 2.95, false)
+    const water = createWater(haze.frame)
+    const depth = { value: new THREE.Texture() }
+    const flight = createNightFlight(sun, { value: 0 }).uniforms
+    for (const night of [nightLightsPatch(sun, flight), nightLightsPatch(sun)]) {
+      const shader = phongShader()
+      composePatches(night, waterPatch(water, haze.frame, false, depth)).onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+      const fs = shader.fragmentShader
+      const main = fs.indexOf('void main')
+      const define = fs.indexOf('#define NIGHT_FLIGHT_MOON')
+      if (night.customProgramCacheKey!() === 'night-lights-flight') {
+        expect(define).toBeGreaterThan(-1)
+        expect(define).toBeLessThan(main)
+        expect(fs.indexOf('uniform vec3 uNightMoonView;')).toBeLessThan(main)
+        expect(fs.indexOf('uniform vec3 uNightMoonLight;')).toBeLessThan(main)
+        expect(shader.uniforms.uNightMoonView).toBe(flight.uNightMoonView)
+      } else {
+        expect(define).toBe(-1)
+      }
+      // The Moon's sin is taken in main, and the flight's moonlight reads the
+      // normal after the waves bend it.
+      expect(fs.indexOf('#ifdef NIGHT_FLIGHT_MOON')).toBeGreaterThan(main)
+      const bend = fs.indexOf('normal = normalize(normal - specularStrength')
+      expect(bend).toBeGreaterThan(main)
+      if (night.customProgramCacheKey!() === 'night-lights-flight') {
+        expect(fs.indexOf('max(dot(normal, uNightMoonView)')).toBeGreaterThan(bend)
+      }
+    }
+  })
+
+  it("sees the flight's Moon on the tiles too, the night's head before the waves", () => {
+    const link = fakeLink()
+    link.nightFlight = createNightFlight({ value: new THREE.Vector3(1, 0, 0) }, { value: 0 }).uniforms
+    const slots = TILE_FEATURES.filter((s) => s.name === 'night' || s.name === 'glint')
+    expect(slots.map((s) => s.name)).toEqual(['night', 'glint'])
+    const mesh = tileMesh()
+    createTileComposer(link, slots).prepare(mesh, {})
+    const fs = compiled(mesh.material as TerrainPhongMaterial).fragmentShader
+    const main = fs.indexOf('void main')
+    const moon = fs.indexOf('waterMoonSin = dot(')
+    expect(main).toBeGreaterThan(-1)
+    expect(moon).toBeGreaterThan(main)
+    for (const head of ['#define NIGHT_FLIGHT_MOON', 'uniform vec3 uNightMoonLight;', 'uniform vec3 uNightMoonView;']) {
+      const i = fs.indexOf(head)
+      expect(i, head).toBeGreaterThan(-1)
+      expect(i, head).toBeLessThan(main)
+      expect(i, head).toBeLessThan(moon)
+    }
+    const bend = fs.indexOf('normal = normalize(normal - specularStrength')
+    expect(fs.indexOf('max(dot(normal, uNightMoonView)')).toBeGreaterThan(bend)
   })
 })

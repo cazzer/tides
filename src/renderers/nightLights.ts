@@ -51,7 +51,10 @@ totalEmissiveRadiance *= smoothstep(0.035, -0.1, dot(normalize(vNightLightsDir),
 
 const f = (x: number) => x.toFixed(6)
 
+// NIGHT_FLIGHT_MOON: the water's waves (water.ts) also run where only the
+// Moon is up.
 const FLIGHT_FRAGMENT_HEAD = /* glsl */ `
+#define NIGHT_FLIGHT_MOON
 uniform vec3 uNightMoon;
 uniform vec3 uNightMoonView;
 uniform vec3 uNightFill;
