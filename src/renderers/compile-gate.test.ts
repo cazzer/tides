@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { afterRound, allShownReady, compilesAhead, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
+import * as THREE from 'three'
+import { afterRound, allShownReady, compilesAhead, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, warmMapJob, withTimeout } from './compile-gate'
+import { retireMap } from '../ship/body-map-residency'
 
 describe('withTimeout', () => {
   afterEach(() => {
@@ -146,5 +148,17 @@ describe('compilesAhead', () => {
 
   it('leaves an object to its draw while one of its materials waits for what changes its program', () => {
     expect(compilesAhead([{ userData: {} }, { userData: { compileLater: true } }])).toBe(false)
+  })
+})
+
+describe('warmMapJob', () => {
+  it('uploads a map, but not one ship mode retired after the list was made (tides-0oi.34)', () => {
+    const gl = { initTexture: vi.fn() }
+    const kept = new THREE.Texture()
+    const retired = new THREE.Texture()
+    const jobs = [warmMapJob(gl, kept), warmMapJob(gl, retired)]
+    retireMap(retired)
+    for (const job of jobs) job()
+    expect(gl.initTexture.mock.calls).toEqual([[kept]])
   })
 })
