@@ -80,10 +80,14 @@ const INIT = `(() => {
     if (m) { for (const v of m.values()) V.live -= v; liveBy.delete(tex); V.liveN-- }
     return dt.apply(this, arguments)
   }
+  // 4x4-block compressed formats' bytes per block (tides-0oi.14): ASTC 4x4, BC7, ETC2/EAC, S3TC, each with its sRGB twin.
+  const block = { 0x93B0: 16, 0x93D0: 16, 0x8E8C: 16, 0x8E8D: 16, 0x9274: 8, 0x9275: 8, 0x9278: 16, 0x9279: 16,
+    0x83F0: 8, 0x83F1: 8, 0x8C4C: 8, 0x8C4D: 8, 0x83F2: 16, 0x83F3: 16, 0x8C4E: 16, 0x8C4F: 16 }
+  const levelBytes = (fmt, w, h) => (block[fmt] ? Math.ceil(w / 4) * Math.ceil(h / 4) * block[fmt] : w * h * (bpp[fmt] || 4))
   const ts2 = P.texStorage2D
   P.texStorage2D = function (t, levels, fmt, w, h) {
     let b = 0, ww = w, hh = h
-    for (let i = 0; i < levels; i++) { b += ww * hh * (bpp[fmt] || 4); ww = Math.max(1, ww >> 1); hh = Math.max(1, hh >> 1) }
+    for (let i = 0; i < levels; i++) { b += levelBytes(fmt, ww, hh); ww = Math.max(1, ww >> 1); hh = Math.max(1, hh >> 1) }
     add('0x' + fmt.toString(16), b, w + 'x' + h + 'x' + levels)
     setLive(this, t, 'storage', t === 0x8513 ? 6 * b : b)
     return ts2.apply(this, arguments)
