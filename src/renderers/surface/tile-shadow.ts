@@ -47,7 +47,9 @@
 // sunLit = min(a, b): one shadow, the deeper (a product would darken twice
 // where both see the same ridge). It dims the direct light only, as the
 // globe's; (a)'s sky occlusion (groundHorizonSky, which the colour slot's
-// sky fill reads after GROUND_HORIZON, as on the globe) dims the ambient.
+// sky fill reads after GROUND_HORIZON, as on the globe) dims the ambient,
+// fading out with the Sun's elevation as it clears the globe map's highest
+// horizon, as on the globe (tides-0oi.17).
 // Grids with no horizon (open water, flat ground, no decode worker, or not
 // baked yet) read a placeholder with uTileHorizonOn 0: (a) alone.
 import * as THREE from 'three'

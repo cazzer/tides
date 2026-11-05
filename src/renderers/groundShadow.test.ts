@@ -5,7 +5,7 @@ import { createCloudLayer } from './cloudShaders'
 import { blankHorizonTexture, earthHorizon } from './earthHorizonTexture'
 import { groundDetailPatch } from './groundDetail'
 import { groundShadowPatch } from './groundShadow'
-import { HORIZON_SOFTNESS } from '../earth-horizon'
+import { HORIZON_CLEAR_MARGIN, HORIZON_MAX_ANGLE, HORIZON_SOFTNESS } from '../earth-horizon'
 import { nightLightsPatch } from './nightLights'
 import { poleSmoothingPatch } from './poleSmoothing'
 
@@ -75,6 +75,33 @@ describe('ground shadow patch', () => {
     // unit over 255 levels) or less.
     expect(frag).toContain('float quantum = k * uGroundHorizonCode.x / 255.0;')
     expect(frag).toContain(`smoothstep(quantum, quantum + ${HORIZON_SOFTNESS.toFixed(6)}, toward));`)
+  })
+
+  it('skips the block once the Sun clears every horizon, the sky fading out first (tides-0oi.17)', () => {
+    // As horizonTop() and sunClearsHorizon() (../earth-horizon.ts): change one, change the other.
+    const top = at(
+      `float top = atan(k * tan(min(max(max(hTop4.x, hTop4.y), max(hTop4.z, hTop4.w)), ${HORIZON_MAX_ANGLE.toFixed(6)})));`
+    )
+    expect(at('vec4 hTop4 = max(hA, hB);')).toBeLessThan(top)
+    expect(at('vec4 hB = texture(uGroundHorizon, vec3(vMapUv, 1.0))')).toBeLessThan(top)
+    const gate = at(`if (elevation < top + ${(HORIZON_SOFTNESS + HORIZON_CLEAR_MARGIN).toFixed(6)}) {`)
+    expect(top).toBeLessThan(gate)
+    // The bound itself only where the shadows show at all (not at night,
+    // nor toward the poles or in the system view).
+    const fade = at('if (fade > 0.0) {\n    float k = ')
+    for (const s of ['float elevation = asin(clamp(dot(sun, up), -1.0, 1.0));', 'vec4 hTop4 = max(hA, hB);']) {
+      expect(at(s)).toBeGreaterThan(fade)
+      expect(at(s)).toBeLessThan(top)
+    }
+    // Everything else inside it.
+    for (const s of ['float sky = dot(', 'float toward = atan(', 'reflectedLight.directDiffuse *= sunLit;']) {
+      expect(at(s)).toBeGreaterThan(gate)
+    }
+    // As skyOcclusionWeight(): 0 at the gate, so skipping is seamless.
+    const s = HORIZON_SOFTNESS.toFixed(6)
+    const weight = at(`float skyWeight = 1.0 - smoothstep(top - ${s}, top + ${s}, elevation);`)
+    expect(weight).toBeLessThan(at('pow(sky / 8.0, 2.000000), fade * skyWeight);'))
+    expect(frag.split('float elevation =')).toHaveLength(2)
   })
 
   it('leaves the night lights alone', () => {
