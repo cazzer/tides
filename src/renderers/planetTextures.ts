@@ -105,6 +105,8 @@ export class BodyMapLoader extends THREE.Loader<THREE.Texture> {
     }
     this.loadCompressed(ktx2, gl).then(
       (texture) => {
+        // Its url, which a compressed texture otherwise doesn't keep (debugging, the perf-audit harness).
+        texture.name = ktx2
         texture.anisotropy = anisotropy
         onLoad(texture)
       },
