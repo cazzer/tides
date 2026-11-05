@@ -205,7 +205,9 @@ export function coverBytesOf(texture: THREE.Texture | 'static'): CloudCover | nu
  * frame must never be uploaded again (needsUpdate, or a renderer's
  * initTexture() on it), as it would go up blank: a lost context, which would
  * send it again, evicts the frames, rebuilt then (realCloudController.ts
- * evictAll()), and nothing warms them ahead (ship/CompileGate).
+ * evictAll()). The warm-ups (CompileGate.tsx warmJobs(), ship-warmup.ts)
+ * init only the maps materials hold, and none holds a frame: the cloud
+ * layer is shown the blend's output, a render target.
  */
 export function releasePixelsOnUpload(texture: THREE.DataTexture): void {
   texture.onUpdate = () => {
