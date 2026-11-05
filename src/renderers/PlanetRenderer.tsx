@@ -168,9 +168,9 @@ function SurfaceMesh({
   const sun = useSunDirection()
   const onBeforeRender = useMemo<BodyMapDrawCheck>(() => {
     if (!onBeforeDraw) return sun.onBeforeRender
-    return function (...args) {
+    return function (renderer, scene, camera, geometry, material, group) {
       sun.onBeforeRender.call(this)
-      onBeforeDraw.apply(this, args)
+      onBeforeDraw.call(this, renderer, scene, camera, geometry, material, group)
     }
   }, [sun, onBeforeDraw])
   const shadowed = ringShadow !== undefined

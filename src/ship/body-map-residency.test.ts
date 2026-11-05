@@ -229,8 +229,14 @@ describe('bodyRadiusPx', () => {
 })
 
 describe('shipMapStep', () => {
-  const step = (radiusPx: number, over: Partial<Parameters<typeof shipMapStep>[0]> = {}) =>
-    shipMapStep({ promoted: false, radiusPx, slotFree: true, showsProxy: false, proxyCached: false, ...over })
+  interface Over {
+    promoted?: boolean
+    slotFree?: boolean
+    showsProxy?: boolean
+    proxyCached?: boolean
+  }
+  const step = (radiusPx: number, { promoted = false, slotFree = true, showsProxy = false, proxyCached = false }: Over = {}) =>
+    shipMapStep(promoted, radiusPx, slotFree, showsProxy, proxyCached)
 
   it('does nothing more once promoted', () => {
     expect(step(50, { promoted: true })).toBe('none')
@@ -257,7 +263,7 @@ describe('shipMapStep', () => {
 
 describe('systemMapStep', () => {
   it('leaves a full map be', () => {
-    expect(systemMapStep({ showsProxy: false, retired: true, slotFree: true })).toBe('none')
+    expect(systemMapStep(false, true, true)).toBe('none')
   })
 
   it('brings retired maps back one a frame, every View showing each as it returns', () => {
@@ -271,11 +277,7 @@ describe('systemMapStep', () => {
       frame++
       for (const views of showsProxy) {
         for (const map of [...views]) {
-          const step: SystemMapStep = systemMapStep({
-            showsProxy: true,
-            retired: retired.has(map),
-            slotFree: budget.free(frame),
-          })
+          const step: SystemMapStep = systemMapStep(true, retired.has(map), budget.free(frame))
           if (step === 'restore') {
             budget.take(frame)
             retired.delete(map)

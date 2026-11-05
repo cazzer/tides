@@ -55,15 +55,16 @@ export function useShipBodyMap(
   const [held, setHeld] = useState<THREE.Texture | null>(() => map && initialBodyMap(map))
   const shown = held && (held === map || fullMapOf(held) === map) ? held : map
   const promoted = useRef(false)
+  // Committed at once, so the layout effect binds it before this frame draws.
+  const show = (texture: THREE.Texture) => flushSync(() => setHeld(texture))
 
   useFrame(({ gl, camera, size, viewport }) => {
     if (!map) return
-    const frame = gl.info.render.frame
     const showsProxy = shown !== map
-    // Committed now, so the layout effect binds it before this frame draws.
-    const show = (texture: THREE.Texture) => flushSync(() => setHeld(texture))
+    if (!shipMode && !showsProxy) return
+    const frame = gl.info.render.frame
     if (!shipMode) {
-      const step = systemMapStep({ showsProxy, retired: isRetiredMap(map), slotFree: uploadSlot.free(frame) })
+      const step = systemMapStep(showsProxy, isRetiredMap(map), uploadSlot.free(frame))
       if (step === 'restore') {
         uploadSlot.take(frame)
         promoteMap(gl, map)
@@ -79,13 +80,7 @@ export function useShipBodyMap(
     const worldRadius = radius * body.getWorldScale(_scale).x
     const radiusPx = bodyRadiusPx(camera as THREE.PerspectiveCamera, _position, worldRadius, size.height * viewport.dpr)
     const proxy = cachedMapProxy(map)
-    const step = shipMapStep({
-      promoted: false,
-      radiusPx,
-      slotFree: uploadSlot.free(frame),
-      showsProxy,
-      proxyCached: proxy !== undefined,
-    })
+    const step = shipMapStep(false, radiusPx, uploadSlot.free(frame), showsProxy, proxy !== undefined)
     if (step === 'promote') {
       uploadSlot.take(frame)
       promoted.current = true

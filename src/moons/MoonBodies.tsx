@@ -140,13 +140,7 @@ function stepMoonMaps(
     mesh.getWorldPosition(_moonPosition)
     const radiusPx = bodyRadiusPx(camera, _moonPosition, mesh.getWorldScale(_moonScale).x, screenPx)
     const proxy = cachedMapProxy(map)
-    const step = shipMapStep({
-      promoted: false,
-      radiusPx,
-      slotFree: uploadSlot.free(frame),
-      showsProxy: bound !== map,
-      proxyCached: proxy !== undefined,
-    })
+    const step = shipMapStep(false, radiusPx, uploadSlot.free(frame), bound !== map, proxy !== undefined)
     if (step === 'promote') {
       uploadSlot.take(frame)
       promoteMap(gl, map)
@@ -219,7 +213,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // view together never stack their uploads into one long frame
   // (tides-2hv.18). In the system view every moon's map is resident once
   // loaded: 154 MB on desktop, 53 MB at 1k on phones; ship mode holds each
-  // as its proxy instead, until the moon comes close (showProxy). The queue holds `looks`' materials, which
+  // as its proxy instead, until the moon comes close (stepMoonMaps). The queue holds `looks`' materials, which
   // a change of distanceScale would replace, but no mounted MoonBodies sees
   // one (tides-sq9): every Scene in App.tsx passes a fixed scale ('flight'
   // for ship mode's own Scene, the 'system' default for the rest), and ship

@@ -116,24 +116,19 @@ export type ShipMapStep =
   | 'wait'
 
 /**
- * A ship-mode body's step: `radiusPx` its size (bodyRadiusPx), `showsProxy`
+ * A ship-mode body's step (plain arguments: it runs per body per frame):
+ * `radiusPx` its size (bodyRadiusPx), `showsProxy`
  * whether it binds its proxy now, `proxyCached` whether one is built. A body
  * already past PROMOTE_RADIUS_PX goes straight to its full map, so it is
  * never read back and retired.
  */
-export function shipMapStep({
-  promoted,
-  radiusPx,
-  slotFree,
-  showsProxy,
-  proxyCached,
-}: {
-  promoted: boolean
-  radiusPx: number
-  slotFree: boolean
-  showsProxy: boolean
+export function shipMapStep(
+  promoted: boolean,
+  radiusPx: number,
+  slotFree: boolean,
+  showsProxy: boolean,
   proxyCached: boolean
-}): ShipMapStep {
+): ShipMapStep {
   if (promoted) return 'none'
   if (shouldUploadNow(radiusPx, slotFree)) return 'promote'
   if (bodyMapTier(radiusPx, false) === 'full') return 'wait'
@@ -158,15 +153,7 @@ export type SystemMapStep =
  * view and its panels draw bodies far larger than PROMOTE_RADIUS_PX), so
  * leaving a flight never uploads them all in its first frame.
  */
-export function systemMapStep({
-  showsProxy,
-  retired,
-  slotFree,
-}: {
-  showsProxy: boolean
-  retired: boolean
-  slotFree: boolean
-}): SystemMapStep {
+export function systemMapStep(showsProxy: boolean, retired: boolean, slotFree: boolean): SystemMapStep {
   if (!showsProxy) return 'none'
   if (!retired) return 'show'
   return slotFree ? 'restore' : 'wait'
