@@ -18,6 +18,23 @@ function init() {
     0x8cac: 4, 0x88f0: 4, 0x8cad: 8, 0x822f: 4, 0x8232: 1, 0x8236: 4, 0x8d48: 1,
     0x1908: 4, 0x1907: 3, 0x1909: 1, 0x190a: 2, 0x1906: 1,
   }
+  // Compressed formats: [block width, block height, bytes per block].
+  // three uploads KTX2 textures as texStorage2D with one of these, then
+  // compressedTexSubImage2D, so storage is where they are counted.
+  const blocks = {}
+  for (const f of [0x83f0, 0x83f1, 0x8c4c, 0x8c4d, 0x8dbb, 0x8dbc, 0x9270, 0x9271, 0x9274, 0x9275, 0x9276, 0x9277, 0x8d64]) blocks[f] = [4, 4, 8]
+  for (const f of [0x83f2, 0x83f3, 0x8c4e, 0x8c4f, 0x8dbd, 0x8dbe, 0x9272, 0x9273, 0x9278, 0x9279, 0x8e8c, 0x8e8d, 0x8e8e, 0x8e8f]) blocks[f] = [4, 4, 16]
+  const ASTC = [[4, 4], [5, 4], [5, 5], [6, 5], [6, 6], [8, 5], [8, 6], [8, 8], [10, 5], [10, 6], [10, 8], [10, 10], [12, 10], [12, 12]]
+  ASTC.forEach(([bw, bh], i) => {
+    blocks[0x93b0 + i] = [bw, bh, 16]
+    blocks[0x93d0 + i] = [bw, bh, 16]
+  })
+  blocks[0x8c00] = blocks[0x8c02] = [4, 4, 8] // PVRTC 4 bpp
+  blocks[0x8c01] = blocks[0x8c03] = [8, 4, 8] // PVRTC 2 bpp
+  const levelBytes = (w, h, format) => {
+    const b = blocks[format]
+    return b ? Math.ceil(w / b[0]) * Math.ceil(h / b[1]) * b[2] : w * h * (bpp[format] || 4)
+  }
   const pp = (window.__pp = {
     textures: new Map(), // WebGLTexture -> { format, parts: Map(part -> bytes), compressed }
     renderbuffers: new Map(), // WebGLRenderbuffer -> { format, bytes }
@@ -49,7 +66,7 @@ function init() {
   const mipBytes = (levels, w, h, depth, format) => {
     let bytes = 0
     for (let i = 0; i < levels; i++) {
-      bytes += w * h * depth * (bpp[format] || 4)
+      bytes += levelBytes(w, h, format) * depth
       w = Math.max(1, w >> 1)
       h = Math.max(1, h >> 1)
     }
@@ -65,8 +82,12 @@ function init() {
   wrap('activeTexture', (ctx, unit) => (stateOf(ctx).unit = unit))
   wrap('bindTexture', (ctx, target, texture) => stateOf(ctx).bound.set(`${stateOf(ctx).unit}:${target}`, texture))
   wrap('deleteTexture', (ctx, texture) => pp.textures.delete(texture))
-  wrap('texStorage2D', (ctx, t, levels, format, w, h) => setPart(ctx, t, 'storage', format, mipBytes(levels, w, h, t === 0x8513 ? 6 : 1, format)))
-  wrap('texStorage3D', (ctx, t, levels, format, w, h, d) => setPart(ctx, t, 'storage', format, mipBytes(levels, w, h, d, format)))
+  wrap('texStorage2D', (ctx, t, levels, format, w, h) =>
+    setPart(ctx, t, 'storage', format, mipBytes(levels, w, h, t === 0x8513 ? 6 : 1, format), format in blocks)
+  )
+  wrap('texStorage3D', (ctx, t, levels, format, w, h, d) =>
+    setPart(ctx, t, 'storage', format, mipBytes(levels, w, h, d, format), format in blocks)
+  )
   wrap('texImage2D', function (ctx, t, level, format) {
     const args = [...arguments].slice(1)
     let w, h

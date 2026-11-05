@@ -51,7 +51,7 @@ const config = {
 const log = (...args) => console.log(...args)
 const children = []
 // What shutdown() must undo however the run ends (error, Ctrl-C).
-const active = { device: null, connection: null, page: null }
+const active = { device: null, connection: null, page: null, lock: null }
 
 async function main() {
   if (!['phone', 'desktop'].includes(config.target)) throw new Error(`TARGET must be phone or desktop, not ${config.target}`)
@@ -223,6 +223,7 @@ async function captureTrace(connection, page, marks) {
     traceFrames = sample.deltas.length
   } finally {
     const complete = connection.waitFor('Tracing.tracingComplete', undefined, 120000)
+    complete.catch(() => {})
     await connection.send('Tracing.end')
     await complete
     offData()
@@ -324,20 +325,14 @@ async function openPhone() {
   const serial = adb.pickSerial(await adb.adb(null, "devices", "-l"), env.ADB_SERIAL ?? env.ANDROID_SERIAL)
   log(`phone: ${serial}`)
   const ports = { cdpPort: config.cdpPort, vitePort: config.vitePort }
-  let prepared
-  try {
-    prepared = await adb.prepareDevice(serial, ports)
-  } catch (error) {
-    await adb.releaseDevice(serial, ports)
-    throw error
-  }
-  const info = { kind: 'phone', serial, ...(await adb.deviceInfo(serial)), thermalAtStart: await adb.readThermal(serial) }
+  const prepared = await adb.prepareDevice(serial, ports)
+  const device = { serial, info: null, close: () => adb.releaseDevice(serial, { ...ports, stayOn: prepared.stayOn }) }
+  // Released by shutdown() from here on, even if reading the device fails.
+  active.device = device
+  device.info = { kind: 'phone', serial, ...(await adb.deviceInfo(serial)), thermalAtStart: await adb.readThermal(serial) }
+  const info = device.info
   log(`  ${info.model}, Android ${info.android}, Chrome ${info.chrome}, battery ${info.battery}%, ${adb.thermalLine(info.thermalAtStart)}`)
-  return {
-    serial,
-    info,
-    close: () => adb.releaseDevice(serial, { ...ports, stayOn: prepared.stayOn }),
-  }
+  return device
 }
 
 // The cross-stream GPU lock (shared with the perf-audit stream): a directory
@@ -392,6 +387,7 @@ async function withGpuLock(lock, fn, { staleMs = 180000 } = {}) {
       await sleep(500)
     }
   }
+  active.lock = lock
   const refresh = setInterval(() => {
     try {
       fs.writeFileSync(owner, `${who} ${Date.now()}`)
@@ -401,6 +397,7 @@ async function withGpuLock(lock, fn, { staleMs = 180000 } = {}) {
     return await fn()
   } finally {
     clearInterval(refresh)
+    active.lock = null
     fs.rmSync(lock, { recursive: true, force: true })
   }
 }
@@ -429,6 +426,8 @@ const pct = (v) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '–')
 let shuttingDown = null
 function shutdown() {
   shuttingDown ??= (async () => {
+    // Ctrl-C mid-pose exits before withGpuLock's finally runs.
+    if (active.lock) fs.rmSync(active.lock, { recursive: true, force: true })
     if (active.page) await active.page.close().catch(() => {})
     active.connection?.close()
     if (active.device) {

@@ -95,10 +95,15 @@ export async function coolDown(serial, { maxC, timeoutMs, log }) {
 // previous setting so releaseDevice can put it back.
 export async function prepareDevice(serial, { cdpPort, vitePort }) {
   const stayOn = (await adb(serial, 'shell', 'settings', 'get', 'global', 'stay_on_while_plugged_in')).trim()
-  await adb(serial, 'shell', 'svc', 'power', 'stayon', 'true')
-  await wakeAndUnlock(serial)
-  await adb(serial, 'reverse', `tcp:${vitePort}`, `tcp:${vitePort}`)
-  await adb(serial, 'forward', `tcp:${cdpPort}`, 'localabstract:chrome_devtools_remote')
+  try {
+    await adb(serial, 'shell', 'svc', 'power', 'stayon', 'true')
+    await wakeAndUnlock(serial)
+    await adb(serial, 'reverse', `tcp:${vitePort}`, `tcp:${vitePort}`)
+    await adb(serial, 'forward', `tcp:${cdpPort}`, 'localabstract:chrome_devtools_remote')
+  } catch (error) {
+    await releaseDevice(serial, { cdpPort, vitePort, stayOn })
+    throw error
+  }
   return { stayOn }
 }
 

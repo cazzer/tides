@@ -155,6 +155,9 @@ export class CdpPage {
 
   async navigate(url, timeoutMs = 60000) {
     const loaded = this.waitFor('Page.loadEventFired', timeoutMs)
+    // Handled even when the navigation fails first, so it can't surface later
+    // as an unhandled rejection that kills the run before the phone is released.
+    loaded.catch(() => {})
     const result = await this.send('Page.navigate', { url })
     if (result.errorText) throw new Error(`Navigation to ${url} failed: ${result.errorText}`)
     await loaded
