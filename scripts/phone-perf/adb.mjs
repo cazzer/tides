@@ -119,6 +119,7 @@ export async function prepareDevice(serial, { cdpPort, vitePorts }, pending = {}
   try {
     await adb(serial, 'shell', 'svc', 'power', 'stayon', 'true')
     await wakeAndUnlock(serial)
+    await foregroundChrome(serial)
     for (const port of vitePorts) await adb(serial, 'reverse', `tcp:${port}`, `tcp:${port}`)
     await adb(serial, 'forward', `tcp:${cdpPort}`, 'localabstract:chrome_devtools_remote')
   } catch (error) {
@@ -137,6 +138,20 @@ export async function wakeAndUnlock(serial) {
   if (/mDreamingLockscreen=true|isKeyguardShowing=true|mShowingLockscreen=true/.test(window)) {
     throw new Error('The phone is locked behind a PIN or pattern; unlock it once by hand')
   }
+}
+
+const CHROME = 'com.android.chrome/com.google.android.apps.chrome.Main'
+
+// Chrome must be the foreground app, or its rAF stops and no pose loads
+// (Settings is often left in front after Wireless debugging is turned on).
+// The launcher intent only brings the existing task to the front; it opens no
+// tab. Returns whether it had to.
+export async function foregroundChrome(serial) {
+  const window = await adb(serial, 'shell', 'dumpsys', 'window').catch(() => '')
+  const focus = /mCurrentFocus=Window\{[^}]*\}/.exec(window)?.[0] ?? ''
+  if (focus.includes('com.android.chrome/')) return false
+  await adb(serial, 'shell', 'am', 'start', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', '-n', CHROME)
+  return true
 }
 
 export async function releaseDevice(serial, { cdpPort, vitePorts, stayOn }) {

@@ -170,6 +170,7 @@ async function measureWithGuards(connection, device, item, build, round) {
       log,
     })
     thermalBefore = { ...cooled.thermal, waitedMs: cooled.waitedMs, cool: cooled.cool }
+    if (await adb.foregroundChrome(device.serial).catch(() => false)) log('  Chrome was not in front; brought it back')
   }
   log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)})` : ''}`)
   const measure = () => measurePose(connection, device, item, build)
