@@ -30,6 +30,18 @@ import { moonTextureUrl } from './moon-textures'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 import { useLimbBodyAmong, useLimbSphere, useWantsLimbSphere, type SphereSegments } from '../ship/limb-detail'
+import {
+  bodyRadiusPx,
+  cachedMapProxy,
+  fullMapOf,
+  initialBodyMap,
+  isRetiredMap,
+  mapProxy,
+  promoteMap,
+  retireMap,
+  shipMapStep,
+  uploadSlot,
+} from '../ship/body-map-residency'
 
 export interface MoonBodiesProps {
   /** Which planet positions the moons follow. */
@@ -101,6 +113,56 @@ function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
   material.needsUpdate = true
 }
 
+const _moonPosition = new THREE.Vector3()
+const _moonScale = new THREE.Vector3()
+
+// Ship mode (tides-0oi.7): each moon binds its map's mip-tail proxy, and the
+// map is freed from the GPU, until the moon is PROMOTE_RADIUS_PX in radius;
+// then its full map, for good (`promoted`, this flight's). A uniform change
+// either way, so the program stays (ship/body-map-residency.ts). Module
+// level, like placeMoons.
+function stepMoonMaps(
+  gl: THREE.WebGLRenderer,
+  meshes: readonly RefObject<THREE.Mesh | null>[],
+  looks: readonly { material: THREE.ShaderMaterial }[],
+  promoted: WeakSet<THREE.Texture>,
+  camera: THREE.PerspectiveCamera,
+  screenPx: number,
+  frame: number
+) {
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i].current
+    const uniform = looks[i].material.uniforms.uMap
+    const bound = uniform.value as THREE.Texture | null
+    if (!mesh || !bound) continue
+    const map = fullMapOf(bound) ?? bound
+    if (promoted.has(map)) continue
+    mesh.getWorldPosition(_moonPosition)
+    const radiusPx = bodyRadiusPx(camera, _moonPosition, mesh.getWorldScale(_moonScale).x, screenPx)
+    const proxy = cachedMapProxy(map)
+    const step = shipMapStep(false, radiusPx, uploadSlot.free(frame), bound !== map, proxy !== undefined)
+    if (step === 'promote') {
+      uploadSlot.take(frame)
+      promoteMap(gl, map)
+      uniform.value = map
+      promoted.add(map)
+    } else if (step === 'proxy' && proxy) {
+      uniform.value = proxy
+      retireMap(map)
+    } else if (step === 'build') {
+      uploadSlot.take(frame)
+      const built = mapProxy(gl, map)
+      if (built) {
+        uniform.value = built
+        retireMap(map)
+      } else {
+        // A map that can't have one stays as it is.
+        promoted.add(map)
+      }
+    }
+  }
+}
+
 export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) => {
   const { handleFocus } = useCamera() as { handleFocus: ((event: ThreeEvent<PointerEvent>) => void) | null }
   const setPlanet = useStore((s) => s.setPlanet)
@@ -111,12 +173,18 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     SPHERE_SEGMENTS
   )
   const limbSphere = useLimbSphere(1, wantsLimb)
+  const shipMode = useStore((s) => s.shipMode)
+  // This flight's promoted maps (stepMoonMaps).
+  const promoted = useMemo(() => new WeakSet<THREE.Texture>(), [])
   const refs = useMemo(() => MOON_KEYS.map(() => createRef<THREE.Mesh>()), [])
   const looks = useMemo(
     () =>
       MOON_KEYS.map((key, i) => {
         const sun = sunDirection()
-        const material = planetSurfaceMaterial(sun.uniform, { map: loadedMaps.get(URLS[i]) ?? null })
+        const loaded = loadedMaps.get(URLS[i])
+        // Its proxy while a flight has the map retired (initialBodyMap).
+        const map = loaded ? initialBodyMap(loaded) : null
+        const material = planetSurfaceMaterial(sun.uniform, { map })
         material.uniforms.uColor.value.set(MOONS[key].color)
         if (key !== 'titan') setPlanetDetail(material, MOON_DETAIL)
         // The camera frames a focused moon by `radius`; moonRaycast reads
@@ -143,8 +211,9 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // Arrived maps upload one per frame (useFrame below), up front rather than
   // when each moon first comes into view, so maps that arrive or come into
   // view together never stack their uploads into one long frame
-  // (tides-2hv.18). Every moon's map is resident once loaded: 154 MB on
-  // desktop, 53 MB at 1k on phones. The queue holds `looks`' materials, which
+  // (tides-2hv.18). In the system view every moon's map is resident once
+  // loaded: 154 MB on desktop, 53 MB at 1k on phones; ship mode holds each
+  // as its proxy instead, until the moon comes close (stepMoonMaps). The queue holds `looks`' materials, which
   // a change of distanceScale would replace, but no mounted MoonBodies sees
   // one (tides-sq9): every Scene in App.tsx passes a fixed scale ('flight'
   // for ship mode's own Scene, the 'system' default for the rest), and ship
@@ -175,14 +244,34 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     return () => MOON_KEYS.forEach((key) => setPlanet(key, undefined))
   }, [interactive, refs, setPlanet])
 
-  useFrame(({ gl }) => {
-    const next = arrived.current.shift()
-    if (next) {
-      gl.initTexture(next.map)
-      applyMap(next.material, next.map)
-    }
+  useFrame(({ gl, camera, size, viewport }) => {
     const t = useStore.getState().timestamp
     if (t != null) placeMoons(refs, t, distanceScale)
+    // Uploads and read-backs share the page's one-a-frame budget.
+    const frame = gl.info.render.frame
+    if (shipMode && t != null) {
+      stepMoonMaps(gl, refs, looks, promoted, camera as THREE.PerspectiveCamera, size.height * viewport.dpr, frame)
+    }
+    const next = arrived.current[0]
+    if (!next) return
+    const shown = initialBodyMap(next.map)
+    if (shipMode && (shown !== next.map || promoted.has(next.map))) {
+      // A retired map's proxy, or a promoted map already bound: no upload.
+      arrived.current.shift()
+      if (!promoted.has(next.map)) applyMap(next.material, shown)
+    } else if (shipMode || !isRetiredMap(next.map)) {
+      // A new map's upload, one a frame as ever (system view), or within the
+      // budget (ship mode, where stepMoonMaps then picks its tier).
+      if (shipMode && !uploadSlot.take(frame)) return
+      arrived.current.shift()
+      gl.initTexture(next.map)
+      applyMap(next.material, next.map)
+    } else if (uploadSlot.take(frame)) {
+      // Outside ship mode a map a flight retired comes back, one a frame.
+      arrived.current.shift()
+      promoteMap(gl, next.map)
+      applyMap(next.material, next.map)
+    }
   })
 
   const onPointerDown = (event: ThreeEvent<PointerEvent>) => {
