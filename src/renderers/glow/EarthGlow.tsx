@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY } from '../../lighting'
 import { NIGHT_LIGHTS_GLSL } from '../nightLights'
 import { GLOW_LAYER, GLOW_SCALE } from './glow'
-import { GLOW_ORDER, glowOn, useGlowSource } from './glowSources'
+import { GLOW_ORDER, useGlowOn, useGlowSource } from './glowSources'
 
 /** [TUNE] The city lights' glow against their own emission. */
 const CITY_GLOW_GAIN = 2.2
@@ -117,7 +117,7 @@ export interface EarthGlowProps {
  * mesh's sibling, in the same frame.
  */
 export function EarthGlow(props: EarthGlowProps) {
-  return glowOn() ? <EarthGlowOn {...props} /> : null
+  return useGlowOn() ? <EarthGlowOn {...props} /> : null
 }
 
 // Module level, so hooks don't mutate a memoised material in place.

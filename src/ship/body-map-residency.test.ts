@@ -10,6 +10,8 @@ import {
   buildMapProxy,
   createUploadBudget,
   fullMapOf,
+  initialBodyMap,
+  mapProxy,
   offAxisScale,
   projectedRadiusPx,
   promoteAtDraw,
@@ -160,6 +162,98 @@ describe('buildMapProxy', () => {
     expect(buildMapProxy(flat, read([]))).toBeNull()
     expect(buildMapProxy(sourceMap(256, 128), read([]))).toBeNull()
     expect(buildMapProxy(sourceMap(2048, 1024), () => null)).toBeNull()
+  })
+})
+
+// What KTX2Loader gives for a mipmapped 2D file (tides-0oi.14).
+function compressedMap(width: number, height: number, levels = Math.log2(Math.max(width, height)) + 1) {
+  const mipmaps = Array.from({ length: levels }, (_, level) => {
+    const w = Math.max(1, width >> level)
+    const h = Math.max(1, height >> level)
+    return { data: new Uint8Array(Math.ceil(w / 4) * Math.ceil(h / 4) * 16), width: w, height: h }
+  })
+  const map = new THREE.CompressedTexture(mipmaps, width, height, THREE.RGBA_ASTC_4x4_Format, THREE.UnsignedByteType)
+  map.minFilter = THREE.LinearMipmapLinearFilter
+  map.magFilter = THREE.LinearFilter
+  map.generateMipmaps = false
+  map.colorSpace = THREE.SRGBColorSpace
+  map.anisotropy = 16
+  map.wrapS = THREE.RepeatWrapping
+  map.wrapT = THREE.MirroredRepeatWrapping
+  return map
+}
+
+describe('buildMapProxy for a compressed map', () => {
+  const noRead = () => {
+    throw new Error('a compressed proxy reads nothing back')
+  }
+
+  it("shares the map's own level data from PROXY_WIDTH down", () => {
+    const map = compressedMap(2048, 1024)
+    const proxy = buildMapProxy(map, noRead) as THREE.CompressedTexture
+    expect(proxy).toBeInstanceOf(THREE.CompressedTexture)
+    const levels = proxy.mipmaps as THREE.CompressedTextureMipmap[]
+    expect(levels.map(({ width, height }) => [width, height])).toEqual([
+      [256, 128],
+      [128, 64],
+      [64, 32],
+      [32, 16],
+      [16, 8],
+      [8, 4],
+      [4, 2],
+      [2, 1],
+      [1, 1],
+    ])
+    levels.forEach((level, k) => expect(level.data).toBe((map.mipmaps as THREE.CompressedTextureMipmap[])[3 + k].data))
+    expect(proxy.image).toMatchObject({ width: PROXY_WIDTH, height: PROXY_WIDTH / 2 })
+  })
+
+  it("keeps the map's format and sampler state", () => {
+    const map = compressedMap(1024, 512)
+    const proxy = buildMapProxy(map, noRead)!
+    expect(proxy.mipmaps).toHaveLength(9)
+    expect(proxy.format).toBe(THREE.RGBA_ASTC_4x4_Format)
+    expect(proxy.type).toBe(THREE.UnsignedByteType)
+    expect(proxy.colorSpace).toBe(THREE.SRGBColorSpace)
+    expect(proxy.anisotropy).toBe(16)
+    expect(proxy.wrapS).toBe(THREE.RepeatWrapping)
+    expect(proxy.wrapT).toBe(THREE.MirroredRepeatWrapping)
+    expect(proxy.magFilter).toBe(THREE.LinearFilter)
+    expect(proxy.minFilter).toBe(THREE.LinearMipmapLinearFilter)
+    expect(proxy.generateMipmaps).toBe(false)
+    expect(proxy.flipY).toBe(false)
+    expect(fullMapOf(proxy)).toBe(map)
+  })
+
+  it('declines a short chain or a single level', () => {
+    expect(buildMapProxy(compressedMap(2048, 1024, 9), noRead)).toBeNull()
+    const flat = compressedMap(2048, 1024, 1)
+    flat.minFilter = THREE.LinearFilter
+    expect(buildMapProxy(flat, noRead)).toBeNull()
+  })
+
+  it('binds at mount in ship mode, before the body is placed, without uploading the map', () => {
+    const gl = new Proxy({} as THREE.WebGLRenderer, {
+      get(_, key) {
+        throw new Error(`gl.${String(key)}`)
+      },
+    })
+    const map = compressedMap(2048, 1024)
+    expect(initialBodyMap(map)).toBe(map)
+    expect(fullMapOf(initialBodyMap(map, gl))).toBe(map)
+    expect(initialBodyMap(compressedMap(2048, 1024, 9), gl)).not.toBeNull()
+  })
+
+  it('makes no GL call through mapProxy', () => {
+    const gl = new Proxy({} as THREE.WebGLRenderer, {
+      get(_, key) {
+        throw new Error(`gl.${String(key)}`)
+      },
+    })
+    const map = compressedMap(2048, 1024)
+    const proxy = mapProxy(gl, map)
+    expect(proxy).not.toBeNull()
+    expect(mapProxy(gl, map)).toBe(proxy)
   })
 })
 

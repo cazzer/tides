@@ -13,6 +13,7 @@ import {
 } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import uranusTexture from '../../assets/uranus-2k.jpg'
+import uranusCompressed from '../../assets/bodies/uranus-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
 import { URANUS_HAZE_OUTER } from './haze-shells'
 
@@ -50,6 +51,7 @@ export function Uranus({ planet }: PlanetRendererProps) {
       <PlanetSurface
         planet={planet}
         texture={uranusTexture}
+        compressedTexture={uranusCompressed}
         albedo={0.8}
         limbDarkening={1.1}
         ringShadow={RINGS}

@@ -25,6 +25,7 @@ import { useShipAudio } from './audio/bind-ship-audio'
 import { ShipSound } from './audio/ShipSound'
 import { ShipCues } from './audio/ShipCues'
 import { GlowPass } from '../renderers/glow/GlowPass'
+import { GlowView } from '../renderers/glow/glowSources'
 
 // After the exit has rendered, focus the ship button if the three-body view
 // came back with one (it carries data-ship-button); otherwise focus falls to
@@ -106,7 +107,8 @@ export function ShipView({ children }: { children: ReactNode }) {
           far={SHIP_FAR}
         />
         <ShipController />
-        {children}
+        {/* Its sources glow (GlowPass below). */}
+        <GlowView>{children}</GlowView>
         {/* SHIP SCENE MOUNT POINT: in-scene additions that need the ship
             camera or the R3F frame loop go here, e.g. space dust, the
             rain and snow falling under a wet cloud (tides-bl3.3), the

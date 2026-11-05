@@ -2217,8 +2217,10 @@ describe('the flat sheet from under it (tides-0oi.3)', () => {
   })
 
   it('ends rays at a sphere every ground drawn encloses', () => {
-    // Each facet's nearest point to the centre, on the coarsest globe and the
-    // limb's (the ground is only ever raised over them).
+    // Each facet's nearest point to the centre, on the globe's top level and
+    // the limb's (the ground is only ever raised over them). Its coarser
+    // levels sag under the sphere, and are never drawn from under the sheet
+    // (sphere-lod.ts, EARTH_TOP_LEVEL_ALTITUDE; pinned in sphere-lod.test.ts).
     for (const [width, height] of [EARTH_BASE_SEGMENTS, LIMB_SEGMENTS]) {
       const sphere = new THREE.SphereGeometry(1, width, height)
       const position = sphere.getAttribute('position')
@@ -2234,7 +2236,7 @@ describe('the flat sheet from under it (tides-0oi.3)', () => {
       expect(lowest, `${width}x${height}`).toBeGreaterThan(SHEET_GROUND_SPHERE)
       sphere.dispose()
     }
-    // The coarsest sags past 0.9998 of sea level, the limb sphere's bound.
+    // The top level sags past 0.9998 of sea level, the limb sphere's bound.
     expect(SHEET_GROUND_SPHERE).toBeLessThan(1 - (1 - Math.cos(Math.PI / EARTH_BASE_SEGMENTS[1])))
   })
 

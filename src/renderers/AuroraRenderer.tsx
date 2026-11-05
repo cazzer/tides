@@ -24,7 +24,7 @@ import { auroraCurtain, CURTAIN_ROWS, CURTAIN_WIDTH } from './auroraCurtain'
 import { AURORA_GAIN } from '../lighting'
 import { isLowQuality } from '../quality'
 import { GLOW_LAYER } from './glow/glow'
-import { GLOW_ORDER, glowOn, useGlowSource } from './glow/glowSources'
+import { GLOW_ORDER, useGlowOn, useGlowSource } from './glow/glowSources'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
 import {
@@ -247,7 +247,8 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
   // The curtains in the glow too, brighter and with a short march, so their
   // folds bloom (tides-64u.4). After the opaque stand-ins: Earth's hides the
   // far side's.
-  const glowMaterial = useMemo(() => (glowOn() ? auroraGlowMaterial(material) : null), [material])
+  const glow = useGlowOn()
+  const glowMaterial = useMemo(() => (glow ? auroraGlowMaterial(material) : null), [material, glow])
   useEffect(() => () => glowMaterial?.dispose(), [glowMaterial])
   const glowGroup = useRef<THREE.Group>(null)
   const glowBand = useRef<THREE.Mesh>(null)

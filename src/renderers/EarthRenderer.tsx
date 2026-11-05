@@ -26,7 +26,7 @@ import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
   driftOffset,
-  STATIC_DRIFT_PER_FRAME,
+  staticDriftStep,
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
@@ -35,11 +35,13 @@ import { fineGroundDepth } from '../ship/ship-session'
 import { reversedFloatDepth } from './depth-precision'
 import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
-import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
+import { LIMB_SEGMENTS, isLimbSphere, useBodySphere, useSizedBodySphere, type SphereSegments } from '../ship/limb-detail'
+import { EARTH_TOP_LEVEL_ALTITUDE } from '../ship/ship-bodies'
 import { FULL_RANGE, limbRowRange } from '../ship/limb-rows'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
 import { useSceneShown } from './scene-shown'
+import { addSceneBeforeRender } from './scene-hooks'
 import { createGroundProbe, syncGroundProbe } from './groundProbe'
 import { useTileWarmProbes } from './tileWarmProbes'
 import { EarthDemLoader } from './earthDemTexture'
@@ -162,7 +164,16 @@ export default function EarthRenderer({
   const sceneShown = useSceneShown()
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
-  const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
+  // Sized to Earth on this View's screen (tides-0oi.16), whole at and under
+  // the cloud tops and near the ship's stop (EARTH_TOP_LEVEL_ALTITUDE).
+  const groundSphere = useSizedBodySphere(
+    'earth',
+    diameter,
+    EARTH_BASE_SEGMENTS,
+    EARTH_LIMB_SWAP_FLOOR,
+    groundRef,
+    EARTH_TOP_LEVEL_ALTITUDE
+  )
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibs = useGibsPatch(groundRef, diameter)
@@ -397,7 +408,7 @@ export default function EarthRenderer({
       clouds.warmUnderSheet(gl, cloudRef.current, camera, scene)
     }
     if (!real) {
-      drift.current += STATIC_DRIFT_PER_FRAME
+      drift.current += staticDriftStep(delta)
       clouds.uniforms.uCloudShift.value = driftOffset(drift.current)
       return
     }
@@ -616,9 +627,7 @@ function cloudsFaceEachCamera(
   cloudRef: RefObject<THREE.Mesh | null>,
   each?: (renderer: THREE.WebGLRenderer, camera: THREE.Camera) => void
 ) {
-  const previous = scene.onBeforeRender
-  scene.onBeforeRender = function (renderer, renderScene, camera, target) {
-    previous.call(this, renderer, renderScene, camera, target)
+  return addSceneBeforeRender(scene, (renderer, camera) => {
     if (cloudRef.current) {
       sunInEarthFrame(cloudRef.current.parent, clouds.uniforms.uSunDir.value)
       // FINE_DECK only where the depth buffer can part its base from the
@@ -626,10 +635,7 @@ function cloudsFaceEachCamera(
       clouds.faceCamera(cloudRef.current, camera, fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(renderer)))
     }
     each?.(renderer, camera)
-  }
-  return () => {
-    scene.onBeforeRender = previous
-  }
+  })
 }
 
 // The Sun's direction in the Earth's frame, from `earth`'s final transform
@@ -673,7 +679,8 @@ function setGroundDisplacement(
   radius: number
 ) {
   const limb = isLimbSphere(geometry)
-  const segments = limb ? LIMB_SEGMENTS : EARTH_BASE_SEGMENTS
+  // The level drawn (tides-0oi.16); the morph's base stays the top level.
+  const segments: SphereSegments = limb ? LIMB_SEGMENTS : (geometry.userData.segments ?? EARTH_BASE_SEGMENTS)
   uniforms.uGroundLod.value = groundLod(texture.image.height, segments[1])
   uniforms.uGroundCells.value.set(...segments)
   uniforms.uGroundBaseLod.value = groundLod(texture.image.height, EARTH_BASE_SEGMENTS[1])

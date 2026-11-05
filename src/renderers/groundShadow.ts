@@ -12,6 +12,11 @@
 //   detail's sky fill (./groundDetail.ts, which reads groundHorizonSky) by
 //   that or its own slope's share, whichever is less: both measure the same
 //   occlusion, so their product would count a tilted slope's twice.
+//   An approximation (tides-0oi.17): the occlusion fades out while the Sun
+//   crosses the highest horizon's soft edge, so that once the Sun clears
+//   every horizon the whole block can be skipped. Measured, the ground's
+//   daytime sky light changes by 1/255 at most: over high mountains on much
+//   of the ground at 12x, on scattered pixels at true scale.
 //
 // Both follow the ground's exaggeration: the map's tangents are scaled from
 // the exaggeration it was baked at to the material's displacementScale (the
@@ -27,7 +32,7 @@
 // split of the Sun's light into sunlight and sky fill, so the shadow dims
 // only the sunlight.
 import type * as THREE from 'three'
-import { HORIZON_MAX_ANGLE, HORIZON_SOFTNESS } from '../earth-horizon'
+import { HORIZON_CLEAR_MARGIN, HORIZON_MAX_ANGLE, HORIZON_SOFTNESS } from '../earth-horizon'
 import type { MaterialPatch } from './eclipseShadow'
 import type { EarthHorizonUniforms } from './earthHorizonTexture'
 import { POLE_SMOOTH_FROM, POLE_SMOOTH_TO } from './poleSmoothing'
@@ -81,35 +86,47 @@ float groundHorizonSky = 1.0;
   vec4 hA = texture(uGroundHorizon, vec3(vMapUv, 0.0)) * uGroundHorizonCode.x;
   vec4 hB = texture(uGroundHorizon, vec3(vMapUv, 1.0)) * uGroundHorizonCode.x;
   if (fade > 0.0) {
-    // Vector maths, no arrays: dynamically indexed, those spill on some GPUs.
     float k = uGroundShadowScale / radius / uGroundHorizonCode.y;
-    // cos² of each scaled angle.
-    vec4 tA = k * tan(min(hA, ${f(HORIZON_MAX_ANGLE)}));
-    vec4 tB = k * tan(min(hB, ${f(HORIZON_MAX_ANGLE)}));
-    float sky = dot(1.0 / (1.0 + tA * tA) + 1.0 / (1.0 + tB * tB), vec4(1.0));
-    // The Sun's azimuth, as sunAzimuth() (../earth-horizon.ts) has it.
-    vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), up));
-    vec2 sunFlat = vec2(dot(sun, east), dot(sun, cross(up, east)));
-    float bin = dot(sunFlat, sunFlat) > 1e-12 ? atan(sunFlat.x, sunFlat.y) * ${f(8 / (2 * Math.PI))} : 0.0;
-    bin += bin < 0.0 ? 8.0 : 0.0;
-    // The two directions either side of the Sun's azimuth, weighted by
-    // nearness (wrapping round from NW to N).
-    vec4 gapA = abs(bin - vec4(0.0, 1.0, 2.0, 3.0));
-    vec4 gapB = abs(bin - vec4(4.0, 5.0, 6.0, 7.0));
-    vec4 wA = max(1.0 - min(gapA, 8.0 - gapA), 0.0);
-    vec4 wB = max(1.0 - min(gapB, 8.0 - gapB), 0.0);
-    float toward = atan(k * tan(min(dot(wA, hA) + dot(wB, hB), ${f(HORIZON_MAX_ANGLE)})));
     float elevation = asin(clamp(dot(sun, up), -1.0, 1.0));
-    // A horizon of a step or less never shadows (sunVisibility()).
-    float quantum = k * uGroundHorizonCode.x / 255.0;
-    float sunLit = mix(1.0,
-      smoothstep(toward - ${f(HORIZON_SOFTNESS)}, toward + ${f(HORIZON_SOFTNESS)}, elevation),
-      smoothstep(quantum, quantum + ${f(HORIZON_SOFTNESS)}, toward));
-    sunLit = mix(1.0, sunLit, fade);
-    groundHorizonSky = mix(1.0, pow(sky / 8.0, ${f(HORIZON_SKY_POWER)}), fade);
-    reflectedLight.directDiffuse *= sunLit;
-    reflectedLight.directSpecular *= sunLit;
-    reflectedLight.indirectDiffuse *= groundHorizonSky;
+    // The highest of the 8 horizons, scaled (horizonTop(), ../earth-horizon.ts).
+    vec4 hTop4 = max(hA, hB);
+    float top = atan(k * tan(min(max(max(hTop4.x, hTop4.y), max(hTop4.z, hTop4.w)), ${f(HORIZON_MAX_ANGLE)})));
+    // A Sun clear of it and the soft edge is clear of the one toward it too
+    // (sunClearsHorizon()): sunLit is 1 and the sky's occlusion has faded
+    // out, so the rest is skipped (tides-0oi.17).
+    if (elevation < top + ${f(HORIZON_SOFTNESS + HORIZON_CLEAR_MARGIN)}) {
+      // Vector maths, no arrays: dynamically indexed, those spill on some GPUs.
+      // cos² of each scaled angle.
+      vec4 tA = k * tan(min(hA, ${f(HORIZON_MAX_ANGLE)}));
+      vec4 tB = k * tan(min(hB, ${f(HORIZON_MAX_ANGLE)}));
+      float sky = dot(1.0 / (1.0 + tA * tA) + 1.0 / (1.0 + tB * tB), vec4(1.0));
+      // The Sun's azimuth, as sunAzimuth() (../earth-horizon.ts) has it.
+      vec3 east = normalize(cross(vec3(0.0, 1.0, 0.0), up));
+      vec2 sunFlat = vec2(dot(sun, east), dot(sun, cross(up, east)));
+      float bin = dot(sunFlat, sunFlat) > 1e-12 ? atan(sunFlat.x, sunFlat.y) * ${f(8 / (2 * Math.PI))} : 0.0;
+      bin += bin < 0.0 ? 8.0 : 0.0;
+      // The two directions either side of the Sun's azimuth, weighted by
+      // nearness (wrapping round from NW to N).
+      vec4 gapA = abs(bin - vec4(0.0, 1.0, 2.0, 3.0));
+      vec4 gapB = abs(bin - vec4(4.0, 5.0, 6.0, 7.0));
+      vec4 wA = max(1.0 - min(gapA, 8.0 - gapA), 0.0);
+      vec4 wB = max(1.0 - min(gapB, 8.0 - gapB), 0.0);
+      float toward = atan(k * tan(min(dot(wA, hA) + dot(wB, hB), ${f(HORIZON_MAX_ANGLE)})));
+      // A horizon of a step or less never shadows (sunVisibility()).
+      float quantum = k * uGroundHorizonCode.x / 255.0;
+      float sunLit = mix(1.0,
+        smoothstep(toward - ${f(HORIZON_SOFTNESS)}, toward + ${f(HORIZON_SOFTNESS)}, elevation),
+        smoothstep(quantum, quantum + ${f(HORIZON_SOFTNESS)}, toward));
+      sunLit = mix(1.0, sunLit, fade);
+      // The sky's occlusion fades out as the Sun crosses the highest
+      // horizon's soft edge (skyOcclusionWeight()): an approximation, so the
+      // gate above doesn't pop it off.
+      float skyWeight = 1.0 - smoothstep(top - ${f(HORIZON_SOFTNESS)}, top + ${f(HORIZON_SOFTNESS)}, elevation);
+      groundHorizonSky = mix(1.0, pow(sky / 8.0, ${f(HORIZON_SKY_POWER)}), fade * skyWeight);
+      reflectedLight.directDiffuse *= sunLit;
+      reflectedLight.directSpecular *= sunLit;
+      reflectedLight.indirectDiffuse *= groundHorizonSky;
+    }
   }
 }
 #endif

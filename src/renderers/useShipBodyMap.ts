@@ -9,13 +9,13 @@ import * as THREE from 'three'
 import { useStore } from '../store'
 import {
   bodyRadiusPx,
-  cachedMapProxy,
   fullMapOf,
   initialBodyMap,
   isRetiredMap,
   mapProxy,
   promoteAtDraw,
   promoteMap,
+  readyMapProxy,
   retireMap,
   shipMapStep,
   systemMapStep,
@@ -52,7 +52,8 @@ export function useShipBodyMap(
   radius: number
 ): ShipBodyMap {
   const shipMode = useStore((s) => s.shipMode)
-  const [held, setHeld] = useState<THREE.Texture | null>(() => map && initialBodyMap(map))
+  const gl = useThree((s) => s.gl)
+  const [held, setHeld] = useState<THREE.Texture | null>(() => map && initialBodyMap(map, shipMode ? gl : undefined))
   const shown = held && (held === map || fullMapOf(held) === map) ? held : map
   const promoted = useRef(false)
   // Committed at once, so the layout effect binds it before this frame draws.
@@ -79,7 +80,7 @@ export function useShipBodyMap(
     if (_position.lengthSq() === 0) return
     const worldRadius = radius * body.getWorldScale(_scale).x
     const radiusPx = bodyRadiusPx(camera as THREE.PerspectiveCamera, _position, worldRadius, size.height * viewport.dpr)
-    const proxy = cachedMapProxy(map)
+    const proxy = readyMapProxy(gl, map)
     const step = shipMapStep(false, radiusPx, uploadSlot.free(frame), showsProxy, proxy !== undefined)
     if (step === 'promote') {
       uploadSlot.take(frame)

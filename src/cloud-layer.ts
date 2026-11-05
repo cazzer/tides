@@ -110,8 +110,9 @@ export const CLOUD_FLAT_ALTITUDE =
 /**
  * A sphere, as a share of sea level, that every ground drawn encloses
  * (tides-0oi.3): the ground is only ever raised over sea level, but its
- * facets cut under it between the vertices, by 1.9 km on the coarsest globe
- * (128x128) and 0.5 km on the limb's; this is 3.2 km under. From under the
+ * facets cut under it between the vertices, by 1.9 km on the globe's top
+ * level (128x128, all it draws from under the sheet: sphere-lod.ts) and
+ * 0.5 km on the limb's; this is 3.2 km under. From under the
  * flat sheet, a ray that meets it meets the ground first, and the sheet only
  * on its far side, past the globe, where the ground's depth hides it.
  */
@@ -838,8 +839,18 @@ export function cloudFrame([x, y, z]: Vec3, turns: number): Vec3 {
   return [x * c - z * s, y, z * c + x * s]
 }
 
-/** The static clouds drift east at this many radians per frame. */
-export const STATIC_DRIFT_PER_FRAME = 0.0001
+/** The static clouds drift east at this many radians a second: the old
+ * 0.0001 a frame at 60 fps, now by the clock so a slower frame rate (paced
+ * frames, tides-0oi.13) doesn't slow the clouds. */
+export const STATIC_DRIFT_PER_SECOND = 0.006
+/** A frame's delta past this (a hidden tab, a stall) drifts only this far,
+ * so the clouds don't jump when the page comes back. */
+export const MAX_DRIFT_STEP_S = 0.1
+
+/** The static drift for one frame `deltaS` seconds long. */
+export function staticDriftStep(deltaS: number): number {
+  return STATIC_DRIFT_PER_SECOND * Math.min(Math.max(deltaS, 0), MAX_DRIFT_STEP_S)
+}
 
 /** Texture-u offset of the static clouds after a drift of `radians`: the
  * cloud seen at Earth u was painted at u - offset. */

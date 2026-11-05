@@ -3,7 +3,7 @@ import { useFrame, type RootState } from '@react-three/fiber'
 import { useProgress } from '@react-three/drei'
 import type * as THREE from 'three'
 import { materialsOf, texturesOf } from '../ship/ship-warmup'
-import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
+import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, warmMapJob, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
 import { SceneGateContext, type SceneGate } from './scene-shown'
 import { shownOnly, visitDrawn } from './compile-view'
 import { compileAndWait } from './compile-wait'
@@ -222,7 +222,7 @@ function warmJobs(gl: THREE.WebGLRenderer, root: THREE.Group): (() => void)[] {
       }
     })
   }
-  const jobs = [...maps].map((texture) => () => gl.initTexture(texture))
+  const jobs = [...maps].map((texture) => warmMapJob(gl, texture))
   for (const program of (gl.info.programs ?? []) as Program[]) {
     jobs.push(() => {
       if (program.program && program.isReady()) program.getUniforms()

@@ -1,5 +1,7 @@
 // The pure parts of the first load's shader warm-up (CompileGate.tsx,
 // tides-0oi.6): its timeout, its per-frame budget, and when it may finish.
+import type * as THREE from 'three'
+import { isRetiredMap } from '../ship/body-map-residency'
 
 /**
  * [TUNE] How long the first load waits on shader compiles before showing
@@ -128,4 +130,16 @@ export function afterRound(
  */
 export function compilesAhead(materials: readonly { userData: Record<string, unknown> }[]): boolean {
   return !materials.some((material) => material.userData.compileLater === true)
+}
+
+/**
+ * The warm-up's upload of `map`, run a few frames after the list was made.
+ * A body map that ship mode retired for its proxy in between (tides-0oi.7)
+ * stays off the GPU: uploading it then left it resident behind its proxy
+ * (tides-0oi.34).
+ */
+export function warmMapJob(gl: Pick<THREE.WebGLRenderer, 'initTexture'>, map: THREE.Texture): () => void {
+  return () => {
+    if (!isRetiredMap(map)) gl.initTexture(map)
+  }
 }
