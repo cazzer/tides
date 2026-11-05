@@ -59,11 +59,33 @@ const INIT = `(() => {
     0x822D: 2, 0x822E: 4, 0x8230: 8, 0x8C3A: 4, 0x8C3D: 4, 0x81A5: 2, 0x81A6: 4, 0x8CAC: 4, 0x88F0: 4, 0x8CAD: 8, 0x822F: 4, 0x8232: 1, 0x8236: 4 }
   const V = (window.__vram = { byFmt: {}, total: 0, n: 0, compressed: 0, list: [] })
   const add = (fmt, bytes, what) => { V.byFmt[fmt] = (V.byFmt[fmt] || 0) + bytes; V.total += bytes; V.n++; V.list.push([what, fmt, bytes]) }
+  // Resident bytes (tides-0oi.7): per WebGLTexture (the one bound to the call's target), per face/level slot, so a
+  // re-specified level replaces its bytes and deleteTexture subtracts them. V.total above never subtracts.
+  V.live = 0; V.liveN = 0
+  const liveBy = new WeakMap()
+  const BINDING = { 0x0DE1: 0x8069, 0x8513: 0x8514, 0x806F: 0x806A, 0x8C1A: 0x8C1D }
+  const bindingOf = (ctx, t) => ctx.getParameter(BINDING[t] || (t >= 0x8515 && t <= 0x851A ? 0x8514 : 0x8069))
+  const setLive = (ctx, t, slot, bytes) => {
+    const tex = bindingOf(ctx, t)
+    if (!tex) return
+    let m = liveBy.get(tex)
+    if (!m) { m = new Map(); liveBy.set(tex, m); V.liveN++ }
+    V.live += bytes - (m.get(slot) || 0)
+    m.set(slot, bytes)
+  }
+  V.liveOf = (tex) => { const m = liveBy.get(tex); let b = 0; if (m) for (const v of m.values()) b += v; return b }
+  const dt = P.deleteTexture
+  P.deleteTexture = function (tex) {
+    const m = tex && liveBy.get(tex)
+    if (m) { for (const v of m.values()) V.live -= v; liveBy.delete(tex); V.liveN-- }
+    return dt.apply(this, arguments)
+  }
   const ts2 = P.texStorage2D
   P.texStorage2D = function (t, levels, fmt, w, h) {
     let b = 0, ww = w, hh = h
     for (let i = 0; i < levels; i++) { b += ww * hh * (bpp[fmt] || 4); ww = Math.max(1, ww >> 1); hh = Math.max(1, hh >> 1) }
     add('0x' + fmt.toString(16), b, w + 'x' + h + 'x' + levels)
+    setLive(this, t, 'storage', t === 0x8513 ? 6 * b : b)
     return ts2.apply(this, arguments)
   }
   const ts3 = P.texStorage3D
@@ -71,10 +93,14 @@ const INIT = `(() => {
     let b = 0, ww = w, hh = h
     for (let i = 0; i < levels; i++) { b += ww * hh * d * (bpp[fmt] || 4); ww = Math.max(1, ww >> 1); hh = Math.max(1, hh >> 1) }
     add('0x' + fmt.toString(16), b, w + 'x' + h + 'x' + d + 'x' + levels)
+    setLive(this, t, 'storage', b)
     return ts3.apply(this, arguments)
   }
   const ti2 = P.texImage2D
   P.texImage2D = function (t, level, fmt) {
+    const lw = arguments.length >= 9 ? arguments[3] : arguments[5] && arguments[5].width
+    const lh = arguments.length >= 9 ? arguments[4] : arguments[5] && arguments[5].height
+    if (lw && lh) setLive(this, t, t + ':' + level, lw * lh * (bpp[fmt] || 4))
     if (arguments.length >= 9 && level === 0) add('img:0x' + fmt.toString(16), arguments[3] * arguments[4] * (bpp[fmt] || 4), arguments[3] + 'x' + arguments[4])
     else if (arguments.length === 6 && level === 0 && arguments[5] && arguments[5].width) add('img:0x' + fmt.toString(16), arguments[5].width * arguments[5].height * (bpp[fmt] || 4), arguments[5].width + 'x' + arguments[5].height)
     return ti2.apply(this, arguments)
@@ -83,6 +109,7 @@ const INIT = `(() => {
   P.compressedTexImage2D = function (t, level, fmt, w, h, b, data) {
     const n = data && data.byteLength || 0
     V.compressed += n; add('cmp:0x' + fmt.toString(16), n, w + 'x' + h + '@' + level)
+    setLive(this, t, t + ':' + level, n)
     return ci2.apply(this, arguments)
   }
   const cs2 = P.compressedTexSubImage2D
@@ -278,12 +305,12 @@ const IN_PAGE = async () => {
     for (const nm of names) { const A = await shot('base'), B = await shot(nm), A2 = await shot('base'); out[nm] = { AA: cmp(A, A2), AB: cmp(A, B) } }
     return out
   }
-  // Note: __vram sums allocations since load (deletes aren't subtracted; cube faces are under-counted), so read
-  // it as "what this pose has allocated", not resident memory.
+  // Note: __vram's total sums allocations since load (deletes aren't subtracted; cube faces are under-counted), so
+  // read it as "what this pose has allocated"; liveMB is what is resident now (textures only, no renderbuffers).
   H.vram = () => {
     const V = window.__vram, by = {}
     for (const [k, v] of Object.entries(V.byFmt)) by[k] = +(v / 1048576).toFixed(1)
-    return { totalMB: +(V.total / 1048576).toFixed(1), compressedMB: +(V.compressed / 1048576).toFixed(1), n: V.n, byFmtMB: by, gl: { ...gl.info.memory }, programs: gl.info.programs?.length }
+    return { totalMB: +(V.total / 1048576).toFixed(1), liveMB: +(V.live / 1048576).toFixed(1), liveTextures: V.liveN, compressedMB: +(V.compressed / 1048576).toFixed(1), n: V.n, byFmtMB: by, gl: { ...gl.info.memory }, programs: gl.info.programs?.length }
   }
   H.programs = () => (gl.info.programs || []).map((p) => ({ name: p.name, key: (p.cacheKey || '').slice(0, 80), used: p.usedTimes }))
   H.earth = () => store.getState().earth?.current

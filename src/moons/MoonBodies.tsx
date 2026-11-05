@@ -30,6 +30,16 @@ import { moonTextureUrl } from './moon-textures'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 import { useLimbBodyAmong, useLimbSphere, useWantsLimbSphere, type SphereSegments } from '../ship/limb-detail'
+import {
+  cachedMapProxy,
+  fullMapOf,
+  mapProxy,
+  projectedRadiusPx,
+  promoteMap,
+  retireMap,
+  shouldUploadNow,
+  uploadSlot,
+} from '../ship/body-map-residency'
 
 export interface MoonBodiesProps {
   /** Which planet positions the moons follow. */
@@ -101,6 +111,50 @@ function applyMap(material: THREE.ShaderMaterial, map: THREE.Texture) {
   material.needsUpdate = true
 }
 
+// Ship mode (tides-0oi.7): a moon binds its map's mip-tail proxy, and the map
+// is freed from the GPU, until the moon is a few px across
+// (ship/body-map-residency.ts). Module level, like placeMoons.
+function showProxy(gl: THREE.WebGLRenderer, material: THREE.ShaderMaterial, map: THREE.Texture) {
+  // Already promoted: a re-queued arrival mustn't take it back.
+  if (material.uniforms.uMap.value === map) return
+  const proxy = mapProxy(gl, map)
+  if (!proxy) {
+    gl.initTexture(map)
+    applyMap(material, map)
+    return
+  }
+  applyMap(material, proxy)
+  retireMap(map)
+}
+
+const _moonPosition = new THREE.Vector3()
+const _moonScale = new THREE.Vector3()
+
+// Swaps in the full map of each moon now PROMOTE_RADIUS_PX across: a
+// uniform change, the program stays.
+function promoteMoons(
+  gl: THREE.WebGLRenderer,
+  meshes: readonly RefObject<THREE.Mesh | null>[],
+  looks: readonly { material: THREE.ShaderMaterial }[],
+  camera: THREE.PerspectiveCamera,
+  screenPx: number,
+  frame: number
+) {
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i].current
+    const uniform = looks[i].material.uniforms.uMap
+    const full = fullMapOf(uniform.value as THREE.Texture | null)
+    if (!mesh || !full) continue
+    mesh.getWorldPosition(_moonPosition)
+    const radius = mesh.getWorldScale(_moonScale).x
+    const radiusPx = projectedRadiusPx(camera.position.distanceTo(_moonPosition), radius, screenPx, camera.fov)
+    if (!shouldUploadNow(radiusPx, uploadSlot.free(frame))) continue
+    uploadSlot.take(frame)
+    promoteMap(gl, full)
+    uniform.value = full
+  }
+}
+
 export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) => {
   const { handleFocus } = useCamera() as { handleFocus: ((event: ThreeEvent<PointerEvent>) => void) | null }
   const setPlanet = useStore((s) => s.setPlanet)
@@ -111,12 +165,16 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     SPHERE_SEGMENTS
   )
   const limbSphere = useLimbSphere(1, wantsLimb)
+  const shipMode = useStore((s) => s.shipMode)
   const refs = useMemo(() => MOON_KEYS.map(() => createRef<THREE.Mesh>()), [])
   const looks = useMemo(
     () =>
       MOON_KEYS.map((key, i) => {
         const sun = sunDirection()
-        const material = planetSurfaceMaterial(sun.uniform, { map: loadedMaps.get(URLS[i]) ?? null })
+        const loaded = loadedMaps.get(URLS[i])
+        // In ship mode the arrival queue builds a proxy that isn't cached yet.
+        const map = (shipMode ? loaded && cachedMapProxy(loaded) : loaded) ?? null
+        const material = planetSurfaceMaterial(sun.uniform, { map })
         material.uniforms.uColor.value.set(MOONS[key].color)
         if (key !== 'titan') setPlanetDetail(material, MOON_DETAIL)
         // The camera frames a focused moon by `radius`; moonRaycast reads
@@ -130,7 +188,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
         }
         return { material, onBeforeRender: sun.onBeforeRender, userData }
       }),
-    [distanceScale]
+    [distanceScale, shipMode]
   )
   useEffect(() => () => looks.forEach(({ material }) => material.dispose()), [looks])
 
@@ -143,8 +201,9 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // Arrived maps upload one per frame (useFrame below), up front rather than
   // when each moon first comes into view, so maps that arrive or come into
   // view together never stack their uploads into one long frame
-  // (tides-2hv.18). Every moon's map is resident once loaded: 154 MB on
-  // desktop, 53 MB at 1k on phones. The queue holds `looks`' materials, which
+  // (tides-2hv.18). In the system view every moon's map is resident once
+  // loaded: 154 MB on desktop, 53 MB at 1k on phones; ship mode holds each
+  // as its proxy instead, until the moon comes close (showProxy). The queue holds `looks`' materials, which
   // a change of distanceScale would replace, but no mounted MoonBodies sees
   // one (tides-sq9): every Scene in App.tsx passes a fixed scale ('flight'
   // for ship mode's own Scene, the 'system' default for the rest), and ship
@@ -175,14 +234,22 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     return () => MOON_KEYS.forEach((key) => setPlanet(key, undefined))
   }, [interactive, refs, setPlanet])
 
-  useFrame(({ gl }) => {
-    const next = arrived.current.shift()
-    if (next) {
-      gl.initTexture(next.map)
-      applyMap(next.material, next.map)
-    }
+  useFrame(({ gl, camera, clock, size, viewport }) => {
     const t = useStore.getState().timestamp
     if (t != null) placeMoons(refs, t, distanceScale)
+    // Ship mode's uploads and read-backs share the View's one-a-frame budget.
+    const frame = clock.elapsedTime
+    if (shipMode && t != null) promoteMoons(gl, refs, looks, camera as THREE.PerspectiveCamera, size.height * viewport.dpr, frame)
+    const next = arrived.current[0]
+    if (!next) return
+    if (!shipMode) {
+      arrived.current.shift()
+      gl.initTexture(next.map)
+      applyMap(next.material, next.map)
+    } else if (cachedMapProxy(next.map) || uploadSlot.take(frame)) {
+      arrived.current.shift()
+      showProxy(gl, next.material, next.map)
+    }
   })
 
   const onPointerDown = (event: ThreeEvent<PointerEvent>) => {

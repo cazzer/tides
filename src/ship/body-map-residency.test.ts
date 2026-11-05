@@ -1,0 +1,186 @@
+import { describe, expect, it } from 'vitest'
+import * as THREE from 'three'
+import {
+  PROMOTE_RADIUS_PX,
+  PROXY_WIDTH,
+  URGENT_RADIUS_PX,
+  bodyMapTier,
+  buildMapProxy,
+  createUploadBudget,
+  fullMapOf,
+  projectedRadiusPx,
+  proxyBaseLevel,
+  shouldUploadNow,
+} from './body-map-residency'
+import { limbFacetPx } from './limb-detail'
+import { SHIP_FOV } from './ship-session'
+
+// Screens a ship View can have: device rows and vertical FOVs.
+const SCREENS = [400, 600, 1688, 2400, 4000].flatMap((rows) => [30, SHIP_FOV, 100].map((fov) => ({ rows, fov })))
+const pxPerRadian = ({ rows, fov }: { rows: number; fov: number }) => rows / 2 / Math.tan(((fov / 2) * Math.PI) / 180)
+/** The eye's distance, in radii, that shows a body `radiusPx` in radius. */
+const eyeOverR = (radiusPx: number, screen: { rows: number; fov: number }) => 1 / Math.sin(radiusPx / pxPerRadian(screen))
+/** Surface radians per pixel at the disk's centre, the finest anywhere on it (the shader's fp there). */
+const centreFootprint = (x: number, screen: { rows: number; fov: number }) => (x - 1) / pxPerRadian(screen)
+
+describe('projectedRadiusPx', () => {
+  it('uses limbFacetPx px per radian', () => {
+    // limbFacetPx is the difference of two such angular radii.
+    const segments = [64, 32] as const
+    const halfDiagonal = 0.5 * Math.hypot((2 * Math.PI) / 64, Math.PI / 32)
+    const depth = 1 - Math.cos(halfDiagonal)
+    for (const x of [1.5, 3, 20]) {
+      const facet = projectedRadiusPx(x, 1, 1688, SHIP_FOV) - projectedRadiusPx(x, 1 - depth, 1688, SHIP_FOV)
+      expect(facet).toBeCloseTo(limbFacetPx(segments, x, 1688, SHIP_FOV), 9)
+    }
+  })
+
+  it('reads a quarter turn from inside the sphere', () => {
+    expect(projectedRadiusPx(0.5, 1, 1000, 90)).toBeCloseTo((Math.PI / 2) * 500, 9)
+  })
+
+  it('reads a far body by its angular radius', () => {
+    expect(projectedRadiusPx(1000, 1, 1000, 90)).toBeCloseTo(Math.asin(0.001) * 500, 9)
+  })
+})
+
+describe('bodyMapTier', () => {
+  it('turns full at PROMOTE_RADIUS_PX', () => {
+    expect(bodyMapTier(PROMOTE_RADIUS_PX - 0.01, false)).toBe('proxy')
+    expect(bodyMapTier(PROMOTE_RADIUS_PX, false)).toBe('full')
+  })
+
+  it('stays full once promoted', () => {
+    expect(bodyMapTier(0.1, true)).toBe('full')
+  })
+})
+
+describe('shouldUploadNow', () => {
+  it('waits for a free slot up to URGENT_RADIUS_PX', () => {
+    expect(shouldUploadNow(PROMOTE_RADIUS_PX - 0.01, true)).toBe(false)
+    expect(shouldUploadNow(PROMOTE_RADIUS_PX, true)).toBe(true)
+    expect(shouldUploadNow(URGENT_RADIUS_PX, false)).toBe(false)
+  })
+
+  it('skips the budget past URGENT_RADIUS_PX', () => {
+    expect(shouldUploadNow(URGENT_RADIUS_PX + 0.01, false)).toBe(true)
+  })
+})
+
+describe('createUploadBudget', () => {
+  it('allows one take per frame key', () => {
+    const budget = createUploadBudget()
+    expect(budget.free(1)).toBe(true)
+    expect(budget.take(1)).toBe(true)
+    expect(budget.free(1)).toBe(false)
+    expect(budget.take(1)).toBe(false)
+    expect(budget.free(1.016)).toBe(true)
+    expect(budget.take(1.016)).toBe(true)
+  })
+})
+
+describe('proxyBaseLevel', () => {
+  it('is the level PROXY_WIDTH wide', () => {
+    expect(proxyBaseLevel(2048)).toBe(3)
+    expect(proxyBaseLevel(1024)).toBe(2)
+  })
+
+  it('is null where there is nothing to save or no such level', () => {
+    expect(proxyBaseLevel(256)).toBeNull()
+    expect(proxyBaseLevel(128)).toBeNull()
+    expect(proxyBaseLevel(1536)).toBeNull()
+  })
+})
+
+function sourceMap(width: number, height: number): THREE.Texture {
+  const map = new THREE.Texture({ width, height } as unknown as HTMLImageElement)
+  map.colorSpace = THREE.SRGBColorSpace
+  map.anisotropy = 16
+  map.wrapS = THREE.RepeatWrapping
+  map.wrapT = THREE.MirroredRepeatWrapping
+  map.magFilter = THREE.LinearFilter
+  map.minFilter = THREE.LinearMipmapLinearFilter
+  return map
+}
+
+describe('buildMapProxy', () => {
+  const read = (reads: number[]) => (level: number, width: number, height: number) => {
+    reads.push(level)
+    return new Uint8Array(width * height * 4).fill(level)
+  }
+
+  it("holds the map's levels from PROXY_WIDTH down to 1 × 1", () => {
+    const reads: number[] = []
+    const proxy = buildMapProxy(sourceMap(2048, 1024), read(reads))!
+    expect(reads).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11])
+    const levels = proxy.mipmaps as unknown as { width: number; height: number; data: Uint8Array }[]
+    expect(levels.map(({ width, height }) => [width, height])).toEqual([
+      [256, 128],
+      [128, 64],
+      [64, 32],
+      [32, 16],
+      [16, 8],
+      [8, 4],
+      [4, 2],
+      [2, 1],
+      [1, 1],
+    ])
+    expect(levels[0].data[0]).toBe(3)
+    expect(proxy.image.width).toBe(PROXY_WIDTH)
+    expect(proxy.generateMipmaps).toBe(false)
+  })
+
+  it("keeps the map's sampler state", () => {
+    const map = sourceMap(1024, 512)
+    const proxy = buildMapProxy(map, read([]))!
+    expect(proxy.mipmaps).toHaveLength(9)
+    expect(proxy.colorSpace).toBe(THREE.SRGBColorSpace)
+    expect(proxy.anisotropy).toBe(16)
+    expect(proxy.wrapS).toBe(THREE.RepeatWrapping)
+    expect(proxy.wrapT).toBe(THREE.MirroredRepeatWrapping)
+    expect(proxy.magFilter).toBe(THREE.LinearFilter)
+    expect(proxy.minFilter).toBe(THREE.LinearMipmapLinearFilter)
+    expect(proxy.format).toBe(THREE.RGBAFormat)
+    expect(proxy.type).toBe(THREE.UnsignedByteType)
+    expect(proxy.flipY).toBe(false)
+    expect(fullMapOf(proxy)).toBe(map)
+    expect(fullMapOf(map)).toBeUndefined()
+  })
+
+  it('declines a map without a mip chain, or one it cannot read', () => {
+    const flat = sourceMap(2048, 1024)
+    flat.minFilter = THREE.LinearFilter
+    expect(buildMapProxy(flat, read([]))).toBeNull()
+    expect(buildMapProxy(sourceMap(256, 128), read([]))).toBeNull()
+    expect(buildMapProxy(sourceMap(2048, 1024), () => null)).toBeNull()
+  })
+})
+
+// Why the proxy draws exactly what the full map would (body-map-residency.ts).
+describe('the proxy stays exact up to promotion', () => {
+  it('keeps two levels of LOD margin at URGENT_RADIUS_PX far off', () => {
+    // A far body's centre spans 1 / r radians per px; its LOD reaches the
+    // proxy's top level at r = PROXY_WIDTH / 2π px.
+    expect(URGENT_RADIUS_PX * 4).toBeLessThanOrEqual(PROXY_WIDTH / (2 * Math.PI))
+  })
+
+  it('keeps the full map at or above the proxy level wherever the proxy can show', () => {
+    for (const screen of SCREENS) {
+      const x = eyeOverR(URGENT_RADIUS_PX, screen)
+      // Texels per px of the full map, in units of the proxy's top level.
+      const lodMargin = Math.log2(centreFootprint(x, screen) / ((2 * Math.PI) / PROXY_WIDTH))
+      expect(lodMargin).toBeGreaterThan(1.9)
+    }
+  })
+
+  it("keeps the shader's detail gate shut for the proxy's textureSize", () => {
+    // fragment.frag: texel = π / textureSize(uMap, 0).y, and the detail is
+    // off while log2(texel / fp) ≤ 1. The full map's texel is finer, so it
+    // is off for both until well past where the LOD margin above runs out.
+    const proxyTexel = Math.PI / (PROXY_WIDTH / 2)
+    for (const screen of SCREENS) {
+      const x = eyeOverR(4 * URGENT_RADIUS_PX, screen)
+      expect(Math.log2(proxyTexel / centreFootprint(x, screen))).toBeLessThanOrEqual(1)
+    }
+  })
+})
