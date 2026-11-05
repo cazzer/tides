@@ -27,6 +27,7 @@ import {
   type GibsTileStore,
 } from '../gibs-patch'
 import type { MaterialPatch } from './eclipseShadow'
+import { registerIdleBusy } from '../idle-driver'
 import type { WarmProbe } from '../ship/ship-warmup'
 
 /** Fetches in flight at once, and tiles uploaded a frame (each regenerates
@@ -136,6 +137,8 @@ export function createGibsStream({
   let generation = 0
   // Offline, every tile fails each retry: say so once, until one loads.
   let warned = false
+  // UPLOADS_PER_FRAME tiles a frame: while some wait the idle cap waits too (tides-0oi.31), so they don't fill at half pace.
+  const unregisterBusy = registerIdleBusy(() => slots.some((slot) => slot.state === 'ready'))
 
   const local = new THREE.Vector3()
   const at = new THREE.Vector2()
@@ -298,6 +301,7 @@ export function createGibsStream({
       return { object: drawing.scene, scene: drawing.scene, target: passProbeTarget() }
     },
     dispose() {
+      unregisterBusy()
       release()
       pass?.dispose()
       pass = null
