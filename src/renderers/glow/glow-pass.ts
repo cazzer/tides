@@ -24,8 +24,13 @@ import { glowSourcesOf, shownInWorld, type GlowSource } from './glowSources'
  * The pass's savings, each on by default; the perf harness (scripts/perf-audit)
  * turns one off to render before and after in the same tick (tides-0oi.15).
  * scissor: the composite only over what the sources' glow can reach.
+ * invalidateDepth: the glow target's depth is dropped once the sources have
+ * drawn, so a tiled GPU never writes it back to memory.
  */
-export const glowPassSwitches = { scissor: true }
+export const glowPassSwitches = { scissor: true, invalidateDepth: true }
+
+/** gl.DEPTH_ATTACHMENT, as invalidateFramebuffer takes it. */
+const DEPTH_ATTACHMENT = [0x8d00]
 
 /**
  * How much of each coarser level comes back up into the finer one: under 1
@@ -294,6 +299,12 @@ export function createGlowPass(): GlowPass {
         if (shownInWorld(object)) gl.render(object, camera)
       }
       camera.layers.mask = mask
+      // Nothing reads the depth after the sources (the blur and composite
+      // sample colour only, and the next frame clears it).
+      if (glowPassSwitches.invalidateDepth) {
+        const context = gl.getContext() as WebGL2RenderingContext
+        context.invalidateFramebuffer(context.FRAMEBUFFER, DEPTH_ATTACHMENT)
+      }
       const glow = blur(gl, glowTarget)
       gl.setRenderTarget(null)
       gl.setClearColor(clearColor, alpha)
