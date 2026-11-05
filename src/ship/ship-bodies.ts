@@ -39,6 +39,7 @@ import {
   terrainFloorRadius,
 } from './terrain-floor'
 import { limbSphereInUse } from './limb-detail'
+import { SPHERE_LOD_HYSTERESIS } from './sphere-lod'
 import { SCALE_HEIGHT_KM } from './frame-carry'
 
 // The scene draws Earth with sceneRadius(diameter) as the sphere radius
@@ -75,6 +76,18 @@ export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
  * deck (tides-01v.8.14). Earth still fills the view from there.
  */
 export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
+
+/**
+ * Earth's ground draws its top level (sphere-lod.ts topWithin) from this
+ * altitude down, in its own units: at and under the cloud tops, where the
+ * flat sheet's early out needs the 128×128 globe (SHEET_GROUND_SPHERE), and
+ * within the hysteresis's margin of either tier's stop, whose floor is
+ * that globe's (terrain-floor.ts).
+ */
+export const EARTH_TOP_LEVEL_ALTITUDE = Math.max(
+  CLOUD_LAYER_TOP,
+  EARTH_COLLISION_RADIUS * SPHERE_LOD_HYSTERESIS - EARTH_RADIUS
+)
 
 // Scene units per true metre at Earth, now beside the handover's tile ground.
 export { EARTH_UNITS_PER_METRE }

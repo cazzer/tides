@@ -110,8 +110,9 @@ export const CLOUD_FLAT_ALTITUDE =
 /**
  * A sphere, as a share of sea level, that every ground drawn encloses
  * (tides-0oi.3): the ground is only ever raised over sea level, but its
- * facets cut under it between the vertices, by 1.9 km on the coarsest globe
- * (128x128) and 0.5 km on the limb's; this is 3.2 km under. From under the
+ * facets cut under it between the vertices, by 1.9 km on the globe's top
+ * level (128x128, all it draws from under the sheet: sphere-lod.ts) and
+ * 0.5 km on the limb's; this is 3.2 km under. From under the
  * flat sheet, a ray that meets it meets the ground first, and the sheet only
  * on its far side, past the globe, where the ground's depth hides it.
  */

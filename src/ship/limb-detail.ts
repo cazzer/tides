@@ -11,10 +11,11 @@
 // Every consumer asks for its own View's camera, so an overview panel
 // drawing the same scene keeps its own spheres and front faces.
 
-import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore, type RefObject } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Body } from './flight'
+import { useRetainedBodySphere, useSphereLevel } from './sphere-lod'
 
 /** Width and height segments of a SphereGeometry. */
 export type SphereSegments = readonly [width: number, height: number]
@@ -468,17 +469,21 @@ export function useLimbSphere(radius: number, wanted: boolean): THREE.BufferGeom
 }
 
 /**
- * Body `key`'s sphere of `radius`: its own `base` segments, or the shared
- * limb sphere while it wants one for this View's camera (wantsLimbSphere,
- * with `swapFloor`) and that is built.
+ * Body `key`'s sphere of `radius`: its own sphere, at `top` segments or, with
+ * `lodOf` (the object it is drawn by), at the level this View's camera sees
+ * it at (sphere-lod.ts useSphereLevel, the top within `topWithin` of its
+ * surface); or the shared limb sphere while it wants one for this View's
+ * camera (wantsLimbSphere by the top segments, with `swapFloor`) and that is
+ * built.
  */
 export function useBodySphere(
   key: string,
   radius: number,
   [width, height]: SphereSegments,
-  swapFloor = 0
+  swapFloor = 0,
+  lodOf?: RefObject<THREE.Object3D | null>,
+  topWithin = 0
 ): THREE.BufferGeometry {
-  const base = useMemo(() => new THREE.SphereGeometry(radius, width, height), [radius, width, height])
-  useEffect(() => () => base.dispose(), [base])
+  const base = useRetainedBodySphere(radius, useSphereLevel(lodOf, radius, [width, height], topWithin))
   return useLimbSphere(radius, useWantsLimbSphere(key, radius, [width, height], swapFloor)) ?? base
 }

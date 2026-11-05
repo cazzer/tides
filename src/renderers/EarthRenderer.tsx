@@ -35,7 +35,8 @@ import { fineGroundDepth } from '../ship/ship-session'
 import { reversedFloatDepth } from './depth-precision'
 import { globeStencil } from './surface/surface-scale'
 import { setSurfaceLink, type GlobeLink, type GlobeStream } from './surface/surface-link'
-import { LIMB_SEGMENTS, isLimbSphere, useBodySphere } from '../ship/limb-detail'
+import { LIMB_SEGMENTS, isLimbSphere, useBodySphere, type SphereSegments } from '../ship/limb-detail'
+import { EARTH_TOP_LEVEL_ALTITUDE } from '../ship/ship-bodies'
 import { FULL_RANGE, limbRowRange } from '../ship/limb-rows'
 import { EARTH_BASE_SEGMENTS } from '../ship/terrain-floor'
 import { warmDefinesOnce, type WarmProbe } from '../ship/ship-warmup'
@@ -162,7 +163,16 @@ export default function EarthRenderer({
   const sceneShown = useSceneShown()
   const scene = useThree((s) => s.scene)
   // Both limbs show from the ship's stop, the cloud shell's the nearer.
-  const groundSphere = useBodySphere('earth', diameter, EARTH_BASE_SEGMENTS, EARTH_LIMB_SWAP_FLOOR)
+  // Sized to Earth on this View's screen (tides-0oi.16), whole at and under
+  // the cloud tops and near the ship's stop (EARTH_TOP_LEVEL_ALTITUDE).
+  const groundSphere = useBodySphere(
+    'earth',
+    diameter,
+    EARTH_BASE_SEGMENTS,
+    EARTH_LIMB_SWAP_FLOOR,
+    groundRef,
+    EARTH_TOP_LEVEL_ALTITUDE
+  )
   const cloudSphere = useBodySphere('earth', diameter + clouds.shellAltitude, [96, 64])
   // Real imagery under the ship (tides-01v.7).
   const gibs = useGibsPatch(groundRef, diameter)
@@ -673,7 +683,8 @@ function setGroundDisplacement(
   radius: number
 ) {
   const limb = isLimbSphere(geometry)
-  const segments = limb ? LIMB_SEGMENTS : EARTH_BASE_SEGMENTS
+  // The level drawn (tides-0oi.16); the morph's base stays the top level.
+  const segments: SphereSegments = limb ? LIMB_SEGMENTS : (geometry.userData.segments ?? EARTH_BASE_SEGMENTS)
   uniforms.uGroundLod.value = groundLod(texture.image.height, segments[1])
   uniforms.uGroundCells.value.set(...segments)
   uniforms.uGroundBaseLod.value = groundLod(texture.image.height, EARTH_BASE_SEGMENTS[1])

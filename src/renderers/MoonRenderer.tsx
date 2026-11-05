@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useLoader } from '@react-three/fiber'
 import { meshBounds, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
@@ -18,11 +19,14 @@ export default function MoonRenderer({ diameter, texture }: MoonRendererProps) {
   const threeTexture = useLoader(THREE.TextureLoader, texture)
   // Earth's shadow during lunar eclipses.
   const eclipseShadow = useEclipseShadow('moon')
-  const geometry = useBodySphere('moon', diameter, [128, 128])
+  // Sized to the Moon on this View's screen (tides-0oi.16).
+  const meshRef = useRef<THREE.Mesh>(null)
+  const geometry = useBodySphere('moon', diameter, [128, 128], 0, meshRef)
 
   return (
     <>
       <mesh
+        ref={meshRef}
         geometry={geometry}
         raycast={meshBounds}
       >
