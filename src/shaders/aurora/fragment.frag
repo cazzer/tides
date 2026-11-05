@@ -31,6 +31,10 @@ uniform float uGain;
 #ifdef DOUBLE_SIDED
 uniform float uGround;
 #endif
+#ifdef CURTAIN_BAKE
+// ./curtain.glsl's noise for this uTime (../../renderers/auroraCurtain.ts).
+uniform sampler2D uCurtain;
+#endif
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
@@ -39,6 +43,8 @@ varying vec3 vRayOrigin;
 #include ../shell/face.glsl
 
 const float TAU = 6.28318530718;
+
+#include ./curtain.glsl
 const vec3 GREEN = vec3(0.2, 1.0, 0.3);
 const vec3 RED = vec3(1.0, 0.05, 0.16);
 const vec3 VIOLET = vec3(0.45, 0.12, 1.0);
@@ -169,6 +175,13 @@ void main() {
     // * fold >= eqLat - 4.2 (|noise| <= 1, foldAmp <= 0.5); and red needs
     // the storm or the arcs. Less 0.3 as a safety margin.
     if (mlat < (storm > 0.0 ? sarLat - 4.0 : min(diffuseLat - 1.0, eqLat - 4.2) - 0.3) || mlat > polLat + 1.5) continue;
+    #ifdef CURTAIN_BAKE
+    // The curtain's slow noise, baked this frame (tides-0oi.5): meander,
+    // fold and breaks. Bilinear taps blend values in [-1, 1], so they stay
+    // there and the floor above still holds.
+    float hemiRow = m > 0.0 ? 0.0 : float(CURTAIN_ROWS);
+    vec3 mfb = texture2D(uCurtain, curtainUv(ang, mlat, CURTAIN_MLAT_MIN, CURTAIN_MLAT_MAX, hemiRow)).rgb * 2.0 - 1.0;
+    #endif
 
     float hgt = clamp((r - uInner) / thickness, 0.0, 1.0);
     // This step's horizontal reach, in degrees: arcs narrower than that are
@@ -183,11 +196,15 @@ void main() {
     // Near magnetic midnight the arcs fold harder.
     float surge = 0.5 + 0.5 * cos(ang - SURGE_ANGLE);
 
-    // Slow meanders shared by all the arcs, so they bend together...
-    float meander = snoise3(vec3(around * 1.7 + hemi, t * 0.012));
-    // ...and smaller folds that also depend on latitude, so an arc can
-    // double back on itself (an S or a curl seen from above).
-    float fold = snoise3(vec3(around * 4.5 + vec2(t * 0.02, -hemi), mlat * 0.4 - t * 0.015));
+    // Meanders shared by all the arcs and folds that also depend on
+    // latitude (./curtain.glsl).
+    #ifdef CURTAIN_BAKE
+    float meander = mfb.r;
+    float fold = mfb.g;
+    #else
+    float meander = curtainMeander(around, hemi, t);
+    float fold = curtainFold(around, hemi, mlat, t);
+    #endif
     float foldAmp = 0.15 + 0.35 * surge + 0.5 * storm;
     // Degrees poleward of the discrete oval's equatorward edge, warped.
     float d = mlat - eqLat - (1.2 + 0.8 * storm) * meander - foldAmp * fold;
@@ -216,8 +233,13 @@ void main() {
     vec3 offset = ARC_AT * (0.8 + 0.6 * storm) + vec3(0.0, 0.5, 0.9) * fold;
     if (d > -2.5 && d < offset.z + 3.0) {
       // Arcs come and go along the oval rather than circling it unbroken.
-      float breaks = snoise3(vec3(around * 3.4 - hemi, t * 0.01 + 5.0));
-      float breaks2 = snoise3(vec3(around * 5.2 + hemi, d * 0.15 + t * 0.012 + 11.0));
+      #ifdef CURTAIN_BAKE
+      float breaks = mfb.b;
+      float breaks2 = texture2D(uCurtain, curtainUv(ang, d, CURTAIN_D_MIN, CURTAIN_D_MAX, hemiRow)).a * 2.0 - 1.0;
+      #else
+      float breaks = curtainBreaks(around, hemi, t);
+      float breaks2 = curtainBreaks2(around, hemi, d, t);
+      #endif
       // Storms keep more of each arc and light the ones behind it more.
       float gaps = 0.25 * storm;
       vec3 present = vec3(
