@@ -146,6 +146,19 @@ describe('ground detail patch', () => {
     })
   })
 
+  it("skips a zero-weight octave's noise, with no derivative inside the branch (tides-0oi.8)", () => {
+    const shader = phongShader()
+    groundDetailPatch(false).onBeforeCompile(shader, {} as THREE.WebGLRenderer)
+    const frag = shader.fragmentShader
+    const loop = frag.slice(frag.indexOf('vec4 groundDetail(vec3 p'), frag.indexOf('return sum;'))
+    const gate = loop.indexOf('if (weight > 0.0) {')
+    expect(gate).toBeGreaterThan(loop.indexOf('if (weight <= 0.0) break;'))
+    const branch = loop.slice(gate, loop.indexOf('}', gate))
+    expect(branch).toContain('detailNoise(')
+    expect(branch).toContain('sum += weight *')
+    expect(branch).not.toMatch(/dFdx|dFdy|fwidth|texture/)
+  })
+
   it('takes fewer octaves on the low tier, with its own program', () => {
     const high = phongShader()
     const low = phongShader()

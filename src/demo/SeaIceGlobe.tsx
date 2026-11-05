@@ -25,6 +25,7 @@ import { SEA_ICE_RENDER_ORDER } from '../renderers/earth-shells'
 import { composePatches, createEclipseShadow, type EclipseShadow, type MaterialPatch } from '../renderers/eclipseShadow'
 import { attachSeaIce, seaIceSurface, showSeaIceFrames } from '../renderers/seaIceLayers'
 import { globeStencil } from '../renderers/surface/surface-scale'
+import { useSceneShown } from '../renderers/scene-shown'
 import { useLoadedSeaIce, useSeaIce, type SeaIceData } from './sea-ice-data'
 import { HUGHES_E, ICE_SRGB, MASK_HEIGHT, MASK_NORTH, MASK_NORTH_ROWS, MASK_PER_DEG, MASK_SOUTH, NORTH_GRID, OCEAN_SRGB, RHO_SCALE, SOUTH_GRID, seaIceDay, seaIceFrames } from './sea-ice'
 
@@ -340,9 +341,10 @@ function SeaIceShell({ radius, data, handleRef }: { radius: number; data: SeaIce
     },
     [material, textures]
   )
+  const sceneShown = useSceneShown()
   useEffect(() => {
-    if (group.current) return warmIce(gl, group.current, camera, scene, textures, () => setWarm(true))
-  }, [gl, camera, scene, textures, material])
+    if (sceneShown && group.current) return warmIce(gl, group.current, camera, scene, textures, () => setWarm(true))
+  }, [sceneShown, gl, camera, scene, textures, material])
   // Handed to the driver with fresh textures (their frames rewritten).
   useEffect(() => {
     if (!group.current) return
@@ -356,6 +358,11 @@ function SeaIceShell({ radius, data, handleRef }: { radius: number; data: SeaIce
     <group
       ref={group}
       visible={false}
+      // Compiled and its mask uploaded under the first load's loading
+      // screen (CompileGate), though hidden till the tour: only when the
+      // shell is mounted during the gate's rounds (a deep link into the
+      // tour). On a normal load warmIce compiles it after the reveal.
+      userData={{ compileHidden: true, warmMaps: [textures.mask] }}
     >
       <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.north} material={material} raycast={noRaycast} />
       <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.south} material={material} raycast={noRaycast} />

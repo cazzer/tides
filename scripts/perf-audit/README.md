@@ -14,7 +14,9 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `ab.cjs` | CLI: same-tick pixel A/B/A2 and paired timing for named shader variants at one pose. |
 | `variants/top10.cjs` | The exact shader-text variants behind the top-10's shader items: clouds-1, aurora gate, aurora noise floor, ground detail gate, night water, plus skip controls. |
 | `body-maps.cjs` | Ship-mode body maps (tides-0oi.7): resident texture memory at named poses, same-tick A/B of the mip-tail proxies against their full maps, and approach runs that log the switch to a full map. |
+| `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
+| `cold-start.cjs` | CLI: the cold start's longest main-thread block, from a CDP Profiler run started before the page loads, with each program's first use, the Sun bake's first face, mip passes and the loading screen's reveal (tides-0oi.6). |
 
 ## Setup
 
@@ -83,6 +85,29 @@ A pair's `from` is a string (every occurrence) or `{ re, flags }`.
 - `K`, `N`: renders per round and number of rounds.
 - `SHOT=<png>`: screenshot the pose. Check it before trusting a number.
 - `NOTIME=1`: pixels only, no timing.
+
+## Cold start: how long does the main thread block?
+
+```bash
+cd scripts/perf-audit
+COLD=1 RUNS=3 node cold-start.cjs     # cold Metal shader cache
+RUNS=3 node cold-start.cjs            # warm
+```
+
+Each run opens a fresh browser under the GPU lock, starts the profiler (200 µs samples) on a same-origin page, then
+loads the app and profiles until `AFTER` ms (4000) past the reveal. It prints one JSON line per run:
+
+- `block`: the longest stretch with no idle sample after navigation, with its top self time and each one's callers.
+  Native WebGL calls show up by name: `getProgramInfoLog` is a program's first use waiting on its link,
+  `texSubImage2D` an upload. `blocks` lists the five longest.
+- `readyAt`: when the loading screen starts to fade (`tides:ready`).
+- `bake`: the Sun bake's first face, the stretch and frame holding it, and when its last face was drawn.
+- `mips`: `generateMipmap` calls on cube maps and on 2D textures.
+- `firstUses` (>= 1 ms) and `drawUses`: programs whose first use came at a draw rather than from a warm-up.
+
+A sync WebGL call waits for the GPU process to finish what was sent before it. So a stall often shows up in
+whatever call comes next, not in the work that caused it. Compare builds interleaved under one vite (swap the files
+between runs), as other streams load the GPU.
 
 ## Writing your own script
 
