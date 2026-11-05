@@ -1,9 +1,13 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   createPanelSchedule,
+  PANEL_COPY_PRIORITY,
   PANEL_FULL_RATE_SPEED,
   PANEL_INPUT_MS,
   panelDrawDue,
+  panelFrame,
   panelPeriodMs,
   panelsPaced,
   parsePanelRate,
@@ -114,5 +118,102 @@ describe('panelDrawDue', () => {
     const schedule = createPanelSchedule()
     expect(panelDrawDue(schedule, 'a', 1, period, false)).toBe(true)
     expect(panelDrawDue(schedule, 'a', 1, period, false)).toBe(false)
+  })
+})
+
+describe('panelFrame', () => {
+  const rect = { x: 0, y: 0, z: 389, w: 400 }
+  const paced = { ready: true, valid: true, rect, heldRect: rect, periodMs: 1000 / 15 }
+  const notDue = (forced: boolean) => forced
+  it('draws and copies on the first frame (no copy yet)', () => {
+    expect(panelFrame({ ...paced, valid: false, heldRect: { x: 0, y: 0, z: 0, w: 0 } }, notDue)).toEqual({ draw: true, copy: true })
+  })
+  it('holds while the copy stands in and nothing is due', () => {
+    expect(panelFrame(paced, notDue)).toEqual({ draw: false, copy: false })
+    expect(panelFrame(paced, () => true)).toEqual({ draw: true, copy: true })
+  })
+  it('redraws at once after a pixel ratio or rect change', () => {
+    expect(panelFrame({ ...paced, rect: { x: 0, y: 0, z: 292, w: 300 } }, notDue)).toEqual({ draw: true, copy: true })
+    expect(panelFrame({ ...paced, rect: { ...rect, x: 1 } }, notDue)).toEqual({ draw: true, copy: true })
+  })
+  it('draws without a copy at the full rate, and redraws with one once paced again', () => {
+    expect(panelFrame({ ...paced, periodMs: 0 }, () => true)).toEqual({ draw: true, copy: false })
+    // the full-rate draw left no valid copy, so the first paced frame is forced
+    expect(panelFrame({ ...paced, valid: false }, notDue)).toEqual({ draw: true, copy: true })
+  })
+  it('draws every frame and copies nothing until ready', () => {
+    expect(panelFrame({ ...paced, ready: false }, notDue)).toEqual({ draw: true, copy: false })
+  })
+})
+
+// Every useFrame in src, with its priority resolved through the constants it names.
+function frameCallbackPriorities(): { file: string; arg: string; value: number | null }[] {
+  const files: string[] = []
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) files.push(p)
+    }
+  }
+  const src = join(__dirname)
+  walk(src)
+  const texts = new Map(files.map((f) => [f, readFileSync(f, 'utf8')]))
+  const constants = new Map<string, string>()
+  for (const text of texts.values()) {
+    for (const m of text.matchAll(/(?:const|let)\s+([A-Z][A-Z0-9_]*)\s*=\s*([^\n;]+)/g)) constants.set(m[1], m[2].trim())
+  }
+  const resolve = (expr: string, depth = 0): number | null => {
+    expr = expr.trim()
+    if (/^-?\d+(\.\d+)?$/.test(expr)) return Number(expr)
+    const sum = expr.match(/^([A-Z][A-Z0-9_]*)\s*([+-])\s*(\d+(?:\.\d+)?)$/)
+    if (sum && depth < 5) {
+      const base = resolve(sum[1], depth + 1)
+      return base === null ? null : base + (sum[2] === '+' ? 1 : -1) * Number(sum[3])
+    }
+    if (/^[A-Z][A-Z0-9_]*$/.test(expr) && constants.has(expr) && depth < 5) return resolve(constants.get(expr)!, depth + 1)
+    return null
+  }
+  const out: { file: string; arg: string; value: number | null }[] = []
+  // useFrame, and hooks that pass their own `priority = n` parameter on to it (useShipAudioFrame).
+  const hooks: { name: string; fallback: string | null }[] = [{ name: 'useFrame', fallback: '0' }]
+  for (let h = 0; h < hooks.length; h++) {
+    const { name, fallback } = hooks[h]
+    for (const [file, text] of texts) {
+      const call = name + '('
+      let i = text.indexOf(call)
+      while (i >= 0) {
+        // the call's last top-level argument
+        let depth = 0, j = i + call.length, commas = 0, lastComma = -1
+        for (; j < text.length; j++) {
+          const c = text[j]
+          if ('([{'.includes(c)) depth++
+          else if (')]}'.includes(c)) { if (depth === 0) break; depth-- }
+          else if (c === ',' && depth === 0) { commas++; lastComma = j }
+        }
+        const line = text.slice(text.lastIndexOf('\n', i) + 1, i)
+        const isDefinition = /function\s+$/.test(line) || /^\s*import\b/.test(line) || /[\w.]$/.test(line)
+        if (!isDefinition) {
+          const arg = (name === 'useFrame' ? lastComma < 0 : commas === 0) ? fallback ?? '' : text.slice(lastComma + 1, j).trim()
+          const param = arg.match(/^[a-z]\w*$/)
+          const wrapper = param && text.slice(0, i).match(new RegExp(`function\\s+(use\\w+)\\([^)]*\\b${arg}\\s*=\\s*([^,)]+)[^)]*\\)[^{]*\\{[^]*$`))
+          if (wrapper) hooks.push({ name: wrapper[1], fallback: wrapper[2].trim() })
+          else out.push({ file: relative(src, file), arg, value: resolve(arg) })
+        }
+        i = text.indexOf(call, j)
+      }
+    }
+  }
+  return out
+}
+
+describe('PANEL_COPY_PRIORITY', () => {
+  it('comes after every other frame callback in src', () => {
+    const calls = frameCallbackPriorities()
+    expect(calls.some((c) => c.arg === 'PANEL_COPY_PRIORITY')).toBe(true)
+    const others = calls.filter((c) => c.arg !== 'PANEL_COPY_PRIORITY')
+    expect(others.length).toBeGreaterThan(10)
+    expect(others.filter((c) => c.value === null)).toEqual([])
+    expect(others.filter((c) => c.value! >= PANEL_COPY_PRIORITY)).toEqual([])
   })
 })

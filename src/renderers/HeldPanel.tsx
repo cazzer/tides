@@ -1,13 +1,14 @@
-import { useEffect, useId, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type RootState } from '@react-three/fiber'
 import { useStore } from '../store'
 import { viewViewport } from './glow/glow'
-import { GLOW_COMPOSITE_PRIORITY } from './glow/GlowPass'
 import {
   createPanelSchedule,
   dropPanel,
+  PANEL_COPY_PRIORITY,
   panelDrawDue,
+  panelFrame,
   panelPeriodMs,
   panelsPaced,
   parsePanelRate,
@@ -52,9 +53,6 @@ export function usePanelsPaced(): boolean {
   return useSyncExternalStore(subscribe, () => pacedOn)
 }
 
-/** After the glow's composite, when every View has drawn. */
-const COPY_PRIORITY = GLOW_COMPOSITE_PRIORITY + 1
-
 const copyOrigin = new THREE.Vector2()
 
 const INPUT_EVENTS = ['pointerdown', 'pointermove', 'wheel', 'touchmove'] as const
@@ -82,8 +80,10 @@ interface Held {
   rect: THREE.Vector4
   /** The texture holds the panel's last draw. */
   valid: boolean
-  /** This frame drew the panel and the copy at COPY_PRIORITY takes it. */
+  /** This frame drew the panel and the copy at PANEL_COPY_PRIORITY takes it. */
   copy: boolean
+  /** The WebGL context is lost: a copy made now holds nothing. */
+  lost: boolean
   pixels: THREE.Vector4
   quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>
   camera: THREE.OrthographicCamera
@@ -107,14 +107,19 @@ function createHeld(): Held {
     rect: new THREE.Vector4(),
     valid: false,
     copy: false,
+    lost: false,
     pixels: new THREE.Vector4(),
     quad,
     camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1),
   }
 }
 
+// Disposed resources come back on their next use, but the copy's texels
+// don't: it is dropped, so the next frame draws.
 function disposeHeld(held: Held) {
   held.texture?.dispose()
+  held.texture = null
+  held.valid = false
   held.quad.geometry.dispose()
   held.quad.material.dispose()
 }
@@ -164,19 +169,41 @@ function finishSkissor(state: RootState, autoClear: boolean) {
  */
 export function HeldPanel({ ready }: { ready: boolean }) {
   const id = useId()
-  const track = useThree((s) => s.events.connected as HTMLElement | undefined)
-  const held = useRef<Held | null>(null)
+  const gl = useThree((s) => s.gl)
+  // The View's own element: drei's View connects it in its effect, after
+  // this child's first render, when `connected` is still the root's.
+  const track = useThree((s) => trackOf(s))
+  // Made in render, so the first frame after the commit can draw.
+  const [held] = useState(createHeld)
   const interactingAt = useRef<number | null>(null)
 
-  useEffect(() => {
-    const created = createHeld()
-    held.current = created
-    return () => {
-      if (held.current === created) held.current = null
-      disposeHeld(created)
+  useEffect(
+    () => () => {
+      disposeHeld(held)
       dropPanel(schedule, id)
+    },
+    [held, id]
+  )
+
+  // A lost context takes the copy's texels with it; three re-allocates the
+  // texture empty on restore, so the panel draws again.
+  useEffect(() => {
+    const canvas = gl.domElement
+    const lost = () => {
+      held.lost = true
+      held.valid = false
     }
-  }, [id])
+    const restored = () => {
+      held.lost = false
+      held.valid = false
+    }
+    canvas.addEventListener('webglcontextlost', lost)
+    canvas.addEventListener('webglcontextrestored', restored)
+    return () => {
+      canvas.removeEventListener('webglcontextlost', lost)
+      canvas.removeEventListener('webglcontextrestored', restored)
+    }
+  }, [gl, held])
 
   useEffect(() => {
     if (!track) return
@@ -188,48 +215,56 @@ export function HeldPanel({ ready }: { ready: boolean }) {
   }, [track])
 
   useFrame((state) => {
-    const h = held.current
-    if (!h || !track) return
+    const element = trackOf(state)
+    if (!element) return
     // The rect and canvas box drei's View reads (its canvasSize is the root's size).
-    const viewport = viewViewport(state.previousRoot?.getState().size ?? state.size, track.getBoundingClientRect())
+    const viewport = viewViewport(state.previousRoot?.getState().size ?? state.size, element.getBoundingClientRect())
     if (!viewport) return
     const autoClear = prepareSkissor(state, viewport)
-    state.gl.getCurrentViewport(h.pixels)
+    state.gl.getCurrentViewport(held.pixels)
     const { timeScale, jumpDate, demo } = useStore.getState()
-    const period = panelPeriodMs(
+    const periodMs = panelPeriodMs(
       { timeScale, jumping: jumpDate !== null, demo: demo !== null, interactingAt: interactingAt.current, now: performance.now() },
       config
     )
-    const forced = !ready || !h.valid || !h.rect.equals(h.pixels)
-    if (panelDrawDue(schedule, id, state.clock.elapsedTime, period, forced)) {
+    const { draw, copy } = panelFrame(
+      { ready, valid: held.valid, rect: held.pixels, heldRect: held.rect, periodMs },
+      (forced) => panelDrawDue(schedule, id, state.clock.elapsedTime, periodMs, forced)
+    )
+    if (draw) {
       state.gl.render(state.scene, state.camera)
-      // At the full rate every frame draws, so nothing is kept to hold.
-      h.copy = ready && period > 0
-      h.valid = false
+      held.copy = copy
+      held.valid = false
       if (window.__panelRate) window.__panelRate.draws++
     } else {
-      h.quad.material.uniforms.map.value = h.texture
-      h.quad.material.uniforms.origin.value.set(h.rect.x, h.rect.y)
-      state.gl.render(h.quad, h.camera)
+      held.quad.material.uniforms.map.value = held.texture
+      held.quad.material.uniforms.origin.value.set(held.rect.x, held.rect.y)
+      state.gl.render(held.quad, held.camera)
       if (window.__panelRate) window.__panelRate.held++
     }
     finishSkissor(state, autoClear)
   }, 1)
 
   useFrame((state) => {
-    const h = held.current
-    if (!h?.copy) return
-    h.copy = false
-    const { x, y, z: width, w: height } = h.pixels
-    if (!h.texture || h.texture.image.width !== width || h.texture.image.height !== height) {
-      h.texture?.dispose()
-      h.texture = new THREE.FramebufferTexture(width, height)
+    if (!held.copy) return
+    held.copy = false
+    if (held.lost) return
+    const { x, y, z: width, w: height } = held.pixels
+    if (!held.texture || held.texture.image.width !== width || held.texture.image.height !== height) {
+      held.texture?.dispose()
+      held.texture = new THREE.FramebufferTexture(width, height)
     }
     state.gl.setRenderTarget(null)
-    state.gl.copyFramebufferToTexture(h.texture, copyOrigin.set(x, y))
-    h.rect.copy(h.pixels)
-    h.valid = true
-  }, COPY_PRIORITY)
+    state.gl.copyFramebufferToTexture(held.texture, copyOrigin.set(x, y))
+    held.rect.copy(held.pixels)
+    held.valid = true
+  }, PANEL_COPY_PRIORITY)
 
   return null
+}
+
+/** The View's element, once drei's View has connected it (not the root's event source). */
+function trackOf(state: RootState): HTMLElement | undefined {
+  const connected = state.events.connected as HTMLElement | undefined
+  return connected && connected !== state.previousRoot?.getState().events.connected ? connected : undefined
 }

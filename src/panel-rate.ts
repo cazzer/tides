@@ -108,3 +108,44 @@ export function panelDrawDue(
 export function dropPanel(schedule: PanelSchedule, id: string): void {
   schedule.lastDraw.delete(id)
 }
+
+/**
+ * The useFrame priority of HeldPanel's copy: after every other frame
+ * callback, so the copy takes the panel's final pixels (the glow's
+ * composite, at 2, included). panel-rate.test.ts holds every other
+ * useFrame in src below it.
+ */
+export const PANEL_COPY_PRIORITY = 100
+
+/** A rect of canvas pixels (x, y, width, height), as THREE.Vector4 holds one. */
+export interface PixelRect {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
+export interface PanelFrameInput {
+  /** The scene has compiled (sceneReady); until then the panel draws every frame. */
+  ready: boolean
+  /** The held copy is the panel's last draw. */
+  valid: boolean
+  /** The panel's canvas pixels this frame, and the ones the copy holds. */
+  rect: PixelRect
+  heldRect: PixelRect
+  periodMs: number
+}
+
+/**
+ * This frame's work for a paced panel: draw it (and then copy it, so the
+ * next frames can hold it), or fill it from its copy. A draw is forced
+ * while not ready, with no valid copy, or once the panel's pixels moved or
+ * resized (a pixel ratio change); otherwise `due(forced)` (panelDrawDue)
+ * decides. At the full rate nothing is copied: every frame draws.
+ */
+export function panelFrame(input: PanelFrameInput, due: (forced: boolean) => boolean): { draw: boolean; copy: boolean } {
+  const { rect: r, heldRect: h } = input
+  const forced = !input.ready || !input.valid || r.x !== h.x || r.y !== h.y || r.z !== h.z || r.w !== h.w
+  if (!due(forced)) return { draw: false, copy: false }
+  return { draw: true, copy: input.ready && input.periodMs > 0 }
+}
