@@ -1,4 +1,4 @@
-// The KTX2 loaders for the flight maps (tides-01v.6) and the body maps
+// The KTX2 loader for the flight maps (tides-01v.6) and the body maps
 // (tides-0oi.14), imported dynamically so the loader and its Basis
 // transcoder stay out of the main bundle until a map needs them. The
 // transcoder ships with three; Vite copies both files into the build under
@@ -21,16 +21,13 @@ function transcoderManager(): THREE.LoadingManager {
   return manager
 }
 
-export function createFlightKtx2Loader(gl: THREE.WebGLRenderer): KTX2Loader {
-  // One worker: maps arrive one body at a time.
-  return new KTX2Loader(transcoderManager()).detectSupport(gl).setWorkerLimit(1)
-}
+let shared: KTX2Loader | null = null
 
 /**
- * The body maps' loader, kept for the page's life (a planet toggled back on
- * reloads from useLoader's cache, not the file). One worker: a 2k map
- * transcodes in a few ms, and the 26 arrive spread over the planets' load.
+ * The page's one KTX2Loader, for the flight maps and the body maps alike:
+ * each loader keeps its own worker and transcoder heap, so it is made once
+ * and never disposed. One worker: maps arrive a body at a time.
  */
-export function createBodyKtx2Loader(gl: THREE.WebGLRenderer): KTX2Loader {
-  return new KTX2Loader(transcoderManager()).detectSupport(gl).setWorkerLimit(1)
+export function getKtx2Loader(gl: THREE.WebGLRenderer): KTX2Loader {
+  return (shared ??= new KTX2Loader(transcoderManager()).detectSupport(gl).setWorkerLimit(1))
 }

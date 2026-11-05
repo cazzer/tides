@@ -10,6 +10,7 @@ import {
   buildMapProxy,
   createUploadBudget,
   fullMapOf,
+  initialBodyMap,
   mapProxy,
   offAxisScale,
   projectedRadiusPx,
@@ -229,6 +230,18 @@ describe('buildMapProxy for a compressed map', () => {
     const flat = compressedMap(2048, 1024, 1)
     flat.minFilter = THREE.LinearFilter
     expect(buildMapProxy(flat, noRead)).toBeNull()
+  })
+
+  it('binds at mount in ship mode, before the body is placed, without uploading the map', () => {
+    const gl = new Proxy({} as THREE.WebGLRenderer, {
+      get(_, key) {
+        throw new Error(`gl.${String(key)}`)
+      },
+    })
+    const map = compressedMap(2048, 1024)
+    expect(initialBodyMap(map)).toBe(map)
+    expect(fullMapOf(initialBodyMap(map, gl))).toBe(map)
+    expect(initialBodyMap(compressedMap(2048, 1024, 9), gl)).not.toBeNull()
   })
 
   it('makes no GL call through mapProxy', () => {

@@ -5,8 +5,9 @@
 # quarter of the JPEG's GPU memory or less. The JPEGs stay: they are the
 # maps for devices with none of those formats and for a failed load.
 #
-# Input: the shipped JPEGs, so a KTX2 holds the same texels the JPEG
-# decodes to. Output:
+# Input: the shipped JPEGs, so a KTX2 starts from the texels the JPEG
+# decodes to (ImageMagick's decode; a browser's IDCT can differ by about
+# 1 LSB). Output:
 #   src/assets/<planet>-2k.jpg      -> src/assets/bodies/<planet>-2k.ktx2
 #   src/assets/moons/<key>-<n>k.jpg -> src/assets/moons/<key>-<n>k.ktx2
 # Earth and Earth's Moon are not in the set; Saturn's ring stays PNG.
@@ -23,12 +24,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ASSETS="$ROOT_DIR/src/assets"
-WORK="${1:-$(mktemp -d)}"
-mkdir -p "$WORK" "$ASSETS/bodies"
-
 for tool in magick basisu; do
   command -v "$tool" >/dev/null || { echo "$tool not found: brew install imagemagick basis_universal" >&2; exit 1; }
 done
+basisu -version | head -1
+
+if [[ $# -ge 1 ]]; then
+  WORK="$1"
+else
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+fi
+mkdir -p "$WORK" "$ASSETS/bodies"
+JPEG_BYTES=0
+KTX2_BYTES=0
 
 UASTC=(-uastc -uastc_level 2 -uastc_rdo_l 3 -mipmap -mip_srgb -y_flip -srgb)
 
@@ -38,7 +47,12 @@ encode() {
   png="$WORK/$(basename "${src%.jpg}").png"
   magick "$src" -colorspace sRGB -type TrueColor "$png"
   basisu "${UASTC[@]}" "$png" -output_file "$out" >/dev/null
-  echo "$out $(wc -c <"$src" | tr -d ' ') -> $(wc -c <"$out" | tr -d ' ') bytes"
+  local jpeg_bytes ktx2_bytes
+  jpeg_bytes=$(wc -c <"$src" | tr -d ' ')
+  ktx2_bytes=$(wc -c <"$out" | tr -d ' ')
+  JPEG_BYTES=$((JPEG_BYTES + jpeg_bytes))
+  KTX2_BYTES=$((KTX2_BYTES + ktx2_bytes))
+  echo "$out $jpeg_bytes -> $ktx2_bytes bytes"
 }
 
 for planet in mercury venus mars jupiter saturn uranus neptune; do
@@ -48,3 +62,5 @@ done
 for src in "$ASSETS"/moons/*-[12]k.jpg; do
   encode "$src" "${src%.jpg}.ktx2"
 done
+
+echo "total: JPEG $JPEG_BYTES -> KTX2 $KTX2_BYTES bytes"

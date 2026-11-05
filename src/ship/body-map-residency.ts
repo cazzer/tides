@@ -166,9 +166,13 @@ export function systemMapStep(showsProxy: boolean, retired: boolean, slotFree: b
 
 /**
  * The texture a body binds when it mounts: its proxy while a flight has
- * retired its map (so mounting doesn't upload it), else the map.
+ * retired its map (so mounting doesn't upload it), else the map. With
+ * `shipGl` (ship mode), a compressed map's proxy too, which costs nothing to
+ * build, so the body's first frame, drawn before its orbit places it,
+ * doesn't upload the full map either.
  */
-export function initialBodyMap(map: THREE.Texture): THREE.Texture {
+export function initialBodyMap(map: THREE.Texture, shipGl?: THREE.WebGLRenderer): THREE.Texture {
+  if (shipGl && map instanceof THREE.CompressedTexture) return readyMapProxy(shipGl, map) ?? map
   return (isRetiredMap(map) && cachedMapProxy(map)) || map
 }
 

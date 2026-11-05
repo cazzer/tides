@@ -52,7 +52,8 @@ export function useShipBodyMap(
   radius: number
 ): ShipBodyMap {
   const shipMode = useStore((s) => s.shipMode)
-  const [held, setHeld] = useState<THREE.Texture | null>(() => map && initialBodyMap(map))
+  const gl = useThree((s) => s.gl)
+  const [held, setHeld] = useState<THREE.Texture | null>(() => map && initialBodyMap(map, shipMode ? gl : undefined))
   const shown = held && (held === map || fullMapOf(held) === map) ? held : map
   const promoted = useRef(false)
   // Committed at once, so the layout effect binds it before this frame draws.

@@ -256,7 +256,9 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
       if (!promoted.has(next.map)) applyMap(next.material, shown)
     } else if (shipMode && readyMapProxy(gl, next.map)) {
       // A compressed map: stepMoonMaps, after this, binds its proxy or
-      // promotes it before the frame draws, so nothing uploads it first.
+      // promotes it before the frame draws, so the full map uploads only for
+      // a moon already past PROMOTE_RADIUS_PX (at its draw, with the slot
+      // taken, as a waiting promotion's would).
       arrived.current.shift()
       applyMap(next.material, next.map)
     } else if (shipMode || !isRetiredMap(next.map)) {

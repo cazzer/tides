@@ -65,9 +65,16 @@ export type CompressedMapLoad = (url: string, gl: THREE.WebGLRenderer) => Promis
 
 let bodyKtx2: Promise<import('three/examples/jsm/loaders/KTX2Loader.js').KTX2Loader> | null = null
 
-// The loader and its transcoder are fetched with the first map that needs them.
+// The loader and its transcoder are fetched with the first map that needs
+// them; a failed fetch is tried again by the next map.
 const loadBodyKtx2: CompressedMapLoad = async (url, gl) => {
-  bodyKtx2 ??= import('./ktx2Loader').then((m) => m.createBodyKtx2Loader(gl))
+  bodyKtx2 ??= import('./ktx2Loader').then(
+    (m) => m.getKtx2Loader(gl),
+    (err: unknown) => {
+      bodyKtx2 = null
+      throw err
+    }
+  )
   return (await bodyKtx2).loadAsync(url)
 }
 

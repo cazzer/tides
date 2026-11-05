@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'fs'
-import { resolve } from 'path'
+import { createRequire } from 'module'
+import { dirname, resolve } from 'path'
 import { describe, expect, it } from 'vitest'
 import { read } from 'three/examples/jsm/libs/ktx-parse.module.js'
 import { canUseCompressedBodyMaps } from './body-maps'
@@ -72,5 +73,69 @@ describe('body map assets', () => {
     expect(container.dataFormatDescriptor[0].transferFunction).toBe(SRGB)
     expect([container.pixelWidth, container.pixelHeight]).toEqual([width, height])
     expect(container.levelCount).toBe(Math.log2(Math.max(width, height)) + 1)
+  })
+})
+
+// Orientation (tides-0oi.14 review): basisu writes no KTXorientation, and
+// three never flips a compressed texture, so -y_flip must store the JPEG's
+// bottom row first, where TextureLoader's upload flip puts it. A small level
+// of the KTX2, decoded by three's own transcoder, against the JPEG at that
+// size (src/__fixtures__/<map>-32x16.rgb: magick -colorspace sRGB -resize
+// 32x16! rgb:), matches row for row only when read bottom up.
+describe('body map orientation', () => {
+  interface Ktx2File {
+    isValid(): boolean
+    startTranscoding(): number
+    getImageTranscodedSizeInBytes(level: number, layer: number, face: number, format: number): number
+    transcodeImage(dst: Uint8Array, level: number, layer: number, face: number, format: number, flags: number, ch0: number, ch1: number): number
+    close(): void
+    delete(): void
+  }
+  interface Transcoder {
+    initializeBasis(): void
+    KTX2File: new (bytes: Uint8Array) => Ktx2File
+  }
+  const RGBA32 = 13
+
+  async function transcoder(): Promise<Transcoder> {
+    const require = createRequire(import.meta.url)
+    const js = require.resolve('three/examples/jsm/libs/basis/basis_transcoder.js')
+    const factory = new Function('require', '__filename', '__dirname', `${readFileSync(js, 'utf8')}\n;return BASIS`)(
+      require,
+      js,
+      dirname(js)
+    ) as (module: { wasmBinary: Uint8Array }) => Promise<Transcoder>
+    const basis = await factory({ wasmBinary: readFileSync(resolve(dirname(js), 'basis_transcoder.wasm')) })
+    basis.initializeBasis()
+    return basis
+  }
+
+  it.each([
+    ['assets/bodies/mars-2k.ktx2', 6, 'mars-2k-32x16.rgb'],
+    ['assets/moons/ganymede-1k.ktx2', 5, 'ganymede-1k-32x16.rgb'],
+  ] as const)('%s stores the bottom row first', async (file, level, fixture) => {
+    const basis = await transcoder()
+    const ktx2 = new basis.KTX2File(new Uint8Array(readFileSync(resolve(__dirname, file))))
+    expect(ktx2.isValid() && ktx2.startTranscoding()).toBeTruthy()
+    const rgba = new Uint8Array(ktx2.getImageTranscodedSizeInBytes(level, 0, 0, RGBA32))
+    expect(ktx2.transcodeImage(rgba, level, 0, 0, RGBA32, 0, -1, -1)).toBeTruthy()
+    ktx2.close()
+    ktx2.delete()
+    const jpeg = readFileSync(resolve(__dirname, '__fixtures__', fixture))
+    const [w, h] = [32, 16]
+    expect(rgba.length).toBe(w * h * 4)
+    const meanError = (bottomUp: boolean) => {
+      let sum = 0
+      for (let y = 0; y < h; y++) {
+        const row = bottomUp ? h - 1 - y : y
+        for (let x = 0; x < w; x++) {
+          for (let c = 0; c < 3; c++) sum += Math.abs(rgba[(y * w + x) * 4 + c] - jpeg[(row * w + x) * 3 + c])
+        }
+      }
+      return sum / (w * h * 3)
+    }
+    // Different downsampling filters keep even the right way from 0.
+    expect(meanError(true)).toBeLessThan(8)
+    expect(meanError(false)).toBeGreaterThan(2 * meanError(true))
   })
 })
