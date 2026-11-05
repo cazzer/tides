@@ -177,6 +177,14 @@ export default function App() {
   const markReady = useCallback((key: string) => {
     setReadyViews((ready) => (ready.has(key) ? ready : new Set(ready).add(key)))
   }, [])
+  const markUnready = useCallback((key: string) => {
+    setReadyViews((ready) => {
+      if (!ready.has(key)) return ready
+      const next = new Set(ready)
+      next.delete(key)
+      return next
+    })
+  }, [])
 
   // Single layout mounts only the chosen panel, so the others never render.
   const single = layout === 'single'
@@ -236,6 +244,7 @@ export default function App() {
               ship
               hold={!sceneReady}
               onReady={() => markReady('ship')}
+              onUnready={() => markUnready('ship')}
             />
           </ShipView>
         )}
@@ -272,6 +281,7 @@ export default function App() {
               showOrbitLabels
               hold={!sceneReady}
               onReady={() => markReady('main')}
+              onUnready={() => markUnready('main')}
             />
             <MainControls />
             {/* Rain and snow round the eye in close zoom (tides-bl3.8). */}
@@ -295,6 +305,7 @@ export default function App() {
               earthCamera
               hold={!sceneReady}
               onReady={() => markReady('top')}
+              onUnready={() => markUnready('top')}
             />
           </Panel>
         )}
@@ -309,6 +320,7 @@ export default function App() {
               moonCamera
               hold={!sceneReady}
               onReady={() => markReady('bottom')}
+              onUnready={() => markUnready('bottom')}
             />
           </Panel>
         )}
@@ -337,6 +349,7 @@ function Scene({
   mainSlot = false,
   hold = false,
   onReady,
+  onUnready,
   ...props
 }: {
   background?: string
@@ -349,6 +362,7 @@ function Scene({
   /** Hide the scene until its shaders are linked (CompileGate). */
   hold?: boolean
   onReady?: () => void
+  onUnready?: () => void
   [key: string]: any
 }) {
   return (
@@ -361,6 +375,7 @@ function Scene({
         <CompileGate
           hold={hold}
           onReady={onReady}
+          onUnready={onUnready}
         >
           <group
             matrixAutoUpdate={false}

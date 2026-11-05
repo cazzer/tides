@@ -12,7 +12,7 @@ import { sunRaycast } from './sun-pick'
 import { useStore } from '../store'
 import { isLowQuality } from '../quality'
 import { sunSurface } from './sun-surface'
-import { useSceneShown } from './scene-shown'
+import { useSceneGate } from './scene-shown'
 import { SunProminences } from './SunProminences'
 import { SunSpicules } from './SunSpicules'
 import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
@@ -169,11 +169,13 @@ export default function SunRenderer({ diameter, interactive = false, coronaFade 
   // The bake waits for every view on the first load to show (CompileGate):
   // its first face is ~100 ms of GPU work cold, which the gate's sync calls
   // (first uses, uploads) would wait behind.
-  const sceneShown = useSceneShown()
-  // A layout effect, so the hold is on before the first frame runs.
+  // The loading screen stays up until it's done, too: an unbaked Sun is plain.
+  const { shown: sceneShown, waitFor } = useSceneGate()
+  // Layout effects, so the hold is on before the first frame runs.
   useLayoutEffect(() => {
     if (!sceneShown) return surface.hold()
   }, [surface, sceneShown])
+  useLayoutEffect(() => waitFor(() => surface.done()), [surface, waitFor])
   useFrame((state) => tick(surface, sunMaterial, state.clock.elapsedTime))
   const mesh = useRef<THREE.Mesh>(null)
   const onBeforeRender = useCallback(

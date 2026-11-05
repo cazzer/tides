@@ -358,6 +358,9 @@ function SeaIceShell({ radius, data, handleRef }: { radius: number; data: SeaIce
     <group
       ref={group}
       visible={false}
+      // Compiled and its mask uploaded under the first load's loading
+      // screen (CompileGate), though hidden till the tour.
+      userData={{ compileHidden: true, warmMaps: [textures.mask] }}
     >
       <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.north} material={material} raycast={noRaycast} />
       <mesh renderOrder={SEA_ICE_RENDER_ORDER} geometry={caps.south} material={material} raycast={noRaycast} />

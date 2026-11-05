@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { allShownReady, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
+import { afterRound, allShownReady, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
 
 describe('withTimeout', () => {
   afterEach(() => {
@@ -80,5 +80,24 @@ describe('allShownReady', () => {
 
   it('is never ready with nothing shown', () => {
     expect(allShownReady([], new Set(['main']))).toBe(false)
+  })
+})
+
+describe('afterRound', () => {
+  const round = (over: Partial<Parameters<typeof afterRound>[0]>) =>
+    afterRound({ outcome: 'done', added: false, loaded: true, quiet: 0, ...over }, 2)
+
+  it('warms after two quiet rounds in a row', () => {
+    expect(round({ quiet: 0 })).toEqual({ next: 'compile', quiet: 1 })
+    expect(round({ quiet: 1 })).toEqual({ next: 'warm', quiet: 2 })
+  })
+
+  it('starts the count again on a round that added programs or with assets still loading', () => {
+    expect(round({ quiet: 1, added: true })).toEqual({ next: 'compile', quiet: 0 })
+    expect(round({ quiet: 1, loaded: false })).toEqual({ next: 'compile', quiet: 0 })
+  })
+
+  it('shows the scene after a round that timed out', () => {
+    expect(round({ outcome: 'timeout', quiet: 1 }).next).toBe('reveal')
   })
 })

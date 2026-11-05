@@ -194,6 +194,10 @@ export function sunSurface(renderer: THREE.WebGLRenderer, low: boolean) {
         held = false
       }
     },
+    /** Whether all eighteen faces are baked. */
+    done(): boolean {
+      return own.cubes.every((b) => b.faces === 6)
+    },
     /** Bakes the next face, if any, once the programs are linked and nothing holds it; true once all are. */
     step(): boolean {
       if (!own.compiled || own.holds > 0) return false

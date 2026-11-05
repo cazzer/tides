@@ -55,3 +55,30 @@ export function assetsLoaded({ active, loaded, total }: LoadProgress): boolean {
 export function allShownReady(shown: readonly string[], ready: ReadonlySet<string>): boolean {
   return shown.length > 0 && shown.every((key) => ready.has(key))
 }
+
+/**
+ * [TUNE] The longest the first load holds a scene back from its mount, ms,
+ * whatever it waits on (assets, compiles, the Sun's bake): then it shows.
+ */
+export const GATE_DEADLINE_MS = 20000
+
+/** What a compile round leads to. */
+export interface RoundOutcome {
+  next: 'compile' | 'warm' | 'reveal'
+  /** Quiet rounds in a row so far. */
+  quiet: number
+}
+
+/**
+ * After a compile round: another round, unless `quietRounds` in a row have
+ * found nothing new (`added`) with every asset in (`loaded`); then the warm.
+ * A round that timed out shows the scene as it is.
+ */
+export function afterRound(
+  { outcome, added, loaded, quiet }: { outcome: 'done' | 'timeout'; added: boolean; loaded: boolean; quiet: number },
+  quietRounds: number
+): RoundOutcome {
+  if (outcome === 'timeout') return { next: 'reveal', quiet }
+  const now = added || !loaded ? 0 : quiet + 1
+  return { next: now >= quietRounds ? 'warm' : 'compile', quiet: now }
+}

@@ -87,9 +87,11 @@ describe('sunSurface', () => {
     const surface = sunSurface(renderer, true)
     renders.length = 0
     await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(surface.done()).toBe(false)
     let steps = 0
     while (!surface.step()) steps++
     expect(steps).toBe(18)
+    expect(surface.done()).toBe(true)
     expect(renders).toHaveLength(18)
     const textures = [surface.surface, surface.corona, surface.plasma]
     renders.forEach((render, i) => {
