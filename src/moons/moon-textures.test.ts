@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { MOON_KEYS } from './moon-keys'
-import { moonTextureUrl } from './moon-textures'
+import { moonTextureUrls } from './moon-textures'
 
 describe('moon surface maps', () => {
   it('has a 1k map for every moon', () => {
-    for (const key of MOON_KEYS) expect(moonTextureUrl(key, true)).toMatch(new RegExp(`${key}-1k\\.jpg`))
+    for (const key of MOON_KEYS) expect(moonTextureUrls(key, true).jpeg).toMatch(new RegExp(`${key}-1k\\.jpg`))
+  })
+
+  it('pairs each map with its KTX2 of the same size', () => {
+    for (const key of MOON_KEYS) {
+      for (const low of [true, false]) {
+        const { jpeg, ktx2 } = moonTextureUrls(key, low)
+        expect(ktx2?.replace(/\.ktx2$/, '.jpg')).toBe(jpeg)
+      }
+    }
   })
 
   it('picks the 2k map unless low quality, where there is one', () => {
-    expect(moonTextureUrl('ganymede', false)).toMatch(/ganymede-2k\.jpg/)
-    expect(moonTextureUrl('ganymede', true)).toMatch(/ganymede-1k\.jpg/)
+    expect(moonTextureUrls('ganymede', false).jpeg).toMatch(/ganymede-2k\.jpg/)
+    expect(moonTextureUrls('ganymede', true).jpeg).toMatch(/ganymede-1k\.jpg/)
     // Voyager's Uranian maps are too coarse for a 2k one.
-    expect(moonTextureUrl('ariel', false)).toMatch(/ariel-1k\.jpg/)
+    expect(moonTextureUrls('ariel', false).jpeg).toMatch(/ariel-1k\.jpg/)
   })
 })
 

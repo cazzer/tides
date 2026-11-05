@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import marsTexture from '../../assets/mars-2k.jpg'
+import marsCompressed from '../../assets/bodies/mars-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
 import { MARS_HAZE_OUTER } from './haze-shells'
 
@@ -32,6 +33,7 @@ export function Mars({ planet }: PlanetRendererProps) {
       <PlanetSurface
         planet={planet}
         texture={marsTexture}
+        compressedTexture={marsCompressed}
         flightTexture="mars"
         albedo={MARS_ALBEDO}
         detail={DETAIL}
