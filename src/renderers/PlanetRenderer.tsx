@@ -39,6 +39,7 @@ import ringFragment from '../shaders/ring/fragment.frag'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 import { useBodySphere } from '../ship/limb-detail'
+import { GlowOccluder } from './glow/GlowOccluder'
 
 export type { RingBand } from './planetFrame'
 
@@ -188,12 +189,16 @@ function SurfaceMesh({
   }, [material, planet.color, albedo, limbDarkening, ringShadow, detail])
 
   return (
-    <mesh
-      geometry={geometry}
-      material={material}
-      raycast={meshBounds}
-      onBeforeRender={sun.onBeforeRender}
-    />
+    <>
+      <mesh
+        geometry={geometry}
+        material={material}
+        raycast={meshBounds}
+        onBeforeRender={sun.onBeforeRender}
+      />
+      {/* Hides the glow behind it, a planet across the Sun (tides-64u.3). */}
+      <GlowOccluder radius={planet.radius} />
+    </>
   )
 }
 

@@ -65,6 +65,7 @@ import earthHorizonCurvedUrl from '../assets/earth-horizon-1k.bin?url'
 import earthHorizonTrueUrl from '../assets/earth-horizon-1k-true.bin?url'
 import { HORIZON_TRUE_CURVE_RELIEF, horizonCurveRelief } from '../earth-horizon'
 import { RELIEF } from '../relief'
+import { EarthGlow } from './glow/EarthGlow'
 
 // The horizon map whose curvature is exact nearer the page's relief
 // (../earth-horizon.ts, tides-zmw.21): only that one is fetched.
@@ -438,6 +439,18 @@ export default function EarthRenderer({
           displacementScale={TERRAIN_DISPLACEMENT}
         />
       </mesh>
+
+      {/* The city lights' and the sea glint's glow (tides-64u.3), in the
+          ground's frame. Only drawn where a GlowPass is. */}
+      <EarthGlow
+        geometry={groundSphere}
+        lightsMap={nightTexture}
+        seaMask={specularMap}
+        sun={clouds.uniforms.uSunDir}
+        cloudMap={clouds.uniforms.uCloudMap}
+        cloudShift={clouds.uniforms.uCloudShift}
+        clouds={!hideClouds}
+      />
 
       {/* Clouds: a shell over the highest ground and cloud tops. The cloud
           texture is a uniform, never a material map: R3F would tag it sRGB. */}
