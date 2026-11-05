@@ -16,6 +16,7 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `body-maps.cjs` | Ship-mode body maps (tides-0oi.7): resident texture memory at named poses, same-tick A/B of the mip-tail proxies against their full maps, and approach runs that log the switch to a full map. |
 | `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
+| `sphere-lod.cjs` | tides-0oi.16's proof: the body spheres sized to the screen against the 128x128 top level, swapped in the same tick: levels per View, pixel stats and board composites per pose, triangles per View, paired timing. |
 | `cold-start.cjs` | CLI: the cold start's longest main-thread block, from a CDP Profiler run started before the page loads, with each program's first use, the Sun bake's first face, mip passes and the loading screen's reveal (tides-0oi.6). |
 
 ## Setup
