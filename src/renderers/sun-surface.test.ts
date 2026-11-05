@@ -3,8 +3,13 @@ import * as THREE from 'three'
 import { sunSurface } from './sun-surface'
 import { COMPILE_TIMEOUT_MS } from './compile-gate'
 
+// Each bake's background compile, as the fake renderer links it.
+const compileAndWait = vi.hoisted(() => vi.fn())
+vi.mock('./compile-wait', () => ({ compileAndWait }))
+
 // Just what the bake asks of a renderer, recording each draw's target and
-// whether three would regenerate its mips after it.
+// whether three would regenerate its mips after it; its compiles link
+// when `linked` settles.
 function fakeRenderer({ linked }: { linked: Promise<unknown> }) {
   let target: THREE.WebGLRenderTarget | null = null
   let face = 0
@@ -24,14 +29,14 @@ function fakeRenderer({ linked }: { linked: Promise<unknown> }) {
     getClearAlpha: () => 1,
     setClearColor: () => {},
     clear: () => {},
-    compileAsync: () => {
-      compiledInto.push(target)
-      return linked
-    },
     render: () => {
       renders.push({ target, face, mips: target?.texture.generateMipmaps ?? false })
     },
   }
+  compileAndWait.mockImplementation(() => {
+    compiledInto.push(target)
+    return linked
+  })
   return { renderer: renderer as unknown as THREE.WebGLRenderer, renders, compiledInto }
 }
 
