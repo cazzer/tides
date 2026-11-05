@@ -26,7 +26,7 @@ import { prefersReducedMotion } from '../ship/reduced-motion'
 import { CITY_LIGHTS_COLOR, CITY_LIGHTS_INTENSITY, TONE_MAPPING_EXPOSURE } from '../lighting'
 import {
   driftOffset,
-  STATIC_DRIFT_PER_FRAME,
+  staticDriftStep,
   TERRAIN_DISPLACEMENT,
 } from '../cloud-layer'
 import { isLowQuality } from '../quality'
@@ -397,7 +397,7 @@ export default function EarthRenderer({
       clouds.warmUnderSheet(gl, cloudRef.current, camera, scene)
     }
     if (!real) {
-      drift.current += STATIC_DRIFT_PER_FRAME
+      drift.current += staticDriftStep(delta)
       clouds.uniforms.uCloudShift.value = driftOffset(drift.current)
       return
     }
