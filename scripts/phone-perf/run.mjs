@@ -50,6 +50,8 @@ const config = {
   // name=path,name=path: source trees to build and compare, each served on
   // its own port (VITE_PORT, +1, ...); the first is the "before".
   builds: env.BUILDS ? env.BUILDS.split(',').map(parseBuild) : null,
+  // A query string added to every pose URL (overrides): PARAMS='dprctl=systemMax:3'.
+  params: env.PARAMS ?? '',
 }
 
 function parseBuild(spec) {
@@ -176,7 +178,7 @@ async function measurePose(connection, device, item, base) {
       source: `${INIT_SCRIPT};try{sessionStorage.setItem('tides.shipControlsSeen','1')}catch{}`,
     })
     await page.send('Page.bringToFront')
-    const url = poseUrl(base, item)
+    const url = poseUrl(base, item, config.params)
     // A cold start: the HTTP cache is emptied (the GPU's own shader cache on
     // disk is not reachable from the protocol and stays warm).
     if (item.coldStart) await page.send('Network.clearBrowserCache')
@@ -242,12 +244,17 @@ async function measurePose(connection, device, item, base) {
     const profile = await captureProfile(page)
 
     const replay = await page.evaluate(`window.__ppProbe.replay(${config.replayK}, 7)`, { timeoutMs: 120000 })
+    // The low tier's dpr controller (tides-0oi.13) logs its changes when present.
+    const dprTimeline = await page.evaluate(
+      'window.__dprctl?.changes ? JSON.parse(JSON.stringify(window.__dprctl.changes.slice(-500))) : null'
+    )
 
     const result = {
       url,
       loadMs,
       startup,
       memoryAtReady,
+      dprTimeline,
       info: sample.info,
       frames,
       gpu: gpu && { source: sample.gpuSource, p50: gpu.p50, p95: gpu.p95, frames: gpu.frames },

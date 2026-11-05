@@ -260,3 +260,14 @@ describe('build comparison', async () => {
     expect(roundOrder(['a', 'b'], 1)).toEqual(['b', 'a'])
   })
 })
+
+describe('pose URLs', async () => {
+  const { poseUrl } = await import('./poses.mjs')
+  it('adds PARAMS last, overriding the common and pose params', () => {
+    const url = new URL(poseUrl('http://x/tides/', { params: { focus: 'earth' }, tier: 'high' }, 'dprctl=systemMax:3&weather=live'))
+    expect(url.searchParams.get('dprctl')).toBe('systemMax:3')
+    expect(url.searchParams.get('weather')).toBe('live')
+    expect(url.searchParams.get('quality')).toBe('high')
+    expect(url.searchParams.get('focus')).toBe('earth')
+  })
+})

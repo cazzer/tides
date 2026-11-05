@@ -107,6 +107,10 @@ Extra poses, run only when `POSES` names them (the sprint fixes' own poses):
 | cold-start | the system view loaded with the HTTP cache cleared: first frame, first frame after the loader leaves (first interactive), long tasks (longest, before/after the loader, total) and the longest frame in the 6 s after; the GPU's disk shader cache is not reachable over CDP and stays warm | tides-0oi.6 |
 
 `POSES` filters by id; `TIERS=auto,high` forces tiers on every pose.
+`PARAMS='dprctl=systemMax:3'` adds a query string to every pose URL, set
+last so it overrides the common and pose params. When the page exposes
+`window.__dprctl.changes` (the low tier's dpr controller, tides-0oi.13), each
+result records it as `dprTimeline` (last 500 entries) in `results.json`.
 
 ## Hooks (`vite.config.mjs`)
 

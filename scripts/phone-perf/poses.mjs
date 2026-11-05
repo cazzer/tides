@@ -230,8 +230,11 @@ export function roundOrder(items, round) {
   return items.map((_, i) => items[(i + round) % n])
 }
 
-export function poseUrl(base, pose) {
+// extra: a query string (PARAMS) set on every pose URL last, so it can
+// override the common and pose params (e.g. dprctl=systemMax:3).
+export function poseUrl(base, pose, extra = '') {
   const params = new URLSearchParams({ ...COMMON_PARAMS, ...pose.params })
   if (pose.tier !== 'auto') params.set('quality', pose.tier)
+  for (const [k, v] of new URLSearchParams(extra)) params.set(k, v)
   return `${base}?${params}`
 }
