@@ -2324,27 +2324,51 @@ describe('the flat sheet from under it (tides-0oi.3)', () => {
     }
   })
 
-  it('compiles the program from under the sheet ahead, and turns back', () => {
+  it('compiles the back faces\' programs ahead, under the sheet and over it, typed or not, and turns back', () => {
     const { clouds, mesh, main } = setup(true)
-    const seen: { side: THREE.Side; defines: string[] }[] = []
+    let seen: { side: THREE.Side; defines: string[] }[] = []
     const renderer = {
       compile: vi.fn(() => {
         seen.push({ side: clouds.material.side, defines: Object.keys(clouds.material.defines) })
         return new Set<THREE.Material>()
       }),
     }
+    // In order by name, as faceCamera() draws them.
+    const ALL = [
+      ['CLOUD_FLAT'],
+      ['CLOUD_FLAT', 'CLOUD_UNDER_SHEET'],
+      ['CLOUD_FLAT', 'CLOUD_TYPED'],
+      ['CLOUD_FLAT', 'CLOUD_TYPED', 'CLOUD_UNDER_SHEET'],
+    ]
+    const compiled = () => seen.map(({ side, defines }) => [side, defines.join('+')].join(' ')).sort()
+    const expected = ALL.map((defines) => [THREE.BackSide, defines.join('+')].join(' ')).sort()
     try {
       const version = clouds.material.version
       clouds.warmUnderSheet(renderer, mesh, main, new THREE.Scene())
-      expect(seen).toEqual([{ side: THREE.BackSide, defines: ['CLOUD_FLAT', 'CLOUD_UNDER_SHEET'] }])
+      expect(compiled()).toEqual(expected)
       expect(clouds.material.side).toBe(THREE.FrontSide)
       expect(Object.keys(clouds.material.defines)).toEqual(['CLOUD_FLAT'])
       expect(clouds.material.version).toBeGreaterThan(version)
-      // Already under it, its program is the one drawn.
+      // From under the sheet, typed, the same four, and back as it was.
+      clouds.uniforms.uCloudTyped.value = 1
       pose(main, mesh, 8, 0)
       clouds.faceCamera(mesh, main)
+      seen = []
       clouds.warmUnderSheet(renderer, mesh, main, new THREE.Scene())
-      expect(renderer.compile).toHaveBeenCalledTimes(1)
+      expect(compiled()).toEqual(expected)
+      expect(clouds.material.side).toBe(THREE.BackSide)
+      expect(Object.keys(clouds.material.defines)).toEqual(ALL[3])
+      // Each as faceCamera() draws it, under the sheet and just over it.
+      const over = CLOUD_FLAT_ALTITUDE * EARTH_KM_PER_UNIT + 1e-3
+      const drawn = new Set<string>()
+      for (const [altitude, typed] of [[8, 0], [over, 1], [over, 0], [8, 1]] as const) {
+        clouds.uniforms.uCloudTyped.value = typed
+        pose(main, mesh, altitude, 0)
+        clouds.faceCamera(mesh, main)
+        expect(clouds.material.side).toBe(THREE.BackSide)
+        drawn.add([THREE.BackSide, Object.keys(clouds.material.defines).join('+')].join(' '))
+      }
+      expect([...drawn].sort()).toEqual(expected)
     } finally {
       clearLimbView()
       clouds.dispose()

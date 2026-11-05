@@ -2197,9 +2197,10 @@ export interface CloudLayer {
    * `fine` where the depth buffer can draw FINE_DECK
    * (ship/ship-session.ts fineGroundDepth()). */
   faceCamera(mesh: THREE.Object3D, camera: THREE.Camera, fine?: boolean): void
-  /** Compiles the flat sheet's program from under it (CLOUD_UNDER_SHEET,
-   * which faceCamera() turns on), so that the first frame drawn there finds
-   * it linked; the relief shell has none. Only from a frame callback, as
+  /** Compiles the flat sheet's back faces' programs, from under it
+   * (CLOUD_UNDER_SHEET, which faceCamera() turns on) and over it, typed
+   * (CLOUD_TYPED) or not, so that the first frame drawn with each finds it
+   * linked; the relief shell has none. Only from a frame callback, as
    * ../ship/ship-warmup.ts compileSide(). */
   warmUnderSheet(
     renderer: Pick<THREE.WebGLRenderer, 'compile'>,
@@ -2372,6 +2373,8 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
         : CLOUD_REACH_RENDER_ORDER
     // The ease is its own program, so that without it the march pays nothing.
     const ease = !flat && prefersReducedMotion()
+    // The defines' version before they turn (sorted below where they do).
+    const definesFrom = material.version
     if (('FOG_EASE' in material.defines) !== ease) {
       if (ease) material.defines.FOG_EASE = ''
       else delete material.defines.FOG_EASE
@@ -2398,9 +2401,9 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
       else delete material.defines.CLOUD_UNDER_SHEET
       material.needsUpdate = true
     }
-    // The defines in order, as the warm-ups compile them (compileSide()):
-    // three keys a program by their order.
-    if (sortDefines(material.defines)) material.needsUpdate = true
+    // Where any turned, in order, as the warm-ups compile them
+    // (compileSide()): three keys a program by their order.
+    if (material.version !== definesFrom) sortDefines(material.defines)
     // And no draw where the view sees only the ground, every ray of which
     // the shader would end at once (SHEET_GROUND_SPHERE): zoomed all the way
     // in, looking down.
@@ -2472,9 +2475,15 @@ export function createCloudLayer(eclipse: EclipseShadow, flat: boolean): CloudLa
     uniforms.uCloudTops.value = types?.tops ?? neutralTypeTexture()
     uniforms.uCloudPrecip.value = types?.precip ?? neutralTypeTexture()
   }
+  // The back faces' programs, typed or not, under the sheet or not, from
+  // the defines as they are: all four, whichever this frame draws, as the
+  // types reach the clouds only later (real weather), and close zoom can
+  // start under the sheet.
   const warmUnderSheet: CloudLayer['warmUnderSheet'] = (renderer, mesh, camera, scene) => {
-    if (!flat || 'CLOUD_UNDER_SHEET' in material.defines) return
-    compileSide(renderer, mesh, THREE.BackSide, camera, scene, createWarmed(), (m) => m, ['CLOUD_UNDER_SHEET'])
+    if (!flat) return
+    for (const turned of [[], ['CLOUD_UNDER_SHEET'], ['CLOUD_TYPED'], ['CLOUD_TYPED', 'CLOUD_UNDER_SHEET']]) {
+      compileSide(renderer, mesh, THREE.BackSide, camera, scene, createWarmed(), (m) => m, turned)
+    }
   }
   return {
     material,
