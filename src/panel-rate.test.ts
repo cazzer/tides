@@ -93,6 +93,12 @@ describe('panelDrawDue', () => {
       expect(frames.slice(1).every((drew) => drew.length <= 1)).toBe(true)
     })
   }
+  it("draws each panel 15 times a second, in turn, at the idle cap's 30 Hz (tides-0oi.31)", () => {
+    const { frames, counts } = run(30, 10, period)
+    for (const n of counts.values()) expect(n / 10).toBeGreaterThanOrEqual(14.5)
+    for (const n of counts.values()) expect(n / 10).toBeLessThanOrEqual(15.5)
+    expect(frames.slice(1).every((drew) => drew.length <= 1)).toBe(true)
+  })
   it('draws both on the first frame (nothing held yet)', () => {
     expect(run(60, 1, period).frames[0]).toEqual(['top', 'bottom'])
   })

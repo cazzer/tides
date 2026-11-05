@@ -6,6 +6,7 @@ import {
   createPacedDprState,
   DEFAULT_PACED_DPR_CONFIG,
   hasPacedTuning,
+  pacedDprSettled,
   parsePacedDprConfig,
   stepPacedDpr,
   viewKindOf,
@@ -15,6 +16,7 @@ import {
   type PacedDprState,
 } from '../paced-dpr'
 import { createGpuFrameTimer, type GpuFrameTimer } from './gpu-frame-timer'
+import { idleCapHeld, reportDprSettled } from '../idle-driver'
 import { isLowQuality } from '../quality'
 import { useStore } from '../store'
 
@@ -136,7 +138,7 @@ function runFixed(get: GetRoot, dpr: number): () => void {
  * the frame before it (from the global before-effect to the after-effect,
  * around every root's and View's useFrame and draws) go to stepPacedDpr.
  */
-function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
+export function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   const state = createPacedDprState(window.devicePixelRatio, get().viewport.dpr, config)
   const debug = window.__dprctl
   if (debug) debug.state = state
@@ -145,7 +147,7 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   let cpuStart = 0
   let lastCpuMs = 0
   // One sample object, refilled each frame.
-  const sample: PacedDprSample = { at: 0, intervalMs: 0, cpuMs: 0, lagMs: 0, kind: 'system', nativeDpr: 1 }
+  const sample: PacedDprSample = { at: 0, intervalMs: 0, cpuMs: 0, lagMs: 0, kind: 'system', nativeDpr: 1, capped: false }
 
   const unsubscribeBefore = addEffect((timestamp) => {
     const startedAt = performance.now()
@@ -159,7 +161,10 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
       sample.lagMs = Math.max(0, startedAt - timestamp)
       sample.kind = viewKindOf(useStore.getState())
       sample.nativeDpr = window.devicePixelRatio
+      // The idle cap's 30 Hz isn't a missed frame: paused while it holds (tides-0oi.31).
+      sample.capped = idleCapHeld()
       stepPacedDpr(state, sample, config)
+      reportDprSettled(pacedDprSettled(state, config))
       // Every change, and the events that keep the ratio ('capped').
       if (state.last !== before && state.last) {
         debug?.changes.push(state.last)
@@ -181,9 +186,12 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   const unsubscribeAfter = addAfterEffect(() => {
     lastCpuMs = performance.now() - cpuStart
   })
+  // Climbing until it says otherwise: the idle cap waits (tides-0oi.31).
+  reportDprSettled(false)
   return () => {
     unsubscribeBefore()
     unsubscribeAfter()
+    reportDprSettled(true)
   }
 }
 

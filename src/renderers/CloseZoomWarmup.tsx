@@ -4,6 +4,7 @@ import type * as THREE from 'three'
 import { useStore } from '../store'
 import { useSceneShown } from './scene-shown'
 import { whenIdle } from '../ship/limb-detail'
+import { registerIdleBusy } from '../idle-driver'
 import { coldWork, createWarmed, runWarmup, type Warmup } from '../ship/ship-warmup'
 
 // How often Earth is searched for new maps and materials, once warming.
@@ -35,6 +36,8 @@ export function CloseZoomWarmup() {
   const armed = useRef<'no' | 'waiting' | 'yes'>('no')
   const cancelIdle = useRef<(() => void) | null>(null)
   const sceneShown = useSceneShown()
+  // A warm-up a frame: while some are queued the idle cap waits (tides-0oi.31), so they don't take twice as long.
+  useEffect(() => registerIdleBusy(() => armed.current === 'yes' && queue.current.length > 0), [])
   useEffect(
     () => () => {
       cancelIdle.current?.()
