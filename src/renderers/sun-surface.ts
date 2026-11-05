@@ -5,6 +5,7 @@ import coronaBakeFragment from '../shaders/sun-bake/corona.frag'
 import plasmaBakeFragment from '../shaders/sun-bake/plasma.frag'
 import { activeRegions, type ActiveRegion } from './sun-activity'
 import { COMPILE_TIMEOUT_MS, withTimeout } from './compile-gate'
+import { compileAndWait } from './compile-wait'
 
 /*
  * The disc's EUV detail and churn and the corona's pattern, baked once
@@ -14,7 +15,7 @@ import { COMPILE_TIMEOUT_MS, withTimeout } from './compile-gate'
  * frame; this bakes one face per frame for the first eighteen frames after
  * load, and then the disc costs three cube lookups per pixel and the
  * corona one. Its three programs are compiled in the background
- * (compileAsync) as the bakes are made, and the bake waits for them, so
+ * (compileAndWait) as the bakes are made, and the bake waits for them, so
  * its first face doesn't link them on the frame (tides-0oi.6). One bake per renderer, shared by every view that draws the
  * Sun, kept for the renderer's life (~13 MB on the low tier): views mount and unmount as panels change, and rebaking each
  * time would cost more than holding it.
@@ -124,7 +125,7 @@ function precompile(renderer: THREE.WebGLRenderer, bake: CubeBake): Promise<unkn
   const previousLevel = renderer.getActiveMipmapLevel()
   renderer.setRenderTarget(bake.target, 0)
   try {
-    return renderer.compileAsync(bake.scene, bake.camera.children[0] as THREE.Camera)
+    return compileAndWait(renderer, bake.scene, bake.camera.children[0] as THREE.Camera)
   } finally {
     renderer.setRenderTarget(previous, previousFace, previousLevel)
   }

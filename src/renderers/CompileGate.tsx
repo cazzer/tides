@@ -6,6 +6,7 @@ import { materialsOf, texturesOf } from '../ship/ship-warmup'
 import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
 import { SceneGateContext, type SceneGate } from './scene-shown'
 import { shownOnly, visitDrawn } from './compile-view'
+import { compileAndWait } from './compile-wait'
 
 /**
  * Compile rounds in a row that must find nothing new, with every asset
@@ -34,7 +35,7 @@ interface CompileGateProps {
  * compiled and linked (tides-0oi.6). Cold, three links each program at its
  * first draw, one after another, and the first frame blocked the main thread
  * 1.47 s. Instead, while the loading screen is up, it compiles the scene
- * with compileAsync (KHR_parallel_shader_compile links in the background),
+ * with compileAndWait (KHR_parallel_shader_compile links in the background),
  * again until a round finds nothing new and the assets are in, then gives
  * each map its upload and each linked program its first use a few per frame
  * (WARM_BUDGET_MS), and only then shows the scene. A compile that doesn't
@@ -140,7 +141,8 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
     root.visible = true
     try {
       if (takesLater) tookLater.current = true
-      linked = gl.compileAsync(
+      linked = compileAndWait(
+        gl,
         shownOnly(root, takesLater, () => (deferred = true)),
         camera,
         scene
@@ -184,7 +186,7 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
     if (held && state && !tookLater.current) {
       tookLater.current = true
       try {
-        state.gl.compileAsync(shownOnly(root, true), state.camera, state.scene).catch(() => {})
+        compileAndWait(state.gl, shownOnly(root, true), state.camera, state.scene).catch(() => {})
       } catch {
         // The draw compiles it.
       }
