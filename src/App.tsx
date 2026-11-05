@@ -33,6 +33,7 @@ import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
 import { DepthInfo } from './renderers/DepthInfo'
+import { GlowPass } from './renderers/glow/GlowPass'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { mainCameraPose, rememberMainCameraPose, takeMainCameraRestore } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
@@ -271,6 +272,9 @@ export default function App() {
             <FallingPrecip eye="system" />
             <MainCameraSession />
             <DemoPlayer />
+            {/* The Sun's, the city lights', the glint's and the aurora's
+                glow over this View (tides-64u); the side panels have none. */}
+            <GlowPass />
           </Panel>
         )}
         {!shipMode && showPanel('top') && (

@@ -24,6 +24,7 @@ import { releaseFlightTextures } from '../renderers/useFlightTexture'
 import { useShipAudio } from './audio/bind-ship-audio'
 import { ShipSound } from './audio/ShipSound'
 import { ShipCues } from './audio/ShipCues'
+import { GlowPass } from '../renderers/glow/GlowPass'
 
 // After the exit has rendered, focus the ship button if the three-body view
 // came back with one (it carries data-ship-button); otherwise focus falls to
@@ -123,6 +124,8 @@ export function ShipView({ children }: { children: ReactNode }) {
         <ShipWarmup />
         <ShipSound />
         <ShipCues />
+        {/* The bright sources' glow over the ship view (tides-64u). */}
+        <GlowPass />
       </View>
       {/* The speed blur (tides-5lj) right over the View, before every other
           overlay: no z-index, so the controls, HUD, exit button, credit,
