@@ -12,7 +12,8 @@ const GLINT_GLOW_PEAK = 4
 /** The glint's Blinn-Phong exponent: the hot core in the middle of the
  * drawn sheen (water.ts roughens it by the wind), which is what blooms. */
 const GLINT_GLOW_SHININESS = 900
-/** Cloud cover (the map's alpha) over which the glow under it is mostly gone. */
+/** Cloud cover (the map's G, as cloudShaders.ts cloudColumn reads it) over
+ * which the glow under it is mostly gone. */
 const GLOW_CLOUD_COVER: readonly [number, number] = [0.35, 0.95]
 /** Of the glow, what the thickest cloud lets through. */
 const GLOW_CLOUD_FLOOR = 0.25
@@ -98,8 +99,6 @@ export interface EarthGlowProps {
   /** The ground's night map and its water (specular) mask. */
   lightsMap: THREE.Texture
   seaMask: THREE.Texture
-  /** The Sun's direction in the ground's frame (the cloud layer's uSunDir). */
-  sun: THREE.IUniform<THREE.Vector3>
   /** The cloud layer's map and its drift. */
   cloudMap: THREE.IUniform<THREE.Texture | null>
   cloudShift: THREE.IUniform<number>
@@ -124,15 +123,25 @@ function setInputs(material: THREE.ShaderMaterial, lightsMap: THREE.Texture, sea
   material.uniforms.uClouds.value = clouds ? 1 : 0
 }
 
-// The Sun's direction, from the ground's frame to the world's.
-function setSunWorld(material: THREE.ShaderMaterial, sun: THREE.IUniform<THREE.Vector3>, mesh: THREE.Object3D) {
-  ;(material.uniforms.uSunWorld.value as THREE.Vector3).copy(sun.value).transformDirection(mesh.matrixWorld)
+const position = new THREE.Vector3()
+const turn = new THREE.Quaternion()
+const scale = new THREE.Vector3()
+
+// The Sun's direction for this draw, from the stand-in's own world matrix
+// (the ground's frame): the Sun is the scene's origin, as sunInEarthFrame
+// (EarthRenderer.tsx) has it. Not the cloud layer's uniform, which the
+// View's scene render sets after the glow has drawn.
+function setSun(material: THREE.ShaderMaterial, mesh: THREE.Object3D) {
+  mesh.matrixWorld.decompose(position, turn, scale)
+  const world = material.uniforms.uSunWorld.value as THREE.Vector3
+  world.copy(position).negate().normalize()
+  ;(material.uniforms.uNightLightsSun.value as THREE.Vector3).copy(world).applyQuaternion(turn.invert())
 }
 
 const lightsColor = new THREE.Color(CITY_LIGHTS_COLOR).multiplyScalar(CITY_LIGHTS_INTENSITY * CITY_GLOW_GAIN)
 const sunWorld = new THREE.Vector3()
 
-function EarthGlowOn({ geometry, lightsMap, seaMask, sun, cloudMap, cloudShift, clouds }: EarthGlowProps) {
+function EarthGlowOn({ geometry, lightsMap, seaMask, cloudMap, cloudShift, clouds }: EarthGlowProps) {
   const mesh = useRef<THREE.Mesh>(null)
   useGlowSource(mesh, GLOW_ORDER.opaque)
   const material = useMemo(
@@ -146,7 +155,7 @@ function EarthGlowOn({ geometry, lightsMap, seaMask, sun, cloudMap, cloudShift, 
           uCloudMap: cloudMap,
           uCloudShift: cloudShift,
           uClouds: { value: clouds ? 1 : 0 },
-          uNightLightsSun: sun,
+          uNightLightsSun: { value: new THREE.Vector3(1, 0, 0) },
           uLights: { value: lightsColor },
           uSunWorld: { value: sunWorld.clone() },
         },
@@ -158,18 +167,16 @@ function EarthGlowOn({ geometry, lightsMap, seaMask, sun, cloudMap, cloudShift, 
   )
   useLayoutEffect(() => setInputs(material, lightsMap, seaMask, clouds), [material, lightsMap, seaMask, clouds])
   useEffect(() => () => material.dispose(), [material])
-  useEffect(() => {
-    mesh.current?.layers.set(GLOW_LAYER)
-  }, [])
 
   return (
     <mesh
       ref={mesh}
+      layers={GLOW_LAYER}
       geometry={geometry}
       material={material}
       raycast={() => null}
       onBeforeRender={() => {
-        if (mesh.current) setSunWorld(material, sun, mesh.current)
+        if (mesh.current) setSun(material, mesh.current)
       }}
     />
   )

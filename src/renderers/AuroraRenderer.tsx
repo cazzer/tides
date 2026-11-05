@@ -238,9 +238,6 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
   const glowGroup = useRef<THREE.Group>(null)
   const glowBand = useRef<THREE.Mesh>(null)
   useGlowSource(glowGroup, GLOW_ORDER.additive)
-  useEffect(() => {
-    glowGroup.current?.traverse((o) => o.layers.set(GLOW_LAYER))
-  }, [glowMaterial])
   const pickGlowFaces: THREE.Object3D['onBeforeRender'] = (_renderer, _scene, camera, _geometry, shader) => {
     pickShellFaces(mesh.current!, shader, camera)
     setGain(shader, AURORA_GAIN * AURORA_GLOW_GAIN)
@@ -284,6 +281,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
             <mesh
               key={i}
               ref={i === 2 ? glowBand : undefined}
+              layers={GLOW_LAYER}
               geometry={geometry}
               material={glowMaterial}
               visible={i !== 2}

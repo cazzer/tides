@@ -197,7 +197,7 @@ function SurfaceMesh({
         onBeforeRender={sun.onBeforeRender}
       />
       {/* Hides the glow behind it, a planet across the Sun (tides-64u.3). */}
-      <GlowOccluder radius={planet.radius} />
+      <GlowOccluder geometry={geometry} />
     </>
   )
 }

@@ -88,9 +88,6 @@ function SunGlowOn({ radius }: { radius: number }) {
   )
   useEffect(() => () => geometry.dispose(), [geometry])
   useEffect(() => () => material.dispose(), [material])
-  useEffect(() => {
-    mesh.current?.layers.set(GLOW_LAYER)
-  }, [])
 
   const onBeforeRender = useCallback(
     (renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
@@ -102,6 +99,7 @@ function SunGlowOn({ radius }: { radius: number }) {
   return (
     <mesh
       ref={mesh}
+      layers={GLOW_LAYER}
       geometry={geometry}
       material={material}
       onBeforeRender={onBeforeRender}

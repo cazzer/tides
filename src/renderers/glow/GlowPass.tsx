@@ -5,9 +5,12 @@ import { glowOn } from './glowSources'
 
 /**
  * Before drei's View draws (its useFrame runs at priority 1) and after the
- * bodies, cameras and controls have moved (priority 0 and below).
+ * camera's last move for the frame: the ship's settle on the ground
+ * (SHIP_SETTLE_PRIORITY, 0.75), its shake (SHIP_SHAKE_PRIORITY, 0.9) and the
+ * sky view's draw (AtmosphereRenderer's SKY_VIEW_PRIORITY, 0.9). Drawn any
+ * earlier, the halos would be off their sources by the shake.
  */
-export const GLOW_PREPARE_PRIORITY = 0.5
+export const GLOW_PREPARE_PRIORITY = 0.95
 /** After every View has drawn. */
 export const GLOW_COMPOSITE_PRIORITY = 2
 
@@ -34,7 +37,12 @@ function GlowPassOn() {
       created.dispose()
     }
   }, [])
-  useFrame((state) => pass.current?.prepare(state.gl, state.scene, state.camera, track), GLOW_PREPARE_PRIORITY)
+  // The canvas's box as drei's View reads it (the root's size), so the glow
+  // lands on the View's own pixels, with no layout read of the canvas.
+  useFrame(
+    (state) => pass.current?.prepare(state.gl, state.scene, state.camera, track, state.previousRoot?.getState().size ?? state.size),
+    GLOW_PREPARE_PRIORITY
+  )
   useFrame((state) => pass.current?.composite(state.gl), GLOW_COMPOSITE_PRIORITY)
   return null
 }

@@ -446,7 +446,6 @@ export default function EarthRenderer({
         geometry={groundSphere}
         lightsMap={nightTexture}
         seaMask={specularMap}
-        sun={clouds.uniforms.uSunDir}
         cloudMap={clouds.uniforms.uCloudMap}
         cloudShift={clouds.uniforms.uCloudShift}
         clouds={!hideClouds}

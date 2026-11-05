@@ -129,7 +129,13 @@ function levelTarget(size: Size): THREE.WebGLRenderTarget {
 
 export interface GlowPass {
   /** Before the View draws: the sources into the glow target, then the blur. */
-  prepare(gl: THREE.WebGLRenderer, scene: THREE.Object3D, camera: THREE.Camera, track: Element | null | undefined): void
+  prepare(
+    gl: THREE.WebGLRenderer,
+    scene: THREE.Object3D,
+    camera: THREE.Camera,
+    track: Element | null | undefined,
+    canvas: { left: number; top: number; width: number; height: number }
+  ): void
   /** After the View drew: the blur over the View's rect, if prepare made one. */
   composite(gl: THREE.WebGLRenderer): void
   dispose(): void
@@ -201,12 +207,20 @@ export function createGlowPass(): GlowPass {
   }
 
   return {
-    prepare(gl, scene, camera, track) {
+    prepare(gl, scene, camera, track, canvas) {
       ready = null
       const sources = glowSourcesOf(scene)
       if (!sources.length || !track) return
-      const viewport = viewViewport(gl.domElement.getBoundingClientRect(), track.getBoundingClientRect())
+      const viewport = viewViewport(canvas, track.getBoundingClientRect())
       if (!viewport) return
+      // drei sets the aspect only as the View draws, after this: after a
+      // resize, the first frame's glow would land at the old one.
+      const perspective = camera as THREE.PerspectiveCamera
+      const aspect = viewport.width / viewport.height
+      if (perspective.isPerspectiveCamera && perspective.aspect !== aspect) {
+        perspective.aspect = aspect
+        perspective.updateProjectionMatrix()
+      }
       let any = false
       for (const s of sources) if (shownInWorld(s.object)) any = true
       if (!any) return

@@ -35,7 +35,7 @@ export default function MoonRenderer({ diameter, texture }: MoonRendererProps) {
         />
       </mesh>
       {/* Hides the glow behind it, Earth's lights or the Sun (tides-64u.3). */}
-      <GlowOccluder radius={diameter} />
+      <GlowOccluder geometry={geometry} />
     </>
   )
 }
