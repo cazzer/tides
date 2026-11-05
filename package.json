@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "convert:stars": "node scripts/convertStars.mjs",
     "textures:2k": "bash scripts/resize-textures-2k.sh",
-    "textures:bodies": "bash scripts/build-body-maps.sh"
+    "textures:bodies": "bash scripts/build-body-maps.sh",
+    "perf:phone": "node scripts/phone-perf/run.mjs"
   },
   "dependencies": {
     "@emotion/styled": "^11.14.1",
