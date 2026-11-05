@@ -4,6 +4,7 @@
 //   MODE=vram     POSES=sea,earth node body-maps.cjs            # V.live (resident bytes) + three's texture count
 //   MODE=pixels   POSES=sea,earth node body-maps.cjs            # fullMaps (B) vs proxies (A), proxyBlack control
 //   MODE=approach TARGET=mars PHONE=0 node body-maps.cjs        # paused A/Bs at RADII px, then a live approach
+//   MODE=entry | MODE=exit | MODE=reentry [PLANETS_BETWEEN=0]    # ship entry, exit and re-entry (see each below)
 //
 // Env: POSES (names below, or a JSON pose for H.openShip), SETTLE ms (15000), TARGET (a planet or moon key),
 // RADII (comma list, default 1,4,7,7.9), FROM/TO px and SECONDS for the live approach (2 -> 20 over 8 s),
@@ -42,6 +43,15 @@ const BODIES = () => {
       if (!u || !u.value || seen.has(o) || !o.material.uniforms.uDetailStyle) return
       seen.add(o)
       out.push(o)
+    })
+    return out
+  }
+  B.nameOf = (m) => nameOf(m, m.material.uniforms.uMap.value)
+  // Every globe material's mesh, textured or not yet (a moon whose uMap is still null).
+  B.meshesAll = () => {
+    const out = [], seen = new Set()
+    for (const c of H.frame) c.scene.traverse((o) => {
+      if (o.isMesh && o.material?.uniforms?.uMap && o.material.uniforms.uDetailStyle && !seen.has(o)) { seen.add(o); out.push(o) }
     })
     return out
   }
@@ -179,6 +189,129 @@ async function holdAt(page, target) {
   }, target)
 }
 
+
+// Entering, leaving and re-entering ship mode through the store (as ship-session.ts's patches do), with the system
+// view's planets on (`planets`), and a per-frame log of what the bodies bind.
+const enterShip = (page) => page.evaluate(() => {
+  const s = __H.store.getState()
+  __H.store.setState({ shipMode: true, shipSaved: { cameraFocus: s.cameraFocus, timeScale: s.timeScale, showPlanets: s.showPlanets }, showPlanets: true, timeScale: 1, jumpDate: null })
+})
+const exitShip = (page, planets) => page.evaluate((planets) => {
+  const s = __H.store.getState()
+  __H.store.setState({ shipMode: false, shipSaved: null, ...s.shipSaved, showPlanets: planets })
+}, planets)
+// n frames of { dt, live, moons bound to nothing, proxies, fulls, and `watch`'s tier and radius }.
+const record = (page, n, watch) => page.evaluate(([n, watch]) => new Promise((resolve) => {
+  const rows = []
+  let last = performance.now(), mesh = null
+  const step = (now) => {
+    const ms = __B.meshesAll()
+    const moons = ms.filter((m) => m.userData.focus)
+    if (watch && !mesh) mesh = __B.meshes().find((m) => __B.nameOf(m) === watch) || null
+    const row = { dt: +(now - last).toFixed(1), live: window.__vram.live, moonsBare: moons.filter((m) => !m.material.uniforms.uMap.value).length,
+      moons: moons.length, ship: !!__H.store.getState().shipMode, views: __H.frame.length, proxies: ms.filter((m) => m.material.uniforms.uMap.value?.userData?.fullMap).length, bodies: ms.length }
+    if (mesh) {
+      const tex = mesh.material.uniforms.uMap.value
+      row.watch = tex?.userData?.fullMap ? 'proxy' : tex?.image?.src ? 'full' : 'other'
+      row.r = +__B.radiusPx(mesh).toFixed(2)
+      const cam = __B.camera(), T = __H.T
+      cam.updateMatrixWorld()
+      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
+      row.on = new T.Frustum().setFromProjectionMatrix(new T.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse))
+        .intersectsSphere(mesh.geometry.boundingSphere.clone().applyMatrix4(mesh.matrixWorld))
+      // Not yet placed by its orbit: drawn at the Sun's spot, not where it is.
+      row.placed = new T.Vector3().setFromMatrixPosition(mesh.matrixWorld).lengthSq() > 0
+    }
+    rows.push(row)
+    last = now
+    if (rows.length < n) requestAnimationFrame(step)
+    else resolve(rows)
+  }
+  requestAnimationFrame(step)
+}), [n, watch])
+const MB = (b) => +(b / 1048576).toFixed(2)
+const steps = (rows) => rows.flatMap((row, i) => (i > 0 && row.live !== rows[i - 1].live ? [[i, MB(row.live - rows[i - 1].live)]] : []))
+
+// (a) Entry from the system view (planets on): no moon bound to nothing in the first frames, then a same-tick A/B
+// ~10 frames in, facing Earth with Jupiter and its moons in view.
+async function entry(phone) {
+  const { browser, page } = await H.launch({ phone })
+  try {
+    await H.open(page, { planets: '1' }, { waitMs: 16000 })
+    await H.hook(page)
+    await page.evaluate(BODIES)
+    await faceEarth(page, POSES.earthJupiter)
+    await enterShip(page)
+    const rows = await record(page, +(process.env.FRAMES || 10), null)
+    await page.evaluate(() => __H.pause())
+    const list = await page.evaluate(() => __B.list())
+    const pixels = await page.evaluate(() => __H.pixels(['fullMaps', 'proxyBlack']))
+    await page.evaluate(() => __H.resume())
+    const more = await record(page, 60, null)
+    const all = rows.concat(more)
+    // The ship's frames: one View (the system view has three, and draws until the ship View mounts).
+    const drawn = all.filter((r) => r.moons > 0 && r.ship && r.views <= 2)
+    console.log(JSON.stringify({ mode: 'entry', phone, framesWithMoons: drawn.length, firstMoonFrame: all.findIndex((r) => r.moons > 0 && r.ship && r.views <= 2), viewsByFrame: all.slice(0, 12).map((r) => `${r.ship ? 's' : 'x'}${r.views}:${r.moons}/${r.moonsBare}`),
+      maxMoonsBare: Math.max(...drawn.map((r) => r.moonsBare)), bareFrames: drawn.filter((r) => r.moonsBare > 0).length,
+      atAB: { frame: rows.length, ...summary(list) }, pixels }))
+  } finally {
+    await browser.close()
+  }
+}
+
+// (b) Leaving a flight that retired the maps for the system view with planets on: frame times and the maps'
+// return, one upload a frame.
+async function exit(phone) {
+  const { browser, page } = await openAt(POSES.sea, { phone })
+  try {
+    await H.settle(page, SETTLE)
+    const before = await page.evaluate(() => ({ live: window.__vram.live, ...((l) => ({ proxy: l.filter((b) => b.tier === 'proxy').length }))(__B.list()) }))
+    const rows = await H.withGpuLock(async () => {
+      const pending = record(page, +(process.env.FRAMES || 180), null)
+      await exitShip(page, true)
+      return pending
+    })
+    const dts = rows.slice(1).map((r) => r.dt)
+    const st = steps(rows)
+    const after = await page.evaluate(() => ({ proxies: __B.meshesAll().filter((m) => m.material.uniforms.uMap.value?.userData?.fullMap).length, bodies: __B.meshesAll().length }))
+    console.log(JSON.stringify({ mode: 'exit', phone, before: { liveMB: MB(before.live), proxy: before.proxy },
+      maxDt: Math.max(...dts), over50: dts.filter((d) => d > 50).length, over33: dts.filter((d) => d > 33.4).length,
+      top5: [...dts].sort((a, b) => b - a).slice(0, 5), over33At: dts.flatMap((d, i) => (d > 33.4 ? [`${i + 1}:${d}`] : [])),
+      firstRestore: st.length ? st[0][0] : null, liveSteps: st, maxStepMB: Math.max(0, ...st.map(([, m]) => m)),
+      framesWithProxies: rows.filter((r) => r.proxies > 0).length, after, liveAfterMB: MB(rows[rows.length - 1].live) }))
+  } finally {
+    await browser.close()
+  }
+}
+
+// (c) Re-entry held near Jupiter (RPX px, default 20): Jupiter binds its full map from its first placed frame.
+// PLANETS_BETWEEN=0 leaves the system view's planets off between flights, so Jupiter is still retired at re-entry.
+async function reentry(phone) {
+  const between = process.env.PLANETS_BETWEEN !== '0'
+  const { browser, page } = await openAt(POSES.sea, { phone })
+  try {
+    await H.settle(page, SETTLE)
+    await exitShip(page, between)
+    await page.waitForTimeout(6000)
+    const retiredAtEntry = await page.evaluate(async () => {
+      const mod = await import('/tides/src/ship/body-map-residency.ts')
+      const m = __B.meshesAll().find((x) => __B.nameOf(x) === 'jupiter')
+      return m ? mod.isRetiredMap(m.material.uniforms.uMap.value?.userData?.fullMap ?? m.material.uniforms.uMap.value) : 'no system-view jupiter'
+    })
+    await holdAt(page, 'jupiter')
+    await page.evaluate((r) => { window.__approachPx = r }, +(process.env.RPX || 20))
+    await enterShip(page)
+    const rows = await record(page, 12, 'jupiter')
+    await page.evaluate(() => __H.pause())
+    const pixels = await page.evaluate(() => __H.pixels(['fullMaps', 'proxyBlack']))
+    const list = await page.evaluate(() => __B.list())
+    console.log(JSON.stringify({ mode: 'reentry', phone, planetsBetween: between, retiredAtEntry,
+      frames: rows.map((r) => `${r.watch ?? '-'}@${r.r ?? '-'}${r.on ? ':on' : ':off'}${r.placed ? '' : ':unplaced'}`), jupiter: list.find((b) => b.body === 'jupiter'), pixels }))
+  } finally {
+    await browser.close()
+  }
+}
+
 async function approach(phone) {
   const target = process.env.TARGET || 'mars'
   const { browser, page } = await openAt(POSES.sea, { phone })
@@ -248,5 +381,8 @@ async function approach(phone) {
   const mode = process.env.MODE || 'vram'
   const phone = process.env.PHONE !== '0'
   if (mode === 'approach') await approach(phone)
+  else if (mode === 'entry') await entry(phone)
+  else if (mode === 'exit') await exit(phone)
+  else if (mode === 'reentry') await reentry(phone)
   else await vramOrPixels(mode, phone)
 })()
