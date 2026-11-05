@@ -381,6 +381,66 @@ describe('paced dpr', () => {
   })
 })
 
+describe('paced dpr under the idle cap (tides-0oi.31)', () => {
+  const sample = (at: number, intervalMs: number, capped: boolean) => ({
+    at,
+    intervalMs,
+    cpuMs: 4,
+    lagMs: 0.5,
+    kind: 'system' as ViewKind,
+    nativeDpr: 3,
+    capped,
+  })
+
+  it('leaves the state unchanged for capped samples, however long they run', () => {
+    const { state, clock, log } = setup(3, 2)
+    sim(state, clock, log, { s: 30, gpu: () => 6 })
+    const dpr = state.dpr
+    const count = state.count
+    const settleUntil = state.settleUntil
+    // 60 s of 30 Hz frames, every one a 'miss' at the 60 Hz target.
+    for (let i = 0; i < 1800; i++) {
+      clock.at += 1000 / 30
+      stepPacedDpr(state, sample(clock.at, 1000 / 30, true))
+    }
+    expect(state.dpr).toBe(dpr)
+    expect(state.count).toBe(count)
+    expect(state.settleUntil).toBe(settleUntil)
+    expect(state.paused).toBe(true)
+  })
+
+  it('restarts the window on the first uncapped sample, then settles and keeps the ratio at 60 Hz', () => {
+    const { state, clock, log } = setup(3, 2)
+    sim(state, clock, log, { s: 30, gpu: () => 6 })
+    const dpr = state.dpr
+    for (let i = 0; i < 300; i++) {
+      clock.at += 1000 / 30
+      stepPacedDpr(state, sample(clock.at, 1000 / 30, true))
+    }
+    clock.at += 1000 / 60
+    stepPacedDpr(state, sample(clock.at, 1000 / 60, false))
+    expect(state.paused).toBe(false)
+    expect(state.count).toBe(0)
+    expect(state.settleUntil).toBe(clock.at + DEFAULT_PACED_DPR_CONFIG.settleMs)
+    const changes = log.length
+    sim(state, clock, log, { s: 30, gpu: () => 6 })
+    expect(state.dpr).toBe(dpr)
+    expect(log.slice(changes).filter((c) => c.reason === 'drop' || c.reason === 'fast')).toEqual([])
+    expect(state.count).toBeGreaterThan(0)
+  })
+
+  it('would drop at 30 Hz frames without the flag', () => {
+    const { state, clock, log } = setup(3, 2)
+    sim(state, clock, log, { s: 30, gpu: () => 6 })
+    const dpr = state.dpr
+    for (let i = 0; i < 1800; i++) {
+      clock.at += 1000 / 30
+      stepPacedDpr(state, sample(clock.at, 1000 / 30, false))
+    }
+    expect(state.dpr).toBeLessThan(dpr)
+  })
+})
+
 describe('viewKindOf', () => {
   it('ranks a demo over ship mode over close zoom', () => {
     expect(viewKindOf({ demo: {}, shipMode: true, closeZoom: true })).toBe('demo')

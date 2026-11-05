@@ -37,6 +37,7 @@ import { GlowPass } from './renderers/glow/GlowPass'
 import { GlowView } from './renderers/glow/glowSources'
 import { CompileGate } from './renderers/CompileGate'
 import { HeldPanel, usePanelsPaced } from './renderers/HeldPanel'
+import { IdleCameraWatch, IdleRate, rootFrameloop } from './renderers/IdleRate'
 import { isLowQuality } from './quality'
 import { allShownReady } from './renderers/compile-gate'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
@@ -219,6 +220,8 @@ export default function App() {
       <div className={single || shipMode ? 'viewports viewports--single' : 'viewports'}>
         <RootCanvas
           shadows
+          // 'never' with ?idlehz=auto on the low tier: IdleRate drives the frame (tides-0oi.31).
+          frameloop={rootFrameloop()}
           eventSource={document.getElementById('root')}
           className="canvas"
           gl={{
@@ -237,6 +240,7 @@ export default function App() {
           <RenderDiagnostics />
           <DepthPrecisionProbe />
           <AdaptivePixelRatio />
+          <IdleRate sceneReady={sceneReady} />
           <View.Port />
         </RootCanvas>
         {shipMode && (
@@ -297,6 +301,7 @@ export default function App() {
             {/* Rain and snow round the eye in close zoom (tides-bl3.8). */}
             <FallingPrecip eye="system" />
             <MainCameraSession />
+            <IdleCameraWatch />
             <DemoPlayer />
             {/* The Sun's, the city lights', the glint's and the aurora's
                 glow over this View (tides-64u); the side panels have none. */}

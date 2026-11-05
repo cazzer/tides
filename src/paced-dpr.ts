@@ -283,6 +283,8 @@ export interface PacedDprState {
   cpuHoldUntil: number
   /** The last change or event, for the log. */
   last: PacedDprChange | null
+  /** Paused by capped samples (the idle cap's frames): the next uncapped one restarts the window. */
+  paused: boolean
 }
 
 function ceilingOf(kind: ViewKind, nativeDpr: number, config: PacedDprConfig): number {
@@ -341,6 +343,7 @@ export function createPacedDprState(
     cpuProbeMedian: 0,
     cpuHoldUntil: -Infinity,
     last: null,
+    paused: false,
   }
 }
 
@@ -479,6 +482,11 @@ export interface PacedDprSample {
   lagMs: number
   kind: ViewKind
   nativeDpr: number
+  /**
+   * The idle cap holds this frame (tides-0oi.31): its intervals are the
+   * cap's, not the GPU's, so the sample is ignored and the ratio kept.
+   */
+  capped?: boolean
 }
 
 /**
@@ -493,6 +501,20 @@ export function stepPacedDpr(
   config: PacedDprConfig = DEFAULT_PACED_DPR_CONFIG,
 ): PacedDprState {
   const { at, intervalMs, cpuMs, kind } = sample
+  if (sample.capped) {
+    state.paused = true
+    return state
+  }
+  if (state.paused) {
+    // Back from the cap: the window starts again from this frame (a view
+    // switch at the same time takes the switch's own restart below).
+    state.paused = false
+    state.lastLagMs = sample.lagMs
+    if (kind === state.kind) {
+      restart(state, at, config)
+      return state
+    }
+  }
   const lagMs = Math.max(state.lastLagMs, sample.lagMs)
   state.lastLagMs = sample.lagMs
   if (kind !== state.levelsKind || sample.nativeDpr !== state.levelsNative) {

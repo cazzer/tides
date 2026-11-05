@@ -15,6 +15,7 @@ import {
   type PacedDprState,
 } from '../paced-dpr'
 import { createGpuFrameTimer, type GpuFrameTimer } from './gpu-frame-timer'
+import { idleCapHeld } from './IdleRate'
 import { isLowQuality } from '../quality'
 import { useStore } from '../store'
 
@@ -145,7 +146,7 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   let cpuStart = 0
   let lastCpuMs = 0
   // One sample object, refilled each frame.
-  const sample: PacedDprSample = { at: 0, intervalMs: 0, cpuMs: 0, lagMs: 0, kind: 'system', nativeDpr: 1 }
+  const sample: PacedDprSample = { at: 0, intervalMs: 0, cpuMs: 0, lagMs: 0, kind: 'system', nativeDpr: 1, capped: false }
 
   const unsubscribeBefore = addEffect((timestamp) => {
     const startedAt = performance.now()
@@ -159,6 +160,8 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
       sample.lagMs = Math.max(0, startedAt - timestamp)
       sample.kind = viewKindOf(useStore.getState())
       sample.nativeDpr = window.devicePixelRatio
+      // The idle cap's 30 Hz isn't a missed frame: paused while it holds (tides-0oi.31).
+      sample.capped = idleCapHeld()
       stepPacedDpr(state, sample, config)
       // Every change, and the events that keep the ratio ('capped').
       if (state.last !== before && state.last) {

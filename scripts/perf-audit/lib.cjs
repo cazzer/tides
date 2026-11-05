@@ -323,8 +323,10 @@ const IN_PAGE = async () => {
   H.earth = () => store.getState().earth?.current
   // Stop/restart R3F's loop: pause after settling so this page draws nothing while others time (replays still work).
   H.root = rootState
-  H.pause = () => H.root().setFrameloop('never')
-  H.resume = () => H.root().setFrameloop('always')
+  // With ?idlehz=auto the frameloop is already 'never' and IdleRate's rAF driver draws (tides-0oi.31): hold that
+  // instead (setFrameloop would also zero the clock under it).
+  H.pause = () => (window.__idleRate ? window.__idleRate.hold(true) : H.root().setFrameloop('never'))
+  H.resume = () => (window.__idleRate ? window.__idleRate.hold(false) : H.root().setFrameloop('always'))
   H.freeze = () => {
     store.getState().setTimeScale?.(0)
     for (const o of H.renderables()) {
