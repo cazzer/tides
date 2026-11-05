@@ -29,21 +29,31 @@
 //     the Uranian moons' southern hemispheres; their north is a smooth fill.
 import type { MoonKey } from './moon-keys'
 
-const LOW = import.meta.glob<string>('../assets/moons/*-1k.jpg', {
+//
+// Each JPEG has a GPU-compressed KTX2 sibling (tides-0oi.14,
+// scripts/build-body-maps.sh), loaded in its place where the browser takes
+// it (renderers/planetTextures.ts).
+const JPEG = import.meta.glob<string>('../assets/moons/*.jpg', {
   eager: true,
   query: '?url',
   import: 'default',
 })
-const HIGH = import.meta.glob<string>('../assets/moons/*-2k.jpg', {
+const KTX2 = import.meta.glob<string>('../assets/moons/*.ktx2', {
   eager: true,
   query: '?url',
   import: 'default',
 })
 
+export interface MoonTextureUrls {
+  jpeg: string
+  /** Undefined only for a JPEG the build script hasn't been run on. */
+  ktx2: string | undefined
+}
+
 /** The moon's surface map: the 2k one unless `low` or there is none. */
-export function moonTextureUrl(key: MoonKey, low: boolean): string {
-  const high = HIGH[`../assets/moons/${key}-2k.jpg`]
-  const url = (!low && high) || LOW[`../assets/moons/${key}-1k.jpg`]
-  if (!url) throw new Error(`No surface map for ${key}`)
-  return url
+export function moonTextureUrls(key: MoonKey, low: boolean): MoonTextureUrls {
+  const name = !low && JPEG[`../assets/moons/${key}-2k.jpg`] ? `${key}-2k` : `${key}-1k`
+  const jpeg = JPEG[`../assets/moons/${name}.jpg`]
+  if (!jpeg) throw new Error(`No surface map for ${key}`)
+  return { jpeg, ktx2: KTX2[`../assets/moons/${name}.ktx2`] }
 }

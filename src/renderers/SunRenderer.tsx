@@ -17,7 +17,8 @@ import { SunProminences } from './SunProminences'
 import { SunSpicules } from './SunSpicules'
 import { eyeSky, EYE_AIRLESS_KM } from '../night-flight'
 import { sunDiscTint } from '../cloud-layer'
-import { eyeInObject, SUN_FRINGE, SUN_FRINGE_FADE_PX, SUN_SEGMENTS, SUN_SHELL } from './sun-spicules'
+import { eyeInObject, SUN_FRINGE, SUN_FRINGE_FADE_PX, SUN_SEGMENTS, SUN_SHELL, sunShellScale } from './sun-spicules'
+import { STOP_TOP_LEVEL_SHARE, bodySphereGeometry, useRetainedBodySphere, useSphereLevel } from '../ship/sphere-lod'
 
 // Outside the component: the react-hooks lint rejects mutating a memoised
 // material in place, as three's uniforms are meant to be.
@@ -31,8 +32,15 @@ function tick(surface: ReturnType<typeof sunSurface>, material: THREE.ShaderMate
 // the fringe's fade in device px, which its fwidth measures in, and the
 // air the eye sees the Sun through (night-flight.ts eyeSky), by its up in
 // the Sun's frame (sun/air.glsl); and the disc, for the sky (setSkyOverDisc()).
-function setView(material: THREE.ShaderMaterial, renderer: THREE.WebGLRenderer, camera: THREE.Camera, mesh: THREE.Object3D) {
-  const { uEyeObject, uDirObject, uFringeFadePx, uAirUp, uAirKm, uRadius } = material.uniforms
+function setView(
+  material: THREE.ShaderMaterial,
+  renderer: THREE.WebGLRenderer,
+  camera: THREE.Camera,
+  mesh: THREE.Object3D,
+  geometry: THREE.BufferGeometry
+) {
+  const { uEyeObject, uDirObject, uFringeFadePx, uAirUp, uAirKm, uRadius, uShell } = material.uniforms
+  uShell.value = geometry.userData.shell ?? SUN_SHELL
   eyeInObject(camera, mesh, uEyeObject.value, uDirObject.value)
   uFringeFadePx.value.set(...SUN_FRINGE_FADE_PX).multiplyScalar(renderer.getPixelRatio())
   uAirKm.value = eyeSky.heightKm
@@ -150,15 +158,14 @@ interface SunRendererProps {
 export default function SunRenderer({ diameter, interactive = false, coronaFade }: SunRendererProps) {
   // In ship mode only ShipView mounts a scene, so this is the ship's Sun.
   const shipMode = useStore((s) => s.shipMode)
-  // A plain sphere: the trace makes the limb exact, so no limb sphere.
-  const sphere = useMemo(() => {
-    const geometry = new THREE.SphereGeometry(diameter, ...SUN_SEGMENTS)
-    // Culled and picked by the shell the vertex shader draws.
-    geometry.computeBoundingSphere()
-    geometry.boundingSphere!.radius *= SUN_SHELL
-    return geometry
-  }, [diameter])
-  useEffect(() => () => sphere.dispose(), [sphere])
+  // A plain sphere: the trace makes the limb exact, so no limb sphere. Sized
+  // to the Sun on this View's screen (tides-0oi.16), each level shared by
+  // every View and drawn out to its own shell (sunShellScale), culled and
+  // picked by it; the top within the ship's stop.
+  const mesh = useRef<THREE.Mesh>(null)
+  const topSphere = useCallback(() => bodySphereGeometry(diameter, SUN_SEGMENTS, SUN_SHELL), [diameter])
+  const level = useSphereLevel(mesh, diameter, SUN_SEGMENTS, diameter * STOP_TOP_LEVEL_SHARE, topSphere)
+  const sphere = useRetainedBodySphere(diameter, level, sunShellScale(level))
   const gl = useThree((s) => s.gl)
   // The photosphere's and corona's baked detail, shared by every view on
   // this renderer.
@@ -226,10 +233,9 @@ export default function SunRenderer({ diameter, interactive = false, coronaFade 
   }, [surface, sceneShown])
   useLayoutEffect(() => waitFor(() => surface.done()), [surface, waitFor])
   useFrame((state) => tick(surface, sunMaterial, state.clock.elapsedTime))
-  const mesh = useRef<THREE.Mesh>(null)
   const onBeforeRender = useCallback(
-    (renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera) => {
-      if (mesh.current) setView(sunMaterial, renderer, camera, mesh.current)
+    (renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera, geometry: THREE.BufferGeometry) => {
+      if (mesh.current) setView(sunMaterial, renderer, camera, mesh.current, geometry)
     },
     [sunMaterial]
   )

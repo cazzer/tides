@@ -28,6 +28,9 @@ import {
   directionToUv,
   distanceToRadius,
   driftOffset,
+  MAX_DRIFT_STEP_S,
+  STATIC_DRIFT_PER_SECOND,
+  staticDriftStep,
   horizonDipSin,
   MAX_CLOUD_TOP_KM,
   maxTopKm,
@@ -171,6 +174,24 @@ describe('shadowCaster', () => {
 })
 
 describe('static cloud drift', () => {
+  it('drifts the old 0.0001 rad a frame at 60 fps', () => {
+    expect(Math.abs(staticDriftStep(1 / 60) - 0.0001)).toBeLessThan(1e-12)
+  })
+
+  it('drifts by the clock, not the frame count', () => {
+    let at60 = 0
+    for (let i = 0; i < 600; i++) at60 += staticDriftStep(1 / 60)
+    let at30 = 0
+    for (let i = 0; i < 300; i++) at30 += staticDriftStep(1 / 30)
+    expect(at30).toBeCloseTo(at60, 12)
+    expect(at60).toBeCloseTo(10 * STATIC_DRIFT_PER_SECOND, 12)
+  })
+
+  it('clamps a long frame (a hidden tab) to MAX_DRIFT_STEP_S', () => {
+    expect(staticDriftStep(5)).toBe(STATIC_DRIFT_PER_SECOND * MAX_DRIFT_STEP_S)
+    expect(staticDriftStep(-1)).toBe(0)
+  })
+
   it('maps the drift to a texture offset in [0, 1)', () => {
     expect(driftOffset(0)).toBe(0)
     expect(driftOffset(Math.PI)).toBeCloseTo(0.5)

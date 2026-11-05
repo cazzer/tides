@@ -51,6 +51,8 @@ describe('maxDpr and dprLevels', () => {
     expect(maxDpr(0.9)).toBe(1)
     expect(maxDpr(1.5)).toBe(1.5)
     expect(maxDpr(0)).toBe(1)
+    expect(maxDpr(3, 3)).toBe(3)
+    expect(maxDpr(3.5, 3)).toBe(3)
   })
 
   it('steps down by 0.25 to 1', () => {

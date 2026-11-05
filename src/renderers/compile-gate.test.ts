@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { afterRound, allShownReady, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, withTimeout } from './compile-gate'
+import * as THREE from 'three'
+import { afterRound, allShownReady, compilesAhead, phaseAfterUnmount, readyNow, assetsLoaded, drainWithin, warmMapJob, withTimeout } from './compile-gate'
+import { retireMap } from '../ship/body-map-residency'
 
 describe('withTimeout', () => {
   afterEach(() => {
@@ -85,16 +87,26 @@ describe('allShownReady', () => {
 
 describe('afterRound', () => {
   const round = (over: Partial<Parameters<typeof afterRound>[0]>) =>
-    afterRound({ outcome: 'done', added: false, loaded: true, quiet: 0, ...over }, 2)
+    afterRound({ outcome: 'done', added: false, loaded: true, quiet: 0, deferred: false, final: false, ...over }, 2)
 
   it('warms after two quiet rounds in a row', () => {
-    expect(round({ quiet: 0 })).toEqual({ next: 'compile', quiet: 1 })
-    expect(round({ quiet: 1 })).toEqual({ next: 'warm', quiet: 2 })
+    expect(round({ quiet: 0 })).toEqual({ next: 'compile', quiet: 1, final: false })
+    expect(round({ quiet: 1 })).toEqual({ next: 'warm', quiet: 2, final: false })
+  })
+
+  it('runs one last round with what was left out, then warms', () => {
+    expect(round({ quiet: 0, deferred: true })).toEqual({ next: 'compile', quiet: 1, final: false })
+    expect(round({ quiet: 1, deferred: true })).toEqual({ next: 'compile', quiet: 2, final: true })
+    expect(round({ quiet: 2, deferred: true, final: true, added: true })).toEqual({ next: 'warm', quiet: 2, final: true })
+  })
+
+  it('shows the scene when the last round times out', () => {
+    expect(round({ quiet: 2, final: true, outcome: 'timeout' })).toEqual({ next: 'reveal', quiet: 2, final: true })
   })
 
   it('starts the count again on a round that added programs or with assets still loading', () => {
-    expect(round({ quiet: 1, added: true })).toEqual({ next: 'compile', quiet: 0 })
-    expect(round({ quiet: 1, loaded: false })).toEqual({ next: 'compile', quiet: 0 })
+    expect(round({ quiet: 1, added: true })).toEqual({ next: 'compile', quiet: 0, final: false })
+    expect(round({ quiet: 1, loaded: false })).toEqual({ next: 'compile', quiet: 0, final: false })
   })
 
   it('shows the scene after a round that timed out', () => {
@@ -125,5 +137,28 @@ describe('phaseAfterUnmount', () => {
 
   it('leaves any other phase as it is', () => {
     expect(phaseAfterUnmount('warm')).toEqual({ phase: 'warm', unready: false })
+  })
+})
+
+describe('compilesAhead', () => {
+  it('compiles materials with nothing on the way', () => {
+    expect(compilesAhead([{ userData: {} }, { userData: { compileLater: false } }])).toBe(true)
+    expect(compilesAhead([])).toBe(true)
+  })
+
+  it('leaves an object to its draw while one of its materials waits for what changes its program', () => {
+    expect(compilesAhead([{ userData: {} }, { userData: { compileLater: true } }])).toBe(false)
+  })
+})
+
+describe('warmMapJob', () => {
+  it('uploads a map, but not one ship mode retired after the list was made (tides-0oi.34)', () => {
+    const gl = { initTexture: vi.fn() }
+    const kept = new THREE.Texture()
+    const retired = new THREE.Texture()
+    const jobs = [warmMapJob(gl, kept), warmMapJob(gl, retired)]
+    retireMap(retired)
+    for (const job of jobs) job()
+    expect(gl.initTexture.mock.calls).toEqual([[kept]])
   })
 })

@@ -11,7 +11,11 @@ import { glowOn } from './glowSources'
  * earlier, the halos would be off their sources by the shake.
  */
 export const GLOW_PREPARE_PRIORITY = 0.95
-/** After every View has drawn. */
+/**
+ * After every View has drawn. Below PANEL_COPY_PRIORITY (../../panel-rate.ts),
+ * which must stay the last frame callback: the side panels' copy takes their
+ * final pixels.
+ */
 export const GLOW_COMPOSITE_PRIORITY = 2
 
 /**

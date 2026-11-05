@@ -4,6 +4,7 @@
 // loading overlay (useProgress watches THREE.DefaultLoadingManager).
 import { useLoader, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
+import { canUseCompressedBodyMaps } from '../body-maps'
 
 // Sets the colour space and anisotropy on arrival: textures passed as
 // shader uniforms aren't tagged the way R3F tags material maps.
@@ -44,7 +45,90 @@ const dataTextureLoader = new PlanetTextureLoader(THREE.NoColorSpace, manager)
 export interface PlanetTextureOptions {
   /** False for non-colour data. Default true. */
   color?: boolean
+  /**
+   * Colour maps only: each url's GPU-compressed KTX2 sibling, if it has one
+   * (body-maps.ts), loaded in its place where the browser takes it.
+   */
+  compressed?: readonly (string | undefined)[]
 }
+
+/** Loads a JPEG (or PNG) colour map: `onLoad` gets it tagged sRGB. */
+export type ColorMapLoad = (
+  url: string,
+  anisotropy: number,
+  onLoad: (texture: THREE.Texture) => void,
+  onError: (err: unknown) => void
+) => void
+
+/** Loads a KTX2 map, rejecting where it can't. */
+export type CompressedMapLoad = (url: string, gl: THREE.WebGLRenderer) => Promise<THREE.Texture>
+
+let bodyKtx2: Promise<import('three/examples/jsm/loaders/KTX2Loader.js').KTX2Loader> | null = null
+
+// The loader and its transcoder are fetched with the first map that needs
+// them; a failed fetch is tried again by the next map.
+const loadBodyKtx2: CompressedMapLoad = async (url, gl) => {
+  bodyKtx2 ??= import('./ktx2Loader').then(
+    (m) => m.getKtx2Loader(gl),
+    (err: unknown) => {
+      bodyKtx2 = null
+      throw err
+    }
+  )
+  return (await bodyKtx2).loadAsync(url)
+}
+
+/**
+ * Colour maps by url (tides-0oi.14): a url with a KTX2 sibling (`ktx2For`)
+ * loads that where `gl` takes one of its GPU formats
+ * (canUseCompressedBodyMaps), the url itself everywhere else and wherever
+ * the KTX2 fails. `gl` and `anisotropy` are set before each load (useLoader's
+ * extensions, as PlanetTextureLoader's anisotropy is).
+ */
+export class BodyMapLoader extends THREE.Loader<THREE.Texture> {
+  anisotropy = 1
+  gl: THREE.WebGLRenderer | null = null
+  readonly ktx2For = new Map<string, string>()
+
+  constructor(
+    private readonly loadColor: ColorMapLoad,
+    private readonly loadCompressed: CompressedMapLoad = loadBodyKtx2
+  ) {
+    super()
+  }
+
+  load(
+    url: string,
+    onLoad: (texture: THREE.Texture) => void,
+    _onProgress?: (event: ProgressEvent) => void,
+    onError?: (err: unknown) => void
+  ): void {
+    const { anisotropy, gl } = this
+    const ktx2 = this.ktx2For.get(url)
+    const fallBack = () => this.loadColor(url, anisotropy, onLoad, (err) => onError?.(err))
+    if (!ktx2 || !gl || !canUseCompressedBodyMaps((ext) => gl.extensions.has(ext))) {
+      fallBack()
+      return
+    }
+    this.loadCompressed(ktx2, gl).then(
+      (texture) => {
+        // Its url, which a compressed texture otherwise doesn't keep (debugging, the perf-audit harness).
+        texture.name = ktx2
+        texture.anisotropy = anisotropy
+        onLoad(texture)
+      },
+      (err: unknown) => {
+        console.warn(`Compressed map ${ktx2} failed to load; using ${url}`, err)
+        fallBack()
+      }
+    )
+  }
+}
+
+const bodyMapLoader = new BodyMapLoader((url, anisotropy, onLoad, onError) => {
+  colorTextureLoader.anisotropy = anisotropy
+  colorTextureLoader.load(url, onLoad, undefined, onError)
+})
 
 /**
  * Loads textures, null where a url is undefined. Suspends while they load.
@@ -53,18 +137,20 @@ export interface PlanetTextureOptions {
  */
 export function usePlanetTextures(
   urls: readonly (string | undefined)[],
-  { color = true }: PlanetTextureOptions = {}
+  { color = true, compressed }: PlanetTextureOptions = {}
 ): (THREE.Texture | null)[] {
   const defined = urls.filter((url): url is string => url !== undefined)
   if (defined.length === 0) throw new Error('usePlanetTextures needs a url')
+  compressed?.forEach((ktx2, i) => {
+    const url = urls[i]
+    if (ktx2 && url) bodyMapLoader.ktx2For.set(url, ktx2)
+  })
+  const gl = useThree((s) => s.gl)
   const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
-  const loaded = useLoader(
-    color ? colorTextureLoader : dataTextureLoader,
-    defined,
-    (loader) => {
-      loader.anisotropy = maxAnisotropy
-    }
-  )
+  const loaded = useLoader(color ? bodyMapLoader : dataTextureLoader, defined, (loader) => {
+    loader.anisotropy = maxAnisotropy
+    if (loader instanceof BodyMapLoader) loader.gl = gl
+  })
   return urls.map((url) => (url === undefined ? null : loaded[defined.indexOf(url)]))
 }
 
@@ -92,12 +178,7 @@ export function canFlipBitmaps(ua: string): boolean {
  * the body first shows (the moons, MoonBodies). Like usePlanetTextures, it
  * stays off the app's loading overlay.
  */
-export function loadColorTexture(
-  url: string,
-  anisotropy: number,
-  onLoad: (texture: THREE.Texture) => void,
-  onError: (err: unknown) => void
-): void {
+export const loadColorTexture: ColorMapLoad = (url, anisotropy, onLoad, onError) => {
   if (!bitmapLoader) {
     colorTextureLoader.anisotropy = anisotropy
     colorTextureLoader.load(url, onLoad, undefined, onError)
@@ -116,4 +197,24 @@ export function loadColorTexture(
     undefined,
     onError
   )
+}
+
+const moonMapLoader = new BodyMapLoader(loadColorTexture)
+
+/**
+ * loadColorTexture for a body map with a KTX2 sibling (`ktx2Url`), which
+ * it loads instead where `gl` takes it (BodyMapLoader).
+ */
+export function loadBodyMap(
+  jpegUrl: string,
+  ktx2Url: string | undefined,
+  gl: THREE.WebGLRenderer,
+  anisotropy: number,
+  onLoad: (texture: THREE.Texture) => void,
+  onError: (err: unknown) => void
+): void {
+  if (ktx2Url) moonMapLoader.ktx2For.set(jpegUrl, ktx2Url)
+  moonMapLoader.gl = gl
+  moonMapLoader.anisotropy = anisotropy
+  moonMapLoader.load(jpegUrl, onLoad, undefined, onError)
 }

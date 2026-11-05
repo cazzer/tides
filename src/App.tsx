@@ -34,7 +34,10 @@ import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
 import { DepthInfo } from './renderers/DepthInfo'
 import { GlowPass } from './renderers/glow/GlowPass'
+import { GlowView } from './renderers/glow/glowSources'
 import { CompileGate } from './renderers/CompileGate'
+import { HeldPanel, usePanelsPaced } from './renderers/HeldPanel'
+import { isLowQuality } from './quality'
 import { allShownReady } from './renderers/compile-gate'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { mainCameraPose, rememberMainCameraPose, takeMainCameraRestore } from './main-camera-session'
@@ -193,8 +196,12 @@ export default function App() {
   // (CompileGate); the clock and the opening wait for it.
   const shownViews = shipMode ? ['ship'] : PANEL_VALUES.filter(showPanel)
   if (!sceneReady && allShownReady(shownViews, readyViews)) setSceneReady(true)
+  // The low tier's side panels redraw at the panel rate (tides-0oi.18).
+  const sidePanelsPaced = isLowQuality() && !single
   const panelProps = (panelKey: PanelKey) => ({
     gridArea: single ? 'main' : getGridArea(panelKey, mainPanel),
+    paced: sidePanelsPaced && panelKey !== 'main' && getGridArea(panelKey, mainPanel) !== 'main',
+    sceneReady,
     // Single layout swaps views through the ViewMenu instead.
     label: single
       ? undefined
@@ -273,16 +280,19 @@ export default function App() {
           >
             <MainCamera />
             <EnablePinLayerForCamera />
-            <Scene
-              background="black"
-              matrix={matrix}
-              interactive
-              mainSlot={panelProps('main').gridArea === 'main'}
-              showOrbitLabels
-              hold={!sceneReady}
-              onReady={() => markReady('main')}
-              onUnready={() => markUnready('main')}
-            />
+            {/* Its sources glow (GlowPass below); the side panels' don't. */}
+            <GlowView>
+              <Scene
+                background="black"
+                matrix={matrix}
+                interactive
+                mainSlot={panelProps('main').gridArea === 'main'}
+                showOrbitLabels
+                hold={!sceneReady}
+                onReady={() => markReady('main')}
+                onUnready={() => markUnready('main')}
+              />
+            </GlowView>
             <MainControls />
             {/* Rain and snow round the eye in close zoom (tides-bl3.8). */}
             <FallingPrecip eye="system" />
@@ -537,10 +547,15 @@ const Panel = forwardRef(
       panelKey,
       onSwap,
       overlay,
+      paced = false,
+      sceneReady,
       children,
       ...props
     }: {
       gridArea: string
+      /** A side panel, drawn at the panel rate by HeldPanel rather than by drei every frame (unless ?panelhz=60). */
+      paced?: boolean
+      sceneReady: boolean
       label?: string
       panelKey: PanelKey
       onSwap: (panelKey: PanelKey) => void
@@ -550,6 +565,8 @@ const Panel = forwardRef(
     },
     fref
   ) => {
+    // Read here, not in App, so the harness's switch doesn't re-render the Canvas.
+    const held = usePanelsPaced() && paced
     return (
       <div
         // @ts-ignore
@@ -559,6 +576,7 @@ const Panel = forwardRef(
         style={{ gridArea }}
       >
         <View
+          visible={!held}
           style={{
             position: 'absolute',
             top: 0,
@@ -568,6 +586,7 @@ const Panel = forwardRef(
           }}
         >
           {children}
+          {held && <HeldPanel ready={sceneReady} />}
         </View>
         {label && (
           <button

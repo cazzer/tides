@@ -5,6 +5,7 @@
 import { PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import mercuryTexture from '../../assets/mercury-2k.jpg'
+import mercuryCompressed from '../../assets/bodies/mercury-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
 
 // Mercury's real albedo is close to the Moon's, so it is lifted until its
@@ -23,6 +24,7 @@ export function Mercury({ planet }: PlanetRendererProps) {
     <PlanetSurface
       planet={planet}
       texture={mercuryTexture}
+      compressedTexture={mercuryCompressed}
       flightTexture="mercury"
       albedo={MERCURY_ALBEDO}
       detail={DETAIL}

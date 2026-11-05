@@ -318,6 +318,39 @@ export function sunVisibility(
   return 1 + (lit - 1) * smoothstep(quantum, quantum + w, horizon)
 }
 
+/** Float slack between the shader's blended horizon and its highest one
+ * (radians): the blend's weights sum to 1 only to rounding. */
+export const HORIZON_CLEAR_MARGIN = 1e-4
+
+/** The highest of the horizons, taken to the tangent scale k (radians). The
+ * Sun's, blended between the two either side of it, is never higher. */
+export function horizonTop(angles: ArrayLike<number>, k: number): number {
+  let top = 0
+  for (let d = 0; d < angles.length; d++) top = Math.max(top, angles[d])
+  return scaledAngle(top, k)
+}
+
+/**
+ * Whether a Sun at `elevation` (radians) clears every horizon and its soft
+ * edge, so is fully up whatever its azimuth (sunVisibility() is 1). The
+ * shader's gate (tides-0oi.17): past it, the shadow and the sky's occlusion
+ * are skipped.
+ */
+export function sunClearsHorizon(angles: ArrayLike<number>, k: number, elevation: number): boolean {
+  return elevation >= horizonTop(angles, k) + HORIZON_SOFTNESS + HORIZON_CLEAR_MARGIN
+}
+
+/**
+ * How much of the sky's occlusion (skyVisibility() to HORIZON_SKY_POWER) the
+ * shader applies: all of it until the Sun reaches the highest horizon's soft
+ * edge, none once it is past, smoothly across. An approximation, so the gate
+ * (sunClearsHorizon()) doesn't pop the occlusion off.
+ */
+export function skyOcclusionWeight(angles: ArrayLike<number>, k: number, elevation: number): number {
+  const top = horizonTop(angles, k)
+  return 1 - smoothstep(top - HORIZON_SOFTNESS, top + HORIZON_SOFTNESS, elevation)
+}
+
 /**
  * The share of a uniform, cosine-weighted sky the ground sees past its
  * horizons (the shader's, before its HORIZON_SKY_POWER): over each

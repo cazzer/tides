@@ -16,7 +16,11 @@ For frame-time profiles on a real phone, use `scripts/phone-perf/` on s02/perf-d
 | `body-maps.cjs` | Ship-mode body maps (tides-0oi.7): resident texture memory at named poses, same-tick A/B of the mip-tail proxies against their full maps, and approach runs that log the switch to a full map. |
 | `curtain.cjs` | tides-0oi.5's proof: the aurora curtain bake against the live noise (pixels, quality against a 128-step reference, timing per STEPS, board composites). |
 | `glow-pass-only.js` | In-page helpers for timing the glow pass. Frame replay is invalid on glow=1 frames. |
+| `sphere-lod.cjs` | tides-0oi.16's proof: the body spheres sized to the screen against the 128x128 top level, swapped in the same tick: levels per View, pixel stats and board composites per pose, triangles per View, paired timing. |
+| `glow-ab.cjs` | CLI: same-tick pixel A/B/A2 and paired wall timing of the real glow pass with one of its `glowPassSwitches` off (scissor, depth invalidate, compact targets), plus a no-glow control and board composites (tides-0oi.15). |
 | `cold-start.cjs` | CLI: the cold start's longest main-thread block, from a CDP Profiler run started before the page loads, with each program's first use, the Sun bake's first face, mip passes and the loading screen's reveal (tides-0oi.6). |
+| `dprctl.cjs` | tides-0oi.13's proof: the low tier's paced pixel ratio (`src/paced-dpr.ts`) end to end with vsync on, each phase under the GPU lock. The system view climbs to dpr 3; x30 CPU throttling doesn't drop it; a fill-heavy quad drops it to 1.5-1.75 and it climbs back once the quad is removed. Logs `window.__dprctl.changes` and the longest frame after each change. Tune the controller with `DPRCTL` (the `?dprctl=key:val,...` value; `off` and `fixed:x` pin the ratio). |
+| `panel-rate.cjs` | tides-0oi.18's proof: the low tier's side panels at the panel rate (`src/panel-rate.ts`, `src/renderers/HeldPanel.tsx`). `MODE=pixels` steps frames by hand at one tick: drei's own draw vs the paced draw frame vs the held frames after it (0 px), again after a pixel ratio change, plus a control. `MODE=time` times paired blocks of real rAF frames, pacing on vs off, split into draw and held frames (`VSYNC=0` for unthrottled frame intervals). `MODE=replay` replays recorded frames at one tick: drei's, a held one, a paced draw with its copies. `MODE=board` writes 12-frame strips of the two panels. |
 
 ## Setup
 
@@ -85,6 +89,18 @@ A pair's `from` is a string (every occurrence) or `{ re, flags }`.
 - `K`, `N`: renders per round and number of rounds.
 - `SHOT=<png>`: screenshot the pose. Check it before trusting a number.
 - `NOTIME=1`: pixels only, no timing.
+
+## The glow pass: exact? how much?
+
+```bash
+cd scripts/perf-audit
+VARS=noScissor,glowOff PARAMS='{"quality":"high"}' NOTIME=1 node glow-ab.cjs
+VARS=noScissor,noInvalidate,half,glowOff PARAMS='{"quality":"low","glow":"1"}' K=24 N=16 node glow-ab.cjs
+```
+
+It draws a fresh `createGlowPass()` around the recorded View draws, so it measures the shipped code, not a port.
+A vs B is a switch off against all of them on; `glowOff` is the control (no glow at all) and the glow's total cost.
+`PASSONLY=1` times the pass without the View draws, where the composite's fill shows; read `dWall`.
 
 ## Cold start: how long does the main thread block?
 

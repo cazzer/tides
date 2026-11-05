@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { GLARE_FADE_PX } from '../glare-geometry'
 import { GLOW_LAYER, GLOW_SCALE } from './glow'
-import { GLOW_ORDER, glowOn, useGlowSource } from './glowSources'
+import { GLOW_ORDER, useGlowOn, useGlowSource } from './glowSources'
 import { sunGlowWeight } from './sun-glow'
 
 /** [TUNE] The Sun's glow, linear, at the disc's centre (limb-darkened out). */
@@ -66,7 +66,7 @@ function setSunGlow(
  * Sun's group.
  */
 export function SunGlow({ radius }: { radius: number }) {
-  return glowOn() ? <SunGlowOn radius={radius} /> : null
+  return useGlowOn() ? <SunGlowOn radius={radius} /> : null
 }
 
 function SunGlowOn({ radius }: { radius: number }) {

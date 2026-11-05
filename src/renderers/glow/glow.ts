@@ -99,3 +99,92 @@ export function viewViewport(canvas: Box, track: Box): ViewViewport | null {
   }
   return { left, bottom, width: track.width, height: track.height }
 }
+
+/**
+ * How far past its sources the glow reaches, in glow-target px, with
+ * `levels` blur levels: four of the coarsest level's texels (tides-0oi.15,
+ * audit glow-2). The kernels' strict reach is 123-152 px at 5 levels (by
+ * the source's phase on the coarse grid; at most 1.5(2^L - 1) +
+ * 1.75(2^(L+1) - 4) = 151.5), but past this much the blur of a unit source
+ * texel is under 1e-10 against a peak of 5e-2, six orders of magnitude below
+ * an 8-bit step, so the composite stops here. glow-reach.test.ts emulates
+ * the blur and holds that bound.
+ */
+export function glowReachPx(levels: number): number {
+  return 4 * 2 ** levels
+}
+
+/** A box on a View, CSS px from the View's bottom left (GL's way up). */
+export interface ScreenBox {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+// The tangent rays' tans (sphereScreenBox), as scratch: called per source
+// mesh per frame.
+let tanLo = 0
+let tanHi = 0
+
+// tan of the two tangent rays from the eye to a circle `radius` round a
+// centre `u` across and `depth` ahead (depth > radius).
+function tangents(u: number, depth: number, radius: number): void {
+  const d2r2 = depth * depth - radius * radius
+  const t = Math.sqrt(u * u + d2r2)
+  tanLo = (u * depth - radius * t) / d2r2
+  tanHi = (u * depth + radius * t) / d2r2
+}
+
+/**
+ * The box a sphere (centre in view space, three's camera looking down -z)
+ * covers on a View of `view` CSS px under the perspective `projection`
+ * (Matrix4.elements), written into `out`. The tangent bounds per axis, so it
+ * holds off axis, where a sphere projects to an ellipse longer than its
+ * centre's radius. False (`out` untouched) when the sphere reaches the eye's
+ * plane: no finite box bounds it.
+ */
+export function sphereScreenBox(
+  centre: { x: number; y: number; z: number },
+  radius: number,
+  projection: ArrayLike<number>,
+  view: Size,
+  out: ScreenBox
+): boolean {
+  const depth = -centre.z
+  if (!(depth > radius)) return false
+  // ndc = scale * tan - offset (the frustum's skew, 0 when symmetric).
+  tangents(centre.x, depth, radius)
+  out.x0 = ((projection[0] * tanLo - projection[8]) * 0.5 + 0.5) * view.width
+  out.x1 = ((projection[0] * tanHi - projection[8]) * 0.5 + 0.5) * view.width
+  tangents(centre.y, depth, radius)
+  out.y0 = ((projection[5] * tanLo - projection[9]) * 0.5 + 0.5) * view.height
+  out.y1 = ((projection[5] * tanHi - projection[9]) * 0.5 + 0.5) * view.height
+  return true
+}
+
+/**
+ * The part of `viewport` (canvas CSS px) the glow can reach, written into
+ * `out`: `box` (View px, or 'all' for the whole View) grown by `margin` px,
+ * clamped to the View and rounded outward. False when that is empty:
+ * nothing in reach glows on this View.
+ */
+export function glowCompositeRect(box: ScreenBox | 'all', margin: number, viewport: ViewViewport, out: ViewViewport): boolean {
+  if (box === 'all') {
+    out.left = viewport.left
+    out.bottom = viewport.bottom
+    out.width = viewport.width
+    out.height = viewport.height
+    return true
+  }
+  const x0 = Math.max(0, Math.floor(box.x0 - margin))
+  const y0 = Math.max(0, Math.floor(box.y0 - margin))
+  const x1 = Math.min(viewport.width, Math.ceil(box.x1 + margin))
+  const y1 = Math.min(viewport.height, Math.ceil(box.y1 + margin))
+  if (!(x1 > x0 && y1 > y0)) return false
+  out.left = viewport.left + x0
+  out.bottom = viewport.bottom + y0
+  out.width = x1 - x0
+  out.height = y1 - y0
+  return true
+}

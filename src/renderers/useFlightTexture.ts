@@ -18,8 +18,6 @@ import {
 
 let loader: Promise<KTX2Loader> | null = null
 let cache: FlightTextureCache | null = null
-/** This flight's loads still in progress on `loader`. */
-const loading = new Set<Promise<unknown>>()
 
 // The colour space comes from each file's KTX2 header, sRGB (pinned by
 // flight-textures.test.ts).
@@ -28,7 +26,7 @@ async function loadFlightTexture(
   gl: THREE.WebGLRenderer,
   isCurrent: () => boolean
 ): Promise<THREE.Texture> {
-  loader ??= import('./ktx2Loader').then((m) => m.createFlightKtx2Loader(gl))
+  loader ??= import('./ktx2Loader').then((m) => m.getKtx2Loader(gl))
   const texture = await (await loader).loadAsync(url)
   if (isCurrent()) {
     texture.anisotropy = gl.capabilities.getMaxAnisotropy()
@@ -39,26 +37,16 @@ async function loadFlightTexture(
 }
 
 function flightCache(gl: THREE.WebGLRenderer): FlightTextureCache {
-  return (cache ??= createFlightTextureCache((url, isCurrent) => {
-    const load = loadFlightTexture(url, gl, isCurrent)
-    loading.add(load)
-    const settle = () => loading.delete(load)
-    load.then(settle, settle)
-    return load
-  }))
+  return (cache ??= createFlightTextureCache((url, isCurrent) => loadFlightTexture(url, gl, isCurrent)))
 }
 
-/** Disposes the flight maps and the transcoder's worker (ship exit). */
+/**
+ * Disposes the flight maps (ship exit). The KTX2 loader is the page's
+ * (getKtx2Loader), shared with the body maps, so it stays.
+ */
 export function releaseFlightTextures(): void {
   cache?.release()
   cache = null
-  // A disposed KTX2Loader still transcodes a file it was fetching, in a
-  // worker nothing would then terminate: let those loads finish first.
-  const done = Promise.allSettled([...loading])
-  loading.clear()
-  const released = loader
-  loader = null
-  void done.then(() => released?.then((l) => l.dispose(), () => {}))
 }
 
 /** This device's URL for `key`, or undefined where the tier is off. */

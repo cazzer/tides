@@ -26,6 +26,7 @@ import { composePatches, createEclipseShadow, type EclipseShadow, type MaterialP
 import { attachSeaIce, seaIceSurface, showSeaIceFrames } from '../renderers/seaIceLayers'
 import { globeStencil } from '../renderers/surface/surface-scale'
 import { useSceneShown } from '../renderers/scene-shown'
+import { compileAndWait } from '../renderers/compile-wait'
 import { useLoadedSeaIce, useSeaIce, type SeaIceData } from './sea-ice-data'
 import { HUGHES_E, ICE_SRGB, MASK_HEIGHT, MASK_NORTH, MASK_NORTH_ROWS, MASK_PER_DEG, MASK_SOUTH, NORTH_GRID, OCEAN_SRGB, RHO_SCALE, SOUTH_GRID, seaIceDay, seaIceFrames } from './sea-ice'
 
@@ -371,7 +372,7 @@ function SeaIceShell({ radius, data, handleRef }: { radius: number; data: SeaIce
 }
 
 /**
- * Links the shell's program off the frame (compileAsync) and uploads its
+ * Links the shell's program off the frame (compileAndWait) and uploads its
  * mask (7 MB and its mips) now, not on the first frame it shows; calls
  * `done` once linked, or if linking fails (the first draw links it then).
  * Returns the cancel. Module level, so the objects from useThree aren't
@@ -389,7 +390,7 @@ function warmIce(
   gl.initTexture(textures.mask)
   // compile() reads only what is visible.
   shell.visible = true
-  const linked = gl.compileAsync(shell, camera, scene)
+  const linked = compileAndWait(gl, shell, camera, scene)
   shell.visible = false
   const finish = () => {
     if (live) done()

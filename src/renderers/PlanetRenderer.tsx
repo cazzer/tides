@@ -96,6 +96,9 @@ export interface PlanetSurfaceProps {
   /** Equirectangular map, longitude 0 at the centre. Without one the
    * planet is its catalog colour. */
   texture?: string
+  /** `texture`'s GPU-compressed KTX2 (tides-0oi.14), loaded in its place
+   * where the browser takes it (planetTextures.ts). */
+  compressedTexture?: string
   /** Scales the texture (or colour) as MOON_ALBEDO does the Moon's. */
   albedo?: number
   /** Minnaert exponent: 1 (default) is Lambert, > 1 darkens the limb;
@@ -125,10 +128,9 @@ export function PlanetSurface(props: PlanetSurfaceProps) {
 }
 
 function TexturedSurface(props: PlanetSurfaceProps) {
-  const [map, ringMap] = usePlanetTextures([
-    props.texture,
-    props.ringShadow?.texture,
-  ])
+  const [map, ringMap] = usePlanetTextures([props.texture, props.ringShadow?.texture], {
+    compressed: [props.compressedTexture],
+  })
   const anchor = useRef<THREE.Group>(null)
   const flightMap = useFlightTexture(props.flightTexture, anchor, props.planet.radius)
   // Ship mode binds a small stand-in until the planet is a few px across.

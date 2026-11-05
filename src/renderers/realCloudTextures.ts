@@ -54,7 +54,10 @@ const buildImage = createCloudImageBuilder({
           name: 'clouds',
         }) as unknown as CloudWorker)
       : null,
-  inThread: (source, staticUrl, signal) => buildCloudImage(source, staticUrl, assets, signal),
+  // Off the worker the forecast base stays whole: deflating it would take a
+  // frame's time on the main thread (tides-0oi.23).
+  inThread: (source, staticUrl, signal) =>
+    buildCloudImage(source, staticUrl, assets, signal, { deflateBase: false }),
   assets,
 })
 

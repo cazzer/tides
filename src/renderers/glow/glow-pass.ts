@@ -7,13 +7,33 @@ import * as THREE from 'three'
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import {
   GLOW_LAYER,
+  GLOW_SCALE,
+  glowCompositeRect,
   glowLevelSizes,
+  glowReachPx,
   glowTargetSize,
+  sphereScreenBox,
   viewViewport,
+  type ScreenBox,
   type Size,
   type ViewViewport,
 } from './glow'
-import { glowSourcesOf, shownInWorld } from './glowSources'
+import { glowSourcesOf, shownInWorld, type GlowSource } from './glowSources'
+
+/**
+ * The pass's savings, each on by default; scripts/perf-audit/glow-ab.cjs
+ * turns one off to render before and after in the same tick and time it
+ * (tides-0oi.15).
+ * scissor: the composite only over what the sources' glow can reach.
+ * invalidateDepth: the glow target's depth is dropped once the sources have
+ * drawn, so a tiled GPU never writes it back to memory.
+ * compactTargets: R11F_G11F_B10F targets (4 bytes a texel) for RGBA16F's 8,
+ * where they are renderable (EXT_color_buffer_float).
+ */
+export const glowPassSwitches = { scissor: true, invalidateDepth: true, compactTargets: true }
+
+/** gl.DEPTH_ATTACHMENT, as invalidateFramebuffer takes it. */
+const DEPTH_ATTACHMENT = [0x8d00]
 
 /**
  * How much of each coarser level comes back up into the finer one: under 1
@@ -105,6 +125,9 @@ const compositeFragment = /* glsl */ `
   }
 `
 
+/** The blur's kernels as GLSL, for glow-reach.test.ts's emulation. */
+export const glowBlurShaders = { down: downFragment, up: upFragment }
+
 function quadMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUniform>, extra: Partial<THREE.ShaderMaterialParameters> = {}) {
   return new THREE.ShaderMaterial({
     vertexShader: quadVertex,
@@ -117,14 +140,22 @@ function quadMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUn
   })
 }
 
-function levelTarget(size: Size): THREE.WebGLRenderTarget {
-  return new THREE.WebGLRenderTarget(size.width, size.height, {
+/**
+ * A float colour target. Compact: R11F_G11F_B10F, half RGBA16F's bytes and
+ * bandwidth, a 6-bit mantissa (5 in blue) for 10, and no alpha, which nothing
+ * in the glow reads. Both render and blend under EXT_color_buffer_float.
+ */
+function glowTarget(size: Size, compact: boolean, depthBuffer: boolean): THREE.WebGLRenderTarget {
+  const target = new THREE.WebGLRenderTarget(size.width, size.height, {
     type: THREE.HalfFloatType,
-    depthBuffer: false,
+    format: compact ? THREE.RGBFormat : THREE.RGBAFormat,
+    depthBuffer,
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
     generateMipmaps: false,
   })
+  if (compact) target.texture.internalFormat = 'R11F_G11F_B10F'
+  return target
 }
 
 export interface GlowPass {
@@ -142,11 +173,89 @@ export interface GlowPass {
 }
 
 const clearColor = new THREE.Color()
+// sourcesBox's scratch: it runs per frame, so no arrays, boxes or closures.
+const sphere = new THREE.Sphere()
+const meshBox: ScreenBox = { x0: 0, y0: 0, x1: 0, y1: 0 }
+const unionBox: ScreenBox = { x0: 0, y0: 0, x1: 0, y1: 0 }
+const NONE = 0
+const SOME = 1
+const ALL = 2
+let boxState = NONE
+let boxCamera: THREE.Camera | null = null
+let boxView: Size = { width: 0, height: 0 }
+
+type Drawn = THREE.Object3D & {
+  isMesh?: boolean
+  isLine?: boolean
+  isPoints?: boolean
+  isSprite?: boolean
+  isInstancedMesh?: boolean
+  isSkinnedMesh?: boolean
+  isBatchedMesh?: boolean
+  geometry?: THREE.BufferGeometry
+}
+
+// One object the glow camera draws: a plain mesh widens the box by its
+// bounding sphere; anything else (instances, skinning, lines, points,
+// sprites) has no sphere that bounds what it draws, so the whole View.
+function addDrawn(o: Drawn): void {
+  if (!(o.isMesh || o.isLine || o.isPoints || o.isSprite)) return
+  if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || !o.geometry) {
+    boxState = ALL
+    return
+  }
+  if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere()
+  sphere.copy(o.geometry.boundingSphere!).applyMatrix4(o.matrixWorld)
+  sphere.center.applyMatrix4(boxCamera!.matrixWorldInverse)
+  if (!sphereScreenBox(sphere.center, sphere.radius, boxCamera!.projectionMatrix.elements, boxView, meshBox)) {
+    boxState = ALL
+  } else if (boxState === NONE) {
+    unionBox.x0 = meshBox.x0
+    unionBox.y0 = meshBox.y0
+    unionBox.x1 = meshBox.x1
+    unionBox.y1 = meshBox.y1
+    boxState = SOME
+  } else {
+    unionBox.x0 = Math.min(unionBox.x0, meshBox.x0)
+    unionBox.y0 = Math.min(unionBox.y0, meshBox.y0)
+    unionBox.x1 = Math.max(unionBox.x1, meshBox.x1)
+    unionBox.y1 = Math.max(unionBox.y1, meshBox.y1)
+  }
+}
+
+// What of `o`'s subtree the glow camera draws (visible, on GLOW_LAYER).
+function addSubtree(o: THREE.Object3D): void {
+  if (!o.visible || boxState === ALL) return
+  if (o.layers.isEnabled(GLOW_LAYER)) addDrawn(o)
+  const children = o.children
+  for (let i = 0; i < children.length; i++) addSubtree(children[i])
+}
+
+/**
+ * The View px the emitting sources cover (their meshes' bounding spheres on
+ * GLOW_LAYER): 'all' when one can't be bounded (around the eye, not a plain
+ * mesh, or not a perspective camera), null when none is in front. World
+ * matrices current. The box is scratch, good until the next call.
+ */
+export function sourcesBox(sources: readonly GlowSource[], camera: THREE.Camera, view: Size): ScreenBox | 'all' | null {
+  if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return 'all'
+  boxState = NONE
+  boxCamera = camera
+  boxView = view
+  for (let i = 0; i < sources.length; i++) {
+    const { object, emits } = sources[i]
+    if (emits && shownInWorld(object)) addSubtree(object)
+  }
+  boxCamera = null
+  return boxState === ALL ? 'all' : boxState === SOME ? unionBox : null
+}
 
 export function createGlowPass(): GlowPass {
   let target: THREE.WebGLRenderTarget | null = null
   let levels: THREE.WebGLRenderTarget[] = []
   let ready: ViewViewport | null = null
+  // The composite's scissor: where this frame's glow can land.
+  const reach: ViewViewport = { left: 0, bottom: 0, width: 0, height: 0 }
 
   const down = quadMaterial(downFragment, { tSource: { value: null }, uTexel: { value: new THREE.Vector2() } })
   const up = quadMaterial(
@@ -167,23 +276,19 @@ export function createGlowPass(): GlowPass {
   )
   const quad = new FullScreenQuad(down)
 
-  const size = (view: Size) => {
+  let compact = false
+  const size = (view: Size, wantCompact: boolean) => {
     const want = glowTargetSize(view)
-    if (target && target.width === want.width && target.height === want.height) return
+    if (target && target.width === want.width && target.height === want.height && compact === wantCompact) return
     target?.depthTexture?.dispose()
     target?.dispose()
     levels.forEach((l) => l.dispose())
-    target = new THREE.WebGLRenderTarget(want.width, want.height, {
-      type: THREE.HalfFloatType,
-      depthBuffer: true,
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      generateMipmaps: false,
-    })
+    compact = wantCompact
+    target = glowTarget(want, compact, true)
     // Float depth: reversed-Z (shaders/depth.glsl) keeps its precision from
     // the ship's metres out to the Sun only in a float buffer.
     target.depthTexture = new THREE.DepthTexture(want.width, want.height, THREE.FloatType)
-    levels = glowLevelSizes(want).map(levelTarget)
+    levels = glowLevelSizes(want).map((s) => glowTarget(s, compact, false))
   }
 
   const blur = (gl: THREE.WebGLRenderer, source: THREE.WebGLRenderTarget): THREE.Texture => {
@@ -225,8 +330,20 @@ export function createGlowPass(): GlowPass {
       for (const s of sources) if (shownInWorld(s.object)) any = true
       if (!any) return
       const ratio = gl.getPixelRatio()
-      size({ width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) })
+      size(
+        { width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) },
+        glowPassSwitches.compactTargets && gl.extensions.has('EXT_color_buffer_float')
+      )
       const glowTarget = target!
+      // The View hasn't drawn yet this frame: bring the camera's and each
+      // source's world matrices up to date, as its scene render would.
+      camera.updateWorldMatrix(true, false)
+      for (const { object } of sources) if (shownInWorld(object)) object.updateWorldMatrix(true, true)
+      // Where the glow can land: the sources' box grown by the blur's reach
+      // (glow-target px, so CSS px at this ratio). Nothing past it changes a
+      // canvas pixel, and nothing at all when the box misses the View.
+      const box = glowPassSwitches.scissor ? sourcesBox(sources, camera, viewport) : 'all'
+      if (!box || !glowCompositeRect(box, glowReachPx(levels.length) / (GLOW_SCALE * ratio), viewport, reach)) return
 
       const autoClear = gl.autoClear
       const alpha = gl.getClearAlpha()
@@ -236,16 +353,17 @@ export function createGlowPass(): GlowPass {
       gl.setRenderTarget(glowTarget)
       gl.setClearColor(0x000000, 0)
       gl.clear(true, true, false)
-      // The View hasn't drawn yet this frame: bring the camera's and each
-      // source's world matrices up to date, as its scene render would.
-      camera.updateWorldMatrix(true, false)
       camera.layers.set(GLOW_LAYER)
       for (const { object } of sources) {
-        if (!shownInWorld(object)) continue
-        object.parent?.updateWorldMatrix(true, false)
-        gl.render(object, camera)
+        if (shownInWorld(object)) gl.render(object, camera)
       }
       camera.layers.mask = mask
+      // Nothing reads the depth after the sources (the blur and composite
+      // sample colour only, and the next frame clears it).
+      if (glowPassSwitches.invalidateDepth) {
+        const context = gl.getContext() as WebGL2RenderingContext
+        context.invalidateFramebuffer(context.FRAMEBUFFER, DEPTH_ATTACHMENT)
+      }
       const glow = blur(gl, glowTarget)
       gl.setRenderTarget(null)
       gl.setClearColor(clearColor, alpha)
@@ -263,7 +381,7 @@ export function createGlowPass(): GlowPass {
       gl.autoClear = false
       gl.setRenderTarget(null)
       gl.setViewport(viewport.left, viewport.bottom, viewport.width, viewport.height)
-      gl.setScissor(viewport.left, viewport.bottom, viewport.width, viewport.height)
+      gl.setScissor(reach.left, reach.bottom, reach.width, reach.height)
       gl.setScissorTest(true)
       quad.material = composite
       quad.render(gl)

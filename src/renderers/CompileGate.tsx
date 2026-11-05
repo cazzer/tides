@@ -3,8 +3,10 @@ import { useFrame, type RootState } from '@react-three/fiber'
 import { useProgress } from '@react-three/drei'
 import type * as THREE from 'three'
 import { materialsOf, texturesOf } from '../ship/ship-warmup'
-import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
+import { afterRound, assetsLoaded, phaseAfterUnmount, readyNow, drainWithin, warmMapJob, withTimeout, COMPILE_TIMEOUT_MS, GATE_DEADLINE_MS, WARM_BUDGET_MS } from './compile-gate'
 import { SceneGateContext, type SceneGate } from './scene-shown'
+import { shownOnly, visitDrawn } from './compile-view'
+import { compileAndWait } from './compile-wait'
 
 /**
  * Compile rounds in a row that must find nothing new, with every asset
@@ -33,7 +35,7 @@ interface CompileGateProps {
  * compiled and linked (tides-0oi.6). Cold, three links each program at its
  * first draw, one after another, and the first frame blocked the main thread
  * 1.47 s. Instead, while the loading screen is up, it compiles the scene
- * with compileAsync (KHR_parallel_shader_compile links in the background),
+ * with compileAndWait (KHR_parallel_shader_compile links in the background),
  * again until a round finds nothing new and the assets are in, then gives
  * each map its upload and each linked program its first use a few per frame
  * (WARM_BUDGET_MS), and only then shows the scene. A compile that doesn't
@@ -58,6 +60,10 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
   const generation = useRef(0)
   const alive = useRef(false)
   const quiet = useRef(0)
+  // Whether the next round takes in the objects compilesAhead leaves out,
+  // and whether one has (afterRound).
+  const final = useRef(false)
+  const tookLater = useRef(false)
   const warm = useRef<(() => void)[]>([])
   const drawn = useRef(0)
   const deadline = useRef(Infinity)
@@ -100,7 +106,7 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
     const late = now > deadline.current
     if (late && phase.current !== 'shown') {
       console.warn(`CompileGate: not ready after ${GATE_DEADLINE_MS} ms; showing the scene`)
-      reveal(root)
+      reveal(root, state)
       return
     }
     switch (phase.current) {
@@ -112,7 +118,7 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
         if (warm.current.length === 0) reveal(root)
         return
       case 'reveal':
-        reveal(root)
+        reveal(root, state)
         return
       case 'shown':
         drawn.current++
@@ -127,12 +133,20 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
     const generationAtStart = generation.current
     const before = gl.info.programs?.length ?? 0
     const loaded = assetsLoaded(useProgress.getState())
+    const takesLater = final.current
+    let deferred = false
     let linked: Promise<unknown>
     // Shown only for the call: three gathers the lights it compiles
     // against from what is visible.
     root.visible = true
     try {
-      linked = gl.compileAsync(shownOnly(scene), camera, scene)
+      if (takesLater) tookLater.current = true
+      linked = compileAndWait(
+        gl,
+        shownOnly(root, takesLater, () => (deferred = true)),
+        camera,
+        scene
+      )
     } catch (error) {
       console.error('CompileGate: compile failed; showing the scene', error)
       phase.current = 'reveal'
@@ -146,8 +160,9 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
       (outcome) => {
         if (generation.current !== generationAtStart || phase.current !== 'compiling') return
         if (outcome === 'timeout') console.warn(`CompileGate: shaders not linked after ${COMPILE_TIMEOUT_MS} ms; showing the scene anyway`)
-        const round = afterRound({ outcome, added, loaded, quiet: quiet.current }, QUIET_ROUNDS)
+        const round = afterRound({ outcome, added, loaded, quiet: quiet.current, deferred, final: takesLater }, QUIET_ROUNDS)
         quiet.current = round.quiet
+        final.current = round.final
         if (round.next === 'warm') warm.current = warmJobs(gl, root)
         phase.current = round.next
       },
@@ -159,12 +174,23 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
     )
   }
 
-  function reveal(root: THREE.Group) {
+  function reveal(root: THREE.Group, state?: RootState) {
     phase.current = 'shown'
     drawn.current = 0
     // Now, so this frame's draw has it; the state keeps the prop in step.
     root.visible = true
     setShown(true)
+    // Shown early (the deadline, a round timed out or failed): what the
+    // rounds left out (compilesAhead) draws as it is, so its compile at
+    // least starts in the background before this frame's draw.
+    if (held && state && !tookLater.current) {
+      tookLater.current = true
+      try {
+        compileAndWait(state.gl, shownOnly(root, true), state.camera, state.scene).catch(() => {})
+      } catch {
+        // The draw compiles it.
+      }
+    }
   }
 
   return (
@@ -175,28 +201,6 @@ export function CompileGate({ hold, onReady, onUnready, children }: CompileGateP
       <SceneGateContext.Provider value={gate}>{children}</SceneGateContext.Provider>
     </group>
   )
-}
-
-// What the first frames draw, and what is compiled ahead of them though
-// hidden (userData.compileHidden): `object` and down.
-function visitDrawn(object: THREE.Object3D, visit: (object: THREE.Object3D) => void) {
-  if (!object.visible && !object.userData.compileHidden) return
-  visit(object)
-  for (const child of object.children) visitDrawn(child, visit)
-}
-
-/**
- * `scene` as compile() should see it: three takes the materials to compile
- * from every object under its first argument, shown or not, but the first
- * frames draw only the shown ones (visitDrawn). The lights come from `scene`
- * itself, passed as compile's target, so this one has none of its own to add.
- */
-function shownOnly(scene: THREE.Object3D): THREE.Object3D {
-  const view = {
-    traverse: (visit: (object: THREE.Object3D) => void) => visitDrawn(scene, visit),
-    traverseVisible: () => {},
-  }
-  return view as unknown as THREE.Object3D
 }
 
 /**
@@ -218,7 +222,7 @@ function warmJobs(gl: THREE.WebGLRenderer, root: THREE.Group): (() => void)[] {
       }
     })
   }
-  const jobs = [...maps].map((texture) => () => gl.initTexture(texture))
+  const jobs = [...maps].map((texture) => warmMapJob(gl, texture))
   for (const program of (gl.info.programs ?? []) as Program[]) {
     jobs.push(() => {
       if (program.program && program.isReady()) program.getUniforms()

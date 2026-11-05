@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import { PlanetAtmosphere, PlanetSurface } from '../PlanetRenderer'
 import type { PlanetDetail } from '../planetMaterials'
 import venusTexture from '../../assets/venus-2k.jpg'
+import venusCompressed from '../../assets/bodies/venus-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
 import { VENUS_HAZE_OUTER } from './haze-shells'
 
@@ -31,6 +32,7 @@ export function Venus({ planet }: PlanetRendererProps) {
       <PlanetSurface
         planet={planet}
         texture={venusTexture}
+        compressedTexture={venusCompressed}
         flightTexture="venus"
         albedo={VENUS_ALBEDO}
         limbDarkening={VENUS_LIMB_DARKENING}
