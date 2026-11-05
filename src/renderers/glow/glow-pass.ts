@@ -21,8 +21,9 @@ import {
 import { glowSourcesOf, shownInWorld, type GlowSource } from './glowSources'
 
 /**
- * The pass's savings, each on by default; the perf harness (scripts/perf-audit)
- * turns one off to render before and after in the same tick (tides-0oi.15).
+ * The pass's savings, each on by default; scripts/perf-audit/glow-ab.cjs
+ * turns one off to render before and after in the same tick and time it
+ * (tides-0oi.15).
  * scissor: the composite only over what the sources' glow can reach.
  * invalidateDepth: the glow target's depth is dropped once the sources have
  * drawn, so a tiled GPU never writes it back to memory.
@@ -124,6 +125,9 @@ const compositeFragment = /* glsl */ `
   }
 `
 
+/** The blur's kernels as GLSL, for glow-reach.test.ts's emulation. */
+export const glowBlurShaders = { down: downFragment, up: upFragment }
+
 function quadMaterial(fragmentShader: string, uniforms: Record<string, THREE.IUniform>, extra: Partial<THREE.ShaderMaterialParameters> = {}) {
   return new THREE.ShaderMaterial({
     vertexShader: quadVertex,
@@ -169,39 +173,89 @@ export interface GlowPass {
 }
 
 const clearColor = new THREE.Color()
+// sourcesBox's scratch: it runs per frame, so no arrays, boxes or closures.
 const sphere = new THREE.Sphere()
+const meshBox: ScreenBox = { x0: 0, y0: 0, x1: 0, y1: 0 }
+const unionBox: ScreenBox = { x0: 0, y0: 0, x1: 0, y1: 0 }
+const NONE = 0
+const SOME = 1
+const ALL = 2
+let boxState = NONE
+let boxCamera: THREE.Camera | null = null
+let boxView: Size = { width: 0, height: 0 }
+
+type Drawn = THREE.Object3D & {
+  isMesh?: boolean
+  isLine?: boolean
+  isPoints?: boolean
+  isSprite?: boolean
+  isInstancedMesh?: boolean
+  isSkinnedMesh?: boolean
+  isBatchedMesh?: boolean
+  geometry?: THREE.BufferGeometry
+}
+
+// One object the glow camera draws: a plain mesh widens the box by its
+// bounding sphere; anything else (instances, skinning, lines, points,
+// sprites) has no sphere that bounds what it draws, so the whole View.
+function addDrawn(o: Drawn): void {
+  if (!(o.isMesh || o.isLine || o.isPoints || o.isSprite)) return
+  if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || !o.geometry) {
+    boxState = ALL
+    return
+  }
+  if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere()
+  sphere.copy(o.geometry.boundingSphere!).applyMatrix4(o.matrixWorld)
+  sphere.center.applyMatrix4(boxCamera!.matrixWorldInverse)
+  if (!sphereScreenBox(sphere.center, sphere.radius, boxCamera!.projectionMatrix.elements, boxView, meshBox)) {
+    boxState = ALL
+  } else if (boxState === NONE) {
+    unionBox.x0 = meshBox.x0
+    unionBox.y0 = meshBox.y0
+    unionBox.x1 = meshBox.x1
+    unionBox.y1 = meshBox.y1
+    boxState = SOME
+  } else {
+    unionBox.x0 = Math.min(unionBox.x0, meshBox.x0)
+    unionBox.y0 = Math.min(unionBox.y0, meshBox.y0)
+    unionBox.x1 = Math.max(unionBox.x1, meshBox.x1)
+    unionBox.y1 = Math.max(unionBox.y1, meshBox.y1)
+  }
+}
+
+// What of `o`'s subtree the glow camera draws (visible, on GLOW_LAYER).
+function addSubtree(o: THREE.Object3D): void {
+  if (!o.visible || boxState === ALL) return
+  if (o.layers.isEnabled(GLOW_LAYER)) addDrawn(o)
+  const children = o.children
+  for (let i = 0; i < children.length; i++) addSubtree(children[i])
+}
 
 /**
  * The View px the emitting sources cover (their meshes' bounding spheres on
- * GLOW_LAYER): 'all' when one can't be bounded (around the eye, or not a
- * perspective camera), null when none is in front. World matrices current.
+ * GLOW_LAYER): 'all' when one can't be bounded (around the eye, not a plain
+ * mesh, or not a perspective camera), null when none is in front. World
+ * matrices current. The box is scratch, good until the next call.
  */
-function sourcesBox(sources: readonly GlowSource[], camera: THREE.Camera, view: Size): ScreenBox | 'all' | null {
+export function sourcesBox(sources: readonly GlowSource[], camera: THREE.Camera, view: Size): ScreenBox | 'all' | null {
   if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return 'all'
-  const projection = camera.projectionMatrix.elements
-  let box: ScreenBox | 'all' | null = null
-  for (const { object, emits } of sources) {
-    if (!emits || !shownInWorld(object) || box === 'all') continue
-    object.traverseVisible((o) => {
-      const mesh = o as THREE.Mesh
-      if (box === 'all' || !mesh.isMesh || !mesh.layers.isEnabled(GLOW_LAYER)) return
-      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
-      sphere.copy(mesh.geometry.boundingSphere!).applyMatrix4(mesh.matrixWorld)
-      sphere.center.applyMatrix4(camera.matrixWorldInverse)
-      const b = sphereScreenBox(sphere.center, sphere.radius, projection, view)
-      if (!b) box = 'all'
-      else if (!box) box = b
-      else box = { x0: Math.min(box.x0, b.x0), y0: Math.min(box.y0, b.y0), x1: Math.max(box.x1, b.x1), y1: Math.max(box.y1, b.y1) }
-    })
+  boxState = NONE
+  boxCamera = camera
+  boxView = view
+  for (let i = 0; i < sources.length; i++) {
+    const { object, emits } = sources[i]
+    if (emits && shownInWorld(object)) addSubtree(object)
   }
-  return box
+  boxCamera = null
+  return boxState === ALL ? 'all' : boxState === SOME ? unionBox : null
 }
 
 export function createGlowPass(): GlowPass {
   let target: THREE.WebGLRenderTarget | null = null
   let levels: THREE.WebGLRenderTarget[] = []
   let ready: ViewViewport | null = null
-  let reach: ViewViewport | null = null
+  // The composite's scissor: where this frame's glow can land.
+  const reach: ViewViewport = { left: 0, bottom: 0, width: 0, height: 0 }
 
   const down = quadMaterial(downFragment, { tSource: { value: null }, uTexel: { value: new THREE.Vector2() } })
   const up = quadMaterial(
@@ -288,12 +342,8 @@ export function createGlowPass(): GlowPass {
       // Where the glow can land: the sources' box grown by the blur's reach
       // (glow-target px, so CSS px at this ratio). Nothing past it changes a
       // canvas pixel, and nothing at all when the box misses the View.
-      reach = viewport
-      if (glowPassSwitches.scissor) {
-        const box = sourcesBox(sources, camera, viewport)
-        reach = box && glowCompositeRect(box, glowReachPx(levels.length) / (GLOW_SCALE * ratio), viewport)
-        if (!reach) return
-      }
+      const box = glowPassSwitches.scissor ? sourcesBox(sources, camera, viewport) : 'all'
+      if (!box || !glowCompositeRect(box, glowReachPx(levels.length) / (GLOW_SCALE * ratio), viewport, reach)) return
 
       const autoClear = gl.autoClear
       const alpha = gl.getClearAlpha()
@@ -325,14 +375,13 @@ export function createGlowPass(): GlowPass {
     },
     composite(gl) {
       const viewport = ready
-      const rect = reach
       ready = null
-      if (!viewport || !rect) return
+      if (!viewport) return
       const autoClear = gl.autoClear
       gl.autoClear = false
       gl.setRenderTarget(null)
       gl.setViewport(viewport.left, viewport.bottom, viewport.width, viewport.height)
-      gl.setScissor(rect.left, rect.bottom, rect.width, rect.height)
+      gl.setScissor(reach.left, reach.bottom, reach.width, reach.height)
       gl.setScissorTest(true)
       quad.material = composite
       quad.render(gl)

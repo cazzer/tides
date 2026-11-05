@@ -4,7 +4,6 @@ import {
   GLOW_LEVELS,
   glowCompositeRect,
   glowLevelSizes,
-  glowReachPx,
   glowTargetSize,
   resolveGlow,
   sphereScreenBox,
@@ -79,13 +78,6 @@ describe('viewViewport', () => {
   })
 })
 
-describe('glowReachPx', () => {
-  it('is four of the coarsest level texels: 128 target px at 5 levels', () => {
-    expect(glowReachPx(5)).toBe(128)
-    expect(glowReachPx(2)).toBe(16)
-  })
-})
-
 describe('sphereScreenBox', () => {
   const camera = new THREE.PerspectiveCamera(50, 390 / 643, 0.1, 1000)
   camera.updateProjectionMatrix()
@@ -119,7 +111,8 @@ describe('sphereScreenBox', () => {
       [2, 1, -3.2, 3],
     ]) {
       const centre = new THREE.Vector3(x, y, z)
-      const box = sphereScreenBox(centre, r, camera.projectionMatrix.elements, view)!
+      const box = { x0: 0, y0: 0, x1: 0, y1: 0 }
+      expect(sphereScreenBox(centre, r, camera.projectionMatrix.elements, view, box)).toBe(true)
       const s = silhouette(centre, r)
       // Contains every sampled point and is no more than a sampling step wider.
       const slack = Math.max(box.x1 - box.x0, box.y1 - box.y0) * 0.002 + 0.01
@@ -134,20 +127,25 @@ describe('sphereScreenBox', () => {
     }
   })
   it('is unbounded once the sphere reaches the eye plane', () => {
-    expect(sphereScreenBox({ x: 0, y: 0, z: -1 }, 1, camera.projectionMatrix.elements, view)).toBeNull()
-    expect(sphereScreenBox({ x: 0, y: 0, z: 5 }, 1, camera.projectionMatrix.elements, view)).toBeNull()
+    const box = { x0: 0, y0: 0, x1: 0, y1: 0 }
+    expect(sphereScreenBox({ x: 0, y: 0, z: -1 }, 1, camera.projectionMatrix.elements, view, box)).toBe(false)
+    expect(sphereScreenBox({ x: 0, y: 0, z: 5 }, 1, camera.projectionMatrix.elements, view, box)).toBe(false)
   })
 })
 
 describe('glowCompositeRect', () => {
   const viewport = { left: 10, bottom: 20, width: 390, height: 643 }
+  const rect = (box: Parameters<typeof glowCompositeRect>[0], margin: number) => {
+    const out = { left: 0, bottom: 0, width: 0, height: 0 }
+    return glowCompositeRect(box, margin, viewport, out) ? out : null
+  }
   it('grows the box by the margin, clamped to the View', () => {
-    expect(glowCompositeRect({ x0: 100.5, y0: 200, x1: 150, y1: 260.2 }, 50, viewport)).toEqual({ left: 60, bottom: 170, width: 150, height: 161 })
-    expect(glowCompositeRect({ x0: -500, y0: -10, x1: 900, y1: 700 }, 50, viewport)).toEqual(viewport)
-    expect(glowCompositeRect('all', 50, viewport)).toBe(viewport)
+    expect(rect({ x0: 100.5, y0: 200, x1: 150, y1: 260.2 }, 50)).toEqual({ left: 60, bottom: 170, width: 150, height: 161 })
+    expect(rect({ x0: -500, y0: -10, x1: 900, y1: 700 }, 50)).toEqual(viewport)
+    expect(rect('all', 50)).toEqual(viewport)
   })
-  it('is null when the grown box misses the View', () => {
-    expect(glowCompositeRect({ x0: -300, y0: 10, x1: -60, y1: 20 }, 50, viewport)).toBeNull()
-    expect(glowCompositeRect({ x0: 100, y0: 700, x1: 120, y1: 800 }, 50, viewport)).toBeNull()
+  it('is empty when the grown box misses the View', () => {
+    expect(rect({ x0: -300, y0: 10, x1: -60, y1: 20 }, 50)).toBeNull()
+    expect(rect({ x0: 100, y0: 700, x1: 120, y1: 800 }, 50)).toBeNull()
   })
 })
