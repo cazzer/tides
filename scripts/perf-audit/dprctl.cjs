@@ -7,14 +7,13 @@
 //                so the frame misses vsync at dpr 2 (alpha ~1e-5, so it blends to the same pixels); the ratio should fall to 1.5-1.75, then climb back to 3 once the
 //                quad is removed.
 // Prints window.__dprctl.changes per phase and the longest rAF interval within 500 ms after each change (the resize
-// hitch). Env: DPRCTL (the ?dprctl= value, default heldMs:600000 so phase b's drop from a long-held 3 isn't read as
-// heat, which would wait a minute to climb back), QUAD_DPR2_VSYNCS (the quad's cost at dpr 2 in vsyncs, 1.3),
+// hitch). Env: DPRCTL (the ?dprctl= value, default empty: the defaults), QUAD_DPR2_VSYNCS (the quad's cost at dpr 2 in vsyncs, 1.3),
 // THROTTLE (30: x6 doesn't make an M4's frames miss), plus lib.cjs's BASE_URL / PLAYWRIGHT_CORE / GPU_LOCK / WHO.
 //
 //   cd scripts/perf-audit && node dprctl.cjs
 const H = require('./lib.cjs')
 
-const DPRCTL = process.env.DPRCTL || 'heldMs:600000'
+const DPRCTL = process.env.DPRCTL || ''
 const QUAD_VSYNCS = +(process.env.QUAD_DPR2_VSYNCS || 1.3)
 const THROTTLE = +(process.env.THROTTLE || 30)
 
@@ -24,12 +23,12 @@ const SETUP = () => {
   let last = null
   const step = (t) => { if (last != null) log.push([t, t - last]); last = t; requestAnimationFrame(step) }
   requestAnimationFrame(step)
-  window.__dprAt = () => ({ dpr: __H.gl.getPixelRatio(), state: { dpr: __dprctl.state.dpr, kind: __dprctl.state.kind, vsyncMs: +__dprctl.state.vsyncMs.toFixed(3), dwellMs: __dprctl.state.dwellMs } })
+  window.__dprAt = () => ({ dpr: __H.gl.getPixelRatio(), state: { dpr: __dprctl.state.dpr, kind: __dprctl.state.kind, dwellMs: __dprctl.state.dwellMs, cpuEwma: +__dprctl.state.cpuEwma.toFixed(2) } })
   // The longest interval ending within 500 ms after each change, and the p99 of the 2 s before it.
   window.__hitches = (since) => __dprctl.changes.filter((c) => c.at >= since).map((c) => {
     const after = log.filter(([t]) => t > c.at && t <= c.at + 500).map(([, d]) => d)
     const before = log.filter(([t]) => t > c.at - 2000 && t <= c.at).map(([, d]) => d).sort((a, b) => a - b)
-    return { at: Math.round(c.at), from: c.from, to: c.to, reason: c.reason, p95: c.p95 && +c.p95.toFixed(2), p99: c.p99 && +c.p99.toFixed(2), vsync: +c.vsyncMs.toFixed(2), dwell: c.dwellMs, maxAfterMs: after.length ? +Math.max(...after).toFixed(1) : null, p99BeforeMs: before.length ? +before[Math.floor(before.length * 0.99)].toFixed(1) : null }
+    return { at: Math.round(c.at), from: c.from, to: c.to, reason: c.reason, bounced: c.bounced, n: c.n, p50: c.p50 && +c.p50.toFixed(1), p95: c.p95 && +c.p95.toFixed(1), misses: c.misses, vsync: c.vsyncMs && +c.vsyncMs.toFixed(2), dwell: c.dwellMs, maxAfterMs: after.length ? +Math.max(...after).toFixed(1) : null, p99BeforeMs: before.length ? +before[Math.floor(before.length * 0.99)].toFixed(1) : null }
   })
   window.__waitFor = (pred, ms) => new Promise((res) => { const end = performance.now() + ms; const tick = () => { if (pred() || performance.now() > end) res(pred()); else setTimeout(tick, 200) }; tick() })
   window.__stable = (ms, maxMs) => new Promise((res) => {
@@ -91,7 +90,7 @@ async function phase(page, name, fn) {
         await new Promise((r) => setTimeout(r, 15000))
         const ds = __rafLog.slice(n0).map(([, d]) => d).sort((a, b) => a - b)
         const s = __dprctl.state
-        return { frames: ds.length, p50: +ds[ds.length >> 1].toFixed(1), p95: +ds[Math.floor(ds.length * 0.95)].toFixed(1), windowCpuBound: s.cpuBound.filter(Boolean).length, window: s.cpuBound.length, ...__dprAt() }
+        return { frames: ds.length, p50: +ds[ds.length >> 1].toFixed(1), p95: +ds[Math.floor(ds.length * 0.95)].toFixed(1), windowCpuBound: s.count - s.kept, window: s.count, ...__dprAt() }
       })
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
       return r
@@ -110,7 +109,7 @@ async function phase(page, name, fn) {
       __H.resume()
       const perIter = (with256 - base) / 256
       // Fill-bound: cost goes as dpr^2; aim for `vsyncs` vsyncs of quad alone at dpr 2.
-      const target = vsyncs * __dprctl.state.vsyncMs
+      const target = vsyncs * (1000 / __dprctl.config.targetHz)
       const iter = Math.min(16384, Math.round(target / (perIter * (2 / dpr) ** 2)))
       material.uniforms.uIter.value = iter
       return { dpr, baseMs: +base.toFixed(3), quad256Ms: +(with256 - base).toFixed(3), iter, predictedMsAt: Object.fromEntries([3, 2, 1.75, 1.5].map((d) => [d, +(perIter * iter * (d / dpr) ** 2).toFixed(1)])) }

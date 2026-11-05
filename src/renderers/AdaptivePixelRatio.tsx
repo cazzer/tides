@@ -5,11 +5,13 @@ import { createAdaptiveDprState, maxDpr, stepAdaptiveDpr, type AdaptiveDprState 
 import {
   createPacedDprState,
   DEFAULT_PACED_DPR_CONFIG,
+  hasPacedTuning,
   parsePacedDprConfig,
   stepPacedDpr,
   viewKindOf,
   type PacedDprChange,
   type PacedDprConfig,
+  type PacedDprSample,
   type PacedDprState,
 } from '../paced-dpr'
 import { createGpuFrameTimer, type GpuFrameTimer } from './gpu-frame-timer'
@@ -19,7 +21,12 @@ import { useStore } from '../store'
 declare global {
   interface Window {
     /** The paced controller's config, live state and change log, when the URL has ?dprctl= (tides-0oi.13). */
-    __dprctl?: { config: PacedDprConfig; state: PacedDprState | null; changes: PacedDprChange[] }
+    __dprctl?: {
+      config: PacedDprConfig
+      mode: DprControllerMode
+      state: PacedDprState | null
+      changes: PacedDprChange[]
+    }
   }
 }
 
@@ -95,7 +102,10 @@ export function AdaptivePixelRatio(): null {
     const low = isLowQuality()
     const timer = low ? null : createGpuFrameTimer(gl.getContext() as WebGL2RenderingContext)
     const mode = dprControllerMode({ low, hasTimer: timer != null, config })
-    window.__dprctl = config ? { config, state: null, changes: [] } : undefined
+    window.__dprctl = config ? { config, mode, state: null, changes: [] } : undefined
+    if (import.meta.env.DEV && config && mode === 'gpu' && hasPacedTuning(config)) {
+      console.warn('[render] dprctl: the high tier times the GPU; tuning keys only apply to the low tier')
+    }
     if (mode === 'paced') return runPaced(get, config ?? DEFAULT_PACED_DPR_CONFIG)
     if (mode === 'gpu' && timer) return runGpuTimed(gl, get, timer)
     timer?.dispose()
@@ -134,26 +144,27 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
   let lastAt: number | null = null
   let cpuStart = 0
   let lastCpuMs = 0
+  // One sample object, refilled each frame.
+  const sample: PacedDprSample = { at: 0, intervalMs: 0, cpuMs: 0, lagMs: 0, kind: 'system', nativeDpr: 1 }
 
   const unsubscribeBefore = addEffect((timestamp) => {
+    const startedAt = performance.now()
     if (lastAt != null) {
       const before = state.dpr
-      stepPacedDpr(
-        state,
-        {
-          at: timestamp,
-          intervalMs: timestamp - lastAt,
-          cpuMs: lastCpuMs,
-          kind: viewKindOf(useStore.getState()),
-          nativeDpr: window.devicePixelRatio,
-        },
-        config,
-      )
+      sample.at = timestamp
+      sample.intervalMs = timestamp - lastAt
+      sample.cpuMs = lastCpuMs
+      // Main-thread work between the frame's start and its effects (other
+      // rAF callbacks, a long task, GC) stretches the interval like CPU time.
+      sample.lagMs = Math.max(0, startedAt - timestamp)
+      sample.kind = viewKindOf(useStore.getState())
+      sample.nativeDpr = window.devicePixelRatio
+      stepPacedDpr(state, sample, config)
       if (state.dpr !== before && state.last) {
         debug?.changes.push(state.last)
         if (import.meta.env.DEV) {
-          const { from, to, reason, p95, p99, vsyncMs } = state.last
-          const stats = p95 == null ? '' : ` (p95 ${p95.toFixed(1)}, p99 ${p99?.toFixed(1)}, vsync ${vsyncMs.toFixed(2)} ms)`
+          const { from, to, reason, p50, p95, misses, n } = state.last
+          const stats = p95 == null ? '' : ` (n ${n}, p50 ${p50?.toFixed(1)}, p95 ${p95.toFixed(1)} ms, ${misses} misses)`
           console.info(`[render] dpr ${from} -> ${to} ${reason}${stats}`)
         }
       }
@@ -164,7 +175,7 @@ function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
       applyDpr(get, pending)
       pending = null
     }
-    cpuStart = performance.now()
+    cpuStart = startedAt
   })
   const unsubscribeAfter = addAfterEffect(() => {
     lastCpuMs = performance.now() - cpuStart
