@@ -10,7 +10,8 @@
     "test": "vitest run --silent=false",
     "preview": "vite preview",
     "convert:stars": "node scripts/convertStars.mjs",
-    "textures:2k": "bash scripts/resize-textures-2k.sh"
+    "textures:2k": "bash scripts/resize-textures-2k.sh",
+    "perf:phone": "node scripts/phone-perf/run.mjs"
   },
   "dependencies": {
     "@emotion/styled": "^11.14.1",
