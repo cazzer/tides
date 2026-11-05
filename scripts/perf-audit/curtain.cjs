@@ -39,25 +39,43 @@ function oldFragment() {
     .replace('#include ../shell/face.glsl', show('src/shaders/shell/face.glsl'))
 }
 
-const SETUP = async ([T, STEPS, ROWS, OLD]) => {
+// PREV_SHA: that commit's baked march (fragment + its one-pass table bake), for an in-page A/B of a later layout
+// change (pages differ run to run, so a cross-page compare can't show 0 px).
+const PREV_SHA = process.env.PREV_SHA
+function prevShaders() {
+  if (!PREV_SHA) return null
+  const root = path.join(__dirname, '../..')
+  const show = (p) => execSync(`git -C ${root} show ${PREV_SHA}:${p}`, { encoding: 'utf8' })
+  const inline = (src) => src.replace('#include ./noise3.glsl', show('src/shaders/aurora/noise3.glsl'))
+    .replace('#include ../shell/face.glsl', show('src/shaders/shell/face.glsl'))
+    .replace('#include ./curtain.glsl', show('src/shaders/aurora/curtain.glsl'))
+  return { frag: inline(show('src/shaders/aurora/fragment.frag')), bake: inline(show('src/shaders/aurora/curtainBake.frag')) }
+}
+
+const SETUP = async ([T, STEPS, ROWS, OLD, PREV]) => {
   const Tm = __H.T, gl = __H.gl, ctx = __H.ctx
   const isA = (m) => m && m.uniforms && m.uniforms.uOval && m.defines && m.defines.STEPS !== 6
   const mats = new Set(), meshes = []
   for (const o of __H.renderables()) if (isA(o.material)) { mats.add(o.material); meshes.push(o) }
-  // The bake: the recorded call whose scene draws the curtain table.
-  const bakeIdx = __H.frame.findIndex((c) => c.scene.children[0]?.material?.defines?.CURTAIN_ROWS != null && !c.scene.children[0].material.uniforms.uOval)
-  const bakeCall = __H.frame[bakeIdx]
+  // The bake: the recorded calls whose scenes draw the curtain strip and table.
+  const isBake = (c) => c.scene.children[0]?.material?.defines?.CURTAIN_ROWS != null && !c.scene.children[0].material.uniforms.uOval
+  const bakeIdx = __H.frame.findIndex(isBake)
+  const bakes = __H.frame.filter(isBake)
+  const bakeCall = bakes.find((c) => !c.scene.children[0].material.defines.CURTAIN_STRIP)
   const bakeMat = bakeCall?.scene.children[0].material
-  const bakeCalls = __H.frame.filter((c) => c.scene.children[0]?.material === bakeMat).length
+  const bakeCalls = bakes.length
   for (const m of mats) m.uniforms.uTime.value = T
   if (bakeMat) bakeMat.uniforms.uTime.value = T
   const base = [...mats][0]
   const baseDefines = { ...base.defines }
   const baseTex = base.uniforms.uCurtain?.value
-  const quad = bakeCall?.scene.children[0]
+  const quads = bakes.map((c) => c.scene.children[0])
+  // Without its passes and their clears (the table keeps its content, so the aurora's cost is unchanged).
+  const hideBake = () => { for (const c of bakes) { const q = c.scene.children[0]; q.__m = q.layers.mask; q.layers.mask = 0; c.__ac = c.autoClear; c.autoClear = false } }
+  const showBake = () => { for (const c of bakes) { const q = c.scene.children[0]; if (q.__m != null) { q.layers.mask = q.__m; q.__m = null; c.autoClear = c.__ac } } }
   // The live variants skip the bake too, so they time as the old shader did.
   const set = (defines, frag, tex) => () => {
-    if (!defines.CURTAIN_BAKE && quad) { quad.__m = quad.layers.mask; quad.layers.mask = 0 }
+    if (!defines.CURTAIN_BAKE && quads.length) hideBake()
     for (const m of mats) {
       m.__saved = { defines: m.defines, frag: m.fragmentShader }
       m.defines = defines
@@ -67,7 +85,7 @@ const SETUP = async ([T, STEPS, ROWS, OLD]) => {
     if (tex) base.uniforms.uCurtain.value = tex
   }
   const unset = () => {
-    if (quad && quad.__m != null) { quad.layers.mask = quad.__m; quad.__m = null }
+    showBake()
     for (const m of mats) { m.defines = m.__saved.defines; m.fragmentShader = m.__saved.frag; m.needsUpdate = true }
     if (baseTex) base.uniforms.uCurtain.value = baseTex
   }
@@ -82,13 +100,24 @@ const SETUP = async ([T, STEPS, ROWS, OLD]) => {
     const [r, w] = ROWS
     const rt = new Tm.WebGLRenderTarget(w, 2 * r, { type: Tm.HalfFloatType, format: Tm.RGBAFormat, minFilter: Tm.LinearFilter, magFilter: Tm.LinearFilter,
       generateMipmaps: false, wrapS: Tm.RepeatWrapping, wrapT: Tm.ClampToEdgeWrapping, depthBuffer: false, stencilBuffer: false })
+    // The table pass at r rows (the strip's width is fixed: w must stay CURTAIN_WIDTH since the split strip).
     const m2 = bakeMat.clone(); m2.defines = { CURTAIN_WIDTH: w, CURTAIN_ROWS: r }; m2.uniforms.uTime.value = T
     const sc = new Tm.Scene(); const q = new Tm.Mesh(bakeCall.scene.children[0].geometry, m2); q.frustumCulled = false; sc.add(q)
     const prev = gl.getRenderTarget(); gl.setRenderTarget(rt); __H.origRender.call(gl, sc, bakeCall.camera); gl.setRenderTarget(prev)
     for (const s of [10, 16]) __H.reg(`bake${s}@${w}x${r}`, set(bakeDefs(s, w, r), null, rt.texture), unset)
   }
+  if (PREV) {
+    const W = baseDefines.CURTAIN_WIDTH, R = baseDefines.CURTAIN_ROWS
+    const rt = new Tm.WebGLRenderTarget(W, 2 * R, { type: Tm.HalfFloatType, format: Tm.RGBAFormat, minFilter: Tm.LinearFilter, magFilter: Tm.LinearFilter,
+      generateMipmaps: false, wrapS: Tm.RepeatWrapping, wrapT: Tm.ClampToEdgeWrapping, depthBuffer: false, stencilBuffer: false })
+    const pm = new Tm.ShaderMaterial({ vertexShader: bakeMat.vertexShader, fragmentShader: PREV.bake, defines: { CURTAIN_WIDTH: W, CURTAIN_ROWS: R },
+      uniforms: { uTime: { value: T } }, depthTest: false, depthWrite: false, toneMapped: false })
+    const sc = new Tm.Scene(); const q = new Tm.Mesh(bakeCall.scene.children[0].geometry, pm); q.frustumCulled = false; sc.add(q)
+    const prevRT = gl.getRenderTarget(); gl.setRenderTarget(rt); __H.origRender.call(gl, sc, bakeCall.camera); gl.setRenderTarget(prevRT)
+    __H.reg('prev', set({ ...baseDefines }, PREV.frag, rt.texture), unset)
+  }
   __H.reg('control', () => meshes.forEach((o) => { o.__m = o.layers.mask; o.layers.mask = 0 }), () => meshes.forEach((o) => { o.layers.mask = o.__m }))
-  __H.reg('bakeOff', () => { quad.__m = quad.layers.mask; quad.layers.mask = 0 }, () => { quad.layers.mask = quad.__m })
+  __H.reg('bakeOff', hideBake, showBake)
 
   // --- images
   const W = ctx.drawingBufferWidth, Hh = ctx.drawingBufferHeight
@@ -184,7 +213,7 @@ const SETUP = async ([T, STEPS, ROWS, OLD]) => {
     await page.evaluate(() => __H.pause())
     if (process.env.PRE) log('pre', JSON.stringify(await page.evaluate(fs.readFileSync(process.env.PRE, 'utf8'))))
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT })
-    const info = await page.evaluate(SETUP, [T, STEPS, ROWS, oldFragment()])
+    const info = await page.evaluate(SETUP, [T, STEPS, ROWS, oldFragment(), prevShaders()])
     log('info', JSON.stringify({ pose: POSE, params: PARAMS, ...info }))
     const r = await page.evaluate(async ([STEPS, ROWS, SHIP]) => {
       const s = window.__shot, c = window.__cmp, q = window.__quality
@@ -193,6 +222,7 @@ const SETUP = async ([T, STEPS, ROWS, OLD]) => {
       const live10 = await s('live10')
       out.old10_vs_live10 = c(await s('old10'), live10)
       out['base_vs_bake' + SHIP] = c(A, await s('bake' + SHIP))
+      if (__H.variants.prev) out.base_vs_prev = c(A, await s('prev'))
       out.live10_vs_bake10 = c(live10, await s('bake10'))
       out[`live${SHIP}_vs_bake${SHIP}`] = c(await s('live' + SHIP), await s('bake' + SHIP))
       out['bake10_vs_bake' + SHIP] = c(await s('bake10'), await s('bake' + SHIP))
@@ -216,6 +246,11 @@ const SETUP = async ([T, STEPS, ROWS, OLD]) => {
       const c = await page.evaluate(async ([a, b]) => window.__crop(await window.__shot(a), await window.__shot(b), await window.__shot('ref'), await window.__shot('control')), [BEFORE, 'bake' + SHIP])
       const f = path.join(OUT, `${TAG}_crop3x_before-bake${SHIP}-ref.png`)
       fs.writeFileSync(f, Buffer.from(c.png, 'base64')); log('crop', f, JSON.stringify(c.at))
+    }
+    // DUMP=<file>: the build's own frame (raw RGBA) for a cross-build compare at the pinned uTime.
+    if (process.env.DUMP) {
+      const b64 = await page.evaluate(async () => { const b = await window.__shot('base'); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s) })
+      fs.writeFileSync(process.env.DUMP, Buffer.from(b64, 'base64')); log('dump', process.env.DUMP)
     }
     await page.evaluate(() => { window.__shots = null })
     if (!process.env.NOTIME) {

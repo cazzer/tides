@@ -178,9 +178,10 @@ void main() {
     #ifdef CURTAIN_BAKE
     // The curtain's slow noise, baked this frame (tides-0oi.5): meander,
     // fold and breaks. Bilinear taps blend values in [-1, 1], so they stay
-    // there and the floor above still holds.
+    // there and the floor above still holds. Level 0 explicitly: the taps
+    // sit in non-uniform control flow, where implicit derivatives are undefined.
     float hemiRow = m > 0.0 ? 0.0 : float(CURTAIN_ROWS);
-    vec3 mfb = texture2D(uCurtain, curtainUv(ang, mlat, CURTAIN_MLAT_MIN, CURTAIN_MLAT_MAX, hemiRow)).rgb * 2.0 - 1.0;
+    vec3 mfb = textureLod(uCurtain, curtainUv(ang, mlat, CURTAIN_MLAT_MIN, CURTAIN_MLAT_MAX, hemiRow), 0.0).rgb * 2.0 - 1.0;
     #endif
 
     float hgt = clamp((r - uInner) / thickness, 0.0, 1.0);
@@ -235,7 +236,7 @@ void main() {
       // Arcs come and go along the oval rather than circling it unbroken.
       #ifdef CURTAIN_BAKE
       float breaks = mfb.b;
-      float breaks2 = texture2D(uCurtain, curtainUv(ang, d, CURTAIN_D_MIN, CURTAIN_D_MAX, hemiRow)).a * 2.0 - 1.0;
+      float breaks2 = textureLod(uCurtain, curtainUv(ang, d, CURTAIN_D_MIN, CURTAIN_D_MAX, hemiRow), 0.0).a * 2.0 - 1.0;
       #else
       float breaks = curtainBreaks(around, hemi, t);
       float breaks2 = curtainBreaks2(around, hemi, d, t);

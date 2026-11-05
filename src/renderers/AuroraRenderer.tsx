@@ -115,9 +115,10 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
       new THREE.ShaderMaterial({
         vertexShader: shellVertex,
         fragmentShader: auroraFragment,
-        // The baked noise paid for more steps on the low tier (tides-0oi.5).
+        // The baked noise paid for more steps on the low tier (tides-0oi.5);
+        // without it the march is exactly as before.
         defines: {
-          STEPS: low ? 14 : 24,
+          STEPS: low ? (curtain ? 14 : 10) : 24,
           ...(curtain && { CURTAIN_BAKE: 1, CURTAIN_WIDTH, CURTAIN_ROWS }),
         },
         uniforms: {
@@ -229,7 +230,10 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
       : kp.current
     // Wall-clock, so the shimmer runs at the same pace at any time speed.
     u.uTime.value = state.clock.elapsedTime
-    // Before the Views draw (priority 1); the other View's call finds it done.
+    // Before any View draws (they render at priority 1), so the table's
+    // target switch never splits a View's pass (a tile flush on the phone's
+    // GPU); the other View's call finds it done. The shell meshes always
+    // draw while this is mounted, so there is no frame to skip.
     curtain?.bake(u.uTime.value)
     sunDirectionLocal(timestamp, u.uSun.value)
     // Ease the daily sway out (and back) over a few frames rather than

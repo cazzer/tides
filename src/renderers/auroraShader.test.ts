@@ -116,17 +116,24 @@ describe('the aurora curtain table', () => {
   })
 
   it('decodes what the bake encodes, row for row', () => {
-    expect(bake).toMatch(/gl_FragColor = vec4\(\s*curtainMeander\(around, hemi, uTime\),\s*curtainFold\(around, hemi, mlat, uTime\),\s*curtainBreaks\(around, hemi, uTime\),\s*curtainBreaks2\(around, hemi, d, uTime\)\s*\) \* 0\.5 \+ 0\.5;/)
+    // The strip (meander, breaks per angle and hemisphere), copied texel for
+    // texel into the table's r and b beside fold and breaks2.
+    expect(bake).toContain(
+      'gl_FragColor = vec4(curtainMeander(around, hemi, uTime), curtainBreaks(around, hemi, uTime), 0.0, 0.0) * 0.5 + 0.5;'
+    )
+    expect(bake).toContain('float hemi = row >= 1.0 ? 37.0 : 0.0;')
+    expect(bake).toContain('vec2 mb = texelFetch(uStrip, ivec2(gl_FragCoord.x, south ? 1 : 0), 0).rg;')
+    expect(bake).toMatch(/gl_FragColor = vec4\(\s*mb\.x,\s*curtainFold\(around, hemi, mlat, uTime\) \* 0\.5 \+ 0\.5,\s*mb\.y,\s*curtainBreaks2\(around, hemi, d, uTime\) \* 0\.5 \+ 0\.5\s*\);/)
     expect(bake).toContain('float mlat = CURTAIN_MLAT_MIN + (CURTAIN_MLAT_MAX - CURTAIN_MLAT_MIN) * r / (rows - 1.0);')
     expect(bake).toContain('float d = CURTAIN_D_MIN + (CURTAIN_D_MAX - CURTAIN_D_MIN) * r / (rows - 1.0);')
     expect(bake).toContain('float ang = (gl_FragCoord.x / float(CURTAIN_WIDTH) - 0.5) * TAU;')
     expect(curtain).toContain('float row = clamp((x - x0) / (x1 - x0), 0.0, 1.0) * (rows - 1.0) + 0.5 + hemiRow;')
     expect(curtain).toContain('return vec2(ang / TAU + 0.5, row / (2.0 * rows));')
     expect(fragment).toContain(
-      'vec3 mfb = texture2D(uCurtain, curtainUv(ang, mlat, CURTAIN_MLAT_MIN, CURTAIN_MLAT_MAX, hemiRow)).rgb * 2.0 - 1.0;'
+      'vec3 mfb = textureLod(uCurtain, curtainUv(ang, mlat, CURTAIN_MLAT_MIN, CURTAIN_MLAT_MAX, hemiRow), 0.0).rgb * 2.0 - 1.0;'
     )
     expect(fragment).toContain(
-      'float breaks2 = texture2D(uCurtain, curtainUv(ang, d, CURTAIN_D_MIN, CURTAIN_D_MAX, hemiRow)).a * 2.0 - 1.0;'
+      'float breaks2 = textureLod(uCurtain, curtainUv(ang, d, CURTAIN_D_MIN, CURTAIN_D_MAX, hemiRow), 0.0).a * 2.0 - 1.0;'
     )
     expect(fragment).toContain('float hemiRow = m > 0.0 ? 0.0 : float(CURTAIN_ROWS);')
     // The tap, mirrored: x = x0 + (x1 - x0) * r / (N - 1) lands on texel r's
@@ -149,7 +156,9 @@ describe('the aurora curtain table', () => {
 
   it('reads the table only past the floor, and breaks2 only in the arcs block', () => {
     const gate = fragment.indexOf(GATE)
-    const taps = [...fragment.matchAll(/texture2D\(uCurtain/g)].map((m) => m.index)
+    // Level 0 explicitly: they sit in non-uniform control flow.
+    expect(fragment).not.toMatch(/texture2D\(uCurtain/)
+    const taps = [...fragment.matchAll(/textureLod\(uCurtain/g)].map((m) => m.index)
     expect(taps.length).toBe(2)
     for (const at of taps) expect(at).toBeGreaterThan(gate)
     expect(taps[1] > arcsBlock.start && taps[1] < arcsBlock.end).toBe(true)
@@ -159,5 +168,23 @@ describe('the aurora curtain table', () => {
 
   it('gives the glow the same table, on its own short march', () => {
     expect(renderer).toContain('defines: { ...material.defines, STEPS: AURORA_GLOW_STEPS },')
+  })
+
+  it('keeps the old 10-step march where the table cannot be made', () => {
+    expect(renderer).toContain('STEPS: low ? (curtain ? 14 : 10) : 24,')
+    expect(renderer).toContain('...(curtain && { CURTAIN_BAKE: 1, CURTAIN_WIDTH, CURTAIN_ROWS }),')
+  })
+
+  it('bakes from the priority-0 frame callback, before any View draws', () => {
+    // Once, in the one useFrame (default priority 0; drei's Views draw at 1),
+    // at this frame's uTime: never from a draw, where its target switch
+    // would split a View's pass.
+    expect([...renderer.matchAll(/curtain\?\.bake\(/g)]).toHaveLength(1)
+    expect([...renderer.matchAll(/useFrame\(/g)]).toHaveLength(1)
+    expect(renderer).toMatch(/useFrame\(\(state, delta\) => \{/)
+    const frame = renderer.slice(renderer.indexOf('useFrame((state, delta) => {'))
+    const body = frame.slice(0, frame.indexOf('\n  })\n'))
+    expect(body).toMatch(/u\.uTime\.value = state\.clock\.elapsedTime\n(?:\s*\/\/.*\n)*\s*curtain\?\.bake\(u\.uTime\.value\)/)
+    expect(renderer).not.toContain('onBeforeRender = (_renderer, _scene, camera, _geometry, shader) => {\n    bake')
   })
 })

@@ -29,10 +29,13 @@ describe('auroraCurtain', () => {
     expect(moon).toBe(main)
     main.bake(1.5)
     moon.bake(1.5)
-    expect(draws).toHaveLength(1)
+    // The strip, then the table.
+    expect(draws).toHaveLength(2)
+    expect(draws[0]?.height).toBe(2)
+    expect(draws[1]?.texture).toBe(main.texture)
     moon.bake(1.6)
     main.bake(1.6)
-    expect(draws).toHaveLength(2)
+    expect(draws).toHaveLength(4)
   })
 
   it('draws into its own target and puts the previous one back', () => {
@@ -41,19 +44,26 @@ describe('auroraCurtain', () => {
     const previous = new THREE.WebGLRenderTarget(4, 4)
     bind(previous)
     curtain.bake(2)
-    expect(draws[0]?.texture).toBe(curtain.texture)
+    expect(draws[1]?.texture).toBe(curtain.texture)
     expect(bound()).toBe(previous)
   })
 
-  it('bakes again after the context is lost', () => {
+  it('bakes again after the context is lost, and once it is back', () => {
     const { gl, draws, domElement } = mockRenderer()
     const curtain = auroraCurtain(gl)!
     curtain.bake(3)
     curtain.bake(3)
-    expect(draws).toHaveLength(1)
-    domElement.dispatchEvent(new Event('webglcontextlost'))
-    curtain.bake(3)
     expect(draws).toHaveLength(2)
+    domElement.dispatchEvent(new Event('webglcontextlost'))
+    // A frame drawn while the context is gone bakes into nothing...
+    curtain.bake(3)
+    expect(draws).toHaveLength(4)
+    curtain.bake(3)
+    expect(draws).toHaveLength(4)
+    // ...so the restored context bakes again.
+    domElement.dispatchEvent(new Event('webglcontextrestored'))
+    curtain.bake(3)
+    expect(draws).toHaveLength(6)
   })
 
   it('is null without a float colour buffer', () => {
@@ -64,14 +74,18 @@ describe('auroraCurtain', () => {
   it('is a linear half-float table that wraps around the pole', () => {
     const { gl, draws } = mockRenderer()
     auroraCurtain(gl)!.bake(0)
-    const target = draws[0]!
+    const [strip, target] = draws as THREE.WebGLRenderTarget[]
     expect([target.width, target.height]).toEqual([CURTAIN_WIDTH, 2 * CURTAIN_ROWS])
-    const t = target.texture
-    expect(t.type).toBe(THREE.HalfFloatType)
-    expect(t.format).toBe(THREE.RGBAFormat)
-    expect([t.minFilter, t.magFilter]).toEqual([THREE.LinearFilter, THREE.LinearFilter])
-    expect(t.generateMipmaps).toBe(false)
-    expect([t.wrapS, t.wrapT]).toEqual([THREE.RepeatWrapping, THREE.ClampToEdgeWrapping])
-    expect(target.depthBuffer).toBe(false)
+    // Copied texel for texel: the same width, one row per hemisphere.
+    expect([strip.width, strip.height]).toEqual([CURTAIN_WIDTH, 2])
+    for (const rt of [strip, target]) {
+      const t = rt.texture
+      expect(t.type).toBe(THREE.HalfFloatType)
+      expect(t.format).toBe(THREE.RGBAFormat)
+      expect([t.minFilter, t.magFilter]).toEqual([THREE.LinearFilter, THREE.LinearFilter])
+      expect(t.generateMipmaps).toBe(false)
+      expect([t.wrapS, t.wrapT]).toEqual([THREE.RepeatWrapping, THREE.ClampToEdgeWrapping])
+      expect(rt.depthBuffer).toBe(false)
+    }
   })
 })
