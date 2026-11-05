@@ -63,50 +63,50 @@ function setCoronaAir(corona: THREE.ShaderMaterial, camera: THREE.Camera, sun: T
 const coronaCentre = new THREE.Vector3()
 const coronaViewport = new THREE.Vector4()
 const coronaScissor = new THREE.Vector4()
-const coronaScissorPx = new THREE.Vector4()
+const coronaFloor = new THREE.Vector4()
+const coronaClip = new THREE.Vector4()
 let coronaScissorTest = false
 let coronaClipped = false
 
 // The main view's corona is drawn only out to CORONA_QUAD_MAIN limb radii,
 // a scissor inside the current one: past it the glow is under a display
-// step. Off a render target only, whose scissor three keeps apart.
+// step. That holds for exposures within the bake's range (CORONA_QUAD_MAIN
+// keeps a margin for the night flight's); a brighter one could lift the
+// cut-off glow over a step. Only into the canvas with a perspective camera:
+// a render target keeps its own scissor, and an ortho main view is drawn
+// whole.
 function clipCorona(renderer: THREE.WebGLRenderer, camera: THREE.Camera, sun: THREE.Object3D, radius: number) {
   coronaClipped = false
   if (renderer.getRenderTarget() || !(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return
+  // The scissor in effect: three applies the CSS one in device px, rounded
+  // by setScissor but floored after a render target switch. Clip only
+  // where the two agree, so it's known to the pixel and restored exactly.
+  const ratio = renderer.getPixelRatio()
+  renderer.getScissor(coronaScissor).multiplyScalar(ratio)
+  coronaFloor.copy(coronaScissor).floor()
+  if (!coronaScissor.round().equals(coronaFloor)) return
   coronaCentre.setFromMatrixPosition(sun.matrixWorld).applyMatrix4(camera.matrixWorldInverse)
   renderer.getCurrentViewport(coronaViewport)
-  const rect = coronaClipRect(
-    [coronaCentre.x, coronaCentre.y, coronaCentre.z],
-    radius,
-    CORONA_QUAD_MAIN,
-    camera.projectionMatrix.elements,
-    [coronaViewport.x, coronaViewport.y, coronaViewport.z, coronaViewport.w]
-  )
-  if (!rect) return
-  const ratio = renderer.getPixelRatio()
-  renderer.getScissor(coronaScissor)
+  if (!coronaClipRect(coronaCentre.x, coronaCentre.y, coronaCentre.z, radius, CORONA_QUAD_MAIN, camera.projectionMatrix.elements, coronaViewport, coronaClip)) return
   coronaScissorTest = renderer.getScissorTest()
-  let [x0, y0, x1, y1] = [rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]]
   if (coronaScissorTest) {
-    // In device px, as three rounds it for gl.scissor.
-    const s = coronaScissorPx.copy(coronaScissor).multiplyScalar(ratio).round()
-    x0 = Math.max(x0, s.x)
-    y0 = Math.max(y0, s.y)
-    x1 = Math.min(x1, s.x + s.z)
-    y1 = Math.min(y1, s.y + s.w)
+    const x0 = Math.max(coronaClip.x, coronaScissor.x)
+    const y0 = Math.max(coronaClip.y, coronaScissor.y)
+    const x1 = Math.min(coronaClip.x + coronaClip.z, coronaScissor.x + coronaScissor.z)
+    const y1 = Math.min(coronaClip.y + coronaClip.w, coronaScissor.y + coronaScissor.w)
+    coronaClip.set(x0, y0, Math.max(x1 - x0, 0), Math.max(y1 - y0, 0))
   }
-  const width = Math.max(x1 - x0, 0)
-  const height = Math.max(y1 - y0, 0)
-  renderer.setScissor(x0 / ratio, y0 / ratio, width / ratio, height / ratio)
-  renderer.setScissorTest(true)
+  // Straight to the GL state, in device px: three's own scissor stays as it was.
+  renderer.state.scissor(coronaClip)
+  renderer.state.setScissorTest(true)
   coronaClipped = true
 }
 
 function unclipCorona(renderer: THREE.WebGLRenderer) {
   if (!coronaClipped) return
   coronaClipped = false
-  renderer.setScissor(coronaScissor)
-  renderer.setScissorTest(coronaScissorTest)
+  renderer.state.scissor(coronaScissor)
+  renderer.state.setScissorTest(coronaScissorTest)
 }
 
 function fadeCorona(corona: THREE.ShaderMaterial, fade: number) {

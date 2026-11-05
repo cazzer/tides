@@ -235,11 +235,15 @@ describe('coronaClipRect', () => {
     0, 0, (far + near) / (near - far), -1,
     0, 0, (2 * far * near) / (near - far), 0,
   ]
-  const viewport: [number, number, number, number] = [0, 402, 780, 1286]
+  const viewport = { x: 0, y: 402, z: 780, w: 1286 }
+  const clip = (c: [number, number, number]) => {
+    const out = { x: 0, y: 0, z: 0, w: 0 }
+    return coronaClipRect(c[0], c[1], c[2], R, CORONA_QUAD_MAIN, projection, viewport, out) ? [out.x, out.y, out.z, out.w] : null
+  }
   const toPx = (p: number[]): [number, number] => {
     const [x, y, z] = p
     const w = -z
-    return [viewport[0] + (0.5 + (0.5 * (projection[0] * x)) / w) * viewport[2], viewport[1] + (0.5 + (0.5 * (projection[5] * y)) / w) * viewport[3]]
+    return [viewport.x + (0.5 + (0.5 * (projection[0] * x)) / w) * viewport.z, viewport.y + (0.5 + (0.5 * (projection[5] * y)) / w) * viewport.w]
   }
 
   it('holds every point of the quad within the extent, and none much past it', () => {
@@ -248,7 +252,7 @@ describe('coronaClipRect', () => {
         for (const roll of [0, 1.1, 2.5, 4]) {
           const c = sunAt(deg, distance, roll)
           const quad = perspectiveCoronaQuad(c, R)!
-          const rect = coronaClipRect(c, R, CORONA_QUAD_MAIN, projection, viewport)!
+          const rect = clip(c)!
           const at = (u: number, v: number) => toPx([
             (quad.centre[0] + u * quad.limb) * quad.push,
             (quad.centre[1] + v * quad.limb) * quad.push,
@@ -276,8 +280,8 @@ describe('coronaClipRect', () => {
   })
 
   it('is null where the shader collapses the quad', () => {
-    expect(coronaClipRect([0, 0, 5], R, CORONA_QUAD_MAIN, projection, viewport)).toBeNull()
-    expect(coronaClipRect(sunAt(85, 100), R, CORONA_QUAD_MAIN, projection, viewport)).toBeNull()
+    expect(clip([0, 0, 5])).toBeNull()
+    expect(clip(sunAt(85, 100))).toBeNull()
   })
 })
 
