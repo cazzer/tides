@@ -7,13 +7,25 @@ import * as THREE from 'three'
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js'
 import {
   GLOW_LAYER,
+  GLOW_SCALE,
+  glowCompositeRect,
   glowLevelSizes,
+  glowReachPx,
   glowTargetSize,
+  sphereScreenBox,
   viewViewport,
+  type ScreenBox,
   type Size,
   type ViewViewport,
 } from './glow'
-import { glowSourcesOf, shownInWorld } from './glowSources'
+import { glowSourcesOf, shownInWorld, type GlowSource } from './glowSources'
+
+/**
+ * The pass's savings, each on by default; the perf harness (scripts/perf-audit)
+ * turns one off to render before and after in the same tick (tides-0oi.15).
+ * scissor: the composite only over what the sources' glow can reach.
+ */
+export const glowPassSwitches = { scissor: true }
 
 /**
  * How much of each coarser level comes back up into the finer one: under 1
@@ -142,11 +154,39 @@ export interface GlowPass {
 }
 
 const clearColor = new THREE.Color()
+const sphere = new THREE.Sphere()
+
+/**
+ * The View px the emitting sources cover (their meshes' bounding spheres on
+ * GLOW_LAYER): 'all' when one can't be bounded (around the eye, or not a
+ * perspective camera), null when none is in front. World matrices current.
+ */
+function sourcesBox(sources: readonly GlowSource[], camera: THREE.Camera, view: Size): ScreenBox | 'all' | null {
+  if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return 'all'
+  const projection = camera.projectionMatrix.elements
+  let box: ScreenBox | 'all' | null = null
+  for (const { object, emits } of sources) {
+    if (!emits || !shownInWorld(object) || box === 'all') continue
+    object.traverseVisible((o) => {
+      const mesh = o as THREE.Mesh
+      if (box === 'all' || !mesh.isMesh || !mesh.layers.isEnabled(GLOW_LAYER)) return
+      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
+      sphere.copy(mesh.geometry.boundingSphere!).applyMatrix4(mesh.matrixWorld)
+      sphere.center.applyMatrix4(camera.matrixWorldInverse)
+      const b = sphereScreenBox(sphere.center, sphere.radius, projection, view)
+      if (!b) box = 'all'
+      else if (!box) box = b
+      else box = { x0: Math.min(box.x0, b.x0), y0: Math.min(box.y0, b.y0), x1: Math.max(box.x1, b.x1), y1: Math.max(box.y1, b.y1) }
+    })
+  }
+  return box
+}
 
 export function createGlowPass(): GlowPass {
   let target: THREE.WebGLRenderTarget | null = null
   let levels: THREE.WebGLRenderTarget[] = []
   let ready: ViewViewport | null = null
+  let reach: ViewViewport | null = null
 
   const down = quadMaterial(downFragment, { tSource: { value: null }, uTexel: { value: new THREE.Vector2() } })
   const up = quadMaterial(
@@ -227,6 +267,19 @@ export function createGlowPass(): GlowPass {
       const ratio = gl.getPixelRatio()
       size({ width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) })
       const glowTarget = target!
+      // The View hasn't drawn yet this frame: bring the camera's and each
+      // source's world matrices up to date, as its scene render would.
+      camera.updateWorldMatrix(true, false)
+      for (const { object } of sources) if (shownInWorld(object)) object.updateWorldMatrix(true, true)
+      // Where the glow can land: the sources' box grown by the blur's reach
+      // (glow-target px, so CSS px at this ratio). Nothing past it changes a
+      // canvas pixel, and nothing at all when the box misses the View.
+      reach = viewport
+      if (glowPassSwitches.scissor) {
+        const box = sourcesBox(sources, camera, viewport)
+        reach = box && glowCompositeRect(box, glowReachPx(levels.length) / (GLOW_SCALE * ratio), viewport)
+        if (!reach) return
+      }
 
       const autoClear = gl.autoClear
       const alpha = gl.getClearAlpha()
@@ -236,14 +289,9 @@ export function createGlowPass(): GlowPass {
       gl.setRenderTarget(glowTarget)
       gl.setClearColor(0x000000, 0)
       gl.clear(true, true, false)
-      // The View hasn't drawn yet this frame: bring the camera's and each
-      // source's world matrices up to date, as its scene render would.
-      camera.updateWorldMatrix(true, false)
       camera.layers.set(GLOW_LAYER)
       for (const { object } of sources) {
-        if (!shownInWorld(object)) continue
-        object.parent?.updateWorldMatrix(true, false)
-        gl.render(object, camera)
+        if (shownInWorld(object)) gl.render(object, camera)
       }
       camera.layers.mask = mask
       const glow = blur(gl, glowTarget)
@@ -257,13 +305,14 @@ export function createGlowPass(): GlowPass {
     },
     composite(gl) {
       const viewport = ready
+      const rect = reach
       ready = null
-      if (!viewport) return
+      if (!viewport || !rect) return
       const autoClear = gl.autoClear
       gl.autoClear = false
       gl.setRenderTarget(null)
       gl.setViewport(viewport.left, viewport.bottom, viewport.width, viewport.height)
-      gl.setScissor(viewport.left, viewport.bottom, viewport.width, viewport.height)
+      gl.setScissor(rect.left, rect.bottom, rect.width, rect.height)
       gl.setScissorTest(true)
       quad.material = composite
       quad.render(gl)

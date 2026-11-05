@@ -18,7 +18,7 @@ export function GlowOccluder({ geometry }: { geometry: THREE.BufferGeometry }) {
 
 function GlowOccluderOn({ geometry }: { geometry: THREE.BufferGeometry }) {
   const mesh = useRef<THREE.Mesh>(null)
-  useGlowSource(mesh, GLOW_ORDER.opaque)
+  useGlowSource(mesh, GLOW_ORDER.opaque, false)
   return (
     <mesh
       ref={mesh}
