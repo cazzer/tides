@@ -92,19 +92,27 @@ describe("the limb sphere's rows (tides-0oi.8)", () => {
     expect(limbRowRange(eyeAt(0, 0, -1), R, LIMB_SEGMENTS, LIFT)).toEqual(FULL_RANGE)
     expect(limbRowRange({ x: 0, y: 0, z: 0 }, R, LIMB_SEGMENTS, LIFT)).toEqual(FULL_RANGE)
     expect(limbRowRange({ x: NaN, y: 0, z: R * 2 }, R, LIMB_SEGMENTS, LIFT)).toEqual(FULL_RANGE)
+    // Below the lowest displaced ground, raised or lowered.
+    const lowered = { min: -0.01 * R, max: 0.02 * R }
+    expect(limbRowRange(eyeAt(30, 0, -0.011 * 6371), R, LIMB_SEGMENTS, lowered)).toEqual(FULL_RANGE)
+    expect(limbRowRange(eyeAt(30, 0, -0.009 * 6371), R, LIMB_SEGMENTS, lowered).count).toBeLessThan(Infinity)
+    expect(limbRowRange(eyeAt(30, 0, 50), R, LIMB_SEGMENTS, { min: 0.01 * R, max: 0.02 * R })).toEqual(FULL_RANGE)
   })
 
-  it("leaves out no triangle the eye can see over the ground's bulge", () => {
-    // A coarse sphere, so every triangle is checked: each corner raised by
-    // any lift up to the most, and the facets' centres, seen from close,
-    // grazing and far eyes. Visible: the line from the eye clears the drawn
-    // sphere's inner ball (its facets' least distance from the centre).
-    const segments: SphereSegments = [64, 32]
+  it.each([
+    ['raised only', { min: 0, max: 0.02 * R }, [64, 32]],
+    // Rows fine enough that the margin a row each side can't hide the lowering.
+    ['lowered most', { min: -0.05 * R, max: 0.002 * R }, [256, 128]],
+  ] as const)("leaves out no triangle the eye can see over the ground's bulge, %s", (_, lift, segments) => {
+    // A coarse sphere, so every triangle is checked: each corner moved by
+    // lifts from the least to the most, and the facets' centres, seen from
+    // close, grazing and far eyes. Visible: the line from the eye clears the
+    // drawn sphere's inner ball (its facets' least distance from the centre,
+    // with every corner at the least lift).
     const [width, height] = segments
     const geometry = new THREE.SphereGeometry(R, width, height)
     const position = geometry.getAttribute('position')
     const index = geometry.index!.array
-    const lift = { min: 0, max: 0.02 * R }
     const corner = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]
     const plane = new THREE.Plane()
     let inner = Infinity
@@ -113,6 +121,7 @@ describe("the limb sphere's rows (tides-0oi.8)", () => {
       plane.setFromCoplanarPoints(corner[0], corner[1], corner[2])
       if (Number.isFinite(plane.constant)) inner = Math.min(inner, Math.abs(plane.constant))
     }
+    inner *= (R + Math.min(lift.min, 0)) / R
     const clears = (eye: THREE.Vector3, point: THREE.Vector3) => {
       const ray = new THREE.Ray(eye, point.clone().sub(eye).normalize())
       const hit = ray.intersectSphere(new THREE.Sphere(new THREE.Vector3(), inner), new THREE.Vector3())
@@ -132,7 +141,7 @@ describe("the limb sphere's rows (tides-0oi.8)", () => {
         if (row >= first && row <= last) continue
         for (let k = 0; k < 3; k++) corner[k].fromBufferAttribute(position, index[i + k])
         const centre = corner[0].clone().add(corner[1]).add(corner[2]).divideScalar(3)
-        for (const by of [0, 0.5 * lift.max, lift.max]) {
+        for (const by of [lift.min, 0, 0.5 * lift.max, lift.max]) {
           for (const p of [...corner, centre]) {
             if (clears(eye, raised(p, by))) missed.push(`${lat},${lon},${km}: triangle ${i / 3}`)
             checked++

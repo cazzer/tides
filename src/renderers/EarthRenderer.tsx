@@ -687,13 +687,16 @@ function setGroundRows(
   _eye.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(_inverse.copy(mesh.matrixWorld).invert())
   const bias = material.displacementMap ? material.displacementBias : 0
   const scale = material.displacementMap ? material.displacementScale : 0
-  const lift = { min: bias + Math.min(0, scale * GROUND_HEIGHT_MAX), max: bias + Math.max(0, scale * GROUND_HEIGHT_MAX) }
-  const { start, count } = limbRowRange(_eye, radius, LIMB_SEGMENTS, lift)
+  _lift.min = bias + Math.min(0, scale * GROUND_HEIGHT_MAX)
+  _lift.max = bias + Math.max(0, scale * GROUND_HEIGHT_MAX)
+  const { start, count } = limbRowRange(_eye, radius, LIMB_SEGMENTS, _lift, _rows)
   geometry.setDrawRange(start, count)
 }
 
 const _eye = new THREE.Vector3()
 const _inverse = new THREE.Matrix4()
+const _lift = { min: 0, max: 0 }
+const _rows = { start: 0, count: 0 }
 const _centre = new THREE.Vector3()
 const _buffer = new THREE.Vector2()
 const _position = new THREE.Vector3()

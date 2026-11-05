@@ -256,7 +256,13 @@ uniform float uCloudUnitsPerKm;
   const DETAIL_OCTAVE = `vec4 o = detailNoise(DETAIL_TURNS[k] * p / wavelength + float(k) * 23.17);
     sum += weight * vec4(amp * (2.0 * o.x - 1.0), rough * 2.0 * (o.yzw * DETAIL_TURNS[k]) / wavelength);
 `
-  const DETAIL_GATE = /    \/\/ Weight is 0 where[^\n]*\n(    \/\/[^\n]*\n)*    if \(weight > 0\.0\) \{\n      vec4 o = detailNoise\([^\n]*\n      sum \+= weight \*[^\n]*\n    \}\n/
+  // The gate's comment and wrapper, about the octave's own text indented
+  // two more: any other change to the octave still changes the hash.
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const GATED_OCTAVE = ('    ' + DETAIL_OCTAVE).replace(/^(?=.)/gm, '  ')
+  const DETAIL_GATE = new RegExp(
+    '    // Weight is 0 where[^\\n]*\\n(    //[^\\n]*\\n)*    if \\(weight > 0\\.0\\) \\{\\n' + escape(GATED_OCTAVE) + '    \\}\\n'
+  )
   function detailGateAsBefore(fragment: string) {
     expect(fragment.split('if (weight > 0.0) {').length).toBe(2)
     expect(fragment).toMatch(DETAIL_GATE)
