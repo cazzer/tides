@@ -7,6 +7,7 @@ import coronaVertex from '../shaders/sun-corona/vertex.glsl'
 import coronaFragment from '../shaders/sun-corona/fragment.frag'
 import { CORONA_MAX_ANGLE, CORONA_OUTER_MAIN, CORONA_OUTER_PERSPECTIVE } from './corona-geometry'
 import { SunGlare } from './SunGlare'
+import { SunGlow } from './glow/SunGlow'
 import { sunRaycast } from './sun-pick'
 import { useStore } from '../store'
 import { isLowQuality } from '../quality'
@@ -214,6 +215,9 @@ export default function SunRenderer({ diameter, interactive = false, coronaFade 
       {/* Far glare: keeps the Sun a bright point when its disc is sub-pixel
           at flight-scale ranges (tides-2hv.12); separate from the corona. */}
       {shipMode && <SunGlare radius={diameter} />}
+      {/* Its glow (tides-64u.2), handed over from the glare above as the disc
+          grows, so the two never stack. Only drawn where a GlowPass is. */}
+      <SunGlow radius={diameter} />
     </>
   )
 }

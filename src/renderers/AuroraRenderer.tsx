@@ -22,6 +22,8 @@ import { kpFeed } from './kpFeed'
 import { ovationFeed } from './ovationFeed'
 import { AURORA_GAIN } from '../lighting'
 import { isLowQuality } from '../quality'
+import { GLOW_LAYER } from './glow/glow'
+import { GLOW_ORDER, glowOn, useGlowSource } from './glow/glowSources'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import auroraFragment from '../shaders/aurora/fragment.frag'
 import {
@@ -31,6 +33,35 @@ import {
   pickShellFaces,
   withinShellReach,
 } from './earth-shells'
+
+/** [TUNE] The aurora's emission in the glow, against its own on screen. */
+const AURORA_GLOW_GAIN = 5
+/** The glow's march (tides-64u.4): blurred, it needs few steps, and the
+ * curtains' full march drawn a second time cost most of the glow's budget. */
+const AURORA_GLOW_STEPS = 6
+
+// The curtains for the glow: the same shader on the same uniforms (one
+// object, so every update reaches both), a short march.
+function auroraGlowMaterial(material: THREE.ShaderMaterial): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: material.vertexShader,
+    fragmentShader: material.fragmentShader,
+    defines: { STEPS: AURORA_GLOW_STEPS },
+    uniforms: material.uniforms,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    forceSinglePass: true,
+    // Turned double-sided within the shell's reach, as the View's is.
+    userData: { warmSides: [THREE.DoubleSide] },
+  })
+}
+
+// Each draw sets the gain: the View's and the glow's materials share it.
+function setGain(material: THREE.Material, gain: number): void {
+  ;(material as THREE.ShaderMaterial).uniforms.uGain.value = gain
+}
 
 // Shell heights as fractions of the Earth's radius. Real aurora spans ~100 to
 // ~300+ km (1.6-5%); the base sits just above the cloud layer (1.02) and the
@@ -182,6 +213,7 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
     // placed the camera.
     if (bandMesh.current) {
       bandMesh.current.visible = withinShellReach(mesh.current!, state.camera, u.uOuter.value)
+      if (glowBand.current) glowBand.current.visible = bandMesh.current.visible
     }
     // Storm cues (red tops, folding) follow the nowcast's activity too.
     u.uKp.value = fit.current
@@ -198,9 +230,24 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
     steadyGeomagneticAxis(geomagneticAxis(timestamp, pole), sway.current, u.uPole.value)
   })
 
-  // The meshes share the material and the Earth's frame.
-  const pickFaces: THREE.Object3D['onBeforeRender'] = (_renderer, _scene, camera, _geometry, shader) =>
+  // The curtains in the glow too, brighter and with a short march, so their
+  // folds bloom (tides-64u.4). After the opaque stand-ins: Earth's hides the
+  // far side's.
+  const glowMaterial = useMemo(() => (glowOn() ? auroraGlowMaterial(material) : null), [material])
+  useEffect(() => () => glowMaterial?.dispose(), [glowMaterial])
+  const glowGroup = useRef<THREE.Group>(null)
+  const glowBand = useRef<THREE.Mesh>(null)
+  useGlowSource(glowGroup, GLOW_ORDER.additive)
+  const pickGlowFaces: THREE.Object3D['onBeforeRender'] = (_renderer, _scene, camera, _geometry, shader) => {
     pickShellFaces(mesh.current!, shader, camera)
+    setGain(shader, AURORA_GAIN * AURORA_GLOW_GAIN)
+  }
+
+  // The meshes share the material and the Earth's frame.
+  const pickFaces: THREE.Object3D['onBeforeRender'] = (_renderer, _scene, camera, _geometry, shader) => {
+    pickShellFaces(mesh.current!, shader, camera)
+    setGain(shader, AURORA_GAIN)
+  }
 
   return (
     <group>
@@ -228,6 +275,22 @@ export default function AuroraRenderer({ radius }: AuroraRendererProps) {
         raycast={noRaycast}
         onBeforeRender={pickFaces}
       />
+      {glowMaterial && (
+        <group ref={glowGroup}>
+          {[north, south, band].map((geometry, i) => (
+            <mesh
+              key={i}
+              ref={i === 2 ? glowBand : undefined}
+              layers={GLOW_LAYER}
+              geometry={geometry}
+              material={glowMaterial}
+              visible={i !== 2}
+              raycast={noRaycast}
+              onBeforeRender={pickGlowFaces}
+            />
+          ))}
+        </group>
+      )}
     </group>
   )
 }
