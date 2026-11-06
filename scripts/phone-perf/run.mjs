@@ -330,6 +330,17 @@ async function measurePose(connection, device, item, { base, params }) {
     const dprTimeline = await page.evaluate(
       'window.__dprctl?.changes ? JSON.parse(JSON.stringify(window.__dprctl.changes.slice(-500))) : null'
     )
+    // The controller's live state at the end (why it did or didn't move), when small enough to keep.
+    const dprState = await page.evaluate(`(() => {
+      const s = window.__dprctl?.state
+      if (!s) return null
+      try {
+        const json = JSON.stringify(s)
+        return json.length < 200000 ? { mode: window.__dprctl.mode, config: window.__dprctl.config, state: JSON.parse(json) } : { mode: window.__dprctl.mode, tooLarge: json.length }
+      } catch (e) {
+        return { error: String(e) }
+      }
+    })()`)
 
     const result = {
       url,
@@ -337,6 +348,7 @@ async function measurePose(connection, device, item, { base, params }) {
       startup,
       memoryAtReady,
       dprTimeline,
+      dprState,
       telemetry: telemetry?.entries ?? null,
       gpuAtReplay,
       activity,
