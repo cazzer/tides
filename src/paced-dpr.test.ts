@@ -4,6 +4,7 @@ import {
   DEFAULT_PACED_DPR_CONFIG,
   hasPacedTuning,
   pacedDprSettled,
+  pacedStartDpr,
   parsePacedDprConfig,
   stepPacedDpr,
   viewKindOf,
@@ -182,10 +183,10 @@ describe('paced dpr', () => {
     expect(raise.at - log[0].at).toBeGreaterThanOrEqual(60000)
   })
 
-  it('labels a drop from a long-held level without heat as held, at the base dwell', () => {
+  it('reads a drop from a level that fit and held heldMs as thermal, flat CPU time or not', () => {
     const { state, clock, log } = setup(3, 3)
     sim(state, clock, log, { s: 30, gpu: (dpr, at) => (at > 21000 && dpr >= 3 ? 20 : 8) })
-    expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'held', dwellMs: 4000 })
+    expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'thermal', dwellMs: 60000 })
   })
 
   it('ignores misses after CPU-bound frames: one probe, restored, then a long hold', () => {
@@ -203,9 +204,14 @@ describe('paced dpr', () => {
   it('keeps a probe drop when the "CPU" time scales with pixels (GPU backpressure)', () => {
     const { state, clock, log } = setup()
     // The main thread blocks in WebGL calls for the GPU: 20 ms at 2, 15.3 at 1.75.
-    sim(state, clock, log, { s: 30, kind: 'close', gpu: () => 5, cpu: () => 20 * (state.dpr / 2) ** 2 })
-    expect(log.map((c) => c.reason)).toEqual(['probe'])
-    expect(state.dpr).toBe(1.75)
+    sim(state, clock, log, { s: 60, kind: 'close', gpu: () => 5, cpu: () => 20 * (state.dpr / 2) ** 2 })
+    expect(log[0]).toMatchObject({ from: 2, to: 1.75, reason: 'probe', bounced: false })
+    expect(log.some((c) => c.reason === 'cpu')).toBe(false)
+    // 1.75 fits, so it tries 2 again; each probe back down is that raise bouncing, and the dwell doubles.
+    const probes = log.filter((c) => c.reason === 'probe')
+    expect(probes.slice(1).every((c) => c.bounced)).toBe(true)
+    expect(probes.map((c) => c.dwellMs)).toEqual([4000, 8000, 16000, 32000].slice(0, probes.length))
+    expect(probes.length).toBeLessThanOrEqual(4)
   })
 
   it('ignores stalls before the effects (lag) at ~3 a second, and still raises', () => {
@@ -333,11 +339,13 @@ describe('paced dpr', () => {
 
   it('keeps the ring consistent at capacity', () => {
     const state = createPacedDprState(3, 2)
+    // No probe: 9 in 10 intervals CPU-bound (25 ms of CPU in a 33 ms interval) grow the window to capacity.
+    const config = { ...DEFAULT_PACED_DPR_CONFIG, cpuProbeMs: 600000 }
     let at = 1000
     for (let i = 0; i < 3000; i++) {
-      at += 1000 / 120
-      const cpuMs = i % 10 < 9 ? 14 : 3
-      stepPacedDpr(state, { at, intervalMs: 1000 / 120, cpuMs, lagMs: 0, kind: 'system', nativeDpr: 3 })
+      const intervalMs = i % 10 < 9 ? 2 * VSYNC : VSYNC
+      at += intervalMs
+      stepPacedDpr(state, { at, intervalMs, cpuMs: i % 10 < 9 ? 25 : 3, lagMs: 0, kind: 'system', nativeDpr: 3 }, config)
     }
     expect(state.count).toBe(512)
     let kept = 0
@@ -380,6 +388,109 @@ describe('paced dpr', () => {
     expect(state.levelSince).toBe(5000)
     stepPacedDpr(state, { ...at(0), at: 5000 + VSYNC })
     expect(state.count).toBe(0)
+  })
+})
+
+describe('paced dpr on the S21 sweep\'s trace shapes (tides-0oi.38)', () => {
+  const t = (at: number) => (at - 1000) / 1000
+  /** Every other frame (by the clock): half the intervals in a burst. */
+  const odd = (at: number) => Math.floor(at / VSYNC) % 2 === 1
+
+  it('aurora-night under GPU backpressure: reaches its best ratio in seconds, and no CPU verdict undoes it', () => {
+    // hold13: at 2 the intervals ran 66.7 ms with cpuMedian 8.6 and lagMedian 5 (cpuShare 0.9: CPU plus lag over
+    // 0.75 budgets), 50 at 1.75. The probe's drop was restored as 'cpu' (CPU fell ~5%), costing ~15 s at 2.
+    const { state, clock, log } = setup()
+    sim(state, clock, log, { s: 30, kind: 'close', cpu: () => 8.6, lag: () => 5, gpu: (dpr) => 58 * (dpr / 2) ** 2 })
+    expect(log.some((c) => c.reason === 'cpu' || c.reason === 'probe')).toBe(false)
+    const best = log.findIndex((c) => c.to === 1.5)
+    expect(best).toBeGreaterThan(0)
+    expect(t(log[best].at)).toBeLessThan(5)
+    expect(log.slice(best + 1)).toEqual([])
+    expect(state.dpr).toBe(1.5)
+  })
+
+  it('keeps a probe drop that shortened the intervals though the CPU time barely fell (backpressure)', () => {
+    // The main thread blocks half the interval in WebGL calls: CPU-bound by any measure, yet 1.75 runs at 50 ms
+    // where 2 ran at 66.7, while the blocked time falls only 5%.
+    const { state, clock, log } = setup()
+    sim(state, clock, log, { s: 20, kind: 'close', cpu: () => (state.dpr >= 2 ? 30 : 28.5), lag: () => 5, gpu: (dpr) => 58 * (dpr / 2) ** 2 })
+    expect(log[0]).toMatchObject({ from: 2, to: 1.75, reason: 'probe' })
+    expect(log.some((c) => c.to === 2)).toBe(false)
+    expect(t(log[0].at)).toBeLessThan(15)
+  })
+
+  it('earth-100km as the GPU throttles: steps down once per level, no 2 <-> 1.75 bounce', () => {
+    // hold13: fine at 2 for 30 s, then bursts of misses at 2 (p95 33, 4-15 misses a window) while 1.75 held a
+    // clean window; the raises back to 2 were undone within ~2-3 s, twice, before it settled at 1.5. Here 2
+    // throttles at 30 s and 1.75 at 60 s: half the frames miss for 0.5 s of every 3 s.
+    const { state, clock, log } = setup()
+    const throttledAt = (dpr: number) => (dpr >= 2 ? 30 : dpr >= 1.75 ? 60 : Infinity)
+    sim(state, clock, log, {
+      s: 90,
+      kind: 'close',
+      gpu: (dpr, at) => (t(at) >= throttledAt(dpr) && t(at) % 3 < 0.5 && odd(at) ? 20 : 12),
+    })
+    expect(log.map((c) => [c.from, c.to, c.reason])).toEqual([
+      [2, 1.75, 'thermal'],
+      [1.75, 1.5, 'thermal'],
+    ])
+    expect(t(log[0].at)).toBeLessThan(34)
+    expect(t(log[1].at)).toBeLessThan(64)
+    expect(log[0].dwellMs).toBe(DEFAULT_PACED_DPR_CONFIG.thermalDwellMs)
+  })
+
+  it('counts a drop seconds after a raise as a bounce, though the raise\'s first window held', () => {
+    // hold13 round 2: the raise 1.75 -> 2 held its first window, then dropped 2.9 s after it, unbounced at the
+    // base dwell, and raised again 5.8 s later.
+    const { state, clock, log } = setup(3, 1.75)
+    sim(state, clock, log, {
+      s: 30,
+      kind: 'close',
+      gpu: (dpr, at) => (dpr >= 2 && at - state.levelSince > 2000 && odd(at) ? 20 : 12),
+    })
+    const drop = log.find((c) => c.from === 2)!
+    expect(drop).toMatchObject({ to: 1.75, bounced: true, dwellMs: 8000 })
+  })
+
+  it('reads a sustained rise in frame time at a level that fit as throttling: one drop, and a minute before raising', () => {
+    // The S21's GPU clock falls to 443 of 840 MHz within 90 s of a close view while the CPU time stays flat, so
+    // the CPU-time heat test never fires. The GPU time at 2 creeps up from 20 s (jitter +-4 ms).
+    const { state, clock, log } = setup()
+    let frame = 0
+    sim(state, clock, log, {
+      s: 120,
+      kind: 'close',
+      gpu: (dpr, at) => (10 + 0.12 * Math.max(0, t(at) - 20) + 4 * Math.sin(frame++ * 1.7)) * (dpr / 2) ** 2,
+    })
+    expect(log[0]).toMatchObject({ from: 2, to: 1.75, reason: 'thermal', bounced: false, dwellMs: 60000 })
+    expect(log.some((c) => c.reason === 'raise')).toBe(false)
+  })
+
+  it('climbs the system view though CPU plus start lag passes 0.75 budgets, when every frame fits', () => {
+    // sweep13 round 2: the system view made no change in 30 s with perfect frames. The S21's start lag runs
+    // 2-7 ms (lagMedian 6.6 in hold13) on ~6 ms of CPU: past 12.5 ms, every interval counted as CPU-bound.
+    const { state, clock, log } = setup()
+    sim(state, clock, log, { s: 30, cpu: () => 5.7, lag: () => 7 })
+    expect(log.every((c) => c.reason === 'raise')).toBe(true)
+    expect(state.dpr).toBe(3)
+  })
+
+  it('starts the system view at the display ratio (3 on the S21) and holds it there', () => {
+    // sweep13sys: dpr 3 in the system view costs ~1 ms of replay and no frames (16.7/16.8).
+    expect(pacedStartDpr(3)).toBe(3)
+    expect(pacedStartDpr(2.5)).toBe(2.5)
+    expect(pacedStartDpr(1)).toBe(1)
+    const state = createPacedDprState(3, pacedStartDpr(3))
+    const clock = { at: 1000 }
+    const log: PacedDprChange[] = []
+    sim(state, clock, log, { s: 30, gpu: () => 7, cpu: () => 6, lag: () => 3 })
+    expect(log).toEqual([])
+    expect(state.dpr).toBe(3)
+    expect(pacedDprSettled(state)).toBe(true)
+    // A close view first: its own ceiling.
+    const close = createPacedDprState(3, pacedStartDpr(3))
+    sim(close, { at: 1000 }, log, { s: 2, kind: 'close' })
+    expect(log).toEqual([expect.objectContaining({ from: 3, to: 2, reason: 'ceiling' })])
   })
 })
 
@@ -473,9 +584,11 @@ describe('pacedDprSettled: when the idle cap may engage (tides-0oi.31)', () => {
     expect(top).toBeGreaterThan(0)
     expect(steps.slice(0, top).every((x) => !x.idle)).toBe(true)
     expect(steps.slice(0, top).some((x) => x.dpr > 2)).toBe(true)
-    // Not on the raise to 3 itself: its first full window must hold first.
+    // Not on the raise to 3 itself: it must hold heldMs first (a drop before then is a bounce).
     expect(steps[top].idle).toBe(false)
-    expect(steps.slice(top + 6).every((x) => x.idle)).toBe(true)
+    const judged = top + (2 * DEFAULT_PACED_DPR_CONFIG.heldMs) / 1000
+    expect(steps.slice(top, judged - 1).every((x) => !x.idle)).toBe(true)
+    expect(steps.slice(judged + 4).every((x) => x.idle)).toBe(true)
     expect(state.dpr).toBe(3)
   })
 
