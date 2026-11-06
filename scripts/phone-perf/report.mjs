@@ -77,7 +77,7 @@ export function aggregate(results) {
         .slice(0, 8),
       info: last?.info ?? null,
       loadMs: median(ok.map((r) => r.loadMs)),
-      thermal: runs.map((r) => ({ before: r.thermalBefore, after: r.thermalAfter })),
+      thermal: runs.map((r) => ({ before: r.thermalBefore, after: r.thermalAfter, power: r.powerBefore ?? null })),
     }
   })
 }
@@ -87,8 +87,25 @@ const gpuProcessMs = (r) => {
   return threads?.length ? threads.reduce((sum, t) => sum + t.busyPerFrameMs, 0) : null
 }
 
+// The GPU clock over the replay: the mean of the readings just before and
+// just after it (the governor can move during it), when the phone gave them.
+export function replayMHz(r) {
+  const v = [r.gpuAtReplay?.curMHz, r.gpuAfterReplay?.curMHz].filter((x) => typeof x === 'number')
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
+}
+
+// Replay ms scaled by that clock, so a run whose GPU was throttled or idling
+// low compares as work done rather than time taken (approximate: memory
+// bandwidth doesn't scale with the core clock).
+function replayCycles(r) {
+  const mhz = replayMHz(r)
+  return typeof r.replay?.ms === 'number' && mhz ? (r.replay.ms * mhz) / 1000 : null
+}
+
 const COMPARED = [
   ['replay ms', (r) => r.replay?.ms],
+  ['replay Mcycles (ms x GPU MHz)', replayCycles],
+  ['GPU MHz at replay', replayMHz],
   ['GPU-process ms/frame', gpuProcessMs],
   ['main ms/frame', (r) => r.trace?.main?.busyPerFrameMs],
   ['p50 ms', (r) => r.frames?.p50],
@@ -106,7 +123,9 @@ const COMPARED = [
 // Before/after per pose across builds (BUILDS): each later build against the
 // first, paired by round (the two ran back to back), so the delta is the
 // median of per-round differences and its range shows the noise.
-export function compareBuilds(results, buildNames) {
+// matchDpr false (COMPARE_DPR=0) pairs runs at any dpr and canvas, for a
+// build whose own controller sets the ratio; the tier must still match.
+export function compareBuilds(results, buildNames, { matchDpr = true } = {}) {
   if (!buildNames || buildNames.length < 2) return []
   const [before, ...afters] = buildNames
   const poseKeys = [...new Set(results.filter((r) => r.build).map((r) => r.poseKey))]
@@ -119,7 +138,8 @@ export function compareBuilds(results, buildNames) {
       // A pair that rendered differently (tier from a saved choice, dpr,
       // canvas) compares two different frames, not two builds.
       const same = ([a, b]) =>
-        a.info?.quality === b.info?.quality && a.info?.dpr === b.info?.dpr && a.info?.canvas?.join('x') === b.info?.canvas?.join('x')
+        a.info?.quality === b.info?.quality &&
+        (!matchDpr || (a.info?.dpr === b.info?.dpr && a.info?.canvas?.join('x') === b.info?.canvas?.join('x')))
       const pairs = all.filter(same)
       const mismatched = all.length - pairs.length
       const metrics = COMPARED.map(([name, get]) => {
@@ -165,6 +185,11 @@ export function summariseDprTimeline(changes) {
 
 // The TELEMETRY_MS polls: skin temperature over the window, mean battery
 // current, the charge counter's change and the idle cap's draws and skips.
+const mean = (xs) => {
+  const v = xs.filter((x) => typeof x === 'number' && Number.isFinite(x))
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
+}
+
 export function summariseTelemetry(entries) {
   const skins = entries.map((e) => e.thermal?.skin?.c).filter((c) => typeof c === 'number')
   const currents = entries.map((e) => e.battery?.currentMa).filter((c) => typeof c === 'number')
@@ -196,6 +221,16 @@ export function summariseTelemetry(entries) {
     currentMeanMa: currents.length ? currents.reduce((a, b) => a + b, 0) / currents.length : null,
     chargeDeltaUah: charges.length > 1 ? charges[charges.length - 1] - charges[0] : null,
     ac: entries.some((e) => e.battery?.ac),
+    gpuMeanMHz: mean(entries.map((e) => e.gpu?.curMHz)),
+    gpuCapMinMHz: (() => {
+      const caps = entries.map((e) => e.gpu?.maxMHz).filter((x) => typeof x === 'number')
+      return caps.length ? Math.min(...caps) : null
+    })(),
+    gpuBusyMeanPct: mean(entries.map((e) => e.gpu?.busyPct)),
+    gpuPwrlevelMax: (() => {
+      const l = entries.map((e) => e.gpu?.thermalPwrlevel).filter((x) => typeof x === 'number')
+      return l.length ? Math.max(...l) : null
+    })(),
     idle,
   }
 }
@@ -231,7 +266,7 @@ export function renderMarkdown({ meta, results }) {
       `| ${r.key} | ${info.quality ?? r.tier} | ${info.dpr ?? '–'} | ${info.canvas?.join('x') ?? '–'} | ${f1(r.p50)} | ${f1(r.p95)} | ${f1(r.p99)} | ${pct(r.dropped)} | ${r.refreshHz ?? '–'} | ${f1(r.mainBusyMs)} | ${f1(r.replayMs)}${r.noiseReplay && r.noiseReplay.runs > 1 ? ` ±${f1(r.noiseReplay.spreadPct / 2)}%` : ''} | ${r.gpuMs !== null ? `${f1(r.gpuMs)} (${r.gpuSource})` : r.gpuDeviceMs !== null ? `${f1(r.gpuDeviceMs)} (trace)` : 'n/a'} | ${gpuProc || '–'} | ${info.vramMB ? `${info.vramMB.total} (${info.vramMB.compressed})` : '–'} | ${r.noise.p50 && r.noise.p50.runs > 1 ? `±${f1(r.noise.p50.spreadPct / 2)}%` : '–'} |`
     )
   }
-  const comparisons = compareBuilds(results, meta.builds?.map((b) => b.name))
+  const comparisons = compareBuilds(results, meta.builds?.map((b) => b.name), { matchDpr: meta.config?.compareDpr !== false })
   if (comparisons.length) {
     lines.push('', '## Before / after (paired by round: median of after - before, with the range over rounds)', '')
     lines.push('| pose | builds | metric | before | after | delta | delta % | range | rounds |', '|---|---|---|---|---|---|---|---|---|')
@@ -274,7 +309,7 @@ export function renderMarkdown({ meta, results }) {
     for (const r of rows) {
       const parts = r.thermal.map((t) =>
         t.before
-          ? `${t.before.skin?.c ?? '?'}→${t.after?.skin?.c ?? '?'}°C (status ${t.before.status}→${t.after?.status ?? '?'}${t.before.waitedMs > 1000 ? `, cooled ${Math.round(t.before.waitedMs / 1000)} s` : ''})`
+          ? `${t.before.skin?.c ?? '?'}→${t.after?.skin?.c ?? '?'}°C (status ${t.before.status}→${t.after?.status ?? '?'}${t.before.waitedMs > 1000 ? `, cooled ${Math.round(t.before.waitedMs / 1000)} s` : ''}${t.power ? `, ${t.power.ac ? 'AC' : 'BATTERY'} ${t.power.level}%` : ''})`
           : '–'
       )
       lines.push(`- **${r.key}**: ${parts.join('; ')}`)
@@ -315,7 +350,7 @@ export function renderMarkdown({ meta, results }) {
         ? `; idle cap: ${t.idle.draws} draws, ${t.idle.skips} skips over the window (${t.idle.drawHz === null ? '–' : f1(t.idle.drawHz)} draws/s), cap held from ${t.idle.capHeldFromS === null ? 'never' : `${f1(t.idle.capHeldFromS)} s`} into sampling, last activity ${t.idle.lastActivity}`
         : ''
       lines.push(
-        `- **${r.key}** round ${r.round + 1}: skin ${f1(t.skinStart)}→${f1(t.skinEnd)}°C (max ${f1(t.skinMax)}, status max ${t.statusMax ?? '–'}); battery current ${f1(t.currentMeanMa)} mA mean${t.ac ? ' (on AC: net charge current)' : ''}, charge counter ${t.chargeDeltaUah === null ? '–' : `${t.chargeDeltaUah > 0 ? '+' : ''}${t.chargeDeltaUah}`} µAh${idle}`
+        `- **${r.key}** round ${r.round + 1}: skin ${f1(t.skinStart)}→${f1(t.skinEnd)}°C (max ${f1(t.skinMax)}, status max ${t.statusMax ?? '–'}); battery current ${f1(t.currentMeanMa)} mA mean${t.ac ? ' (on AC: net charge current)' : ''}, charge counter ${t.chargeDeltaUah === null ? '–' : `${t.chargeDeltaUah > 0 ? '+' : ''}${t.chargeDeltaUah}`} µAh; GPU ${f1(t.gpuMeanMHz)} MHz mean (cap ${f1(t.gpuCapMinMHz)}, busy ${f1(t.gpuBusyMeanPct)}%, thermal level ${t.gpuPwrlevelMax ?? '–'})${r.gpuAtReplay ? `, ${f1(r.gpuAtReplay.curMHz)} MHz into the replay` : ''}${idle}`
       )
     }
   }

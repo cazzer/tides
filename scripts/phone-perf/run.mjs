@@ -58,6 +58,10 @@ const config = {
   // Every N ms during sampling: thermal, battery (phone) and the idle cap's
   // counters (window.__idleRate, tides-0oi.31). 0 = off.
   telemetryMs: num('TELEMETRY_MS', 0),
+  // 0: a wireless drop ends the run at once (no adb connect attempts).
+  reconnect: env.RECONNECT !== '0',
+  // 0: the before/after table pairs rounds at different dpr (a controller's own choice).
+  compareDpr: env.COMPARE_DPR !== '0',
 }
 
 function parseBuild(spec) {
@@ -65,7 +69,10 @@ function parseBuild(spec) {
   if (at < 1) throw new Error(`BUILDS entries are name=path, not ${spec}`)
   const name = spec.slice(0, at).trim()
   if (!/^[\w.-]+$/.test(name)) throw new Error(`Build name ${name} must be letters, digits, . _ or -`)
-  return { name, root: path.resolve(spec.slice(at + 1).trim()) }
+  // name=path?query: the build's own query string, after PARAMS (the same
+  // tree can be listed twice with different settings, each built and served).
+  const [root, query] = spec.slice(at + 1).trim().split('?')
+  return { name, root: path.resolve(root), params: query ?? null }
 }
 
 const log = (...args) => console.log(...args)
@@ -149,6 +156,7 @@ async function measureSurvivingDrops(device, item, build, round) {
   const attempt = () => measureWithGuards(active.connection, device, item, build, round).catch((thrown) => ({ thrown }))
   let record = await attempt()
   if ((record.thrown || record.error) && device.serial && !(await adb.attached(device.serial))) {
+    if (!config.reconnect) throw new Error(`The phone dropped off adb (${device.serial}); RECONNECT=0, so the run stops here`)
     log(`  the phone dropped off adb; reconnecting ${device.serial}…`)
     if (!(await adb.reconnect(device.serial, { log }))) {
       throw new Error(`The phone dropped and did not come back (adb connect ${device.serial}); not re-pairing`)
@@ -166,6 +174,8 @@ async function measureSurvivingDrops(device, item, build, round) {
 async function measureWithGuards(connection, device, item, build, round) {
   const key = build.name ? `${item.key}#${build.name}` : item.key
   let thermalBefore = null
+  // On AC or on battery when the pose starts (the phone can be unplugged mid-queue).
+  let powerBefore = null
   if (device.serial) {
     const cooled = await adb.coolDown(device.serial, {
       maxC: config.cooldownC,
@@ -174,8 +184,9 @@ async function measureWithGuards(connection, device, item, build, round) {
     })
     thermalBefore = { ...cooled.thermal, waitedMs: cooled.waitedMs, cool: cooled.cool }
     if (await adb.foregroundChrome(device.serial).catch(() => false)) log('  Chrome was not in front; brought it back')
+    powerBefore = await adb.readBattery(device.serial).catch(() => null)
   }
-  log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)})` : ''}`)
+  log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)}${powerBefore ? `, ${powerBefore.ac ? 'AC' : 'battery'} ${powerBefore.level}%` : ''})` : ''}`)
   const measure = () => measurePose(connection, device, item, build)
   let record
   try {
@@ -195,6 +206,7 @@ async function measureWithGuards(connection, device, item, build, round) {
     round,
     thermalBefore,
     thermalAfter,
+    powerBefore,
     ...record,
   }
 }
@@ -216,6 +228,7 @@ function startTelemetry(page, device, intervalMs) {
     if (device.serial) {
       entry.thermal = await adb.readThermal(device.serial).catch(() => null)
       entry.battery = await adb.readBattery(device.serial).catch(() => null)
+      entry.gpu = await adb.readGpu(device.serial).catch(() => null)
     }
     entry.idle = await page.evaluate(IDLE_SNAPSHOT).catch(() => null)
     entries.push(entry)
@@ -321,11 +334,26 @@ async function measurePose(connection, device, item, { base, params }) {
     const profile = await captureProfile(page)
 
     const activity = item.activity ? { panels: activityPanels, touches: await page.evaluate('window.__ppActivityStop()') } : null
+    // The GPU's clock going into the replay: the replay is timed, and a
+    // governor that settled low for a slow frame rate makes it look heavier.
+    const gpuAtReplay = device.serial ? await adb.readGpu(device.serial).catch(() => null) : null
     const replay = await page.evaluate(`window.__ppProbe.replay(${config.replayK}, 7)`, { timeoutMs: 120000 })
+    const gpuAfterReplay = device.serial ? await adb.readGpu(device.serial).catch(() => null) : null
     // The low tier's dpr controller (tides-0oi.13) logs its changes when present.
     const dprTimeline = await page.evaluate(
       'window.__dprctl?.changes ? JSON.parse(JSON.stringify(window.__dprctl.changes.slice(-500))) : null'
     )
+    // The controller's live state at the end (why it did or didn't move), when small enough to keep.
+    const dprState = await page.evaluate(`(() => {
+      const s = window.__dprctl?.state
+      if (!s) return null
+      try {
+        const json = JSON.stringify(s)
+        return json.length < 200000 ? { mode: window.__dprctl.mode, config: window.__dprctl.config, state: JSON.parse(json) } : { mode: window.__dprctl.mode, tooLarge: json.length }
+      } catch (e) {
+        return { error: String(e) }
+      }
+    })()`)
 
     const result = {
       url,
@@ -333,7 +361,10 @@ async function measurePose(connection, device, item, { base, params }) {
       startup,
       memoryAtReady,
       dprTimeline,
+      dprState,
       telemetry: telemetry?.entries ?? null,
+      gpuAtReplay,
+      gpuAfterReplay,
       activity,
       panelRate: await page.evaluate('window.__panelRate ? { config: window.__panelRate.config, draws: window.__panelRate.draws, held: window.__panelRate.held } : null'),
       info: sample.info,

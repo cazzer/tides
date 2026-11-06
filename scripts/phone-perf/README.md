@@ -16,7 +16,8 @@ BUILDS=before=../wt-a,after=../wt-b POSES=system npm run perf:phone  # before/af
 
 ## Before / after (`BUILDS`)
 
-`BUILDS=name=path,name=path` builds each source tree with this harness's hooks
+`BUILDS=name=path,name=path` (or `name=path?query` for a build's own URL
+params, after `PARAMS`; the same tree may be listed twice) builds each source tree with this harness's hooks
 (the tree is the build root, so its `src/` is what gets bundled) and serves
 them on `VITE_PORT`, `+1`, ... Per pose the builds run back to back, their
 order alternating each round, each after its own cool-down. The report adds a
@@ -27,6 +28,8 @@ same way. Use detached worktrees pinned to the commits you compare
 symlinked from a checkout with the same `package-lock.json`; the tree's
 `vite.config.ts` must match this checkout's (checked). On a pose that already
 holds 60 fps the p50 can't move; compare replay ms and GPU-process ms.
+Rounds that rendered at a different dpr or canvas are left out of the pairs;
+`COMPARE_DPR=0` keeps them, for a build whose own controller picks the dpr.
 
 No dependencies beyond Node 22 (built-in WebSocket) and `adb` on the PATH.
 
@@ -116,10 +119,16 @@ result records it as `dprTimeline` (last 500 entries) in `results.json`, and
 the report lists each change with its reason, window stats, cpuShare,
 cpuMedian and lagMedian.
 
+`RECONNECT=0` ends the run as soon as the phone drops off adb, instead of
+trying `adb connect` for a minute and retrying the pose once (it never
+re-pairs either way).
+
 `TELEMETRY_MS=5000` polls, every 5 s while sampling, the phone's thermal
 state and `dumpsys battery` (`current now` in mA and the charge counter; on
 AC that is the net charge current, so a lighter load shows as more charge)
-and the idle cap's `window.__idleRate` counters (tides-0oi.31); the report
+the Adreno's clock (`/sys/class/kgsl/kgsl-3d0`: current and allowed maximum
+frequency, busy %, thermal power level; the clock is also read going into the
+replay) and the idle cap's `window.__idleRate` counters (tides-0oi.31); the report
 summarises them per pose and round.
 
 `VARIANTS='off=dprctl=off;fixed2=dprctl=fixed:2'` runs each pose once per
