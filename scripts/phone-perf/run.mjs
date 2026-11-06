@@ -58,6 +58,8 @@ const config = {
   // Every N ms during sampling: thermal, battery (phone) and the idle cap's
   // counters (window.__idleRate, tides-0oi.31). 0 = off.
   telemetryMs: num('TELEMETRY_MS', 0),
+  // 0: a wireless drop ends the run at once (no adb connect attempts).
+  reconnect: env.RECONNECT !== '0',
   // 0: the before/after table pairs rounds at different dpr (a controller's own choice).
   compareDpr: env.COMPARE_DPR !== '0',
 }
@@ -154,6 +156,7 @@ async function measureSurvivingDrops(device, item, build, round) {
   const attempt = () => measureWithGuards(active.connection, device, item, build, round).catch((thrown) => ({ thrown }))
   let record = await attempt()
   if ((record.thrown || record.error) && device.serial && !(await adb.attached(device.serial))) {
+    if (!config.reconnect) throw new Error(`The phone dropped off adb (${device.serial}); RECONNECT=0, so the run stops here`)
     log(`  the phone dropped off adb; reconnecting ${device.serial}…`)
     if (!(await adb.reconnect(device.serial, { log }))) {
       throw new Error(`The phone dropped and did not come back (adb connect ${device.serial}); not re-pairing`)
