@@ -4,7 +4,7 @@
 // (renderers/HeldPanel.tsx); anything that moves them quickly brings back the
 // full rate.
 
-/** ?panelhz=: 60 (every frame, as before; the default), auto (the rule below), or a fixed rate. */
+/** ?panelhz=: auto (the rule below; the low tier's default), 60 (every frame; the high tier's default), or a fixed rate. */
 export type PanelRateConfig = { mode: 'auto'; hz: number } | { mode: 'fixed'; hz: number }
 
 const FIXED_RATES = [60, 30, 20, 15]
@@ -19,16 +19,17 @@ export const PANEL_FULL_RATE_SPEED = 60 * 60
 export const PANEL_INPUT_MS = 500
 
 /**
- * The URL's ?panelhz=. Off (60: drei draws every frame, as before) when
- * absent or unreadable, until the S21 shows a gain (tides-0oi.18); auto or a
- * fixed rate turns pacing on.
+ * The URL's ?panelhz=, or the tier's default when absent or unreadable: auto
+ * on the low tier (on since the S21 showed GPU work -0.8 ms a frame at no
+ * frame cost, tides-0oi.18/.41), 60 (drei draws every frame) otherwise.
+ * ?panelhz=60 turns pacing off on either tier.
  */
-export function parsePanelRate(search: string): PanelRateConfig {
+export function parsePanelRate(search: string, lowTier = false): PanelRateConfig {
   const raw = new URLSearchParams(search).get('panelhz')
   if (raw === 'auto') return { mode: 'auto', hz: PANEL_HZ }
   const hz = Number(raw)
   if (raw && FIXED_RATES.includes(hz)) return { mode: 'fixed', hz }
-  return { mode: 'fixed', hz: 60 }
+  return lowTier ? { mode: 'auto', hz: PANEL_HZ } : { mode: 'fixed', hz: 60 }
 }
 
 /** Whether panels are paced at all: ?panelhz=60 draws them every frame through drei, as before. */

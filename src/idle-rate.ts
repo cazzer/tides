@@ -5,7 +5,7 @@
 // (renderers/IdleRate.tsx); any input, store change or camera motion brings
 // back the full rate on the next frame.
 
-/** ?idlehz=auto turns the cap on (low tier only); off when absent, until the S21 shows a gain. */
+/** The low tier's idle cap: on by default since the S21 showed idle GPU busy 70% -> 35% at no frame cost (tides-0oi.31/.41); ?idlehz=off turns it off. */
 export interface IdleRateConfig {
   hz: number
 }
@@ -19,9 +19,10 @@ export const IDLE_AFTER_MS = 2000
 /** From this speed up (sim seconds a second, either way) the view keeps the full rate. */
 export const IDLE_MAX_SPEED = 1
 
-/** The URL's ?idlehz=: auto caps idle frames at IDLE_HZ; anything else (or none) leaves the rate alone. */
+/** The URL's ?idlehz=: absent or auto caps idle frames at IDLE_HZ; anything else (off, 60, ...) leaves the rate alone. */
 export function parseIdleRate(search: string): IdleRateConfig | null {
-  return new URLSearchParams(search).get('idlehz') === 'auto' ? { hz: IDLE_HZ } : null
+  const raw = new URLSearchParams(search).get('idlehz')
+  return raw === null || raw === 'auto' ? { hz: IDLE_HZ } : null
 }
 
 /**

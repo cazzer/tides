@@ -13,8 +13,11 @@ import {
 } from './idle-rate'
 
 describe('parseIdleRate', () => {
-  it('is off when absent or unreadable', () => {
-    for (const search of ['', '?idlehz=', '?idlehz=30', '?idlehz=on', '?other=auto']) expect(parseIdleRate(search)).toBeNull()
+  it('is on by default (tides-0oi.41)', () => {
+    for (const search of ['', '?other=auto']) expect(parseIdleRate(search)).toEqual({ hz: IDLE_HZ })
+  })
+  it('is off for any other value', () => {
+    for (const search of ['?idlehz=', '?idlehz=off', '?idlehz=60', '?idlehz=on']) expect(parseIdleRate(search)).toBeNull()
   })
   it('caps at 30 Hz with ?idlehz=auto', () => {
     expect(parseIdleRate('?idlehz=auto')).toEqual({ hz: IDLE_HZ })
@@ -23,13 +26,15 @@ describe('parseIdleRate', () => {
 })
 
 describe('idleFrameloop', () => {
-  it("keeps R3F's loop ('always') without the param, on either tier", () => {
+  it("keeps R3F's loop ('always') with the cap off, on either tier", () => {
     expect(idleFrameloop(null, true)).toBe('always')
     expect(idleFrameloop(null, false)).toBe('always')
   })
   it("hands the loop to the driver ('never') on the low tier only", () => {
     expect(idleFrameloop(parseIdleRate('?idlehz=auto'), true)).toBe('never')
     expect(idleFrameloop(parseIdleRate('?idlehz=auto'), false)).toBe('always')
+    expect(idleFrameloop(parseIdleRate(''), true)).toBe('never')
+    expect(idleFrameloop(parseIdleRate(''), false)).toBe('always')
   })
 })
 

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
+import { isLowQuality } from '../quality'
 import { useFrame, useThree, type RootState } from '@react-three/fiber'
 import { useStore } from '../store'
 import { viewViewport } from './glow/glow'
@@ -28,7 +29,7 @@ declare global {
   }
 }
 
-const config = parsePanelRate(typeof window === 'undefined' ? '' : window.location.search)
+const config = typeof window === 'undefined' ? parsePanelRate('') : parsePanelRate(window.location.search, isLowQuality())
 const schedule = createPanelSchedule()
 
 // Whether the side panels are paced; a switch so the harness can render both

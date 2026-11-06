@@ -18,11 +18,15 @@ const AUTO = parsePanelRate('?panelhz=auto')
 const still: PanelRateInput = { timeScale: 1, jumping: false, demo: false, interactingAt: null, now: 10_000 }
 
 describe('parsePanelRate', () => {
-  it('is off (every frame) by default and for unreadable values', () => {
+  it('is off (every frame) by default on the high tier and for unreadable values', () => {
     for (const search of ['', '?panelhz=7', '?panelhz=abc', '?panelhz=']) {
       expect(parsePanelRate(search)).toEqual({ mode: 'fixed', hz: 60 })
       expect(panelsPaced(parsePanelRate(search))).toBe(false)
     }
+  })
+  it('is auto by default on the low tier (tides-0oi.41), and ?panelhz=60 turns it off', () => {
+    for (const search of ['', '?panelhz=7', '?panelhz=']) expect(parsePanelRate(search, true)).toEqual({ mode: 'auto', hz: 15 })
+    expect(panelsPaced(parsePanelRate('?panelhz=60', true))).toBe(false)
   })
   it('is auto at 15 Hz with ?panelhz=auto', () => {
     expect(parsePanelRate('?panelhz=auto')).toEqual({ mode: 'auto', hz: 15 })
