@@ -216,6 +216,7 @@ function startTelemetry(page, device, intervalMs) {
     if (device.serial) {
       entry.thermal = await adb.readThermal(device.serial).catch(() => null)
       entry.battery = await adb.readBattery(device.serial).catch(() => null)
+      entry.gpu = await adb.readGpu(device.serial).catch(() => null)
     }
     entry.idle = await page.evaluate(IDLE_SNAPSHOT).catch(() => null)
     entries.push(entry)
@@ -321,6 +322,9 @@ async function measurePose(connection, device, item, { base, params }) {
     const profile = await captureProfile(page)
 
     const activity = item.activity ? { panels: activityPanels, touches: await page.evaluate('window.__ppActivityStop()') } : null
+    // The GPU's clock going into the replay: the replay is timed, and a
+    // governor that settled low for a slow frame rate makes it look heavier.
+    const gpuAtReplay = device.serial ? await adb.readGpu(device.serial).catch(() => null) : null
     const replay = await page.evaluate(`window.__ppProbe.replay(${config.replayK}, 7)`, { timeoutMs: 120000 })
     // The low tier's dpr controller (tides-0oi.13) logs its changes when present.
     const dprTimeline = await page.evaluate(
@@ -334,6 +338,7 @@ async function measurePose(connection, device, item, { base, params }) {
       memoryAtReady,
       dprTimeline,
       telemetry: telemetry?.entries ?? null,
+      gpuAtReplay,
       activity,
       panelRate: await page.evaluate('window.__panelRate ? { config: window.__panelRate.config, draws: window.__panelRate.draws, held: window.__panelRate.held } : null'),
       info: sample.info,

@@ -165,6 +165,11 @@ export function summariseDprTimeline(changes) {
 
 // The TELEMETRY_MS polls: skin temperature over the window, mean battery
 // current, the charge counter's change and the idle cap's draws and skips.
+const mean = (xs) => {
+  const v = xs.filter((x) => typeof x === 'number' && Number.isFinite(x))
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
+}
+
 export function summariseTelemetry(entries) {
   const skins = entries.map((e) => e.thermal?.skin?.c).filter((c) => typeof c === 'number')
   const currents = entries.map((e) => e.battery?.currentMa).filter((c) => typeof c === 'number')
@@ -196,6 +201,16 @@ export function summariseTelemetry(entries) {
     currentMeanMa: currents.length ? currents.reduce((a, b) => a + b, 0) / currents.length : null,
     chargeDeltaUah: charges.length > 1 ? charges[charges.length - 1] - charges[0] : null,
     ac: entries.some((e) => e.battery?.ac),
+    gpuMeanMHz: mean(entries.map((e) => e.gpu?.curMHz)),
+    gpuCapMinMHz: (() => {
+      const caps = entries.map((e) => e.gpu?.maxMHz).filter((x) => typeof x === 'number')
+      return caps.length ? Math.min(...caps) : null
+    })(),
+    gpuBusyMeanPct: mean(entries.map((e) => e.gpu?.busyPct)),
+    gpuPwrlevelMax: (() => {
+      const l = entries.map((e) => e.gpu?.thermalPwrlevel).filter((x) => typeof x === 'number')
+      return l.length ? Math.max(...l) : null
+    })(),
     idle,
   }
 }
@@ -315,7 +330,7 @@ export function renderMarkdown({ meta, results }) {
         ? `; idle cap: ${t.idle.draws} draws, ${t.idle.skips} skips over the window (${t.idle.drawHz === null ? '–' : f1(t.idle.drawHz)} draws/s), cap held from ${t.idle.capHeldFromS === null ? 'never' : `${f1(t.idle.capHeldFromS)} s`} into sampling, last activity ${t.idle.lastActivity}`
         : ''
       lines.push(
-        `- **${r.key}** round ${r.round + 1}: skin ${f1(t.skinStart)}→${f1(t.skinEnd)}°C (max ${f1(t.skinMax)}, status max ${t.statusMax ?? '–'}); battery current ${f1(t.currentMeanMa)} mA mean${t.ac ? ' (on AC: net charge current)' : ''}, charge counter ${t.chargeDeltaUah === null ? '–' : `${t.chargeDeltaUah > 0 ? '+' : ''}${t.chargeDeltaUah}`} µAh${idle}`
+        `- **${r.key}** round ${r.round + 1}: skin ${f1(t.skinStart)}→${f1(t.skinEnd)}°C (max ${f1(t.skinMax)}, status max ${t.statusMax ?? '–'}); battery current ${f1(t.currentMeanMa)} mA mean${t.ac ? ' (on AC: net charge current)' : ''}, charge counter ${t.chargeDeltaUah === null ? '–' : `${t.chargeDeltaUah > 0 ? '+' : ''}${t.chargeDeltaUah}`} µAh; GPU ${f1(t.gpuMeanMHz)} MHz mean (cap ${f1(t.gpuCapMinMHz)}, busy ${f1(t.gpuBusyMeanPct)}%, thermal level ${t.gpuPwrlevelMax ?? '–'})${r.gpuAtReplay ? `, ${f1(r.gpuAtReplay.curMHz)} MHz into the replay` : ''}${idle}`
       )
     }
   }

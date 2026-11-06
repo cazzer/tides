@@ -162,6 +162,26 @@ export async function readBattery(serial) {
   return parseBattery(await adb(serial, 'shell', 'dumpsys', 'battery'))
 }
 
+// The Adreno's clock (kgsl devfreq, readable without root on the S21): the
+// current and the allowed maximum frequency (the thermal cap lowers it),
+// busy % and the thermal power level (0 = no thermal limit).
+export function parseGpu(text) {
+  const [cur, max, busy, level] = text.trim().split('\n').map((l) => Number(/-?\d+/.exec(l)?.[0] ?? NaN))
+  const mhz = (hz) => (Number.isFinite(hz) ? hz / 1e6 : null)
+  return {
+    curMHz: mhz(cur),
+    maxMHz: mhz(max),
+    busyPct: Number.isFinite(busy) ? busy : null,
+    thermalPwrlevel: Number.isFinite(level) ? level : null,
+  }
+}
+
+const KGSL = '/sys/class/kgsl/kgsl-3d0'
+export async function readGpu(serial) {
+  const files = ['devfreq/cur_freq', 'devfreq/max_freq', 'gpu_busy_percentage', 'thermal_pwrlevel'].map((f) => `${KGSL}/${f}`)
+  return parseGpu(await adb(serial, 'shell', `cat ${files.join(' ')}`))
+}
+
 const CHROME = 'com.android.chrome/com.google.android.apps.chrome.Main'
 
 // Chrome must be the foreground app, or its rAF stops and no pose loads

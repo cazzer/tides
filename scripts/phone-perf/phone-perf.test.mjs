@@ -312,6 +312,10 @@ describe('telemetry', async () => {
     const b = parseBattery('  AC powered: true\n  level: 69\n  voltage: 4237\n  temperature: 364\n  current now: 1954\n  Charge counter: 2585722\n  charge counter: 2585722\n')
     expect(b).toEqual({ ac: true, level: 69, voltageMv: 4237, currentMa: 1954, chargeCounterUah: 2585722, tempC: 36.4 })
   })
+  it('reads the Adreno clock', async () => {
+    const { parseGpu } = await import('./adb.mjs')
+    expect(parseGpu('840000000\n840000000\n67 %\n0\n')).toEqual({ curMHz: 840, maxMHz: 840, busyPct: 67, thermalPwrlevel: 0 })
+  })
   it('summarises skin, current, charge and the idle cap', () => {
     const e = (t, skin, ma, uah, idle) => ({ t, thermal: { status: 0, skin: { c: skin } }, battery: { ac: true, currentMa: ma, chargeCounterUah: uah }, idle })
     const s = summariseTelemetry([

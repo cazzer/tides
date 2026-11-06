@@ -119,7 +119,9 @@ cpuMedian and lagMedian.
 `TELEMETRY_MS=5000` polls, every 5 s while sampling, the phone's thermal
 state and `dumpsys battery` (`current now` in mA and the charge counter; on
 AC that is the net charge current, so a lighter load shows as more charge)
-and the idle cap's `window.__idleRate` counters (tides-0oi.31); the report
+the Adreno's clock (`/sys/class/kgsl/kgsl-3d0`: current and allowed maximum
+frequency, busy %, thermal power level; the clock is also read going into the
+replay) and the idle cap's `window.__idleRate` counters (tides-0oi.31); the report
 summarises them per pose and round.
 
 `VARIANTS='off=dprctl=off;fixed2=dprctl=fixed:2'` runs each pose once per
