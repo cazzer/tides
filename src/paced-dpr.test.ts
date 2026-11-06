@@ -178,15 +178,45 @@ describe('paced dpr', () => {
       cpu: (at) => 4 + 4 * Math.min(1, Math.max(0, (t(at) - 20) / 30)),
       gpu: (dpr, at) => (t(at) > 50 && dpr >= 3 ? 20 : 8),
     })
-    expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'thermal', dwellMs: 60000 })
+    expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'thermal' })
     const raise = log.find((c) => c.reason === 'raise')!
     expect(raise.at - log[0].at).toBeGreaterThanOrEqual(60000)
   })
 
-  it('reads a drop from a level that fit and held heldMs as thermal, flat CPU time or not', () => {
+  it('labels a load step at a long-held level as held, at the base dwell, with no hold', () => {
     const { state, clock, log } = setup(3, 3)
     sim(state, clock, log, { s: 30, gpu: (dpr, at) => (at > 21000 && dpr >= 3 ? 20 : 8) })
-    expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'thermal', dwellMs: 60000 })
+    expect(log[0]).toMatchObject({ from: 3, to: 2.75, reason: 'held', dwellMs: 4000 })
+    expect(state.holdLevel).toBeNull()
+  })
+
+  it('takes one hitch at a level that fit and held as a strike: no drop', () => {
+    // 6 misses in 0.6 s (an upload, a GC) after 20 s at 2: the first slow window empties, the next is clean.
+    const { state, clock, log } = setup()
+    const miss = every(6)
+    sim(state, clock, log, {
+      s: 60,
+      kind: 'close',
+      gpu: (_, at) => (miss() && at > 21000 && at < 21600 ? 20 : 12),
+    })
+    expect(log).toEqual([])
+    expect(state.dpr).toBe(2)
+  })
+
+  it('climbs back after a load step at a long-held level at the usual dwell, not a thermal hold', () => {
+    // dprctl.cjs's fill quad on desktop: added at a long-held 3 (drops to 1.5-1.75), removed after 15 s.
+    const { state, clock, log } = setup(3, 3)
+    sim(state, clock, log, { s: 15, gpu: () => 5 })
+    sim(state, clock, log, { s: 15, gpu: (dpr) => 48 * (dpr / 3) ** 2 })
+    expect(log[0]).toMatchObject({ from: 3 })
+    expect(log.some((c) => c.reason === 'thermal')).toBe(false)
+    expect(state.dpr).toBeLessThanOrEqual(1.75)
+    const removedAt = clock.at
+    sim(state, clock, log, { s: 80, gpu: () => 5 })
+    const top = log.find((c) => c.reason === 'raise' && c.to === 3)!
+    // Six raises at most at the dwell a bounce during the quad may have left (8 s), not a minute's hold.
+    expect(top.at - removedAt).toBeLessThan(6 * (8000 + 2000))
+    expect(state.dpr).toBe(3)
   })
 
   it('ignores misses after CPU-bound frames: one probe, restored, then a long hold', () => {
@@ -204,14 +234,14 @@ describe('paced dpr', () => {
   it('keeps a probe drop when the "CPU" time scales with pixels (GPU backpressure)', () => {
     const { state, clock, log } = setup()
     // The main thread blocks in WebGL calls for the GPU: 20 ms at 2, 15.3 at 1.75.
-    sim(state, clock, log, { s: 60, kind: 'close', gpu: () => 5, cpu: () => 20 * (state.dpr / 2) ** 2 })
+    sim(state, clock, log, { s: 180, kind: 'close', gpu: () => 5, cpu: () => 20 * (state.dpr / 2) ** 2 })
     expect(log[0]).toMatchObject({ from: 2, to: 1.75, reason: 'probe', bounced: false })
     expect(log.some((c) => c.reason === 'cpu')).toBe(false)
-    // 1.75 fits, so it tries 2 again; each probe back down is that raise bouncing, and the dwell doubles.
-    const probes = log.filter((c) => c.reason === 'probe')
-    expect(probes.slice(1).every((c) => c.bounced)).toBe(true)
-    expect(probes.map((c) => c.dwellMs)).toEqual([4000, 8000, 16000, 32000].slice(0, probes.length))
-    expect(probes.length).toBeLessThanOrEqual(4)
+    // 1.75 fits, but the kept probe holds 2 off for a minute; the retry bounces and holds it off two.
+    const raises = log.filter((c) => c.reason === 'raise')
+    expect(raises.length).toBeLessThanOrEqual(2)
+    expect(raises[0].at - log[0].at).toBeGreaterThanOrEqual(DEFAULT_PACED_DPR_CONFIG.thermalDwellMs)
+    if (raises[1]) expect(raises[1].at - raises[0].at).toBeGreaterThanOrEqual(2 * DEFAULT_PACED_DPR_CONFIG.thermalDwellMs)
   })
 
   it('ignores stalls before the effects (lag) at ~3 a second, and still raises', () => {
@@ -436,7 +466,6 @@ describe('paced dpr on the S21 sweep\'s trace shapes (tides-0oi.38)', () => {
     ])
     expect(t(log[0].at)).toBeLessThan(34)
     expect(t(log[1].at)).toBeLessThan(64)
-    expect(log[0].dwellMs).toBe(DEFAULT_PACED_DPR_CONFIG.thermalDwellMs)
   })
 
   it('counts a drop seconds after a raise as a bounce, though the raise\'s first window held', () => {
@@ -446,7 +475,7 @@ describe('paced dpr on the S21 sweep\'s trace shapes (tides-0oi.38)', () => {
     sim(state, clock, log, {
       s: 30,
       kind: 'close',
-      gpu: (dpr, at) => (dpr >= 2 && at - state.levelSince > 2000 && odd(at) ? 20 : 12),
+      gpu: (dpr, at) => (dpr >= 2 && at - ([...log].reverse().find((c) => c.reason === 'raise')?.at ?? Infinity) > 2000 && odd(at) ? 20 : 12),
     })
     const drop = log.find((c) => c.from === 2)!
     expect(drop).toMatchObject({ to: 1.75, bounced: true, dwellMs: 8000 })
@@ -462,7 +491,7 @@ describe('paced dpr on the S21 sweep\'s trace shapes (tides-0oi.38)', () => {
       kind: 'close',
       gpu: (dpr, at) => (10 + 0.12 * Math.max(0, t(at) - 20) + 4 * Math.sin(frame++ * 1.7)) * (dpr / 2) ** 2,
     })
-    expect(log[0]).toMatchObject({ from: 2, to: 1.75, reason: 'thermal', bounced: false, dwellMs: 60000 })
+    expect(log[0]).toMatchObject({ from: 2, to: 1.75, reason: 'thermal', bounced: false })
     expect(log.some((c) => c.reason === 'raise')).toBe(false)
   })
 
@@ -473,6 +502,56 @@ describe('paced dpr on the S21 sweep\'s trace shapes (tides-0oi.38)', () => {
     sim(state, clock, log, { s: 30, cpu: () => 5.7, lag: () => 7 })
     expect(log.every((c) => c.reason === 'raise')).toBe(true)
     expect(state.dpr).toBe(3)
+  })
+
+  it('earth-100km held at throttle for 5 minutes: each raise back that bounces doubles the hold', () => {
+    const { state, clock, log } = setup()
+    const throttledAt = (dpr: number) => (dpr >= 2 ? 30 : dpr >= 1.75 ? 60 : Infinity)
+    sim(state, clock, log, {
+      s: 300,
+      kind: 'close',
+      gpu: (dpr, at) => (t(at) >= throttledAt(dpr) && t(at) % 3 < 0.5 && odd(at) ? 20 : 12),
+    })
+    expect(log.slice(0, 2).map((c) => c.reason)).toEqual(['thermal', 'thermal'])
+    expect(log.some((c) => c.to === 2)).toBe(false)
+    const raises = log.filter((c) => c.reason === 'raise')
+    // 1.75 back after a minute, then two; never a bounce every ~10 s.
+    expect(raises.length).toBeLessThanOrEqual(2)
+    expect(raises[0].at - log[1].at).toBeGreaterThanOrEqual(60000)
+    if (raises[1]) expect(raises[1].at - raises[0].at).toBeGreaterThanOrEqual(120000)
+  })
+
+  it('does not ratchet real CPU work down on a noisy p95: ends at 2', () => {
+    // Pure CPU (25 ms, 6% of frames 40 ms), nothing scales with pixels: the p95 jumps 33 <-> 50 ms on noise.
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const { state, clock, log } = setup()
+      let x = seed * 7919
+      const rand = () => ((x = (x * 48271) % 2147483647) / 2147483647)
+      sim(state, clock, log, { s: 120, kind: 'close', gpu: () => 5, cpu: () => (rand() < 0.06 ? 40 : 25) })
+      expect(state.dpr).toBe(2)
+      expect(log.filter((c) => c.reason === 'probe').length).toBeLessThanOrEqual(2)
+    }
+  })
+
+  it('a CPU verdict after a probe inside a raise\'s probation leaves the dwell as it was', () => {
+    const { state, clock, log } = setup(3, 2.5)
+    sim(state, clock, log, { s: 7 })
+    expect(state.dpr).toBe(2.75)
+    // A main-thread burst right after the raise: probe, restored as cpu.
+    sim(state, clock, log, { s: 8, cpu: () => 20 })
+    expect(log.map((c) => c.reason)).toEqual(['raise', 'probe', 'cpu'])
+    expect(state.dwellMs).toBe(DEFAULT_PACED_DPR_CONFIG.raiseDwellMs)
+  })
+
+  it('opening in a close view, the first visit to the system view goes to its ceiling', () => {
+    const state = createPacedDprState(3, pacedStartDpr(3))
+    const clock = { at: 1000 }
+    const log: PacedDprChange[] = []
+    sim(state, clock, log, { s: 5, kind: 'close', gpu: (dpr) => 28 * (dpr / 2) ** 2 })
+    expect(state.dpr).toBeLessThan(2)
+    sim(state, clock, log, { s: 1 })
+    expect(state.dpr).toBe(3)
+    expect(log[log.length - 1]).toMatchObject({ to: 3, reason: 'kind' })
   })
 
   it('starts the system view at the display ratio (3 on the S21) and holds it there', () => {
