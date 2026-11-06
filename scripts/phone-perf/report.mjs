@@ -87,8 +87,25 @@ const gpuProcessMs = (r) => {
   return threads?.length ? threads.reduce((sum, t) => sum + t.busyPerFrameMs, 0) : null
 }
 
+// The GPU clock over the replay: the mean of the readings just before and
+// just after it (the governor can move during it), when the phone gave them.
+export function replayMHz(r) {
+  const v = [r.gpuAtReplay?.curMHz, r.gpuAfterReplay?.curMHz].filter((x) => typeof x === 'number')
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null
+}
+
+// Replay ms scaled by that clock, so a run whose GPU was throttled or idling
+// low compares as work done rather than time taken (approximate: memory
+// bandwidth doesn't scale with the core clock).
+function replayCycles(r) {
+  const mhz = replayMHz(r)
+  return typeof r.replay?.ms === 'number' && mhz ? (r.replay.ms * mhz) / 1000 : null
+}
+
 const COMPARED = [
   ['replay ms', (r) => r.replay?.ms],
+  ['replay Mcycles (ms x GPU MHz)', replayCycles],
+  ['GPU MHz at replay', replayMHz],
   ['GPU-process ms/frame', gpuProcessMs],
   ['main ms/frame', (r) => r.trace?.main?.busyPerFrameMs],
   ['p50 ms', (r) => r.frames?.p50],

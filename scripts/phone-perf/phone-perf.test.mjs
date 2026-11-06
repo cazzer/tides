@@ -327,3 +327,15 @@ describe('telemetry', async () => {
     expect(s.idle).toMatchObject({ draws: 50, skips: 550, drawHz: 5, capHeldFromS: 5, lastActivity: 'camera' })
   })
 })
+
+describe('replay clock', async () => {
+  const { replayMHz, compareBuilds } = await import('./report.mjs')
+  it('averages the clock around the replay and scales replay ms by it', () => {
+    expect(replayMHz({ gpuAtReplay: { curMHz: 540 }, gpuAfterReplay: { curMHz: 840 } })).toBe(690)
+    expect(replayMHz({})).toBeNull()
+    const run = (build, round, ms, mhz) => ({ poseKey: 'p', build, round, replay: { ms }, gpuAtReplay: { curMHz: mhz }, gpuAfterReplay: { curMHz: mhz }, info: { quality: 'low', dpr: 2, canvas: [1, 1] } })
+    const [c] = compareBuilds([run('a', 0, 40, 500), run('b', 0, 20, 1000)], ['a', 'b'])
+    const cycles = c.metrics.find((m) => m.name.startsWith('replay Mcycles'))
+    expect(cycles.delta).toBe(0)
+  })
+})

@@ -326,6 +326,7 @@ async function measurePose(connection, device, item, { base, params }) {
     // governor that settled low for a slow frame rate makes it look heavier.
     const gpuAtReplay = device.serial ? await adb.readGpu(device.serial).catch(() => null) : null
     const replay = await page.evaluate(`window.__ppProbe.replay(${config.replayK}, 7)`, { timeoutMs: 120000 })
+    const gpuAfterReplay = device.serial ? await adb.readGpu(device.serial).catch(() => null) : null
     // The low tier's dpr controller (tides-0oi.13) logs its changes when present.
     const dprTimeline = await page.evaluate(
       'window.__dprctl?.changes ? JSON.parse(JSON.stringify(window.__dprctl.changes.slice(-500))) : null'
@@ -351,6 +352,7 @@ async function measurePose(connection, device, item, { base, params }) {
       dprState,
       telemetry: telemetry?.entries ?? null,
       gpuAtReplay,
+      gpuAfterReplay,
       activity,
       panelRate: await page.evaluate('window.__panelRate ? { config: window.__panelRate.config, draws: window.__panelRate.draws, held: window.__panelRate.held } : null'),
       info: sample.info,
