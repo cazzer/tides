@@ -291,6 +291,7 @@ describe('variants', async () => {
       ['w2+glow', 5393, 'quality=low&glow=1'],
     ])
     expect(withVariants(builds, null)).toBe(builds)
+    expect(withVariants([{ ...builds[0], params: 'dprctl=fixed:2' }], parseVariants('g=glow=1'))[0].params).toBe('dprctl=fixed:2&glow=1')
     const url = new URL(poseUrl(runs[1].base, { params: {}, tier: 'auto' }, runs[1].params))
     expect(url.searchParams.get('glow')).toBe('1')
     expect(url.searchParams.get('quality')).toBe('low')
@@ -337,5 +338,8 @@ describe('replay clock', async () => {
     const [c] = compareBuilds([run('a', 0, 40, 500), run('b', 0, 20, 1000)], ['a', 'b'])
     const cycles = c.metrics.find((m) => m.name.startsWith('replay Mcycles'))
     expect(cycles.delta).toBe(0)
+    const other = { ...run('b', 0, 20, 1000), info: { quality: 'low', dpr: 1.5, canvas: [2, 2] } }
+    expect(compareBuilds([run('a', 0, 40, 500), other], ['a', 'b'])[0].pairs).toBe(0)
+    expect(compareBuilds([run('a', 0, 40, 500), other], ['a', 'b'], { matchDpr: false })[0].pairs).toBe(1)
   })
 })

@@ -123,7 +123,9 @@ const COMPARED = [
 // Before/after per pose across builds (BUILDS): each later build against the
 // first, paired by round (the two ran back to back), so the delta is the
 // median of per-round differences and its range shows the noise.
-export function compareBuilds(results, buildNames) {
+// matchDpr false (COMPARE_DPR=0) pairs runs at any dpr and canvas, for a
+// build whose own controller sets the ratio; the tier must still match.
+export function compareBuilds(results, buildNames, { matchDpr = true } = {}) {
   if (!buildNames || buildNames.length < 2) return []
   const [before, ...afters] = buildNames
   const poseKeys = [...new Set(results.filter((r) => r.build).map((r) => r.poseKey))]
@@ -136,7 +138,8 @@ export function compareBuilds(results, buildNames) {
       // A pair that rendered differently (tier from a saved choice, dpr,
       // canvas) compares two different frames, not two builds.
       const same = ([a, b]) =>
-        a.info?.quality === b.info?.quality && a.info?.dpr === b.info?.dpr && a.info?.canvas?.join('x') === b.info?.canvas?.join('x')
+        a.info?.quality === b.info?.quality &&
+        (!matchDpr || (a.info?.dpr === b.info?.dpr && a.info?.canvas?.join('x') === b.info?.canvas?.join('x')))
       const pairs = all.filter(same)
       const mismatched = all.length - pairs.length
       const metrics = COMPARED.map(([name, get]) => {
@@ -263,7 +266,7 @@ export function renderMarkdown({ meta, results }) {
       `| ${r.key} | ${info.quality ?? r.tier} | ${info.dpr ?? '–'} | ${info.canvas?.join('x') ?? '–'} | ${f1(r.p50)} | ${f1(r.p95)} | ${f1(r.p99)} | ${pct(r.dropped)} | ${r.refreshHz ?? '–'} | ${f1(r.mainBusyMs)} | ${f1(r.replayMs)}${r.noiseReplay && r.noiseReplay.runs > 1 ? ` ±${f1(r.noiseReplay.spreadPct / 2)}%` : ''} | ${r.gpuMs !== null ? `${f1(r.gpuMs)} (${r.gpuSource})` : r.gpuDeviceMs !== null ? `${f1(r.gpuDeviceMs)} (trace)` : 'n/a'} | ${gpuProc || '–'} | ${info.vramMB ? `${info.vramMB.total} (${info.vramMB.compressed})` : '–'} | ${r.noise.p50 && r.noise.p50.runs > 1 ? `±${f1(r.noise.p50.spreadPct / 2)}%` : '–'} |`
     )
   }
-  const comparisons = compareBuilds(results, meta.builds?.map((b) => b.name))
+  const comparisons = compareBuilds(results, meta.builds?.map((b) => b.name), { matchDpr: meta.config?.compareDpr !== false })
   if (comparisons.length) {
     lines.push('', '## Before / after (paired by round: median of after - before, with the range over rounds)', '')
     lines.push('| pose | builds | metric | before | after | delta | delta % | range | rounds |', '|---|---|---|---|---|---|---|---|---|')

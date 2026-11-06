@@ -58,6 +58,8 @@ const config = {
   // Every N ms during sampling: thermal, battery (phone) and the idle cap's
   // counters (window.__idleRate, tides-0oi.31). 0 = off.
   telemetryMs: num('TELEMETRY_MS', 0),
+  // 0: the before/after table pairs rounds at different dpr (a controller's own choice).
+  compareDpr: env.COMPARE_DPR !== '0',
 }
 
 function parseBuild(spec) {
@@ -65,7 +67,10 @@ function parseBuild(spec) {
   if (at < 1) throw new Error(`BUILDS entries are name=path, not ${spec}`)
   const name = spec.slice(0, at).trim()
   if (!/^[\w.-]+$/.test(name)) throw new Error(`Build name ${name} must be letters, digits, . _ or -`)
-  return { name, root: path.resolve(spec.slice(at + 1).trim()) }
+  // name=path?query: the build's own query string, after PARAMS (the same
+  // tree can be listed twice with different settings, each built and served).
+  const [root, query] = spec.slice(at + 1).trim().split('?')
+  return { name, root: path.resolve(root), params: query ?? null }
 }
 
 const log = (...args) => console.log(...args)

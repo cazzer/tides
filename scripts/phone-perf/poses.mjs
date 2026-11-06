@@ -306,7 +306,11 @@ export function parseVariants(spec) {
 export function withVariants(builds, variants) {
   if (!variants?.length) return builds
   return builds.flatMap((b) =>
-    variants.map((v) => ({ ...b, name: b.name ? `${b.name}+${v.name}` : v.name, params: v.params }))
+    variants.map((v) => ({
+      ...b,
+      name: b.name ? `${b.name}+${v.name}` : v.name,
+      params: [b.params, v.params].filter(Boolean).join('&'),
+    }))
   )
 }
 
