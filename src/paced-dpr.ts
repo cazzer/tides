@@ -76,10 +76,11 @@ export interface PacedDprConfig {
   /** A window mostly CPU-bound and missing this long tries one drop, in case the "CPU" is GPU backpressure. */
   cpuProbeMs: number
   /**
-   * The probe's drop stays if the window's median interval or median CPU
+   * The probe's drop stays if the window's mean interval or median CPU
    * time fell by this share: under GPU backpressure the intervals shorten
    * while the blocked CPU time barely moves (S21: 66.7 -> 50 ms at -5% CPU).
-   * Not the p95: on vsync-quantized intervals it jumps a whole vsync on noise.
+   * Not a rank: on vsync-quantized intervals the p95, or a median between
+   * two vsync counts, jumps a whole vsync on noise.
    */
   cpuProbeGain: number
   /** An interval this long (a hidden tab, a stall) empties the window. */
@@ -304,10 +305,10 @@ export interface PacedDprState {
   cappedP50: number
   /** Since when the window has been mostly CPU-bound and missing, or null. */
   cpuMissSince: number | null
-  /** A CPU probe in progress: the level it dropped from, the median CPU time and interval before it and the dwell it found, or null. */
+  /** A CPU probe in progress: the level it dropped from, the median CPU time and mean interval before it and the dwell it found, or null. */
   cpuProbeFrom: number | null
   cpuProbeMedian: number
-  cpuProbeP50: number
+  cpuProbeMean: number
   cpuProbeDwellMs: number
   /**
    * The level a thermal drop or a kept probe left, off limits to raises until
@@ -316,9 +317,11 @@ export interface PacedDprState {
   holdLevel: number | null
   holdUntil: number
   holdMs: number
+  /** Each other view's hold, restored on coming back to it (a trip away doesn't lift it). */
+  holdByKind: Partial<Record<ViewKind, { level: number; until: number; ms: number }>>
   /** A strike: when a level that fit and was held heldMs first ran slow, or null. */
   strikeAt: number | null
-  /** The latest sample's time. */
+  /** The latest uncapped sample's time (it stands still under the idle cap, which only keeps a hold reading as settled). */
   now: number
   /** No CPU probe before this (thermalDwellMs after one that didn't help). */
   cpuHoldUntil: number
@@ -382,12 +385,13 @@ export function createPacedDprState(
     cpuMissSince: null,
     cpuProbeFrom: null,
     cpuProbeMedian: 0,
-    cpuProbeP50: 0,
+    cpuProbeMean: 0,
     cpuProbeDwellMs: 0,
     cpuHoldUntil: -Infinity,
     holdLevel: null,
     holdUntil: -Infinity,
     holdMs: config.thermalDwellMs,
+    holdByKind: {},
     strikeAt: null,
     now: -Infinity,
     last: null,
@@ -468,6 +472,13 @@ function sortedOf(state: PacedDprState, values: Float64Array, keptOnly: boolean)
   return out.sort((a, b) => a - b)
 }
 
+/** The mean of one ring array over the whole window: allocation-free. */
+function meanOf(state: PacedDprState, values: Float64Array): number {
+  let sum = 0
+  for (let k = 0; k < state.count; k++) sum += values[(state.head + k) % CAPACITY]
+  return state.count ? sum / state.count : 0
+}
+
 function rank(sorted: number[], q: number): number | null {
   return sorted.length ? sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] : null
 }
@@ -518,9 +529,14 @@ function change(
 
 const EPS = 1e-9
 
-/** Holds raises off `level` and above: thermalDwellMs, or twice the last hold when it's that level again (up to 4x). */
+/**
+ * Holds raises off `level` and above: thermalDwellMs, or twice the last hold
+ * when it's that level again and the last hold ran out no longer ago than it
+ * lasted (up to 4x).
+ */
 function holdOff(state: PacedDprState, level: number, at: number, config: PacedDprConfig) {
-  const again = state.holdLevel != null && level >= state.holdLevel - EPS
+  const again =
+    state.holdLevel != null && level >= state.holdLevel - EPS && at - state.holdUntil <= state.holdMs
   state.holdMs = again ? Math.min(state.holdMs * 2, 4 * config.thermalDwellMs) : config.thermalDwellMs
   state.holdLevel = level
   state.holdUntil = at + state.holdMs
@@ -631,14 +647,20 @@ export function stepPacedDpr(
 
   if (state.kind !== kind) {
     // Another view: its own last ratio, at once and never over its ceiling.
-    if (state.kind != null) state.levelByKind[state.kind] = state.dpr
+    if (state.kind != null) {
+      state.levelByKind[state.kind] = state.dpr
+      state.holdByKind[state.kind] =
+        state.holdLevel == null ? undefined : { level: state.holdLevel, until: state.holdUntil, ms: state.holdMs }
+    }
     const first = state.kind == null
     state.kind = kind
     state.capFrom = null
     state.cpuProbeFrom = null
-    // Another view's levels: its own heat verdicts.
-    state.holdLevel = null
-    state.holdMs = config.thermalDwellMs
+    // Another view's levels: its own holds, kept while it's away.
+    const hold = state.holdByKind[kind]
+    state.holdLevel = hold?.level ?? null
+    state.holdUntil = hold?.until ?? -Infinity
+    state.holdMs = hold?.ms ?? config.thermalDwellMs
     // A view seen for the first time starts at its ceiling (the first view at the start ratio).
     const to = snap(levels, state.levelByKind[kind] ?? (first ? state.dpr : levels[0]))
     const resized = to !== state.dpr
@@ -692,7 +714,7 @@ export function stepPacedDpr(
   if (state.cpuProbeFrom != null && state.count >= config.minSamples) {
     // The probe's verdict: did a level down shorten the intervals, or cut the "CPU" time?
     const keep = 1 - config.cpuProbeGain
-    const shorter = (rank(sortedOf(state, state.intervals, false), 0.5) ?? 0) <= keep * state.cpuProbeP50
+    const shorter = meanOf(state, state.intervals) <= keep * state.cpuProbeMean
     const lighter = (rank(sortedOf(state, state.cpu, false), 0.5) ?? 0) <= keep * state.cpuProbeMedian
     const from = state.cpuProbeFrom
     state.cpuProbeFrom = null
@@ -730,7 +752,7 @@ export function stepPacedDpr(
       if (bounced) state.dwellMs = Math.min(state.dwellMs * 2, config.dwellCapMs)
       state.cpuProbeFrom = state.dpr
       state.cpuProbeMedian = rank(sortedOf(state, state.cpu, false), 0.5) ?? 0
-      state.cpuProbeP50 = rank(sortedOf(state, state.intervals, false), 0.5) ?? 0
+      state.cpuProbeMean = meanOf(state, state.intervals)
       change(state, down, at, 'probe', config, bounced)
     }
     return state

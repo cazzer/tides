@@ -533,6 +533,33 @@ describe('paced dpr on the S21 sweep\'s trace shapes (tides-0oi.38)', () => {
     }
   })
 
+  it('does not ratchet real CPU work whose intervals straddle two vsync counts (median flips 33 <-> 50)', () => {
+    // 26-40 ms of CPU a frame at 60 Hz: about half the intervals 2 vsyncs, half 3. Nothing scales with pixels.
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      for (const base of [26, 27]) {
+        const { state, clock, log } = setup()
+        let x = seed * 7919
+        const rand = () => ((x = (x * 48271) % 2147483647) / 2147483647)
+        sim(state, clock, log, { s: 120, kind: 'close', gpu: () => 5, cpu: () => base + 14 * rand() })
+        expect(state.dpr).toBe(2)
+      }
+    }
+  })
+
+  it('keeps a throttled close view\'s hold across a trip to the system view and back', () => {
+    const { state, clock, log } = setup()
+    const throttledAt = (dpr: number) => (dpr >= 2 ? 30 : Infinity)
+    const gpu = (dpr: number, at: number) => (t(at) >= throttledAt(dpr) && t(at) % 3 < 0.5 && odd(at) ? 20 : 12)
+    sim(state, clock, log, { s: 70, kind: 'close', gpu })
+    expect(log.map((c) => [c.from, c.to, c.reason])).toEqual([[2, 1.75, 'thermal']])
+    sim(state, clock, log, { s: 3, gpu: () => 5 })
+    const back = log.length
+    sim(state, clock, log, { s: 20, kind: 'close', gpu })
+    // Back at 1.75 under the same hold: no raise to 2 before the minute is up.
+    expect(log[back]).toMatchObject({ to: 1.75, reason: 'kind' })
+    expect(log.slice(back + 1).filter((c) => c.reason === 'raise')).toEqual([])
+  })
+
   it('a CPU verdict after a probe inside a raise\'s probation leaves the dwell as it was', () => {
     const { state, clock, log } = setup(3, 2.5)
     sim(state, clock, log, { s: 7 })
