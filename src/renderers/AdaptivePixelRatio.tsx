@@ -7,6 +7,7 @@ import {
   DEFAULT_PACED_DPR_CONFIG,
   hasPacedTuning,
   pacedDprSettled,
+  pacedStartDpr,
   parsePacedDprConfig,
   stepPacedDpr,
   viewKindOf,
@@ -139,7 +140,8 @@ function runFixed(get: GetRoot, dpr: number): () => void {
  * around every root's and View's useFrame and draws) go to stepPacedDpr.
  */
 export function runPaced(get: GetRoot, config: PacedDprConfig): () => void {
-  const state = createPacedDprState(window.devicePixelRatio, get().viewport.dpr, config)
+  // At the highest ceiling: the first frame's view snaps it under its own (the system view at the display's ratio).
+  const state = createPacedDprState(window.devicePixelRatio, pacedStartDpr(window.devicePixelRatio, config), config)
   const debug = window.__dprctl
   if (debug) debug.state = state
   let pending: number | null = null

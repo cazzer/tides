@@ -10,9 +10,13 @@
 // Intervals are judged against the fixed budget, not a measured vsync: an
 // adaptive-refresh display moving between 120 and 60 Hz doesn't change what
 // counts as a miss. An interval also stretches when the main thread is late,
-// which no resolution change fixes, so an interval after a frame whose CPU
-// time plus start lag took most of the budget is left out, and a window that
-// is mostly such intervals decides nothing.
+// which no resolution change fixes, so a long interval after a frame whose CPU
+// time plus start lag could explain it (most of the budget and half the
+// interval) is left out, and a window that is mostly such intervals decides
+// nothing. An interval that fits is always kept: on the S21 the start lag runs
+// 2-7 ms on ~6 ms of CPU, and counting fitting frames as CPU-bound froze the
+// system view's climb (tides-0oi.38). Under GPU backpressure the main thread
+// blocks ~9 ms of a 67 ms interval: the GPU's doing, so those intervals count.
 
 import { dprLevels, maxDpr } from './adaptive-dpr'
 
@@ -43,13 +47,23 @@ export interface PacedDprConfig {
   raiseDwellMs: number
   /** The dwell doubles on each raise undone at its first decision, up to this. */
   dwellCapMs: number
-  /** A drop from a level held this long is 'held' (logged; the dwell is unchanged unless it's heat). */
+  /**
+   * A raise is judged over this long: a drop before it is a bounce. A drop
+   * from a level held this long is 'held'. At a level that fit a full window
+   * and was held this long, the first slow window is a strike (no drop, the
+   * window empties); a second within heldMs is sustained, the frames slowing
+   * under the same load as the GPU throttles: 'thermal'.
+   */
   heldMs: number
   /** Heat: the CPU time's moving average at one ratio and view has risen by this factor... */
   heatRise: number
   /** ...over at least this long. */
   heatMs: number
-  /** After a drop under heat the next raise waits at least this long. */
+  /**
+   * After a thermal drop or a kept CPU probe, no raise back into the level it
+   * left (or above) for this long; the levels under it climb at the usual
+   * dwell. A raise back that bounces doubles the hold, up to 4x.
+   */
   thermalDwellMs: number
   /** Intervals ignored after a change or a gap: the resize and the first frames at a new size. */
   settleMs: number
@@ -61,12 +75,23 @@ export interface PacedDprConfig {
   kindSettleMs: number
   /** A window mostly CPU-bound and missing this long tries one drop, in case the "CPU" is GPU backpressure. */
   cpuProbeMs: number
-  /** The probe's drop stays only if the median CPU time fell by this share (the work scaled with pixels). */
+  /**
+   * The probe's drop stays if the window's mean interval or median CPU
+   * time fell by this share: under GPU backpressure the intervals shorten
+   * while the blocked CPU time barely moves (S21: 66.7 -> 50 ms at -5% CPU).
+   * Not a rank: on vsync-quantized intervals the p95, or a median between
+   * two vsync counts, jumps a whole vsync on noise.
+   */
   cpuProbeGain: number
   /** An interval this long (a hidden tab, a stall) empties the window. */
   gapMs: number
-  /** An interval after a frame whose CPU time plus start lag is over this share of the budget is CPU-bound. */
+  /**
+   * A long interval (over missAt budgets) is CPU-bound when the frame's CPU
+   * time plus start lag is over this share of the budget and cpuIntervalShare
+   * of the interval. An interval that fits never is.
+   */
   cpuBoundShare: number
+  cpuIntervalShare: number
   /** The lowest ratio the controller goes to. */
   floor: number
   /** The ceiling in the system view, under the display's ratio. */
@@ -100,6 +125,7 @@ export const DEFAULT_PACED_DPR_CONFIG: PacedDprConfig = {
   cpuProbeGain: 0.15,
   gapMs: 1000,
   cpuBoundShare: 0.75,
+  cpuIntervalShare: 0.5,
   floor: 1.5,
   systemMax: 3,
   otherMax: 2,
@@ -132,6 +158,7 @@ const RANGES: Record<NumericKey | 'fixed', [number, number]> = {
   cpuProbeGain: [0, 0.9],
   gapMs: [100, 10000],
   cpuBoundShare: [0.1, 10],
+  cpuIntervalShare: [0, 1],
   floor: [0.5, 4],
   systemMax: [0.5, 4],
   otherMax: [0.5, 4],
@@ -199,10 +226,12 @@ export interface PacedDprChange {
   to: number
   /**
    * raise; drop (p95 over a full window); fast (the latest intervals' median);
-   * held (a drop from a level held heldMs); thermal (a drop under heat);
+   * held (a drop from a level held heldMs that never fit a full window);
+   * thermal (a drop under heat: from a level that fit a full window and was
+   * held heldMs, or with the CPU time crept up heatRise);
    * kind (another view); ceiling (the display's ratio); probe (a drop tried
-   * while the window is CPU-bound and missing); cpu (the probe didn't lower
-   * the CPU time: restored); capped (dropping to the floor didn't shorten the
+   * while the window is CPU-bound and missing); cpu (the probe shortened
+   * neither the intervals nor the CPU time: restored); capped (dropping to the floor didn't shorten the
    * frames, as on a display capped at 30 Hz: restored, and held there).
    */
   reason: 'raise' | 'drop' | 'fast' | 'held' | 'thermal' | 'kind' | 'ceiling' | 'probe' | 'cpu' | 'capped'
@@ -259,7 +288,7 @@ export interface PacedDprState {
   /** When the raise was first good, or null. */
   goodSince: number | null
   dwellMs: number
-  /** A raise not yet judged: its first decision after the settle says whether it bounced. */
+  /** A raise not yet judged: a drop within heldMs of it is a bounce. */
   probation: boolean
   /** When the ratio last changed, or the view or a gap reset it. */
   levelSince: number
@@ -276,9 +305,24 @@ export interface PacedDprState {
   cappedP50: number
   /** Since when the window has been mostly CPU-bound and missing, or null. */
   cpuMissSince: number | null
-  /** A CPU probe in progress: the level it dropped from and the median CPU time before it, or null. */
+  /** A CPU probe in progress: the level it dropped from, the median CPU time and mean interval before it and the dwell it found, or null. */
   cpuProbeFrom: number | null
   cpuProbeMedian: number
+  cpuProbeMean: number
+  cpuProbeDwellMs: number
+  /**
+   * The level a thermal drop or a kept probe left, off limits to raises until
+   * holdUntil (null: none), and the hold's length (doubling on a bounce out of it).
+   */
+  holdLevel: number | null
+  holdUntil: number
+  holdMs: number
+  /** Each other view's hold, restored on coming back to it (a trip away doesn't lift it). */
+  holdByKind: Partial<Record<ViewKind, { level: number; until: number; ms: number }>>
+  /** A strike: when a level that fit and was held heldMs first ran slow, or null. */
+  strikeAt: number | null
+  /** The latest uncapped sample's time (it stands still under the idle cap, which only keeps a hold reading as settled). */
+  now: number
   /** No CPU probe before this (thermalDwellMs after one that didn't help). */
   cpuHoldUntil: number
   /** The last change or event, for the log. */
@@ -341,7 +385,15 @@ export function createPacedDprState(
     cpuMissSince: null,
     cpuProbeFrom: null,
     cpuProbeMedian: 0,
+    cpuProbeMean: 0,
+    cpuProbeDwellMs: 0,
     cpuHoldUntil: -Infinity,
+    holdLevel: null,
+    holdUntil: -Infinity,
+    holdMs: config.thermalDwellMs,
+    holdByKind: {},
+    strikeAt: null,
+    now: -Infinity,
     last: null,
     paused: false,
   }
@@ -358,6 +410,7 @@ function restart(state: PacedDprState, at: number, config: PacedDprConfig) {
   state.cpuEwma = NaN
   state.heatRefEwma = null
   state.cpuMissSince = null
+  state.strikeAt = null
   // A raise is judged only by its own level's frames: a gap or a view switch
   // before its first decision leaves it unjudged, not bounced.
   state.probation = false
@@ -419,6 +472,13 @@ function sortedOf(state: PacedDprState, values: Float64Array, keptOnly: boolean)
   return out.sort((a, b) => a - b)
 }
 
+/** The mean of one ring array over the whole window: allocation-free. */
+function meanOf(state: PacedDprState, values: Float64Array): number {
+  let sum = 0
+  for (let k = 0; k < state.count; k++) sum += values[(state.head + k) % CAPACITY]
+  return state.count ? sum / state.count : 0
+}
+
 function rank(sorted: number[], q: number): number | null {
   return sorted.length ? sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] : null
 }
@@ -467,23 +527,55 @@ function change(
   restart(state, at, config)
 }
 
+const EPS = 1e-9
+
+/**
+ * Holds raises off `level` and above: thermalDwellMs, or twice the last hold
+ * when it's that level again and the last hold ran out no longer ago than it
+ * lasted (up to 4x).
+ */
+function holdOff(state: PacedDprState, level: number, at: number, config: PacedDprConfig) {
+  const again =
+    state.holdLevel != null && level >= state.holdLevel - EPS && at - state.holdUntil <= state.holdMs
+  state.holdMs = again ? Math.min(state.holdMs * 2, 4 * config.thermalDwellMs) : config.thermalDwellMs
+  state.holdLevel = level
+  state.holdUntil = at + state.holdMs
+}
+
+/** Whether the level over `dpr` is held off now. */
+function upHeld(state: PacedDprState, levels: number[], index: number, at: number): boolean {
+  return state.holdLevel != null && at < state.holdUntil && index > 0 && levels[index - 1] >= state.holdLevel - EPS
+}
+
 const DROP_REASONS: ReadonlySet<PacedDprChange['reason']> = new Set(['drop', 'fast', 'held', 'thermal', 'probe'])
+
+/**
+ * The ratio the low tier starts at: the highest view ceiling, which the first
+ * view snaps under its own. The system view starts at the display's ratio
+ * (3 on the S21, ~1 ms and no frames there: tides-0oi.38) instead of climbing
+ * from R3F's 2 for ~23 s; the other views start at their ceiling, 2, as before.
+ */
+export function pacedStartDpr(nativeDpr: number, config: PacedDprConfig = DEFAULT_PACED_DPR_CONFIG): number {
+  return maxDpr(nativeDpr, Math.max(config.systemMax, config.otherMax))
+}
 
 /**
  * Whether the controller has stopped climbing, so frames held to the idle
  * cap (tides-0oi.31), which it can't judge, cost it nothing: off or fixed;
- * at the current view's ceiling once the raise there has held a window; after a raise bounced or heat lengthened
- * the dwell (dwellMs over the base); held after a CPU probe or on a capped
+ * at the current view's ceiling once the raise there has held heldMs; after a raise bounced (dwellMs over
+ * the base) or while the next level up is held off; held after a CPU probe or on a capped
  * display; or after a drop, with a full window since that isn't good enough
  * to start a raise. Until then it needs uncapped frames to climb, and the
  * cap waits.
  */
 export function pacedDprSettled(state: PacedDprState, config: PacedDprConfig = DEFAULT_PACED_DPR_CONFIG): boolean {
   if (config.off || config.fixed != null) return true
-  // A raise not yet judged (its first full window) could still bounce.
+  // A raise not yet judged (heldMs at its level) could still bounce.
   if (state.kind == null || state.levelsKind !== state.kind || state.probation) return false
   if (state.dpr >= state.levels[0] - 1e-9) return true
   if (state.dwellMs > config.raiseDwellMs || state.capped) return true
+  // The next level up is held off (a thermal drop or a kept probe).
+  if (upHeld(state, state.levels, state.levels.indexOf(state.dpr), state.now)) return true
   const reason = state.last?.reason
   if (reason === 'cpu' || reason === 'capped') return true
   return (
@@ -542,6 +634,7 @@ export function stepPacedDpr(
       return state
     }
   }
+  state.now = at
   const lagMs = Math.max(state.lastLagMs, sample.lagMs)
   state.lastLagMs = sample.lagMs
   if (kind !== state.levelsKind || sample.nativeDpr !== state.levelsNative) {
@@ -554,16 +647,29 @@ export function stepPacedDpr(
 
   if (state.kind !== kind) {
     // Another view: its own last ratio, at once and never over its ceiling.
-    if (state.kind != null) state.levelByKind[state.kind] = state.dpr
+    if (state.kind != null) {
+      state.levelByKind[state.kind] = state.dpr
+      state.holdByKind[state.kind] =
+        state.holdLevel == null ? undefined : { level: state.holdLevel, until: state.holdUntil, ms: state.holdMs }
+    }
     const first = state.kind == null
     state.kind = kind
     state.capFrom = null
     state.cpuProbeFrom = null
-    const to = snap(levels, state.levelByKind[kind] ?? state.dpr)
-    if (to !== state.dpr) change(state, to, at, first ? 'ceiling' : 'kind', config)
+    // Another view's levels: its own holds, kept while it's away.
+    const hold = state.holdByKind[kind]
+    state.holdLevel = hold?.level ?? null
+    state.holdUntil = hold?.until ?? -Infinity
+    state.holdMs = hold?.ms ?? config.thermalDwellMs
+    // A view seen for the first time starts at its ceiling (the first view at the start ratio).
+    const to = snap(levels, state.levelByKind[kind] ?? (first ? state.dpr : levels[0]))
+    const resized = to !== state.dpr
+    if (resized) change(state, to, at, first ? 'ceiling' : 'kind', config)
     else restart(state, at, config)
-    if (first) state.settleUntil = -Infinity
-    else {
+    // The first view: no settle unless it resized the canvas.
+    if (first) {
+      if (!resized) state.settleUntil = -Infinity
+    } else {
       state.settleUntil = at + config.kindSettleMs
       state.needFull = true
     }
@@ -582,7 +688,11 @@ export function stepPacedDpr(
   }
   if (at < state.settleUntil) return state
 
-  const cpuBound = cpuMs + lagMs > config.cpuBoundShare * budgetMs
+  const mainMs = cpuMs + lagMs
+  const cpuBound =
+    intervalMs > config.missAt * budgetMs &&
+    mainMs > config.cpuBoundShare * budgetMs &&
+    mainMs > config.cpuIntervalShare * intervalMs
   push(state, at, intervalMs, cpuBound, cpuMs, sample.lagMs)
   if (!cpuBound) {
     const alpha = Math.min(1, intervalMs / 2000)
@@ -602,16 +712,22 @@ export function stepPacedDpr(
   const dropMs = config.dropP95 * budgetMs
 
   if (state.cpuProbeFrom != null && state.count >= config.minSamples) {
-    // The probe's verdict: did a level down cut the "CPU" time?
-    const median = rank(sortedOf(state, state.cpu, false), 0.5) ?? 0
+    // The probe's verdict: did a level down shorten the intervals, or cut the "CPU" time?
+    const keep = 1 - config.cpuProbeGain
+    const shorter = meanOf(state, state.intervals) <= keep * state.cpuProbeMean
+    const lighter = (rank(sortedOf(state, state.cpu, false), 0.5) ?? 0) <= keep * state.cpuProbeMedian
     const from = state.cpuProbeFrom
     state.cpuProbeFrom = null
-    if (median > (1 - config.cpuProbeGain) * state.cpuProbeMedian) {
-      // Real CPU work: back to the level, and no probe for a while.
+    if (!shorter && !lighter) {
+      // Real CPU work: back to the level, no probe for a while, and the
+      // raise before it wasn't at fault.
       state.cpuHoldUntil = at + config.thermalDwellMs
+      state.dwellMs = state.cpuProbeDwellMs
       change(state, from, at, 'cpu', config)
       return state
     }
+    // The GPU was the limit at `from`: hold raises off it, as after a thermal drop.
+    holdOff(state, from, at, config)
   }
 
   if (state.count - state.kept > state.kept) {
@@ -629,9 +745,15 @@ export function stepPacedDpr(
       at >= state.cpuHoldUntil &&
       at - state.cpuMissSince! >= config.cpuProbeMs
     ) {
+      // Within heldMs of a raise it's that raise bouncing, as for any drop
+      // (undone if the verdict finds real CPU work).
+      const bounced = state.probation && at - state.levelSince < config.heldMs
+      state.cpuProbeDwellMs = state.dwellMs
+      if (bounced) state.dwellMs = Math.min(state.dwellMs * 2, config.dwellCapMs)
       state.cpuProbeFrom = state.dpr
       state.cpuProbeMedian = rank(sortedOf(state, state.cpu, false), 0.5) ?? 0
-      change(state, down, at, 'probe', config)
+      state.cpuProbeMean = meanOf(state, state.intervals)
+      change(state, down, at, 'probe', config, bounced)
     }
     return state
   }
@@ -677,15 +799,34 @@ export function stepPacedDpr(
       state.capP50 = rank(sortedOf(state, state.intervals, true), 0.5) ?? 0
     }
     const held = at - state.levelSince >= config.heldMs
-    // The raise's first decision, unless the level ran heldMs without one
-    // (all CPU-bound): a drop that late isn't the raise's doing.
-    const bounced = state.probation && !held
-    if (bounced) state.dwellMs = Math.min(state.dwellMs * 2, config.dwellCapMs)
-    const heat =
+    const cpuHeat =
       state.heatRefEwma != null &&
       at - state.heatRefAt >= config.heatMs &&
       state.cpuEwma > state.heatRefEwma * config.heatRise
-    if (heat) state.dwellMs = Math.max(state.dwellMs, config.thermalDwellMs)
+    // A level that fit a full window and held heldMs, now slow (not mostly
+    // missing): a strike first, as one hitch (an upload, a GC) looks the
+    // same; a second fresh slow window within heldMs is the frames slowing
+    // under the same load, as when the S21's GPU clock falls to ~53% inside
+    // 90 s of a close view while the CPU time stays flat.
+    let sustained = false
+    if (!fast && held && state.heatRefEwma != null && !cpuHeat) {
+      if (state.strikeAt == null || at - state.strikeAt > config.heldMs) {
+        state.strikeAt = at
+        state.head = 0
+        state.count = 0
+        state.kept = 0
+        state.goodSince = null
+        return state
+      }
+      sustained = true
+    }
+    // Within heldMs of a raise, the raise's doing; later it isn't.
+    const bounced = state.probation && !held
+    if (bounced) state.dwellMs = Math.min(state.dwellMs * 2, config.dwellCapMs)
+    const heat = sustained || cpuHeat
+    // A raise back into a held-off level that bounced: hold it off longer.
+    const bouncedHeld = bounced && state.holdLevel != null && state.dpr >= state.holdLevel - EPS
+    if (heat || bouncedHeld) holdOff(state, state.dpr, at, config)
     state.needFull = false
     change(state, down!, at, heat ? 'thermal' : held ? 'held' : fast ? 'fast' : 'drop', config, bounced)
     return state
@@ -699,12 +840,16 @@ export function stepPacedDpr(
     state.heatRefEwma = state.cpuEwma
     state.heatRefAt = at
   }
-  if (state.probation) {
-    // The raise's first full window held: the next one waits the base dwell.
+  if (state.probation && at - state.levelSince >= config.heldMs) {
+    // The raise held heldMs: the next one waits the base dwell, and a held-off level it reached is clear.
     state.probation = false
     state.dwellMs = config.raiseDwellMs
+    if (state.holdLevel != null && state.dpr >= state.holdLevel - EPS) {
+      state.holdLevel = null
+      state.holdMs = config.thermalDwellMs
+    }
   }
-  const up = index > 0 ? levels[index - 1] : null
+  const up = index > 0 && !upHeld(state, levels, index, at) ? levels[index - 1] : null
   if (up != null && countOver(state, config.missAt * budgetMs, true) <= config.raiseMaxMisses) {
     state.goodSince ??= at
     if (at - state.goodSince >= state.dwellMs) {
