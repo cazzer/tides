@@ -77,7 +77,7 @@ export function aggregate(results) {
         .slice(0, 8),
       info: last?.info ?? null,
       loadMs: median(ok.map((r) => r.loadMs)),
-      thermal: runs.map((r) => ({ before: r.thermalBefore, after: r.thermalAfter })),
+      thermal: runs.map((r) => ({ before: r.thermalBefore, after: r.thermalAfter, power: r.powerBefore ?? null })),
     }
   })
 }
@@ -309,7 +309,7 @@ export function renderMarkdown({ meta, results }) {
     for (const r of rows) {
       const parts = r.thermal.map((t) =>
         t.before
-          ? `${t.before.skin?.c ?? '?'}→${t.after?.skin?.c ?? '?'}°C (status ${t.before.status}→${t.after?.status ?? '?'}${t.before.waitedMs > 1000 ? `, cooled ${Math.round(t.before.waitedMs / 1000)} s` : ''})`
+          ? `${t.before.skin?.c ?? '?'}→${t.after?.skin?.c ?? '?'}°C (status ${t.before.status}→${t.after?.status ?? '?'}${t.before.waitedMs > 1000 ? `, cooled ${Math.round(t.before.waitedMs / 1000)} s` : ''}${t.power ? `, ${t.power.ac ? 'AC' : 'BATTERY'} ${t.power.level}%` : ''})`
           : '–'
       )
       lines.push(`- **${r.key}**: ${parts.join('; ')}`)

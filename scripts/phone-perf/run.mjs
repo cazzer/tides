@@ -171,6 +171,8 @@ async function measureSurvivingDrops(device, item, build, round) {
 async function measureWithGuards(connection, device, item, build, round) {
   const key = build.name ? `${item.key}#${build.name}` : item.key
   let thermalBefore = null
+  // On AC or on battery when the pose starts (the phone can be unplugged mid-queue).
+  let powerBefore = null
   if (device.serial) {
     const cooled = await adb.coolDown(device.serial, {
       maxC: config.cooldownC,
@@ -179,8 +181,9 @@ async function measureWithGuards(connection, device, item, build, round) {
     })
     thermalBefore = { ...cooled.thermal, waitedMs: cooled.waitedMs, cool: cooled.cool }
     if (await adb.foregroundChrome(device.serial).catch(() => false)) log('  Chrome was not in front; brought it back')
+    powerBefore = await adb.readBattery(device.serial).catch(() => null)
   }
-  log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)})` : ''}`)
+  log(`\n[round ${round + 1}/${config.runs}] ${key}${thermalBefore ? ` (${adb.thermalLine(thermalBefore)}${powerBefore ? `, ${powerBefore.ac ? 'AC' : 'battery'} ${powerBefore.level}%` : ''})` : ''}`)
   const measure = () => measurePose(connection, device, item, build)
   let record
   try {
@@ -200,6 +203,7 @@ async function measureWithGuards(connection, device, item, build, round) {
     round,
     thermalBefore,
     thermalAfter,
+    powerBefore,
     ...record,
   }
 }
