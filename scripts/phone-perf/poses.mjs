@@ -15,7 +15,7 @@ export const COMMON_PARAMS = { t: '2026-03-20T19:00:00Z', weather: 'static' }
 // (tilt: degrees from straight down toward north). Same math as the
 // perf-audit harness's poseMain: Earth's ground mesh is the first Phong mesh
 // under the Earth group.
-function mainPose(pose) {
+export function mainPose(pose) {
   return `(() => {
     const pose = ${JSON.stringify(pose)}
     const { THREE: T, store } = window.__ppProbe
