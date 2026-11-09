@@ -239,8 +239,10 @@ export const useStore = create<{
   /** The main view's eye is below Earth's close-zoom barrier (close-zoom.ts):
    * time runs no faster than real time there. */
   closeZoom: boolean
-  /** In close zoom, the eye is low enough for the streamed surface tiles
-   * (close-zoom-rules.ts isTileRange, tides-tvr.7.2). */
+  /** In close zoom, the system view keeps the streamed surface tiles
+   * mounted (tides-tvr.7.2): the eye is in their range (close-zoom-rules.ts
+   * isTileRange), or has been out of it for under TILE_LEAVE_GRACE_S
+   * (stepTileMount, tides-8h7). */
   closeZoomTiles: boolean
   /** Bumped each time close zoom holds time at real time, for a brief cue. */
   realTimeCue: number

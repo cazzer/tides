@@ -19,7 +19,9 @@
 // (setSurfaceEye) and read the sweep from the camera's own height and motion
 // over the ground, in Earth's frame; close zoom's floor then reads their
 // ground as the ship's does (../../close-zoom.ts earthGroundRadius). Leaving
-// ship mode, close zoom or Earth focus unmounts them.
+// ship mode, close zoom or Earth focus unmounts them; leaving their range
+// does once the eye has stayed out of it for TILE_LEAVE_GRACE_S
+// (stepTileMount, tides-8h7), hidden above the handover's top meanwhile.
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
@@ -81,7 +83,9 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
   // extra render), so StrictMode's mount, unmount, mount disposes the first
   // instance whole and draws only the second. Leaving ship mode (or, in the
   // system view, close zoom or Earth focus) unmounts this: the camera is
-  // released and every tile, texture and in-flight download with it.
+  // released and every tile, texture and in-flight download with it. Leaving
+  // the tiles' range unmounts it only after a grace (TILE_LEAVE_GRACE_S), so
+  // a tilt across the range's edge doesn't rebuild the whole instance.
   useEffect(() => {
     const parent = holder.current
     const previous = previousEye.current

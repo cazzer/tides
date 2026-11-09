@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { TILE_RANGE_ENTER, TILE_RANGE_LEAVE, holdRealTime, isTileRange, systemSurfaceTilesOn } from './close-zoom-rules'
+import {
+  TILE_LEAVE_GRACE_S,
+  TILE_RANGE_ENTER,
+  TILE_RANGE_LEAVE,
+  holdRealTime,
+  isTileRange,
+  stepTileMount,
+  systemSurfaceTilesOn,
+  type TileMount,
+} from './close-zoom-rules'
 
 describe('holdRealTime', () => {
   it('holds faster speeds at real time in close zoom, keeping their direction, with a cue', () => {
@@ -43,5 +52,74 @@ describe('isTileRange', () => {
     // …until past the leave edge.
     expect(isTileRange(2.21 * top, top, true)).toBe(false)
     expect(isTileRange(0, top, false)).toBe(true)
+  })
+})
+
+describe('stepTileMount', () => {
+  const unmounted = (): TileMount => ({ mounted: false, outFor: 0 })
+  const mounted = (): TileMount => ({ mounted: true, outFor: 0 })
+  /** Steps `m` out of range in close zoom `n` times by `dt`, returning the last result. */
+  const stepOut = (m: TileMount, n: number, dt: number) => {
+    let on = m.mounted
+    for (let i = 0; i < n; i++) on = stepTileMount(m, true, false, dt)
+    return on
+  }
+
+  it('pins the grace at 10 s', () => {
+    expect(TILE_LEAVE_GRACE_S).toBe(10)
+  })
+
+  it('mounts at once in range, with no timer', () => {
+    const m = unmounted()
+    expect(stepTileMount(m, true, true, 0.016)).toBe(true)
+    expect(m).toEqual({ mounted: true, outFor: 0 })
+  })
+
+  it('never mounted and out of range: stays unmounted, with no timer', () => {
+    const m = unmounted()
+    expect(stepOut(m, 200, 0.1)).toBe(false)
+    expect(m).toEqual({ mounted: false, outFor: 0 })
+  })
+
+  it('stays mounted through a leave inside the grace', () => {
+    const m = mounted()
+    expect(stepOut(m, 99, 0.1)).toBe(true)
+    expect(m.mounted).toBe(true)
+    expect(m.outFor).toBeCloseTo(9.9)
+  })
+
+  it('resets the timer on re-entering the range', () => {
+    const m = mounted()
+    expect(stepOut(m, 99, 0.1)).toBe(true)
+    expect(stepTileMount(m, true, true, 0.1)).toBe(true)
+    expect(m.outFor).toBe(0)
+    expect(stepOut(m, 99, 0.1)).toBe(true)
+  })
+
+  it('unmounts once a sustained leave crosses the grace, and stays unmounted', () => {
+    const m = mounted()
+    expect(stepOut(m, 99, 0.1)).toBe(true)
+    expect(stepOut(m, 2, 0.1)).toBe(false)
+    expect(m).toEqual({ mounted: false, outFor: 0 })
+    expect(stepOut(m, 50, 0.1)).toBe(false)
+    expect(m.outFor).toBe(0)
+  })
+
+  it('unmounts on a single step of the grace or longer', () => {
+    const at = mounted()
+    expect(stepTileMount(at, true, false, 10)).toBe(false)
+    const over = mounted()
+    expect(stepTileMount(over, true, false, 12)).toBe(false)
+    expect(over).toEqual({ mounted: false, outFor: 0 })
+  })
+
+  it('unmounts at once out of close zoom, mid-grace or in range', () => {
+    const mid = mounted()
+    stepOut(mid, 50, 0.1)
+    expect(stepTileMount(mid, false, false, 0.016)).toBe(false)
+    expect(mid).toEqual({ mounted: false, outFor: 0 })
+    const inRange = mounted()
+    expect(stepTileMount(inRange, false, true, 0.016)).toBe(false)
+    expect(inRange).toEqual({ mounted: false, outFor: 0 })
   })
 })

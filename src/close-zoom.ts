@@ -25,7 +25,7 @@ import { MIN_DISTANCE_FACTOR } from './main-view'
 import type { Pivot, Spin } from './pivot'
 import { useStore } from './store'
 import { EARTH_KM_PER_UNIT, SURFACE_TOP, tileGroundRadius } from './surface-handover'
-import { isTileRange } from './close-zoom-rules'
+import { isTileRange, stepTileMount, type TileMount } from './close-zoom-rules'
 import { TERRAIN_DISPLACEMENT } from './cloud-layer'
 import { NEAR_MIN as SHIP_NEAR_MIN } from './ship/ship-session'
 import {
@@ -297,7 +297,7 @@ const _limbCandidates: readonly LimbCandidate[] = [_earthLimb]
  * One CameraProvider's close zoom: whether it owns the shared state (it has
  * controls), Earth's last turn, the camera it feeds the limb view for (null
  * while it doesn't), and whether it still has limb spheres to let go of
- * since it stopped.
+ * since it stopped, and the tiles' range and mount (stepTileMount).
  */
 interface CloseZoomOwner {
   owns: boolean
@@ -306,6 +306,8 @@ interface CloseZoomOwner {
   previous: Quaternion
   fedCamera: Camera | null
   releasing: boolean
+  tileRange: boolean
+  tileMount: TileMount
 }
 
 /** Start the terrain floor's fetch and build once the eye is within this many barriers of Earth's centre. */
@@ -338,6 +340,9 @@ function leaveCloseZoom(
   closeZoomState.groundUnderTarget = null
   closeZoomState.groundUnderEye = null
   closeZoomState.guard = false
+  owner.tileRange = false
+  owner.tileMount.mounted = false
+  owner.tileMount.outFor = 0
   if (controls) setZoomSpeeds(controls, 1, 1)
   if (useStore.getState().closeZoom) useStore.getState().setCloseZoom(false)
   if (useStore.getState().closeZoomTiles) useStore.getState().setCloseZoomTiles(false)
@@ -360,6 +365,8 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     previous: new Quaternion(),
     fedCamera: null,
     releasing: false,
+    tileRange: false,
+    tileMount: { mounted: false, outFor: 0 },
   })
   // Every panel mounts a CameraProvider; only the one with controls clears
   // the shared state, so closing a panel leaves the main view's close zoom.
@@ -380,7 +387,7 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     }
   }, [get, spin])
 
-  useFrame((frame) => {
+  useFrame((frame, delta) => {
     const controls = frame.controls as OrbitControlsImpl | null
     if (!controls) return
     const owner = ownerRef.current
@@ -420,8 +427,10 @@ export function useCloseZoom(camera: Camera, pivot: Pivot, spin: Spin) {
     // Each frame until Earth's meshes have let go of every sphere.
     if (owner.releasing && releaseLimbSpheres()) owner.releasing = false
     // The tiles' range (tides-tvr.7.2): only in close zoom, from the eye's
-    // height over the sea-level sphere.
-    const tiles = close && isTileRange(eyeR - radius, SURFACE_TOP, state.closeZoomTiles)
+    // height over the sea-level sphere. They stay mounted a while after the
+    // eye leaves it (tides-8h7), so a tilt across its edge doesn't rebuild them.
+    owner.tileRange = close && isTileRange(eyeR - radius, SURFACE_TOP, owner.tileRange)
+    const tiles = stepTileMount(owner.tileMount, close, owner.tileRange, delta)
     if (tiles !== state.closeZoomTiles) state.setCloseZoomTiles(tiles)
 
     const earthFocus = state.cameraFocus === 'earth'
