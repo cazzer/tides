@@ -5,8 +5,10 @@ import {
   TILE_RANGE_LEAVE,
   holdRealTime,
   isTileRange,
+  stepTileGate,
   stepTileMount,
   systemSurfaceTilesOn,
+  type TileGate,
   type TileMount,
 } from './close-zoom-rules'
 
@@ -108,6 +110,7 @@ describe('stepTileMount', () => {
   it('unmounts on a single step of the grace or longer', () => {
     const at = mounted()
     expect(stepTileMount(at, true, false, 10)).toBe(false)
+    expect(at).toEqual({ mounted: false, outFor: 0 })
     const over = mounted()
     expect(stepTileMount(over, true, false, 12)).toBe(false)
     expect(over).toEqual({ mounted: false, outFor: 0 })
@@ -121,5 +124,58 @@ describe('stepTileMount', () => {
     const inRange = mounted()
     expect(stepTileMount(inRange, false, true, 0.016)).toBe(false)
     expect(inRange).toEqual({ mounted: false, outFor: 0 })
+  })
+})
+
+describe('stepTileGate', () => {
+  // In km: the tiles' range then enters below 200 and leaves above 220.
+  const top = 100
+  const dt = 0.1
+  const gate = (): TileGate => ({ range: false, mount: { mounted: false, outFor: 0 } })
+
+  it('keeps the tiles mounted through a tilt flapping across the range for a minute (tides-8h7)', () => {
+    const g = gate()
+    expect(stepTileGate(g, true, true, 150, top, dt)).toBe(true)
+    let unmounted = 0
+    for (let i = 0; i < 600; i++) {
+      const altitude = Math.floor(i / 30) % 2 === 0 ? 260 : 150
+      if (!stepTileGate(g, true, true, altitude, top, dt)) unmounted++
+      // The range follows the eye, not the grace.
+      expect(g.range).toBe(altitude === 150)
+    }
+    expect(unmounted).toBe(0)
+  })
+
+  it('unmounts a hold above the range between 10 and 10.2 s, and stays unmounted', () => {
+    const g = gate()
+    expect(stepTileGate(g, true, true, 150, top, dt)).toBe(true)
+    let steps = 0
+    while (stepTileGate(g, true, true, 260, top, dt)) steps++
+    const outFor = (steps + 1) * dt
+    expect(outFor).toBeGreaterThanOrEqual(10 - 1e-9)
+    expect(outFor).toBeLessThanOrEqual(10.2)
+    for (let i = 0; i < 100; i++) expect(stepTileGate(g, true, true, 260, top, dt)).toBe(false)
+    expect(g.mount).toEqual({ mounted: false, outFor: 0 })
+  })
+
+  it('unmounts at once on leaving Earth focus, and a return above the range does not remount', () => {
+    const g = gate()
+    expect(stepTileGate(g, true, true, 150, top, dt)).toBe(true)
+    expect(stepTileGate(g, true, true, 260, top, dt)).toBe(true)
+    expect(stepTileGate(g, true, false, 260, top, dt)).toBe(false)
+    expect(g.mount).toEqual({ mounted: false, outFor: 0 })
+    for (let i = 0; i < 20; i++) expect(stepTileGate(g, true, true, 260, top, dt)).toBe(false)
+    // Back in range, they mount again.
+    expect(stepTileGate(g, true, true, 150, top, dt)).toBe(true)
+  })
+
+  it('leaves the range only above 220 km while mounted, and drops it out of close zoom', () => {
+    const g = gate()
+    stepTileGate(g, true, true, 150, top, dt)
+    stepTileGate(g, true, true, 210, top, dt)
+    expect(g.range).toBe(true)
+    stepTileGate(g, false, true, 150, top, dt)
+    expect(g.range).toBe(false)
+    expect(g.mount.mounted).toBe(false)
   })
 })

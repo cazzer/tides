@@ -73,6 +73,32 @@ export function stepTileMount(
   return m.mounted
 }
 
+/** Close zoom's tiles each frame (stepTileGate): in their range (isTileRange's hysteresis), and mounted. */
+export interface TileGate {
+  range: boolean
+  mount: TileMount
+}
+
+/**
+ * Steps `g` by `dt` seconds for an eye `altitude` over the sea (`top` the
+ * handover's top, in the same units) and returns whether the tiles stay
+ * mounted. The range keys its hysteresis on itself, never on the mount, so
+ * the grace can't widen it. The mount needs close zoom in Earth focus: the
+ * system view only mounts them there (systemSurfaceTilesOn), so leaving focus
+ * drops the grace rather than letting a return above the range remount them.
+ */
+export function stepTileGate(
+  g: TileGate,
+  close: boolean,
+  earthFocus: boolean,
+  altitude: number,
+  top: number,
+  dt: number
+): boolean {
+  g.range = close && isTileRange(altitude, top, g.range)
+  return stepTileMount(g.mount, close && earthFocus, g.range, dt)
+}
+
 /**
  * Whether the system view mounts the streamed surface tiles (tides-tvr.7.2):
  * with them on (high tier, not ?surface=0), in the main view while it holds
