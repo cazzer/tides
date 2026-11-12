@@ -3,12 +3,19 @@ import { Object3D, PerspectiveCamera, Vector3 } from 'three'
 import {
   HEARTBEAT_KEY,
   HEARTBEAT_MS,
+  NOTICE_MAX_S,
+  answerPings,
   classifyExit,
   createExitWatch,
   describeExit,
+  exitDetails,
   geoPose,
+  isLoadAlive,
+  settleExit,
+  showsNotice,
   watchCamera,
   watchedCamera,
+  type ChannelCtor,
   type ExitSnapshot,
   type Heartbeat,
 } from './exit-watch'
@@ -24,6 +31,7 @@ const SNAPSHOT: ExitSnapshot = {
 
 const record = (over: Partial<Heartbeat> = {}): Heartbeat => ({
   v: 1,
+  loadId: 'load-a',
   sha: 'abc1234',
   t: 1_000_000,
   uptimeS: 40,
@@ -46,8 +54,16 @@ describe('classifyExit', () => {
     expect(classifyExit(JSON.stringify({ ...record(), state: 'gone' }), 0).kind).toBe('none')
   })
 
-  it('is none for another version', () => {
+  it('is none for another version, or without a load id', () => {
     expect(classifyExit(JSON.stringify({ ...record(), v: 2 }), 0).kind).toBe('none')
+    expect(classifyExit(JSON.stringify({ ...record(), loadId: undefined }), 0).kind).toBe('none')
+  })
+
+  it('reads a record without the snapshot fields', () => {
+    const minimal = { v: 1, loadId: 'x', sha: 's', t: 0, uptimeS: 0, state: 'visible', navType: 'reload', writeMs: 0 }
+    const result = classifyExit(JSON.stringify(minimal), 2000)
+    expect(result.kind).toBe('foreground')
+    expect(exitDetails(result).map(([label]) => label)).toEqual(['last heartbeat', 'build', 'snapshot'])
   })
 
   it('reads clean, background (hidden) and foreground (visible)', () => {
@@ -79,6 +95,90 @@ describe('describeExit', () => {
   })
 })
 
+describe('settleExit', () => {
+  const foreground = classifyExit(JSON.stringify(record()), 1_002_000)
+
+  it('drops a foreground kill whose page still answers: a duplicated tab', async () => {
+    const isAlive = vi.fn(async () => true)
+    expect((await settleExit(foreground, isAlive)).kind).toBe('none')
+    expect(isAlive).toHaveBeenCalledWith('load-a')
+  })
+
+  it('keeps a foreground kill nobody answers for', async () => {
+    expect(await settleExit(foreground, async () => false)).toBe(foreground)
+  })
+
+  it('asks nothing for the other kinds', async () => {
+    const isAlive = vi.fn(async () => true)
+    const background = classifyExit(JSON.stringify(record({ state: 'hidden' })), 0)
+    expect(await settleExit(background, isAlive)).toBe(background)
+    expect(await settleExit({ kind: 'none' }, isAlive)).toEqual({ kind: 'none' })
+    expect(isAlive).not.toHaveBeenCalled()
+  })
+})
+
+describe('showsNotice', () => {
+  it('shows only for a recent foreground kill', () => {
+    const at = (state: Heartbeat['state'], seconds: number) =>
+      classifyExit(JSON.stringify(record({ state })), 1_000_000 + seconds * 1000)
+    expect(showsNotice(at('visible', 4))).toBe(true)
+    expect(showsNotice(at('visible', NOTICE_MAX_S + 1))).toBe(false)
+    expect(showsNotice(at('hidden', 4))).toBe(false)
+    expect(showsNotice(at('clean', 4))).toBe(false)
+    expect(showsNotice({ kind: 'none' })).toBe(false)
+    expect(showsNotice(null)).toBe(false)
+  })
+})
+
+// BroadcastChannel's delivery: async, to every other instance of the name.
+function channelBus(): ChannelCtor {
+  const open = new Set<FakeChannel>()
+  class FakeChannel {
+    onmessage: ((event: { data: unknown }) => void) | null = null
+    constructor(readonly name: string) {
+      open.add(this)
+    }
+    postMessage(data: unknown) {
+      for (const other of open) {
+        if (other !== this && other.name === this.name) queueMicrotask(() => other.onmessage?.({ data }))
+      }
+    }
+    close() {
+      open.delete(this)
+    }
+  }
+  return FakeChannel
+}
+
+describe('isLoadAlive', () => {
+  it('is true when the page of that load answers', async () => {
+    const Channel = channelBus()
+    const stop = answerPings('load-a', Channel)
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 50 })).toBe(true)
+    stop()
+  })
+
+  it('is false when only other loads answer, or none', async () => {
+    const Channel = channelBus()
+    const stop = answerPings('load-b', Channel)
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 20 })).toBe(false)
+    stop()
+    expect(await isLoadAlive('load-b', { Channel, timeoutMs: 20 })).toBe(false)
+  })
+
+  it('is false without BroadcastChannel', async () => {
+    const none = { Channel: undefined as unknown as ChannelCtor }
+    expect(await isLoadAlive('load-a', { ...none, timeoutMs: 20 })).toBe(false)
+    expect(() => answerPings('load-a', undefined)()).not.toThrow()
+  })
+
+  it('works over the runtime BroadcastChannel', async () => {
+    const stop = answerPings('load-real')
+    expect(await isLoadAlive('load-real', { timeoutMs: 200 })).toBe(true)
+    stop()
+  })
+})
+
 class FakeStorage {
   data = new Map<string, string>()
   writes = 0
@@ -88,6 +188,9 @@ class FakeStorage {
   setItem(key: string, value: string) {
     this.writes++
     this.data.set(key, value)
+  }
+  removeItem(key: string) {
+    this.data.delete(key)
   }
 }
 
@@ -109,13 +212,17 @@ describe('createExitWatch', () => {
   let clock: number
   let stop: () => void
 
-  const start = (store: Pick<Storage, 'getItem' | 'setItem'> | null = storage) => {
+  const start = (
+    store: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null = storage,
+    snapshot: () => ExitSnapshot | null = () => SNAPSHOT
+  ) => {
     stop = createExitWatch({
       storage: store,
       doc,
       win,
       now: () => clock,
-      snapshot: () => SNAPSHOT,
+      snapshot,
+      loadId: 'load-a',
       sha: 'abc1234',
       navType: 'navigate',
     })
@@ -201,6 +308,20 @@ describe('createExitWatch', () => {
     expect(storage.writes).toBe(writes + 1)
   })
 
+  it('beats again on visible after a pagehide that kept the page (iOS)', () => {
+    start()
+    win.dispatchEvent(pageEvent('pagehide', false))
+    doc.set('hidden')
+    expect(next().kind).toBe('clean')
+    doc.set('visible')
+    const writes = storage.writes
+    advance(HEARTBEAT_MS * 2)
+    expect(storage.writes).toBe(writes + 2)
+    expect(next().kind).toBe('foreground')
+    doc.set('hidden')
+    expect(next().kind).toBe('background')
+  })
+
   it('ignores the first load pageshow', () => {
     start()
     win.dispatchEvent(pageEvent('pagehide', false))
@@ -217,12 +338,50 @@ describe('createExitWatch', () => {
     expect(storage.writes).toBe(writes)
   })
 
+  it('still writes, and still marks clean, when the snapshot throws', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    start(storage, () => {
+      throw new Error('context gone')
+    })
+    advance(HEARTBEAT_MS * 2)
+    expect(storage.writes).toBe(3)
+    const beating = next()
+    expect(beating.kind).toBe('foreground')
+    expect(beating.record?.loadId).toBe('load-a')
+    expect(beating.record?.view).toBeUndefined()
+    win.dispatchEvent(pageEvent('pagehide', false))
+    expect(next().kind).toBe('clean')
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes a record without the snapshot before there is one', () => {
+    start(storage, () => null)
+    expect(next().kind).toBe('foreground')
+    expect(next().record?.pose).toBeUndefined()
+  })
+
+  it('removes the record when the storage starts throwing', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    start()
+    advance(HEARTBEAT_MS)
+    expect(next().kind).toBe('foreground')
+    storage.setItem = () => {
+      throw new Error('QuotaExceededError')
+    }
+    advance(HEARTBEAT_MS)
+    expect(storage.getItem(HEARTBEAT_KEY)).toBeNull()
+    expect(next().kind).toBe('none')
+  })
+
   it('turns off on a throwing storage, with one console.info', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
     const throwing = {
       getItem: () => null,
       setItem: () => {
         throw new Error('QuotaExceededError')
+      },
+      removeItem: () => {
+        throw new Error('SecurityError')
       },
     }
     expect(() => start(throwing)).not.toThrow()

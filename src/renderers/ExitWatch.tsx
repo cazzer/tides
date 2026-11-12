@@ -2,15 +2,7 @@ import { useEffect } from 'react'
 import { useThree } from '@react-three/fiber'
 import { Vector3, type Object3D } from 'three'
 import { useStore } from '../store'
-import {
-  createExitWatch,
-  geoPose,
-  loadExitReport,
-  navigationType,
-  sessionStore,
-  watchedCamera,
-  type ExitSnapshot,
-} from '../exit-watch'
+import { geoPose, setExitSnapshot, watchedCamera, type ExitSnapshot } from '../exit-watch'
 
 interface PerformanceMemory {
   usedJSHeapSize: number
@@ -22,16 +14,15 @@ const eye = new Vector3()
 const look = new Vector3()
 
 /**
- * The unclean-exit heartbeat (tides-8h7.4, exit-watch.ts): the pose of the
- * watched camera, the dpr, the canvas and GL memory every 2 s while the page
- * is visible. Mount once in the root Canvas.
+ * The unclean-exit heartbeat's snapshot (tides-8h7.4, exit-watch.ts): the
+ * pose of the watched camera, the dpr, the canvas and GL memory. The
+ * heartbeat itself runs from exit-watch.ts's import. Mount once in the root
+ * Canvas.
  */
 export function ExitWatch() {
   const gl = useThree((s) => s.gl)
 
   useEffect(() => {
-    // Before this load's first heartbeat overwrites the last load's.
-    loadExitReport()
     const snapshot = (): ExitSnapshot => {
       const state = useStore.getState()
       const camera = watchedCamera()
@@ -65,15 +56,7 @@ export function ExitWatch() {
         ctxLost: gl.getContext().isContextLost(),
       }
     }
-    return createExitWatch({
-      storage: sessionStore(),
-      doc: document,
-      win: window,
-      now: Date.now,
-      snapshot,
-      sha: __BUILD_SHA__,
-      navType: navigationType(),
-    })
+    return setExitSnapshot(snapshot)
   }, [gl])
 
   return null
