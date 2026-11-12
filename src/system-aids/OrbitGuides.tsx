@@ -5,7 +5,8 @@
 // the parent's centre (orbit-guides.ts) and moved to the parent's live
 // position each frame, so the lines need no rebuild to follow the planet.
 // A set is rebuilt in place only when its orbits' planes may have drifted
-// (ORBIT_GUIDE_REFRESH_DAYS), never per frame, and fades out once it is too
+// (ORBIT_GUIDE_REFRESH_DAYS) or its system's expansion has changed (each
+// frame of an expansion's ease, tides-ufyr.6.3), and fades out once it is too
 // small on screen to read: zoomed out to the whole system, Mars' and
 // Jupiter's moons would only thicken their planet's dot.
 //
@@ -23,11 +24,12 @@ import { mainViewHidesMoon } from '../demo/demo-aids'
 import {
   GUIDE_PARENTS,
   MOON_ORBIT_SEGMENTS,
+  guideExpansion,
   guideExtent,
   guideLoopCount,
   loopIndices,
   orbitGuideFade,
-  orbitGuideIsStale,
+  orbitGuideNeedsRebuild,
   writeGuidePaths,
   type GuideParent,
 } from './orbit-guides'
@@ -54,6 +56,8 @@ interface Guide {
   material: THREE.LineBasicMaterial
   /** Sim time the lines were last built for. */
   pathT: number
+  /** The parent's expansion they were built at (guideExpansion). */
+  pathExpansion: number
 }
 
 function createGuide(parent: GuideParent, t: number, scale: DistanceScale): Guide {
@@ -70,11 +74,12 @@ function createGuide(parent: GuideParent, t: number, scale: DistanceScale): Guid
     opacity: MOON_ORBIT_OPACITY,
     depthWrite: false,
   })
-  return { parent, scale, geometry, material, pathT: t }
+  return { parent, scale, geometry, material, pathT: t, pathExpansion: guideExpansion(parent, scale) }
 }
 
 function rebuild(guide: Guide, t: number) {
   const position = guide.geometry.getAttribute('position') as THREE.BufferAttribute
+  guide.pathExpansion = guideExpansion(guide.parent, guide.scale)
   writeGuidePaths(guide.parent, t, MOON_ORBIT_SEGMENTS, guide.scale, position.array as Float32Array)
   position.needsUpdate = true
   guide.geometry.computeBoundingSphere()
@@ -104,7 +109,9 @@ function updateGuides(
     line.visible = strength > 0 && !(guide.parent === 'earth' && moonHidden)
     guide.material.opacity = MOON_ORBIT_OPACITY * strength
     // A hidden set catches up when it next shows.
-    if (line.visible && orbitGuideIsStale(guide.parent, guide.pathT, t)) rebuild(guide, t)
+    if (line.visible && orbitGuideNeedsRebuild(guide.parent, scale, guide.pathT, guide.pathExpansion, t)) {
+      rebuild(guide, t)
+    }
   }
 }
 

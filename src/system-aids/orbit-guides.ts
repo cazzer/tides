@@ -5,15 +5,18 @@
 // moons.ts. Every set is built relative to its parent's centre and drawn at
 // the parent's live position. Earth's Moon sits at moonOffset, ~10 units, at
 // both distance scales; a planet's moons orbit at the scale's own radii,
-// which differ in flight only under ?truescale (moons.ts).
+// which in the system view grow with the planet's expansion (moons.ts).
 import { MOON_UNITS_PER_KM, moonOffset } from '../ephemeris'
 import {
   MOON_PARENTS,
+  SYSTEM_EXPANSION_MAX,
+  moonExpansion,
   moonOrbitPath,
   moonSystemExtent,
   moonsOf,
   type MoonParent,
 } from '../moons/moons'
+import { EXPANSION_SNAP } from '../moons/moon-expansion'
 import type { DistanceScale } from '../distance-scale'
 
 /** A body whose moons get orbit lines. */
@@ -97,11 +100,37 @@ export function writeGuidePaths(
   positions: Float32Array
 ): Float32Array {
   if (parent === 'earth') return earthMoonOrbitPath(t, segments, positions)
-  const stride = segments * 3
-  moonsOf(parent).forEach((key, i) => {
-    moonOrbitPath(key, t, segments, scale, positions.subarray(i * stride, (i + 1) * stride))
-  })
+  const keys = moonsOf(parent)
+  for (let i = 0; i < keys.length; i++) moonOrbitPath(keys[i], t, segments, scale, positions, i * segments * 3)
   return positions
+}
+
+/**
+ * The expansion a parent's lines are built at (moons.ts' moonExpansion):
+ * only the system view's planets have one. Not a uniform scale of the loops
+ * (each moon moves its own share in log space), so a change rebuilds them.
+ */
+export function guideExpansion(parent: GuideParent, scale: DistanceScale): number {
+  return parent === 'earth' || scale === 'flight' ? 0 : moonExpansion(parent)
+}
+
+/**
+ * True once the lines built at pathT and pathExpansion no longer match t and
+ * the parent's expansion: moved more than EXPANSION_SNAP (radii ~0.02%,
+ * under a pixel), so a cap drifting with the clock doesn't rebuild every
+ * frame, or landed on either end (compact, or all the way), so the lines
+ * end up exactly on the moons.
+ */
+export function orbitGuideNeedsRebuild(
+  parent: GuideParent,
+  scale: DistanceScale,
+  pathT: number,
+  pathExpansion: number,
+  t: number
+): boolean {
+  const e = guideExpansion(parent, scale)
+  const landed = (e === 0 || e === SYSTEM_EXPANSION_MAX) && e !== pathExpansion
+  return landed || Math.abs(e - pathExpansion) > EXPANSION_SNAP || orbitGuideIsStale(parent, pathT, t)
 }
 
 /**

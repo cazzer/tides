@@ -27,8 +27,12 @@
 //     MOON_ORBIT_GAP plus the innermost moon's compact radius
 //     (clampedSceneRadius, the radius it was drawn at before tides-ufyr.6.2,
 //     kept so the map stays exactly as it was), and span is [TUNE] per
-//     parent. A later rule may grow a focused planet's system toward true
-//     (tides-ufyr.6.3), from this table and the flight one.
+//     parent. A system the camera is on grows toward true spacing
+//     (tides-ufyr.6.3): each parent has an expansion e in
+//     [0, SYSTEM_EXPANSION_MAX], and each of its moons orbits
+//     towardTrue(compact, true, e) out, true being aKm / R_km of the
+//     planet's system radius. At e = 0 that is the compact map itself, bit
+//     for bit; moon-expansion.ts drives e, setMoonExpansion sets it.
 //   - Flight (ship mode, 1000 units/AU): true spacing in planet radii. A moon
 //     orbits aKm / R_km of its planet's flight radius out (flightRadii, so it
 //     follows ?truescale's planet growth): Callisto ~27 Jupiter radii (~540
@@ -373,8 +377,75 @@ function moonSizes(
 }
 
 // Separate tables at every ?truescale, 0 included: the views' orbits differ.
-const SYSTEM_SIZES = moonSizes(SYSTEM_RADIUS, SYSTEM_ORBIT_RADIUS)
+// The system table's orbit radii and extents are live (setMoonExpansion);
+// it starts as the compact map.
+const systemOrbitRadius: Record<MoonKey, number> = { ...SYSTEM_ORBIT_RADIUS }
+const SYSTEM_SIZES = moonSizes(SYSTEM_RADIUS, systemOrbitRadius)
+const systemExtent = SYSTEM_SIZES.extent as Record<MoonParent, number>
 const FLIGHT_SIZES = moonSizes(moonRadiiAt(TRUESCALE), moonOrbitRadiiAt(TRUESCALE))
+
+// --- System view expansion (tides-ufyr.6.3) ------------------------------
+
+/**
+ * The most a system's orbits move from the compact map toward true spacing,
+ * in log space. [TUNE] At 0.6 Callisto goes from 2.84 to ~11 Jupiter radii
+ * (true ~27), Iapetus from 4.88 to ~22 Saturn radii, Triton from 1.33 to
+ * ~5.6 Neptune radii; further would crowd the neighbouring planets for more
+ * of the time (moon-expansion.ts' cap).
+ */
+export const SYSTEM_EXPANSION_MAX = 0.6
+
+/** Each moon's true system-view orbit radius: aKm / R_km of its planet's system radius. */
+const SYSTEM_TRUE_ORBIT_RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
+  MOON_KEYS.map((key) => {
+    const { parent, aKm } = MOONS[key]
+    return [key, (aKm / parentRadiusKm(parent)) * positionsFor('system').radius[parent]]
+  })
+) as Record<MoonKey, number>
+
+const expansion: Record<MoonParent, number> = { mars: 0, jupiter: 0, saturn: 0, uranus: 0, neptune: 0 }
+
+/** The parent's system-view expansion, 0 (the compact map) to SYSTEM_EXPANSION_MAX. */
+export function moonExpansion(parent: MoonParent): number {
+  return expansion[parent]
+}
+
+/**
+ * Moves the parent's system-view orbits `e` of the way, in log space, from
+ * the compact map toward true spacing (0 to SYSTEM_EXPANSION_MAX; the driver
+ * clamps). Every reader of the system scale (positions, orbit paths,
+ * extents) sees it at once. Allocation-free; false, and nothing done, when e
+ * is already the parent's.
+ */
+export function setMoonExpansion(parent: MoonParent, e: number): boolean {
+  if (expansion[parent] === e) return false
+  expansion[parent] = e
+  const keys = MOONS_OF[parent]
+  let extent = 0
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]
+    const radius = towardTrue(SYSTEM_ORBIT_RADIUS[key], SYSTEM_TRUE_ORBIT_RADIUS[key], e)
+    systemOrbitRadius[key] = radius
+    extent = Math.max(extent, radius + SYSTEM_RADIUS[key])
+  }
+  systemExtent[parent] = extent
+  return true
+}
+
+/**
+ * The largest expansion at which the parent's system reaches no further than
+ * `reach` from its centre, clamped to [0, SYSTEM_EXPANSION_MAX]: solved on
+ * the outermost moon, whose sphere is the system's extent at every e.
+ */
+export function expansionForExtent(parent: MoonParent, reach: number): number {
+  const keys = MOONS_OF[parent]
+  const last = keys[keys.length - 1]
+  const compact = SYSTEM_ORBIT_RADIUS[last]
+  const room = reach - SYSTEM_RADIUS[last]
+  if (!(room > compact)) return 0
+  const e = Math.log(room / compact) / Math.log(SYSTEM_TRUE_ORBIT_RADIUS[last] / compact)
+  return Math.min(SYSTEM_EXPANSION_MAX, e)
+}
 
 function sizesFor(scale: DistanceScale): MoonSizes {
   return scale === 'flight' ? FLIGHT_SIZES : SYSTEM_SIZES
@@ -542,14 +613,17 @@ export function moonPosition(key: MoonKey, t: number, scale: DistanceScale): Vec
  * THREE.LineLoop, relative to the parent's centre (add the parent's
  * position, or draw it in a group there). The loop starts at the moon and
  * runs the way it orbits, so the moon is always on it. The Galileans' loops
- * are their osculating circles, within ~0.5° of Jupiter's equator.
+ * are their osculating circles, within ~0.5° of Jupiter's equator. With
+ * `out`, written from index `at` on (an orbit set's loop, without a
+ * subarray).
  */
 export function moonOrbitPath(
   key: MoonKey,
   t: number,
   segments: number,
   scale: DistanceScale,
-  out?: Float32Array
+  out?: Float32Array,
+  at = 0
 ): Float32Array {
   computeAll(t)
   const points = out ?? new Float32Array(segments * 3)
@@ -559,9 +633,10 @@ export function moonOrbitPath(
     const s = (2 * Math.PI * k) / segments
     const c = a * Math.cos(s)
     const d = a * Math.sin(s)
-    points[k * 3] = c * unitP[i] + d * unitQ[i]
-    points[k * 3 + 1] = c * unitP[i + 1] + d * unitQ[i + 1]
-    points[k * 3 + 2] = c * unitP[i + 2] + d * unitQ[i + 2]
+    const j = at + k * 3
+    points[j] = c * unitP[i] + d * unitQ[i]
+    points[j + 1] = c * unitP[i + 1] + d * unitQ[i + 1]
+    points[j + 2] = c * unitP[i + 2] + d * unitQ[i + 2]
   }
   return points
 }

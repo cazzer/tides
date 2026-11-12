@@ -14,6 +14,7 @@
 import { createRef, useEffect, useMemo, useRef, type FC, type RefObject } from 'react'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { DistanceScale } from '../distance-scale'
 import { positionsFor } from '../flight-scale'
 import { useCamera } from '../camera'
@@ -27,6 +28,8 @@ import {
 import { loadBodyMap } from '../renderers/planetTextures'
 import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonRadius } from './moons'
 import { moonTextureUrls, type MoonTextureUrls } from './moon-textures'
+import { resetMoonExpansions, stepMoonExpansions } from './moon-expansion'
+import { prefersReducedMotion } from '../ship/reduced-motion'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 import { worldUnitsPerPixel } from '../system-aids/pixel-scale'
@@ -270,6 +273,22 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
     MOON_KEYS.forEach((key, i) => setPlanet(key, refs[i]))
     return () => MOON_KEYS.forEach((key) => setPlanet(key, undefined))
   }, [interactive, refs, setPlanet])
+
+  // The main view's system grows the focused planet's moons toward true
+  // spacing (moon-expansion.ts). At -1, after SimClock (also -1, subscribed
+  // first, and r3f's sort is stable) and before every frame that reads the
+  // system scale (this one's placeMoons, the orbit lines, labels, camera),
+  // so they all see this frame's value. Side panels on the system scale
+  // share it. Back to the compact map when this goes.
+  const expands = interactive && distanceScale === 'system'
+  useEffect(() => (expands ? resetMoonExpansions : undefined), [expands])
+  useFrame(({ controls }, delta) => {
+    if (!expands) return
+    const { timestamp: t, cameraFocus, earthRadius } = useStore.getState()
+    if (t == null) return
+    const distance = controls ? (controls as OrbitControlsImpl).getDistance() : Infinity
+    stepMoonExpansions(cameraFocus, distance, t, delta, prefersReducedMotion(), earthRadius)
+  }, -1)
 
   // Binds the next arrived map, one a frame.
   const takeArrivedMap = (gl: THREE.WebGLRenderer, frame: number) => {
