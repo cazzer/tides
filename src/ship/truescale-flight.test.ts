@@ -207,7 +207,8 @@ describe('?truescale: HUD ranges', () => {
   // per unit, the true position and the nearest, bit for bit as before it,
   // over two years of dates from every body out toward three others. A
   // deliberate change to the ranges at a = 0 re-pins this (log the digest);
-  // last for tides-ufyr.6.2, the moons at true spacing.
+  // last for tides-ufyr.6.2 and .6.2.1, the moons at true spacing on their
+  // systems' own scales.
   it('measures exactly as before at ?truescale=0', async () => {
     const hash = createHash('sha256')
     for (let day = 0; day < 720; day += 60) {
@@ -227,7 +228,7 @@ describe('?truescale: HUD ranges', () => {
         }
       }
     }
-    expect(hash.digest('hex')).toBe('a8af857f24d156b3343fd2ee2fdfa6f06bfb1f3ff188d4d5fba5733f4be3340c')
+    expect(hash.digest('hex')).toBe('e9037c699179aed76c7462402a0bbd5bc1ae8298b3a81d984928c05d3a9f8b28')
   }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {

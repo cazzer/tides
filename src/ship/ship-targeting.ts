@@ -8,6 +8,7 @@ import * as THREE from 'three'
 import type { Body as FlightBody } from './flight'
 import { isMoonKey } from '../moons/moon-keys'
 import { MOONS } from '../moons/moons'
+import type { SystemEdgeCrossing } from './ship-distances'
 
 export interface ScreenBody {
   key: string
@@ -213,6 +214,8 @@ export interface ShipNav {
   nearestKm: number
   targetKm: number
   kmPerUnit: number
+  /** The last moon-system edge the ship crossed (ship-distances.ts ShipRanges.edgeCrossing). */
+  edgeCrossing: SystemEdgeCrossing
 }
 
 export const shipNav: ShipNav = {
@@ -220,6 +223,7 @@ export const shipNav: ShipNav = {
   nearestKm: NaN,
   targetKm: NaN,
   kmPerUnit: NaN,
+  edgeCrossing: { parent: null, entering: false, count: 0 },
 }
 
 /**

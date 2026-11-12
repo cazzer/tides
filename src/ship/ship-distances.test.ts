@@ -22,9 +22,13 @@ import {
   formatDistance,
   formatEta,
   formatSpeed,
+  MOON_SYSTEM_EDGE_HYSTERESIS,
   measureRanges,
+  moonSystemEdge,
   trueBodies,
 } from './ship-distances'
+import { createSystemCue, stepSystemCue, systemCueShowing } from './hud-format'
+import { MOON_PARENTS } from '../moons/moons'
 
 const DATES = [
   Date.UTC(2026, 9, 22, 12), // Venus near inferior conjunction, ~280 units off
@@ -386,8 +390,10 @@ describe('measureRanges', () => {
     // ~376 000 km over a ~6 unit shell gap.
     expect(nearEarth).toBeGreaterThan(40_000)
     expect(nearEarth).toBeLessThan(120_000)
-    // Clear of Triton's system (60 units), sunward.
-    measureRanges(shellToward(neptune, sun, 100), bodies, truth, ranges)
+    // Clear of Triton's system, sunward. At true moon spacing (tides-ufyr.6.2)
+    // the system reaches ~108 units at ?truescale=0, so the old probe 100
+    // units off the shell sat inside it, on Neptune's own scale.
+    measureRanges(shellToward(neptune, sun, 1.2 * moonSystemEdge('neptune')), bodies, truth, ranges)
     // Deep space: every pair scale converges on KM_PER_AU / FLIGHT_UNITS_PER_AU.
     expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.01)
   })
@@ -488,7 +494,7 @@ describe('measureRanges in the other moon systems (tides-2hv.8)', () => {
     expect(Math.abs(centres / MOONS.titan.aKm - 1)).toBeLessThan(1e-9)
   })
 
-  // Straight in from well past each system's hand-over, the parent's range
+  // Straight in from well past each system's edge, the parent's range
   // only ever falls. The blended position mixes anchors whose scene
   // directions disagree, which ran it backwards by up to ~280 000 km near
   // Jupiter and Saturn.
@@ -513,9 +519,9 @@ describe('measureRanges in the other moon systems (tides-2hv.8)', () => {
     }
   )
 
-  // The moons' scales are 3–30× off the planets' (~14 000 km a unit between
-  // Saturn and Mimas): counted all the way out, 1000 units from Saturn read
-  // ~10× short.
+  // A planet system's own scale is 14–43× finer than the planets' (~9 400 km
+  // a unit at Saturn at ?truescale=0): carried past its edge, 1000 units from
+  // Saturn would read ~16× short.
   it.each(['mars', 'jupiter', 'saturn', 'uranus'])(
     'reads 1000 units from %s on the planets’ scale, not its moons’',
     (key) => {
@@ -589,3 +595,117 @@ function mulberry32(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+
+describe('planet moon systems on their own scale (tides-ufyr.6.2.1)', () => {
+  const JUPITER = MOON_PARENTS.indexOf('jupiter')
+  // km per scene unit inside Jupiter's system: its true radius over its drawn one.
+  const systemScale = (bodies: readonly ShipBody[], truth: ReturnType<typeof trueBodies>) => {
+    const jupiter = find(bodies, 'jupiter')
+    return truth.radii[jupiter.index] / jupiter.body.radius
+  }
+
+  it.each(['io', 'callisto'] as const)('reads %s’s range exactly on Jupiter’s system scale inside it', (key) => {
+    for (const t of DATES) {
+      const { bodies, truth, ranges } = setup(t)
+      const k = systemScale(bodies, truth)
+      const jupiter = find(bodies, 'jupiter').body
+      const moon = find(bodies, key)
+      // 5 units off the moon's shell, on the far side from Jupiter.
+      const out = moon.body.position.clone().sub(jupiter.position).normalize()
+      measureRanges(moon.body.position.clone().addScaledVector(out, shellOf(moon.body) + 5), bodies, truth, ranges)
+      expect(ranges.insideSystem[JUPITER]).toBe(true)
+      expect(Math.abs(ranges.km[moon.index] / (5 * k) - 1), key).toBeLessThan(1e-3)
+      expect(Math.abs(ranges.kmPerUnit / k - 1), key).toBeLessThan(1e-3)
+      // Jupiter's system scale is ~14× finer than the planets'.
+      expect(k).toBeLessThan(FLIGHT_KM_PER_UNIT / 10)
+    }
+  })
+
+  it('reads Jupiter on the planets’ scale just outside the edge, its moons at their true offsets', () => {
+    for (const t of DATES) {
+      const { bodies, truth, ranges } = setup(t)
+      const jupiter = find(bodies, 'jupiter')
+      const d = 1.2 * moonSystemEdge('jupiter')
+      const outward = jupiter.body.position.clone().normalize()
+      measureRanges(jupiter.body.position.clone().addScaledVector(outward, d), bodies, truth, ranges)
+      expect(ranges.insideSystem[JUPITER]).toBe(false)
+      const gapKm = (d - shellOf(jupiter.body)) * FLIGHT_KM_PER_UNIT
+      expect(Math.abs(ranges.km[jupiter.index] / gapKm - 1)).toBeLessThan(0.06)
+      expect(Math.abs(ranges.kmPerUnit / FLIGHT_KM_PER_UNIT - 1)).toBeLessThan(0.02)
+      for (const key of ['io', 'europa', 'ganymede', 'callisto'] as const) {
+        const moon = find(bodies, key)
+        const offsetKm = truth.positions[moon.index].distanceTo(truth.positions[jupiter.index])
+        expect(Math.abs(ranges.km[moon.index] - ranges.km[jupiter.index]), key).toBeLessThanOrEqual(
+          offsetKm + truth.radii[jupiter.index]
+        )
+      }
+    }
+  })
+
+  // Out of Jupiter's system and back on a slow radial run: the Sun's range
+  // steps once each way, where the edge's hysteresis says, and hovering on
+  // the edge changes nothing.
+  it('jumps once at the edge each way, with hysteresis, and cues the HUD each time', () => {
+    const { bodies, truth, ranges } = setup(DATES[0])
+    const jupiter = find(bodies, 'jupiter').body
+    const sun = find(bodies, 'sun').index
+    const edge = moonSystemEdge('jupiter')
+    const outward = jupiter.position.clone().normalize()
+    const at = (d: number) => {
+      measureRanges(jupiter.position.clone().addScaledVector(outward, d), bodies, truth, ranges)
+      return ranges.km[sun]
+    }
+    const cue = createSystemCue(ranges.edgeCrossing.count)
+    const step = edge / 500
+    // The planets' scale less the system's, over the edge: the jump's size.
+    const jump = edge * (FLIGHT_KM_PER_UNIT - systemScale(bodies, truth))
+    const run = (from: number, to: number) => {
+      const jumps: number[] = []
+      const fired: number[] = []
+      let previous = at(from)
+      const sign = Math.sign(to - from)
+      for (let d = from + sign * step; sign * (to - d) >= 0; d += sign * step) {
+        const km = at(d)
+        if (Math.abs(km - previous) > jump / 2) jumps.push(d)
+        if (stepSystemCue(cue, ranges.edgeCrossing, d)) fired.push(d)
+        previous = km
+      }
+      return { jumps, fired }
+    }
+
+    at(0.5 * edge)
+    expect(ranges.insideSystem[JUPITER]).toBe(true)
+    const count = ranges.edgeCrossing.count
+    const leaving = run(0.5 * edge, 1.5 * edge)
+    expect(leaving.jumps).toHaveLength(1)
+    expect(leaving.jumps[0]).toBeGreaterThan(edge * (1 + MOON_SYSTEM_EDGE_HYSTERESIS))
+    expect(leaving.jumps[0]).toBeLessThanOrEqual(edge * (1 + MOON_SYSTEM_EDGE_HYSTERESIS) + step)
+    expect(ranges.edgeCrossing).toEqual({ parent: 'jupiter', entering: false, count: count + 1 })
+    expect(leaving.fired).toEqual(leaving.jumps)
+    expect(cue.text).toBe('Leaving Jupiter’s moons · scale change')
+
+    const entering = run(1.5 * edge, 0.5 * edge)
+    expect(entering.jumps).toHaveLength(1)
+    expect(entering.jumps[0]).toBeLessThan(edge * (1 - MOON_SYSTEM_EDGE_HYSTERESIS))
+    expect(entering.jumps[0]).toBeGreaterThanOrEqual(edge * (1 - MOON_SYSTEM_EDGE_HYSTERESIS) - step)
+    expect(ranges.edgeCrossing).toEqual({ parent: 'jupiter', entering: true, count: count + 2 })
+    expect(entering.fired).toEqual(entering.jumps)
+    expect(cue.text).toBe('Entering Jupiter’s moons · scale change')
+
+    // Inside the hysteresis band, back and forth across the edge: no flips.
+    for (let i = 0; i < 40; i++) {
+      at(edge * (1 + (i % 2 ? 1 : -1) * 0.8 * MOON_SYSTEM_EDGE_HYSTERESIS))
+      expect(stepSystemCue(cue, ranges.edgeCrossing, i)).toBe(false)
+    }
+    expect(ranges.edgeCrossing.count).toBe(count + 2)
+    expect(systemCueShowing(cue, entering.fired[0] + 1)).toBe(true)
+  })
+
+  it('places a fresh measure without counting a crossing', () => {
+    const { bodies, truth, ranges } = setup(DATES[0])
+    const jupiter = find(bodies, 'jupiter').body
+    measureRanges(jupiter.position.clone().addScaledVector(new THREE.Vector3(1, 0, 0), 10), bodies, truth, ranges)
+    expect(ranges.insideSystem[JUPITER]).toBe(true)
+    expect(ranges.edgeCrossing.count).toBe(0)
+  })
+})

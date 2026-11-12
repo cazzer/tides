@@ -110,6 +110,7 @@ export function ShipTargeting() {
     shipNav.nearestKm = nearest >= 0 ? ranges.km[nearest] : NaN
     shipNav.targetKm = targetIndex >= 0 ? ranges.km[targetIndex] : NaN
     shipNav.kmPerUnit = ranges.kmPerUnit
+    shipNav.edgeCrossing = ranges.edgeCrossing
 
     updateApproach({
       bodies,
