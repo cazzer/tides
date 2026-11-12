@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { MIN_LAP_FRAMES, lapSeconds } from './moon-laps'
+import { DEMO_FLIGHT_SECONDS } from './demo-flight'
+import { MIN_LAP_FRAMES, lapSeconds, stopLapSeconds } from './moon-laps'
 
 describe('lapSeconds', () => {
   it('is the period in real seconds at the clock’s speed', () => {
@@ -13,6 +14,14 @@ describe('lapSeconds', () => {
 
   it('halves as the clock doubles', () => {
     expect(lapSeconds(7.154553, 57_600)).toBeCloseTo(lapSeconds(7.154553, 28_800) / 2, 12)
+  })
+})
+
+describe('stopLapSeconds', () => {
+  it('is the stop’s real length less the flight in', () => {
+    const from = Date.parse('2027-09-05T00:00:00Z')
+    // Three days at three hours a second: 24 s.
+    expect(stopLapSeconds(from, from + 3 * 86_400_000, 10_800)).toBe(24 - DEMO_FLIGHT_SECONDS)
   })
 })
 

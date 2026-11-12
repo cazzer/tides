@@ -144,10 +144,19 @@ export function expansionCap(parent: MoonParent, t: number): number {
   return expansionForExtent(parent, Math.min(EXPANSION_CLEAR_SHARE * room, room - EXPANSION_MIN_CLEAR))
 }
 
+/** What a running demo asks of the expansion. */
+export interface DemoExpansion {
+  /** expansionTarget's `spread`: the focused system all the way out (aids.moonSystems). */
+  spread?: boolean
+  /** No system grows, though one may shrink: the eye is flying to another
+   * body (demoFlightRunning) and must not meet its system on the way. */
+  holdGrowth?: boolean
+}
+
 /**
- * One frame of every parent's expansion: eased toward its target (`spread`
- * as expansionTarget's), held under its cap. Parents go in turn, so each
- * one's cap sees the others' extents as already set this frame.
+ * One frame of every parent's expansion: eased toward its target, held
+ * under its cap. Parents go in turn, so each one's cap sees the others'
+ * extents as already set this frame.
  */
 export function stepMoonExpansions(
   focus: CameraFocus,
@@ -156,11 +165,12 @@ export function stepMoonExpansions(
   dt: number,
   reducedMotion: boolean,
   earthRadius?: number,
-  spread = false
+  demo: DemoExpansion = {}
 ): void {
   for (let i = 0; i < MOON_PARENTS.length; i++) {
     const parent = MOON_PARENTS[i]
-    const target = SYSTEM_EXPANSION_MAX * expansionTarget(focus, distance, parent, earthRadius, spread)
+    const wanted = SYSTEM_EXPANSION_MAX * expansionTarget(focus, distance, parent, earthRadius, demo.spread)
+    const target = demo.holdGrowth ? Math.min(wanted, moonExpansion(parent)) : wanted
     const eased = stepExpansion(moonExpansion(parent), target, dt, reducedMotion)
     setMoonExpansion(parent, Math.min(eased, expansionCap(parent, t)))
   }

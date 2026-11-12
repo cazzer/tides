@@ -23,17 +23,12 @@ import {
   type DemoPose,
 } from './demo-script'
 import { DEMO_MAX_DELTA } from './demo-travel'
+import { DEMO_FLIGHT_SECONDS, blendFlightTarget, poseFocusBefore, setDemoFlight } from './demo-flight'
+import type { DemoRun } from './demo-session'
 import { bandFraming, clearBand, demoChromeRects, type Rect } from './demo-chrome'
 
 /** How long the eye takes to reach a step's pose, in seconds. */
 export const DEMO_EASE_SECONDS = 2.5
-
-/**
- * How long the eye takes to fly to a step's pose about another body than
- * the step before's, in seconds (moon-laps.ts' FLIGHT_LEAD_SECONDS counts
- * it out of a stop's laps). [TUNE]
- */
-export const DEMO_FLIGHT_SECONDS = 3
 
 /**
  * After CameraProvider's frame (0), which moves the target with the focus,
@@ -136,6 +131,10 @@ export function DemoPlayer() {
   // The focus the last step's pose was about; null outside a demo, so
   // entering one cuts to its first pose's focus rather than flying.
   const lastPoseFocus = useRef<DemoFocus | null>(null)
+  // The run the ease was last set for, and whether this mount has seeded
+  // lastPoseFocus yet.
+  const handled = useRef<DemoRun | null>(null)
+  const seeded = useRef(false)
   const viewRect = useRef<Rect | null>(null)
   const offsetY = useRef(0)
 
@@ -163,7 +162,18 @@ export function DemoPlayer() {
   )
 
   useEffect(() => {
-    const step = demo && findDemo(demo.id)?.steps[demo.step]
+    const script = demo && findDemo(demo.id)
+    // Mounted mid-demo (after a View from Earth step): the eye was last
+    // about the pose before this step's.
+    if (!seeded.current) {
+      seeded.current = true
+      lastPoseFocus.current = demo && script ? poseFocusBefore(script, demo.step) : null
+    }
+    // StrictMode runs this twice on mount: the second run would take the
+    // first's focus for the last one and drop the flight.
+    if (demo && demo === handled.current) return
+    handled.current = demo
+    const step = demo && script ? script.steps[demo.step] : undefined
     const pose = step?.camera
     const travelling = useStore.getState().demoTravel != null
     const held = travelling && step?.travel?.camera
@@ -172,14 +182,21 @@ export function DemoPlayer() {
     ease.current = !pose
       ? null
       : held
-        ? easeTo({ ...held, focus: pose.focus }, true, true)
+        ? easeTo({ ...held, focus: pose.focus }, true, true, flight)
         : easeTo(pose, travelling, false, flight)
+    setDemoFlight(ease.current?.flight ?? false)
     // A snap left unconsumed (the main view unmounted the next frame) must
     // not land on the user's restored view after the demo.
     if (!demo) takeFocusSnap()
   }, [demo])
 
-  useEffect(() => () => void takeFocusSnap(), [])
+  useEffect(
+    () => () => {
+      takeFocusSnap()
+      setDemoFlight(false)
+    },
+    []
+  )
 
   // The user taking hold of the view ends the ease; the demo's own bar
   // (outside the panels) does not.
@@ -219,11 +236,15 @@ export function DemoPlayer() {
     }
 
     const current = ease.current
-    if (!current || !controls) return
+    if (!current || !controls) {
+      setDemoFlight(false)
+      return
+    }
     // Left the demo: the restore runs this frame, before the effect clears
     // the ease, which would otherwise put the step's pose back over it.
     if (!state.demo || state.cameraFocus !== current.pose.focus) {
       ease.current = null
+      setDemoFlight(false)
       return
     }
     const focus = focusedRef<BodyRef>(state, current.pose.focus)?.current
@@ -267,6 +288,7 @@ export function DemoPlayer() {
     current.elapsed += Math.min(delta, DEMO_MAX_DELTA)
     const duration = reduced ? 0 : current.flight ? DEMO_FLIGHT_SECONDS : DEMO_EASE_SECONDS
     const t = easeProgress(current.elapsed, duration)
+    setDemoFlight(current.flight && t < 1)
 
     // Each frame, so a resized view keeps a pose's fit and kept bodies in
     // view, in the band clear of the demo's boxes.
@@ -280,15 +302,19 @@ export function DemoPlayer() {
     outOfPoseFrame(current.from!, frame, _bodies, _from)
     easedEye(_from, _goal, _focus, t, distance, camera.position)
 
+    // A flight draws the target onto the new focus as it goes, landing on
+    // it exactly, so the snap below then moves nothing.
+    if (current.flight) blendFlightTarget(target, _focus, t)
+
     // Followed, the focus can move far in a frame; CameraProvider's target
     // would trail it, so it is put on the focus outright, this frame here
-    // and from the next by a snap.
-    const follow = current.travel || frame !== 'sun'
+    // and from the next by a snap. So is a landed flight's.
+    const follow = current.travel || frame !== 'sun' || current.pose.followed === true
     if (follow && !current.locked) {
       const near = target.distanceTo(_focus) <= LOCK_SHARE * camera.position.distanceTo(_focus)
       current.locked = t >= 1 || (first && near)
     }
-    if (follow && current.locked) {
+    if ((follow && current.locked) || (current.flight && t >= 1)) {
       requestFocusSnap()
       target.copy(_focus)
     }

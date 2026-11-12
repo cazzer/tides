@@ -39,16 +39,19 @@ import {
   outOfPoseFrame,
   poseDirection,
   poseDistance,
+  type Demo,
   type DemoFocus,
   type DemoPose,
   type PoseBodies,
 } from '../demo-script'
-import { DEMO_FLIGHT_SECONDS } from '../DemoPlayer'
-import { FLIGHT_LEAD_SECONDS, MIN_LAP_FRAMES, lapSeconds } from '../moon-laps'
+import { DEMO_FLIGHT_SECONDS } from '../demo-flight'
+import { bandFraming, clearBand } from '../demo-chrome'
+import { MIN_LAP_FRAMES, MIN_LAP_SLACK_SECONDS, lapSeconds, stopLapSeconds } from '../moon-laps'
 import { MOON_SHOWCASE } from './planets'
 import { clampLook } from '../../sky-look'
 import { demoAidAt } from '../demo-aids'
 import { demoStepPatch, type DemoSaved } from '../demo-session'
+import { travelRun, travelTimestamp } from '../demo-travel'
 import { DEMOS, findDemo } from '.'
 
 // A user's view with nothing a demo might rely on turned on.
@@ -420,9 +423,8 @@ describe('planets', () => {
   const demo = findDemo('planets')!
   const SYSTEM = positionsFor('system')
   const HOUR = 3_600_000
-  const DESKTOP = 1440 / 900
   const at = (key: BodyKey, t: number) => new THREE.Vector3(...SYSTEM.positionAt[key](t))
-  // The pose's frame needs no Earth turn: no flight here is in Earth's.
+  // The pose's frame needs no Earth turn: no pose here is in Earth's.
   const bodiesAt = (focus: DemoFocus, t: number): PoseBodies => ({
     focus: at(focus as BodyKey, t),
     sun: at('sun', t),
@@ -455,6 +457,13 @@ describe('planets', () => {
     demo.steps.forEach((_, i) => expect(demoAidAt(demo, i, 'moonSystems')).toBe(true))
   })
 
+  // The day–night line held still, so the planet's own turn is what moves:
+  // Venus' clockwise (retrograde) against it, Mercury's slow one.
+  it('holds the Sun still at Mercury and Venus', () => {
+    for (const i of [0, 1]) expect(demo.steps[i].camera).toMatchObject({ followed: true })
+    for (const i of [0, 1]) expect(demo.steps[i].camera!.frame ?? 'sun').toBe('sun')
+  })
+
   const moonStops = demo.steps.flatMap((step, i) =>
     MOON_PARENTS.includes(step.camera!.focus as MoonParent) ? [[step.camera!.focus as MoonParent, i] as const] : []
   )
@@ -468,10 +477,10 @@ describe('planets', () => {
     const { named, laps, framed } = MOON_SHOWCASE[parent]
     const { from, to } = span(i)
 
-    it('plays the named moon’s laps after the flight in, and no moon strobes', () => {
+    it('plays the named moon’s laps after the flight in, with time to spare, and no moon strobes', () => {
       expect(MOONS[named].parent).toBe(parent)
-      const dwell = (to - from) / 1000 / step.timeScale! - FLIGHT_LEAD_SECONDS
-      expect(laps * lapSeconds(MOONS[named].periodDays, step.timeScale!)).toBeLessThanOrEqual(dwell)
+      const played = laps * lapSeconds(MOONS[named].periodDays, step.timeScale!)
+      expect(played + MIN_LAP_SLACK_SECONDS).toBeLessThanOrEqual(stopLapSeconds(from, to, step.timeScale!))
       for (const key of moonsOf(parent)) {
         expect(lapSeconds(MOONS[key].periodDays, step.timeScale!) * 60, key).toBeGreaterThanOrEqual(MIN_LAP_FRAMES)
       }
@@ -490,28 +499,49 @@ describe('planets', () => {
     })
   })
 
-  // At four days a second Earth spins four times a second: kept out of view.
-  it.each([0, 1])('keeps Earth’s disc out of view at stop %i', (i) => {
-    const pose = demo.steps[i].camera!
-    const { from, to } = span(i)
-    const halfDiagonal = Math.atan(Math.tan((MAIN_FOV / 2) * DEG) * Math.hypot(1, DESKTOP))
-    const distance = poseDistance(pose, MAIN_FOV, DESKTOP)
-    for (const t of sampled(from, to, 12 * HOUR)) {
-      const bodies = bodiesAt(pose.focus, t)
-      const eye = poseDirection(pose, bodies).multiplyScalar(distance).add(bodies.focus)
-      const toEarth = bodies.earth.clone().sub(eye)
-      const toFocus = bodies.focus.clone().sub(eye)
-      const disc = Math.asin(SYSTEM.radius.earth / toEarth.length())
-      expect(toEarth.angleTo(toFocus) - disc).toBeGreaterThan(halfDiagonal)
-    }
+  // At four days a second Earth spins four times a second: kept out of the
+  // whole view, the caption's strip included, its projection shifted to
+  // centre the band above the caption as DemoPlayer shifts it.
+  describe.each([
+    [1440, 900],
+    [1920, 1080],
+    [2560, 1080],
+  ])('at %ix%i', (width, height) => {
+    // The caption as it sits on a 1440×900 desktop (demo-chrome.test.ts),
+    // its height and margin kept on a taller screen.
+    const caption = { left: 0.22 * width, top: height - 234, right: 0.78 * width, bottom: height - 12 }
+    const view = { left: 0, top: 0, right: width, bottom: height }
+    const band = clearBand(view, [caption])
+    const framing = bandFraming(band, height, MAIN_FOV)
+    const bandAspect = width / (band.bottom - band.top)
+
+    it.each([0, 1])('keeps Earth’s disc out of view at stop %i', (i) => {
+      const pose = demo.steps[i].camera!
+      const { from, to } = span(i)
+      const camera = new THREE.PerspectiveCamera(MAIN_FOV, width / height, 0.01, 1e6)
+      camera.setViewOffset(width, height, 0, framing.offsetY, width, height)
+      const frustum = new THREE.Frustum()
+      const distance = poseDistance(pose, framing.vfov, bandAspect)
+      for (const t of sampled(from, to, 6 * HOUR)) {
+        const bodies = bodiesAt(pose.focus, t)
+        camera.position.copy(poseDirection(pose, bodies)).multiplyScalar(distance).add(bodies.focus)
+        camera.lookAt(bodies.focus)
+        camera.updateMatrixWorld(true)
+        frustum.setFromProjectionMatrix(
+          new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+        )
+        expect(frustum.intersectsSphere(new THREE.Sphere(bodies.earth, SYSTEM.radius.earth))).toBe(false)
+      }
+    })
   })
 })
 
-// Every step that moves the camera to another body flies there (DemoPlayer):
-// the eye sets out from the last pose's, about the new focus, and arcs to
-// the step's pose over DEMO_FLIGHT_SECONDS as the clock runs at the step's
-// speed. It must keep clear of the Sun and every planet on the way, and not
-// turn so near half round that the arc's way round is a toss-up.
+// Every step that moves the camera to another body flies there (DemoPlayer),
+// Next or Back: the eye sets out from where the step it leaves had put it,
+// about the new focus, and arcs to the step's pose over DEMO_FLIGHT_SECONDS
+// as the clock runs from the step's date at its speed. It must keep clear
+// of the Sun and every planet on the way, and not turn so near half round
+// that the arc's way round is a toss-up.
 describe('flights between bodies', () => {
   const SYSTEM = positionsFor('system')
   const SUN_CLEARANCE = 15
@@ -535,59 +565,94 @@ describe('flights between bodies', () => {
   }
   const obstacles: BodyKey[] = ['earth', ...PLANET_KEYS]
   const isParent = (focus: DemoFocus): focus is MoonParent => MOON_PARENTS.includes(focus as MoonParent)
+  // The last pose shown at step i, as a run from the start leaves it.
+  const poseAt = (demo: Demo, i: number) => demo.steps.slice(0, i + 1).reverse().find((s) => s.camera)?.camera
 
   afterEach(resetMoonExpansions)
 
-  it('takes as long as the planets tour allows for', () => {
-    expect(DEMO_FLIGHT_SECONDS).toBeLessThanOrEqual(FLIGHT_LEAD_SECONDS)
-  })
-
   const flights = DEMOS.flatMap((demo) =>
     demo.steps.flatMap((step, i) => {
-      const before = demo.steps.slice(0, i).reverse().find((s) => s.camera)?.camera
-      if (!step.camera || !before || before.focus === step.camera.focus) return []
-      return [[`${demo.id} step ${i}`, demo, i, before] as const]
+      if (!step.camera) return []
+      const pairs: (readonly [string, Demo, number, number])[] = []
+      const before = poseAt(demo, i - 1)
+      if (before && before.focus !== step.camera.focus) pairs.push([`${demo.id} ${i - 1}→${i}`, demo, i - 1, i])
+      // Back from the step after, if it shows another body.
+      const after = demo.steps[i + 1]?.camera
+      if (after && after.focus !== step.camera.focus) pairs.push([`${demo.id} ${i + 1}→${i}`, demo, i + 1, i])
+      return pairs
     })
   )
 
-  it('include the planets tour’s and the seasons’ Earth-to-Sun', () => {
-    expect(flights.map(([name]) => name)).toEqual(expect.arrayContaining(['seasons step 5', 'planets step 6']))
+  it('include the planets tour’s both ways and the seasons’ Earth-to-Sun', () => {
+    expect(flights.map(([name]) => name)).toEqual(
+      expect.arrayContaining(['seasons 4→5', 'seasons 5→4', 'planets 5→6', 'planets 5→4', 'planets 1→0'])
+    )
   })
 
-  it.each(flights)('%s keeps clear of the Sun and the planets', (_, demo, i, before) => {
+  it.each(flights)('%s keeps clear of the Sun and the planets', (_, demo, leaving, i) => {
     const pose = demo.steps[i].camera!
+    const before = poseAt(demo, leaving)!
     expect(pose.frame).not.toBe('earth')
     expect(before.frame).not.toBe('earth')
-    expect(demo.steps[i].travel).toBeUndefined()
     const spread = demoAidAt(demo, i, 'moonSystems')
     const t0 = Date.parse(demo.steps[i].date)
     const { timeScale } = demoStepPatch(bare, demo, i)
-    const frame = pose.frame ?? 'sun'
-    for (const aspect of [1440 / 900, 390 / 844]) {
-      // The system left as spread as it was, easing in as the new one grows.
-      resetMoonExpansions()
-      if (isParent(before.focus)) {
-        setMoonExpansion(before.focus, Math.min(SYSTEM_EXPANSION_MAX, expansionCap(before.focus, t0)))
-      }
-      const last = bodiesAt(before.focus, t0)
-      const lastEye = poseDirection(before, last)
-        .multiplyScalar(poseDistance(before, MAIN_FOV, aspect))
-        .add(last.focus)
-      const start = bodiesAt(pose.focus, t0)
-      const from = intoPoseFrame(lastEye.clone().sub(start.focus), frame, start)
-      const distance = poseDistance(pose, MAIN_FOV, aspect)
-      for (let k = 0; k <= 60; k++) {
-        const seconds = (k / 60) * DEMO_FLIGHT_SECONDS
-        const t = t0 + seconds * 1000 * timeScale
-        if (k > 0) stepMoonExpansions(pose.focus, distance, t, DEMO_FLIGHT_SECONDS / 60, false, undefined, spread)
-        const bodies = bodiesAt(pose.focus, t)
-        const goal = poseDirection(pose, bodies)
-        const fromNow = outOfPoseFrame(from, frame, bodies)
-        expect(fromNow.angleTo(goal) / DEG).toBeLessThan(MAX_TURN)
-        const eye = easedEye(fromNow, goal, bodies.focus, easeProgress(seconds, DEMO_FLIGHT_SECONDS), distance)
-        expect(eye.distanceTo(bodies.sun)).toBeGreaterThanOrEqual(SUN_CLEARANCE)
-        for (const key of obstacles) {
-          expect(eye.distanceTo(at(key, t)), key).toBeGreaterThan(reachOf(key))
+    // Left at the start, the middle or the end of the step left.
+    const left = demo.steps[leaving]
+    const leftFrom = Date.parse(left.date)
+    const leftTo = left.until ? Date.parse(left.until) : leftFrom
+    for (const pressed of [leftFrom, (leftFrom + leftTo) / 2, leftTo]) {
+      // The clock travels from the instant shown to the step's date, the eye
+      // flying in the travel's own pose; or it cuts to the date and runs on
+      // at the step's speed.
+      const travel = demo.steps[i].travel
+      const run = travelRun(travel, pressed, t0, false)
+      const flown: DemoPose = run && travel?.camera ? { ...travel.camera, focus: pose.focus } : pose
+      const frame = flown.frame ?? 'sun'
+      const clock = (seconds: number) => (run ? travelTimestamp(run, seconds) : t0 + seconds * 1000 * timeScale)
+      for (const aspect of [1440 / 900, 390 / 844]) {
+        // The system left as spread as it was, easing in as the eye flies;
+        // the new one waits for it to land.
+        resetMoonExpansions()
+        if (isParent(before.focus)) {
+          setMoonExpansion(before.focus, Math.min(SYSTEM_EXPANSION_MAX, expansionCap(before.focus, pressed)))
+        }
+        const last = bodiesAt(before.focus, pressed)
+        const lastEye = poseDirection(before, last)
+          .multiplyScalar(poseDistance(before, MAIN_FOV, aspect))
+          .add(last.focus)
+        const start = bodiesAt(pose.focus, clock(0))
+        const from = intoPoseFrame(lastEye.clone().sub(start.focus), frame, start)
+        const distance = poseDistance(flown, MAIN_FOV, aspect)
+        for (let k = 0; k <= 60; k++) {
+          const seconds = (k / 60) * DEMO_FLIGHT_SECONDS
+          const t = clock(seconds)
+          if (k > 0) {
+            stepMoonExpansions(pose.focus, distance, t, DEMO_FLIGHT_SECONDS / 60, false, undefined, {
+              spread,
+              holdGrowth: k < 60,
+            })
+          }
+          const bodies = bodiesAt(pose.focus, t)
+          const goal = poseDirection(flown, bodies)
+          const fromNow = outOfPoseFrame(from, frame, bodies)
+          expect(fromNow.angleTo(goal) / DEG).toBeLessThan(MAX_TURN)
+          const eye = easedEye(fromNow, goal, bodies.focus, easeProgress(seconds, DEMO_FLIGHT_SECONDS), distance)
+          expect(eye.distanceTo(bodies.sun)).toBeGreaterThanOrEqual(SUN_CLEARANCE)
+          for (const key of obstacles) {
+            expect(eye.distanceTo(at(key, t)), key).toBeGreaterThan(reachOf(key))
+          }
+        }
+        // Landed, the new system grows with the eye at its pose.
+        if (isParent(pose.focus)) {
+          for (let k = 0; k < 5 * 60; k++) {
+            stepMoonExpansions(pose.focus, distance, t0, 1 / 60, false, undefined, { spread })
+          }
+          const bodies = bodiesAt(pose.focus, t0)
+          const eye = poseDirection(pose, bodies)
+            .multiplyScalar(poseDistance(pose, MAIN_FOV, aspect))
+            .add(bodies.focus)
+          expect(eye.distanceTo(bodies.focus)).toBeGreaterThan(reachOf(pose.focus))
         }
       }
     }

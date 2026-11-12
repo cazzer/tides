@@ -3,6 +3,8 @@
 // goes round within the stop, and none of the planet's moons goes round so
 // fast that it strobes.
 
+import { DEMO_FLIGHT_SECONDS } from './demo-flight'
+
 const SECONDS_PER_DAY = 86_400
 
 /**
@@ -12,14 +14,19 @@ const SECONDS_PER_DAY = 86_400
  */
 export const MIN_LAP_FRAMES = 30
 
-/**
- * The real seconds at the start of a stop the eye spends flying to it
- * (DemoPlayer's DEMO_FLIGHT_SECONDS): the laps a stop promises are counted
- * after it.
- */
-export const FLIGHT_LEAD_SECONDS = 3
+/** The least a stop runs on past its laps, seconds, so the last isn't cut
+ * off at the stop. */
+export const MIN_LAP_SLACK_SECONDS = 1.5
 
 /** Real seconds for one lap of a moon of `periodDays` at `timeScale` sim seconds a second. */
 export function lapSeconds(periodDays: number, timeScale: number): number {
   return (periodDays * SECONDS_PER_DAY) / timeScale
+}
+
+/**
+ * The real seconds a stop from `from` to `to` (epoch ms) at `timeScale`
+ * leaves for laps once the eye has flown in (DEMO_FLIGHT_SECONDS).
+ */
+export function stopLapSeconds(from: number, to: number, timeScale: number): number {
+  return (to - from) / 1000 / timeScale - DEMO_FLIGHT_SECONDS
 }

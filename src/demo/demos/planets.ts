@@ -7,10 +7,12 @@ import type { Demo, DemoPose } from '../demo-script'
 //
 // The stops run back to back: each starts where the last one stops, so the
 // clock never jumps and nothing travels; only the eye flies from planet to
-// planet (DemoPlayer's flight). Every stop has one speed, picked so the moon
-// its caption names finishes its laps within the stop, after the flight
-// (MOON_SHOWCASE, moon-laps.ts), and the fastest moon of the planet still
-// takes MIN_LAP_FRAMES a lap, so nothing strobes. At these speeds, a lap of
+// planet (DemoPlayer's flight, demo-flight.ts), the new system spreading
+// once it lands. Every stop has one speed, picked so the moon its caption
+// names finishes its laps within the stop, after the flight, with
+// MIN_LAP_SLACK_SECONDS to spare (MOON_SHOWCASE, moon-laps.ts), and the
+// fastest moon of the planet still takes MIN_LAP_FRAMES a lap, so nothing
+// strobes. At these speeds, a lap of
 // (period / timeScale): Phobos 2.6 s and Deimos 10.1 s at 10 800; Io 5.3 s
 // and Ganymede 21.5 s at 28 800; Mimas 1.4 s and Titan 23.9 s at 57 600;
 // Miranda 2.1 s and Oberon 20.2 s at 57 600; Triton 11.8 s at 43 200. The
@@ -27,14 +29,19 @@ import type { Demo, DemoPose } from '../demo-script'
 // way through these weeks. In 2026 Saturn's is held back by its conjunction
 // with Neptune.
 //
-// Mercury and Venus have no moons: their stops look against the stars,
-// followed, from high over the planet's north, so the planet is seen to
-// spin as it goes round the Sun (about the Sun the eye would turn with it,
-// and Mercury's 176-day solar day would hardly move). They run at four days
-// a second, at which Earth would spin four times a second and strobe; the
-// poses keep it out of view (registry.test.ts).
+// Mercury and Venus have no moons: their stops show the planet's turn. The
+// eye is high over its north, beside the Sun's line and followed, so the
+// Sun keeps its place on screen and the day–night line holds still: what
+// moves is the planet turning against it, its day from sunrise to sunrise.
+// Against the stars the line would sweep round once a year and read as the
+// spin: at Venus prograde, though Venus turns backwards. Venus' day is 117
+// days, so in this 100-day stop its clouds turn most of the way round,
+// clockwise; Mercury's is 176 days, two of its years, so in this 88-day stop
+// it turns half way round. They run at four days a second, at which Earth
+// would spin four times a second and strobe; the poses keep it out of the
+// whole view (registry.test.ts).
 
-const HIGH = { frame: 'stars', azimuth: 0, elevation: 60 } as const
+const HIGH = { followed: true, azimuth: 90, elevation: 60 } as const
 
 const MERCURY: DemoPose = { focus: 'mercury', ...HIGH, distance: 40 }
 const VENUS: DemoPose = { focus: 'venus', ...HIGH, distance: 60 }
@@ -78,7 +85,7 @@ export const planets: Demo = {
       aids: { moonSystems: true },
       caption: {
         title: 'Mercury: no moons',
-        body: 'Closest to the Sun, no moons. It spins three times every two trips round the Sun.',
+        body: 'Watch a spot by the day–night line: Mercury turns so slowly that sunrise to sunrise takes two of its years.',
       },
     },
     {
@@ -88,12 +95,12 @@ export const planets: Demo = {
       camera: VENUS,
       caption: {
         title: 'Venus spins backwards',
-        body: 'No moons. Venus turns the opposite way to most planets, taking 243 days to turn once, longer than its 225-day year.',
+        body: 'No moons. Watch the dark clouds: Venus turns clockwise seen from above, the opposite way to most planets.',
       },
     },
     {
       date: '2027-09-05T00:00:00Z',
-      until: '2027-09-08T00:00:00Z',
+      until: '2027-09-08T06:00:00Z',
       timeScale: 10_800,
       camera: MARS,
       caption: {
@@ -102,8 +109,8 @@ export const planets: Demo = {
       },
     },
     {
-      date: '2027-09-08T00:00:00Z',
-      until: '2027-09-16T12:00:00Z',
+      date: '2027-09-08T06:00:00Z',
+      until: '2027-09-17T00:00:00Z',
       timeScale: 28_800,
       camera: JUPITER,
       caption: {
@@ -112,8 +119,8 @@ export const planets: Demo = {
       },
     },
     {
-      date: '2027-09-16T12:00:00Z',
-      until: '2027-10-05T12:00:00Z',
+      date: '2027-09-17T00:00:00Z',
+      until: '2027-10-06T00:00:00Z',
       timeScale: 57_600,
       camera: SATURN,
       caption: {
@@ -122,18 +129,18 @@ export const planets: Demo = {
       },
     },
     {
-      date: '2027-10-05T12:00:00Z',
-      until: '2027-10-21T12:00:00Z',
+      date: '2027-10-06T00:00:00Z',
+      until: '2027-10-23T00:00:00Z',
       timeScale: 57_600,
       camera: URANUS,
       caption: {
         title: 'Uranus on its side',
-        body: 'Uranus is tipped on its side, and its moons circle its tipped middle, so their paths stand on end.',
+        body: 'Uranus is tipped on its side, and its moons circle around its tipped-over equator, so their paths stand on end.',
       },
     },
     {
-      date: '2027-10-21T12:00:00Z',
-      until: '2027-11-04T12:00:00Z',
+      date: '2027-10-23T00:00:00Z',
+      until: '2027-11-06T06:00:00Z',
       timeScale: 43_200,
       camera: NEPTUNE,
       caption: {
