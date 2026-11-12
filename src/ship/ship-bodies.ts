@@ -306,6 +306,12 @@ export interface ShipBody extends FlightBody {
   spin?: THREE.Quaternion
   /** Earth's. */
   floor?: GroundFloor
+  /**
+   * The radii of the shells it draws over its ground, which the ship
+   * camera's near plane keeps clear of (ship-session.ts bodiesShellGap):
+   * Earth's (EARTH_SHELL_RADII) and a planet's haze (planetShellRadii).
+   */
+  shellRadii?: readonly number[]
 }
 
 const DEG = Math.PI / 180
@@ -470,16 +476,36 @@ const PLANET_HAZE_OUTER: Partial<Record<PlanetKey, number>> = {
   neptune: NEPTUNE_HAZE_OUTER,
 }
 
+/** The radii of a planet of `radius`'s drawn shells: its haze's, if it has one. */
+export function planetShellRadii(key: PlanetKey, radius: number): readonly number[] {
+  const haze = PLANET_HAZE_OUTER[key]
+  return haze === undefined ? [] : [radius * haze]
+}
+
 /**
- * The ship's stop above a planet of `radius` (tides-9m0): as for Earth on the
- * low tier (EARTH_COLLISION_RADIUS), a near plane's depth (shipNear's
- * ceiling) beyond its haze, which is drawn front-faced only and would vanish
- * from inside, never inside COLLISION_MARGIN's default.
+ * The ship's stop over Jupiter, as a fraction of its radius: its haze's top
+ * is at COLLISION_MARGIN (JUPITER_HAZE_OUTER 1.02), where a ship parked at
+ * the default stop would sit on the shell, so it stops under it, 0.008 R
+ * down. Lower and the limb sphere's facets pass 1 px in a screen's corner
+ * (limb-detail.test LIMB_SEGMENTS: ~1.05 px at 1.01 R, ~0.95 px here).
+ * [TUNE]
+ */
+export const JUPITER_STOP = 1.012
+
+// The planets whose stop is not COLLISION_MARGIN.
+const PLANET_STOP: Partial<Record<PlanetKey, number>> = { jupiter: JUPITER_STOP }
+
+/**
+ * The ship's stop above a planet of `radius`. Each haze is drawn from inside
+ * too (PlanetAtmosphere, pickShellFaces: tides-ufyr.4), and the near plane
+ * keeps clear of it on the way down (bodiesShellGap), so the stop sits under
+ * the hazes rather than a near plane's depth beyond them (tides-9m0, which
+ * held Mars at 9% R and Venus at 8.5%): COLLISION_MARGIN's 1.02 R for Venus
+ * (haze to 1.05 R), Mars, Uranus and Neptune (1.04 R), as for every planet
+ * without one, and JUPITER_STOP's 1.012 R under Jupiter's (1.02 R).
  */
 export function planetCollisionRadius(key: PlanetKey, radius: number): number {
-  const haze = PLANET_HAZE_OUTER[key]
-  const stop = radius * COLLISION_MARGIN
-  return haze === undefined ? stop : Math.max(stop, radius * haze + shipNear(Infinity))
+  return radius * (PLANET_STOP[key] ?? COLLISION_MARGIN)
 }
 
 /**
@@ -496,6 +522,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
     radius: EARTH_RADIUS,
     mass: BODY_MASS_KG.earth,
     positionAt: positionAt.earth,
+    shellRadii: EARTH_SHELL_RADII,
   }
   attachEarthStop(earth, tier, surfaceTiles)
   return [
@@ -519,6 +546,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
       position: new THREE.Vector3(),
       radius: flightRadius[key],
       collisionRadius: planetCollisionRadius(key, flightRadius[key]),
+      shellRadii: planetShellRadii(key, flightRadius[key]),
       mass: BODY_MASS_KG[key],
       positionAt: positionAt[key],
     })),

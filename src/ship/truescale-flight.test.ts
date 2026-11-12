@@ -226,7 +226,7 @@ describe('?truescale: HUD ranges', () => {
         }
       }
     }
-    expect(hash.digest('hex')).toBe('6f77fe6b2827f7a877610bedbd794434c5900f7e8671ef0827bc0e3f8e997b6e')
+    expect(hash.digest('hex')).toBe('3709ae7dcbe8c1dfb0e5afe0a08baa404d28d55996e00dd77b04b4883ea7892d')
   }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {

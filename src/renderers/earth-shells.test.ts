@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { clearLimbView, updateLimbView } from '../ship/limb-detail'
-import { ATMOSPHERE_OUTER, eyeNearEarth, insideShell, withinShellReach } from './earth-shells'
+import {
+  ATMOSPHERE_OUTER,
+  eyeNearBody,
+  eyeNearEarth,
+  insideShell,
+  pickShellFaces,
+  withinShellReach,
+} from './earth-shells'
+import { planetAtmosphereMaterial } from './planetMaterials'
+import { MARS_HAZE_OUTER } from './planets/haze-shells'
 
 const R = 3
 
@@ -13,10 +22,11 @@ function cameraAt(r: number, near = 0.001): THREE.PerspectiveCamera {
   return camera
 }
 
-// The limb view fed for `camera` over Earth, as ShipController or close zoom feeds it.
-function feed(camera: THREE.Camera) {
-  const earth = { key: 'earth', position: new THREE.Vector3(), radius: R }
-  updateLimbView('earth', [earth], camera.position, 1600, 30, camera)
+// The limb view fed for `camera` over `key` (Earth by default), as
+// ShipController or close zoom feeds it.
+function feed(camera: THREE.Camera, key = 'earth') {
+  const body = { key, position: new THREE.Vector3(), radius: R }
+  updateLimbView(key, [body], camera.position, 1600, 30, camera)
 }
 
 describe('the near-Earth camera (tides-tvr.7.3)', () => {
@@ -56,5 +66,70 @@ describe('the near-Earth camera (tides-tvr.7.3)', () => {
     feed(fed)
     expect(insideShell(shell, fed, outer)).toBe(false)
     expect(withinShellReach(shell, fed, outer)).toBe(true)
+  })
+})
+
+describe("a planet's haze from inside (tides-ufyr.4)", () => {
+  afterEach(() => clearLimbView())
+  const outer = R * MARS_HAZE_OUTER
+
+  // A Mars haze shell at the origin, with its material's outer radius set.
+  function haze() {
+    const material = planetAtmosphereMaterial({ value: new THREE.Vector3(1, 0, 0) })
+    material.uniforms.uOuter.value = outer
+    return { mesh: new THREE.Object3D(), material }
+  }
+
+  it('draws both faces with no depth test for the camera near Mars, under the haze', () => {
+    const fed = cameraAt(R * 1.02)
+    feed(fed, 'mars')
+    const { mesh, material } = haze()
+    expect(eyeNearBody(fed, 'mars')).toBe(true)
+    expect(eyeNearEarth(fed)).toBe(false)
+    expect(withinShellReach(mesh, fed, outer, 'mars')).toBe(true)
+    expect(insideShell(mesh, fed, outer, 'mars')).toBe(true)
+    pickShellFaces(mesh, material, fed, undefined, 'mars')
+    expect(material.side).toBe(THREE.DoubleSide)
+    expect(material.depthTest).toBe(false)
+  })
+
+  it("keeps Earth's shells front-faced while Mars is the limb body", () => {
+    const fed = cameraAt(R * 1.02)
+    feed(fed, 'mars')
+    const { mesh, material } = haze()
+    expect(withinShellReach(mesh, fed, outer)).toBe(false)
+    expect(insideShell(mesh, fed, outer)).toBe(false)
+    pickShellFaces(mesh, material, fed)
+    expect(material.side).toBe(THREE.FrontSide)
+    expect(material.depthTest).toBe(true)
+  })
+
+  it('keeps the Mars haze front-faced near Earth, or for another camera', () => {
+    const fed = cameraAt(R * 1.02)
+    const other = cameraAt(R * 1.02)
+    for (const [key, camera] of [
+      ['earth', fed],
+      ['mars', other],
+    ] as const) {
+      clearLimbView()
+      feed(fed, key)
+      const { mesh, material } = haze()
+      pickShellFaces(mesh, material, camera, undefined, 'mars')
+      expect(material.side).toBe(THREE.FrontSide)
+      expect(material.depthTest).toBe(true)
+    }
+  })
+
+  it('turns back to front faces with the depth test on far from the shell', () => {
+    const fed = cameraAt(R * 1.02)
+    feed(fed, 'mars')
+    const { mesh, material } = haze()
+    pickShellFaces(mesh, material, fed, undefined, 'mars')
+    expect(material.side).toBe(THREE.DoubleSide)
+    fed.position.set(R * 3, 0, 0)
+    fed.updateMatrixWorld()
+    pickShellFaces(mesh, material, fed, undefined, 'mars')
+    expect(material.side).toBe(THREE.FrontSide)
+    expect(material.depthTest).toBe(true)
   })
 })

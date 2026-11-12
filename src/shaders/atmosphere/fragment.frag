@@ -6,9 +6,11 @@
 // just inside the limb rather than drawn as H/cos(z): the day side is
 // already bright, and a full haze washes it out. Lit where it is thickest.
 // Shared by the Earth (AtmosphereRenderer) and the planets (PlanetAtmosphere),
-// which pass their own sky and dusk colours (linear RGB). Only the Earth's is
-// ever double-sided (ship mode), and so drawn from inside (tides-01v.8.2),
-// where over the ground it also hides some of what it covers (HAZE_COVER).
+// which pass their own sky and dusk colours (linear RGB). Each is double-
+// sided near its body (ship mode, close zoom: pickShellFaces), and so drawn
+// from inside (the Earth's: tides-01v.8.2; the planets': tides-ufyr.4).
+// Only the Earth's, over the ground from inside, also hides some of what it
+// covers (HAZE_COVER); the planets' set uSeaLevel 0, so theirs only adds.
 
 uniform float uSurface;
 uniform float uOuter;
@@ -17,7 +19,7 @@ uniform vec3 uSun;
 uniform float uGain;
 uniform vec3 uSky;
 uniform vec3 uDusk;
-// Read only from inside (columnAheadOverSea()), so only the Earth's sets it.
+// Read only from inside (columnAheadOverSea()); the planets' is 0, no sea.
 uniform float uSeaLevel;
 // The sky-view table (renderers/skyView.ts): only the Earth's, from inside.
 uniform sampler2D uSkyView;

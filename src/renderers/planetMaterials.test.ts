@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { planetSurfaceMaterial, setPlanetDetail } from './planetMaterials'
+import { planetAtmosphereMaterial, planetSurfaceMaterial, setPlanetDetail } from './planetMaterials'
 import { moonDetailPatch } from './moonDetail'
 
 const sun = { value: new THREE.Vector3(1, 0, 0) }
@@ -75,5 +75,20 @@ describe('shared detail source', () => {
     for (const name of ['void planetDetail', 'float planetDetailFootprint']) {
       expect(fn(shader.fragmentShader, name)).toBe(fn(planet, name))
     }
+  })
+})
+
+describe('planet haze material (tides-ufyr.4)', () => {
+  it('draws from inside in one pass, its double-sided program warmed, with no sea', () => {
+    const material = planetAtmosphereMaterial(sun)
+    // Else three draws a transparent double-sided material twice, as two programs.
+    expect(material.forceSinglePass).toBe(true)
+    expect(material.userData.warmSides).toEqual([THREE.DoubleSide])
+    expect(material.uniforms.uSeaLevel.value).toBe(0)
+    // pickShellFaces reads the shell's radius from it.
+    expect(material.uniforms.uOuter).toBeDefined()
+    expect(material.uniforms.uSun).toBe(sun)
+    expect(material.blending).toBe(THREE.AdditiveBlending)
+    expect(material.defines.HAZE_COVER).toBeUndefined()
   })
 })

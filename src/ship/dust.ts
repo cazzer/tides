@@ -64,8 +64,9 @@ export const STREAK_ENERGY_FLOOR = 0.45
 // stands in for space's empty dark and motes read as debris whizzing past
 // (tides-d9f.1's streaks in the air went with it). It fades in across the
 // atmosphere's top, DUST_AIR_BAND_KM, so climbing out it comes in rather
-// than popping. The planets' hazes need none: the ship's stop stays outside
-// them (ship-bodies.ts planetCollisionRadius).
+// than popping. The planets' hazes have none: the ship's stop is under them
+// now (ship-bodies.ts planetCollisionRadius, tides-ufyr.4), but the dust
+// still draws there (tides-vc6e).
 
 /** Altitudes, km over the sea, the dust is gone under and whole over: up to
  * the Karman line, as frame-carry.ts RELEASE_BAND_KM's top. [TUNE] */

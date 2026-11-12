@@ -45,7 +45,9 @@ import {
   EARTH_GROUND_SPEED,
   EARTH_HARD_CLEARANCE,
   EARTH_RADIUS,
+  EARTH_SHELL_RADII,
   EARTH_SHELL_RADIUS,
+  JUPITER_STOP,
   MOON_COLLISION_CLEARANCE,
   EARTH_GROUND_SPEED_LAW,
   EARTH_SLOWEST,
@@ -220,10 +222,20 @@ describe('ship bodies', () => {
       ['jupiter', JUPITER_HAZE_OUTER],
       ['uranus', URANUS_HAZE_OUTER],
       ['neptune', NEPTUNE_HAZE_OUTER],
-    ])("stops a near plane's depth outside %s's haze (tides-9m0)", (key, haze) => {
+    ])("stops under %s's haze, clear of its shell (tides-ufyr.4)", (key, haze) => {
       const body = byKey()[key]
-      expect(haze).toBeGreaterThanOrEqual(1.02)
-      expect(collisionRadius(body)).toBeCloseTo(body.radius * haze + shipNear(Infinity), 12)
+      const stop = collisionRadius(body) / body.radius
+      expect(stop).toBeCloseTo(key === 'jupiter' ? JUPITER_STOP : COLLISION_MARGIN, 12)
+      // Inside the shell, and far enough under it that the near plane at the
+      // stop (bodiesShellGap) need not crowd its floor.
+      expect(haze - stop).toBeGreaterThanOrEqual(0.005)
+      expect(body.shellRadii).toEqual([body.radius * haze])
+    })
+
+    it('lists the shells each body draws for the near plane to keep clear of', () => {
+      const b = byKey()
+      expect(b.earth.shellRadii).toBe(EARTH_SHELL_RADII)
+      for (const key of ['sun', 'mercury', 'saturn']) expect(b[key].shellRadii ?? []).toEqual([])
     })
 
     it('stops the ship well clear of even the smallest moon', () => {

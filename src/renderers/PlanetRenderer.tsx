@@ -29,6 +29,7 @@ import { isLowQuality } from '../quality'
 import {
   AMBIENT,
   bandUniforms,
+  planetAtmosphereMaterial,
   planetSurfaceMaterial,
   setPlanetDetail,
   sunDirection,
@@ -37,10 +38,9 @@ import {
 } from './planetMaterials'
 import ringVertex from '../shaders/ring/vertex.glsl'
 import ringFragment from '../shaders/ring/fragment.frag'
-import shellVertex from '../shaders/shell/vertex.glsl'
-import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 import { useBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
+import { pickShellFaces } from './earth-shells'
 
 export type { RingBand } from './planetFrame'
 
@@ -234,7 +234,9 @@ export interface PlanetAtmosphereProps {
 
 /**
  * An additive limb haze, the Earth's (AtmosphereRenderer) with the planet's
- * own sizes and colours, lit from the Sun's actual direction.
+ * own sizes and colours, lit from the Sun's actual direction. Drawn from
+ * inside too, as the Earth's, while the planet is the limb body
+ * (tides-ufyr.4), so the ship's stop can sit under it.
  */
 export function PlanetAtmosphere({
   planet,
@@ -247,30 +249,21 @@ export function PlanetAtmosphere({
 }: PlanetAtmosphereProps) {
   const sun = useSunDirection()
   const R = planet.radius
-  const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        vertexShader: shellVertex,
-        fragmentShader: atmosphereFragment,
-        uniforms: {
-          uSurface: { value: 0 },
-          uOuter: { value: 0 },
-          uScaleHeight: { value: 0 },
-          uSun: sun.uniform,
-          uGain: { value: 1 },
-          uSky: { value: new THREE.Color() },
-          uDusk: { value: new THREE.Color() },
-        },
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      }),
-    [sun.uniform]
-  )
+  const material = useMemo(() => planetAtmosphereMaterial(sun.uniform), [sun.uniform])
   // Faint but not zero at its outer edge, so from close by a coarse shell
   // shows as facets there.
   const geometry = useBodySphere(planet.key, R * outer, [96, 48])
   useEffect(() => () => material.dispose(), [material])
+  // Both faces within the ship's reach (pickShellFaces), with no ground stop:
+  // the depth test is off there and the shader stops each ray at the globe.
+  const onBeforeRender = useMemo<BodyMapDrawCheck>(
+    () =>
+      function (_renderer, _scene, camera) {
+        sun.onBeforeRender.call(this)
+        pickShellFaces(this, material, camera, undefined, planet.key)
+      },
+    [sun, material, planet.key]
+  )
 
   useLayoutEffect(() => {
     const u = material.uniforms
@@ -290,7 +283,7 @@ export function PlanetAtmosphere({
       material={material}
       renderOrder={1}
       raycast={noRaycast}
-      onBeforeRender={sun.onBeforeRender}
+      onBeforeRender={onBeforeRender}
     />
   )
 }

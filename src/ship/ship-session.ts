@@ -7,6 +7,7 @@ import type { MainCameraPose } from '../main-camera-session'
 import { collisionRadius, createShipState, type Body as FlightBody, type ShipState } from './flight'
 import { FLIGHT_UNITS_PER_AU, positionsFor } from '../flight-scale'
 import { isMoonKey, moonRadius } from '../moons/moons'
+import type { ShipBody } from './ship-bodies'
 
 /** The view state ship mode overrides or hides, put back on exit. */
 export interface ShipSaved {
@@ -198,6 +199,21 @@ export function shipNear(
 export function shellGap(distance: number, radii: readonly number[]): number {
   let gap = Infinity
   for (const radius of radii) gap = Math.min(gap, Math.abs(distance - radius))
+  return gap
+}
+
+/**
+ * How far `position` is from the nearest shell any of `bodies` draws (their
+ * shellRadii: Earth's, the planets' hazes), from inside or out.
+ */
+export function bodiesShellGap(
+  position: THREE.Vector3,
+  bodies: readonly Pick<ShipBody, 'position' | 'shellRadii'>[]
+): number {
+  let gap = Infinity
+  for (const body of bodies) {
+    if (body.shellRadii) gap = Math.min(gap, shellGap(position.distanceTo(body.position), body.shellRadii))
+  }
   return gap
 }
 
