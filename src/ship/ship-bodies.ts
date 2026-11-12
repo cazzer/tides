@@ -486,14 +486,13 @@ export const MOON_COLLISION_CLEARANCE = 0.02
 
 /**
  * The moon radius, scene units, below which a moon's speed floor falls under
- * V_NORMAL in proportion (minSpeed = V_NORMAL · r / MOON_SPEED_RADIUS), so
- * crossing a small moon takes as long as crossing one this size at V_NORMAL:
- * Phobos' 0.06 is crossed in ~1.6 s at 0.3 V_NORMAL, not ~0.5 s. Under
- * half V_NORMAL (a moon under 0.1: Phobos, Deimos, Mimas) an arrival can't
- * crash, only touch down (approach.ts canCrash), as on Earth's ground on the
- * high tier. [TUNE]
+ * V_NORMAL in proportion (minSpeed = V_NORMAL · r / MOON_SPEED_RADIUS), so a
+ * small moon isn't crossed in a blink: Phobos' 0.06 is crossed in ~0.8 s at
+ * 0.6 V_NORMAL, not ~0.5 s. [TUNE] Not over 0.12: at MOON_RADIUS_MIN the
+ * floor must stay over half V_NORMAL, or an arrival there can't crash, only
+ * touch down (approach.ts canCrash, strict at exactly half).
  */
-export const MOON_SPEED_RADIUS = 0.2
+export const MOON_SPEED_RADIUS = 0.1
 
 // The planets' haze shells, as fractions of their radii.
 const PLANET_HAZE_OUTER: Partial<Record<PlanetKey, number>> = {

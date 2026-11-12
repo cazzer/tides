@@ -7,6 +7,7 @@ import {
   PLANETS_STAR_RADIUS,
   REFERENCE_VIEW_HEIGHT,
   NEAR_MIN,
+  PLANET_ZOOM_MAX,
   allowDistance,
   easeDistance,
   focusedRef,
@@ -33,6 +34,7 @@ import { PLANETS, sceneDistance } from './planets'
 import { KUIPER_A_AU } from './system-aids/belt-particles'
 import { FOCUS_VALUES, isSystemFocus, type CameraFocus } from './store'
 import { bodyRadius } from './system-aids/label-visibility'
+import { MOON_KEYS, moonRadius } from './moons/moons'
 
 describe('planetFramingZoom', () => {
   const EARTH = 2.95
@@ -47,8 +49,17 @@ describe('planetFramingZoom', () => {
   })
 
   it('clamps very small and very large radii', () => {
-    expect(planetFramingZoom(0.01, EARTH)).toBe(40)
+    expect(planetFramingZoom(0.001, EARTH)).toBe(PLANET_ZOOM_MAX)
     expect(planetFramingZoom(1000, EARTH)).toBe(1)
+  })
+
+  it('frames every moon as large as Earth, under the cap and outside its minDistance', () => {
+    for (const key of MOON_KEYS) {
+      const radius = moonRadius(key, 'system')
+      expect(planetFramingZoom(radius, EARTH), key).toBeLessThan(PLANET_ZOOM_MAX)
+      expect(planetFramingZoom(radius, EARTH) * radius, key).toBeCloseTo(MAIN_ZOOM * EARTH, 9)
+      expect(framingDistance(radius, EARTH), key).toBeGreaterThan(minDistance(key))
+    }
   })
 })
 

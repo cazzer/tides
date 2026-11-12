@@ -182,9 +182,14 @@ describe('changing focus', () => {
         .add(jupiter)
     const eye = new Vector3(100, 80, 80).setLength(MAIN_DISTANCE).add(jupiter)
     const goal = framingDistance(moonRadius('io', 'system'), EARTH)
-    const { landedAt, eyeToFocus } = focusChange(eye, jupiter, io, 'io', goal, 'jupiter')
-    // Framed on the target, which trails Io by up to ~10%.
-    expect(Math.abs(eyeToFocus / goal - 1)).toBeLessThan(0.15)
+    const { landedAt, eyeToFocus, distance } = focusChange(eye, jupiter, io, 'io', goal, 'jupiter')
+    // Framed on the target...
+    expect(Math.abs(distance / goal - 1)).toBeLessThan(0.15)
+    // ...which trails Io: by ~7% of the framing at 1 day a second. At 30 it
+    // trails by up to Io's orbit radius, which since the moons shrank toward
+    // true (tides-ufyr.6.2) is ~half the ~18 unit framing, not a quarter.
+    if (days === 1) expect(Math.abs(eyeToFocus / goal - 1)).toBeLessThan(0.15)
+    else expect(Math.abs(eyeToFocus - distance)).toBeLessThan(radius)
     // At 1 day a second the framing lands; at 30, where Io laps Jupiter
     // every few frames and the target can only trail it, it keeps easing.
     if (days === 1) expect(landedAt).toBeGreaterThan(0)

@@ -11,7 +11,14 @@ import {
 export const MAIN_ZOOM = 10
 
 const PLANET_ZOOM_MIN = 1
-const PLANET_ZOOM_MAX = 40
+/**
+ * The most a focused body's framing zooms in. [TUNE] Room for every moon to
+ * read as large as Earth does at MAIN_ZOOM: Phobos and Deimos, at
+ * MOON_RADIUS_MIN (0.06), frame at ~492 (tides-ufyr.6.2; it was 40, when the
+ * smallest moon was drawn 0.2 across). Even there the framing distance (~3
+ * units) is ~37 radii out, far past minDistance's MIN_DISTANCE_FACTOR.
+ */
+export const PLANET_ZOOM_MAX = 600
 
 /** The zoom at which a planet of `radius` reads as large as Earth does at MAIN_ZOOM. */
 export function planetFramingZoom(radius: number, earthRadius: number): number {

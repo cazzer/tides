@@ -61,6 +61,7 @@ import {
   updateShipBodies,
 } from './ship-bodies'
 import { NEAR_MIN, SHIP_FOV, shipNear, spawnPose } from './ship-session'
+import { canCrash } from './approach'
 import {
   EARTH_BASE_SEGMENTS,
   TERRAIN_FALLBACK_GREY,
@@ -122,11 +123,18 @@ describe('ship bodies', () => {
       expect(minSpeed, key).toBeCloseTo(V_NORMAL * Math.min(1, radius / MOON_SPEED_RADIUS), 12)
       expect(speedFloor(b[key]), key).toBeCloseTo(Math.min(V_NORMAL, minSpeed!), 12)
     }
-    // Phobos at MOON_RADIUS_MIN: 0.3 of V_NORMAL. Titan and Ganymede: V_NORMAL.
+    // Phobos at MOON_RADIUS_MIN: 0.6 of V_NORMAL. Titan and Ganymede: V_NORMAL.
     expect(b.phobos.radius).toBe(MOON_RADIUS_MIN)
-    expect(speedFloor(b.phobos)).toBeCloseTo(0.3 * V_NORMAL, 12)
+    expect(speedFloor(b.phobos)).toBeCloseTo(0.6 * V_NORMAL, 12)
     expect(speedFloor(b.titan)).toBe(V_NORMAL)
     expect(speedFloor(b.ganymede)).toBe(V_NORMAL)
+  })
+
+  it('keeps every moon crashable: its speed floor lets an arrival hit hard', () => {
+    const b = byKey()
+    for (const key of MOON_KEYS) expect(canCrash(speedFloor(b[key])), key).toBe(true)
+    // So does a moon on the floor at any truescale.
+    expect(canCrash(V_NORMAL * (MOON_RADIUS_MIN / MOON_SPEED_RADIUS))).toBe(true)
   })
 
   it('sizes them as the scene draws them', () => {
