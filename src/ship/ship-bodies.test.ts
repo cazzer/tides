@@ -52,7 +52,10 @@ import {
   EARTH_SHEET_CLEARANCE,
   JUPITER_STOP,
   MOON_COLLISION_CLEARANCE,
+  MOON_COLLISION_CLEARANCE_HIGH,
   MOON_SPEED_RADIUS,
+  ROCKY_STOP_HIGH,
+  rockyStop,
   EARTH_GROUND_SPEED_LAW,
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
@@ -248,11 +251,25 @@ describe('ship bodies', () => {
       expect(shipNear(EARTH_GROUND_CLEARANCE)).toBeCloseTo(0.4 * EARTH_GROUND_CLEARANCE, 12)
     })
 
-    it('leaves the Sun, the Moon and the planets without a haze on the default margin', () => {
-      const b = byKey()
-      for (const key of ['sun', 'moon', 'mercury']) {
-        expect(collisionRadius(b[key])).toBe(b[key].radius * COLLISION_MARGIN)
+    it('leaves the Sun on the default margin on either tier', () => {
+      for (const tier of ['high', 'low'] as const) {
+        const { sun } = byKey(T, tier)
+        expect(collisionRadius(sun), tier).toBe(sun.radius * COLLISION_MARGIN)
       }
+    })
+
+    it('stops lower over the Moon and Mercury on the high tier only (tides-ufyr.5)', () => {
+      const high = byKey(T, 'high')
+      const low = byKey(T, 'low')
+      for (const key of ['moon', 'mercury']) {
+        expect(collisionRadius(high[key]), key).toBeCloseTo(high[key].radius * ROCKY_STOP_HIGH, 12)
+        expect(collisionRadius(low[key]), key).toBeCloseTo(low[key].radius * COLLISION_MARGIN, 12)
+      }
+      // ~1% R: about half the low tier's height over the ground.
+      expect(ROCKY_STOP_HIGH).toBeGreaterThan(1.01)
+      expect(ROCKY_STOP_HIGH).toBeLessThan(1.012)
+      expect(rockyStop('high')).toBe(ROCKY_STOP_HIGH)
+      expect(rockyStop('low')).toBe(COLLISION_MARGIN)
     })
 
     it.each([
@@ -262,14 +279,16 @@ describe('ship bodies', () => {
       ['saturn', SATURN_HAZE_OUTER],
       ['uranus', URANUS_HAZE_OUTER],
       ['neptune', NEPTUNE_HAZE_OUTER],
-    ])("stops under %s's haze, clear of its shell (tides-ufyr.4)", (key, haze) => {
-      const body = byKey()[key]
-      const stop = collisionRadius(body) / body.radius
-      expect(stop).toBeCloseTo(key === 'jupiter' ? JUPITER_STOP : COLLISION_MARGIN, 12)
-      // Inside the shell, and far enough under it that the near plane at the
-      // stop (bodiesShellGap) need not crowd its floor.
-      expect(haze - stop).toBeGreaterThanOrEqual(0.005)
-      expect(body.shellRadii).toEqual([body.radius * haze])
+    ])("stops under %s's haze, clear of its shell, on either tier (tides-ufyr.4)", (key, haze) => {
+      for (const tier of ['high', 'low'] as const) {
+        const body = byKey(T, tier)[key]
+        const stop = collisionRadius(body) / body.radius
+        expect(stop, tier).toBeCloseTo(key === 'jupiter' ? JUPITER_STOP : COLLISION_MARGIN, 12)
+        // Inside the shell, and far enough under it that the near plane at the
+        // stop (bodiesShellGap) need not crowd its floor.
+        expect(haze - stop).toBeGreaterThanOrEqual(0.005)
+        expect(body.shellRadii).toEqual([body.radius * haze])
+      }
     })
 
     it('lists the shells each body draws for the near plane to keep clear of', () => {
@@ -279,12 +298,28 @@ describe('ship bodies', () => {
     })
 
     it('stops the ship well clear of even the smallest moon', () => {
-      const b = byKey()
+      const b = byKey(T, 'low')
       for (const key of MOON_KEYS) {
         const { radius } = b[key]
         expect(collisionRadius(b[key])).toBeGreaterThanOrEqual(radius * COLLISION_MARGIN)
         expect(collisionRadius(b[key]) - radius).toBeGreaterThanOrEqual(MOON_COLLISION_CLEARANCE - 1e-12)
       }
+    })
+
+    it('stops every moon MOON_COLLISION_CLEARANCE_HIGH up on the high tier, 0.02 on the low (tides-ufyr.5)', () => {
+      const high = byKey(T, 'high')
+      const low = byKey(T, 'low')
+      for (const key of MOON_KEYS) {
+        const { radius } = high[key]
+        // Every moon is under 0.01 / (ROCKY_STOP_HIGH − 1) ≈ 0.9 units, so
+        // on the clearance branch: Titan's 0.56 included.
+        expect(radius * (ROCKY_STOP_HIGH - 1), key).toBeLessThan(MOON_COLLISION_CLEARANCE_HIGH)
+        expect(collisionRadius(high[key]) - radius, key).toBeCloseTo(MOON_COLLISION_CLEARANCE_HIGH, 12)
+        expect(collisionRadius(low[key]) - radius, key).toBeCloseTo(MOON_COLLISION_CLEARANCE, 12)
+      }
+      // 0.01 units: the near plane at the stop, 0.4 of it, stays over NEAR_MIN.
+      expect(MOON_COLLISION_CLEARANCE_HIGH).toBe(0.01)
+      expect(shipNear(MOON_COLLISION_CLEARANCE_HIGH)).toBeGreaterThan(NEAR_MIN)
     })
 
     it('spawns outside every collision sphere', () => {

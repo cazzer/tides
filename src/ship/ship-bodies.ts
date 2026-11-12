@@ -480,9 +480,38 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
  * The ship's stop above a major moon (tides-2hv.8). COLLISION_MARGIN's 2%
  * of Phobos' and Deimos' 0.06 (MOON_RADIUS_MIN, tides-ufyr.6.2) is ~0.001
  * units, the near plane's own floor, so a moon's shell stands at least
- * MOON_COLLISION_CLEARANCE off its sphere. [TUNE]
+ * MOON_COLLISION_CLEARANCE off its sphere: every moon's, now, Titan's 0.56
+ * included. [TUNE]
  */
 export const MOON_COLLISION_CLEARANCE = 0.02
+
+/**
+ * MOON_COLLISION_CLEARANCE on the high tier (tides-ufyr.5): the near plane
+ * at 0.4 of it is 0.004, well over NEAR_MIN, and the limb sphere's facets
+ * stay under 1 px from Titan's 1.018 R. The low tier keeps the 0.02. [TUNE]
+ */
+export const MOON_COLLISION_CLEARANCE_HIGH = 0.01
+
+/**
+ * The high tier's stop over a rocky body with no shell over it, as a
+ * fraction of its radius (tides-ufyr.5): the Moon and Mercury, and the
+ * moons where that is over MOON_COLLISION_CLEARANCE_HIGH (none, now). Not
+ * 1.01: there the limb sphere's facets pass 1 px in a screen's corner
+ * (limb-detail.test LIMB_SEGMENTS: ~1.05 px at 1.01 R, ~1.00 px here). The
+ * low tier keeps COLLISION_MARGIN. [TUNE]
+ */
+export const ROCKY_STOP_HIGH = 1.011
+
+/** The stop over a rocky body with no shell over it on `tier`, as a fraction of its radius. */
+export function rockyStop(tier: QualityTier): number {
+  return tier === 'high' ? ROCKY_STOP_HIGH : COLLISION_MARGIN
+}
+
+/** The ship's stop above a moon of `radius` on `tier`. */
+export function moonCollisionRadius(radius: number, tier: QualityTier): number {
+  const clearance = tier === 'high' ? MOON_COLLISION_CLEARANCE_HIGH : MOON_COLLISION_CLEARANCE
+  return Math.max(radius * rockyStop(tier), radius + clearance)
+}
 
 /**
  * The moon radius, scene units, below which a moon's speed floor falls under
@@ -520,26 +549,29 @@ export function planetShellRadii(key: PlanetKey, radius: number): readonly numbe
  */
 export const JUPITER_STOP = 1.012
 
-// The planets whose stop is not COLLISION_MARGIN.
+// The hazy planets whose stop is not COLLISION_MARGIN.
 const PLANET_STOP: Partial<Record<PlanetKey, number>> = { jupiter: JUPITER_STOP }
 
 /**
- * The ship's stop above a planet of `radius`. Each haze is drawn from inside
- * too (PlanetAtmosphere, pickShellFaces: tides-ufyr.4), and the near plane
- * keeps clear of it on the way down (bodiesShellGap), so the stop sits under
- * the hazes rather than a near plane's depth beyond them (tides-9m0, which
- * held Mars at 9% R and Venus at 8.5%): COLLISION_MARGIN's 1.02 R for Venus
- * (haze to 1.05 R), Mars, Uranus and Neptune (1.04 R) and Saturn (1.03 R), as
- * for every planet without one, and JUPITER_STOP's 1.012 R under Jupiter's (1.02 R).
+ * The ship's stop above a planet of `radius` on `tier`. Each haze is drawn
+ * from inside too (PlanetAtmosphere, pickShellFaces: tides-ufyr.4), and the
+ * near plane keeps clear of it on the way down (bodiesShellGap), so the stop
+ * sits under the hazes rather than a near plane's depth beyond them
+ * (tides-9m0, which held Mars at 9% R and Venus at 8.5%): COLLISION_MARGIN's
+ * 1.02 R for Venus (haze to 1.05 R), Mars, Uranus and Neptune (1.04 R) and
+ * Saturn (1.03 R), and JUPITER_STOP's 1.012 R under Jupiter's (1.02 R), on
+ * either tier. A planet without a haze (Mercury) stops at rockyStop.
  */
-export function planetCollisionRadius(key: PlanetKey, radius: number): number {
+export function planetCollisionRadius(key: PlanetKey, radius: number, tier: QualityTier): number {
+  if (PLANET_HAZE_OUTER[key] === undefined) return radius * rockyStop(tier)
   return radius * (PLANET_STOP[key] ?? COLLISION_MARGIN)
 }
 
 /**
  * Sun, Earth, Moon, the seven planets and their major moons, positions unset
- * until updated. `tier` sets Earth's stop (attachEarthStop), and
- * `surfaceTiles` whether it follows the streamed tiles (tides-zmw.9.8).
+ * until updated. `tier` sets Earth's stop (attachEarthStop) and the rocky
+ * bodies' (rockyStop, moonCollisionRadius), and `surfaceTiles` whether
+ * Earth's follows the streamed tiles (tides-zmw.9.8).
  */
 export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles: boolean = SURFACE_TILES_ON): ShipBody[] {
   const { positionAt, radius: flightRadius } = positionsFor('flight')
@@ -566,6 +598,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
       key: 'moon',
       position: new THREE.Vector3(),
       radius: flightRadius.moon,
+      collisionRadius: flightRadius.moon * rockyStop(tier),
       mass: BODY_MASS_KG.moon,
       positionAt: positionAt.moon,
     },
@@ -573,7 +606,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
       key,
       position: new THREE.Vector3(),
       radius: flightRadius[key],
-      collisionRadius: planetCollisionRadius(key, flightRadius[key]),
+      collisionRadius: planetCollisionRadius(key, flightRadius[key], tier),
       shellRadii: planetShellRadii(key, flightRadius[key]),
       mass: BODY_MASS_KG[key],
       positionAt: positionAt[key],
@@ -584,7 +617,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
         key,
         position: new THREE.Vector3(),
         radius,
-        collisionRadius: Math.max(radius * COLLISION_MARGIN, radius + MOON_COLLISION_CLEARANCE),
+        collisionRadius: moonCollisionRadius(radius, tier),
         minSpeed: V_NORMAL * Math.min(1, radius / MOON_SPEED_RADIUS),
         mass: MOONS[key].massKg,
         positionAt: (t: number) => moonPosition(key, t, 'flight'),

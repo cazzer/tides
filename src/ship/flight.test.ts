@@ -1229,8 +1229,10 @@ describe('cushion (tides-ufyr.1)', () => {
   })
 
   // Full throttle straight down from 3 gaps up, nose down, pilot hands off.
+  // Mercury, Io, Titan and Phobos too: the high tier's lower stops over the
+  // rocky bodies (tides-ufyr.5).
   test.each(
-    (['moon', 'mars', 'earth'] as const).flatMap((key) =>
+    (['moon', 'mercury', 'io', 'titan', 'phobos', 'mars', 'earth'] as const).flatMap((key) =>
       (['high', 'low'] as const).flatMap((tier) => [FRAME, MAX_DT].map((dt) => [key, tier, dt] as const))
     )
   )('diving into %s (%s tier) at full throttle, nose down, at dt %s: never under the stop, and the nose rises', (key, tier, dt) => {
