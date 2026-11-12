@@ -26,7 +26,8 @@
 // tides-8h7.5: each waiting bake holds a ~2 MB copy of its grid, and on a
 // phone a pivot low to the ground could queue them by the hundred.
 // maxWaitingBakes bounds the wait: past it a new bake is dropped
-// (BakeDroppedError), and its grid's cache bakes it again later.
+// (BakeDroppedError), and its grid's cache bakes it again later. bakeRoom
+// says so ahead, so the cache never copies a grid for a bake that drops.
 import type { HorizonJob, PaddedGrid } from './terrarium'
 
 export type DecodeRequest =
@@ -67,6 +68,11 @@ export interface TerrariumDecoder {
   bake: TerrariumBake
   /** Whether a bake would run (a worker is up or can be made, not disposed): false, and nothing need be gathered for one. */
   readonly bakes: boolean
+  /**
+   * Whether a bake posted now would go out or wait, not drop (maxWaitingBakes):
+   * ask it just before copying a grid for one, and post in the same turn.
+   */
+  readonly bakeRoom: boolean
   /** Terminates the workers; decodes still pending reject with an AbortError. */
   dispose(): void
 }
@@ -316,6 +322,12 @@ export function createTerrariumDecoder({
     },
     get bakes() {
       return workersOk && !disposed
+    },
+    get bakeRoom() {
+      // post's own test: dropped only with every worker's bake in hand and the wait full
+      return (
+        waitingBakes.length < maxWaitingBakes || !workersOk || disposed || slots.length < size || slots.some((slot) => slot.bakes === 0)
+      )
     },
     dispose() {
       disposed = true

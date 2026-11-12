@@ -65,7 +65,6 @@ import {
   TILE_HORIZON_REACH_METRES,
   tileHorizonSize,
   mercatorLatitude,
-  type HorizonJob,
   type HorizonSource,
   type PaddedGrid,
 } from './terrarium'
@@ -88,6 +87,8 @@ interface HorizonGrid {
   since?: number
   /** Aborts on the grid's dispose. */
   gone: AbortController
+  /** Its bakes dropped in a row by a full queue (BakeDroppedError), for the retry's backoff. */
+  drops: number
 }
 
 /** The library version everything here was read from. */
@@ -148,6 +149,12 @@ export interface SurfaceGridOptions {
   bake?: TerrariumBake
   /** Whether bake would run now (the decoder's bakes): false, and no horizon work is done at all. */
   canBake?: () => boolean
+  /**
+   * Whether a bake posted now would be taken, not dropped (the decoder's
+   * bakeRoom, tides-8h7.5): asked just before a bake's copies, which are
+   * skipped (the bake dropped, and tried again later) when it says no.
+   */
+  bakeRoom?: () => boolean
   /** Paces the main-thread end of each grid (texture, stitch, upload) and each bake's copying, grids first. */
   budget: Pick<FrameBudget, 'run'>
   /** Uploads a finished grid (and its horizon map) now (renderer.initTexture), not at first draw. */
@@ -293,6 +300,18 @@ export const HORIZON_NEIGHBOUR_MARGIN_TEXELS = 48
 export const HORIZON_REBAKE_DELAY_MS = 1000
 /** ... but no later than this after the first of them, ms. */
 export const HORIZON_REBAKE_MAX_DELAY_MS = 3000
+/** The longest wait before a dropped bake is tried again, before its jitter, ms. */
+export const HORIZON_DROP_RETRY_MAX_MS = 8000
+
+/**
+ * How long a grid waits to try a bake again after its `drops`-th dropped
+ * one in a row (tides-8h7.5): HORIZON_REBAKE_DELAY_MS, doubling with each
+ * drop up to HORIZON_DROP_RETRY_MAX_MS, stretched by a random 1-2x so the
+ * grids a pivot dropped together don't all come back in the same frame, ms.
+ */
+export function dropRetryDelay(drops: number, random: () => number = Math.random): number {
+  return Math.min(HORIZON_REBAKE_DELAY_MS * 2 ** Math.max(0, drops - 1), HORIZON_DROP_RETRY_MAX_MS) * (1 + random())
+}
 
 /** What the horizon bakes cost (the headless checks read it). */
 export interface HorizonStats {
@@ -301,6 +320,8 @@ export interface HorizonStats {
   empty: number
   /** Bakes again for a neighbour that turned up after a grid's bake. */
   rebakes: number
+  /** Bakes dropped by a full queue before any copy (tides-8h7.5), each tried again later (not counted as rebakes). */
+  dropped: number
   /** Worker time, ms: total and longest. */
   bakeMs: number
   bakeMaxMs: number
@@ -331,7 +352,7 @@ export class SurfaceGridCache extends GridCache {
   private readonly held: LockedGrid[] = []
   private readonly options: SurfaceGridOptions
   private readonly lifetime = new AbortController()
-  readonly horizonStats: HorizonStats = { baked: 0, empty: 0, rebakes: 0, bakeMs: 0, bakeMaxMs: 0, contextMaxMs: 0, uploadMaxMs: 0 }
+  readonly horizonStats: HorizonStats = { baked: 0, empty: 0, rebakes: 0, dropped: 0, bakeMs: 0, bakeMaxMs: 0, contextMaxMs: 0, uploadMaxMs: 0 }
   /** The grids that get a horizon map, by key, while they live. */
   private readonly horizonGrids = new Map<string, HorizonGrid>()
   /** A neighbour's key → the grids whose latest bake went without it, baked again once it is made. */
@@ -421,7 +442,7 @@ export class SurfaceGridCache extends GridCache {
   private startHorizon(grid: DataTexture, x: number, y: number, level: number, first?: HorizonSource): void {
     if (!this.bakes()) return
     const k = key(x, y, level)
-    const entry: HorizonGrid = { grid, x, y, level, first, without: [], running: false, again: false, gone: new AbortController() }
+    const entry: HorizonGrid = { grid, x, y, level, first, without: [], running: false, again: false, gone: new AbortController(), drops: 0 }
     this.horizonGrids.set(k, entry)
     baking.add(grid.source)
     const onDispose = () => {
@@ -439,7 +460,7 @@ export class SurfaceGridCache extends GridCache {
   /**
    * Bakes entry's map (once more after this one, if asked while it runs); a
    * failure leaves the map it had, and a dropped bake runs again after
-   * HORIZON_REBAKE_DELAY_MS.
+   * dropRetryDelay.
    */
   private runBake(k: string, entry: HorizonGrid): void {
     if (entry.running) {
@@ -450,21 +471,24 @@ export class SurfaceGridCache extends GridCache {
     entry.running = true
     const { signal, release } = eitherSignal(entry.gone.signal, this.lifetime.signal)
     const tileSize = (this.plugin as TerrainPluginInternals).tileDimension
-    this.horizonJob(k, entry, signal)
-      .then((job) => (job ? this.options.bake!(job.horizon, job.grid, signal) : null))
+    this.bakeHorizon(k, entry, signal)
       .then((baked) => {
+        entry.drops = 0
         if (!signal.aborted) this.attachHorizon(entry.grid, baked, tileSize)
       })
       .catch((err) => {
-        // Turned away by a full queue (tides-8h7.5): tried again shortly, so
-        // no grid is left without its map. A rebake already pending covers it.
-        if (err instanceof BakeDroppedError && !signal.aborted && entry.timer === undefined) {
-          // (its grid's dispose clears it, and runBake skips a released grid)
-          entry.timer = setTimeout(() => {
-            entry.timer = entry.since = undefined
-            this.runBake(k, entry)
-          }, HORIZON_REBAKE_DELAY_MS)
-        }
+        if (!(err instanceof BakeDroppedError) || signal.aborted) return
+        // Turned away by a full queue, nothing copied (tides-8h7.5): tried
+        // again later, so no grid is left without its map. A rebake already
+        // pending (the timer), or the one asked while this ran (again, at
+        // once below), covers it. The grid's dispose clears the timer.
+        this.horizonStats.dropped++
+        entry.drops++
+        if (entry.timer !== undefined || entry.again) return
+        entry.timer = setTimeout(() => {
+          entry.timer = entry.since = undefined
+          this.runBake(k, entry)
+        }, dropRetryDelay(entry.drops))
       })
       .finally(() => {
         release()
@@ -527,7 +551,7 @@ export class SurfaceGridCache extends GridCache {
   }
 
   /**
-   * The grid's horizon job (terrarium.ts HorizonJob) and a copy of the grid:
+   * Bakes the grid's horizon job (terrarium.ts HorizonJob) and a copy of the grid:
    * its bounds, then windows of the grids around it, nearest detail first:
    * entry.first, its same-level neighbours (HORIZON_NEIGHBOUR_MARGIN_TEXELS
    * at their own texels; none across the antimeridian), and each ancestor
@@ -536,9 +560,11 @@ export class SurfaceGridCache extends GridCache {
    * HORIZON_CONTEXT_WAIT_MS: the traversal loads parents and siblings
    * together); grids not asked for are not fetched for this. The windows
    * are read (and copied, paced by the budget) once that settles, from the
-   * grids as they then stand.
+   * grids as they then stand, and the bake posted in the same turn, so the
+   * queue's room (bakeRoom) asked before the copies still holds: with none,
+   * nothing is copied and it rejects with BakeDroppedError.
    */
-  private async horizonJob(k: string, entry: HorizonGrid, signal: AbortSignal): Promise<{ horizon: HorizonJob; grid: PaddedGrid } | null> {
+  private async bakeHorizon(k: string, entry: HorizonGrid, signal: AbortSignal): Promise<BakedHorizon | null> {
     const source = (this.plugin as TerrainPluginInternals)._source
     if (!source) return null
     const { x, y, level } = entry
@@ -581,9 +607,10 @@ export class SurfaceGridCache extends GridCache {
       ).finally(() => clearTimeout(timer))
     }
     // copied in the frame's budget, after the grids waiting (a bake only sharpens a tile already drawn)
-    return this.options.budget.run(
+    return await this.options.budget.run(
       () => {
         signal.throwIfAborted()
+        if (this.options.bakeRoom?.() === false) throw new BakeDroppedError()
         const t0 = performance.now()
         const context: HorizonSource[] = []
         if (entry.first) context.push({ ...entry.first, data: entry.first.data.slice() })
@@ -606,7 +633,7 @@ export class SurfaceGridCache extends GridCache {
         const grid = { data: image.data.slice(), width: image.width, height: image.height }
         const ms = performance.now() - t0
         if (ms > this.horizonStats.contextMaxMs) this.horizonStats.contextMaxMs = ms
-        return { horizon: { tileSize, south, north, context }, grid }
+        return this.options.bake!({ tileSize, south, north, context }, grid, signal)
       },
       signal,
       'bake'

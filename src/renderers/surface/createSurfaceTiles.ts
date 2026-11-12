@@ -197,6 +197,7 @@ export function createSurfaceTiles({
     decode: decoder.decode,
     bake: decoder.bake,
     canBake: () => decoder.bakes,
+    bakeRoom: () => decoder.bakeRoom,
     budget,
     upload: tracked?.upload,
     edges,
@@ -220,7 +221,7 @@ export function createSurfaceTiles({
     lruCache.minBytesSize = min
     lruCache.maxBytesSize = max
   })
-  cacheMarks.set(capCacheMarks(surfaceDetail(0, 0).cache, memory))
+  cacheMarks.set(capCacheMarks(surfaceDetail(0, 0), memory))
   lruCache.unloadPriorityCallback = DEFAULT_LRU_CACHE.unloadPriorityCallback
   tiles.lruCache = lruCache
   const { downloads, parse } = createSurfaceQueues(memory)
@@ -321,7 +322,7 @@ export function createSurfaceTiles({
     setViewSize(camera, width, height) {
       const detail = surfaceDetail(width, height)
       tiles.setResolution(camera, detail.width, detail.height)
-      cacheMarks.set(capCacheMarks(detail.cache, memory))
+      cacheMarks.set(capCacheMarks(detail, memory))
     },
     syncCounters,
     // tiles.dispose() unregisters the terrain plugin, which releases every

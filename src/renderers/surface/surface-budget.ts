@@ -12,7 +12,8 @@
 // system view's tiles stop choosing and fetching tiles while they sit
 // above their range out their leave grace (tides-8h7), drawing nothing.
 import { aboveTileRange } from '../../close-zoom-rules'
-import type { CacheMarks } from './surface-lod'
+import { SURFACE_TOP } from '../../surface-handover'
+import { REFERENCE_PIXELS, type CacheMarks, type SurfaceDetail } from './surface-lod'
 import { SURFACE_JOBS_PER_ORIGIN, SURFACE_PARSE_JOBS } from './surface-queues'
 
 const GIGABYTE = 2 ** 30
@@ -24,7 +25,11 @@ export interface SurfaceMemoryBudget {
   parseJobs: number
   /** Horizon bakes waiting for a worker; more are dropped (and retried later, terrain-internals.ts). */
   maxWaitingBakes: number
-  /** The cache's marks in real bytes (CPU copies included), or null: the view's marks alone (surfaceDetail). */
+  /**
+   * The cache's marks in real bytes (CPU copies included) for a view of
+   * TOUCH_REFERENCE_PIXELS, larger views' scaled up as surface-lod's are
+   * (capCacheMarks), or null: the view's marks alone (surfaceDetail).
+   */
   cacheRealBytes: CacheMarks | null
   /** Whether the system view skips tiles.update() while its tiles sit above their range (pauseTileUpdates). */
   pauseAboveRange: boolean
@@ -39,9 +44,13 @@ export const DESKTOP_SURFACE_BUDGET: SurfaceMemoryBudget = {
   pauseAboveRange: false,
 }
 
+/** The phone view the touch marks are given for: 390x844 CSS pixels. */
+export const TOUCH_REFERENCE_PIXELS = 390 * 844
+
 /**
  * Phones and tablets. The marks hold a 390x844 phone's view-sized ones
- * (0.20/0.26 GiB counted) to 0.14/0.18 GiB counted, 0.28/0.36 GiB real.
+ * (0.20/0.26 GiB counted) to 0.14/0.18 GiB counted, 0.28/0.36 GiB real;
+ * a tablet's scale up from there (capCacheMarks).
  */
 export const TOUCH_SURFACE_BUDGET: SurfaceMemoryBudget = {
   // [TUNE] at least parseJobs: each parse waits on its grid's request (tides-zmw.9.25)
@@ -66,12 +75,32 @@ export function surfaceMemoryBudget(touch: boolean): SurfaceMemoryBudget {
   return touch ? TOUCH_SURFACE_BUDGET : DESKTOP_SURFACE_BUDGET
 }
 
-/** The view's cache marks (surfaceDetail's), held to the budget's real bytes; min never above max. */
-export function capCacheMarks(marks: CacheMarks, budget: SurfaceMemoryBudget): CacheMarks {
+/** surface-lod's working set at REFERENCE_PIXELS (the Grand Canyon gorge, CACHE_BYTES_AT_REFERENCE), bytes counted. */
+const WORKING_SET_BYTES_AT_REFERENCE = 464e6
+
+/**
+ * The bytes (counted) a view of `width` x `height` detail pixels
+ * (surfaceDetail's) holds in use at the heaviest stop measured, scaled from
+ * REFERENCE_PIXELS as surface-lod scales its marks, by the square root of the pixels.
+ */
+export function workingSetBytes(width: number, height: number): number {
+  return WORKING_SET_BYTES_AT_REFERENCE * Math.sqrt(Math.max(0, width * height) / REFERENCE_PIXELS)
+}
+
+/**
+ * The view's cache marks (surfaceDetail's), held to the budget's: its real
+ * bytes over CPU_COPY_FACTOR, at TOUCH_REFERENCE_PIXELS and smaller views,
+ * scaled up past it by the square root of the pixels, as surface-lod scales
+ * its marks; the high mark never under the view's working set (a refused
+ * tile is a coarser settled frame), and min never above max.
+ */
+export function capCacheMarks(detail: SurfaceDetail, budget: SurfaceMemoryBudget): CacheMarks {
   const cap = budget.cacheRealBytes
+  const marks = detail.cache
   if (!cap) return marks
-  const max = Math.min(marks.max, cap.max / CPU_COPY_FACTOR)
-  return { min: Math.min(marks.min, cap.min / CPU_COPY_FACTOR, max), max }
+  const scale = Math.max(1, Math.sqrt((detail.width * detail.height) / TOUCH_REFERENCE_PIXELS) || 0)
+  const max = Math.min(marks.max, Math.max((cap.max / CPU_COPY_FACTOR) * scale, workingSetBytes(detail.width, detail.height)))
+  return { min: Math.min(marks.min, (cap.min / CPU_COPY_FACTOR) * scale, max), max }
 }
 
 /**
@@ -82,4 +111,20 @@ export function capCacheMarks(marks: CacheMarks, budget: SurfaceMemoryBudget): C
  */
 export function pauseTileUpdates(budget: SurfaceMemoryBudget, eye: 'ship' | 'system', altitude: number, top: number): boolean {
   return budget.pauseAboveRange && eye === 'system' && aboveTileRange(altitude, top)
+}
+
+/**
+ * SurfaceTiles' frame: runs tiles.update() unless pauseTileUpdates says
+ * not to, for an eye `altitude` over the sea-level sphere in scene units
+ * (SURFACE_TOP's), and says whether it ran.
+ */
+export function updateSurfaceTiles(
+  tiles: { update(): void },
+  budget: SurfaceMemoryBudget,
+  eye: 'ship' | 'system',
+  altitude: number
+): boolean {
+  if (pauseTileUpdates(budget, eye, altitude, SURFACE_TOP)) return false
+  tiles.update()
+  return true
 }

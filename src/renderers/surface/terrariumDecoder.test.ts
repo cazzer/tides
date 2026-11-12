@@ -256,6 +256,31 @@ describe('horizon bakes in the decode workers (tides-zmw.9.15)', () => {
     decoder.dispose()
   })
 
+  it('says ahead whether a bake would drop (bakeRoom), so nothing is copied for one (tides-8h7.5)', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1, maxWaitingBakes: 2 })
+    const signal = new AbortController().signal
+    const rooms: boolean[] = []
+    const bakes = [0, 1, 2].map(() => (rooms.push(decoder.bakeRoom), decoder.bake(job(), grid(1), signal)))
+    // sent, waits, waits: then full
+    expect(rooms).toEqual([true, true, true])
+    expect(decoder.bakeRoom).toBe(false)
+    await expect(decoder.bake(job(), grid(1), signal)).rejects.toBeInstanceOf(BakeDroppedError)
+    // one answered: the next goes out, and there's room again
+    worker.reply({ type: 'baked', id: bakeIdsOf(worker)[0], baked: { horizon: null, ms: 1 } })
+    await bakes[0]
+    expect(decoder.bakeRoom).toBe(true)
+    for (const bake of bakes) bake.catch(() => {})
+    decoder.dispose()
+    // nothing drops once nothing bakes
+    expect(decoder.bakeRoom).toBe(true)
+    // and by default nothing ever does
+    const open = createTerrariumDecoder({ createWorker: () => new FakeWorker(), inThread: async () => grid(-1), size: 1 })
+    for (let i = 0; i < 20; i++) open.bake(job(), grid(1), signal).catch(() => {})
+    expect(open.bakeRoom).toBe(true)
+    open.dispose()
+  })
+
   it('makes room when a waiting bake is aborted (tides-8h7.5)', async () => {
     const worker = new FakeWorker()
     const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1, maxWaitingBakes: 2 })

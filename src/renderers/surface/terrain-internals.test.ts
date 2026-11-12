@@ -32,7 +32,9 @@ import {
   setGridHorizon,
   GRID_LEVEL_STEP,
   HELD_BETWEEN_GRIDS,
+  HORIZON_DROP_RETRY_MAX_MS,
   HORIZON_REBAKE_DELAY_MS,
+  dropRetryDelay,
   installSurfaceGridCache,
   PINNED_TILES_VERSION,
   protectOverlayBitmaps,
@@ -699,12 +701,143 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
     describe('a bake dropped by a full queue (tides-8h7.5)', () => {
       // Timeouts faked (and still advancing with real time, for the queues'
       // frames and the budget's waits), so the retry's delay is stepped over.
+      // No jitter unless a test asks for it: each retry at its delay's floor.
+      let random: { mockReturnValue(value: number): unknown }
       beforeEach(() => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+        random = vi.spyOn(Math, 'random').mockReturnValue(0)
       })
       afterEach(() => vi.useRealTimers())
 
       const map = { horizon: new Uint8Array(8).fill(9), ms: 1, max: 9 }
+      type Entry = { drops: number; again: boolean; timer?: unknown }
+      const internals = (cache: SurfaceGridCache) =>
+        cache as unknown as { horizonGrids: Map<string, Entry>; runBake(k: string, entry: Entry): void }
+
+      it('waits the rebake delay, doubling with each drop in a row up to a cap, stretched by 1-2x', () => {
+        expect(dropRetryDelay(1, () => 0)).toBe(HORIZON_REBAKE_DELAY_MS)
+        expect(dropRetryDelay(2, () => 0)).toBe(2 * HORIZON_REBAKE_DELAY_MS)
+        expect(dropRetryDelay(3, () => 0)).toBe(4 * HORIZON_REBAKE_DELAY_MS)
+        expect(dropRetryDelay(20, () => 0)).toBe(HORIZON_DROP_RETRY_MAX_MS)
+        expect(dropRetryDelay(1, () => 0.5)).toBe(1.5 * HORIZON_REBAKE_DELAY_MS)
+        expect(dropRetryDelay(20, () => 0.999)).toBeLessThan(2 * HORIZON_DROP_RETRY_MAX_MS)
+      })
+
+      it('copies nothing when the queue has no room, and bakes (copying then) once it has', async () => {
+        const { terrain } = await loadedPlugin()
+        let room = false
+        let rooms = 0
+        const bakes: PaddedGrid[] = []
+        const bake = async (_job: HorizonJob, grid: PaddedGrid | null) => {
+          bakes.push(grid!)
+          return map
+        }
+        const opts = options({ decode: planes, bake, bakeRoom: () => (rooms++, room) })
+        // the copies made inside each bake's budget turn
+        const slice = vi.spyOn(Float32Array.prototype, 'slice')
+        const copies: number[] = []
+        const run = opts.budget.run.bind(opts.budget)
+        opts.budget.run = ((work, signal, lane, size) =>
+          run(
+            lane === 'bake'
+              ? () => {
+                  const before = slice.mock.calls.length
+                  try {
+                    return work()
+                  } finally {
+                    copies.push(slice.mock.calls.length - before)
+                  }
+                }
+              : work,
+            signal,
+            lane,
+            size
+          )) as typeof opts.budget.run
+        const cache = installSurfaceGridCache(terrain, opts)
+        answer = byLevel
+        const land = cache.lock(1, 1, 2)
+        await drain(opts.budget, land)
+        await until(opts.budget, () => rooms === 1)
+        // asked before any copy: none made, nothing posted, the drop counted (not as a rebake)
+        expect(copies).toEqual([0])
+        expect(bakes).toHaveLength(0)
+        expect(cache.horizonStats).toMatchObject({ dropped: 1, rebakes: 0 })
+        room = true
+        await vi.advanceTimersByTimeAsync(HORIZON_REBAKE_DELAY_MS + 50)
+        await until(opts.budget, () => bakes.length === 1)
+        // the grid's copy, made once there was room
+        expect(copies).toHaveLength(2)
+        expect(copies[1]).toBeGreaterThan(0)
+        expect(gridHorizon((await land) as DataTexture)).not.toBeNull()
+      })
+
+      it('spreads the retries of grids dropped together, and backs off a grid dropped again', async () => {
+        const { terrain } = await loadedPlugin()
+        let room = false
+        const opts = options({ decode: planes, bake: async () => map, bakeRoom: () => room })
+        const cache = installSurfaceGridCache(terrain, opts)
+        const entries = internals(cache).horizonGrids
+        const drops = () => ['2/1/1', '2/2/1'].map((k) => entries.get(k)!.drops)
+        // timers stepped over, then the budget's turns for whatever they started
+        const step = async (ms: number) => {
+          await vi.advanceTimersByTimeAsync(ms)
+          for (let i = 0; i < 5; i++) {
+            opts.budget.tick()
+            await vi.advanceTimersByTimeAsync(2)
+          }
+        }
+        answer = byLevel
+        // the first grid's retry stretched least, the second's most (three's uuids take the same)
+        const a = cache.lock(1, 1, 2)
+        await drain(opts.budget, a)
+        await until(opts.budget, () => cache.horizonStats.dropped === 1)
+        random.mockReturnValue(0.9)
+        const b = cache.lock(2, 1, 2)
+        await drain(opts.budget, b)
+        await until(opts.budget, () => cache.horizonStats.dropped === 2)
+        expect(drops()).toEqual([1, 1])
+        // at ~1.2 s the first has come back (and dropped again: no room), the second not yet
+        await step(1200)
+        expect(cache.horizonStats.dropped).toBe(3)
+        expect(drops()).toEqual([2, 1])
+        // the second at ~1.9 s
+        await step(800)
+        expect(cache.horizonStats.dropped).toBe(4)
+        expect(drops()).toEqual([2, 2])
+        // the first's second drop (at ~1 s, stretched 1.9x) waits 3.8 s, not 1.9: nothing more by ~3.4 s
+        await step(1500)
+        expect(cache.horizonStats.dropped).toBe(4)
+        room = true
+        await step(4 * HORIZON_REBAKE_DELAY_MS)
+        await until(opts.budget, () => cache.horizonStats.baked === 2)
+        expect(drops()).toEqual([0, 0])
+        expect(cache.horizonStats.dropped).toBe(4)
+      })
+
+      it('sets no retry when a bake was asked again while the dropped one ran (that one runs at once)', async () => {
+        const { terrain } = await loadedPlugin()
+        let calls = 0
+        let drop!: () => void
+        const bake = () => {
+          if (++calls === 1) return new Promise<never>((_, reject) => (drop = () => reject(new BakeDroppedError())))
+          return Promise.resolve(map)
+        }
+        const opts = options({ decode: planes, bake })
+        const cache = installSurfaceGridCache(terrain, opts)
+        answer = byLevel
+        const land = cache.lock(1, 1, 2)
+        await drain(opts.budget, land)
+        await until(opts.budget, () => calls === 1)
+        const { horizonGrids, runBake } = internals(cache)
+        const entry = horizonGrids.get('2/1/1')!
+        runBake.call(cache, '2/1/1', entry)
+        expect(entry.again).toBe(true)
+        drop()
+        await until(opts.budget, () => calls === 2)
+        expect(entry.timer).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(3 * HORIZON_DROP_RETRY_MAX_MS)
+        expect(calls).toBe(2)
+      })
 
       it('is baked again after HORIZON_REBAKE_DELAY_MS, so the grid still gets its map', async () => {
         const { terrain } = await loadedPlugin()
