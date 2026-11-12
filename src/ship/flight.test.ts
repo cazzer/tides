@@ -1122,6 +1122,29 @@ describe('cushion (tides-ufyr.1)', () => {
     expect(impacts(V_NORMAL)).toBe(0)
   })
 
+  // A settled Flight Assist approach: the velocity a hair off the target it
+  // eases to, so the step's thrust is a rounding error and the band's entry
+  // time must not divide by it (tides-ufyr.10).
+  test.each([FRAME, MAX_DT])('a settled Flight Assist approach a fraction of a step over the band never moves further in than its speed allows (dt %s)', (dt) => {
+    for (const share of [0.3, 0.45, 0.6, 0.8]) {
+      for (const off of [1e-14, -1e-14, 3e-14, -3e-14, 1e-13, -1e-13]) {
+        const state = createShipState()
+        state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+        const nose = noseOf(state)
+        const cap = speedCap(new THREE.Vector3(0, STOP + W, 0), [ROCK], nose)
+        state.position.set(0, STOP + W + share * cap * dt, 0)
+        state.velocity.copy(nose).multiplyScalar(cap).addScaledVector(Y, off)
+        const speed = state.velocity.length()
+        const before = state.position.length()
+        stepShip(state, input({ throttle: 1 }), dt, still)
+        const inward = before - state.position.length()
+        expect(inward, `${share} ${off}`).toBeLessThanOrEqual(speed * dt * (1 + 1e-9))
+        // And it does reach the band.
+        expect(inward, `${share} ${off}`).toBeGreaterThan(share * cap * dt)
+      }
+    }
+  })
+
   test('reaches the backstop at the same speed at any frame rate', () => {
     const backstop = (dt: number) => {
       const state = arriving(3 * V_NORMAL)

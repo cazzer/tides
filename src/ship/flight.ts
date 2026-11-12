@@ -633,18 +633,18 @@ function cushionMotion(
 
 // When a ship at depth `x` ≤ 0 (above the band) moving in at `y` under a
 // constant inward acceleration `f` first reaches the band's top moving in,
-// seconds; Infinity if it never does.
+// seconds; Infinity if it never does. The root it enters at is the one
+// moving in at +√disc, (√disc − y) / f; moving in already, that is taken as
+// 2(−x) / (y + √disc), since on a settled Flight Assist approach f is a
+// rounding error, √disc rounds to y and (√disc − y) / f is noise
+// (tides-ufyr.10). It also covers f = 0.
 function entryTime(x: number, y: number, f: number): number {
-  if (f === 0) return y > 0 ? -x / y : Infinity
   const disc = y * y - 2 * f * x
-  if (disc < 0) return Infinity
+  if (!(disc >= 0)) return Infinity
   const root = Math.sqrt(disc)
-  let first = Infinity
-  for (const t of [(-y - root) / f, (-y + root) / f]) {
-    const rate = y + f * t
-    if (t >= 0 && t < first && (rate > 0 || (rate === 0 && f > 0))) first = t
-  }
-  return first
+  if (y > 0) return (-2 * x) / (y + root)
+  // Still or moving out: only an inward pull brings it in, and √disc ≥ −y.
+  return f > 0 ? (root - y) / f : Infinity
 }
 
 // The cushion over a step of `dt` s, after the thrust and before the move.
