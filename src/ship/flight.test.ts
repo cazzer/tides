@@ -3112,6 +3112,45 @@ describe("the gas giants' cloud decks (tides-ufyr.8.3)", () => {
     }
   })
 
+  // Locking a moon behind the giant from inside its fog, under the passing
+  // stop: the ship keeps the deck's own cushion, never put up on the
+  // passStop in a step, and climbs out under its own thrust.
+  test.each([
+    [0.995, 0],
+    [0.995, 0.1],
+    [1.005, 0],
+    [1.005, 0.1],
+  ])('locking a moon behind Jupiter at %s R, moving in at %s u/s, moves it no further than it flies', (at, inward) => {
+    const bodies = flightBodies()
+    const jupiter = bodies.find((b) => b.key === 'jupiter')!
+    const io = bodies.find((b) => b.key === 'io')!
+    const R = jupiter.radius
+    const normal = jupiter.position.clone().sub(io.position).normalize()
+    const start = jupiter.position.clone().addScaledVector(normal, R * at)
+    for (const dt of [FRAME, MAX_DT]) {
+      const state = shipAt(start, start.clone().add(normal))
+      state.velocity.copy(normal).multiplyScalar(-inward)
+      const telemetry = createShipTelemetry()
+      let d = state.position.distanceTo(jupiter.position)
+      let cap = Math.max(V_NORMAL, inward)
+      let climbed = -1
+      for (let t = 0; t < 60 && climbed < 0; t += dt) {
+        // Held still for 2 s, then full throttle, nose straight up.
+        stepShip(state, input({ throttle: t < 2 ? 0 : 1 }), dt, env(bodies, 'io'), telemetry)
+        const next = state.position.distanceTo(jupiter.position)
+        cap = Math.max(cap, telemetry.speedCap)
+        expect(Math.abs(next - d), `${dt} ${t.toFixed(2)}`).toBeLessThanOrEqual(OVERSPEED_MAX * cap * dt + 1e-9)
+        expect(telemetry.colliding).toBe(false)
+        expect(telemetry.impactSpeed).toBe(0)
+        expect(next).toBeGreaterThanOrEqual(collisionRadius(jupiter) - 1e-9)
+        d = next
+        cap = telemetry.speedCap
+        if (d > jupiter.passStop! * 1.01) climbed = t
+      }
+      expect(climbed, `${dt}`).toBeGreaterThan(0)
+    }
+  })
+
   test('an unlocked dive, or one locked on the giant, still goes into the deck', () => {
     const bodies = flightBodies()
     const jupiter = bodies.find((b) => b.key === 'jupiter')!

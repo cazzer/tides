@@ -335,7 +335,7 @@ describe('ship bodies', () => {
         expect(speedFloor(body)).toBe(V_NORMAL)
       })
 
-      it.each(giants)("rests %s's cushion top the same way round, half way from the floor to its cloud top", (key) => {
+      it.each(giants)("rests %s's cushion top the same way round, half way from the floor to its cloud top", (key, haze) => {
         const body = byKey()[key]
         const deck = DECK_PROFILES[key]!
         const R = body.radius
@@ -347,8 +347,11 @@ describe('ship bodies', () => {
         // The globe's shell caps it (CUSHION_SHELL_SHARE), under the speed floor's cap.
         expect(rest / R).toBeCloseTo((deck.floor + 1) / 2, 12)
         expect(CUSHION_MAX_SECONDS * V_NORMAL).toBeGreaterThan(rest - R * deck.floor)
-        // A ship passing it to a target beyond keeps over the fog's top.
-        expect(body.passStop).toBeCloseTo(R * deck.top, 12)
+        // A ship passing it to a target beyond keeps over the fog's top,
+        // half way up to the haze, off both shells.
+        expect(body.passStop).toBeCloseTo((R * (deck.top + haze)) / 2, 12)
+        expect(body.passStop).toBeGreaterThan(R * deck.top)
+        expect(body.passStop).toBeLessThan(R * haze)
       })
 
       it('gives no other body a passing stop', () => {

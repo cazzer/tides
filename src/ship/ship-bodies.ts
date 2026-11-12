@@ -9,7 +9,7 @@ import { qualityTier, type QualityTier } from '../quality'
 import { PLANET_KEYS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
-import { COLLISION_MARGIN, MAX_DT, V_NORMAL, cushionWidth, floorRadius } from './flight'
+import { COLLISION_MARGIN, CUSHION_SHELL_SHARE, MAX_DT, V_NORMAL, cushionWidth, floorRadius } from './flight'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { RELIEF } from '../relief'
 import { DECK_PROFILES } from '../cloud-deck'
@@ -590,8 +590,11 @@ function planetBody(key: PlanetKey, radius: number, positionAt: (t: number) => V
     const base = radius * deck.base
     body.ground = () => base
     body.groundClearance = radius * (deck.floor - deck.base)
-    // Going past it to a locked target beyond, over the fog's top.
-    body.passStop = radius * deck.top
+    // Going past it to a locked target beyond, over the fog's top: off its
+    // shell by CUSHION_SHELL_SHARE of the gap up to the haze, as the cushion
+    // keeps off a shell, so the passing band never sits on the deck's.
+    const haze = PLANET_HAZE_OUTER[key] ?? deck.top
+    body.passStop = radius * (deck.top + CUSHION_SHELL_SHARE * (haze - deck.top))
   }
   return body
 }

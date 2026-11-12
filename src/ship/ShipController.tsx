@@ -38,24 +38,26 @@ const BODY_REFRESH_MS = 250
 // last refresh: the air's speed takes it out (fillAirUncarried).
 const earthVelocity = new THREE.Vector3()
 const earthVelocityNow = new THREE.Vector3()
+const ORIGIN = new THREE.Vector3()
 
 const deckUp = new THREE.Vector3()
+const deckToSun = new THREE.Vector3()
 
 /**
  * How deep the ship at `position` is in the cloud deck of any of `bodies`
  * (cloud-deck.ts deckShare, tides-ufyr.8.3), 0 outside them all, and, into
  * deckEye, the giant whose fog shell it is inside and the Sun's light
- * through that fog (deckSunlight; the Sun is at the origin). The decks never
- * overlap.
+ * through that fog toward `sun` (deckSunlight). The decks never overlap.
  */
-function updateDeckEye(position: THREE.Vector3, bodies: readonly ShipBody[]): number {
+function updateDeckEye(position: THREE.Vector3, bodies: readonly ShipBody[], sun: THREE.Vector3): number {
   for (const body of bodies) {
     const profile = DECK_PROFILES[body.key as keyof typeof DECK_PROFILES]
     if (!profile) continue
     const distance = position.distanceTo(body.position)
     if (!(distance < body.radius * profile.top) || !(distance > 0)) continue
-    const toSun = position.length()
-    const muSun = toSun > 0 ? -deckUp.subVectors(position, body.position).dot(position) / (distance * toSun) : 1
+    deckToSun.subVectors(sun, position)
+    const toSun = deckToSun.length()
+    const muSun = toSun > 0 ? deckUp.subVectors(position, body.position).dot(deckToSun) / (distance * toSun) : 1
     setDeckEye(body.key, deckSunlight(distance, muSun, body.radius, profile))
     return deckShare(distance, body.radius, profile)
   }
@@ -73,6 +75,7 @@ export function ShipController() {
   const bodies = useMemo(createShipBodies, [])
   const earth = useMemo(() => bodies.find((body) => body.key === 'earth'), [bodies])
   const moon = useMemo(() => bodies.find((body) => body.key === 'moon'), [bodies])
+  const sunBody = useMemo(() => bodies.find((body) => body.key === 'sun'), [bodies])
   const bodiesAt = useRef<number | null>(null)
   const ship = useRef<ShipState | null>(null)
   const camera = useThree((s) => s.camera)
@@ -151,7 +154,7 @@ export function ShipController() {
       earthVelocityNow.copy(earthVelocity).multiplyScalar(Number.isFinite(timeScale) ? timeScale : 0)
       fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
     }
-    shipTelemetry.deck = updateDeckEye(state.position, bodies)
+    shipTelemetry.deck = updateDeckEye(state.position, bodies, sunBody?.position ?? ORIGIN)
     if (earth) fillEarthEye(shipTelemetry, state.position, earth)
     else {
       shipTelemetry.earthEye.altitude = Infinity

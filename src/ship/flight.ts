@@ -486,19 +486,16 @@ interface Contact {
   end: number
   settled: number
   /**
-   * The passing stop the band sits on (cushionBandOver's `lift`), 0 for
-   * none; and whether collide holds the ship there, soft, as a backstop:
-   * only when the step started at or over it, so a ship already under it
-   * rises out on the band instead of jumping up.
+   * The passing stop the band sits on (cushionBandOver's `lift`), which
+   * collide holds the ship on, soft, as a backstop; 0 for none. Only set
+   * for a step that starts on or over it (findContact).
    */
   lift: number
-  liftHolds: boolean
 }
 
 const contact: Contact = {
   body: null,
   lift: 0,
-  liftHolds: false,
   normal: new THREE.Vector3(),
   width: 0,
   speed: 0,
@@ -507,6 +504,11 @@ const contact: Contact = {
   end: 0,
   settled: 0,
 }
+
+// How far under a passStop, as a share of it, a ship still counts as on
+// it: collide puts it back on the stop exactly, and the next step's distance
+// can round a hair under.
+const PASS_STOP_SLACK = 1e-9
 
 // The cushion the ship at `position` is in, or can reach in a step that
 // moves it at most `reach`; null for none. Only `nearest`'s can be, its
@@ -526,16 +528,22 @@ function findContact(
   const d = normal.subVectors(position, nearest.position).length()
   if (d > 1e-9) normal.divideScalar(d)
   else normal.copy(WORLD_UP)
-  // Going past it to a locked target behind its surface, on its passStop.
+  // Going past it to a locked target behind its surface, on its passStop,
+  // but only from over it: raised under the ship, the band would put it on
+  // its passStop in a step (cushionStep's past-the-backstop branch). Under
+  // it, the body's own cushion; the ship climbs out under its own thrust.
   const lift =
-    passingTo && passingTo !== nearest && nearest.passStop !== undefined && behindSurface(passingTo, position, normal)
+    passingTo &&
+    passingTo !== nearest &&
+    nearest.passStop !== undefined &&
+    d >= nearest.passStop * (1 - PASS_STOP_SLACK) &&
+    behindSurface(passingTo, position, normal)
       ? nearest.passStop
       : 0
   const { stop, width, speed } = cushionBandOver(nearest, d - gap, lift)
   if (!(width > 0) || !(d < stop + width + reach)) return null
   contact.body = nearest
   contact.lift = lift
-  contact.liftHolds = lift > 0 && d >= lift
   contact.width = width
   contact.speed = speed
   contact.omega = (CUSHION_ABSORB * speed) / width
@@ -1633,12 +1641,11 @@ function collide(
       cushion.end = stop + cushion.width - d
       cushion.settled = stop + cushion.width - Math.max(d, stop)
     }
-    const shell = pressed && cushion.liftHolds ? stop : floor
-    if (d >= shell) continue
-    state.position.copy(body.position).addScaledVector(normal, shell)
+    if (d >= stop) continue
+    state.position.copy(body.position).addScaledVector(normal, stop)
     const inward = state.velocity.dot(normal)
     // The passing stop is soft: put back on it, never a hit.
-    if (shell > floor) {
+    if (stop > floor) {
       if (inward < 0) state.velocity.addScaledVector(normal, -inward)
       continue
     }
