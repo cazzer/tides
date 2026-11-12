@@ -19,6 +19,7 @@ import {
   RIDE_DOWN_RATE,
   RIDE_UP_RATE,
   ROLL_RATE,
+  ROTATION_TAU,
   TURN_RATE_MIN_FACTOR,
   V_NORMAL,
   V_TOP,
@@ -1072,7 +1073,7 @@ describe('cushion (tides-ufyr.1)', () => {
     }
   })
 
-  test('the nudge leaves no turn behind: out of the cushion the ship stops turning, with Flight Assist off', () => {
+  test('the nudge leaves no turn behind: out of the cushion the turn eases out over ROTATION_TAU and stops, with Flight Assist off', () => {
     for (const throttle of [0, 1]) {
       // 45° nose down, heading along +X, at the floor speed along the nose.
       const state = createShipState()
@@ -1084,23 +1085,100 @@ describe('cushion (tides-ufyr.1)', () => {
       const dive = () => -noseOf(state).dot(overStop(ROCK, state.position).normal)
       const entry = dive()
       let pressed = false
-      let left = false
+      let left = -1
+      let leaving = 0
+      let last = Infinity
       for (let i = 0; i < 20 * 60; i++) {
         const before = state.orientation.clone()
-        const out = state.cushion.depth === 0 && !inCushion(ROCK, state.position)
+        // Out of it, after it was pressed in.
+        const out = pressed && state.cushion.depth === 0 && !inCushion(ROCK, state.position)
         stepShip(state, input({ throttle, flightAssist: false }), FRAME, env([ROCK]))
         pressed ||= state.cushion.depth > 0
         // Idle stick: the spin it had before contact, none, all along.
         expect(state.angularVelocity.length()).toBe(0)
-        if (pressed && out) left = true
-        // A step out of it doesn't turn the ship: the nose holds where the
-        // nudge left it.
-        if (out) expect(state.orientation.angleTo(before)).toBe(0)
+        if (!out) continue
+        const turn = turnRate(state, before, FRAME).length()
+        if (left < 0) {
+          left = i
+          leaving = turn
+        }
+        // Out of it the turn only eases out, an e-fold every ROTATION_TAU.
+        const since = (i - left) * FRAME
+        expect(turn).toBeLessThanOrEqual(last + 1e-9)
+        expect(turn).toBeLessThanOrEqual(leaving * Math.exp(-since / ROTATION_TAU) * (1 + 1e-6) + 1e-9)
+        last = turn
       }
       expect(pressed).toBe(true)
-      expect(left).toBe(true)
+      expect(left).toBeGreaterThan(0)
+      // And then stops: the nose holds where the nudge left it.
+      expect(last).toBe(0)
+      expect(state.nudge.length()).toBe(0)
       expect(dive()).toBeLessThan(entry)
     }
+  })
+
+  // The ship's turn rate over a step, body frame, rad/s: the rotation from
+  // `before` to its orientation now over `dt`.
+  function turnRate(state: ShipState, before: THREE.Quaternion, dt: number): THREE.Vector3 {
+    const q = before.clone().invert().multiply(state.orientation)
+    if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w)
+    // atan2, not acos: a small turn's angle to full precision.
+    const axisOf = new THREE.Vector3(q.x, q.y, q.z)
+    const sin = axisOf.length()
+    return sin > 0 ? axisOf.multiplyScalar((2 * Math.atan2(sin, q.w)) / sin / dt) : axisOf
+  }
+
+  // Pressed into the cushion and pitching down 60° (rolled 90°: yawing),
+  // holding throttle into it, the pilot presses the stick against the nudge
+  // and lets go (tides-ufyr.9): the nudge eases in and out at the stick's own
+  // rate, so the turn never changes in a frame by more than the ease allows
+  // between the most the stick and the nudge can ask for.
+  test.each(
+    [FRAME, MAX_DT].flatMap((dt) =>
+      [0, Math.PI / 2].flatMap((roll) => [true, false].map((flightAssist) => [dt, roll, flightAssist] as const))
+    )
+  )('pressing and releasing the stick against the nudge never snaps the turn (dt %s, rolled %s, Flight Assist %s)', (dt, roll, flightAssist) => {
+    const state = createShipState()
+    state.position.set(0, STOP + 0.5 * W, 0)
+    state.orientation
+      .setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 3)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1), roll))
+    state.cushion.key = ROCK.key
+    state.cushion.depth = 0.5 * W
+    const ease = 1 - Math.exp(-dt / ROTATION_TAU)
+    // The stick's demand and the nudge are each at most these.
+    const most = Math.hypot(PITCH_RATE, YAW_RATE) + PITCH_RATE
+    const stick = roll ? { yaw: 1 } : { pitch: -1 }
+    let previous = new THREE.Vector3()
+    let nudged = 0
+    let jump = 0
+    for (let t = 0; t < 2; t += dt) {
+      // Pressed from 0.5 s to 1 s.
+      const held = t >= 0.5 - 1e-9 && t < 1 - 1e-9
+      const before = state.orientation.clone()
+      stepShip(state, input({ throttle: 1, flightAssist, ...(held ? stick : {}) }), dt, env([ROCK]))
+      const rate = turnRate(state, before, dt)
+      jump = Math.max(jump, rate.distanceTo(previous))
+      expect(rate.distanceTo(previous), `${t.toFixed(2)}`).toBeLessThanOrEqual(ease * most * (1 + 1e-6))
+      previous = rate
+      if (!held && state.cushion.depth > 0) nudged = Math.max(nudged, state.nudge.length())
+    }
+    // There was a nudge to ease, a strong one.
+    expect(nudged).toBeGreaterThan(0.5 * PITCH_RATE)
+    console.log(`stick against the nudge (dt ${dt.toFixed(3)}, roll ${roll.toFixed(2)}, FA ${flightAssist}): most turn change ${jump.toFixed(3)} rad/s a frame, bound ${(ease * most).toFixed(3)}`)
+  })
+
+  test('with Flight Assist off the eased nudge is not spin: idle stick leaves angularVelocity at 0 through a contact', () => {
+    const state = createShipState()
+    state.position.set(0, STOP + 0.5 * W, 0)
+    state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 3)
+    state.cushion.key = ROCK.key
+    state.cushion.depth = 0.5 * W
+    for (let t = 0; t < 1; t += FRAME) {
+      stepShip(state, input({ throttle: 1, flightAssist: false }), FRAME, env([ROCK]))
+      expect(state.angularVelocity.length()).toBe(0)
+    }
+    expect(state.nudge.length()).toBeGreaterThan(0)
   })
 
   test.each([FRAME, 1 / 30, MAX_DT])('an arrival too fast for the cushion is an impact at any frame rate, one it absorbs never is (dt %s)', (dt) => {

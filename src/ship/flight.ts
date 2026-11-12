@@ -138,6 +138,14 @@ export interface ShipState {
    * does, so a parked ship is never bounced.
    */
   cushion: CushionState
+  /**
+   * The cushion's nose nudge as it is now, body frame, rad/s (tides-ufyr.9):
+   * eased over ROTATION_TAU toward what cushionNudge asks for, and to 0 once
+   * that ends, so pressing or releasing the stick in the cushion never
+   * snaps the turn. It turns the ship on top of angularVelocity and never
+   * goes into it, so it leaves no lasting spin.
+   */
+  nudge: THREE.Vector3
 }
 
 /** ShipState.cushion. */
@@ -844,7 +852,7 @@ export const COLLISION_SPEED = 0.05
 //     backstop gives back outward.
 //   • The nose nudge: CUSHION_NUDGE_GAIN rad/s per radian of dive at full
 //     depth, at most PITCH_RATE, scaled by CUSHION_NUDGE_REDUCED under
-//     reduced motion.
+//     reduced motion, eased in and out over ROTATION_TAU (ShipState.nudge).
 export const CUSHION_DEPTH_SHARE = 1.5
 export const CUSHION_MAX_SECONDS = 0.6
 export const CUSHION_ABSORB = 1
@@ -967,6 +975,7 @@ export function createShipState(): ShipState {
     boost: 0,
     groundHold: { key: null, radius: NaN },
     cushion: { key: null, depth: 0 },
+    nudge: new THREE.Vector3(),
   }
 }
 
@@ -1388,6 +1397,10 @@ function levelRollRate(): number {
 const nudge = new THREE.Vector3()
 const nudgeTurn = new THREE.Quaternion()
 
+// Under this, rad/s, an eased nudge easing to rest is put at rest, so it
+// stops turning the ship rather than creeping on for ever.
+const NUDGE_REST = 1e-6
+
 // The cushion's nudge (tides-ufyr.1), into `nudge`, body frame, rad/s: with
 // the ship pressed `share` (0..1) of the way into a cushion whose outward
 // normal is `normal` and its nose below that horizon, a pitch and yaw (never
@@ -1444,14 +1457,22 @@ function rotate(
   // Level is unscaled: it is a recovery assist, and should right the ship as
   // quickly at the cap as at rest.
   if (input.level) demand.z = levelRollRate()
-  // Unscaled too, like level: an assist. It turns the ship for this step
-  // only, on top of the spin, and never goes into angularVelocity: when it
-  // ends (out of the cushion, the nose at the horizon) it leaves no turn
-  // behind, with Flight Assist on or off alike.
-  const nudged = cushion !== null && cushionNudge(state.orientation, cushion, share, nudgeScale, input)
+  // Unscaled too, like level: an assist. Eased at the stick's own rate
+  // (ShipState.nudge), on top of the spin and never into angularVelocity:
+  // when it ends (out of the cushion, the nose at the horizon, the stick on
+  // its axis) it eases out within ~ROTATION_TAU and leaves no turn behind,
+  // with Flight Assist on or off alike.
+  const ease = 1 - Math.exp(-dt / ROTATION_TAU)
+  const eased = state.nudge
+  // A NaN would turn the ship to NaN for good.
+  if (!Number.isFinite(eased.lengthSq())) eased.set(0, 0, 0)
+  if (cushion !== null && cushionNudge(state.orientation, cushion, share, nudgeScale, input)) eased.lerp(nudge, ease)
+  else if (eased.lengthSq() > 0) {
+    eased.multiplyScalar(1 - ease)
+    if (eased.lengthSq() < NUDGE_REST * NUDGE_REST) eased.set(0, 0, 0)
+  }
 
   const w = state.angularVelocity
-  const ease = 1 - Math.exp(-dt / ROTATION_TAU)
   if (input.flightAssist) {
     w.lerp(demand, ease)
   } else {
@@ -1466,8 +1487,7 @@ function rotate(
       : clamp(w.z + (demand.z * dt) / ROTATION_TAU, -ROLL_RATE, ROLL_RATE)
   }
 
-  spinAxis.copy(w)
-  if (nudged) spinAxis.add(nudge)
+  spinAxis.copy(w).add(eased)
   const rate = spinAxis.length()
   if (rate > 0) {
     spin.setFromAxisAngle(spinAxis.divideScalar(rate), rate * dt)
