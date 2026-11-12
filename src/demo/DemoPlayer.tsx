@@ -19,6 +19,7 @@ import {
   keepDistance,
   type DemoFrame,
   type KeptBody,
+  type DemoFocus,
   type DemoPose,
 } from './demo-script'
 import { DEMO_MAX_DELTA } from './demo-travel'
@@ -26,6 +27,13 @@ import { bandFraming, clearBand, demoChromeRects, type Rect } from './demo-chrom
 
 /** How long the eye takes to reach a step's pose, in seconds. */
 export const DEMO_EASE_SECONDS = 2.5
+
+/**
+ * How long the eye takes to fly to a step's pose about another body than
+ * the step before's, in seconds (moon-laps.ts' FLIGHT_LEAD_SECONDS counts
+ * it out of a stop's laps). [TUNE]
+ */
+export const DEMO_FLIGHT_SECONDS = 3
 
 /**
  * After CameraProvider's frame (0), which moves the target with the focus,
@@ -69,10 +77,13 @@ interface Ease {
   held: boolean
   /** The target is kept on the focus each frame (a followed pose). */
   locked: boolean
+  /** The focus is another than the step before's: the eye sets out from
+   * where it is, about the new focus, over DEMO_FLIGHT_SECONDS. */
+  flight: boolean
 }
 
-function easeTo(pose: DemoPose, travel: boolean, held = false): Ease {
-  return { pose: { ...pose, frame: pose.frame ?? 'sun' }, from: null, elapsed: 0, travel, held, locked: false }
+function easeTo(pose: DemoPose, travel: boolean, held = false, flight = false): Ease {
+  return { pose: { ...pose, frame: pose.frame ?? 'sun' }, from: null, elapsed: 0, travel, held, locked: false, flight }
 }
 
 const _focus = new Vector3()
@@ -122,6 +133,9 @@ export function DemoPlayer() {
   const dom = connected || canvas
   const demo = useStore((s) => s.demo)
   const ease = useRef<Ease | null>(null)
+  // The focus the last step's pose was about; null outside a demo, so
+  // entering one cuts to its first pose's focus rather than flying.
+  const lastPoseFocus = useRef<DemoFocus | null>(null)
   const viewRect = useRef<Rect | null>(null)
   const offsetY = useRef(0)
 
@@ -153,11 +167,13 @@ export function DemoPlayer() {
     const pose = step?.camera
     const travelling = useStore.getState().demoTravel != null
     const held = travelling && step?.travel?.camera
+    const flight = pose != null && lastPoseFocus.current !== null && pose.focus !== lastPoseFocus.current
+    lastPoseFocus.current = !demo ? null : (pose?.focus ?? lastPoseFocus.current)
     ease.current = !pose
       ? null
       : held
         ? easeTo({ ...held, focus: pose.focus }, true, true)
-        : easeTo(pose, travelling)
+        : easeTo(pose, travelling, false, flight)
     // A snap left unconsumed (the main view unmounted the next frame) must
     // not land on the user's restored view after the demo.
     if (!demo) takeFocusSnap()
@@ -240,13 +256,16 @@ export function DemoPlayer() {
     const reduced = prefersReducedMotion()
     const first = !current.from && !start
     if (first) {
-      start = _from.subVectors(camera.position, target)
+      // A flight sets out from the eye as it is, about the new focus, so it
+      // arcs there while CameraProvider turns the target onto it; any other
+      // ease from the eye about the target, as the user left it.
+      start = _from.subVectors(camera.position, current.flight ? _focus : target)
       if (reduced) requestFocusSnap()
     }
     const { frame } = current.pose
     if (start) current.from = intoPoseFrame(start, frame, _bodies)
     current.elapsed += Math.min(delta, DEMO_MAX_DELTA)
-    const duration = reduced ? 0 : DEMO_EASE_SECONDS
+    const duration = reduced ? 0 : current.flight ? DEMO_FLIGHT_SECONDS : DEMO_EASE_SECONDS
     const t = easeProgress(current.elapsed, duration)
 
     // Each frame, so a resized view keeps a pose's fit and kept bodies in

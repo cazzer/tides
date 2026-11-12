@@ -138,6 +138,10 @@ export interface DemoAids {
   /** Main view: the month names round Earth's orbit, hidden in a demo
    * otherwise (the 3D clock always is: the caption's is the only one). */
   monthLabels?: boolean
+  /** Main view: the focused planet's moon system spread all the way toward
+   * true spacing (expansionTarget's `spread`) at any zoom, the cap still
+   * holding it clear of its neighbours (tides-ufyr.7). */
+  moonSystems?: boolean
 }
 
 /**

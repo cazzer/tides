@@ -30,6 +30,7 @@ import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonR
 import { moonTextureUrls, type MoonTextureUrls } from './moon-textures'
 import { resetMoonExpansions, stepMoonExpansions } from './moon-expansion'
 import { prefersReducedMotion } from '../ship/reduced-motion'
+import { demoAidOn } from '../demo/demo-aids'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
 import { worldUnitsPerPixel } from '../system-aids/pixel-scale'
@@ -278,16 +279,19 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
   // spacing (moon-expansion.ts). At -1, after SimClock (also -1, subscribed
   // first, and r3f's sort is stable) and before every frame that reads the
   // system scale (this one's placeMoons, the orbit lines, labels, camera),
-  // so they all see this frame's value. Side panels on the system scale
+  // so they all see this frame's value. A demo's aids.moonSystems spreads
+  // the focused system at any zoom. Side panels on the system scale
   // share it. Back to the compact map when this goes.
   const expands = interactive && distanceScale === 'system'
   useEffect(() => (expands ? resetMoonExpansions : undefined), [expands])
   useFrame(({ controls }, delta) => {
     if (!expands) return
-    const { timestamp: t, cameraFocus, earthRadius } = useStore.getState()
+    const state = useStore.getState()
+    const { timestamp: t, cameraFocus, earthRadius } = state
     if (t == null) return
     const distance = controls ? (controls as OrbitControlsImpl).getDistance() : Infinity
-    stepMoonExpansions(cameraFocus, distance, t, delta, prefersReducedMotion(), earthRadius)
+    const spread = demoAidOn(state, 'moonSystems')
+    stepMoonExpansions(cameraFocus, distance, t, delta, prefersReducedMotion(), earthRadius, spread)
   }, -1)
 
   // Binds the next arrived map, one a frame.
