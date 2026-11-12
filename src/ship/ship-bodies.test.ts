@@ -13,6 +13,7 @@ import {
   JUPITER_HAZE_OUTER,
   MARS_HAZE_OUTER,
   NEPTUNE_HAZE_OUTER,
+  SATURN_HAZE_OUTER,
   URANUS_HAZE_OUTER,
   VENUS_HAZE_OUTER,
 } from '../renderers/planets/haze-shells'
@@ -211,7 +212,7 @@ describe('ship bodies', () => {
 
     it('leaves the Sun, the Moon and the planets without a haze on the default margin', () => {
       const b = byKey()
-      for (const key of ['sun', 'moon', 'mercury', 'saturn']) {
+      for (const key of ['sun', 'moon', 'mercury']) {
         expect(collisionRadius(b[key])).toBe(b[key].radius * COLLISION_MARGIN)
       }
     })
@@ -220,6 +221,7 @@ describe('ship bodies', () => {
       ['venus', VENUS_HAZE_OUTER],
       ['mars', MARS_HAZE_OUTER],
       ['jupiter', JUPITER_HAZE_OUTER],
+      ['saturn', SATURN_HAZE_OUTER],
       ['uranus', URANUS_HAZE_OUTER],
       ['neptune', NEPTUNE_HAZE_OUTER],
     ])("stops under %s's haze, clear of its shell (tides-ufyr.4)", (key, haze) => {
@@ -235,7 +237,7 @@ describe('ship bodies', () => {
     it('lists the shells each body draws for the near plane to keep clear of', () => {
       const b = byKey()
       expect(b.earth.shellRadii).toBe(EARTH_SHELL_RADII)
-      for (const key of ['sun', 'mercury', 'saturn']) expect(b[key].shellRadii ?? []).toEqual([])
+      for (const key of ['sun', 'mercury']) expect(b[key].shellRadii ?? []).toEqual([])
     })
 
     it('stops the ship well clear of even the smallest moon', () => {

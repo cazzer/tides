@@ -25,6 +25,7 @@ import {
   JUPITER_HAZE_OUTER,
   MARS_HAZE_OUTER,
   NEPTUNE_HAZE_OUTER,
+  SATURN_HAZE_OUTER,
   URANUS_HAZE_OUTER,
   VENUS_HAZE_OUTER,
 } from '../renderers/planets/haze-shells'
@@ -472,6 +473,7 @@ const PLANET_HAZE_OUTER: Partial<Record<PlanetKey, number>> = {
   venus: VENUS_HAZE_OUTER,
   mars: MARS_HAZE_OUTER,
   jupiter: JUPITER_HAZE_OUTER,
+  saturn: SATURN_HAZE_OUTER,
   uranus: URANUS_HAZE_OUTER,
   neptune: NEPTUNE_HAZE_OUTER,
 }
@@ -501,8 +503,8 @@ const PLANET_STOP: Partial<Record<PlanetKey, number>> = { jupiter: JUPITER_STOP 
  * keeps clear of it on the way down (bodiesShellGap), so the stop sits under
  * the hazes rather than a near plane's depth beyond them (tides-9m0, which
  * held Mars at 9% R and Venus at 8.5%): COLLISION_MARGIN's 1.02 R for Venus
- * (haze to 1.05 R), Mars, Uranus and Neptune (1.04 R), as for every planet
- * without one, and JUPITER_STOP's 1.012 R under Jupiter's (1.02 R).
+ * (haze to 1.05 R), Mars, Uranus and Neptune (1.04 R) and Saturn (1.03 R), as
+ * for every planet without one, and JUPITER_STOP's 1.012 R under Jupiter's (1.02 R).
  */
 export function planetCollisionRadius(key: PlanetKey, radius: number): number {
   return radius * (PLANET_STOP[key] ?? COLLISION_MARGIN)

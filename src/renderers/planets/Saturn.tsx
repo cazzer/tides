@@ -4,6 +4,7 @@
 // https://www.solarsystemscope.com/textures/download/2k_saturn_ring_alpha.png
 // (flight tier: 8k_saturn.jpg, scripts/build-flight-textures.sh)
 import {
+  PlanetAtmosphere,
   PlanetRings,
   PlanetSurface,
   type RingProfile,
@@ -13,6 +14,7 @@ import saturnTexture from '../../assets/saturn-2k.jpg'
 import saturnCompressed from '../../assets/bodies/saturn-2k.ktx2?url'
 import ringTexture from '../../assets/saturn-ring-2k.png'
 import type { PlanetRendererProps } from './index'
+import { SATURN_HAZE_OUTER } from './haze-shells'
 
 const EQUATORIAL_RADIUS_KM = 60_268
 
@@ -56,6 +58,18 @@ export function Saturn({ planet }: PlanetRendererProps) {
         limbDarkening={1.1}
         ringShadow={RINGS}
         detail={DETAIL}
+      />
+      {/* A pale haze, a little deeper than Jupiter's [TUNE]. The rings (from
+          1.15 R) lie wholly outside it and draw after it (renderOrder 2 over
+          1), so far-side ring seen through the limb haze covers it by the
+          ring's alpha rather than sitting behind it. */}
+      <PlanetAtmosphere
+        planet={planet}
+        outer={SATURN_HAZE_OUTER}
+        scaleHeight={0.006}
+        sky="#f0dcae"
+        dusk="#c4955a"
+        gain={0.4}
       />
       <PlanetRings
         planet={planet}

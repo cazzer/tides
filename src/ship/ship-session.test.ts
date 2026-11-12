@@ -341,7 +341,7 @@ describe('ship camera range', () => {
 
   // The planets' hazes are drawn from inside too, and their stops sit under
   // them (tides-ufyr.4).
-  it.each(['venus', 'mars', 'jupiter', 'uranus', 'neptune'])(
+  it.each(['venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
     "keeps the near rectangle off %s's haze on the way down to its stop",
     (key) => {
       const bodies = createShipBodies()

@@ -82,6 +82,7 @@ import {
   JUPITER_HAZE_OUTER,
   MARS_HAZE_OUTER,
   NEPTUNE_HAZE_OUTER,
+  SATURN_HAZE_OUTER,
   URANUS_HAZE_OUTER,
   VENUS_HAZE_OUTER,
 } from '../renderers/planets/haze-shells'
@@ -821,6 +822,7 @@ describe('collision', () => {
     ['venus', VENUS_HAZE_OUTER],
     ['mars', MARS_HAZE_OUTER],
     ['jupiter', JUPITER_HAZE_OUTER],
+    ['saturn', SATURN_HAZE_OUTER],
     ['uranus', URANUS_HAZE_OUTER],
     ['neptune', NEPTUNE_HAZE_OUTER],
   ])("dives under %s's haze shell at full throttle to its stop, never through it (tides-ufyr.4)", (key, haze) => {
