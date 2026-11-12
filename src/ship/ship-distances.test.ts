@@ -610,11 +610,16 @@ describe('planet moon systems on their own scale (tides-ufyr.6.2.1)', () => {
       const k = systemScale(bodies, truth)
       const jupiter = find(bodies, 'jupiter').body
       const moon = find(bodies, key)
-      // 5 units off the moon's shell, on the far side from Jupiter.
+      // 10 units off the moon's shell, on the far side from Jupiter: past
+      // where its shell's excess over its true radius is made up
+      // (SHELL_EXCESS_FADE), so the range is to its true surface, on the
+      // system's scale.
       const out = moon.body.position.clone().sub(jupiter.position).normalize()
-      measureRanges(moon.body.position.clone().addScaledVector(out, shellOf(moon.body) + 5), bodies, truth, ranges)
+      const d = shellOf(moon.body) + 10
+      measureRanges(moon.body.position.clone().addScaledVector(out, d), bodies, truth, ranges)
       expect(ranges.insideSystem[JUPITER]).toBe(true)
-      expect(Math.abs(ranges.km[moon.index] / (5 * k) - 1), key).toBeLessThan(1e-3)
+      const surfaceKm = d * k - truth.radii[moon.index]
+      expect(Math.abs(ranges.km[moon.index] / surfaceKm - 1), key).toBeLessThan(1e-3)
       expect(Math.abs(ranges.kmPerUnit / k - 1), key).toBeLessThan(1e-3)
       // Jupiter's system scale is ~14× finer than the planets'.
       expect(k).toBeLessThan(FLIGHT_KM_PER_UNIT / 10)
@@ -682,7 +687,7 @@ describe('planet moon systems on their own scale (tides-ufyr.6.2.1)', () => {
     expect(leaving.jumps[0]).toBeLessThanOrEqual(edge * (1 + MOON_SYSTEM_EDGE_HYSTERESIS) + step)
     expect(ranges.edgeCrossing).toEqual({ parent: 'jupiter', entering: false, count: count + 1 })
     expect(leaving.fired).toEqual(leaving.jumps)
-    expect(cue.text).toBe('Leaving Jupiter’s moons · scale change')
+    expect(cue.text).toBe('Leaving Jupiter’s moons: distances rescaled')
 
     const entering = run(1.5 * edge, 0.5 * edge)
     expect(entering.jumps).toHaveLength(1)
@@ -690,7 +695,7 @@ describe('planet moon systems on their own scale (tides-ufyr.6.2.1)', () => {
     expect(entering.jumps[0]).toBeGreaterThanOrEqual(edge * (1 - MOON_SYSTEM_EDGE_HYSTERESIS) - step)
     expect(ranges.edgeCrossing).toEqual({ parent: 'jupiter', entering: true, count: count + 2 })
     expect(entering.fired).toEqual(entering.jumps)
-    expect(cue.text).toBe('Entering Jupiter’s moons · scale change')
+    expect(cue.text).toBe('Entering Jupiter’s moons: distances rescaled')
 
     // Inside the hysteresis band, back and forth across the edge: no flips.
     for (let i = 0; i < 40; i++) {
@@ -699,6 +704,33 @@ describe('planet moon systems on their own scale (tides-ufyr.6.2.1)', () => {
     }
     expect(ranges.edgeCrossing.count).toBe(count + 2)
     expect(systemCueShowing(cue, entering.fired[0] + 1)).toBe(true)
+  })
+
+  // The members' anchors start from their drawn offsets on the system scale
+  // and take their shells' excess back near them (SHELL_EXCESS_FADE), so
+  // they agree: blending from Io's to Jupiter's on the way in moves the
+  // ranges at the speed the HUD reads, not 14–40% off it as from the true
+  // ephemeris positions, ~1% off the drawn circles.
+  it('runs Jupiter’s range from Io inward at the speed readout, within 2%', () => {
+    for (const t of DATES) {
+      const { bodies, truth, ranges } = setup(t)
+      const jupiter = find(bodies, 'jupiter')
+      const io = find(bodies, 'io').body
+      const dir = jupiter.body.position.clone().sub(io.position).normalize()
+      const start = io.position.clone().addScaledVector(dir, shellOf(io) + 0.01)
+      const total = jupiter.body.position.distanceTo(start) - shellOf(jupiter.body) - 0.01
+      const steps = 1000
+      let previous = NaN
+      for (let i = 0; i <= steps; i++) {
+        measureRanges(start.clone().addScaledVector(dir, (total * i) / steps), bodies, truth, ranges)
+        const km = ranges.km[jupiter.index]
+        if (i > 0) {
+          const rate = (previous - km) / (total / steps)
+          expect(Math.abs(rate / ranges.kmPerUnit - 1), `${t} step ${i}`).toBeLessThan(0.02)
+        }
+        previous = km
+      }
+    }
   })
 
   it('places a fresh measure without counting a crossing', () => {

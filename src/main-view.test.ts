@@ -35,6 +35,7 @@ import { KUIPER_A_AU } from './system-aids/belt-particles'
 import { FOCUS_VALUES, isSystemFocus, type CameraFocus } from './store'
 import { bodyRadius } from './system-aids/label-visibility'
 import { MOON_KEYS, moonRadius } from './moons/moons'
+import { positionsFor } from './flight-scale'
 
 describe('planetFramingZoom', () => {
   const EARTH = 2.95
@@ -51,6 +52,13 @@ describe('planetFramingZoom', () => {
   it('clamps very small and very large radii', () => {
     expect(planetFramingZoom(0.001, EARTH)).toBe(PLANET_ZOOM_MAX)
     expect(planetFramingZoom(1000, EARTH)).toBe(1)
+  })
+
+  it('frames the Sun, Earth, its Moon and the planets as under the old cap of 40', () => {
+    const system = positionsFor('system').radius
+    for (const [key, radius] of Object.entries(system)) {
+      expect(planetFramingZoom(radius, EARTH), key).toBe(MathUtils.clamp((MAIN_ZOOM * EARTH) / radius, 1, 40))
+    }
   })
 
   it('frames every moon as large as Earth, under the cap and outside its minDistance', () => {

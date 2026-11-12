@@ -242,7 +242,7 @@ export function ShipHud() {
             easing: 'ease-in',
           })
         }
-        announce(cue.text)
+        announce(cue.spoken)
       } else if (cueShown && !systemCueShowing(cue, now) && r.systemCue) {
         r.systemCue.hidden = true
         cueShown = false
@@ -938,25 +938,25 @@ const ClearButton = styled.button`
   }
 `
 
-// A coral edge glow over the whole view on impact, animated by the frame
-// loop (Web Animations), transparent otherwise.
-// The moon-system cue: a line under the instruments, the announcer saying it.
+// The moon-system cue: a line just under the instruments, over the scene,
+// so the strip doesn't grow while it shows; the announcer says it.
 const SystemCueLine = styled.div`
-  /* Its own line: the strip wraps its rows on a wide screen. */
-  flex: 0 0 100%;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 14px;
+  right: 6px;
+  pointer-events: none;
   font-size: 11px;
   line-height: 14px;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-
-  ${PHONE} {
-    /* The strip is one column there. */
-    flex: none;
-  }
 `
 
+// A coral edge glow over the whole view on impact, animated by the frame
+// loop (Web Animations), transparent otherwise.
 const ImpactFlash = styled.div`
   position: absolute;
   inset: 0;

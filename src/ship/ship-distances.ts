@@ -22,10 +22,16 @@
 //          km a unit at Jupiter at ?truescale=0, ~3 500 at the default 0.7:
 //          14–43× finer than the planets'). Inside its edge
 //          (moonSystemEdge: MOON_SYSTEM_EDGE_FACTOR × its extent) every member
-//          anchors on that scale, so a moon's range is exact; outside, the
-//          parent alone anchors, on its scale against the other planets, and
-//          the moons take their ranges from the blended position, at their
-//          true offsets from it. So the ranges to everything outside the
+//          anchors on that scale, from its drawn offset from the parent on it
+//          (the drawn orbits are circles, the true ones ~1% off them), and
+//          takes its shell's excess over its true radius back near it
+//          (SHELL_EXCESS_FADE), so the members' anchors agree: a moon's range
+//          is to its true surface on the system's scale, and blending from
+//          one member's anchor to the next runs the ranges at the speed read
+//          (within ~0.3% from Io in to Jupiter; passing close by another
+//          moon, its own make-up shows). Outside, the parent alone anchors,
+//          on its scale against the other planets, and the moons take their
+//          ranges from the blended position, at their true offsets from it. So the ranges to everything outside the
 //          system step once at the edge (tides-ufyr.6.2.1, the user's call):
 //          leaving Jupiter's at 0.7, by ~0.8 AU, the km its ~810 units stand
 //          for on the one scale and not the other. No band could pay that
@@ -55,8 +61,8 @@
 //      hand-over term), handing over to the formula above only far out
 //      (RANGE_HAND_OVER), so it only shrinks as the ship closes. A planet's
 //      moon system needs no such exception: inside, its members' anchors
-//      agree to the drawn radii's excess and the ephemeris' ~1% off circular
-//      orbits; outside, only the parent anchors.
+//      agree (and their ranges are from their drawn places on the system's
+//      scale, not their ephemeris ones); outside, only the parent anchors.
 //
 // Gaps are to the collision shell, the closest the ship can get (over Earth,
 // its terrain floor under the ship: flight.ts floorRadius), and the anchor
@@ -186,6 +192,15 @@ export const MOON_SYSTEM_EDGE_FACTOR = 1.5
  * between scales every frame. [TUNE]
  */
 export const MOON_SYSTEM_EDGE_HYSTERESIS = 0.05
+
+/**
+ * Inside a planet system's edge a member's anchor takes its shell's excess
+ * over its true radius (a few hundred to a few thousand km) back over a gap
+ * this many times that excess, so the members' anchors agree past it and
+ * the blend between them doesn't run the ranges off the speed. The speed
+ * reads up to 1.5 / this over the system's scale through it. [TUNE]
+ */
+export const SHELL_EXCESS_FADE = 30
 
 interface Band {
   inner: number
@@ -389,6 +404,12 @@ const systemHandOver: number[] = []
 // Per body: the surface gap its own anchor puts the ship at, km.
 const anchorGapKm: number[] = []
 const anchor = new THREE.Vector3()
+// Per body: where its anchor starts, km: its true position, or inside a
+// planet system's edge its scene offset from the parent on the system's
+// scale, so the members' anchors agree with each other (the drawn orbits are
+// circles; the true ones are ~1% off them).
+const based: THREE.Vector3[] = []
+const systemBase: THREE.Vector3[] = []
 const direction = new THREE.Vector3()
 
 // From `position` to `body`'s collision shell, at least 0. Only a body with
@@ -477,6 +498,7 @@ export function measureRanges(
   anchorGapKm.length = n
   for (let i = 0; i < n; i++) {
     gaps[i] = shellGap(position, bodies[i])
+    based[i] = truth.positions[i]
   }
 
   // Which bodies form which moon system, and where the ship is in each.
@@ -544,6 +566,20 @@ export function measureRanges(
       if (systemDeparture[s] === 0) {
         a = truth.radii[parent] / bodies[parent].radius
         w *= MOON_SYSTEM_BOOST
+        if (r !== parent) {
+          const at = (systemBase[r] ??= new THREE.Vector3())
+          based[r] = at.subVectors(bodies[r].position, bodies[parent].position).multiplyScalar(a).add(truth.positions[parent])
+        }
+        // Its shell's km over its true radius, made up near it the way the
+        // Sun's growth is: the anchor reads 0 on the shell, and from
+        // SHELL_EXCESS_FADE × the excess out it agrees with every other
+        // member's.
+        const excess = Math.max(0, collisionRadius(bodies[r]) * a - truth.radii[r])
+        if (excess > 0) {
+          const band = { inner: 0, outer: (SHELL_EXCESS_FADE * excess) / a }
+          leavingKm = excess * bandSlope(gaps[r], band)
+          leavingGapKm = excess * THREE.MathUtils.smoothstep(gaps[r], band.inner, band.outer)
+        }
       } else if (r === parent) {
         a = systemKm[s]
       } else {
@@ -583,7 +619,7 @@ export function measureRanges(
     direction.subVectors(position, bodies[r].position)
     if (direction.lengthSq() > 0) direction.normalize()
     anchorGapKm[r] = gapKm
-    anchor.copy(truth.positions[r]).addScaledVector(direction, truth.radii[r] + gapKm)
+    anchor.copy(based[r]).addScaledVector(direction, truth.radii[r] + gapKm)
     out.position.addScaledVector(anchor, w)
     weightSum += w
     logSum += w * logScales[r]
@@ -595,7 +631,7 @@ export function measureRanges(
   // position's far out (see the header).
   out.nearest = -1
   for (let b = 0; b < n; b++) {
-    const km = Math.max(0, truth.positions[b].distanceTo(out.position) - truth.radii[b])
+    const km = Math.max(0, based[b].distanceTo(out.position) - truth.radii[b])
     out.km[b] =
       systemOf[b] === 0 && systemParent[0] === b
         ? THREE.MathUtils.lerp(anchorGapKm[b], km, systemHandOver[0])

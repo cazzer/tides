@@ -1821,6 +1821,71 @@ describe('trip times at the flight scale', () => {
   })
 })
 
+describe('a locked line through a body that is not the target (tides-ufyr.6.2)', () => {
+  // A moon on the line to a locked target: dead centre, and a little off.
+  // The cushion fades the thrust into it; the ship must slide round it, its
+  // nose still on the target, and go on to arrive.
+  test.each([0, 0.15])('slides round a moon %s off the line and arrives, without hitting it', (offset) => {
+    const rock: Body = { key: 'rock', position: new THREE.Vector3(offset, 0, -40), radius: 0.5, mass: 1e20 }
+    const goal: Body = { key: 'goal', position: new THREE.Vector3(0, 0, -120), radius: 2, mass: 1e24 }
+    const flightEnv = env([rock, goal], 'goal')
+    const state = shipAt(new THREE.Vector3(), goal.position)
+    const telemetry = createShipTelemetry()
+    let touched = false
+    let seconds = 0
+    while (state.position.distanceTo(goal.position) - goal.radius > goal.radius && seconds < 300) {
+      stepShip(state, input({ throttle: 1 }), FRAME, flightEnv, telemetry)
+      seconds += FRAME
+      expect(telemetry.colliding).toBe(false)
+      if (state.cushion.key === 'rock') touched = true
+    }
+    expect(touched).toBe(true)
+    expect(seconds).toBeLessThan(120)
+    // Never turned: the nose is still on the line it set out along.
+    const nose = new THREE.Vector3(0, 0, -1).applyQuaternion(state.orientation)
+    expect(nose.z).toBeLessThan(-0.9999)
+  })
+
+  test('still nudges the nose of a ship locked on the body it is pressed into, or unlocked', () => {
+    const rock: Body = { key: 'rock', position: new THREE.Vector3(0, 0, -3), radius: 0.5, mass: 1e20 }
+    for (const targetKey of ['rock', null]) {
+      const state = shipAt(new THREE.Vector3(0.05, 0, 0), rock.position)
+      const start = state.orientation.clone()
+      for (let i = 0; i < 600; i++) stepShip(state, input({ throttle: 1 }), FRAME, env([rock], targetKey), createShipTelemetry())
+      expect(state.orientation.angleTo(start), String(targetKey)).toBeGreaterThan(0.05)
+    }
+  })
+})
+
+describe('crashing into the smallest moons (tides-ufyr.6.2)', () => {
+  // Phobos at MOON_RADIUS_MIN: an arrival over ~2× its speed floor reaches
+  // the backstop fast enough to count, one at the floor is absorbed.
+  test.each(['phobos', 'mimas'])('an arrival at %s too fast for its cushion is an impact', (key) => {
+    const bodies = flightBodies()
+    const moon = bodies.find((b) => b.key === key)!
+    const away = new THREE.Vector3(0.3, 1, 0.2).normalize()
+    const floor = speedFloor(moon)
+    const impacts = (speed: number) => {
+      const state = createShipState()
+      state.position.copy(moon.position).addScaledVector(away, floorRadius(moon, away) + cushionWidth(moon, away) * 1.001)
+      state.orientation.setFromRotationMatrix(new THREE.Matrix4().lookAt(state.position, moon.position, new THREE.Vector3(1, 0, 0)))
+      state.velocity.copy(away).multiplyScalar(-speed)
+      const telemetry = createShipTelemetry()
+      let count = 0
+      let was = false
+      for (let t = 0; t < 2; t += FRAME) {
+        stepShip(state, input({ flightAssist: false }), FRAME, { ...env(bodies), reducedMotion: true }, telemetry)
+        if (isImpact(telemetry.colliding, was, telemetry.impactSpeed)) count++
+        was = telemetry.colliding
+      }
+      return count
+    }
+    expect(floor).toBeLessThan(V_NORMAL)
+    expect(impacts(2.5 * floor)).toBe(1)
+    expect(impacts(floor)).toBe(0)
+  })
+})
+
 describe('overshoot', () => {
   test('unlocked, full throttle at the Moon arrives over the cap and reaches its cushion over the floor speed; locked it does not', () => {
     const unlocked = trip('moon', { locked: false })

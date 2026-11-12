@@ -228,7 +228,7 @@ describe('?truescale: HUD ranges', () => {
         }
       }
     }
-    expect(hash.digest('hex')).toBe('e9037c699179aed76c7462402a0bbd5bc1ae8298b3a81d984928c05d3a9f8b28')
+    expect(hash.digest('hex')).toBe('6ed31f1dc34c5be1334e4f80b318bb23b79c64ae002665486d4928c89af2e710')
   }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {
@@ -333,4 +333,35 @@ describe('?truescale=0.5: spawning from the main view', () => {
       expect(state.position.distanceTo(other.position), other.key).toBeGreaterThan(flight.collisionRadius(other))
     }
   })
+})
+
+// Two planet moon systems can never both hold the ship (tides-ufyr.6.2.1):
+// at the cap, where the systems are largest, neighbouring edges, each at its
+// hysteresis' far side, stay apart at the planets' closest, 1900–2100.
+describe(`?truescale=${MAX_TRUESCALE}: moon system edges`, () => {
+  it('keeps neighbouring systems’ edges apart at their closest', async () => {
+    const { distances, scale } = await loadAt(AT_MAX)
+    const { positionAt } = scale.positionsFor('flight')
+    const reach = (key: 'mars' | 'jupiter' | 'saturn' | 'uranus' | 'neptune') =>
+      distances.moonSystemEdge(key) * (1 + distances.MOON_SYSTEM_EDGE_HYSTERESIS)
+    const pairs = [
+      ['mars', 'jupiter'],
+      ['jupiter', 'saturn'],
+      ['saturn', 'uranus'],
+      ['uranus', 'neptune'],
+    ] as const
+    const closest = pairs.map(() => Infinity)
+    for (let t = Date.UTC(1900, 0, 1); t < Date.UTC(2100, 0, 1); t += 5 * DAY) {
+      pairs.forEach(([a, b], i) => {
+        const p = positionAt[a](t)
+        const q = positionAt[b](t)
+        closest[i] = Math.min(closest[i], Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]))
+      })
+    }
+    pairs.forEach(([a, b], i) => {
+      expect(reach(a) + reach(b), `${a}–${b}`).toBeLessThan(closest[i])
+    })
+    // Jupiter–Saturn is the tight pair: ~3400 of ~4030 units.
+    expect(reach('jupiter') + reach('saturn')).toBeGreaterThan(0.75 * closest[1])
+  }, 30_000)
 })
