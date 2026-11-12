@@ -72,6 +72,7 @@ import {
   EARTH_UNITS_PER_METRE,
   FINE_GROUND_CLEARANCE,
   createShipBodies,
+  deckRestRadius,
   updateShipBodies,
   updateShipBody,
 } from './ship-bodies'
@@ -3062,8 +3063,69 @@ describe("the gas giants' cloud decks (tides-ufyr.8.3)", () => {
         }
         // It got below the visible cloud top, into the cushion over the floor.
         expect(deepest, `${flightAssist} ${dt}`).toBeLessThan(R)
-        expect(deepest).toBeLessThan(R * deck.rest)
+        expect(deepest).toBeLessThan(deckRestRadius(body))
       }
     }
   )
+
+  // Locked on a moon behind the giant, the ship skirts its cloud tops on
+  // the passing stop (Body.passStop), never diving into the fog to slide
+  // round at the floor, and comes out past it on the moon's side in bounded
+  // time. (Its nose isn't steered, tides-ufyr.6.2, so it then flies on
+  // parallel to the line, about a giant's radius off it.)
+  test.each([
+    ['jupiter', 'io'],
+    ['jupiter', 'callisto'],
+    ['saturn', 'titan'],
+  ])('a locked line through %s to %s beyond keeps over the fog top and comes out past it', (giantKey, moonKey) => {
+    const bodies = flightBodies()
+    const giant = bodies.find((b) => b.key === giantKey)!
+    const moon = bodies.find((b) => b.key === moonKey)!
+    const R = giant.radius
+    const top = giant.passStop!
+    expect(top).toBeGreaterThan(R)
+    // On the far side of the giant from the moon, a touch off the line.
+    const away = giant.position.clone().sub(moon.position).normalize()
+    const start = giant.position.clone().addScaledVector(away.applyAxisAngle(Y, 0.02), R * 1.4)
+    for (const dt of [FRAME, MAX_DT]) {
+      const state = shipAt(start, moon.position)
+      const telemetry = createShipTelemetry()
+      const toMoon = moon.position.clone().sub(giant.position).normalize()
+      const offset = new THREE.Vector3()
+      let lowest = Infinity
+      let touched = false
+      let past = -1
+      for (let t = 0; t < 300 && past < 0; t += dt) {
+        stepShip(state, input({ throttle: 1 }), dt, env(bodies, moonKey), telemetry)
+        lowest = Math.min(lowest, state.position.distanceTo(giant.position))
+        expect(telemetry.colliding).toBe(false)
+        if (state.cushion.key === giantKey) touched = true
+        if (offset.subVectors(state.position, giant.position).dot(toMoon) > 1.1 * R) past = t
+      }
+      expect(touched, `${dt}`).toBe(true)
+      expect(lowest, `${dt}`).toBeGreaterThanOrEqual(top - 1e-9)
+      // Round a hemisphere at the V_NORMAL floor: ~45 s on the stop, ~85 s in all.
+      expect(past, `${dt}`).toBeGreaterThan(0)
+      expect(past, `${dt}`).toBeLessThan(120)
+      // Going on toward the moon.
+      expect(state.velocity.dot(toMoon)).toBeGreaterThan(0)
+    }
+  })
+
+  test('an unlocked dive, or one locked on the giant, still goes into the deck', () => {
+    const bodies = flightBodies()
+    const jupiter = bodies.find((b) => b.key === 'jupiter')!
+    const io = bodies.find((b) => b.key === 'io')!
+    const away = jupiter.position.clone().sub(io.position).normalize()
+    const start = jupiter.position.clone().addScaledVector(away, jupiter.radius * 1.2)
+    for (const targetKey of [null, 'jupiter']) {
+      const state = shipAt(start, jupiter.position)
+      let lowest = Infinity
+      for (let t = 0; t < 90; t += FRAME) {
+        stepShip(state, input({ throttle: 1 }), FRAME, env(bodies, targetKey))
+        lowest = Math.min(lowest, state.position.distanceTo(jupiter.position))
+      }
+      expect(lowest, String(targetKey)).toBeLessThan(jupiter.radius)
+    }
+  })
 })

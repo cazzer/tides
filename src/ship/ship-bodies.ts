@@ -9,7 +9,7 @@ import { qualityTier, type QualityTier } from '../quality'
 import { PLANET_KEYS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
-import { COLLISION_MARGIN, MAX_DT, V_NORMAL } from './flight'
+import { COLLISION_MARGIN, MAX_DT, V_NORMAL, cushionWidth, floorRadius } from './flight'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { RELIEF } from '../relief'
 import { DECK_PROFILES } from '../cloud-deck'
@@ -590,9 +590,23 @@ function planetBody(key: PlanetKey, radius: number, positionAt: (t: number) => V
     const base = radius * deck.base
     body.ground = () => base
     body.groundClearance = radius * (deck.floor - deck.base)
+    // Going past it to a locked target beyond, over the fog's top.
+    body.passStop = radius * deck.top
   }
   return body
 }
+
+/**
+ * Where a ship comes to rest over a gas giant's cloud-deck floor: the
+ * cushion's top (flight.ts cushionWidth), the same in every direction over
+ * its constant ground. NaN for a body without a deck.
+ */
+export function deckRestRadius(body: FlightBody): number {
+  if (!(body.key in DECK_PROFILES)) return NaN
+  return floorRadius(body, REST_UP) + cushionWidth(body, REST_UP)
+}
+
+const REST_UP = new THREE.Vector3(0, 1, 0)
 
 /**
  * Sun, Earth, Moon, the seven planets and their major moons, positions unset

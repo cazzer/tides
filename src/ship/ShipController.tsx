@@ -8,7 +8,7 @@ import { settleShip, stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
 import { createShipBodies, shipBodyVelocity, updateShipBodies, updateShipBody, type ShipBody } from './ship-bodies'
-import { DECK_PROFILES, deckShare } from '../cloud-deck'
+import { DECK_PROFILES, deckShare, deckSunlight, setDeckEye } from '../cloud-deck'
 import {
   NEAR_MIN,
   SHIP_SETTLE_PRIORITY,
@@ -39,18 +39,28 @@ const BODY_REFRESH_MS = 250
 const earthVelocity = new THREE.Vector3()
 const earthVelocityNow = new THREE.Vector3()
 
+const deckUp = new THREE.Vector3()
+
 /**
  * How deep the ship at `position` is in the cloud deck of any of `bodies`
- * (cloud-deck.ts deckShare, tides-ufyr.8.3): 0 outside them all. The decks
- * never overlap, so it is the nearest giant's.
+ * (cloud-deck.ts deckShare, tides-ufyr.8.3), 0 outside them all, and, into
+ * deckEye, the giant whose fog shell it is inside and the Sun's light
+ * through that fog (deckSunlight; the Sun is at the origin). The decks never
+ * overlap.
  */
-function deckDepth(position: THREE.Vector3, bodies: readonly ShipBody[]): number {
-  let share = 0
+function updateDeckEye(position: THREE.Vector3, bodies: readonly ShipBody[]): number {
   for (const body of bodies) {
     const profile = DECK_PROFILES[body.key as keyof typeof DECK_PROFILES]
-    if (profile) share = Math.max(share, deckShare(position.distanceTo(body.position), body.radius, profile))
+    if (!profile) continue
+    const distance = position.distanceTo(body.position)
+    if (!(distance < body.radius * profile.top) || !(distance > 0)) continue
+    const toSun = position.length()
+    const muSun = toSun > 0 ? -deckUp.subVectors(position, body.position).dot(position) / (distance * toSun) : 1
+    setDeckEye(body.key, deckSunlight(distance, muSun, body.radius, profile))
+    return deckShare(distance, body.radius, profile)
   }
-  return share
+  setDeckEye(null, 1)
+  return 0
 }
 
 /**
@@ -75,6 +85,7 @@ export function ShipController() {
       clearLimbView()
       disposeLimbSpheres()
       setSurfaceEye(Infinity)
+      setDeckEye(null, 1)
       resetFrameCarry(shipCarry)
     },
     []
@@ -140,7 +151,7 @@ export function ShipController() {
       earthVelocityNow.copy(earthVelocity).multiplyScalar(Number.isFinite(timeScale) ? timeScale : 0)
       fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
     }
-    shipTelemetry.deck = deckDepth(state.position, bodies)
+    shipTelemetry.deck = updateDeckEye(state.position, bodies)
     if (earth) fillEarthEye(shipTelemetry, state.position, earth)
     else {
       shipTelemetry.earthEye.altitude = Infinity

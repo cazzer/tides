@@ -5,9 +5,11 @@ import {
   DECK_PROFILES,
   deckAhead,
   deckColumn,
+  deckEye,
   deckFade,
-  deckRest,
   deckShare,
+  deckSunlight,
+  setDeckEye,
   type DeckProfile,
 } from './cloud-deck'
 
@@ -35,15 +37,6 @@ describe('the cloud decks (tides-ufyr.8.3)', () => {
     expect(deckFade(R * deck.floor, R, deck)).toBe(1)
     const mid = deckFade(R * (1 + deck.top) * 0.5, R, deck)
     expect(mid).toBeCloseTo(0.5, 12)
-  })
-
-  it('sets the rest at the cushion top flight.ts gives, under the cloud top', () => {
-    for (const [, deck] of profiles) {
-      expect(deck.rest).toBe(deckRest(deck.base, deck.floor))
-      expect(deck.rest).toBeLessThan(1)
-      // Half way from the floor up to the globe's shell at 1.0 R.
-      expect(deck.rest).toBeCloseTo((deck.floor + 1) / 2, 12)
-    }
   })
 })
 
@@ -148,5 +141,37 @@ describe('the shaders mirror', () => {
     expect(glsl).toContain('float deckColumn(float r, float mu, float R, float H)')
     expect(glsl).toContain('float p = max(r * sqrt(max(0.0, 1.0 - mu * mu)), H);')
     expect(glsl).toContain('return (-H / mu) * log(1.0 - k);')
+  })
+})
+
+describe('deckSunlight (the Sun glow through the fog)', () => {
+  it.each(profiles)("is whole over %s's fog shell and all but gone at its floor", (_key, deck) => {
+    for (const mu of [-0.5, 0, 0.5, 1]) {
+      expect(deckSunlight(R * deck.top, mu, R, deck)).toBe(1)
+      expect(deckSunlight(R * 1.1, mu, R, deck)).toBe(1)
+      expect(deckSunlight(R * deck.floor, mu, R, deck)).toBeLessThan(1e-3)
+    }
+    // The Sun overhead at the cloud top: the fog's own e^-1 overhead.
+    expect(deckSunlight(R, 1, R, deck)).toBeCloseTo(Math.exp(-deck.scaleHeight / deck.visibility), 2)
+  })
+
+  it('dims with depth and as the Sun sinks', () => {
+    const deck = DECK_PROFILES.jupiter!
+    let last = 1
+    for (let i = 0; i <= 50; i++) {
+      const light = deckSunlight(R * (deck.top - (i / 50) * (deck.top - deck.floor)), 0.7, R, deck)
+      expect(light).toBeLessThanOrEqual(last + 1e-12)
+      last = light
+    }
+    const at = R * 1.005
+    expect(deckSunlight(at, 1, R, deck)).toBeGreaterThan(deckSunlight(at, 0.2, R, deck))
+    expect(deckSunlight(at, 0.2, R, deck)).toBeGreaterThan(deckSunlight(at, -0.2, R, deck))
+  })
+
+  it('records the deck the eye is in, and clears to full light', () => {
+    setDeckEye('jupiter', 0.25)
+    expect(deckEye).toEqual({ key: 'jupiter', sunlight: 0.25 })
+    setDeckEye(null, 0.25)
+    expect(deckEye).toEqual({ key: null, sunlight: 1 })
   })
 })

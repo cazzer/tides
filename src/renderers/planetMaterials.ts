@@ -246,7 +246,8 @@ export function planetAtmosphereMaterial(sunDir: { value: THREE.Vector3 }): THRE
  * A gas giant's cloud-deck fog (PlanetDeck, tides-ufyr.8.3), lit from
  * `sunDir` (sunDirection); its sizes, map and detail are set on the
  * uniforms, so every giant shares one program per side on a tier: the
- * bands' octaves, flowing on the high tier as the globes' do. Blended over
+ * bands' octaves, flowing on the high tier as the globes' do, and the rings'
+ * shadow, by map or bands (uRingHasMap). Blended over
  * what is drawn (normal alpha, after the hazes and rings), double-sided
  * within the ship's reach (pickShellFaces) in one pass, as the hazes are,
  * that program warmed ahead (ship-warmup.ts warmSides). It writes no depth;
@@ -258,10 +259,13 @@ export function planetDeckMaterial(
   { lowQuality = isLowQuality() }: { lowQuality?: boolean } = {}
 ): THREE.ShaderMaterial {
   // The globes' octaves, so the bands' contrast matches the cloud top's.
+  // The rings' shadow for any giant, map or bands (ring/profile.glsl).
   const defines: Record<string, unknown> = {
     PLANET_DETAIL_OCTAVES: lowQuality ? LOW_QUALITY_DETAIL_OCTAVES : DETAIL_OCTAVES,
     PLANET_BAND_OCTAVES: lowQuality ? LOW_QUALITY_DETAIL_OCTAVES : BAND_DETAIL_OCTAVES,
     ...(!lowQuality && flowDefines()),
+    RING_PROFILE_EITHER: '',
+    MAX_RING_BANDS,
   }
   return new THREE.ShaderMaterial({
     vertexShader: shellVertex,
@@ -285,6 +289,12 @@ export function planetDeckMaterial(
       uDetailStrength: { value: 0 },
       uDetailBump: { value: 0 },
       uDetailTime: { value: 0 },
+      uRingInner: { value: 0 },
+      uRingOuter: { value: 0 },
+      uRingOpacity: { value: 0 },
+      uRingMap: { value: null },
+      uRingHasMap: { value: false },
+      ...bandUniforms(),
     },
     transparent: true,
     depthWrite: false,

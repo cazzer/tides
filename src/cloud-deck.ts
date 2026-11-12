@@ -13,7 +13,6 @@
 // function takes R.
 
 import type { PlanetKey } from './planets'
-import { CUSHION_DEPTH_SHARE, CUSHION_SHELL_SHARE } from './ship/flight'
 
 export interface DeckProfile {
   /**
@@ -21,15 +20,12 @@ export interface DeckProfile {
    * ship-bodies.ts). Nothing solid is drawn there.
    */
   base: number
-  /** The hard backstop under the cushion (planetCollisionRadius). */
-  floor: number
   /**
-   * The cushion's top over the floor (flight.ts cushionBandOver):
-   * CUSHION_DEPTH_SHARE × the floor's height over the base, capped at
-   * CUSHION_SHELL_SHARE of the way up to the cloud top, whose globe is a
-   * shell over the stop; so always under 1.0 R.
+   * The hard backstop under the cushion (planetCollisionRadius). The
+   * cushion over it (flight.ts, ship-bodies.ts deckRestRadius) stops half
+   * way up to the globe's shell at 1.0 R, so always under it.
    */
-  rest: number
+  floor: number
   /** The fog's scale height, H. */
   scaleHeight: number
   /** The fog shell's radius, 1 + DECK_TOP_HEIGHTS · H: e^−4 of the fog at R. */
@@ -48,21 +44,10 @@ export const DECK_TOP_HEIGHTS = 4
 export const DECK_VISIBILITY = 0.004
 export const DECK_SUN_DEPTH = 0.006
 
-/**
- * The cushion's top over a floor `floor` above a base `base` (fractions of
- * R) with the globe's shell at 1.0 R over it: flight.ts cushionBandOver's
- * width from the data alone (its CUSHION_MAX_SECONDS cap at the speed floor
- * is wider than either for every giant; ship-bodies.test checks it).
- */
-export function deckRest(base: number, floor: number): number {
-  return floor + Math.min(CUSHION_DEPTH_SHARE * (floor - base), CUSHION_SHELL_SHARE * (1 - floor))
-}
-
 function deckProfile(scaleHeight: number): DeckProfile {
   return {
     base: DECK_BASE,
     floor: DECK_FLOOR,
-    rest: deckRest(DECK_BASE, DECK_FLOOR),
     scaleHeight,
     top: 1 + DECK_TOP_HEIGHTS * scaleHeight,
     visibility: DECK_VISIBILITY,
@@ -148,4 +133,31 @@ export function deckAhead(r: number, mu: number, R: number, H: number, visibilit
   if (Math.abs(k) < 1e-6) return local
   if (k >= 1) return Infinity
   return (-H / mu) * Math.log(1 - k)
+}
+
+/**
+ * The share of the Sun's glow (the glow pass's, renderers/glow, which the
+ * fog shell doesn't draw into) that reaches an eye `distance` from the
+ * centre of a planet of radius `R`, with the Sun at cos(zenith) `muSun`:
+ * the fog's transmittance toward it, eased in as the fog is (deckFade), so
+ * 1 over the shell's top and nearly 0 deep in the deck.
+ */
+export function deckSunlight(distance: number, muSun: number, R: number, profile: DeckProfile): number {
+  const fade = deckFade(distance, R, profile)
+  if (fade === 0) return 1
+  const through = Math.exp(-deckColumn(distance, muSun, R, R * profile.scaleHeight) / (R * profile.visibility))
+  return 1 - fade * (1 - through)
+}
+
+/**
+ * The cloud deck the ship's eye is in this frame, if any (ShipController
+ * fills it, tides-ufyr.8.3): the giant's key and deckSunlight there, which
+ * the Sun's glow scales by for the camera near that giant (SunGlow.tsx).
+ */
+export const deckEye: { key: string | null; sunlight: number } = { key: null, sunlight: 1 }
+
+/** Sets deckEye; null and 1 for none. */
+export function setDeckEye(key: string | null, sunlight: number): void {
+  deckEye.key = key
+  deckEye.sunlight = key === null ? 1 : sunlight
 }

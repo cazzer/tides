@@ -4,6 +4,8 @@ import { GLARE_FADE_PX } from '../glare-geometry'
 import { GLOW_LAYER, GLOW_SCALE } from './glow'
 import { GLOW_ORDER, useGlowOn, useGlowSource } from './glowSources'
 import { sunGlowWeight } from './sun-glow'
+import { deckEye } from '../../cloud-deck'
+import { eyeNearBody } from '../earth-shells'
 
 /** [TUNE] The Sun's glow, linear, at the disc's centre (limb-darkened out). */
 const SUN_GLOW_INTENSITY = 1.5
@@ -55,7 +57,10 @@ function setSunGlow(
       isPerspective: (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true,
       viewHeightPx: viewport.w / (renderer.getPixelRatio() * GLOW_SCALE),
       fadePx: GLARE_FADE_PX,
-    })
+    }) *
+    // In a gas giant's cloud deck, through its fog (tides-ufyr.8.3): the
+    // glow pass draws no fog, and the giant's occluder culls from inside.
+    (deckEye.key !== null && eyeNearBody(camera, deckEye.key) ? deckEye.sunlight : 1)
 }
 
 /**

@@ -285,7 +285,10 @@ describe('planet cloud-deck material (tides-ufyr.8.3)', () => {
     const globe = planetSurfaceMaterial(sun, { map: new THREE.Texture(), flowingBands: true, lowQuality: false })
     const globeDefines = { ...globe.defines }
     delete globeDefines.USE_PLANET_MAP
-    expect(high.defines).toEqual(globeDefines)
+    const deckDefines = { ...high.defines }
+    delete deckDefines.RING_PROFILE_EITHER
+    delete deckDefines.MAX_RING_BANDS
+    expect(deckDefines).toEqual(globeDefines)
     const low = planetDeckMaterial(sun, { lowQuality: true })
     expect(low.defines.PLANET_DETAIL_FLOW).toBeUndefined()
     expect(low.defines.PLANET_BAND_OCTAVES).toBe(2)
@@ -301,5 +304,30 @@ describe('planet cloud-deck material (tides-ufyr.8.3)', () => {
     const main = shader.slice(shader.indexOf('void main()'))
     expect(main).not.toMatch(/dFd[xy]|fwidth|planetDetailFootprint/)
     expect(main).toContain('uPixelAngle')
+  })
+})
+
+describe("the cloud deck's ring shadow (tides-ufyr.8.3)", () => {
+  it('compiles map and bands both, picked by a uniform, off until a giant sets its rings', () => {
+    const material = planetDeckMaterial(sun)
+    expect(material.defines.RING_PROFILE_EITHER).toBe('')
+    expect(material.defines.MAX_RING_BANDS).toBeGreaterThan(0)
+    const u = material.uniforms
+    expect(u.uRingOpacity.value).toBe(0)
+    expect(u.uRingHasMap.value).toBe(false)
+    expect(u.uBands.value).toHaveLength(material.defines.MAX_RING_BANDS as number)
+    const shader = material.fragmentShader
+    const main = shader.slice(shader.indexOf('void main()'))
+    expect(main).toContain('uRingOpacity > 0.0 && n.y * uSunDir.y < 0.0')
+    expect(shader).toContain('uniform bool uRingHasMap;')
+    expect(shader).toContain('uniform sampler2D uRingMap;')
+    expect(shader).toContain('float ringBandsAlpha(float u)')
+  })
+
+  it("leaves the globe's and the rings' own profile as it was", () => {
+    const shadowed = planetSurfaceMaterial(sun, { map: new THREE.Texture(), ringMap: new THREE.Texture(), shadowed: true })
+    // Its USE_RING_MAP branch, as before; the deck's needs RING_PROFILE_EITHER.
+    expect(shadowed.defines.RING_PROFILE_EITHER).toBeUndefined()
+    expect(shadowed.fragmentShader).toMatch(/#elif defined\(USE_RING_MAP\)\n\s*return texture2D\(uRingMap, vec2\(u, 0\.5\)\)\.a;/)
   })
 })

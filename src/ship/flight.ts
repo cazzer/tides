@@ -188,6 +188,14 @@ export interface Body {
    */
   shellRadii?: readonly number[]
   /**
+   * Where the cushion sits for a ship going past this body to a locked
+   * target behind it (stepShip's `passing`), when that is above the stop:
+   * a gas giant's cloud-deck top (ship-bodies.ts, tides-ufyr.8.3), so a
+   * line through it skirts the cloud tops rather than sliding round in the
+   * fog. A soft stop: reaching it is not a hit.
+   */
+  passStop?: number
+  /**
    * The speed floor while this body sets d_eff, in place of V_NORMAL: the
    * cap follows the well below V_NORMAL down to this. For a body whose
    * stop is low enough that V_NORMAL would cross what is drawn there in a
@@ -411,14 +419,16 @@ const band: CushionBand = { stop: 0, width: 0, speed: 0 }
 // NaN) is `surface` from its centre. The stop's height over the surface
 // sizes the band, and the speed floor at its top caps it; read at the top,
 // not where the ship is, so the band's width doesn't move as the ship sinks
-// into it.
-function cushionBandOver(body: Body, surface: number): CushionBand {
+// into it. `lift` raises the stop to at least that radius (a passing ship's
+// passStop; 0 for none).
+function cushionBandOver(body: Body, surface: number, lift = 0): CushionBand {
   const shell = collisionRadius(body)
   let stop = shell
   if (body.ground && Number.isFinite(surface)) {
     const floor = surface + (body.groundClearance ?? 0)
     if (Number.isFinite(floor)) stop = Math.max(shell, floor)
   }
+  if (lift > stop) stop = lift
   const height = Math.max(0, stop - surface)
   const share = CUSHION_DEPTH_SHARE * height
   const speed = speedFloorAt(body, height + share, stop + share - body.radius)
@@ -475,10 +485,20 @@ interface Contact {
   start: number
   end: number
   settled: number
+  /**
+   * The passing stop the band sits on (cushionBandOver's `lift`), 0 for
+   * none; and whether collide holds the ship there, soft, as a backstop:
+   * only when the step started at or over it, so a ship already under it
+   * rises out on the band instead of jumping up.
+   */
+  lift: number
+  liftHolds: boolean
 }
 
 const contact: Contact = {
   body: null,
+  lift: 0,
+  liftHolds: false,
   normal: new THREE.Vector3(),
   width: 0,
   speed: 0,
@@ -493,16 +513,29 @@ const contact: Contact = {
 // surface `gap` under the ship (measure()'s, which already read its ground
 // there, so this reads none): bodies never overlap, and their bands are a
 // sliver of the gaps between them.
-function findContact(position: THREE.Vector3, nearest: Body | null, gap: number, reach: number): Contact | null {
+function findContact(
+  position: THREE.Vector3,
+  nearest: Body | null,
+  gap: number,
+  reach: number,
+  passingTo: Body | null = null
+): Contact | null {
   contact.body = null
   if (!nearest || !Number.isFinite(gap)) return null
   const normal = contact.normal
   const d = normal.subVectors(position, nearest.position).length()
   if (d > 1e-9) normal.divideScalar(d)
   else normal.copy(WORLD_UP)
-  const { stop, width, speed } = cushionBandOver(nearest, d - gap)
+  // Going past it to a locked target behind its surface, on its passStop.
+  const lift =
+    passingTo && passingTo !== nearest && nearest.passStop !== undefined && behindSurface(passingTo, position, normal)
+      ? nearest.passStop
+      : 0
+  const { stop, width, speed } = cushionBandOver(nearest, d - gap, lift)
   if (!(width > 0) || !(d < stop + width + reach)) return null
   contact.body = nearest
+  contact.lift = lift
+  contact.liftHolds = lift > 0 && d >= lift
   contact.width = width
   contact.speed = speed
   contact.omega = (CUSHION_ABSORB * speed) / width
@@ -1442,7 +1475,8 @@ function translate(
   { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost, targetHold, wellBand }: Proximity,
   cushion: THREE.Vector3 | null = null,
   share = 0,
-  passing: Body | null = null
+  passing: Body | null = null,
+  overPassStop = false
 ): void {
   bodyAxes(state.orientation)
   // Thrust as a share of the cap, world frame.
@@ -1455,13 +1489,16 @@ function translate(
   // in), thrust into the surface fades with the depth, so holding it in
   // settles into a hover rather than bottoming out. Going `passing` it, to a
   // locked target beyond, the faded share turns along the surface toward the
-  // target instead, so the ship slides round rather than hovering there.
+  // target instead, so the ship slides round rather than hovering there. On
+  // a passStop (`overPassStop`, a gas giant's cloud-deck top), all of the
+  // thrust into it turns: that band is thin, so the faded share is a sliver
+  // and the ship would creep round (tides-ufyr.8.3).
   if (cushion && share > 0) {
     const into = scratch.dot(cushion)
     if (into < 0) {
       const faded = -Math.min(1, share) * into
       scratch.addScaledVector(cushion, faded)
-      if (passing) scratch.addScaledVector(tangentToward(cushion, passing.position, state.position), faded)
+      if (passing) scratch.addScaledVector(tangentToward(cushion, passing.position, state.position), overPassStop ? -into : faded)
     }
   }
 
@@ -1588,15 +1625,23 @@ function collide(
     if (!pressed && !body.ground && d >= collisionRadius(body)) continue
     if (d > 1e-9) normal.divideScalar(d)
     else normal.copy(WORLD_UP)
-    const shell = floorRadius(body, normal)
+    const floor = floorRadius(body, normal)
+    // A passing ship's band sits on its passStop (findContact).
+    const stop = pressed ? Math.max(floor, cushion.lift) : floor
     if (pressed) {
       cushion.normal.copy(normal)
-      cushion.end = shell + cushion.width - d
-      cushion.settled = shell + cushion.width - Math.max(d, shell)
+      cushion.end = stop + cushion.width - d
+      cushion.settled = stop + cushion.width - Math.max(d, stop)
     }
+    const shell = pressed && cushion.liftHolds ? stop : floor
     if (d >= shell) continue
     state.position.copy(body.position).addScaledVector(normal, shell)
     const inward = state.velocity.dot(normal)
+    // The passing stop is soft: put back on it, never a hit.
+    if (shell > floor) {
+      if (inward < 0) state.velocity.addScaledVector(normal, -inward)
+      continue
+    }
     if (-inward > COLLISION_SPEED) {
       state.velocity.addScaledVector(normal, -(1 + (body === soft ? 0 : restitution)) * inward)
       hit = true
@@ -1782,7 +1827,7 @@ export function stepShip(
   here.targetBoost = Math.min(here.targetBoost, spool)
   // The cushion the step can touch (tides-ufyr.1): the nearest body's, within
   // the most the step can move the ship, OVERSPEED_MAX × the cap.
-  const touch = findContact(state.position, here.nearest, here.nearestGap, OVERSPEED_MAX * capBefore * h)
+  const touch = findContact(state.position, here.nearest, here.nearestGap, OVERSPEED_MAX * capBefore * h, target)
   const cushion = state.cushion
   const touchKey = touch?.body?.key ?? null
   if (cushion.key !== touchKey || !Number.isFinite(cushion.depth)) {
@@ -1807,7 +1852,7 @@ export function stepShip(
     const nudgeScale = passing ? 0 : env.reducedMotion ? CUSHION_NUDGE_REDUCED : 1
     rotate(state, input, h, speedFraction(state.velocity.length(), capBefore), normal, share, nudgeScale)
     const before = touch ? state.velocity.dot(touch.normal) : 0
-    translate(state, input, h, capBefore, here, normal, share, passing)
+    translate(state, input, h, capBefore, here, normal, share, passing, passing !== null && touch !== null && touch.lift > 0)
     let shift = 0
     if (touch) {
       // A locked approach settles onto its target's cushion without a bob.

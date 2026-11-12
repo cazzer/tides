@@ -237,6 +237,8 @@ function SurfaceMesh({
           albedo={albedo}
           limbDarkening={limbDarkening}
           detail={detail}
+          ringShadow={ringShadow}
+          ringMap={ringMap}
         />
       )}
     </>
@@ -255,7 +257,8 @@ const deckViewport = new THREE.Vector4()
  * discards every fragment (uDeckFade 0) rather than going invisible, which
  * would keep ShipWarmup from compiling it ahead (ship-warmup.ts coldWork).
  * Draws after the hazes (1) and rings (2), which it lies over. Samples the
- * globe's own map (`map`), detail and lighting.
+ * globe's own map (`map`), detail and lighting, and the rings' shadow
+ * (`ringShadow`, its strip `ringMap`) as the globe takes it.
  */
 function PlanetDeck({
   planet,
@@ -264,6 +267,8 @@ function PlanetDeck({
   albedo,
   limbDarkening,
   detail,
+  ringShadow,
+  ringMap,
 }: {
   planet: Planet
   deck: DeckProfile
@@ -271,6 +276,8 @@ function PlanetDeck({
   albedo: number
   limbDarkening: number
   detail?: PlanetDetail
+  ringShadow?: RingProfile
+  ringMap: THREE.Texture | null
 }) {
   const sun = useSunDirection()
   const R = planet.radius
@@ -309,6 +316,17 @@ function PlanetDeck({
     })
     setPlanetDetail(material, detail)
   }, [material, R, deck, albedo, limbDarkening, detail])
+  useLayoutEffect(() => {
+    const u = material.uniforms
+    setUniforms(u, {
+      uRingInner: ringShadow?.inner ?? 0,
+      uRingOuter: ringShadow?.outer ?? 0,
+      uRingOpacity: ringShadow ? (ringShadow.opacity ?? 1) : 0,
+      uRingMap: ringMap,
+      uRingHasMap: ringMap !== null,
+    })
+    if (ringShadow) setBands(u, ringShadow)
+  }, [material, ringShadow, ringMap])
 
   return (
     <mesh

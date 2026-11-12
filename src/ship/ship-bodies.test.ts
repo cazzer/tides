@@ -61,6 +61,7 @@ import {
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
   createShipBodies,
+  deckRestRadius,
   floorReach,
   updateShipBodies,
 } from './ship-bodies'
@@ -305,9 +306,11 @@ describe('ship bodies', () => {
 
       it.each(giants)('stacks base < floor < rest < cloud top < fog top < haze over %s', (key, haze) => {
         const deck = DECK_PROFILES[key]!
+        const body = byKey()[key]
+        const rest = deckRestRadius(body) / body.radius
         expect(deck.base).toBeLessThan(deck.floor)
-        expect(deck.floor).toBeLessThan(deck.rest)
-        expect(deck.rest).toBeLessThan(1)
+        expect(deck.floor).toBeLessThan(rest)
+        expect(rest).toBeLessThan(1)
         expect(1).toBeLessThan(deck.top)
         expect(deck.top).toBeLessThan(haze)
         expect(deck.top).toBeCloseTo(1 + 4 * deck.scaleHeight, 12)
@@ -332,17 +335,28 @@ describe('ship bodies', () => {
         expect(speedFloor(body)).toBe(V_NORMAL)
       })
 
-      it.each(giants)("rests %s's cushion top at the profile's rest, under its cloud top", (key) => {
+      it.each(giants)("rests %s's cushion top the same way round, half way from the floor to its cloud top", (key) => {
         const body = byKey()[key]
         const deck = DECK_PROFILES[key]!
         const R = body.radius
+        const rest = deckRestRadius(body)
         for (const direction of [new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0.5, 0.2).normalize()]) {
-          const top = floorRadius(body, direction) + cushionWidth(body, direction)
-          expect(top / R).toBeCloseTo(deck.rest, 9)
-          expect(top).toBeLessThan(R)
+          expect(floorRadius(body, direction) + cushionWidth(body, direction)).toBeCloseTo(rest, 12)
         }
-        // The shell's cap, not the speed floor's, sets it: the data alone.
-        expect(CUSHION_MAX_SECONDS * V_NORMAL).toBeGreaterThan(R * (deck.rest - deck.floor))
+        expect(rest).toBeLessThan(R)
+        // The globe's shell caps it (CUSHION_SHELL_SHARE), under the speed floor's cap.
+        expect(rest / R).toBeCloseTo((deck.floor + 1) / 2, 12)
+        expect(CUSHION_MAX_SECONDS * V_NORMAL).toBeGreaterThan(rest - R * deck.floor)
+        // A ship passing it to a target beyond keeps over the fog's top.
+        expect(body.passStop).toBeCloseTo(R * deck.top, 12)
+      })
+
+      it('gives no other body a passing stop', () => {
+        for (const body of createShipBodies()) {
+          if (!(body.key in DECK_PROFILES)) expect(body.passStop, body.key).toBeUndefined()
+          else expect(deckRestRadius(body)).toBeGreaterThan(0)
+        }
+        expect(deckRestRadius(byKey().mars)).toBeNaN()
       })
     })
 

@@ -8,7 +8,9 @@
 // exit), lit as the globe is (fragment.frag: Minnaert, with the ambient
 // fill) but with the sunlight dimmed over uSunDepth under R. The footprint
 // comes from uPixelAngle, not derivatives, so the map's seam and the
-// detail's octave weights stay smooth. Saturn's ring shadow is left out.
+// detail's octave weights stay smooth. Saturn's and Uranus's rings shadow
+// it as they do the globe (fragment.frag's USE_RING_SHADOW, here gated by
+// uRingOpacity so every giant shares one program).
 
 #define RECIPROCAL_PI 0.3183098861837907
 
@@ -28,6 +30,10 @@ uniform float uSunIntensity;
 uniform vec3 uAmbient;
 uniform float uMinnaert;
 uniform sampler2D uMap;
+// Planet radii; uRingOpacity 0 for no rings.
+uniform float uRingInner;
+uniform float uRingOuter;
+uniform float uRingOpacity;
 
 varying vec3 vPos;
 varying vec3 vRayOrigin;
@@ -35,6 +41,7 @@ varying vec3 vRayOrigin;
 #include ../shell/face.glsl
 #include ./detail.glsl
 #include ./deck-column.glsl
+#include ../ring/profile.glsl
 
 // SphereGeometry's texture coordinates of a local direction.
 vec2 deckUv(vec3 dir) {
@@ -83,6 +90,16 @@ void main() {
   float cosE = max(abs(dot(n, rd)), 0.05);
   float direct = pow(cosI, uMinnaert) * pow(cosE, uMinnaert - 1.0);
   direct *= exp(-max(R - length(at), 0.0) / uSunDepth);
+
+  // The rings' shadow, as on the globe: sunlight toward n crosses the ring
+  // plane only from the side away from the Sun.
+  if (uRingOpacity > 0.0 && n.y * uSunDir.y < 0.0) {
+    vec2 hit = n.xz - (n.y / uSunDir.y) * uSunDir.xz;
+    float rr = length(hit);
+    if (rr >= uRingInner && rr <= uRingOuter) {
+      direct *= 1.0 - uRingOpacity * ringAlpha((rr - uRingInner) / (uRingOuter - uRingInner));
+    }
+  }
 
   vec3 irradiance = vec3(uSunIntensity * direct) + uAmbient;
   gl_FragColor = vec4(albedo * RECIPROCAL_PI * irradiance, uDeckFade * (1.0 - T));
