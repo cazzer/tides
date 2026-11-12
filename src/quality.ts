@@ -79,7 +79,9 @@ export function touchDevice(): boolean {
  * The widest flight-only map (tides-01v.6) this device fetches, or null for
  * none: 8k on desktops, 4k on phones and tablets, iPads included (their tier
  * stays 'high' for the Earth maps, but an 8k map is a third of a phone-class
- * memory budget), and never wider than the GPU takes.
+ * memory budget), and never wider than the GPU takes. A phone or tablet keeps
+ * the 4k cap even with 'high' forced (tides-8h7.6, board option A): the high
+ * look, with a phone's memory caps.
  */
 export function resolveFlightTextureCap(
   search: string,
@@ -89,7 +91,7 @@ export function resolveFlightTextureCap(
   saved: string | null = null
 ): 8192 | 4096 | null {
   const forced = forcedTier(search, saved)
-  const mobile = forced === 'low' || (forced !== 'high' && isTouchDevice(userAgent, maxTouchPoints))
+  const mobile = forced === 'low' || isTouchDevice(userAgent, maxTouchPoints)
   const cap = mobile ? 4096 : 8192
   if (maxTextureSize >= cap) return cap
   return maxTextureSize >= 4096 ? 4096 : null

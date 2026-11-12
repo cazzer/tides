@@ -86,20 +86,21 @@ describe('resolveFlightTextureCap', () => {
     expect(resolveFlightTextureCap('', IPAD, 0, 16384)).toBe(8192)
   })
 
-  it('takes ?quality over the device', () => {
+  it('takes ?quality=low over the device', () => {
     expect(resolveFlightTextureCap('?quality=low', DESKTOP, 0, 16384)).toBe(4096)
-    expect(resolveFlightTextureCap('?quality=high', IPAD, 5, 16384)).toBe(8192)
+    expect(resolveFlightTextureCap('?quality=high', DESKTOP, 0, 16384)).toBe(8192)
   })
 
   it('takes the saved choice over the device, and ?quality over both', () => {
     expect(resolveFlightTextureCap('', DESKTOP, 0, 16384, 'low')).toBe(4096)
-    expect(resolveFlightTextureCap('', IPHONE, 5, 16384, 'high')).toBe(8192)
     expect(resolveFlightTextureCap('?quality=high', DESKTOP, 0, 16384, 'low')).toBe(8192)
   })
 
-  it('keeps 8k for a phone forced high (pending tides-8h7.6: whether forced high should still cap)', () => {
-    expect(resolveFlightTextureCap('', IPHONE, 5, 16384, 'high')).toBe(8192)
-    expect(resolveFlightTextureCap('?quality=high', IPHONE, 5, 16384)).toBe(8192)
+  it('keeps 4k on a phone or tablet forced high (tides-8h7.6, option A)', () => {
+    expect(resolveFlightTextureCap('', IPHONE, 5, 16384, 'high')).toBe(4096)
+    expect(resolveFlightTextureCap('?quality=high', IPHONE, 5, 16384)).toBe(4096)
+    expect(resolveFlightTextureCap('?quality=high', ANDROID, 5, 16384)).toBe(4096)
+    expect(resolveFlightTextureCap('?quality=high', IPAD, 5, 16384)).toBe(4096)
   })
 
   it('never exceeds the GPU, and is off below 4k', () => {
