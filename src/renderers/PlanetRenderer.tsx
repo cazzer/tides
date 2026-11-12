@@ -12,6 +12,7 @@
 // the rings shadow the globe); props only change uniform values.
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { meshBounds } from '@react-three/drei'
+import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Planet } from '../planets'
 import {
@@ -29,6 +30,7 @@ import { isLowQuality } from '../quality'
 import {
   AMBIENT,
   bandUniforms,
+  detailFlowTime,
   planetAtmosphereMaterial,
   planetSurfaceMaterial,
   setPlanetDetail,
@@ -176,11 +178,16 @@ function SurfaceMesh({
     }
   }, [sun, onBeforeDraw])
   const shadowed = ringShadow !== undefined
+  const flowingBands = detail?.style === 'bands'
   const material = useMemo(
-    () => planetSurfaceMaterial(sun.uniform, { map, ringMap, shadowed }),
-    [map, ringMap, shadowed, sun.uniform]
+    () => planetSurfaceMaterial(sun.uniform, { map, ringMap, shadowed, flowingBands }),
+    [map, ringMap, shadowed, flowingBands, sun.uniform]
   )
   useEffect(() => () => material.dispose(), [material])
+  // Read only by a flowing program (tides-ufyr.8.2).
+  useFrame((state) => {
+    material.uniforms.uDetailTime.value = detailFlowTime(state.clock.elapsedTime)
+  })
   // A uniform swap, not a new material: that could drop and recompile a
   // program only this planet uses (Saturn's ring-shadowed one).
   useLayoutEffect(() => {

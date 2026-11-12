@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { planetAtmosphereMaterial, planetSurfaceMaterial, setPlanetDetail } from './planetMaterials'
+import {
+  BAND_DETAIL_OCTAVES,
+  DETAIL_FLOW_CYCLES,
+  DETAIL_FLOW_OFFSET,
+  DETAIL_FLOW_PERIOD,
+  DETAIL_FLOW_RATE,
+  bandFlowPhases,
+  bandFlowRate,
+  detailFlowTime,
+  planetAtmosphereMaterial,
+  planetSurfaceMaterial,
+  setPlanetDetail,
+} from './planetMaterials'
 import { moonDetailPatch } from './moonDetail'
 
 const sun = { value: new THREE.Vector3(1, 0, 0) }
@@ -72,9 +84,160 @@ describe('shared detail source', () => {
       expect(end).toBeGreaterThan(start)
       return source.slice(start, end)
     }
-    for (const name of ['void planetDetail', 'float planetDetailFootprint']) {
+    for (const name of ['void planetDetailNoise', 'void planetDetail', 'float planetDetailFootprint']) {
       expect(fn(shader.fragmentShader, name)).toBe(fn(planet, name))
     }
+    // The Moon's patch doesn't flow, and its bands' octaves (unused) are its own.
+    expect(shader.fragmentShader).not.toMatch(/#define PLANET_DETAIL_FLOW\b/)
+    expect(shader.fragmentShader).not.toMatch(/#define PLANET_BAND_OCTAVES \d/)
+  })
+})
+
+describe('band flow (tides-ufyr.8.2)', () => {
+  const map = new THREE.Texture()
+  const flow = (options: Parameters<typeof planetSurfaceMaterial>[1]) =>
+    planetSurfaceMaterial(sun, options).defines.PLANET_DETAIL_FLOW
+
+  it('flows textured band detail on the high tier only', () => {
+    expect(flow({ map, flowingBands: true, lowQuality: false })).toBe('')
+    expect(flow({ map, flowingBands: true, lowQuality: true })).toBeUndefined()
+    // Rock, streaks and moons: no flowingBands.
+    expect(flow({ map, lowQuality: false })).toBeUndefined()
+    expect(flow({ flowingBands: true, lowQuality: false })).toBeUndefined()
+  })
+
+  it('passes the flow constants as GLSL floats', () => {
+    const d = planetSurfaceMaterial(sun, { map, flowingBands: true, lowQuality: false }).defines
+    for (const [name, value] of [
+      ['DETAIL_FLOW_RATE', DETAIL_FLOW_RATE],
+      ['DETAIL_FLOW_PERIOD', DETAIL_FLOW_PERIOD],
+      ['DETAIL_FLOW_CYCLES', DETAIL_FLOW_CYCLES],
+      ['DETAIL_FLOW_OFFSET', DETAIL_FLOW_OFFSET],
+    ] as const) {
+      expect(d[name]).toMatch(/^\d+(\.\d+)?(e-?\d+)?$/)
+      expect(d[name]).toMatch(/[.e]/)
+      expect(Number(d[name])).toBe(value)
+    }
+  })
+
+  it('gives the bands 6 octaves on high, 2 on low, others as before', () => {
+    const high = planetSurfaceMaterial(sun, { map, flowingBands: true, lowQuality: false }).defines
+    expect([high.PLANET_BAND_OCTAVES, high.PLANET_DETAIL_OCTAVES]).toEqual([BAND_DETAIL_OCTAVES, 5])
+    // Finer would terrace: the noise is keyed to the unit sphere.
+    expect(BAND_DETAIL_OCTAVES).toBe(6)
+    const low = planetSurfaceMaterial(sun, { map, flowingBands: true, lowQuality: true }).defines
+    expect([low.PLANET_BAND_OCTAVES, low.PLANET_DETAIL_OCTAVES]).toEqual([2, 2])
+    // The same for every globe of a tier, so it adds no program.
+    expect(planetSurfaceMaterial(sun, { lowQuality: false }).defines.PLANET_BAND_OCTAVES).toBe(6)
+  })
+
+  it('keeps the bands contrast from range, and stops at the first faded octave, NaN too', () => {
+    const shader = planetSurfaceMaterial(sun, { map }).fragmentShader
+    // Normalised by the first PLANET_DETAIL_OCTAVES' amplitudes, as before
+    // the extra octaves; rock and streaks take exactly those.
+    expect(shader).toContain('float(min(octaves, PLANET_DETAIL_OCTAVES))')
+    expect(shader).toContain('if (!(w > 0.0)) break;')
+  })
+
+  it('has a uDetailTime uniform, flowing or not', () => {
+    for (const flowingBands of [false, true]) {
+      expect(planetSurfaceMaterial(sun, { map, flowingBands }).uniforms.uDetailTime.value).toBe(0)
+    }
+  })
+
+  it('keeps the flow, and its uniform, inside #ifdef PLANET_DETAIL_FLOW', () => {
+    const shader = planetSurfaceMaterial(sun, { map }).fragmentShader
+    const start = shader.indexOf('#ifdef PLANET_DETAIL_FLOW')
+    const end = shader.indexOf('#endif', start)
+    expect(start).toBeGreaterThanOrEqual(0)
+    const block = shader.slice(start, end)
+    for (const code of ['uniform float uDetailTime', 'vec3 detailFlowTurn(', 'void detailFlowPhase(']) {
+      expect(shader.indexOf(code)).toBe(shader.lastIndexOf(code))
+      expect(block).toContain(code)
+    }
+    expect(block).toContain('cos(lat) * cos(6.0 * lat)')
+    // bandFlowPhases' key.
+    expect(block).toContain('float key = 2.0 * mod(floor(cycles), DETAIL_FLOW_CYCLES) + 2.0 * shift;')
+    expect(block).toContain('fract(key * vec3(')
+    // planetDetail's call into it is guarded too.
+    const entry = shader.slice(shader.indexOf('void planetDetail('))
+    const guard = entry.indexOf('#ifdef PLANET_DETAIL_FLOW')
+    expect(guard).toBeGreaterThan(0)
+    expect(entry.indexOf('detailFlowPhase(')).toBeGreaterThan(guard)
+    expect(entry.indexOf('detailFlowPhase(')).toBeLessThan(entry.indexOf('#endif', guard))
+  })
+
+  it('blows a prograde equatorial jet, alternating poleward, mirrored across the equator', () => {
+    const deg = Math.PI / 180
+    expect(bandFlowRate(0)).toBe(DETAIL_FLOW_RATE)
+    for (const lat of [15, 45, 75, 90]) {
+      expect(bandFlowRate(lat * deg)).toBeCloseTo(0, 12)
+      expect(bandFlowRate(-lat * deg)).toBeCloseTo(0, 12)
+    }
+    expect(bandFlowRate(30 * deg)).toBeLessThan(0)
+    expect(bandFlowRate(60 * deg)).toBeGreaterThan(0)
+    for (let lat = -90; lat <= 90; lat += 0.5) {
+      expect(bandFlowRate(-lat * deg)).toBeCloseTo(bandFlowRate(lat * deg), 15)
+      expect(Math.abs(bandFlowRate(lat * deg))).toBeLessThanOrEqual(DETAIL_FLOW_RATE)
+    }
+  })
+
+  it('crossfades two phases with weights that sum to 1, each restarting unseen', () => {
+    const step = 0.01
+    let previous = bandFlowPhases(0)
+    for (let time = step; time < 3 * DETAIL_FLOW_PERIOD; time += step) {
+      const phases = bandFlowPhases(time)
+      expect(phases[0].weight + phases[1].weight).toBeCloseTo(1, 9)
+      // Never the same offset, though they share a cycle half the time.
+      expect(phases[0].key).not.toBe(phases[1].key)
+      phases.forEach((phase, i) => {
+        expect(phase.key).toBe(2 * phase.cycle + i)
+        expect(phase.t).toBeGreaterThanOrEqual(0)
+        expect(phase.t).toBeLessThan(DETAIL_FLOW_PERIOD)
+        // A restart (t jumps back, a new cycle) only where the weight is ~0.
+        if (phase.t < previous[i].t) {
+          expect(phase.cycle).not.toBe(previous[i].cycle)
+          expect(phase.weight).toBeLessThan(2 * step / DETAIL_FLOW_PERIOD + 1e-9)
+        } else {
+          expect(phase.cycle).toBe(previous[i].cycle)
+        }
+      })
+      previous = phases
+    }
+  })
+
+  it('bounds the shear: a phase turns any two latitudes apart by a sliver', () => {
+    // The most a phase's noise is turned, and the most two latitudes 1° apart
+    // are turned apart, by the end of its period.
+    const deg = Math.PI / 180
+    let turn = 0
+    let shear = 0
+    for (let lat = -90; lat < 90; lat += 0.25) {
+      turn = Math.max(turn, Math.abs(bandFlowRate(lat * deg)) * DETAIL_FLOW_PERIOD)
+      shear = Math.max(
+        shear,
+        Math.abs(bandFlowRate((lat + 1) * deg) - bandFlowRate(lat * deg)) * DETAIL_FLOW_PERIOD
+      )
+    }
+    expect(turn).toBeLessThanOrEqual(DETAIL_FLOW_RATE * DETAIL_FLOW_PERIOD)
+    expect(shear).toBeLessThan(6 * deg * DETAIL_FLOW_RATE * DETAIL_FLOW_PERIOD)
+    expect(turn).toBeGreaterThan(0)
+  })
+
+  it('wraps the clock to whole cycles, with no jump in either phase', () => {
+    const span = DETAIL_FLOW_CYCLES * DETAIL_FLOW_PERIOD
+    expect(detailFlowTime(0)).toBe(0)
+    expect(detailFlowTime(span + 12.5)).toBeCloseTo(12.5, 9)
+    expect(detailFlowTime(5 * span - 0.25)).toBeCloseTo(span - 0.25, 6)
+    const before = bandFlowPhases(detailFlowTime(span - 1e-6))
+    const after = bandFlowPhases(detailFlowTime(span))
+    // The half-period phase, at full weight here, keeps its cycle, offset and age.
+    expect(after[1].cycle).toBe(before[1].cycle)
+    expect(after[1].key).toBe(before[1].key)
+    expect(after[0].key).not.toBe(after[1].key)
+    expect(after[1].t).toBeCloseTo(before[1].t, 4)
+    expect(after[1].weight).toBeCloseTo(1, 6)
+    expect(after[0].weight).toBeCloseTo(0, 6)
   })
 })
 
