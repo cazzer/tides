@@ -56,11 +56,15 @@ describe('limbFacetPx', () => {
 
 describe('LIMB_SEGMENTS', () => {
   it('keeps every body’s limb under 1 px at its collision stop, even in a corner', () => {
-    for (const body of createShipBodies('low')) {
-      // Earth's low-tier stop is over its cloud sheet now (tides-ufyr.2), as
-      // close as the high tier's floor: held at the centre below.
-      if (body.key === 'earth') continue
-      expect(cornerPx(collisionRadius(body) / body.radius), body.key).toBeLessThan(1)
+    // The high tier's rocky stops are lower (tides-ufyr.5): the Moon's and
+    // Mercury's 1.011 R reads ~0.996 px here.
+    for (const tier of ['low', 'high'] as const) {
+      for (const body of createShipBodies(tier)) {
+        // Earth's low-tier stop is over its cloud sheet now (tides-ufyr.2), as
+        // close as the high tier's floor: held at the centre below.
+        if (body.key === 'earth') continue
+        expect(cornerPx(collisionRadius(body) / body.radius), `${tier} ${body.key}`).toBeLessThan(1)
+      }
     }
   })
 
