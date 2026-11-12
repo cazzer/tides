@@ -6,6 +6,7 @@ import {
   V_TOP,
   collisionRadius,
   createShipState,
+  floorRadius,
   lawFloor,
   stepShip,
   wellFactor,
@@ -13,12 +14,14 @@ import {
 } from './flight'
 import {
   BODY_MASS_KG,
+  EARTH_COLLISION_RADIUS,
   EARTH_GROUND_SPEED,
   EARTH_GROUND_SPEED_LAW,
   EARTH_RADIUS,
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
   FINE_GROUND_CLEARANCE,
+  createShipBodies,
 } from './ship-bodies'
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry } from './ship-telemetry'
@@ -453,6 +456,8 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
       key: 'earth',
       position: new THREE.Vector3(),
       radius: EARTH_RADIUS,
+      // Under the floor, as Earth's hard sphere is (the default margin's 2% R isn't).
+      collisionRadius: EARTH_RADIUS + 10 * M,
       mass: BODY_MASS_KG.earth,
       ground: () => EARTH_RADIUS,
       groundClearance: FINE_GROUND_CLEARANCE,
@@ -516,5 +521,54 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
       if (telemetry.nearest.surfaceDistance < FINE_GROUND_CLEARANCE + 1 * M) break
     }
     expect(Math.abs(t / eta - 1)).toBeLessThan(0.15)
+  })
+
+  // The low tier's stop is its hard sphere over the cloud sheet, ~0.025 over
+  // the ground, not groundClearance over it (tides-ufyr.2).
+  test('a locked descent on the low tier counts its ETA down to ~0 at the stop over the sheet', () => {
+    const earth = createShipBodies('low').find((b) => b.key === 'earth')!
+    const up = new THREE.Vector3(0, 1, 0)
+    const stop = floorRadius(earth, up)
+    expect(stop).toBe(EARTH_COLLISION_RADIUS)
+    const state = createShipState()
+    state.position.set(0, stop + 0.5, 0)
+    state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    const pilot = input({ throttle: 1 })
+    const telemetry = createShipTelemetry()
+    const bodies = [earth]
+    const km = [NaN]
+    resetShipApproach()
+    const etas: { t: number; eta: number }[] = []
+    let t = 0
+    for (; t < 600; t += FRAME) {
+      stepShip(state, pilot, FRAME, { bodies, targetKey: 'earth' }, telemetry)
+      updateApproach({
+        bodies,
+        position: state.position,
+        velocity: state.velocity,
+        speed: telemetry.speed,
+        cap: telemetry.speedCap,
+        capFloor: telemetry.well.floor,
+        boost: telemetry.boost,
+        throttle: telemetry.throttle,
+        flightAssist: true,
+        targetKey: 'earth',
+        km,
+      })
+      etas.push({ t: t + FRAME, eta: shipApproach.eta })
+      if (state.position.length() - stop < 1e-6) break
+    }
+    const arrival = t + FRAME
+    expect(state.position.length() - stop).toBeLessThan(1e-6)
+    // Within a frame or so of the stop, the ETA is about 0, not a slow leg
+    // down to groundClearance over the ground.
+    const last = etas.filter((e) => arrival - e.t <= 0.1 && Number.isFinite(e.eta))
+    expect(last.length).toBeGreaterThan(0)
+    for (const e of last) expect(e.eta).toBeLessThan(0.5)
+    // Once the speed has settled, it tracks the time left.
+    for (const share of [0.5, 0.8]) {
+      const e = etas[Math.floor(share * (etas.length - 1))]
+      expect(Math.abs(e.eta / (arrival - e.t) - 1), String(share)).toBeLessThan(0.15)
+    }
   })
 })

@@ -24,6 +24,7 @@ import {
   WELL_BRAKE,
   WELL_EDGE_SPEED,
   bandEdgeGap,
+  floorRadius,
   lawCeiling,
   lawFloor,
   speedFloor,
@@ -588,7 +589,12 @@ export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApp
   let ground: EtaGround | undefined
   if (body.groundSpeed) {
     etaGround.law = body.groundSpeed
-    etaGround.stop = body.groundClearance ?? 0
+    // The stop's height over the ground under the ship: groundClearance
+    // where the ground sets the floor, more where the hard sphere does (the
+    // low tier's over its cloud sheet, tides-ufyr.2).
+    etaGround.stop = body.ground && distance > 0
+      ? floorRadius(body, fromBody) - (distance - gap)
+      : (body.groundClearance ?? 0)
     etaGround.base = distance - body.radius - gap
     etaGround.boost = frame.boost
     ground = etaGround

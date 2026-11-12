@@ -350,17 +350,29 @@ describe('ship camera range', () => {
       const gap = bodiesShellGap(eye, bodies)
       return { near: shipNear(floor.nearGap(eye), gap), gap }
     }
+    const STEP = 1e-4
     let holes = 0
     let steps = 0
-    for (let d = 3 * EARTH_RADIUS; d >= stop; d -= 1e-4) {
+    let floored = 0
+    for (let d = 3 * EARTH_RADIUS; d >= stop; d -= STEP) {
       const { near, gap } = nearAt(d)
       steps++
       // At a shell the floor wins: a hole a near's width across, crossing it.
-      if (near <= NEAR_MIN) continue
+      if (near <= NEAR_MIN) {
+        floored++
+        continue
+      }
       if (near * NEAR_CORNER_REACH >= gap) holes++
     }
     expect(steps).toBeGreaterThan(50_000)
     expect(holes).toBe(0)
+    // The floor holds only in the band where NEAR_SHARE of the gap is under
+    // it (NEAR_MIN / NEAR_SHARE = 0.0025 each side of a shell), with room,
+    // for each shell crossed: no long stretch skipped unchecked.
+    const crossed = EARTH_SHELL_RADII.filter((r) => r > stop && r < 3 * EARTH_RADIUS).length
+    expect(crossed).toBe(3)
+    expect(floored).toBeGreaterThan(0)
+    expect(floored).toBeLessThan((crossed * 4 * (NEAR_MIN / NEAR_SHARE)) / STEP)
     // At the stop, over the cloud sheet, with the speed kick's FOV on a 21:9 screen.
     const { near, gap } = nearAt(stop)
     expect(gap).toBeCloseTo(EARTH_SHEET_CLEARANCE, 12)
