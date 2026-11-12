@@ -1,8 +1,10 @@
-import { useRef } from 'react'
+import { useMemo, useRef } from 'react'
 import { useLoader } from '@react-three/fiber'
 import { meshBounds, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
-import { useEclipseShadow } from './eclipseShadow'
+import { composePatches, useEclipseShadow } from './eclipseShadow'
+import { moonDetailPatch } from './moonDetail'
+import { isLowQuality } from '../quality'
 import { MOON_ALBEDO } from '../lighting'
 import { useSizedBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
@@ -19,6 +21,11 @@ export default function MoonRenderer({ diameter, texture }: MoonRendererProps) {
   const threeTexture = useLoader(THREE.TextureLoader, texture)
   // Earth's shadow during lunar eclipses.
   const eclipseShadow = useEclipseShadow('moon')
+  // Rock detail finer than the map, at close range (tides-ufyr.3).
+  const patch = useMemo(
+    () => composePatches(eclipseShadow, moonDetailPatch(isLowQuality())),
+    [eclipseShadow]
+  )
   // Sized to the Moon on this View's screen (tides-0oi.16).
   const meshRef = useRef<THREE.Mesh>(null)
   const geometry = useSizedBodySphere('moon', diameter, [128, 128], 0, meshRef)
@@ -31,7 +38,7 @@ export default function MoonRenderer({ diameter, texture }: MoonRendererProps) {
         raycast={meshBounds}
       >
         <meshPhongMaterial
-          {...eclipseShadow}
+          {...patch}
           attach="material"
           map={threeTexture}
           color={MOON_COLOR}

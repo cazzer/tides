@@ -55,11 +55,11 @@ export interface PlanetDetail {
 }
 
 // fragment.frag's DETAIL_* values; 0 is no detail.
-const DETAIL_STYLES = { bands: 1, rock: 2, streaks: 3 } as const
+export const DETAIL_STYLES = { bands: 1, rock: 2, streaks: 3 } as const
 
 /** Noise octaves in the detail: fewer on the low quality tier. */
-const DETAIL_OCTAVES = 5
-const LOW_QUALITY_DETAIL_OCTAVES = 2
+export const DETAIL_OCTAVES = 5
+export const LOW_QUALITY_DETAIL_OCTAVES = 2
 
 /** Sets a globe material's detail; uniforms only, so no recompile. */
 export function setPlanetDetail(material: THREE.ShaderMaterial, detail?: PlanetDetail) {
