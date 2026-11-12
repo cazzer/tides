@@ -6,6 +6,8 @@ import {
   BLUE_ZONE,
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
+  COLLISION_SPEED,
+  CUSHION_RESTITUTION,
   HOLD_DRIFT_SHARE,
   HOLD_FALL_TAU,
   HOLD_REACH_ALTITUDES,
@@ -29,6 +31,7 @@ import {
   bandEdgeGap,
   collisionRadius,
   createShipState,
+  cushionWidth,
   floorRadius,
   lawCeiling,
   lawFloor,
@@ -77,6 +80,7 @@ import { CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY } from '../clou
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 import { carryShip, createFrameCarry, earthSpinRate } from './frame-carry'
+import { IMPACT_BACKSTOP_SPEED, isImpact } from './impact'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { approachEta } from './approach'
 import {
@@ -176,6 +180,23 @@ function fly(
 ): ShipState {
   for (let t = 0; t < seconds - 1e-9; t += dt) stepShip(state, shipInput, dt, flightEnv)
   return state
+}
+
+/**
+ * Where `position` is over `body`'s stop (floorRadius) along the radial,
+ * scene units, and the cushion's width there (tides-ufyr.1): `height` under
+ * `width` is in the cushion.
+ */
+function overStop(body: Body, position: THREE.Vector3): { height: number; width: number; normal: THREE.Vector3 } {
+  const normal = position.clone().sub(body.position)
+  const d = normal.length()
+  normal.divideScalar(d)
+  return { height: d - floorRadius(body, normal), width: cushionWidth(body, normal), normal }
+}
+
+function inCushion(body: Body, position: THREE.Vector3): boolean {
+  const { height, width } = overStop(body, position)
+  return height < width
 }
 
 describe('speedCap', () => {
@@ -654,26 +675,57 @@ function closingSpeed(state: ShipState, body: Body): number {
 }
 
 describe('target approach', () => {
-  test('speed toward the target never exceeds max(V_NORMAL, gap / wellTime) and it lands without passing inside', () => {
+  test('speed toward the target never exceeds max(V_NORMAL, gap / wellTime) and it settles into the cushion without passing inside, bouncing or hitting', () => {
     const start = EARTH.position.clone().add(new THREE.Vector3(-40, 0, 0))
     const state = shipAt(start, EARTH.position)
     const telemetry = createShipTelemetry()
     const shell = EARTH.radius * COLLISION_MARGIN
     let previous = Infinity
     let hits = 0
+    let landed = false
+    // Nose held in (no nudge), so the touchdown is all the cushion's.
+    const flightEnv = { ...env(BODIES, 'earth'), reducedMotion: true }
     for (let i = 0; i < 60 * 60; i++) {
-      stepShip(state, input({ throttle: 1 }), FRAME, env(BODIES, 'earth'), telemetry)
+      stepShip(state, input({ throttle: 1 }), FRAME, flightEnv, telemetry)
       const gap = telemetry.target!.surfaceDistance
       expect(closingSpeed(state, EARTH)).toBeLessThanOrEqual(
         Math.max(V_NORMAL, gap / wellTime(EARTH)) + 1e-12
       )
-      expect(gap).toBeLessThanOrEqual(previous + 1e-12)
+      // Straight in to the cushion; once in, critically damped: it never
+      // comes back out (no bob).
+      if (!landed) expect(gap).toBeLessThanOrEqual(previous + 1e-12)
+      landed ||= inCushion(EARTH, state.position)
+      if (landed) expect(inCushion(EARTH, state.position)).toBe(true)
       expect(state.position.distanceTo(EARTH.position)).toBeGreaterThanOrEqual(shell - 1e-9)
       if (telemetry.colliding) hits++
       previous = gap
     }
-    expect(telemetry.target!.surfaceDistance).toBeCloseTo(shell - EARTH.radius, 9)
-    // Touchdown counts once; pressing into the surface afterwards does not.
+    expect(landed).toBe(true)
+    // Settled: hovering in the cushion, pressing into it at full throttle.
+    expect(Math.abs(state.velocity.dot(overStop(EARTH, state.position).normal))).toBeLessThan(1e-3)
+    // A touchdown at the floor speed is the cushion's to absorb: no hit.
+    expect(hits).toBe(0)
+  })
+
+  test('locked, a hit at the backstop does not bounce, and the cushion never pushes the ship out past its top', () => {
+    const body: Body = { key: 'rock', position: new THREE.Vector3(), radius: 1 }
+    const { width } = overStop(body, Y)
+    // On the stop already and moving in at the floor speed, the most the
+    // approach cap lets a locked ship close at: it reaches the backstop at
+    // once, over COLLISION_SPEED.
+    const state = shipAt(new THREE.Vector3(0, floorRadius(body, Y), 0), body.position)
+    state.velocity.set(0, -V_NORMAL, 0)
+    const telemetry = createShipTelemetry()
+    let hits = 0
+    for (let i = 0; i < 10 * 60; i++) {
+      stepShip(state, input({ flightAssist: false }), FRAME, { ...env([body], 'rock'), reducedMotion: true }, telemetry)
+      const u = state.velocity.dot(overStop(body, state.position).normal)
+      if (telemetry.colliding) {
+        hits++
+        expect(u).toBeCloseTo(0, 12)
+      }
+      expect(overStop(body, state.position).height).toBeLessThanOrEqual(width + 1e-12)
+    }
     expect(hits).toBe(1)
   })
 
@@ -803,19 +855,21 @@ describe('collision', () => {
     expect(collisionRadius({ ...MOON, collisionRadius: 1.5 })).toBe(1.5)
   })
 
-  test("stops at a body's own collisionRadius, flying straight in at full throttle", () => {
+  test("never enters a body's own collisionRadius and reaches its cushion, flying straight in at full throttle", () => {
     const shelled: Body = { ...EARTH, collisionRadius: EARTH.radius * 1.2 }
     const start = shelled.position.clone().add(new THREE.Vector3(0, 0, 30))
     for (const targetKey of [null, 'earth']) {
       const state = shipAt(start, shelled.position)
       const telemetry = createShipTelemetry()
+      let reached = false
       for (let i = 0; i < 60 * 60; i++) {
         stepShip(state, input({ throttle: 1 }), FRAME, env([shelled], targetKey), telemetry)
         expect(state.position.distanceTo(shelled.position)).toBeGreaterThanOrEqual(
           shelled.collisionRadius! * (1 - 1e-12)
         )
+        reached ||= inCushion(shelled, state.position)
       }
-      expect(state.position.distanceTo(shelled.position)).toBeCloseTo(shelled.collisionRadius!, 9)
+      expect(reached).toBe(true)
     }
   })
 
@@ -826,7 +880,7 @@ describe('collision', () => {
     ['saturn', SATURN_HAZE_OUTER],
     ['uranus', URANUS_HAZE_OUTER],
     ['neptune', NEPTUNE_HAZE_OUTER],
-  ])("dives under %s's haze shell at full throttle to its stop, never through it (tides-ufyr.4)", (key, haze) => {
+  ])("dives under %s's haze shell at full throttle into its cushion, never through the stop (tides-ufyr.4)", (key, haze) => {
     const planet = flightBodies().find((b) => b.key === key)!
     const shell = planet.radius * haze
     const stop = collisionRadius(planet)
@@ -835,21 +889,43 @@ describe('collision', () => {
     for (const targetKey of [null, key]) {
       const state = shipAt(start, planet.position)
       const telemetry = createShipTelemetry()
+      let lowest = Infinity
+      let surface = Infinity
+      let reached = false
       for (let i = 0; i < 60 * 60; i++) {
         stepShip(state, input({ throttle: 1 }), FRAME, env([planet], targetKey), telemetry)
-        expect(state.position.distanceTo(planet.position)).toBeGreaterThanOrEqual(stop * (1 - 1e-12))
+        const d = state.position.distanceTo(planet.position)
+        expect(d).toBeGreaterThanOrEqual(stop * (1 - 1e-12))
+        reached ||= inCushion(planet, state.position)
+        if (d < lowest) {
+          lowest = d
+          surface = telemetry.nearest.surfaceDistance
+        }
       }
-      expect(state.position.distanceTo(planet.position)).toBeCloseTo(stop, 9)
-      // The near plane at the stop sits well short of the shell overhead.
-      const gap = shell - stop
-      expect(shipNear(telemetry.nearest.surfaceDistance, gap)).toBeLessThan(gap / 2)
+      expect(reached).toBe(true)
+      // The near plane at the lowest the ship got sits well short of the shell overhead.
+      const gap = shell - lowest
+      expect(gap).toBeGreaterThan(0)
+      expect(shipNear(surface, gap)).toBeLessThan(gap / 2)
     }
   })
 
-  test('pushes out along the normal, drops inward velocity and flags colliding', () => {
+  test.each(['venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
+    "keeps %s's cushion under its haze shell (tides-ufyr.4)",
+    (key) => {
+      const planet = flightBodies().find((b) => b.key === key)!
+      const up = new THREE.Vector3(0, 1, 0)
+      const stop = collisionRadius(planet)
+      const shell = Math.min(...planet.shellRadii!.filter((r) => r > stop))
+      expect(stop + cushionWidth(planet, up)).toBeLessThan(shell)
+    }
+  )
+
+  test('pushes out along the normal, bounces the inward velocity back at CUSHION_RESTITUTION and flags colliding', () => {
     const state = createShipState()
     state.position.set(EARTH.position.x - EARTH.radius, 0, 0.5)
     state.velocity.set(0.1, 0, 0.05)
+    const into = -state.velocity.dot(state.position.clone().sub(EARTH.position).normalize())
     const telemetry = createShipTelemetry()
     stepShip(state, input({ flightAssist: false }), FRAME, env([EARTH]), telemetry)
     expect(telemetry.colliding).toBe(true)
@@ -858,28 +934,351 @@ describe('collision', () => {
       EARTH.radius * COLLISION_MARGIN,
       9
     )
-    expect(state.velocity.dot(normal)).toBeGreaterThanOrEqual(-1e-12)
+    // Back out at the restitution's share of what reached the backstop: the
+    // cushion took some of it first, never added to it.
+    expect(state.velocity.dot(normal)).toBeLessThanOrEqual(CUSHION_RESTITUTION * into + 1e-12)
+    expect(state.velocity.dot(normal)).toBeGreaterThan(0.5 * CUSHION_RESTITUTION * into)
     expect(state.velocity.length()).toBeGreaterThan(0)
   })
 
   test.each([FRAME, MAX_DT])('resting on or thrusting into a surface is not a hit (dt %s)', (dt) => {
     // Nose straight at Earth's centre, so thrust is purely into the surface.
     const start = EARTH.position.clone().add(new THREE.Vector3(0, 0, EARTH.radius * COLLISION_MARGIN))
-    for (const throttle of [0, 1]) {
-      const state = shipAt(start, EARTH.position)
-      const telemetry = createShipTelemetry()
-      for (let i = 0; i < 300; i++) {
-        stepShip(state, input({ throttle }), dt, env([EARTH]), telemetry)
-        expect(telemetry.colliding).toBe(false)
+    for (const flightAssist of [true, false]) {
+      for (const throttle of [0, 1]) {
+        for (const reducedMotion of [true, false]) {
+          const state = shipAt(start, EARTH.position)
+          const telemetry = createShipTelemetry()
+          for (let i = 0; i < 300; i++) {
+            stepShip(state, input({ throttle, flightAssist }), dt, { ...env([EARTH]), reducedMotion }, telemetry)
+            expect(telemetry.colliding).toBe(false)
+            expect(state.position.distanceTo(EARTH.position)).toBeGreaterThanOrEqual(collisionRadius(EARTH) * (1 - 1e-12))
+          }
+          // At rest on the stop it stays there.
+          if (throttle === 0) expect(state.position.distanceTo(start)).toBeLessThan(1e-9)
+        }
       }
-      expect(state.position.distanceTo(start)).toBeLessThan(1e-9)
     }
-    for (const throttle of [0, 1]) {
-      const state = shipAt(start, EARTH.position)
-      const telemetry = createShipTelemetry()
-      for (let i = 0; i < 300; i++) {
-        stepShip(state, input({ throttle, flightAssist: false }), dt, env([EARTH]), telemetry)
+  })
+})
+
+describe('cushion (tides-ufyr.1)', () => {
+  // A plain sphere: its stop 2% of the radius up, and the cushion over it.
+  const ROCK: Body = { key: 'rock', position: new THREE.Vector3(), radius: 1 }
+  const STOP = floorRadius(ROCK, Y)
+  const W = cushionWidth(ROCK, Y)
+  const still = { ...env([ROCK]), reducedMotion: true }
+
+  // A ship just over the cushion moving straight down at `speed`, nose down.
+  function arriving(speed: number, body: Body = ROCK): ShipState {
+    const { width } = overStop(body, Y)
+    const state = createShipState()
+    state.position.copy(body.position).addScaledVector(Y, floorRadius(body, Y) + width * 1.001)
+    // Nose exactly down (lookAt along its up is degenerate): any tilt slides a
+    // ship held against a sphere off it sideways.
+    state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
+    state.velocity.set(0, -speed, 0)
+    return state
+  }
+
+  const radial = (state: ShipState, body: Body = ROCK) => state.velocity.dot(overStop(body, state.position).normal)
+
+  test('is CUSHION_DEPTH_SHARE × the stop height, at most CUSHION_MAX_SECONDS at the floor speed, and none on the surface', () => {
+    expect(W).toBeCloseTo(1.5 * (STOP - ROCK.radius), 12)
+    const big: Body = { ...ROCK, collisionRadius: 3 }
+    expect(cushionWidth(big, Y)).toBeCloseTo(0.6 * V_NORMAL, 12)
+    expect(cushionWidth({ ...ROCK, collisionRadius: 1 }, Y)).toBe(0)
+  })
+
+  test.each([FRAME, MAX_DT])('arriving at the floor speed sinks in under its width, is pushed back out and leaves, no hit (dt %s)', (dt) => {
+    const state = arriving(V_NORMAL)
+    const telemetry = createShipTelemetry()
+    let deepest = 0
+    let left = false
+    for (let i = 0; i < 3 / dt; i++) {
+      stepShip(state, input({ flightAssist: false }), dt, still, telemetry)
+      expect(telemetry.colliding).toBe(false)
+      deepest = Math.max(deepest, W - overStop(ROCK, state.position).height)
+      if (deepest > 0 && !inCushion(ROCK, state.position)) {
+        left = true
+        break
+      }
+    }
+    expect(deepest).toBeGreaterThan(0.2 * W)
+    expect(deepest).toBeLessThan(W)
+    expect(left).toBe(true)
+    // Out again, moving away: the bob's rebound, a small share of the arrival.
+    expect(radial(state)).toBeGreaterThan(0)
+    expect(radial(state)).toBeLessThan(0.3 * V_NORMAL)
+  })
+
+  test('sinks in about as deep at 60 fps as at MAX_DT', () => {
+    const deepest = (dt: number) => {
+      const state = arriving(V_NORMAL)
+      let most = 0
+      for (let i = 0; i < 2 / dt; i++) {
+        stepShip(state, input({ flightAssist: false }), dt, still)
+        most = Math.max(most, W - overStop(ROCK, state.position).height)
+      }
+      return most
+    }
+    const fast = deepest(FRAME)
+    const slow = deepest(MAX_DT)
+    expect(Math.abs(slow / fast - 1)).toBeLessThan(0.15)
+  })
+
+  test('arriving at 3× the floor speed reaches the backstop once and bounces off at CUSHION_RESTITUTION', () => {
+    const state = arriving(3 * V_NORMAL)
+    const telemetry = createShipTelemetry()
+    let hits = 0
+    for (let i = 0; i < 3 * 60; i++) {
+      const before = radial(state)
+      stepShip(state, input({ flightAssist: false }), FRAME, still, telemetry)
+      if (telemetry.colliding) {
+        hits++
+        // What reached the backstop, after the cushion's braking, came back
+        // out at the restitution's share: no more than that of the speed
+        // into the step, and most of it.
+        expect(radial(state)).toBeGreaterThan(0)
+        expect(radial(state)).toBeLessThanOrEqual(CUSHION_RESTITUTION * -before + 1e-12)
+        expect(radial(state)).toBeGreaterThan(0.5 * CUSHION_RESTITUTION * -before)
+        expect(-before).toBeGreaterThan(COLLISION_SPEED)
+      }
+      expect(state.position.length()).toBeGreaterThanOrEqual(STOP * (1 - 1e-12))
+    }
+    expect(hits).toBe(1)
+  })
+
+  test.each(
+    [FRAME, MAX_DT].flatMap((dt) => [true, false].map((flightAssist) => [dt, flightAssist] as const))
+  )('holding full throttle into it settles into a hover in it at rest, no hit (dt %s, Flight Assist %s)', (dt, flightAssist) => {
+    const state = arriving(V_NORMAL)
+    const telemetry = createShipTelemetry()
+    let settled = NaN
+    for (let t = 0; t < 30; t += dt) {
+      stepShip(state, input({ throttle: 1, flightAssist }), dt, still, telemetry)
+      expect(state.position.length()).toBeGreaterThanOrEqual(STOP * (1 - 1e-12))
+      if (t > 20) {
         expect(telemetry.colliding).toBe(false)
+        expect(inCushion(ROCK, state.position)).toBe(true)
+        settled = Number.isNaN(settled) ? state.position.length() : settled
+        expect(Math.abs(state.position.length() - settled)).toBeLessThan(1e-3 * W)
+        // At rest, so the HUD reads 0: the thrust is folded into the spring,
+        // not left as a velocity the next step's thrust cancels.
+        expect(telemetry.speed).toBeLessThan(1e-3 * V_NORMAL)
+      }
+    }
+  })
+
+  test('the nudge leaves no turn behind: out of the cushion the ship stops turning, with Flight Assist off', () => {
+    for (const throttle of [0, 1]) {
+      // 45° nose down, heading along +X, at the floor speed along the nose.
+      const state = createShipState()
+      state.position.set(0, STOP + 1.001 * W, 0)
+      state.orientation
+        .setFromAxisAngle(Y, -Math.PI / 2)
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 4))
+      state.velocity.copy(noseOf(state)).multiplyScalar(V_NORMAL)
+      const dive = () => -noseOf(state).dot(overStop(ROCK, state.position).normal)
+      const entry = dive()
+      let pressed = false
+      let left = false
+      for (let i = 0; i < 20 * 60; i++) {
+        const before = state.orientation.clone()
+        const out = state.cushion.depth === 0 && !inCushion(ROCK, state.position)
+        stepShip(state, input({ throttle, flightAssist: false }), FRAME, env([ROCK]))
+        pressed ||= state.cushion.depth > 0
+        // Idle stick: the spin it had before contact, none, all along.
+        expect(state.angularVelocity.length()).toBe(0)
+        if (pressed && out) left = true
+        // A step out of it doesn't turn the ship: the nose holds where the
+        // nudge left it.
+        if (out) expect(state.orientation.angleTo(before)).toBe(0)
+      }
+      expect(pressed).toBe(true)
+      expect(left).toBe(true)
+      expect(dive()).toBeLessThan(entry)
+    }
+  })
+
+  test.each([FRAME, 1 / 30, MAX_DT])('an arrival too fast for the cushion is an impact at any frame rate, one it absorbs never is (dt %s)', (dt) => {
+    const impacts = (speed: number) => {
+      const state = arriving(speed)
+      const telemetry = createShipTelemetry()
+      let count = 0
+      let was = false
+      for (let t = 0; t < 2; t += dt) {
+        stepShip(state, input({ flightAssist: false }), dt, still, telemetry)
+        if (isImpact(telemetry.colliding, was, telemetry.impactSpeed)) count++
+        if (!telemetry.colliding) expect(telemetry.impactSpeed).toBe(0)
+        was = telemetry.colliding
+      }
+      return count
+    }
+    expect(impacts(2.5 * V_NORMAL)).toBe(1)
+    expect(impacts(1.5 * V_NORMAL)).toBe(0)
+    expect(impacts(V_NORMAL)).toBe(0)
+  })
+
+  test('reaches the backstop at the same speed at any frame rate', () => {
+    const backstop = (dt: number) => {
+      const state = arriving(3 * V_NORMAL)
+      const telemetry = createShipTelemetry()
+      let most = 0
+      for (let t = 0; t < 2; t += dt) {
+        stepShip(state, input({ flightAssist: false }), dt, still, telemetry)
+        most = Math.max(most, telemetry.impactSpeed)
+      }
+      return most
+    }
+    const fast = backstop(FRAME)
+    expect(fast).toBeGreaterThan(IMPACT_BACKSTOP_SPEED)
+    expect(Math.abs(backstop(MAX_DT) / fast - 1)).toBeLessThan(0.05)
+  })
+
+  test('holding full throttle into it, the nose is eased up to the horizon without pilot input, and the ship skims off', () => {
+    for (const flightAssist of [true, false]) {
+      const state = arriving(V_NORMAL)
+      const telemetry = createShipTelemetry()
+      let hits = 0
+      let level = false
+      for (let i = 0; i < 10 * 60 && !level; i++) {
+        stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env([ROCK]), telemetry)
+        if (telemetry.colliding) hits++
+        level = noseOf(state).dot(overStop(ROCK, state.position).normal) > -0.05
+      }
+      expect(level).toBe(true)
+      expect(hits).toBe(0)
+    }
+  })
+
+  test.each([0, Math.PI / 2])('nudges the nose up toward the horizon with the ship rolled %s rad, never rolling it; the stick wins; reduced motion leaves it', (roll) => {
+    // 30° nose down, pressed half way in, still.
+    const setUp = () => {
+      const state = createShipState()
+      state.position.set(0, STOP + 0.5 * W, 0)
+      const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 6)
+      state.orientation.multiply(tilt).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1), roll))
+      state.cushion.key = ROCK.key
+      state.cushion.depth = 0.5 * W
+      return state
+    }
+    const dive = (state: ShipState) => -noseOf(state).dot(Y)
+    const before = dive(setUp())
+    expect(before).toBeCloseTo(0.5, 9)
+    for (const flightAssist of [true, false]) {
+      const free = setUp()
+      stepShip(free, input({ flightAssist }), FRAME, env([ROCK]))
+      // The nose rose; the ship didn't roll about it.
+      expect(dive(free)).toBeLessThan(before)
+      expect(Math.abs(free.angularVelocity.z)).toBeLessThan(1e-12)
+
+      // Full stick down on both axes: the nudge gives way.
+      const held = setUp()
+      const pushed = setUp()
+      stepShip(held, input({ flightAssist, pitch: -1, yaw: roll ? 1 : 0 }), FRAME, { ...env([ROCK]), reducedMotion: true })
+      stepShip(pushed, input({ flightAssist, pitch: -1, yaw: roll ? 1 : 0 }), FRAME, env([ROCK]))
+      expect(pushed.orientation.angleTo(held.orientation)).toBeLessThan(1e-9)
+
+      // Reduced motion: no nudge.
+      const reduced = setUp()
+      stepShip(reduced, input({ flightAssist }), FRAME, { ...env([ROCK]), reducedMotion: true })
+      expect(reduced.orientation.angleTo(setUp().orientation)).toBeLessThan(1e-12)
+    }
+  })
+
+  test('not pressed in, there is no nudge', () => {
+    const state = createShipState()
+    state.position.set(0, STOP + 2 * W, 0)
+    state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 6)
+    const orientation = state.orientation.clone()
+    stepShip(state, input(), FRAME, env([ROCK]))
+    expect(state.orientation.angleTo(orientation)).toBe(0)
+  })
+
+  test.each([FRAME, MAX_DT])('ground rising under a parked ship never presses the cushion in nor moves it (dt %s)', (dt) => {
+    let rise = 0
+    const CLEARANCE = 0.01
+    const body: Body = { key: 'rock', position: new THREE.Vector3(), radius: 1, collisionRadius: 1, groundClearance: CLEARANCE, ground: () => 1 + rise }
+    const width = cushionWidth(body, Y)
+    const state = shipAt(new THREE.Vector3(0, 1 + CLEARANCE, 0), body.position)
+    const telemetry = createShipTelemetry()
+    for (let i = 0; i < 20; i++) {
+      rise += 0.5 * width
+      stepShip(state, input(), dt, env([body]), telemetry)
+      settleShip(state, env([body]))
+      expect(state.velocity.length()).toBe(0)
+      expect(state.cushion.depth).toBe(0)
+      expect(telemetry.colliding).toBe(false)
+      expect(state.position.length()).toBeCloseTo(1 + rise + CLEARANCE, 12)
+    }
+  })
+
+  test('telemetry.cushion reads the speed sinking in over the floor speed, and 0 out of it', () => {
+    const state = arriving(V_NORMAL)
+    const telemetry = createShipTelemetry()
+    let peak = 0
+    for (let i = 0; i < 3 * 60; i++) {
+      stepShip(state, input({ flightAssist: false }), FRAME, still, telemetry)
+      expect(telemetry.cushion).toBeGreaterThanOrEqual(0)
+      expect(telemetry.cushion).toBeLessThanOrEqual(1)
+      peak = Math.max(peak, telemetry.cushion)
+      if (!inCushion(ROCK, state.position) && radial(state) > 0) expect(telemetry.cushion).toBe(0)
+    }
+    expect(peak).toBeGreaterThan(0.5)
+  })
+
+  // Full throttle straight down from 3 gaps up, nose down, pilot hands off.
+  test.each(
+    (['moon', 'mars', 'earth'] as const).flatMap((key) =>
+      (['high', 'low'] as const).flatMap((tier) => [FRAME, MAX_DT].map((dt) => [key, tier, dt] as const))
+    )
+  )('diving into %s (%s tier) at full throttle, nose down, at dt %s: never under the stop, and the nose rises', (key, tier, dt) => {
+    const bodies = flightBodies(TRIP_DATE, tier)
+    const body = bodies.find((b) => b.key === key)!
+    const up = new THREE.Vector3(0.3, 1, -0.2).normalize()
+    const { width } = overStop(body, body.position.clone().addScaledVector(up, body.radius * 2))
+    const start = body.position.clone().addScaledVector(up, floorRadius(body, up) + Math.max(3 * width, 0.05 * body.radius))
+    const state = shipAt(start, body.position)
+    const telemetry = createShipTelemetry()
+    let reached = false
+    let risen = false
+    for (let t = 0; t < 120 && !risen; t += dt) {
+      stepShip(state, input({ throttle: 1 }), dt, env(bodies), telemetry)
+      const { height, normal } = overStop(body, state.position)
+      expect(height).toBeGreaterThanOrEqual(-1e-12)
+      reached ||= inCushion(body, state.position)
+      risen = reached && noseOf(state).dot(normal) > -0.1
+    }
+    expect(reached).toBe(true)
+    expect(risen).toBe(true)
+  })
+
+  test.each([
+    ['a slope', 0.1, 0.2],
+    ['a cliff', 0.05, 0],
+  ])('skimming level across %s at the floor speed never hits it', (_, rise, width) => {
+    const CLEARANCE = 0.01
+    const body: Body = {
+      key: 'rock',
+      position: new THREE.Vector3(),
+      radius: 1,
+      collisionRadius: 1,
+      ground: (direction) => {
+        const phi = Math.atan2(direction.z, direction.x)
+        return 1 + rise * (width > 0 ? THREE.MathUtils.clamp(phi / width, 0, 1) : phi >= 0 ? 1 : 0)
+      },
+      groundClearance: CLEARANCE,
+    }
+    for (const dt of [FRAME, MAX_DT]) {
+      const start = new THREE.Vector3(Math.cos(-0.1), 0, Math.sin(-0.1)).multiplyScalar(1 + CLEARANCE)
+      const tangent = new THREE.Vector3(-Math.sin(-0.1), 0, Math.cos(-0.1))
+      const state = shipAt(start, start.clone().add(tangent))
+      const telemetry = createShipTelemetry()
+      for (let t = 0; t < 10; t += dt) {
+        stepShip(state, input({ throttle: 1 }), dt, env([body]), telemetry)
+        expect(telemetry.colliding).toBe(false)
+        expect(overStop(body, state.position).height).toBeGreaterThanOrEqual(-1e-12)
       }
     }
   })
@@ -918,40 +1317,58 @@ describe('ground (tides-01v.8.3)', () => {
   test.each([
     ['a slope', 0.1, 0.2],
     ['a cliff', 0.05, 0],
-  ])('slides up %s at the speed floor without entering it', (_, rise, width) => {
+  ])('slides up %s at the speed floor without entering it or hitting it', (_, rise, width) => {
     const body = rock(rise, width)
-    // Pressed 30° into the ground and heading east across the rise.
+    // Pressed 30° into the ground and heading east across the rise, the
+    // nose held there (no nudge).
     const start = along(-0.1).multiplyScalar(floorRadius(body, along(-0.1)))
     const tangent = new THREE.Vector3(-Math.sin(0.05), 0, Math.cos(0.05))
     const nose = tangent.clone().addScaledVector(along(0.05), -Math.tan(Math.PI / 6))
     const state = shipAt(start, start.clone().add(nose))
     const telemetry = createShipTelemetry()
     const direction = new THREE.Vector3()
+    let rode = false
     for (let i = 0; i < 40 / MAX_DT; i++) {
-      stepShip(state, input({ throttle: 1 }), MAX_DT, env([body]), telemetry)
+      stepShip(state, input({ throttle: 1 }), MAX_DT, { ...env([body]), reducedMotion: true }, telemetry)
       direction.copy(state.position).normalize()
       expect(state.position.length()).toBeGreaterThanOrEqual(floorRadius(body, direction) * (1 - 1e-12))
       expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * V_NORMAL + 1e-9)
+      expect(telemetry.colliding).toBe(false)
+      rode ||= longitude(state.position) > 0 && inCushion(body, state.position)
       if (longitude(state.position) > 0.3) break
     }
-    // Over the top and resting on it, not stuck at the foot.
+    // Over the top, having ridden the rise in its cushion, not stuck at the
+    // foot. (Off the top it can coast up out of the cushion: nothing pulls
+    // it back down but the thrust.)
     expect(longitude(state.position)).toBeGreaterThan(0.3)
-    expect(state.position.length()).toBeCloseTo(1 + rise + CLEARANCE, 6)
+    expect(state.position.length()).toBeGreaterThanOrEqual(1 + rise + CLEARANCE - 1e-12)
+    expect(rode).toBe(true)
     expect(telemetry.speedCap).toBe(V_NORMAL)
   })
 
-  test('diving straight in stops on the floor and flags the hit', () => {
+  test('diving straight in at the cap sinks into the cushion over the floor without a hit; at 3× the floor speed with Flight Assist off it hits', () => {
     const body = rock(0.1, 0.2)
     const start = along(0.3).multiplyScalar(3)
     const state = shipAt(start, body.position)
     const telemetry = createShipTelemetry()
-    let hit = false
+    let reached = false
     for (let i = 0; i < 60 * 60; i++) {
       stepShip(state, input({ throttle: 1 }), FRAME, env([body]), telemetry)
       expect(state.position.length()).toBeGreaterThanOrEqual((1.1 + CLEARANCE) * (1 - 1e-12))
+      expect(telemetry.colliding).toBe(false)
+      reached ||= inCushion(body, state.position)
+    }
+    expect(reached).toBe(true)
+
+    const { width } = overStop(body, along(0.3))
+    const fast = shipAt(along(0.3).multiplyScalar(1.1 + CLEARANCE + width), body.position)
+    fast.velocity.copy(along(0.3)).multiplyScalar(-3 * V_NORMAL)
+    let hit = false
+    for (let i = 0; i < 60; i++) {
+      stepShip(fast, input({ flightAssist: false }), FRAME, env([body]), telemetry)
+      expect(fast.position.length()).toBeGreaterThanOrEqual((1.1 + CLEARANCE) * (1 - 1e-12))
       hit ||= telemetry.colliding
     }
-    expect(state.position.length()).toBeCloseTo(1.1 + CLEARANCE, 9)
     expect(hit).toBe(true)
   })
 
@@ -1006,46 +1423,66 @@ describe("Earth's floor (tides-01v.8.7)", () => {
   })
 
   // Straight down at Earth from `gap` over its ground, unlocked, until it
-  // rests on the floor; then straight back up for `climb` seconds.
-  function dive(tier: QualityTier, throttle: number, gap = 3, climb = 0) {
+  // reaches the cushion over the floor, holding on into it for `hover`
+  // seconds; then straight back up for `climb` seconds.
+  function dive(tier: QualityTier, throttle: number, gap = 3, climb = 0, hover = 0) {
     const bodies = flightBodies(TRIP_DATE, tier)
     const earth = bodies.find((b) => b.key === 'earth')!
     const up = new THREE.Vector3(0.3, 1, -0.2).normalize()
     const start = earth.position.clone().addScaledVector(up, earth.ground!(up) + gap)
     const state = shipAt(start, earth.position)
     const telemetry = createShipTelemetry()
+    // Nose held down (no nudge): the dive and the hover at its end are the
+    // cushion's alone.
+    const held = { ...env(bodies), reducedMotion: true }
     let seconds = 0
     let peakShare = 0
     let peakSpeed = 0
     let lowest = Infinity
     const direction = new THREE.Vector3()
     for (; seconds < 600; seconds += FRAME) {
-      stepShip(state, input({ throttle }), FRAME, env(bodies), telemetry)
+      stepShip(state, input({ throttle }), FRAME, held, telemetry)
       const d = direction.subVectors(state.position, earth.position).length()
       direction.divideScalar(d)
       lowest = Math.min(lowest, d - floorRadius(earth, direction))
       peakShare = Math.max(peakShare, telemetry.speed / telemetry.speedCap)
       peakSpeed = Math.max(peakSpeed, telemetry.speed)
-      if (telemetry.speed < 1e-3 && d - floorRadius(earth, direction) < 1e-9) break
+      // Arrived: in the cushion over the floor (tides-ufyr.1).
+      if (inCushion(earth, state.position)) break
     }
     const altitude = state.position.distanceTo(earth.position) - earth.radius
     // Predicted from rest at the cap all the way (the spool-up aside).
     const ground = { law: earth.groundSpeed!, stop: earth.groundClearance!, base: altitude - telemetry.nearest.surfaceDistance }
     const eta = approachEta(gap, 1e9, wellTime(earth), throttle, speedFloor(earth), ground)
-    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, altitude, cap: telemetry.speedCap, eta }
+    const landed = { seconds, gap: telemetry.nearest.surfaceDistance, altitude, cap: telemetry.speedCap, eta, width: overStop(earth, state.position).width }
+    // Holding the throttle on into the ground: a hover in the cushion.
+    let hits = 0
+    let hovering = true
+    for (let t = 0; t < hover; t += FRAME) {
+      stepShip(state, input({ throttle }), FRAME, held, telemetry)
+      lowest = Math.min(lowest, overStop(earth, state.position).height)
+      peakShare = Math.max(peakShare, telemetry.speed / telemetry.speedCap)
+      if (telemetry.colliding) hits++
+      hovering &&= inCushion(earth, state.position)
+    }
     state.orientation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI))
     fly(state, climb, input({ throttle }), env(bodies))
     const height = state.position.distanceTo(earth.position) - earth.ground!(direction.subVectors(state.position, earth.position).normalize())
-    return { landed, peakShare, peakSpeed, lowest, height }
+    return { landed, peakShare, peakSpeed, lowest, height, hits, hovering }
   }
 
-  test.each([1, 0.3])('a dive at throttle %s from orbit comes to rest on the floor, never under it', (throttle) => {
-    const { landed, peakShare, lowest } = dive('high', throttle)
+  test.each([1, 0.3])('a dive at throttle %s from orbit arrives in the cushion over the floor and hovers there, never under it', (throttle) => {
+    const { landed, peakShare, lowest, hits, hovering } = dive('high', throttle, 3, 0, 20)
     expect(lowest).toBeGreaterThanOrEqual(-1e-9)
-    expect(landed.gap).toBeCloseTo(EARTH_GROUND_CLEARANCE, 6)
-    // The air's floor at the stop, with or without the tiles (tides-zmw.9.29).
+    expect(landed.gap).toBeGreaterThanOrEqual(EARTH_GROUND_CLEARANCE)
+    expect(landed.gap).toBeLessThan(EARTH_GROUND_CLEARANCE + landed.width)
+    expect(hits).toBe(0)
+    expect(hovering).toBe(true)
+    // The air's floor in the cushion, with or without the tiles (tides-zmw.9.29).
     expect(landed.cap).toBeCloseTo(lawFloor(EARTH_GROUND_SPEED_LAW, landed.gap, landed.altitude), 12)
-    // Rides the well and the air down without the approach warning's overshoot.
+    // Rides the well and the air down without the approach warning's
+    // overshoot, and the hover doesn't run away (tides-ufyr.1: the ride's
+    // ratio on the spring's push).
     expect(peakShare).toBeLessThan(1.5)
     // Most of it in the air (~70 s at full throttle, over 3 min at 0.3), as approachEta has it.
     expect(landed.seconds).toBeGreaterThan(0.95 * landed.eta)
@@ -1070,37 +1507,47 @@ describe("Earth's floor (tides-01v.8.7)", () => {
     expect(dive('high', 1, DECK, 15).height).toBeGreaterThan(EARTH_SHELL_RADIUS + shipNear(Infinity) - EARTH_RADIUS)
   })
 
-  test.each([true, false])('a locked dive at Earth never goes over the cap (FA %s)', (flightAssist) => {
+  test.each([true, false])('a locked dive at Earth never goes over the cap and settles into the cushion (FA %s)', (flightAssist) => {
     const bodies = flightBodies()
     const earth = bodies.find((b) => b.key === 'earth')!
     const state = shipAt(earth.position.clone().add(new THREE.Vector3(0, 0, 6)), earth.position)
     const telemetry = createShipTelemetry()
     let peak = 0
     for (let i = 0; i < 60 * 60; i++) {
-      stepShip(state, input({ throttle: 1, flightAssist }), FRAME, env(bodies, 'earth'), telemetry)
+      stepShip(state, input({ throttle: 1, flightAssist }), FRAME, { ...env(bodies, 'earth'), reducedMotion: true }, telemetry)
+      expect(telemetry.colliding).toBe(false)
       peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
     }
-    expect(telemetry.nearest.surfaceDistance).toBeCloseTo(EARTH_GROUND_CLEARANCE, 6)
+    expect(inCushion(earth, state.position)).toBe(true)
+    expect(overStop(earth, state.position).height).toBeGreaterThanOrEqual(0)
     expect(peak).toBeLessThanOrEqual(1 + 1e-6)
   })
 
   // Over the cloud sheet, on the high tier's speed law (tides-ufyr.2).
-  test('a dive on the low tier comes to rest at EARTH_COLLISION_RADIUS at the air\'s cap', () => {
+  test('a dive on the low tier arrives in the cushion over EARTH_COLLISION_RADIUS at the air\'s cap', () => {
     const { landed, peakShare, lowest } = dive('low', 1)
     expect(lowest).toBeGreaterThanOrEqual(-1e-9)
-    expect(landed.altitude).toBeCloseTo(EARTH_COLLISION_RADIUS - EARTH_RADIUS, 9)
+    const stop = EARTH_COLLISION_RADIUS - EARTH_RADIUS
+    expect(landed.altitude).toBeGreaterThanOrEqual(stop - 1e-9)
+    expect(landed.altitude).toBeLessThan(stop + landed.width)
     expect(landed.cap).toBeCloseTo(lawFloor(EARTH_GROUND_SPEED_LAW, landed.gap, landed.altitude), 12)
     // ~5 km/s over the sheet, not V_NORMAL.
     expect(landed.cap).toBeLessThan(V_NORMAL)
     expect(peakShare).toBeLessThan(1.5)
   })
 
-  test('the low tier still stops at EARTH_COLLISION_RADIUS', () => {
+  test('the low tier still stops at EARTH_COLLISION_RADIUS, its cushion over it', () => {
     const bodies = flightBodies(TRIP_DATE, 'low')
     const earth = bodies.find((b) => b.key === 'earth')!
     const state = shipAt(earth.position.clone().add(new THREE.Vector3(0, 0, 4)), earth.position)
-    fly(state, 30, input({ throttle: 1 }), env(bodies))
-    expect(state.position.distanceTo(earth.position)).toBeCloseTo(EARTH_COLLISION_RADIUS, 9)
+    let reached = false
+    for (let t = 0; t < 30; t += FRAME) {
+      stepShip(state, input({ throttle: 1 }), FRAME, env(bodies))
+      expect(state.position.distanceTo(earth.position)).toBeGreaterThanOrEqual(EARTH_COLLISION_RADIUS * (1 - 1e-12))
+      reached ||= inCushion(earth, state.position)
+    }
+    expect(reached).toBe(true)
+    expect(floorRadius(earth, Y)).toBe(EARTH_COLLISION_RADIUS)
   })
 })
 
@@ -1374,7 +1821,7 @@ describe('trip times at the flight scale', () => {
 })
 
 describe('overshoot', () => {
-  test('unlocked, full throttle at the Moon arrives over the cap and hits; locked it does not', () => {
+  test('unlocked, full throttle at the Moon arrives over the cap and reaches its cushion over the floor speed; locked it does not', () => {
     const unlocked = trip('moon', { locked: false })
     expect(unlocked.arrivalFraction).toBeGreaterThan(1.2)
     expect(unlocked.peakFraction).toBeLessThanOrEqual(OVERSPEED_MAX)
@@ -1383,17 +1830,18 @@ describe('overshoot', () => {
     expect(locked.peakFraction).toBeLessThanOrEqual(1 + 1e-9)
     expect(locked.hit).toBe(false)
 
-    // Keep going unlocked: it reaches the surface still over the floor.
+    // Keep going unlocked: it reaches the surface's cushion still over the
+    // floor (tides-ufyr.1: which then absorbs it, under ~2× the floor).
     const bodies = flightBodies()
     const moon = bodies.find((b) => b.key === 'moon')!
     const state = shipAt(moon.position.clone().add(new THREE.Vector3(0, 0, 20)), moon.position)
     const telemetry = createShipTelemetry()
-    let hit = false
-    for (let i = 0; i < 60 * 30 && !hit; i++) {
+    let arrival = NaN
+    for (let i = 0; i < 60 * 30 && Number.isNaN(arrival); i++) {
       stepShip(state, input({ throttle: 1 }), FRAME, env(bodies), telemetry)
-      hit = telemetry.colliding
+      if (inCushion(moon, state.position)) arrival = telemetry.speed
     }
-    expect(hit).toBe(true)
+    expect(arrival).toBeGreaterThan(1.2 * V_NORMAL)
   })
 
   test('below WELL_BRAKE · wellFactor / K_WELL throttle the dive tracks the cap', () => {
@@ -1573,7 +2021,7 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
     expect((growth(EARTH_GROUND_SPEED_LAW) as { worst: number }).worst).toBeLessThan(1.02)
   })
 
-  test('an unlocked dive under the law rides the cap down: speed / cap stays at the throttle to the stop', () => {
+  test('an unlocked dive under the law rides the cap down: speed / cap stays at the throttle down to the cushion', () => {
     const { bodies, earth } = earthOverTiles()
     const start = earth.position.clone().addScaledVector(UP, earth.ground!(UP) + 30000 * M)
     const state = shipAt(start, earth.position)
@@ -1584,7 +2032,7 @@ describe('true to scale near the ground (tides-zmw.9.18)', () => {
       stepShip(state, input({ throttle: 0.6 }), FRAME, env(bodies), telemetry)
       // After the spool-up (2 s τ deep in the well).
       if (seconds > 8) peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
-      if (gapOf(earth, state) < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+      if (inCushion(earth, state.position)) break
     }
     expect(peak).toBeLessThan(0.62)
     // Through the air (tides-zmw.9.29): ∫ dh / (0.6 · sea · e^(h / L)) from
@@ -1785,7 +2233,7 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
     expect(state.velocity.length() / before).toBeGreaterThan(0.8)
   })
 
-  test('flying level at the cap into rising ground: never under the floor, and it comes to the 30 m stop over the slope', () => {
+  test('flying level at the cap into rising ground: never under the floor, and it rides the cushion over the 30 m stop up the slope', () => {
     // Sea for x < 0, then a slope rising to 3 km at 1:2.
     const slope = (direction: THREE.Vector3) => THREE.MathUtils.clamp(0.5 * R * Math.atan2(direction.x, direction.y), 0, 3 * KM)
     const earth = earthWith(slope)
@@ -1800,9 +2248,9 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       direction.divideScalar(d)
       expect(d - floorRadius(earth, direction)).toBeGreaterThanOrEqual(-1e-12)
       expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * telemetry.speedCap + 1e-12)
-      if (d - earth.ground!(direction) < FINE_GROUND_CLEARANCE + 1 * M) resting++
+      if (inCushion(earth, state.position)) resting++
     }
-    // It met the slope and rode it at the stop.
+    // It met the slope and rode it in the cushion over the stop.
     expect(resting).toBeGreaterThan(0)
   })
 
@@ -1855,18 +2303,18 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
       expect(speedCap(at, [sea], flatNose, NaN)).toBe(base)
     })
 
-    // Straight down from 100 km at full throttle, Flight Assist on, to the 30 m stop.
+    // Straight down from 100 km at full throttle, Flight Assist on, to the cushion over the 30 m stop.
     const descend = (boost: boolean, dt = FRAME) => {
       const state = shipAt(above(100), new THREE.Vector3())
       let seconds = 0
       for (; seconds < 300; seconds += dt) {
         stepShip(state, input({ throttle: 1, boost }), dt, env([sea]))
-        if (state.position.length() - R < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+        if (inCushion(sea, state.position)) break
       }
       return seconds
     }
 
-    test('boosted, straight down from 100 km to the 30 m stop takes seconds, not a minute and a half, as approachEta has it', () => {
+    test('boosted, straight down from 100 km to the cushion over the 30 m stop takes seconds, not a minute and a half, as approachEta has it', () => {
       const boosted = descend(true)
       expect(boosted).toBeLessThan(10)
       expect(descend(true, MAX_DT)).toBeLessThan(10)
@@ -1933,7 +2381,7 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
     test.each([
       ['held', Infinity],
       ['released at 5 s', 5],
-    ])('boost %s flying level at the cap into rising ground: never under the floor, never a hit, and it comes to the 30 m stop', (_, release) => {
+    ])('boost %s flying level at the cap into rising ground: never under the floor, never a hit, and it rides the cushion over the 30 m stop', (_, release) => {
       const slope = (direction: THREE.Vector3) => THREE.MathUtils.clamp(0.5 * R * Math.atan2(direction.x, direction.y), 0, 3 * KM)
       const earth = earthWith(slope)
       const start = new THREE.Vector3(-0.002, R + 1 * KM, 0)
@@ -1948,7 +2396,7 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
         expect(d - floorRadius(earth, direction)).toBeGreaterThanOrEqual(-1e-12)
         expect(telemetry.speed).toBeLessThanOrEqual(OVERSPEED_MAX * telemetry.speedCap + 1e-12)
         expect(telemetry.colliding).toBe(false)
-        if (d - earth.ground!(direction) < FINE_GROUND_CLEARANCE + 1 * M) resting++
+        if (inCushion(earth, state.position)) resting++
       }
       expect(resting).toBeGreaterThan(0)
     })
@@ -1962,7 +2410,7 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
         stepShip(state, input({ throttle: 1, flightAssist: false, boost: true }), FRAME, env([sea], 'earth'), telemetry)
         const closing = state.velocity.dot(down.copy(state.position).normalize().negate())
         expect(closing).toBeLessThanOrEqual(telemetry.speedCap * (1 + 1e-9))
-        if (state.position.length() - R < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+        if (inCushion(sea, state.position)) break
       }
       expect(seconds).toBeLessThan(120)
     })
@@ -1979,7 +2427,7 @@ describe("Earth's air sets the cap (tides-zmw.9.29)", () => {
         stepShip(state, input({ throttle: 1, flightAssist: false, boost: Number.isNaN(released) }), FRAME, env([sea], 'earth'), telemetry)
         const closing = state.velocity.dot(down.copy(state.position).normalize().negate())
         expect(closing).toBeLessThanOrEqual(telemetry.speedCap * (1 + 1e-9))
-        if (gap < FINE_GROUND_CLEARANCE + 1e-3 * M) break
+        if (inCushion(sea, state.position)) break
       }
       // Released, and the spool-down ran its course before the stop.
       expect(seconds - released).toBeGreaterThan(BOOST_SPOOL_SECONDS)

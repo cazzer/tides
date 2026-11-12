@@ -9,7 +9,8 @@ import { prefersReducedMotion } from './reduced-motion'
 
 /**
  * Shakes the ship view in Earth's air (tides-xxg, shake.ts): with the
- * dynamic pressure, more while the boost raises the cap, eased in and out.
+ * dynamic pressure, more while the boost raises the cap, and lightly while
+ * sinking into a body's cushion (tides-ufyr.1), eased in and out.
  * Off under prefers-reduced-motion. Touches only the camera's quaternion,
  * and only from SHIP_SHAKE_PRIORITY (after ShipController's settle, just
  * before drei's View renders) to SHIP_SHAKE_RESTORE_PRIORITY (just after
@@ -32,7 +33,13 @@ export function useShipShake(): void {
     if (!('isPerspectiveCamera' in camera)) return
     const dt = Math.min(delta, MAX_DT)
     const reduced = prefersReducedMotion()
-    const target = shakeTarget(shipTelemetry.air.dynamicPressure, shipTelemetry.boost, shipTelemetry.boosted, reduced)
+    const target = shakeTarget(
+      shipTelemetry.air.dynamicPressure,
+      shipTelemetry.boost,
+      shipTelemetry.boosted,
+      reduced,
+      shipTelemetry.cushion
+    )
     // Reduced motion cuts it at once rather than easing it out.
     intensity.current = reduced ? 0 : easeShake(intensity.current, target, dt)
     if (intensity.current === 0) return

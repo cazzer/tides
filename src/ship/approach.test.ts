@@ -6,6 +6,8 @@ import {
   V_TOP,
   collisionRadius,
   createShipState,
+  CUSHION_MAX_SECONDS,
+  cushionWidth,
   floorRadius,
   lawFloor,
   stepShip,
@@ -75,11 +77,19 @@ interface Sample {
   status: ApproachStatus
 }
 
+/** Whether `position` is in `body`'s cushion over its stop (flight.ts, tides-ufyr.1). */
+function inCushion(body: Body, position: THREE.Vector3): boolean {
+  const normal = position.clone().sub(body.position)
+  const d = normal.length()
+  normal.divideScalar(d)
+  return d - floorRadius(body, normal) < cushionWidth(body, normal)
+}
+
 /**
  * Fly straight at `subject` (on the −Z axis from +Z) from `start` units off
  * its surface, already at `throttle` × V_TOP, holding `throttle`, until the
- * ship hits or `seconds` pass; shipApproach is updated every frame, as
- * ShipTargeting does.
+ * ship hits or reaches its cushion (tides-ufyr.1) or `seconds` pass;
+ * shipApproach is updated every frame, as ShipTargeting does.
  */
 function approach(
   subject: Body,
@@ -127,7 +137,7 @@ function approach(
       eta: shipApproach.eta,
       status: shipApproach.status,
     })
-    if (telemetry.colliding || telemetry.nearest.surfaceDistance < 0.03) break
+    if (telemetry.colliding || inCushion(subject, state.position)) break
   }
   return samples
 }
@@ -216,9 +226,8 @@ describe("touching Earth's ground (tides-01v.8.17)", () => {
       let impacts = 0
       let landed = false
       for (let t = 0; t < 300 && !landed; t += FRAME) {
-        const speedBefore = telemetry.speed
         stepShip(state, pilot, FRAME, { bodies, targetKey: null }, telemetry)
-        if (isImpact(telemetry.colliding, wasColliding, speedBefore)) impacts++
+        if (isImpact(telemetry.colliding, wasColliding, telemetry.impactSpeed)) impacts++
         wasColliding = telemetry.colliding
         peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
         updateApproach({
@@ -235,7 +244,7 @@ describe("touching Earth's ground (tides-01v.8.17)", () => {
           km,
         })
         statuses.add(shipApproach.status)
-        landed = state.position.length() - collisionRadius(earth) < 1e-6
+        landed = inCushion(earth, state.position)
       }
       expect(landed).toBe(true)
       expect(impacts).toBe(0)
@@ -291,12 +300,13 @@ describe('approachEta', () => {
       const moon = body('moon')
       const run = approach(moon, { start: 500, throttle, locked: true })
       const arrival = run[run.length - 1].t
-      // It arrives, rather than sticking at the well time.
-      expect(run[run.length - 1].gap).toBeLessThan(0.05)
+      // It arrives in the cushion (tides-ufyr.1), rather than sticking at the well time.
+      expect(run[run.length - 1].gap).toBeLessThan(collisionRadius(moon) - moon.radius + cushionWidth(moon, new THREE.Vector3(0, 0, 1)))
       // From a second in, once the velocity has settled to the throttle.
       const settled = run.filter((s) => s.t > 1)
       expect(Math.abs(settled[0].eta - (arrival - settled[0].t)) / (arrival - settled[0].t)).toBeLessThan(0.15)
-      for (let i = 1; i < settled.length; i++) {
+      // All the way in; the last sample, in the cushion, is slowed by it.
+      for (let i = 1; i < settled.length - 1; i++) {
         expect(settled[i].eta).toBeLessThan(settled[i - 1].eta + 1e-9)
       }
       // gap / closing, the old ETA, sticks near the well time in the well.
@@ -482,7 +492,9 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
       return shipApproach.eta
     }
     const boosted = eta(1)
-    expect(boosted).toBeCloseTo(approachEta(20000 * M, 1, wellTime, 1, EARTH_SLOWEST, { law, stop: FINE_GROUND_CLEARANCE, base: 0, boost: 1 }), 9)
+    // Arriving in the cushion over the stop (tides-ufyr.1).
+    const stop = FINE_GROUND_CLEARANCE + cushionWidth(earth, new THREE.Vector3(0, 1, 0))
+    expect(boosted).toBeCloseTo(approachEta(20000 * M, 1, wellTime, 1, EARTH_SLOWEST, { law, stop, base: 0, boost: 1 }), 9)
     expect(boosted).toBeLessThan(eta(0) / 5)
   })
 
@@ -517,8 +529,8 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
     let t = 0
     for (; t < 300; t += 1 / 60) {
       stepShip(state, input, 1 / 60, { bodies: [earth], targetKey: 'earth' }, telemetry)
-      // Arrived: within a metre of the stop.
-      if (telemetry.nearest.surfaceDistance < FINE_GROUND_CLEARANCE + 1 * M) break
+      // Arrived: in the cushion over the stop (tides-ufyr.1).
+      if (inCushion(earth, state.position)) break
     }
     expect(Math.abs(t / eta - 1)).toBeLessThan(0.15)
   })
@@ -530,6 +542,7 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
     const up = new THREE.Vector3(0, 1, 0)
     const stop = floorRadius(earth, up)
     expect(stop).toBe(EARTH_COLLISION_RADIUS)
+    const width = cushionWidth(earth, up)
     const state = createShipState()
     state.position.set(0, stop + 0.5, 0)
     state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
@@ -556,15 +569,17 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
         km,
       })
       etas.push({ t: t + FRAME, eta: shipApproach.eta })
-      if (state.position.length() - stop < 1e-6) break
+      // Arrived: in the cushion over the stop (tides-ufyr.1).
+      if (state.position.length() - stop < width + 1e-6) break
     }
     const arrival = t + FRAME
-    expect(state.position.length() - stop).toBeLessThan(1e-6)
-    // Within a frame or so of the stop, the ETA is about 0, not a slow leg
-    // down to groundClearance over the ground.
+    expect(state.position.length() - stop).toBeLessThan(width + 1e-6)
+    // Within a frame or so of the cushion, the ETA is no more than the band's
+    // own depth at its speed (CUSHION_MAX_SECONDS), not a slow leg down to
+    // groundClearance over the ground.
     const last = etas.filter((e) => arrival - e.t <= 0.1 && Number.isFinite(e.eta))
     expect(last.length).toBeGreaterThan(0)
-    for (const e of last) expect(e.eta).toBeLessThan(0.5)
+    for (const e of last) expect(e.eta).toBeLessThan(CUSHION_MAX_SECONDS + 0.2)
     // Once the speed has settled, it tracks the time left.
     for (const share of [0.5, 0.8]) {
       const e = etas[Math.floor(share * (etas.length - 1))]

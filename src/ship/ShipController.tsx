@@ -23,6 +23,7 @@ import { clearLimbView, disposeLimbSpheres, updateLimbView } from './limb-detail
 import { setSurfaceEye } from '../surface-handover'
 import { reversedFloatDepth } from '../renderers/depth-precision'
 import { SURFACE_TILES_ON } from '../surface'
+import { prefersReducedMotion } from './reduced-motion'
 import { carryShip, earthSpinRate, fillAir, fillAirUncarried, fillEarthEye, resetFrameCarry, shipCarry } from './frame-carry'
 
 // Ship mode runs the sim at 1×, where bodies move ~1e-5 units/s: re-running
@@ -110,7 +111,13 @@ export function ShipController() {
     setSurfaceEye(earth ? state.position.distanceTo(earth.position) - earth.radius : Infinity)
     // Read each frame: the depth probe may answer after the first ones.
     if (SURFACE_TILES_ON) earth?.floor?.beginFrame(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(gl)))
-    stepShip(state, shipInput, delta, { bodies, targetKey: getShipTarget() }, shipTelemetry)
+    stepShip(
+      state,
+      shipInput,
+      delta,
+      { bodies, targetKey: getShipTarget(), reducedMotion: prefersReducedMotion() },
+      shipTelemetry
+    )
     if (SURFACE_TILES_ON && earth) fillAir(shipCarry, shipTelemetry, state, earth, spinRate)
     // Without the carry the ship flies in the heliocentric frame: the air's
     // speed (the HUD's, tides-d9f.1) takes Earth's orbit and spin out of it.

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { SEA_LEVEL_DENSITY, airDensity } from './frame-carry'
 import {
+  CUSHION_SHAKE_GAIN,
   SHAKE_BOOST_GAIN,
   SHAKE_EPSILON,
   SHAKE_FALL_TAU,
@@ -91,6 +92,20 @@ describe('shake target', () => {
     expect(shakeTarget(pressure, NaN, true)).toBe(plain)
     expect(shakeTarget(0, 1, true)).toBe(0)
     expect(shakeTarget(1e12, 1, true)).toBeLessThanOrEqual(SHAKE_MAX_INTENSITY)
+  })
+
+  test('sinking into a cushion shakes it lightly, in vacuum too, never under reduced motion (tides-ufyr.1)', () => {
+    expect(shakeTarget(0, 0, false, false, 1)).toBe(CUSHION_SHAKE_GAIN)
+    expect(shakeTarget(0, 0, false, false, 0.5)).toBeCloseTo(0.5 * CUSHION_SHAKE_GAIN, 12)
+    expect(shakeTarget(0, 0, false, false, 0)).toBe(0)
+    expect(shakeTarget(0, 0, false, true, 1)).toBe(0)
+    // The larger of the two, never their sum, and never over the most.
+    const pressure = q(2, 400)
+    const air = shakeTarget(pressure, 1, true)
+    expect(shakeTarget(pressure, 1, true, false, 1)).toBe(Math.max(air, CUSHION_SHAKE_GAIN))
+    expect(shakeTarget(1e12, 1, true, false, 1)).toBeLessThanOrEqual(SHAKE_MAX_INTENSITY)
+    for (const nonsense of [NaN, -1, Infinity]) expect(shakeTarget(0, 0, false, false, nonsense)).toBeLessThanOrEqual(CUSHION_SHAKE_GAIN)
+    expect(shakeTarget(0, 0, false, false, NaN)).toBe(0)
   })
 
   test('none under reduced motion', () => {

@@ -15,7 +15,8 @@ const FOV_EPSILON = 1e-3
  * rest toward SHIP_FOV + FOV_KICK at the cruise cap in real cruise (see
  * fovKickShare), eased so it swells and settles rather than tracking every
  * throttle twitch. Off under prefers-reduced-motion. Also counts impacts
- * (telemetry.colliding's rising edge, coming in fast; see isImpact) into
+ * (telemetry.colliding's rising edge, reaching the backstop fast:
+ * telemetry.impactSpeed; see isImpact) into
  * shipImpacts and punches the FOV in for a moment on each (tides-2hv.12),
  * again not under reduced motion. Touches only fov (and the projection), never the pose, near or far that
  * ShipController owns.
@@ -24,7 +25,6 @@ export function useSpeedFov(): void {
   const get = useThree((s) => s.get)
   const share = useRef(0)
   const colliding = useRef(false)
-  const speedBefore = useRef(0)
   // Seconds since the last hit; Infinity before any.
   const sinceImpact = useRef(Infinity)
 
@@ -33,14 +33,13 @@ export function useSpeedFov(): void {
   useFrame(({ camera }, delta) => {
     if (!('isPerspectiveCamera' in camera)) return
     const dt = Math.min(delta, MAX_DT)
-    if (isImpact(shipTelemetry.colliding, colliding.current, speedBefore.current)) {
+    if (isImpact(shipTelemetry.colliding, colliding.current, shipTelemetry.impactSpeed)) {
       shipImpacts.count++
       sinceImpact.current = 0
     } else {
       sinceImpact.current += dt
     }
     colliding.current = shipTelemetry.colliding
-    speedBefore.current = shipTelemetry.speed
     const target = fovKickShare(shipTelemetry.speed, shipTelemetry.speedCap)
     share.current = easeToward(share.current, target, dt, FOV_TAU)
     const reduced = prefersReducedMotion()

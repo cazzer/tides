@@ -24,6 +24,7 @@ import {
   WELL_BRAKE,
   WELL_EDGE_SPEED,
   bandEdgeGap,
+  cushionWidth,
   floorRadius,
   lawCeiling,
   lawFloor,
@@ -92,7 +93,11 @@ export const FAST_OFF = OVER_ON - 0.1
  * a floor under IMPACT_MIN_SPEED / OVERSPEED_MAX (0.125; Earth's ground on
  * the high tier is 0.02) even an unlocked full-throttle dive with Flight
  * Assist off touches down softly: stopping at the ground, not hitting it
- * (tides-01v.8.17). There, over and fast would warn about nothing.
+ * (tides-01v.8.17). There, over and fast would warn about nothing. A crash
+ * means reaching the backstop under the surface's cushion (flight.ts,
+ * tides-ufyr.1), which absorbs arrivals up to about twice the floor; this
+ * still reads any arrival over the floor as one that can be, so it warns
+ * early rather than late (tides-d11z tightens it).
  */
 export function canCrash(speedFloor: number): boolean {
   return OVERSPEED_MAX * speedFloor > IMPACT_MIN_SPEED
@@ -589,11 +594,12 @@ export function updateApproach(frame: ApproachFrame, out: ShipApproach = shipApp
   let ground: EtaGround | undefined
   if (body.groundSpeed) {
     etaGround.law = body.groundSpeed
-    // The stop's height over the ground under the ship: groundClearance
-    // where the ground sets the floor, more where the hard sphere does (the
-    // low tier's over its cloud sheet, tides-ufyr.2).
+    // Where the ship arrives, over the ground under it: the stop's height
+    // (groundClearance where the ground sets the floor, more where the hard
+    // sphere does: the low tier's over its cloud sheet, tides-ufyr.2), plus
+    // the cushion it comes to rest in (tides-ufyr.1).
     etaGround.stop = body.ground && distance > 0
-      ? floorRadius(body, fromBody) - (distance - gap)
+      ? floorRadius(body, fromBody) + cushionWidth(body, fromBody) - (distance - gap)
       : (body.groundClearance ?? 0)
     etaGround.base = distance - body.radius - gap
     etaGround.boost = frame.boost
