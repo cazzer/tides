@@ -7,12 +7,12 @@ import { mainCameraPose } from '../main-camera-session'
 import { settleShip, stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
-import { createShipBodies, EARTH_SHELL_RADII, shipBodyVelocity, updateShipBodies, updateShipBody } from './ship-bodies'
+import { createShipBodies, shipBodyVelocity, updateShipBodies, updateShipBody } from './ship-bodies'
 import {
   NEAR_MIN,
   SHIP_SETTLE_PRIORITY,
+  bodiesShellGap,
   fineGroundDepth,
-  shellGap,
   shipFar,
   shipNear,
   shipNearFloor,
@@ -67,13 +67,10 @@ export function ShipController() {
   // The near and far planes for the ship at `position`, `groundGap` over the
   // ground and on a depth buffer whose floor is `nearFloor`.
   const setPlanes = (camera: THREE.PerspectiveCamera, position: THREE.Vector3, groundGap: number, nearFloor: number) => {
-    // Earth's shells stand off its ground, so the ground's gap alone would let
-    // the near plane cut them on the way down through them.
-    const near = shipNear(
-      groundGap,
-      earth ? shellGap(position.distanceTo(earth.position), EARTH_SHELL_RADII) : Infinity,
-      nearFloor
-    )
+    // Earth's shells and the planets' hazes stand off their ground, so the
+    // ground's gap alone would let the near plane cut them on the way down
+    // through them.
+    const near = shipNear(groundGap, bodiesShellGap(position, bodies), nearFloor)
     // The Sun sits at the origin.
     const far = shipFar(position.length())
     if (camera.near !== near || camera.far !== far) {

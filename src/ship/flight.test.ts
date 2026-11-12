@@ -823,20 +823,22 @@ describe('collision', () => {
     ['jupiter', JUPITER_HAZE_OUTER],
     ['uranus', URANUS_HAZE_OUTER],
     ['neptune', NEPTUNE_HAZE_OUTER],
-  ])("stops a near plane's depth outside %s's haze shell at full throttle (tides-9m0)", (key, haze) => {
+  ])("dives under %s's haze shell at full throttle to its stop, never through it (tides-ufyr.4)", (key, haze) => {
     const planet = flightBodies().find((b) => b.key === key)!
     const shell = planet.radius * haze
+    const stop = collisionRadius(planet)
+    expect(stop).toBeLessThan(shell)
     const start = planet.position.clone().add(new THREE.Vector3(0, 0, 30 + shell))
     for (const targetKey of [null, key]) {
       const state = shipAt(start, planet.position)
       const telemetry = createShipTelemetry()
       for (let i = 0; i < 60 * 60; i++) {
         stepShip(state, input({ throttle: 1 }), FRAME, env([planet], targetKey), telemetry)
-        expect(state.position.distanceTo(planet.position)).toBeGreaterThan(shell)
+        expect(state.position.distanceTo(planet.position)).toBeGreaterThanOrEqual(stop * (1 - 1e-12))
       }
-      const gap = state.position.distanceTo(planet.position) - shell
-      expect(gap).toBeCloseTo(shipNear(Infinity), 9)
-      // The near plane at the stop sits well short of the shell.
+      expect(state.position.distanceTo(planet.position)).toBeCloseTo(stop, 9)
+      // The near plane at the stop sits well short of the shell overhead.
+      const gap = shell - stop
       expect(shipNear(telemetry.nearest.surfaceDistance, gap)).toBeLessThan(gap / 2)
     }
   })

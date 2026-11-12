@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import type { MainCameraPose } from '../main-camera-session'
 import type { CameraFocus, Layout, PanelKey } from '../store'
-import { COLLISION_MARGIN } from './flight'
+import { COLLISION_MARGIN, collisionRadius } from './flight'
 import {
   createShipBodies,
   EARTH_COLLISION_RADIUS,
@@ -28,6 +28,8 @@ import {
   SHIP_SHAKE_RESTORE_PRIORITY,
   SHIP_STAR_RADIUS,
   SYSTEM_REACH,
+  NEAR_CORNER_REACH,
+  bodiesShellGap,
   shellGap,
   shipFar,
   shipNear,
@@ -336,6 +338,38 @@ describe('ship camera range', () => {
     expect(shipNear(d - EARTH_RADIUS)).toBeGreaterThan(shells)
     expect(shipNear(d - EARTH_RADIUS, shells) * CORNER).toBeLessThan(shells)
   })
+
+  // The planets' hazes are drawn from inside too, and their stops sit under
+  // them (tides-ufyr.4).
+  it.each(['venus', 'mars', 'jupiter', 'uranus', 'neptune'])(
+    "keeps the near rectangle off %s's haze on the way down to its stop",
+    (key) => {
+      const bodies = createShipBodies()
+      updateShipBodies(bodies, Date.UTC(2026, 0, 1))
+      const planet = bodies.find((b) => b.key === key)!
+      const [shell] = planet.shellRadii!
+      const stop = collisionRadius(planet)
+      expect(stop).toBeLessThan(shell)
+      const eye = new THREE.Vector3()
+      let holes = 0
+      let groundAloneHoles = 0
+      const steps = 2000
+      for (let i = 0; i <= steps; i++) {
+        const d = planet.radius * 1.2 + ((stop - planet.radius * 1.2) * i) / steps
+        eye.set(0, 0, d).add(planet.position)
+        const gap = bodiesShellGap(eye, bodies)
+        expect(gap).toBeCloseTo(Math.abs(d - shell), 9)
+        const near = shipNear(d - planet.radius, gap)
+        // At the shell the floor wins: a hole a near's width across, crossing it.
+        if (near <= NEAR_MIN) continue
+        if (near * NEAR_CORNER_REACH > gap) holes++
+        if (shipNear(d - planet.radius) * NEAR_CORNER_REACH > gap) groundAloneHoles++
+      }
+      expect(holes).toBe(0)
+      // Going by the ground alone it would.
+      expect(groundAloneHoles).toBeGreaterThan(0)
+    }
+  )
 
   it('measures the gap to the nearest shell from inside or out', () => {
     expect(shellGap(1, [2, 4])).toBe(1)

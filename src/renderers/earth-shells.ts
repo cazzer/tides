@@ -3,7 +3,9 @@
 // and whose low-tier stop stays outside them (tides-3bl.7). In ship mode, and
 // in the system view's close zoom (tides-tvr.7.3), both are drawn from inside
 // too (pickShellFaces), and on the high tier the eye comes down through them
-// to the terrain floor (tides-01v.8.7).
+// to the terrain floor (tides-01v.8.7). The face picking below serves the
+// planets' haze shells too (PlanetAtmosphere, tides-ufyr.4), each for its
+// own limb body.
 import * as THREE from 'three'
 import { limbBody, limbEye } from '../ship/limb-detail'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP } from '../cloud-layer'
@@ -68,33 +70,38 @@ export function groundHazeTop(flat: boolean): number {
 const eye = new THREE.Vector3()
 
 /**
- * True for the camera the limb view was fed for while Earth is its limb
- * body: the ship's with Earth nearest, or the main view's in close zoom
- * (tides-tvr.7.3), the only cameras that draw the shells from inside. The
+ * True for the camera the limb view was fed for while `body` is its limb
+ * body: the ship's with that body nearest, or the main view's in close zoom
+ * (tides-tvr.7.3), the only cameras that draw its shells from inside. The
  * view is null otherwise, and belongs to one camera, which keeps every other
  * camera on front faces, including the Moon Phase panel's, which sits inside
- * the shells.
+ * Earth's shells.
  */
-export function eyeNearEarth(camera: THREE.Camera): boolean {
+export function eyeNearBody(camera: THREE.Camera, body: string): boolean {
   return (
     (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true &&
-    limbBody() === 'earth' &&
+    limbBody() === body &&
     limbEye() === camera
   )
 }
 
+/** eyeNearBody for Earth. */
+export const eyeNearEarth = (camera: THREE.Camera): boolean => eyeNearBody(camera, 'earth')
+
 /**
- * True when the near-Earth camera (eyeNearEarth) is inside the shell of radius
- * `outer` round `shell`'s origin, or near enough that its near plane may clip
- * the shell (at the frustum's corners, the near plane reaches out to its
- * depth over the corner ray's cosine): where the shell needs its back faces.
+ * True when the camera near `body` (eyeNearBody) is inside the shell of
+ * radius `outer` round `shell`'s origin, or near enough that its near plane
+ * may clip the shell (at the frustum's corners, the near plane reaches out to
+ * its depth over the corner ray's cosine): where the shell needs its back
+ * faces.
  */
 export function withinShellReach(
   shell: THREE.Object3D,
   camera: THREE.Camera,
-  outer: number
+  outer: number,
+  body = 'earth'
 ): boolean {
-  if (!eyeNearEarth(camera)) return false
+  if (!eyeNearBody(camera, body)) return false
   const { near, fov, aspect } = camera as THREE.PerspectiveCamera
   const tan = Math.tan(THREE.MathUtils.degToRad(fov / 2))
   const cornerReach = near * Math.sqrt(1 + tan * tan * (1 + aspect * aspect))
@@ -102,11 +109,17 @@ export function withinShellReach(
 }
 
 /**
- * True when the near-Earth camera (eyeNearEarth) is inside the shell of radius
- * `outer` round `shell`'s origin: where the shell shows its back faces alone.
+ * True when the camera near `body` (eyeNearBody) is inside the shell of
+ * radius `outer` round `shell`'s origin: where the shell shows its back faces
+ * alone.
  */
-export function insideShell(shell: THREE.Object3D, camera: THREE.Camera, outer: number): boolean {
-  return eyeNearEarth(camera) && shell.worldToLocal(camera.getWorldPosition(eye)).length() < outer
+export function insideShell(
+  shell: THREE.Object3D,
+  camera: THREE.Camera,
+  outer: number,
+  body = 'earth'
+): boolean {
+  return eyeNearBody(camera, body) && shell.worldToLocal(camera.getWorldPosition(eye)).length() < outer
 }
 
 /**
@@ -120,22 +133,24 @@ export function insideShell(shell: THREE.Object3D, camera: THREE.Camera, outer: 
  * the reach compiles only once. `stopAtGround` (the atmosphere's, tides-
  * zmw.5): a radius (groundHazeTop() over sea level) inside which the depth
  * test stays on, so the back faces stop at the ground, which draws its own
- * share of the haze (groundHaze.ts).
+ * share of the haze (groundHaze.ts). `body`: the limb body whose shell it is
+ * (a planet's haze, tides-ufyr.4); only the camera near it turns to both.
  */
 export function pickShellFaces(
   mesh: THREE.Object3D,
   material: THREE.Material,
   camera: THREE.Camera,
-  stopAtGround?: number
+  stopAtGround?: number,
+  body = 'earth'
 ): void {
   const shader = material as THREE.ShaderMaterial
   const outer = shader.uniforms.uOuter.value
-  const reach = withinShellReach(mesh, camera, outer)
+  const reach = withinShellReach(mesh, camera, outer, body)
   const side = reach ? THREE.DoubleSide : THREE.FrontSide
   if (shader.side !== side) {
     shader.side = side
     shader.needsUpdate = true
   }
   shader.depthTest =
-    !reach || (stopAtGround !== undefined && insideShell(mesh, camera, stopAtGround))
+    !reach || (stopAtGround !== undefined && insideShell(mesh, camera, stopAtGround, body))
 }

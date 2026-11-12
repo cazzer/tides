@@ -1,5 +1,6 @@
 // The lit-globe material and its uniforms, shared by the planets
-// (PlanetRenderer.tsx) and the major moons (moons/MoonBodies.tsx). The
+// (PlanetRenderer.tsx) and the major moons (moons/MoonBodies.tsx), and the
+// planets' haze shell's material (PlanetAtmosphere). The
 // scene's directional sunlight is aimed at the Earth, so these take the Sun's
 // direction in the body's own frame instead (sunDirection).
 import * as THREE from 'three'
@@ -8,6 +9,8 @@ import { AMBIENT_COLOR, AMBIENT_INTENSITY, SUNLIGHT_INTENSITY } from '../lightin
 import { isLowQuality } from '../quality'
 import planetVertex from '../shaders/planet/vertex.glsl'
 import planetFragment from '../shaders/planet/fragment.frag'
+import shellVertex from '../shaders/shell/vertex.glsl'
+import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
 
 /** The scene's ambient fill, as the planets' shaders take it. */
 export const AMBIENT = new THREE.Color(AMBIENT_COLOR).multiplyScalar(AMBIENT_INTENSITY)
@@ -122,5 +125,38 @@ export function planetSurfaceMaterial(
       uDetailBump: { value: 0 },
       ...bandUniforms(),
     },
+  })
+}
+
+/**
+ * A planet's additive haze shell (PlanetAtmosphere), lit from `sunDir`
+ * (sunDirection); its sizes and colours are set on the uniforms. Double-
+ * sided within the ship's reach of it, as the Earth's (pickShellFaces,
+ * tides-ufyr.4), where the shader keeps one face per ray and, at uSeaLevel
+ * 0, adds the haze ahead from inside with no ground cover (no HAZE_COVER).
+ * Single pass: three would otherwise draw a transparent double-sided
+ * material as a back pass and a front pass, two programs, and the shader's
+ * own choice of face would be drawn twice. That program is warmed ahead
+ * (ship-warmup.ts warmSides).
+ */
+export function planetAtmosphereMaterial(sunDir: { value: THREE.Vector3 }): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: shellVertex,
+    fragmentShader: atmosphereFragment,
+    uniforms: {
+      uSurface: { value: 0 },
+      uOuter: { value: 0 },
+      uScaleHeight: { value: 0 },
+      uSeaLevel: { value: 0 },
+      uSun: sunDir,
+      uGain: { value: 1 },
+      uSky: { value: new THREE.Color() },
+      uDusk: { value: new THREE.Color() },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    forceSinglePass: true,
+    userData: { warmSides: [THREE.DoubleSide] },
   })
 }
