@@ -10,7 +10,7 @@ import {
   withinShellReach,
 } from './earth-shells'
 import { planetAtmosphereMaterial } from './planetMaterials'
-import { MARS_HAZE_OUTER } from './planets/haze-shells'
+import { MARS_HAZE_OUTER, SATURN_HAZE_OUTER } from './planets/haze-shells'
 
 const R = 3
 
@@ -73,22 +73,27 @@ describe("a planet's haze from inside (tides-ufyr.4)", () => {
   afterEach(() => clearLimbView())
   const outer = R * MARS_HAZE_OUTER
 
-  // A Mars haze shell at the origin, with its material's outer radius set.
-  function haze() {
+  // A haze shell at the origin (Mars' by default), with its material's
+  // outer radius set.
+  function haze(shellOuter = outer) {
     const material = planetAtmosphereMaterial({ value: new THREE.Vector3(1, 0, 0) })
-    material.uniforms.uOuter.value = outer
+    material.uniforms.uOuter.value = shellOuter
     return { mesh: new THREE.Object3D(), material }
   }
 
-  it('draws both faces with no depth test for the camera near Mars, under the haze', () => {
+  it.each([
+    ['mars', MARS_HAZE_OUTER],
+    ['saturn', SATURN_HAZE_OUTER],
+  ])('draws both faces with no depth test for the camera near %s, under the haze', (key, hazeOuter) => {
+    const shellOuter = R * hazeOuter
     const fed = cameraAt(R * 1.02)
-    feed(fed, 'mars')
-    const { mesh, material } = haze()
-    expect(eyeNearBody(fed, 'mars')).toBe(true)
+    feed(fed, key)
+    const { mesh, material } = haze(shellOuter)
+    expect(eyeNearBody(fed, key)).toBe(true)
     expect(eyeNearEarth(fed)).toBe(false)
-    expect(withinShellReach(mesh, fed, outer, 'mars')).toBe(true)
-    expect(insideShell(mesh, fed, outer, 'mars')).toBe(true)
-    pickShellFaces(mesh, material, fed, undefined, 'mars')
+    expect(withinShellReach(mesh, fed, shellOuter, key)).toBe(true)
+    expect(insideShell(mesh, fed, shellOuter, key)).toBe(true)
+    pickShellFaces(mesh, material, fed, undefined, key)
     expect(material.side).toBe(THREE.DoubleSide)
     expect(material.depthTest).toBe(false)
   })

@@ -8,5 +8,6 @@
 export const VENUS_HAZE_OUTER = 1.05
 export const MARS_HAZE_OUTER = 1.04
 export const JUPITER_HAZE_OUTER = 1.02
+export const SATURN_HAZE_OUTER = 1.03
 export const URANUS_HAZE_OUTER = 1.04
 export const NEPTUNE_HAZE_OUTER = 1.04
