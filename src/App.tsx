@@ -33,6 +33,8 @@ import { RenderDiagnostics } from './renderers/RenderDiagnostics'
 import { DepthPrecisionProbe } from './renderers/DepthPrecisionProbe'
 import { AdaptivePixelRatio, usePixelRatio } from './renderers/AdaptivePixelRatio'
 import { DepthInfo } from './renderers/DepthInfo'
+import { ExitWatch } from './renderers/ExitWatch'
+import { ExitNotice } from './ExitNotice'
 import { GlowPass } from './renderers/glow/GlowPass'
 import { GlowView } from './renderers/glow/glowSources'
 import { CompileGate } from './renderers/CompileGate'
@@ -215,6 +217,7 @@ export default function App() {
     <div className="container">
       <LoadingOverlay sceneReady={sceneReady} />
       <DepthInfo />
+      <ExitNotice />
       {!shipMode && !demo && <Controls />}
       {demo && <DemoBar />}
       <div className={single || shipMode ? 'viewports viewports--single' : 'viewports'}>
@@ -238,6 +241,7 @@ export default function App() {
           <SimClock running={sceneReady} />
           <DemoClock />
           <RenderDiagnostics />
+          <ExitWatch />
           <DepthPrecisionProbe />
           <AdaptivePixelRatio />
           <IdleRate sceneReady={sceneReady} />
