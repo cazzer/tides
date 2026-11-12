@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { moonOffset } from '../ephemeris'
-import { MOON_PARENTS, moonOffsetInto, moonOrbitRadius, moonsOf, setMoonExpansion } from '../moons/moons'
+import {
+  MOON_PARENTS,
+  SYSTEM_EXPANSION_MAX,
+  moonOffsetInto,
+  moonOrbitRadius,
+  moonsOf,
+  setMoonExpansion,
+} from '../moons/moons'
+import { EXPANSION_SNAP } from '../moons/moon-expansion'
 import {
   GUIDE_PARENTS,
   MOON_ORBIT_SEGMENTS,
@@ -188,6 +196,23 @@ describe('orbitGuideNeedsRebuild (tides-ufyr.6.3)', () => {
     // Still on the clock's refresh too.
     const stale = t + 2 * ORBIT_GUIDE_REFRESH_DAYS.jupiter * MS_PER_DAY
     expect(orbitGuideNeedsRebuild('jupiter', 'system', t, guideExpansion('jupiter', 'system'), stale)).toBe(true)
+  })
+
+  it('lets a sub-threshold drift (a cap following the clock) ride, but not a real change or a landing', () => {
+    setMoonExpansion('jupiter', 0.4)
+    const built = guideExpansion('jupiter', 'system')
+    setMoonExpansion('jupiter', 0.4 - 0.5 * EXPANSION_SNAP)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, built, t)).toBe(false)
+    setMoonExpansion('jupiter', 0.4 + 0.9 * EXPANSION_SNAP)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, built, t)).toBe(false)
+    setMoonExpansion('jupiter', 0.4 - 2 * EXPANSION_SNAP)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, built, t)).toBe(true)
+    // Landing on either end rebuilds however small the last step.
+    setMoonExpansion('jupiter', 0)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, 0.5 * EXPANSION_SNAP, t)).toBe(true)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, 0, t)).toBe(false)
+    setMoonExpansion('jupiter', SYSTEM_EXPANSION_MAX)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, SYSTEM_EXPANSION_MAX - 0.5 * EXPANSION_SNAP, t)).toBe(true)
   })
 
   it('ignores the expansion in flight, and for Earth', () => {

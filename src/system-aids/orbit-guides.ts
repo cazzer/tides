@@ -9,12 +9,14 @@
 import { MOON_UNITS_PER_KM, moonOffset } from '../ephemeris'
 import {
   MOON_PARENTS,
+  SYSTEM_EXPANSION_MAX,
   moonExpansion,
   moonOrbitPath,
   moonSystemExtent,
   moonsOf,
   type MoonParent,
 } from '../moons/moons'
+import { EXPANSION_SNAP } from '../moons/moon-expansion'
 import type { DistanceScale } from '../distance-scale'
 
 /** A body whose moons get orbit lines. */
@@ -112,7 +114,13 @@ export function guideExpansion(parent: GuideParent, scale: DistanceScale): numbe
   return parent === 'earth' || scale === 'flight' ? 0 : moonExpansion(parent)
 }
 
-/** True once the lines built at pathT and pathExpansion no longer match t and the parent's expansion. */
+/**
+ * True once the lines built at pathT and pathExpansion no longer match t and
+ * the parent's expansion: moved more than EXPANSION_SNAP (radii ~0.02%,
+ * under a pixel), so a cap drifting with the clock doesn't rebuild every
+ * frame, or landed on either end (compact, or all the way), so the lines
+ * end up exactly on the moons.
+ */
 export function orbitGuideNeedsRebuild(
   parent: GuideParent,
   scale: DistanceScale,
@@ -120,7 +128,9 @@ export function orbitGuideNeedsRebuild(
   pathExpansion: number,
   t: number
 ): boolean {
-  return pathExpansion !== guideExpansion(parent, scale) || orbitGuideIsStale(parent, pathT, t)
+  const e = guideExpansion(parent, scale)
+  const landed = (e === 0 || e === SYSTEM_EXPANSION_MAX) && e !== pathExpansion
+  return landed || Math.abs(e - pathExpansion) > EXPANSION_SNAP || orbitGuideIsStale(parent, pathT, t)
 }
 
 /**

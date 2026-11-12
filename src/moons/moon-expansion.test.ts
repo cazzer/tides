@@ -95,29 +95,42 @@ describe('stepExpansion', () => {
   })
 })
 
+// Every other body's centre at t and the sphere around it to keep clear
+// of: the Sun, Earth, its Moon, the planets (Saturn's and Uranus' ring
+// edges) and the other systems at their live extent.
+function obstacles(parent: MoonParent, t: number): [string, number[], number][] {
+  const list: [string, number[], number][] = [
+    ['sun', [0, 0, 0], SYSTEM.radius.sun],
+    ['earth', [...SYSTEM.positionAt.earth(t)], EARTH],
+    ['moon', [...SYSTEM.positionAt.moon(t)], SYSTEM.radius.moon],
+  ]
+  for (const key of PLANET_KEYS) {
+    if (key === parent) continue
+    const { radius, rings } = PLANETS[key]
+    list.push([key, [...SYSTEM.positionAt[key](t)], radius * (rings?.outer ?? 1)])
+  }
+  for (const other of MOON_PARENTS) {
+    if (other !== parent) list.push([`${other} system`, [...SYSTEM.positionAt[other](t)], moonSystemExtent(other, 'system')])
+  }
+  return list
+}
+
+// How far the parent's nearest moon sphere is from anything in obstacles at t.
+function leastClearance(parent: MoonParent, t: number): number {
+  let least = Infinity
+  const around = obstacles(parent, t)
+  for (const key of moonsOf(parent)) {
+    const p = moonPosition(key, t, 'system')
+    for (const [, centre, reach] of around) {
+      least = Math.min(least, Math.hypot(p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]) - reach - moonRadius(key, 'system'))
+    }
+  }
+  return least
+}
+
 describe('expansion cap, 1900–2100', () => {
   const times: number[] = []
   for (let t = Date.UTC(1900, 0, 1); t <= Date.UTC(2100, 0, 1); t += 23 * DAY) times.push(t)
-
-  // Every other body's centre at t and the sphere around it to keep clear
-  // of: the Sun, Earth, its Moon, the planets (Saturn's and Uranus' ring
-  // edges) and the other systems at their (compact) extent.
-  function obstacles(parent: MoonParent, t: number): [string, number[], number][] {
-    const list: [string, number[], number][] = [
-      ['sun', [0, 0, 0], SYSTEM.radius.sun],
-      ['earth', [...SYSTEM.positionAt.earth(t)], EARTH],
-      ['moon', [...SYSTEM.positionAt.moon(t)], SYSTEM.radius.moon],
-    ]
-    for (const key of PLANET_KEYS) {
-      if (key === parent) continue
-      const { radius, rings } = PLANETS[key]
-      list.push([key, [...SYSTEM.positionAt[key](t)], radius * (rings?.outer ?? 1)])
-    }
-    for (const other of MOON_PARENTS) {
-      if (other !== parent) list.push([`${other} system`, [...SYSTEM.positionAt[other](t)], moonSystemExtent(other, 'system')])
-    }
-    return list
-  }
 
   it('keeps every moon of an expanded system 2+ units clear of every other body and system', () => {
     for (const parent of MOON_PARENTS) {
@@ -126,13 +139,7 @@ describe('expansion cap, 1900–2100', () => {
         const e = Math.min(SYSTEM_EXPANSION_MAX, expansionCap(parent, t))
         expect(e).toBeGreaterThanOrEqual(0)
         setMoonExpansion(parent, e)
-        const around = obstacles(parent, t)
-        for (const key of moonsOf(parent)) {
-          const p = moonPosition(key, t, 'system')
-          for (const [, centre, reach] of around) {
-            least = Math.min(least, Math.hypot(p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]) - reach - moonRadius(key, 'system'))
-          }
-        }
+        least = Math.min(least, leastClearance(parent, t))
       }
       setMoonExpansion(parent, 0)
       expect(least, parent).toBeGreaterThanOrEqual(2)
@@ -181,6 +188,33 @@ describe('stepMoonExpansions', () => {
     run('titan', 1e4, 5)
     expect(moonExpansion('saturn')).toBe(Math.min(SYSTEM_EXPANSION_MAX, expansionCap('saturn', T)))
     expect(moonExpansion('saturn')).toBeGreaterThan(0)
+  })
+
+  it('keeps Jupiter and Saturn clear every step of a refocus from one to the other at conjunction', () => {
+    // 2000 May: their centres ~70 units apart, so both caps bind.
+    const t = Date.UTC(2000, 4, 28)
+    const step = (focus: 'jupiter' | 'saturn') => {
+      stepMoonExpansions(focus, zf(focus), t, 1 / 60, false)
+      for (const parent of ['jupiter', 'saturn'] as const) {
+        expect(leastClearance(parent, t), parent).toBeGreaterThanOrEqual(2)
+      }
+    }
+    for (let i = 0; i < 5 * 60; i++) step('jupiter')
+    const jupiter = moonExpansion('jupiter')
+    expect(jupiter).toBeGreaterThan(0)
+    expect(jupiter).toBeLessThan(SYSTEM_EXPANSION_MAX)
+    expect(moonExpansion('saturn')).toBe(0)
+    let previous = { jupiter, saturn: 0 }
+    for (let i = 0; i < 5 * 60; i++) {
+      step('saturn')
+      const now = { jupiter: moonExpansion('jupiter'), saturn: moonExpansion('saturn') }
+      expect(now.jupiter).toBeLessThanOrEqual(previous.jupiter)
+      expect(now.saturn).toBeGreaterThanOrEqual(previous.saturn)
+      previous = now
+    }
+    expect(moonExpansion('jupiter')).toBe(0)
+    expect(moonExpansion('saturn')).toBeGreaterThan(0)
+    expect(moonExpansion('saturn')).toBe(Math.min(SYSTEM_EXPANSION_MAX, expansionCap('saturn', t)))
   })
 
   it('does nothing once settled, and never touches the store (no re-render)', () => {
