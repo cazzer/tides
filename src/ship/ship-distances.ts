@@ -410,6 +410,9 @@ const anchor = new THREE.Vector3()
 // circles; the true ones are ~1% off them).
 const based: THREE.Vector3[] = []
 const systemBase: THREE.Vector3[] = []
+// The band a member's shell excess, or the Sun's growth, is made up over
+// (from the shell out); reused each body.
+const fadeBand: Band = { inner: 0, outer: 0 }
 const direction = new THREE.Vector3()
 
 // From `position` to `body`'s collision shell, at least 0. Only a body with
@@ -576,9 +579,9 @@ export function measureRanges(
         // member's.
         const excess = Math.max(0, collisionRadius(bodies[r]) * a - truth.radii[r])
         if (excess > 0) {
-          const band = { inner: 0, outer: (SHELL_EXCESS_FADE * excess) / a }
-          leavingKm = excess * bandSlope(gaps[r], band)
-          leavingGapKm = excess * THREE.MathUtils.smoothstep(gaps[r], band.inner, band.outer)
+          fadeBand.outer = (SHELL_EXCESS_FADE * excess) / a
+          leavingKm = excess * bandSlope(gaps[r], fadeBand)
+          leavingGapKm = excess * THREE.MathUtils.smoothstep(gaps[r], fadeBand.inner, fadeBand.outer)
         }
       } else if (r === parent) {
         a = systemKm[s]
@@ -598,9 +601,9 @@ export function measureRanges(
       // moon system's departure is (the same two terms).
       const growth = collisionRadius(bodies[r]) - pairShell(bodies[r])
       if (growth > 0) {
-        const band = { inner: 0, outer: SUN_BAND_GROWTHS * growth }
-        leavingKm = growth * FLIGHT_KM_PER_UNIT * bandSlope(gaps[r], band)
-        leavingGapKm = growth * FLIGHT_KM_PER_UNIT * THREE.MathUtils.smoothstep(gaps[r], band.inner, band.outer)
+        fadeBand.outer = SUN_BAND_GROWTHS * growth
+        leavingKm = growth * FLIGHT_KM_PER_UNIT * bandSlope(gaps[r], fadeBand)
+        leavingGapKm = growth * FLIGHT_KM_PER_UNIT * THREE.MathUtils.smoothstep(gaps[r], fadeBand.inner, fadeBand.outer)
       }
     }
     const grounded = bodies[r].ground && speedFloor(bodies[r]) < V_NORMAL

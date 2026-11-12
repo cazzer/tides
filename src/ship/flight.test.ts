@@ -1846,6 +1846,45 @@ describe('a locked line through a body that is not the target (tides-ufyr.6.2)',
     expect(nose.z).toBeLessThan(-0.9999)
   })
 
+  // Setting down on Earth locked on the Moon overhead: the target is above
+  // the horizon, not behind the surface (PASSING_BELOW), so the cushion is
+  // as it is unlocked: the nose is nudged up and the ship hovers, no slide.
+  test.each([
+    ['overhead', new THREE.Vector3(0.5, 10, 0)],
+    ['on the horizon', new THREE.Vector3(10, 1.2, 0)],
+  ])('locked on a body %s, holding throttle into another’s cushion hovers as unlocked, the nose nudged', (_, at) => {
+    const ground: Body = { key: 'earth', position: new THREE.Vector3(), radius: 1 }
+    const moon: Body = { key: 'moon', position: at, radius: 0.3 }
+    const stop = floorRadius(ground, Y)
+    const width = cushionWidth(ground, Y)
+    // 30° nose down, pressed half way in, still.
+    const setUp = () => {
+      const state = createShipState()
+      state.position.set(0, stop + 0.5 * width, 0)
+      state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 6)
+      state.cushion.key = ground.key
+      state.cushion.depth = 0.5 * width
+      return state
+    }
+    const locked = setUp()
+    const free = setUp()
+    const start = locked.orientation.clone()
+    const telemetry = createShipTelemetry()
+    let pressed = 0
+    for (let i = 0; i < 120; i++) {
+      stepShip(locked, input({ throttle: 1 }), FRAME, env([ground, moon], 'moon'), telemetry)
+      stepShip(free, input({ throttle: 1 }), FRAME, env([ground, moon]))
+      expect(telemetry.colliding).toBe(false)
+      if (locked.cushion.key === 'earth' && locked.cushion.depth > 0) pressed++
+      // The same turn as unlocked, step for step (to acos precision): the nudge.
+      expect(locked.orientation.angleTo(free.orientation), `step ${i}`).toBeLessThan(1e-6)
+    }
+    expect(locked.orientation.angleTo(start)).toBeGreaterThan(0.05)
+    expect(pressed).toBeGreaterThan(0)
+    // No slide toward the target: where the unlocked ship went, to a hair.
+    expect(locked.position.distanceTo(free.position)).toBeLessThan(1e-3 * width)
+  })
+
   test('still nudges the nose of a ship locked on the body it is pressed into, or unlocked', () => {
     const rock: Body = { key: 'rock', position: new THREE.Vector3(0, 0, -3), radius: 0.5, mass: 1e20 }
     for (const targetKey of ['rock', null]) {

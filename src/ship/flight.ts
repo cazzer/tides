@@ -1493,6 +1493,21 @@ function translate(
   if (closing > limit) v.addScaledVector(toTarget, limit - closing)
 }
 
+/**
+ * A locked target counts as behind the surface the ship is pressed into
+ * (stepShip's `passing`) when the direction to it is at least this far below
+ * the surface's horizon, as a cosine to the outward normal (~6°): clear of a
+ * target on the horizon or above it, where the ship would rather hover than
+ * slide. [TUNE]
+ */
+export const PASSING_BELOW = 0.1
+
+function behindSurface(target: Body, from: THREE.Vector3, normal: THREE.Vector3): boolean {
+  roundTangent.subVectors(target.position, from)
+  const reach = roundTangent.length()
+  return reach > 0 && roundTangent.dot(normal) < -PASSING_BELOW * reach
+}
+
 // Into roundTangent: the unit direction along a surface with outward normal
 // `normal`, at `from`, toward `to` seen past it; with `to` straight through
 // the body's centre (no such direction), the ship's right across the normal,
@@ -1781,12 +1796,14 @@ export function stepShip(
   const share = touch ? depth / touch.width : 0
   if (h > 0) {
     const normal = touch ? touch.normal : null
-    // Locked on a body beyond the one it's pressed into, the ship is going
-    // past that one (tides-ufyr.6.2: a line in to Jupiter through Callisto).
-    // No nudge then: nothing steers a locked ship's nose back, so turned off
-    // the line it flew on past its target for good. Its thrust slides it
-    // round instead (translate).
-    const passing = touch && target && touch.body !== target ? target : null
+    // Locked on a body beyond the one it's pressed into, behind its surface
+    // (PASSING_BELOW), the ship is going past that one (tides-ufyr.6.2: a
+    // line in to Jupiter through Callisto). No nudge then: nothing steers a
+    // locked ship's nose back, so turned off the line it flew on past its
+    // target for good. Its thrust slides it round instead (translate). A
+    // target over the horizon (the Moon, setting down on Earth) leaves the
+    // cushion as it is: the ship hovers.
+    const passing = touch && target && touch.body !== target && behindSurface(target, state.position, touch.normal) ? target : null
     const nudgeScale = passing ? 0 : env.reducedMotion ? CUSHION_NUDGE_REDUCED : 1
     rotate(state, input, h, speedFraction(state.velocity.length(), capBefore), normal, share, nudgeScale)
     const before = touch ? state.velocity.dot(touch.normal) : 0
