@@ -5,6 +5,7 @@ import {
   HEARTBEAT_MS,
   NOTICE_MAX_S,
   answerPings,
+  answerPingsWhileShown,
   classifyExit,
   createExitWatch,
   describeExit,
@@ -167,15 +168,51 @@ describe('isLoadAlive', () => {
   })
 
   it('is false without BroadcastChannel', async () => {
-    const none = { Channel: undefined as unknown as ChannelCtor }
-    expect(await isLoadAlive('load-a', { ...none, timeoutMs: 20 })).toBe(false)
-    expect(() => answerPings('load-a', undefined)()).not.toThrow()
+    // A live page on the runtime's channel, which the null Channel must not reach.
+    const stop = answerPings('load-a')
+    expect(await isLoadAlive('load-a', { Channel: null, timeoutMs: 20 })).toBe(false)
+    expect(() => answerPings('load-a', null)()).not.toThrow()
+    stop()
+  })
+
+  it('counts a pong that arrives as the timer fires', async () => {
+    vi.useFakeTimers()
+    try {
+      const Channel = channelBus()
+      const late = new Channel('tides.exit')
+      late.onmessage = () => setTimeout(() => late.postMessage({ type: 'pong', loadId: 'load-a' }), 20)
+      const alive = isLoadAlive('load-a', { Channel, timeoutMs: 20 })
+      await vi.advanceTimersByTimeAsync(20)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await alive).toBe(true)
+      late.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('works over the runtime BroadcastChannel', async () => {
     const stop = answerPings('load-real')
     expect(await isLoadAlive('load-real', { timeoutMs: 200 })).toBe(true)
     stop()
+  })
+})
+
+describe('answerPingsWhileShown', () => {
+  it('stops answering on pagehide and answers again after a back-forward cache restore', async () => {
+    const Channel = channelBus()
+    const win = new EventTarget()
+    const stop = answerPingsWhileShown('load-a', win, Channel)
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 20 })).toBe(true)
+    win.dispatchEvent(pageEvent('pagehide', true))
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 20 })).toBe(false)
+    win.dispatchEvent(pageEvent('pageshow', false))
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 20 })).toBe(false)
+    win.dispatchEvent(pageEvent('pageshow', true))
+    win.dispatchEvent(pageEvent('pageshow', true))
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 20 })).toBe(true)
+    stop()
+    expect(await isLoadAlive('load-a', { Channel, timeoutMs: 20 })).toBe(false)
   })
 })
 

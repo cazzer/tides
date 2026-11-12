@@ -12,8 +12,12 @@ export const HEARTBEAT_KEY = 'tides.exit.heartbeat'
 export const HEARTBEAT_MS = 2000
 /** Where a page answers for its own load (isLoadAlive). */
 export const LIVENESS_CHANNEL = 'tides.exit'
-/** How long a duplicated tab waits for the page whose heartbeat it copied. */
-export const LIVENESS_MS = 250
+/**
+ * How long a duplicated tab waits for the page whose heartbeat it copied. The
+ * ping goes out while the bundle evaluates, so this tab's own busy start
+ * counts against it.
+ */
+export const LIVENESS_MS = 1200
 /**
  * An in-place reload after a kill comes within seconds; an older heartbeat
  * is a restored session or a long-closed tab, worth the console alone.
@@ -357,8 +361,9 @@ interface ChannelLike {
 }
 export type ChannelCtor = new (name: string) => ChannelLike
 
-const defaultChannel = (): ChannelCtor | undefined =>
-  typeof BroadcastChannel === 'function' ? (BroadcastChannel as unknown as ChannelCtor) : undefined
+// null: no BroadcastChannel.
+const defaultChannel = (): ChannelCtor | null =>
+  typeof BroadcastChannel === 'function' ? (BroadcastChannel as unknown as ChannelCtor) : null
 
 const isMessage = (data: unknown, type: 'ping' | 'pong', loadId: string) =>
   typeof data === 'object' &&
@@ -367,7 +372,7 @@ const isMessage = (data: unknown, type: 'ping' | 'pong', loadId: string) =>
   (data as { loadId?: unknown }).loadId === loadId
 
 /** Answers isLoadAlive for `loadId` on LIVENESS_CHANNEL. Returns the stop. */
-export function answerPings(loadId: string, Channel: ChannelCtor | undefined = defaultChannel()): () => void {
+export function answerPings(loadId: string, Channel: ChannelCtor | null = defaultChannel()): () => void {
   if (!Channel) return () => {}
   let channel: ChannelLike
   try {
@@ -382,12 +387,39 @@ export function answerPings(loadId: string, Channel: ChannelCtor | undefined = d
 }
 
 /**
+ * answerPings while the page is shown: closed on pagehide, since an open
+ * BroadcastChannel can keep a page out of the back-forward cache (or evict
+ * it), and opened again when the page comes back from it. Returns the stop.
+ */
+export function answerPingsWhileShown(
+  loadId: string,
+  win: EventTarget,
+  Channel: ChannelCtor | null = defaultChannel()
+): () => void {
+  let close: (() => void) | null = answerPings(loadId, Channel)
+  const onPageHide = () => {
+    close?.()
+    close = null
+  }
+  const onPageShow = (event: Event) => {
+    if ((event as PageTransitionEvent).persisted && !close) close = answerPings(loadId, Channel)
+  }
+  win.addEventListener('pagehide', onPageHide)
+  win.addEventListener('pageshow', onPageShow)
+  return () => {
+    onPageHide()
+    win.removeEventListener('pagehide', onPageHide)
+    win.removeEventListener('pageshow', onPageShow)
+  }
+}
+
+/**
  * Whether a page of this origin answers for `loadId` within `timeoutMs`;
  * false without BroadcastChannel.
  */
 export function isLoadAlive(
   loadId: string,
-  { Channel = defaultChannel(), timeoutMs = LIVENESS_MS }: { Channel?: ChannelCtor; timeoutMs?: number } = {}
+  { Channel = defaultChannel(), timeoutMs = LIVENESS_MS }: { Channel?: ChannelCtor | null; timeoutMs?: number } = {}
 ): Promise<boolean> {
   if (!Channel) return Promise.resolve(false)
   let channel: ChannelLike
@@ -397,7 +429,10 @@ export function isLoadAlive(
     return Promise.resolve(false)
   }
   return new Promise((resolve) => {
+    let finished = false
     const done = (alive: boolean) => {
+      if (finished) return
+      finished = true
       clearTimeout(timer)
       channel.onmessage = null
       channel.close()
@@ -406,7 +441,8 @@ export function isLoadAlive(
     channel.onmessage = (event) => {
       if (isMessage(event.data, 'pong', loadId)) done(true)
     }
-    const timer = setTimeout(() => done(false), timeoutMs)
+    // Then one more turn, so a pong already queued behind the timer still counts.
+    const timer = setTimeout(() => setTimeout(() => done(false), 0), timeoutMs)
     channel.postMessage({ type: 'ping', loadId })
   })
 }
@@ -505,7 +541,7 @@ function readLastExit(): ExitResult {
 
 // At import, before this load's first heartbeat overwrites the last load's.
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  const stopAnswering = answerPings(LOAD_ID)
+  const stopAnswering = answerPingsWhileShown(LOAD_ID, window)
   if (!settled) {
     void settleExit(readLastExit(), (loadId) => isLoadAlive(loadId)).then((result) => {
       settled = result
