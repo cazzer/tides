@@ -5,15 +5,18 @@ import { PLANETS, PLANET_KEYS, planetPosition, sceneRadius } from '../planets'
 import { moonPosition as earthMoonPosition, eclipticToScene } from '../ephemeris'
 import { flightRadii, positionsFor } from '../flight-scale'
 import type { DistanceScale } from '../distance-scale'
-import { MAX_TRUESCALE } from '../truescale'
+import { DEFAULT_TRUESCALE, MAX_TRUESCALE, towardTrue } from '../truescale'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import {
   MOONS,
   MOON_KEYS,
   MOON_PARENTS,
   MOON_RADIUS_FLOOR,
+  MOON_RADIUS_MIN,
   MOON_ORBIT_GAP,
+  MOON_SIZE_TRUENESS,
   clampedSceneRadius,
+  compactMoonRadiiAt,
   moonOffsetInto,
   moonOrbitPath,
   moonOrientationInto,
@@ -68,23 +71,54 @@ describe('moon table', () => {
   })
 })
 
-describe('moon radius', () => {
+// The parent's mean radius, km.
+const parentKm = (parent: MoonParent) => PLANETS[parent].diameter / 2000
+const SCALES = [0, 0.5, DEFAULT_TRUESCALE, MAX_TRUESCALE]
+
+// Per view: the drawn radii, the compact ones they start from, and the
+// parents' radii they are true against.
+const VIEWS: readonly {
+  name: string
+  radius: Readonly<Record<MoonKey, number>>
+  compact: Readonly<Record<MoonKey, number>>
+  planet: (parent: MoonParent) => number
+}[] = [
+  {
+    name: 'system',
+    radius: Object.fromEntries(MOON_KEYS.map((key) => [key, moonRadius(key, 'system')])) as Record<MoonKey, number>,
+    compact: Object.fromEntries(
+      MOON_KEYS.map((key) => [key, clampedSceneRadius(2 * MOONS[key].radiusKm)])
+    ) as Record<MoonKey, number>,
+    planet: (parent) => PLANETS[parent].radius,
+  },
+  ...SCALES.map((a) => ({
+    name: `flight at a = ${a}`,
+    radius: moonRadiiAt(a),
+    compact: compactMoonRadiiAt(a),
+    planet: (parent: MoonParent) => flightRadii(a)[parent],
+  })),
+]
+
+// A moon's true radius beside its parent drawn at planet(parent).
+const trueRadius = (key: MoonKey, planet: (parent: MoonParent) => number) =>
+  (MOONS[key].radiusKm / parentKm(MOONS[key].parent)) * planet(MOONS[key].parent)
+
+describe('compact moon radius', () => {
   it('is positive and in size order, never below the floor', () => {
     const bySize = [...MOON_KEYS].sort((a, b) => MOONS[a].radiusKm - MOONS[b].radiusKm)
+    const compact = compactMoonRadiiAt(0)
     for (let i = 0; i < bySize.length; i++) {
-      expect(moonRadius(bySize[i], 'system')).toBeGreaterThanOrEqual(MOON_RADIUS_FLOOR)
-      if (i > 0) {
-        expect(moonRadius(bySize[i], 'system')).toBeGreaterThan(moonRadius(bySize[i - 1], 'system'))
-      }
+      expect(compact[bySize[i]]).toBeGreaterThanOrEqual(MOON_RADIUS_FLOOR)
+      if (i > 0) expect(compact[bySize[i]]).toBeGreaterThan(compact[bySize[i - 1]])
     }
     // sceneRadius alone would be ≤ 0 for Phobos.
     expect(sceneRadius(22_160)).toBeLessThan(0)
-    expect(moonRadius('phobos', 'system')).toBeCloseTo(0.236, 3)
+    expect(compact.phobos).toBeCloseTo(0.236, 3)
   })
 
   it('keeps the shared log scale for the large moons, and meets it continuously', () => {
     for (const key of ['io', 'europa', 'ganymede', 'callisto', 'titan', 'triton'] as const) {
-      expect(moonRadius(key, 'system')).toBe(sceneRadius(2 * MOONS[key].radiusKm * 1000))
+      expect(compactMoonRadiiAt(0)[key]).toBe(sceneRadius(2 * MOONS[key].radiusKm * 1000))
     }
     expect(clampedSceneRadius(2662 - 1e-6)).toBeCloseTo(clampedSceneRadius(2662 + 1e-6), 6)
     for (let d = 10; d < 6000; d *= 1.05) {
@@ -93,15 +127,99 @@ describe('moon radius', () => {
   })
 })
 
+describe('moon radius (tides-ufyr.6.2)', () => {
+  it.each(VIEWS.map((view) => [view.name, view] as const))(
+    'is MOON_SIZE_TRUENESS of the way from compact toward true, floored (%s)',
+    (_, { radius, compact, planet }) => {
+      for (const key of MOON_KEYS) {
+        expect(radius[key], key).toBe(
+          Math.max(MOON_RADIUS_MIN, towardTrue(compact[key], trueRadius(key, planet), MOON_SIZE_TRUENESS))
+        )
+      }
+    }
+  )
+
+  it.each(VIEWS.map((view) => [view.name, view] as const))(
+    'is never under MOON_RADIUS_MIN and keeps size order within each parent (%s)',
+    (_, { radius }) => {
+      for (const parent of MOON_PARENTS) {
+        const bySize = [...moonsOf(parent)].sort((a, b) => MOONS[a].radiusKm - MOONS[b].radiusKm)
+        for (let i = 0; i < bySize.length; i++) {
+          expect(radius[bySize[i]], bySize[i]).toBeGreaterThanOrEqual(MOON_RADIUS_MIN)
+          if (i === 0) continue
+          // Strictly larger, unless both sit on the floor (Phobos and Deimos).
+          if (radius[bySize[i]] > MOON_RADIUS_MIN) {
+            expect(radius[bySize[i]], bySize[i]).toBeGreaterThan(radius[bySize[i - 1]])
+          } else {
+            expect(radius[bySize[i - 1]], bySize[i - 1]).toBe(MOON_RADIUS_MIN)
+          }
+        }
+      }
+    }
+  )
+
+  it.each(VIEWS.map((view) => [view.name, view] as const))(
+    'is strictly closer to true beside its planet than the compact radius, in log space (%s)',
+    (_, { radius, compact, planet }) => {
+      for (const key of MOON_KEYS) {
+        const truth = trueRadius(key, planet)
+        expect(Math.abs(Math.log(radius[key] / truth)), key).toBeLessThan(
+          Math.abs(Math.log(compact[key] / truth))
+        )
+      }
+    }
+  )
+
+  it('draws Io ~1/18 of Jupiter’s radius in the system view (true 1/38), against 1/6 compact', () => {
+    const [system] = VIEWS
+    expect(system.compact.io / PLANETS.jupiter.radius).toBeCloseTo(0.164, 3)
+    expect(system.radius.io / PLANETS.jupiter.radius).toBeLessThan(0.06)
+    expect(system.radius.phobos).toBe(MOON_RADIUS_MIN)
+    expect(system.radius.mimas).toBeLessThan(0.07)
+  })
+})
+
+// The compact log map's orbit radii from before tides-ufyr.6.2: the system
+// view keeps them bit for bit (its 1900–2100 clearance below holds on them).
+const SYSTEM_ORBIT_RADII: Readonly<Record<MoonKey, number>> = {
+  phobos: 2.840028045442723,
+  deimos: 4.840028045442724,
+  io: 8.6193607395064,
+  europa: 11.724120034789891,
+  ganymede: 14.845277490387602,
+  callisto: 18.619360739506398,
+  mimas: 15.595913631975884,
+  enceladus: 16.859013938853597,
+  tethys: 17.94362489828941,
+  dione: 19.20075957877306,
+  rhea: 20.89704950321743,
+  titan: 25.1654757389664,
+  iapetus: 30.595913631975883,
+  miranda: 11.424746359344814,
+  ariel: 13.976110826995372,
+  umbriel: 16.209258654173464,
+  titania: 19.494471027203858,
+  oberon: 21.424746359344816,
+  triton: 6.606150319354498,
+}
+
 describe('orbit radius (log map)', () => {
+  it('is the compact log map exactly as before', () => {
+    for (const key of MOON_KEYS) expect(moonOrbitRadius(key, 'system'), key).toBe(SYSTEM_ORBIT_RADII[key])
+  })
+
   it('keeps order, clears the planet and its rings, and keeps neighbours apart', () => {
     for (const parent of MOON_PARENTS) {
       const planet = PLANETS[parent]
       const keys = moonsOf(parent)
       const clear = planet.radius * (planet.rings?.outer ?? 1)
-      expect(moonOrbitRadius(keys[0], 'system') - moonRadius(keys[0], 'system')).toBeCloseTo(
+      // The map's floor is set by the compact radius; the drawn moon is smaller.
+      expect(moonOrbitRadius(keys[0], 'system') - compactMoonRadiiAt(0)[keys[0]]).toBeCloseTo(
         clear + MOON_ORBIT_GAP[parent],
         9
+      )
+      expect(moonOrbitRadius(keys[0], 'system') - moonRadius(keys[0], 'system')).toBeGreaterThan(
+        clear + MOON_ORBIT_GAP[parent]
       )
       for (let i = 1; i < keys.length; i++) {
         const gap =
@@ -218,37 +336,57 @@ describe('orbit sense and plane', () => {
   })
 })
 
-describe('?truescale (tides-o39)', () => {
-  it('is the system sizes at a = 0, and in flight without the flag', () => {
-    const radius = moonRadiiAt(0)
-    const orbit = moonOrbitRadiiAt(0)
+describe('flight sizes (tides-o39, tides-ufyr.6.2)', () => {
+  it('are their own table: the system radii at a = 0, but at true spacing', () => {
     for (const key of MOON_KEYS) {
-      expect(radius[key]).toBe(moonRadius(key, 'system'))
-      expect(orbit[key]).toBe(moonOrbitRadius(key, 'system'))
+      expect(moonRadiiAt(0)[key]).toBe(moonRadius(key, 'system'))
       expect(moonRadius(key, 'flight')).toBe(moonRadius(key, 'system'))
-      expect(moonOrbitRadius(key, 'flight')).toBe(moonOrbitRadius(key, 'system'))
+      expect(moonOrbitRadius(key, 'flight')).toBe(moonOrbitRadiiAt(0)[key])
+      expect(moonOrbitRadius(key, 'flight')).toBeGreaterThan(moonOrbitRadius(key, 'system'))
     }
     for (const parent of MOON_PARENTS) {
-      expect(moonSystemExtent(parent, 'flight')).toBe(moonSystemExtent(parent, 'system'))
+      expect(moonSystemExtent(parent, 'flight')).toBe(
+        Math.max(...moonsOf(parent).map((key) => moonOrbitRadius(key, 'flight') + moonRadius(key, 'flight')))
+      )
     }
   })
 
-  it.each([0.5, MAX_TRUESCALE])('slides radii toward true, floored, at a = %f', (a) => {
-    const radius = moonRadiiAt(a)
+  it.each(SCALES)('puts every moon at its true spacing in planet radii at a = %f', (a) => {
+    const orbit = moonOrbitRadiiAt(a)
+    const planetRadius = flightRadii(a)
     for (const key of MOON_KEYS) {
-      const scene = moonRadius(key, 'system')
+      const { parent, aKm } = MOONS[key]
+      expect(orbit[key] / planetRadius[parent], key).toBeCloseTo(aKm / parentKm(parent), 12)
+    }
+    expect(orbit.callisto / planetRadius.jupiter).toBeCloseTo(26.9, 1)
+    expect(orbit.iapetus / planetRadius.saturn).toBeCloseTo(61, 0)
+    expect(orbit.triton / planetRadius.neptune).toBeCloseTo(14.4, 1)
+  })
+
+  it('puts Callisto ~540 and Iapetus ~1065 units out at the default truescale', () => {
+    const orbit = moonOrbitRadiiAt(DEFAULT_TRUESCALE)
+    expect(orbit.callisto).toBeGreaterThan(530)
+    expect(orbit.callisto).toBeLessThan(550)
+    expect(orbit.iapetus).toBeGreaterThan(1050)
+    expect(orbit.iapetus).toBeLessThan(1080)
+  })
+
+  it.each([0.5, MAX_TRUESCALE])('slides the compact radii toward true, floored, at a = %f', (a) => {
+    const radius = compactMoonRadiiAt(a)
+    for (const key of MOON_KEYS) {
+      const scene = compactMoonRadiiAt(0)[key]
       const truth = MOONS[key].radiusKm / EARTH_KM_PER_UNIT
       expect(radius[key]).toBeGreaterThanOrEqual(MOON_RADIUS_FLOOR)
-      // Between the scene radius and the true one (or the floor).
+      // Between the compact radius and the true one (or the floor).
       expect(radius[key]).toBeLessThanOrEqual(Math.max(scene, truth) + 1e-12)
       expect(radius[key]).toBeGreaterThanOrEqual(Math.min(scene, Math.max(truth, MOON_RADIUS_FLOOR)) - 1e-12)
     }
-    // Ganymede is the largest: true ~1.22 units against a scene 1.63.
-    expect(radius.ganymede).toBeLessThan(moonRadius('ganymede', 'system'))
+    // Ganymede is the largest: true ~1.22 units against a compact 1.63.
+    expect(radius.ganymede).toBeLessThan(compactMoonRadiiAt(0).ganymede)
     expect(radius.phobos).toBe(MOON_RADIUS_FLOOR)
   })
 
-  it.each([0.5, MAX_TRUESCALE])(
+  it.each(SCALES)(
     'keeps each system clear of its grown planet and rings, its moons apart, at a = %f',
     (a) => {
       const radius = moonRadiiAt(a)
@@ -256,15 +394,6 @@ describe('?truescale (tides-o39)', () => {
       const planetRadius = flightRadii(a)
       for (const parent of MOON_PARENTS) {
         const keys = moonsOf(parent)
-        const k = planetRadius[parent] / PLANETS[parent].radius
-        // The whole map scales with the planet: spacing in planet radii holds.
-        for (const key of keys) {
-          expect(orbit[key] / planetRadius[parent]).toBeCloseTo(
-            moonOrbitRadius(key, 'system') / PLANETS[parent].radius,
-            12
-          )
-          expect(orbit[key]).toBeCloseTo(moonOrbitRadius(key, 'system') * k, 12)
-        }
         const clear = planetRadius[parent] * (PLANETS[parent].rings?.outer ?? 1)
         expect(orbit[keys[0]] - radius[keys[0]], parent).toBeGreaterThan(clear + 0.2)
         for (let i = 1; i < keys.length; i++) {

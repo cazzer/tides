@@ -40,3 +40,55 @@ export function approachAnnouncement(status: ApproachStatus, key: string): strin
   if (status === 'fast') return `Too fast to stop at ${bodyName(key)}`
   return null
 }
+
+/** How long the moon-system cue shows after the ship crosses a system's edge. */
+export const SYSTEM_CUE_MS = 2500
+
+/** The cue's line: the ranges and speed just changed scale (ship-distances.ts). */
+export function systemEdgeCue(parent: string, entering: boolean): string {
+  return `${entering ? 'Entering' : 'Leaving'} ${bodyName(parent)}’s moons: distances rescaled`
+}
+
+/** What the announcer says for the cue. */
+export function systemEdgeAnnouncement(parent: string, entering: boolean): string {
+  return `${entering ? 'Entering' : 'Leaving'} ${bodyName(parent)}’s moon system. Distances rescaled.`
+}
+
+/**
+ * The cue's state: the crossings seen, and its line and announcement until
+ * `until` (ms, rAF clock).
+ */
+export interface SystemCue {
+  seen: number
+  text: string
+  spoken: string
+  until: number
+}
+
+/** A cue that has seen the `count` crossings so far, so it fires only on the next. */
+export function createSystemCue(count: number): SystemCue {
+  return { seen: count, text: '', spoken: '', until: -Infinity }
+}
+
+/**
+ * Steps `cue` to the ship's last edge crossing (ShipRanges.edgeCrossing) at
+ * `now`: a new one shows its text for SYSTEM_CUE_MS. True when it fires.
+ */
+export function stepSystemCue(
+  cue: SystemCue,
+  crossing: { parent: string | null; entering: boolean; count: number },
+  now: number
+): boolean {
+  if (crossing.count === cue.seen) return false
+  cue.seen = crossing.count
+  if (crossing.parent == null) return false
+  cue.text = systemEdgeCue(crossing.parent, crossing.entering)
+  cue.spoken = systemEdgeAnnouncement(crossing.parent, crossing.entering)
+  cue.until = now + SYSTEM_CUE_MS
+  return true
+}
+
+/** Whether the cue is showing at `now`. */
+export function systemCueShowing(cue: SystemCue, now: number): boolean {
+  return now < cue.until
+}

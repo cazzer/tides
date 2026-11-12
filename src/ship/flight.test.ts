@@ -1710,16 +1710,15 @@ function trip(
 }
 
 // Jupiter's band is checked two days after TRIP_DATE, when the Earth →
-// Jupiter line runs clear of its moons (tides-2hv.8): it passes 10+ units off
-// every Galilean's shell, and Jupiter is as far as at TRIP_DATE. At
-// TRIP_DATE itself the line runs through Callisto (18.6 units out from
-// Jupiter): Callisto's well takes over ~18 units short and the locked ship
-// crawls through it at the V_NORMAL floor, ~20 s longer than the open
-// approach the band was set for (81 s against 60 s with no moons, since the
-// slowdown bands, tides-h6a). The
-// moons' phases change the trip by tens of seconds from day to day, so the
-// band is for the open approach; crossing a moon system is tested on its own
-// below.
+// Jupiter line runs clear of its moons (tides-2hv.8): it passes 45+ units off
+// every Galilean's shell at true spacing (tides-ufyr.6.2), and Jupiter is as
+// far as at TRIP_DATE, where the line passes ~5 units off Callisto's. On the
+// old compact map the line ran through Callisto at TRIP_DATE, and the locked
+// ship crawled through its well at the V_NORMAL floor, ~20 s longer than the
+// open approach the band was set for (81 s against 60 s with no moons, since
+// the slowdown bands, tides-h6a). The moons' phases change the trip by tens
+// of seconds from day to day, so the band is for the open approach; crossing
+// a moon system is tested on its own below.
 const JUPITER_TRIP_DATE = '2026-10-24T12:00:00Z'
 
 const GALILEANS = ['io', 'europa', 'ganymede', 'callisto'] as const
@@ -1778,13 +1777,15 @@ describe('trip times at the flight scale', () => {
   // Locked, the ride down follows the cap whichever well takes over, so a
   // straight line through a moon system drops hard at each moon instead of
   // carrying the ship in over its cap (2.4× at Callisto with the braked
-  // ride). On 2027-02-26 the line passes 0.84 units off Ganymede's shell; at
-  // TRIP_DATE it runs through Callisto, so the ship meets Callisto's surface,
-  // at no more than the V_NORMAL floor, and slides round it: contact is
-  // allowed there, since only steering avoids it.
+  // ride). At true spacing (tides-ufyr.6.2) on 2026-11-11 the line passes
+  // 1.1 units off Ganymede's shell; on 2026-10-05 at 18:30 it runs through
+  // Callisto (27 Jupiter radii out, it lies on the line only that once in
+  // the 400 days from 2026-10), so the ship meets Callisto's surface, at no
+  // more than the V_NORMAL floor, and slides round it: contact is allowed
+  // there, since only steering avoids it.
   test.each([
-    { date: TRIP_DATE, moon: 'callisto', missAtMost: 0, contactAllowed: true },
-    { date: '2027-02-26T12:00:00Z', moon: 'ganymede', missAtMost: 2, contactAllowed: false },
+    { date: '2026-10-05T18:30:00Z', moon: 'callisto', missAtMost: 0, contactAllowed: true },
+    { date: '2026-11-11T12:00:00Z', moon: 'ganymede', missAtMost: 2, contactAllowed: false },
   ] as const)('locked across Jupiter’s moons ($date, past $moon) stays under every well’s cap', ({ date, moon, missAtMost, contactAllowed }) => {
     // The premise: the line runs through (≤ 0) or just past the moon's shell.
     const miss = galileanMisses(date)[moon]
@@ -1817,6 +1818,110 @@ describe('trip times at the flight scale', () => {
       return `${key} ${seconds.toFixed(0)} s`
     })
     console.log(`${date.slice(0, 10)}: ${times.join(', ')}`)
+  })
+})
+
+describe('a locked line through a body that is not the target (tides-ufyr.6.2)', () => {
+  // A moon on the line to a locked target: dead centre, and a little off.
+  // The cushion fades the thrust into it; the ship must slide round it, its
+  // nose still on the target, and go on to arrive.
+  test.each([0, 0.15])('slides round a moon %s off the line and arrives, without hitting it', (offset) => {
+    const rock: Body = { key: 'rock', position: new THREE.Vector3(offset, 0, -40), radius: 0.5, mass: 1e20 }
+    const goal: Body = { key: 'goal', position: new THREE.Vector3(0, 0, -120), radius: 2, mass: 1e24 }
+    const flightEnv = env([rock, goal], 'goal')
+    const state = shipAt(new THREE.Vector3(), goal.position)
+    const telemetry = createShipTelemetry()
+    let touched = false
+    let seconds = 0
+    while (state.position.distanceTo(goal.position) - goal.radius > goal.radius && seconds < 300) {
+      stepShip(state, input({ throttle: 1 }), FRAME, flightEnv, telemetry)
+      seconds += FRAME
+      expect(telemetry.colliding).toBe(false)
+      if (state.cushion.key === 'rock') touched = true
+    }
+    expect(touched).toBe(true)
+    expect(seconds).toBeLessThan(120)
+    // Never turned: the nose is still on the line it set out along.
+    const nose = new THREE.Vector3(0, 0, -1).applyQuaternion(state.orientation)
+    expect(nose.z).toBeLessThan(-0.9999)
+  })
+
+  // Setting down on Earth locked on the Moon overhead: the target is above
+  // the horizon, not behind the surface (PASSING_BELOW), so the cushion is
+  // as it is unlocked: the nose is nudged up and the ship hovers, no slide.
+  test.each([
+    ['overhead', new THREE.Vector3(0.5, 10, 0)],
+    ['on the horizon', new THREE.Vector3(10, 1.2, 0)],
+  ])('locked on a body %s, holding throttle into another’s cushion hovers as unlocked, the nose nudged', (_, at) => {
+    const ground: Body = { key: 'earth', position: new THREE.Vector3(), radius: 1 }
+    const moon: Body = { key: 'moon', position: at, radius: 0.3 }
+    const stop = floorRadius(ground, Y)
+    const width = cushionWidth(ground, Y)
+    // 30° nose down, pressed half way in, still.
+    const setUp = () => {
+      const state = createShipState()
+      state.position.set(0, stop + 0.5 * width, 0)
+      state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 6)
+      state.cushion.key = ground.key
+      state.cushion.depth = 0.5 * width
+      return state
+    }
+    const locked = setUp()
+    const free = setUp()
+    const start = locked.orientation.clone()
+    const telemetry = createShipTelemetry()
+    let pressed = 0
+    for (let i = 0; i < 120; i++) {
+      stepShip(locked, input({ throttle: 1 }), FRAME, env([ground, moon], 'moon'), telemetry)
+      stepShip(free, input({ throttle: 1 }), FRAME, env([ground, moon]))
+      expect(telemetry.colliding).toBe(false)
+      if (locked.cushion.key === 'earth' && locked.cushion.depth > 0) pressed++
+      // The same turn as unlocked, step for step (to acos precision): the nudge.
+      expect(locked.orientation.angleTo(free.orientation), `step ${i}`).toBeLessThan(1e-6)
+    }
+    expect(locked.orientation.angleTo(start)).toBeGreaterThan(0.05)
+    expect(pressed).toBeGreaterThan(0)
+    // No slide toward the target: where the unlocked ship went, to a hair.
+    expect(locked.position.distanceTo(free.position)).toBeLessThan(1e-3 * width)
+  })
+
+  test('still nudges the nose of a ship locked on the body it is pressed into, or unlocked', () => {
+    const rock: Body = { key: 'rock', position: new THREE.Vector3(0, 0, -3), radius: 0.5, mass: 1e20 }
+    for (const targetKey of ['rock', null]) {
+      const state = shipAt(new THREE.Vector3(0.05, 0, 0), rock.position)
+      const start = state.orientation.clone()
+      for (let i = 0; i < 600; i++) stepShip(state, input({ throttle: 1 }), FRAME, env([rock], targetKey), createShipTelemetry())
+      expect(state.orientation.angleTo(start), String(targetKey)).toBeGreaterThan(0.05)
+    }
+  })
+})
+
+describe('crashing into the smallest moons (tides-ufyr.6.2)', () => {
+  // Phobos at MOON_RADIUS_MIN: an arrival over ~2× its speed floor reaches
+  // the backstop fast enough to count, one at the floor is absorbed.
+  test.each(['phobos', 'mimas'])('an arrival at %s too fast for its cushion is an impact', (key) => {
+    const bodies = flightBodies()
+    const moon = bodies.find((b) => b.key === key)!
+    const away = new THREE.Vector3(0.3, 1, 0.2).normalize()
+    const floor = speedFloor(moon)
+    const impacts = (speed: number) => {
+      const state = createShipState()
+      state.position.copy(moon.position).addScaledVector(away, floorRadius(moon, away) + cushionWidth(moon, away) * 1.001)
+      state.orientation.setFromRotationMatrix(new THREE.Matrix4().lookAt(state.position, moon.position, new THREE.Vector3(1, 0, 0)))
+      state.velocity.copy(away).multiplyScalar(-speed)
+      const telemetry = createShipTelemetry()
+      let count = 0
+      let was = false
+      for (let t = 0; t < 2; t += FRAME) {
+        stepShip(state, input({ flightAssist: false }), FRAME, { ...env(bodies), reducedMotion: true }, telemetry)
+        if (isImpact(telemetry.colliding, was, telemetry.impactSpeed)) count++
+        was = telemetry.colliding
+      }
+      return count
+    }
+    expect(floor).toBeLessThan(V_NORMAL)
+    expect(impacts(2.5 * floor)).toBe(1)
+    expect(impacts(floor)).toBe(0)
   })
 })
 

@@ -35,7 +35,7 @@ import {
 } from './flight'
 import { fovKickShare } from './dust'
 import type { QualityTier } from '../quality'
-import { MOONS, MOON_KEYS, isMoonKey, moonPosition, moonRadius } from '../moons/moons'
+import { MOONS, MOON_KEYS, MOON_RADIUS_MIN, isMoonKey, moonPosition, moonRadius } from '../moons/moons'
 import {
   BODY_MASS_KG,
   EARTH_AIR_BOOST,
@@ -52,6 +52,7 @@ import {
   EARTH_SHEET_CLEARANCE,
   JUPITER_STOP,
   MOON_COLLISION_CLEARANCE,
+  MOON_SPEED_RADIUS,
   EARTH_GROUND_SPEED_LAW,
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
@@ -60,6 +61,7 @@ import {
   updateShipBodies,
 } from './ship-bodies'
 import { NEAR_MIN, SHIP_FOV, shipNear, spawnPose } from './ship-session'
+import { canCrash } from './approach'
 import {
   EARTH_BASE_SEGMENTS,
   TERRAIN_FALLBACK_GREY,
@@ -104,9 +106,35 @@ describe('ship bodies', () => {
       expect(b[key].radius).toBe(moonRadius(key, 'flight'))
       const [x, y, z] = moonPosition(key, T, 'flight')
       expect(b[key].position.distanceTo(new THREE.Vector3(x, y, z))).toBeLessThan(1e-9)
-      // Near its parent, not its system-view distance from the Sun.
-      expect(b[key].position.distanceTo(b[MOONS[key].parent].position)).toBeLessThan(40)
+      // At its true spacing in its parent's radii (tides-ufyr.6.2), not its
+      // system-view distance from the Sun.
+      const parent = b[MOONS[key].parent]
+      expect(b[key].position.distanceTo(parent.position) / parent.radius).toBeCloseTo(
+        MOONS[key].aKm / (PLANETS[MOONS[key].parent].diameter / 2000),
+        9
+      )
     }
+  })
+
+  it('slows the small moons below V_NORMAL in proportion to their radius', () => {
+    const b = byKey()
+    for (const key of MOON_KEYS) {
+      const { radius, minSpeed } = b[key]
+      expect(minSpeed, key).toBeCloseTo(V_NORMAL * Math.min(1, radius / MOON_SPEED_RADIUS), 12)
+      expect(speedFloor(b[key]), key).toBeCloseTo(Math.min(V_NORMAL, minSpeed!), 12)
+    }
+    // Phobos at MOON_RADIUS_MIN: 0.6 of V_NORMAL. Titan and Ganymede: V_NORMAL.
+    expect(b.phobos.radius).toBe(MOON_RADIUS_MIN)
+    expect(speedFloor(b.phobos)).toBeCloseTo(0.6 * V_NORMAL, 12)
+    expect(speedFloor(b.titan)).toBe(V_NORMAL)
+    expect(speedFloor(b.ganymede)).toBe(V_NORMAL)
+  })
+
+  it('keeps every moon crashable: its speed floor lets an arrival hit hard', () => {
+    const b = byKey()
+    for (const key of MOON_KEYS) expect(canCrash(speedFloor(b[key])), key).toBe(true)
+    // So does a moon on the floor at any truescale.
+    expect(canCrash(V_NORMAL * (MOON_RADIUS_MIN / MOON_SPEED_RADIUS))).toBe(true)
   })
 
   it('sizes them as the scene draws them', () => {

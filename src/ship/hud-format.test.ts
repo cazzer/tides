@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'vitest'
 import { V_TOP } from './flight'
 import { formatDistance, formatSpeed } from './ship-distances'
-import { approachAnnouncement, approachTail, speedParts, wellSuffix } from './hud-format'
+import {
+  SYSTEM_CUE_MS,
+  approachAnnouncement,
+  approachTail,
+  createSystemCue,
+  speedParts,
+  stepSystemCue,
+  systemCueShowing,
+  systemEdgeAnnouncement,
+  systemEdgeCue,
+  wellSuffix,
+} from './hud-format'
 
 describe('speedParts', () => {
   test('splits formatSpeed into number and unit', () => {
@@ -50,5 +61,28 @@ describe('fine units (tides-zmw.9.18)', () => {
     expect(formatDistance(0.03)).toBe('0 km')
     expect(formatDistance(12, true)).toBe(formatDistance(12))
     expect(formatDistance(NaN, true)).toBe('—')
+  })
+})
+
+describe('the moon-system cue (tides-ufyr.6.2.1)', () => {
+  test('names the system and the way across', () => {
+    expect(systemEdgeCue('saturn', true)).toBe('Entering Saturn’s moons: distances rescaled')
+    expect(systemEdgeCue('mars', false)).toBe('Leaving Mars’s moons: distances rescaled')
+    expect(systemEdgeAnnouncement('jupiter', true)).toBe('Entering Jupiter’s moon system. Distances rescaled.')
+    expect(systemEdgeAnnouncement('jupiter', false)).toBe('Leaving Jupiter’s moon system. Distances rescaled.')
+    // Short enough for the strip's one nowrap line.
+    expect(systemEdgeCue('neptune', false).length).toBeLessThanOrEqual(44)
+  })
+
+  test('fires on a new crossing only, and shows for SYSTEM_CUE_MS', () => {
+    const cue = createSystemCue(3)
+    expect(stepSystemCue(cue, { parent: 'jupiter', entering: true, count: 3 }, 0)).toBe(false)
+    expect(systemCueShowing(cue, 0)).toBe(false)
+    expect(stepSystemCue(cue, { parent: 'jupiter', entering: false, count: 4 }, 1000)).toBe(true)
+    expect(cue.text).toBe('Leaving Jupiter’s moons: distances rescaled')
+    expect(cue.spoken).toBe('Leaving Jupiter’s moon system. Distances rescaled.')
+    expect(systemCueShowing(cue, 1000 + SYSTEM_CUE_MS - 1)).toBe(true)
+    expect(systemCueShowing(cue, 1000 + SYSTEM_CUE_MS)).toBe(false)
+    expect(stepSystemCue(cue, { parent: 'jupiter', entering: false, count: 4 }, 1100)).toBe(false)
   })
 })

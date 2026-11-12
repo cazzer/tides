@@ -92,7 +92,9 @@
 //     arriving at the floor speed sinks in and is pushed back out with one
 //     small bob (ShipState.cushion holds how far it is pressed in). Inside
 //     it, thrust into the surface fades with the depth and the nose is eased
-//     toward the horizon (the stick wins; off under reduced motion). The
+//     toward the horizon (the stick wins; off under reduced motion); locked
+//     on a target beyond the body, the faded thrust slides the ship round it
+//     toward the target instead and the nose stays put (tides-ufyr.6.2). The
 //     stop stays as the backstop: a ship that reaches it is put back on it
 //     and bounces off at CUSHION_RESTITUTION (none on a locked approach),
 //     and only that counts as a hit (telemetry.colliding).
@@ -1318,6 +1320,7 @@ const up = new THREE.Vector3()
 const levelUp = new THREE.Vector3()
 const scratch = new THREE.Vector3()
 const toTarget = new THREE.Vector3()
+const roundTangent = new THREE.Vector3()
 const demand = new THREE.Vector3()
 const spinAxis = new THREE.Vector3()
 const spin = new THREE.Quaternion()
@@ -1438,7 +1441,8 @@ function translate(
   cap: number,
   { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost, targetHold, wellBand }: Proximity,
   cushion: THREE.Vector3 | null = null,
-  share = 0
+  share = 0,
+  passing: Body | null = null
 ): void {
   bodyAxes(state.orientation)
   // Thrust as a share of the cap, world frame.
@@ -1449,10 +1453,16 @@ function translate(
     .addScaledVector(up, STRAFE_SHARE * axis(input.strafeY))
   // Pressed into a cushion (outward normal `cushion`, `share` of the way
   // in), thrust into the surface fades with the depth, so holding it in
-  // settles into a hover rather than bottoming out.
+  // settles into a hover rather than bottoming out. Going `passing` it, to a
+  // locked target beyond, the faded share turns along the surface toward the
+  // target instead, so the ship slides round rather than hovering there.
   if (cushion && share > 0) {
     const into = scratch.dot(cushion)
-    if (into < 0) scratch.addScaledVector(cushion, -Math.min(1, share) * into)
+    if (into < 0) {
+      const faded = -Math.min(1, share) * into
+      scratch.addScaledVector(cushion, faded)
+      if (passing) scratch.addScaledVector(tangentToward(cushion, passing.position, state.position), faded)
+    }
   }
 
   const v = state.velocity
@@ -1481,6 +1491,35 @@ function translate(
     ? airApproachCap(law, targetGap, targetAltitude, targetClimb, wellTime(target), dt, targetBoost, targetHold)
     : approachCap(targetGap, wellTime(target), dt, targetFloor)
   if (closing > limit) v.addScaledVector(toTarget, limit - closing)
+}
+
+/**
+ * A locked target counts as behind the surface the ship is pressed into
+ * (stepShip's `passing`) when the direction to it is at least this far below
+ * the surface's horizon, as a cosine to the outward normal (~6°): clear of a
+ * target on the horizon or above it, where the ship would rather hover than
+ * slide. [TUNE]
+ */
+export const PASSING_BELOW = 0.1
+
+function behindSurface(target: Body, from: THREE.Vector3, normal: THREE.Vector3): boolean {
+  roundTangent.subVectors(target.position, from)
+  const reach = roundTangent.length()
+  return reach > 0 && roundTangent.dot(normal) < -PASSING_BELOW * reach
+}
+
+// Into roundTangent: the unit direction along a surface with outward normal
+// `normal`, at `from`, toward `to` seen past it; with `to` straight through
+// the body's centre (no such direction), the ship's right across the normal,
+// or its up. Needs bodyAxes.
+function tangentToward(normal: THREE.Vector3, to: THREE.Vector3, from: THREE.Vector3): THREE.Vector3 {
+  roundTangent.subVectors(to, from)
+  const reach = roundTangent.length()
+  roundTangent.addScaledVector(normal, -roundTangent.dot(normal))
+  if (roundTangent.length() > 1e-6 * reach) return roundTangent.normalize()
+  roundTangent.copy(right).addScaledVector(normal, -right.dot(normal))
+  if (roundTangent.lengthSq() < 1e-6) roundTangent.copy(up).addScaledVector(normal, -up.dot(normal))
+  return roundTangent.normalize()
 }
 
 // After the move, with FA on, scale the velocity by how much the cap changed
@@ -1757,10 +1796,18 @@ export function stepShip(
   const share = touch ? depth / touch.width : 0
   if (h > 0) {
     const normal = touch ? touch.normal : null
-    const nudgeScale = env.reducedMotion ? CUSHION_NUDGE_REDUCED : 1
+    // Locked on a body beyond the one it's pressed into, behind its surface
+    // (PASSING_BELOW), the ship is going past that one (tides-ufyr.6.2: a
+    // line in to Jupiter through Callisto). No nudge then: nothing steers a
+    // locked ship's nose back, so turned off the line it flew on past its
+    // target for good. Its thrust slides it round instead (translate). A
+    // target over the horizon (the Moon, setting down on Earth) leaves the
+    // cushion as it is: the ship hovers.
+    const passing = touch && target && touch.body !== target && behindSurface(target, state.position, touch.normal) ? target : null
+    const nudgeScale = passing ? 0 : env.reducedMotion ? CUSHION_NUDGE_REDUCED : 1
     rotate(state, input, h, speedFraction(state.velocity.length(), capBefore), normal, share, nudgeScale)
     const before = touch ? state.velocity.dot(touch.normal) : 0
-    translate(state, input, h, capBefore, here, normal, share)
+    translate(state, input, h, capBefore, here, normal, share, passing)
     let shift = 0
     if (touch) {
       // A locked approach settles onto its target's cushion without a bob.

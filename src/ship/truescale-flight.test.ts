@@ -206,7 +206,9 @@ describe('?truescale: HUD ranges', () => {
   // At ?truescale=0 nothing tides-ofv added takes part: every range, the km
   // per unit, the true position and the nearest, bit for bit as before it,
   // over two years of dates from every body out toward three others. A
-  // deliberate change to the ranges at a = 0 re-pins this (log the digest).
+  // deliberate change to the ranges at a = 0 re-pins this (log the digest);
+  // last for tides-ufyr.6.2 and .6.2.1, the moons at true spacing on their
+  // systems' own scales.
   it('measures exactly as before at ?truescale=0', async () => {
     const hash = createHash('sha256')
     for (let day = 0; day < 720; day += 60) {
@@ -226,7 +228,7 @@ describe('?truescale: HUD ranges', () => {
         }
       }
     }
-    expect(hash.digest('hex')).toBe('3709ae7dcbe8c1dfb0e5afe0a08baa404d28d55996e00dd77b04b4883ea7892d')
+    expect(hash.digest('hex')).toBe('6ed31f1dc34c5be1334e4f80b318bb23b79c64ae002665486d4928c89af2e710')
   }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {
@@ -297,10 +299,69 @@ describe('?truescale=0.5: spawning from the main view', () => {
           )
         }
       }
-      // Only Io, whose parent grows round it, ever needs carrying out: on
-      // day 8 the mapped point is inside Jupiter.
-      if (key !== 'io') expect(pushed).toEqual([])
-      else expect(pushed).toContain(8)
+      // At true moon spacing (tides-ufyr.6.2) Io orbits 6 Jupiter radii out,
+      // so on this pose's line the grown Jupiter never stands on the mapped
+      // point: nothing needs carrying out (the case below makes it).
+      expect(pushed).toEqual([])
     }
   )
+
+  it('carries the ship on out past Jupiter when Io’s mapped point falls inside it', async () => {
+    const { bodies, moons, session, flight } = await loadAt('?truescale=0.5')
+    const ship = bodies.createShipBodies('high', false)
+    bodies.updateShipBodies(ship, T)
+    const io = ship.find((b) => b.key === 'io')!
+    const jupiter = ship.find((b) => b.key === 'jupiter')!
+    const systemRadius = moons.moonRadius('io', 'system')
+    // The main view looking at Io from beyond Jupiter, framed so the mapped
+    // point lands on Jupiter's centre.
+    const outward = jupiter.position.clone().sub(io.position).normalize()
+    const toJupiter = jupiter.position.distanceTo(io.position)
+    const from = (eyeDistance: number): MainCameraPose => ({
+      ...pose,
+      position: outward.clone().multiplyScalar(eyeDistance).toArray() as [number, number, number],
+      target: [0, 0, 0],
+    })
+    // The mapping is near enough linear this far out.
+    const aimed = from((10 * toJupiter) / session.cameraToShipDistance(from(10), systemRadius, io.radius)!)
+    expect(session.cameraToShipDistance(aimed, systemRadius, io.radius)! / toJupiter).toBeCloseTo(1, 2)
+    const state = session.spawnPoseFromCamera(aimed, 'io', ship)!
+    const along = state.position.clone().sub(io.position)
+    expect(along.clone().normalize().dot(outward)).toBeCloseTo(1, 9)
+    expect(along.length()).toBeGreaterThan(toJupiter + flight.collisionRadius(jupiter))
+    for (const other of ship) {
+      expect(state.position.distanceTo(other.position), other.key).toBeGreaterThan(flight.collisionRadius(other))
+    }
+  })
+})
+
+// Two planet moon systems can never both hold the ship (tides-ufyr.6.2.1):
+// at the cap, where the systems are largest, neighbouring edges, each at its
+// hysteresis' far side, stay apart at the planets' closest, 1900–2100.
+describe(`?truescale=${MAX_TRUESCALE}: moon system edges`, () => {
+  it('keeps neighbouring systems’ edges apart at their closest', async () => {
+    const { distances, scale } = await loadAt(AT_MAX)
+    const { positionAt } = scale.positionsFor('flight')
+    const reach = (key: 'mars' | 'jupiter' | 'saturn' | 'uranus' | 'neptune') =>
+      distances.moonSystemEdge(key) * (1 + distances.MOON_SYSTEM_EDGE_HYSTERESIS)
+    const pairs = [
+      ['mars', 'jupiter'],
+      ['jupiter', 'saturn'],
+      ['saturn', 'uranus'],
+      ['uranus', 'neptune'],
+    ] as const
+    const closest = pairs.map(() => Infinity)
+    for (let t = Date.UTC(1900, 0, 1); t < Date.UTC(2100, 0, 1); t += 5 * DAY) {
+      pairs.forEach(([a, b], i) => {
+        const p = positionAt[a](t)
+        const q = positionAt[b](t)
+        closest[i] = Math.min(closest[i], Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]))
+      })
+    }
+    pairs.forEach(([a, b], i) => {
+      expect(reach(a) + reach(b), `${a}–${b}`).toBeLessThan(closest[i])
+    })
+    // Jupiter–Saturn is the tight pair: ~3400 of ~4030 units.
+    expect(reach('jupiter') + reach('saturn')).toBeGreaterThan(0.75 * closest[1])
+  }, 30_000)
 })

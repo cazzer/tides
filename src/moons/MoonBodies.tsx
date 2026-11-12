@@ -29,6 +29,7 @@ import { MOONS, MOON_KEYS, isMoonKey, moonOffsetInto, moonOrientationInto, moonR
 import { moonTextureUrls, type MoonTextureUrls } from './moon-textures'
 import { isLowQuality } from '../quality'
 import { moonRaycast, type MoonPickData } from './moon-pick'
+import { worldUnitsPerPixel } from '../system-aids/pixel-scale'
 import { useLimbBodyAmong, useLimbSphere, useWantsLimbSphere, type SphereSegments } from '../ship/limb-detail'
 import {
   bodyRadiusPx,
@@ -81,9 +82,24 @@ function moonMap({ jpeg: url, ktx2 }: MoonTextureUrls, gl: THREE.WebGLRenderer, 
   return pending
 }
 
-// Each moon at its parent's position at `scale` plus its offset. Module
+/**
+ * The least radius, CSS px, a moon is drawn at (tides-ufyr.6.2): at their
+ * near-true sizes Phobos and Mimas would fall under a pixel and flicker. A
+ * draw-only floor, in mesh.scale alone: userData.radius (picking, the
+ * camera's framing) and ship mode's bodies keep the true sphere. [TUNE]
+ */
+const MOON_MIN_RADIUS_PX = 1
+
+// Each moon at its parent's position at `scale` plus its offset, drawn at
+// least MOON_MIN_RADIUS_PX in radius in a view `heightPx` CSS px tall. Module
 // level, so the meshes behind the memoised refs aren't mutated in a hook.
-function placeMoons(meshes: readonly RefObject<THREE.Mesh | null>[], t: number, scale: DistanceScale) {
+function placeMoons(
+  meshes: readonly RefObject<THREE.Mesh | null>[],
+  t: number,
+  scale: DistanceScale,
+  camera: THREE.Camera,
+  heightPx: number
+) {
   const { positionAt } = positionsFor(scale)
   for (let i = 0; i < MOON_KEYS.length; i++) {
     const mesh = meshes[i].current
@@ -95,7 +111,10 @@ function placeMoons(meshes: readonly RefObject<THREE.Mesh | null>[], t: number, 
     mesh.position.x += parent[0]
     mesh.position.y += parent[1]
     mesh.position.z += parent[2]
-    ;(mesh.userData as MoonPickData).parentPosition.fromArray(parent)
+    const data = mesh.userData as MoonPickData
+    data.parentPosition.fromArray(parent)
+    const pixel = heightPx > 0 ? worldUnitsPerPixel(camera, mesh.position, heightPx) : 0
+    mesh.scale.setScalar(Math.max(data.radius, MOON_MIN_RADIUS_PX * pixel))
   }
 }
 
@@ -285,7 +304,7 @@ export const MoonBodies: FC<MoonBodiesProps> = ({ distanceScale, interactive }) 
 
   useFrame(({ gl, camera, size, viewport }) => {
     const t = useStore.getState().timestamp
-    if (t != null) placeMoons(refs, t, distanceScale)
+    if (t != null) placeMoons(refs, t, distanceScale, camera, size.height)
     // Uploads and read-backs share the page's one-a-frame budget.
     const frame = gl.info.render.frame
     takeArrivedMap(gl, frame)

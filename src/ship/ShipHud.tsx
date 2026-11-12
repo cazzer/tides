@@ -8,7 +8,16 @@ import { getShipTarget, setShipTarget, shipTelemetry } from './ship-telemetry'
 import { bodyName, formatDistance, formatSpeed } from './ship-distances'
 import { shipNav, targetMarker } from './ship-targeting'
 import { shipApproach } from './approach'
-import { approachAnnouncement, approachTail, speedParts, wellSuffix } from './hud-format'
+import {
+  SYSTEM_CUE_MS,
+  approachAnnouncement,
+  approachTail,
+  createSystemCue,
+  speedParts,
+  stepSystemCue,
+  systemCueShowing,
+  wellSuffix,
+} from './hud-format'
 import {
   IMPACT_FLASH_COOLDOWN_MS,
   IMPACT_FLASH_MS,
@@ -79,6 +88,7 @@ interface Readouts {
   clearTarget: HTMLElement | null
   markerLabel: HTMLElement | null
   impactFlash: HTMLElement | null
+  systemCue: HTMLElement | null
   announcer: HTMLElement | null
 }
 
@@ -116,6 +126,7 @@ export function ShipHud() {
     clearTarget: null,
     markerLabel: null,
     impactFlash: null,
+    systemCue: null,
     announcer: null,
   })
 
@@ -149,6 +160,9 @@ export function ShipHud() {
     let warningShown: string | null = null
     let impactsSeen = shipImpacts.count
     let flashAt = -Infinity
+    // Crossings before the HUD mounted (the spawn) aren't cued.
+    const cue = createSystemCue(shipNav.edgeCrossing.count)
+    let cueShown = false
     // A live region speaks only when its text changes, so the text is
     // cleared first and set a frame later: a second "Impact" is spoken too.
     let announceFrame = 0
@@ -212,6 +226,26 @@ export function ShipHud() {
           })
           announce('Impact')
         }
+      }
+
+      // Into or out of a planet's moon system: the ranges and speed just
+      // changed scale (ship-distances.ts), so say so for a moment. A fade,
+      // or with reduced motion a plain show and hide.
+      if (stepSystemCue(cue, shipNav.edgeCrossing, now) && r.systemCue) {
+        set(r.systemCue, cue.text)
+        r.systemCue.hidden = false
+        cueShown = true
+        r.systemCue.getAnimations().forEach((animation) => animation.cancel())
+        if (!prefersReducedMotion()) {
+          r.systemCue.animate([{ opacity: 1 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }], {
+            duration: SYSTEM_CUE_MS,
+            easing: 'ease-in',
+          })
+        }
+        announce(cue.spoken)
+      } else if (cueShown && !systemCueShowing(cue, now) && r.systemCue) {
+        r.systemCue.hidden = true
+        cueShown = false
       }
 
       if (now - textAt < TEXT_INTERVAL_MS) return
@@ -485,6 +519,11 @@ export function ShipHud() {
           </SubjectCell>
           <ShipSoundButton />
         </Row>
+        <SystemCueLine
+          ref={bind('systemCue')}
+          aria-hidden
+          hidden
+        />
       </Strip>
       <VisuallyHidden
         ref={bind('announcer')}
@@ -897,6 +936,23 @@ const ClearButton = styled.button`
   &[hidden] {
     display: none;
   }
+`
+
+// The moon-system cue: a line just under the instruments, over the scene,
+// so the strip doesn't grow while it shows; the announcer says it.
+const SystemCueLine = styled.div`
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 14px;
+  right: 6px;
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 `
 
 // A coral edge glow over the whole view on impact, animated by the frame
