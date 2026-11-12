@@ -22,11 +22,17 @@
 // ship mode, close zoom or Earth focus unmounts them; leaving their range
 // does once the eye has stayed out of it for TILE_LEAVE_GRACE_S
 // (stepTileMount, tides-8h7), hidden above the handover's top meanwhile.
+//
+// tides-8h7.5: phones and tablets build the tiles on a smaller memory budget
+// (surface-budget.ts), and there the system view's tiles stop choosing and
+// fetching tiles while they wait out that grace above their range.
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { shipTelemetry } from '../../ship/ship-telemetry'
 import { setSurfaceEye, surfaceOpacityUniform } from '../../surface-handover'
+import { touchDevice } from '../../quality'
+import { surfaceMemoryBudget, updateSurfaceTiles } from './surface-budget'
 import { createSurfaceTiles, type SurfaceTiles as Tiles } from './createSurfaceTiles'
 import { ActiveSources, creditsShown, NO_SOURCES, sourcesForTile, tileOnNearSide, tileRadianBounds, type SurfaceSource } from './credit-sources'
 import type { ImageryTile } from './imagery'
@@ -71,6 +77,8 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
   // are nearest-filtered instead (createSurfaceTiles, tides-zmw.9.2).
   const floatLinear = useMemo(() => gl.getContext().getExtension('OES_texture_float_linear') !== null, [gl])
   const touch = useMemo(() => typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches, [])
+  // By user agent, as the flight map cap (../../quality.ts), not the pointer.
+  const memory = useMemo(() => surfaceMemoryBudget(touchDevice()), [])
   const holder = useRef<THREE.Group>(null)
   const surface = useRef<Tiles | null>(null)
   const ground = useRef<SurfaceGround | null>(null)
@@ -92,7 +100,13 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
     if (!parent || !link) return
     let created: Tiles
     try {
-      created = createSurfaceTiles({ floatLinear, upload: (texture) => gl.initTexture(texture), writeRects: createRectWriter(gl), link })
+      created = createSurfaceTiles({
+        floatLinear,
+        upload: (texture) => gl.initTexture(texture),
+        writeRects: createRectWriter(gl),
+        link,
+        budget: memory,
+      })
     } catch (error) {
       // e.g. no OffscreenCanvas (Safari before 16.4), which the library's
       // terrain plugin needs to construct: fly over the globe alone.
@@ -130,14 +144,14 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
         console.error('surface tiles: dispose failed', error)
       }
     }
-  }, [camera, gl, floatLinear, link, eye])
+  }, [camera, gl, floatLinear, link, eye, memory])
 
   // In CSS pixels, as setResolutionFromRenderer would give: the error target
   // is in those pixels, and the cache's marks follow them (surface-lod.ts).
   // After the effect above, so the camera is registered.
   useEffect(() => {
     surface.current?.setViewSize(camera, width, height)
-  }, [camera, gl, floatLinear, link, width, height])
+  }, [camera, gl, floatLinear, link, memory, width, height])
 
   useFrame((_, delta) => {
     const current = surface.current
@@ -155,13 +169,15 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
     let speed: number
     let nearest: { key: string | null; surfaceDistance: number }
     let margin: number
+    // The eye's height over the sea in scene units: the system view's (the ship's never pauses).
+    let altitude = Infinity
     if (eye === 'system') {
       // The holder sits in Earth's spinning body, centred on it: the camera
       // there is its height over the sea-level sphere, and its motion over
       // the ground, which close zoom's turn with Earth leaves still.
       const local = holderGroup.worldToLocal(camera.getWorldPosition(systemEye))
       const eyeR = local.length()
-      const altitude = eyeR - EARTH_RADIUS
+      altitude = eyeR - EARTH_RADIUS
       setSurfaceEye(altitude)
       const previous = previousEye.current
       speed = groundSpeed(previous.has ? previous.at : null, local, delta)
@@ -187,7 +203,15 @@ export default function SurfaceTiles({ eye = 'ship' }: SurfaceTilesProps) {
     const target = surfaceErrorTarget(sweepRate(speed, nearest), touch)
     errorTarget.current = smoothErrorTarget(errorTarget.current, target, delta)
     current.setErrorTarget(errorTarget.current, surfaceErrorTarget(0, touch), margin)
-    tiles.update()
+    // On a touch budget, the system view's tiles above their range (out the
+    // leave grace, drawing nothing) skip update() (updateSurfaceTiles). That
+    // skips all of it: no traversal, so no tiles chosen or requested; no
+    // removeUnusedPendingTiles, so downloads and parses already queued
+    // finish rather than cancel (budget.tick() above keeps running them); no
+    // lruCache.scheduleUnload, so nothing is evicted meanwhile; and no
+    // usedSet reset, so last frame's tiles stay marked used. The first
+    // update() back in range does each of these as usual, so the resume is clean.
+    updateSurfaceTiles(tiles, memory, eye, altitude)
     ground.current?.invalidate()
     // None of the ground is the tiles' above the handover's top (ShipController,
     // or the system view's eye above, has written this frame's share): the

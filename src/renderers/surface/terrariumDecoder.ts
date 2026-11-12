@@ -22,6 +22,12 @@
 // bake at most. A cancelled bake holds its worker until the worker replies
 // (it can't stop a bake once started), so cancels in a burst don't stack
 // bakes on a worker.
+//
+// tides-8h7.5: each waiting bake holds a ~2 MB copy of its grid, and on a
+// phone a pivot low to the ground could queue them by the hundred.
+// maxWaitingBakes bounds the wait: past it a new bake is dropped
+// (BakeDroppedError), and its grid's cache bakes it again later. bakeRoom
+// says so ahead, so the cache never copies a grid for a bake that drops.
 import type { HorizonJob, PaddedGrid } from './terrarium'
 
 export type DecodeRequest =
@@ -62,6 +68,11 @@ export interface TerrariumDecoder {
   bake: TerrariumBake
   /** Whether a bake would run (a worker is up or can be made, not disposed): false, and nothing need be gathered for one. */
   readonly bakes: boolean
+  /**
+   * Whether a bake posted now would go out or wait, not drop (maxWaitingBakes):
+   * ask it just before copying a grid for one, and post in the same turn.
+   */
+  readonly bakeRoom: boolean
   /** Terminates the workers; decodes still pending reject with an AbortError. */
   dispose(): void
 }
@@ -89,6 +100,16 @@ interface WaitingBake {
   onAbort: () => void
 }
 
+/**
+ * A bake turned away because maxWaitingBakes were already waiting: nothing
+ * was sent or kept. Not an AbortError: the bake is wanted, just not now.
+ */
+export class BakeDroppedError extends DOMException {
+  constructor() {
+    super('terrain bake dropped: too many waiting', 'BakeDroppedError')
+  }
+}
+
 const disposedError = () => new DOMException('terrain decoder disposed', 'AbortError')
 
 interface Slot {
@@ -111,10 +132,13 @@ export function createTerrariumDecoder({
   createWorker,
   inThread,
   size = DECODE_WORKERS,
+  maxWaitingBakes = Infinity,
 }: {
   createWorker: () => DecodeWorker | null
   inThread: (buffer: ArrayBuffer) => Promise<PaddedGrid>
   size?: number
+  /** Bakes that may wait for a worker; more reject with BakeDroppedError. */
+  maxWaitingBakes?: number
 }): TerrariumDecoder {
   const slots: Slot[] = []
   // false once a worker can't be made or has died: everything runs in thread
@@ -261,7 +285,8 @@ export function createTerrariumDecoder({
     const slot = !workersOk ? null : bake ? pickForBake() : pick()
     if (!slot) {
       if (!bake || !workersOk || slots.length === 0) return fallback()
-      // every worker has a bake in hand: wait for one
+      // every worker has a bake in hand: wait for one, if there's room
+      if (waitingBakes.length >= maxWaitingBakes) return Promise.reject(new BakeDroppedError())
       return new Promise<T>((resolve, reject) => {
         const waiting: WaitingBake = {
           signal,
@@ -297,6 +322,12 @@ export function createTerrariumDecoder({
     },
     get bakes() {
       return workersOk && !disposed
+    },
+    get bakeRoom() {
+      // post's own test: dropped only with every worker's bake in hand and the wait full
+      return (
+        waitingBakes.length < maxWaitingBakes || !workersOk || disposed || slots.length < size || slots.some((slot) => slot.bakes === 0)
+      )
     },
     dispose() {
       disposed = true

@@ -10,6 +10,9 @@ import { surfaceOpacityUniform } from '../../surface-handover'
 import type { MaterialPatch } from '../eclipseShadow'
 import { createSurfaceTiles, SURFACE_RENDER_ORDER } from './createSurfaceTiles'
 import { SURFACE_SCALE } from './surface-frame'
+import { CPU_COPY_FACTOR, TOUCH_SURFACE_BUDGET } from './surface-budget'
+import { surfaceDetail } from './surface-lod'
+import { SURFACE_JOBS_PER_ORIGIN, SURFACE_PARSE_JOBS } from './surface-queues'
 import { TerrainPhongMaterial } from './tile-material'
 import { globeStencil, patchSurfaceShader, prepareSurfaceMaterial, SURFACE_STENCIL_REF, surfaceElevationMetres } from './surface-scale'
 
@@ -206,6 +209,34 @@ describe('createSurfaceTiles at the relief (tides-zmw.9.7, tides-zmw.21)', () =>
       expect(fade?.fadeRootTiles).toBe(true)
     } finally {
       surface.dispose()
+    }
+  })
+
+  it("keeps a desktop's cache marks and queues by default, and takes a touch budget's lower ones (tides-8h7.5)", () => {
+    const camera = new THREE.PerspectiveCamera()
+    const desktop = createSurfaceTiles({ floatLinear: true })
+    const touch = createSurfaceTiles({ floatLinear: true, budget: TOUCH_SURFACE_BUDGET })
+    try {
+      for (const s of [desktop, touch]) {
+        s.tiles.setCamera(camera)
+        s.setViewSize(camera, 390, 844)
+      }
+      const view = surfaceDetail(390, 844).cache
+      expect(desktop.tiles.lruCache.minBytesSize).toBe(view.min)
+      expect(desktop.tiles.lruCache.maxBytesSize).toBe(view.max)
+      expect(desktop.tiles.downloadQueue.maxJobsPerOrigin).toBe(SURFACE_JOBS_PER_ORIGIN)
+      expect(desktop.tiles.parseQueue.maxJobs).toBe(SURFACE_PARSE_JOBS)
+      // the phone's view marks held to the cap
+      expect(touch.tiles.lruCache.minBytesSize).toBe(TOUCH_SURFACE_BUDGET.cacheRealBytes!.min / CPU_COPY_FACTOR)
+      expect(touch.tiles.lruCache.maxBytesSize).toBe(TOUCH_SURFACE_BUDGET.cacheRealBytes!.max / CPU_COPY_FACTOR)
+      expect(touch.tiles.lruCache.maxBytesSize).toBeLessThan(desktop.tiles.lruCache.maxBytesSize)
+      expect(touch.tiles.downloadQueue.maxJobsPerOrigin).toBe(TOUCH_SURFACE_BUDGET.jobsPerOrigin)
+      expect(touch.tiles.parseQueue.maxJobs).toBe(TOUCH_SURFACE_BUDGET.parseJobs)
+      // the imagery shares the tiles' download queue
+      expect(touch.overlay.downloadQueue).toBe(touch.tiles.downloadQueue)
+    } finally {
+      desktop.dispose()
+      touch.dispose()
     }
   })
 

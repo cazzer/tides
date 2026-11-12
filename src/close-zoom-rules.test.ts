@@ -3,6 +3,7 @@ import {
   TILE_LEAVE_GRACE_S,
   TILE_RANGE_ENTER,
   TILE_RANGE_LEAVE,
+  aboveTileRange,
   holdRealTime,
   isTileRange,
   stepTileGate,
@@ -169,6 +170,14 @@ describe('stepTileGate', () => {
     expect(stepTileGate(g, true, true, 150, top, dt)).toBe(true)
   })
 
+  it('keeps the tiles mounted at 2.3 tops during the grace, above their range (tides-8h7.5 pauses them there)', () => {
+    const g = gate()
+    expect(stepTileGate(g, true, true, 150, top, dt)).toBe(true)
+    for (let i = 0; i < 50; i++) expect(stepTileGate(g, true, true, 230, top, dt)).toBe(true)
+    expect(g.range).toBe(false)
+    expect(aboveTileRange(230, top)).toBe(true)
+  })
+
   it('leaves the range only above 220 km while mounted, and drops it out of close zoom', () => {
     const g = gate()
     stepTileGate(g, true, true, 150, top, dt)
@@ -177,5 +186,17 @@ describe('stepTileGate', () => {
     stepTileGate(g, false, true, 150, top, dt)
     expect(g.range).toBe(false)
     expect(g.mount.mounted).toBe(false)
+  })
+})
+
+describe('aboveTileRange (tides-8h7.5)', () => {
+  const top = 100
+  it('is above from the leave mark up, whatever the range was', () => {
+    expect(aboveTileRange(210, top)).toBe(false)
+    expect(aboveTileRange(TILE_RANGE_LEAVE * top, top)).toBe(true)
+    expect(aboveTileRange(230, top)).toBe(true)
+    // between the marks an eye can be out of range (entering) yet not above it
+    expect(isTileRange(210, top, false)).toBe(false)
+    expect(aboveTileRange(210, top)).toBe(false)
   })
 })

@@ -42,6 +42,10 @@
 // level, whose 1-2 px triangles had the water shaded several times over
 // along their edges (1.5 ms against the globe's 0.15 at sea), keeps its
 // vertices but takes a coarser index, chords of 4 km at most (flat-tiles.ts).
+//
+// tides-8h7.5 gave the instance a memory budget (surface-budget.ts): on
+// phones and tablets its cache marks are capped, its queues narrower and
+// its waiting bakes bounded; desktops keep what they had.
 import * as THREE from 'three'
 import { DEFAULT_LRU_CACHE, LRUCache } from '3d-tiles-renderer/core'
 import { TilesRenderer } from '3d-tiles-renderer/three'
@@ -59,6 +63,7 @@ import { GridEdges, type RectWriter } from './grid-upload'
 import { boundSurfaceViewError, type SurfaceViewError } from './surface-coverage'
 import { cacheMarkSetter, surfaceDetail } from './surface-lod'
 import { createSurfaceQueues } from './surface-queues'
+import { capCacheMarks, DESKTOP_SURFACE_BUDGET, type SurfaceMemoryBudget } from './surface-budget'
 import {
   GRID_LEVEL_STEP,
   installSurfaceGridCache,
@@ -93,6 +98,8 @@ export interface SurfaceTilesOptions {
   writeRects?: RectWriter
   /** The globe's side of the tiles' features (its haze, eclipse, ...). */
   link?: GlobeLink | null
+  /** What the instance may hold and run at once (surfaceMemoryBudget); a desktop's by default. */
+  budget?: SurfaceMemoryBudget
 }
 
 export interface SurfaceTiles {
@@ -116,7 +123,8 @@ export interface SurfaceTiles {
    * The view's size in CSS pixels, as setResolutionFromRenderer would give
    * (the error target is in those pixels): sets the camera's detail
    * resolution and the cache's marks from it (surfaceDetail; marks that
-   * fall wait for the size to settle, cacheMarkSetter). Call after the
+   * fall wait for the size to settle, cacheMarkSetter), held to the
+   * budget's (capCacheMarks). Call after the
    * camera is registered and on every resize.
    */
   setViewSize(camera: THREE.Camera, width: number, height: number): void
@@ -150,7 +158,13 @@ function createDecodeWorker(): DecodeWorker | null {
  * take by stencil (surface-scale.ts). three sorts a Group's children by it. */
 export const SURFACE_RENDER_ORDER = -1
 
-export function createSurfaceTiles({ floatLinear, upload, writeRects, link = null }: SurfaceTilesOptions): SurfaceTiles {
+export function createSurfaceTiles({
+  floatLinear,
+  upload,
+  writeRects,
+  link = null,
+  budget: memory = DESKTOP_SURFACE_BUDGET,
+}: SurfaceTilesOptions): SurfaceTiles {
   const overlay = new SurfaceImageryOverlay()
   protectOverlayBitmaps(overlay)
   const terrain = new TerrariumMeshPlugin({
@@ -163,7 +177,11 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     overlay,
     applyOverlayTexture: true,
   })
-  const decoder = createTerrariumDecoder({ createWorker: createDecodeWorker, inThread: decodeTerrariumImage })
+  const decoder = createTerrariumDecoder({
+    createWorker: createDecodeWorker,
+    inThread: decodeTerrariumImage,
+    maxWaitingBakes: memory.maxWaitingBakes,
+  })
   const budget = new FrameBudget()
   // Every upload goes through one tracker, so a tile's queued upload knows
   // what is already sent (tile-upload.ts).
@@ -179,6 +197,7 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     decode: decoder.decode,
     bake: decoder.bake,
     canBake: () => decoder.bakes,
+    bakeRoom: () => decoder.bakeRoom,
     budget,
     upload: tracked?.upload,
     edges,
@@ -202,10 +221,10 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     lruCache.minBytesSize = min
     lruCache.maxBytesSize = max
   })
-  cacheMarks.set(surfaceDetail(0, 0).cache)
+  cacheMarks.set(capCacheMarks(surfaceDetail(0, 0), memory))
   lruCache.unloadPriorityCallback = DEFAULT_LRU_CACHE.unloadPriorityCallback
   tiles.lruCache = lruCache
-  const { downloads, parse } = createSurfaceQueues()
+  const { downloads, parse } = createSurfaceQueues(memory)
   tiles.downloadQueue = downloads
   tiles.parseQueue = parse
   overlay.downloadQueue = downloads
@@ -303,7 +322,7 @@ export function createSurfaceTiles({ floatLinear, upload, writeRects, link = nul
     setViewSize(camera, width, height) {
       const detail = surfaceDetail(width, height)
       tiles.setResolution(camera, detail.width, detail.height)
-      cacheMarks.set(detail.cache)
+      cacheMarks.set(capCacheMarks(detail, memory))
     },
     syncCounters,
     // tiles.dispose() unregisters the terrain plugin, which releases every

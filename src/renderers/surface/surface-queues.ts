@@ -49,12 +49,21 @@ export interface SurfaceQueues {
   parse: PriorityQueue
 }
 
-export function createSurfaceQueues(): SurfaceQueues {
+/** The queues' concurrency (a touch device's are lower: surface-budget.ts). */
+export interface SurfaceQueueLimits {
+  /** Requests in flight per server (keep it at least parseJobs: tides-zmw.9.25). */
+  jobsPerOrigin: number
+  parseJobs: number
+}
+
+export function createSurfaceQueues(
+  limits: SurfaceQueueLimits = { jobsPerOrigin: SURFACE_JOBS_PER_ORIGIN, parseJobs: SURFACE_PARSE_JOBS }
+): SurfaceQueues {
   const downloads = new SurfaceDownloadQueue()
-  downloads.maxJobsPerOrigin = SURFACE_JOBS_PER_ORIGIN
+  downloads.maxJobsPerOrigin = limits.jobsPerOrigin
   downloads.priorityCallback = DEFAULT_DOWNLOAD_QUEUE.priorityCallback
   const parse = new PriorityQueue()
-  parse.maxJobs = SURFACE_PARSE_JOBS
+  parse.maxJobs = limits.parseJobs
   parse.priorityCallback = DEFAULT_PARSE_QUEUE.priorityCallback
   return { downloads, parse }
 }

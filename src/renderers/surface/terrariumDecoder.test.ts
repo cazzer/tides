@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HorizonJob, PaddedGrid } from './terrarium'
-import { createTerrariumDecoder, type DecodeReply, type DecodeRequest, type DecodeWorker } from './terrariumDecoder'
+import { BakeDroppedError, createTerrariumDecoder, type DecodeReply, type DecodeRequest, type DecodeWorker } from './terrariumDecoder'
 
 class FakeWorker implements DecodeWorker {
   posted: DecodeRequest[] = []
@@ -224,6 +224,95 @@ describe('horizon bakes in the decode workers (tides-zmw.9.15)', () => {
     worker.reply({ type: 'baked', id: bakeIds()[2], baked: { horizon: null, ms: 1 } })
     expect(bakeIds()).toHaveLength(4)
     fourth.catch(() => {})
+    decoder.dispose()
+  })
+
+  const bakeIdsOf = (worker: FakeWorker) => worker.posted.filter((m) => m.type === 'bake').map((m) => m.id)
+
+  it('drops a bake past maxWaitingBakes, keeping nothing of it (tides-8h7.5)', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1, maxWaitingBakes: 2 })
+    const signal = new AbortController().signal
+    // one sent, two waiting
+    const kept = [0, 1, 2].map(() => decoder.bake(job(), grid(1), signal))
+    expect(bakeIdsOf(worker)).toHaveLength(1)
+    const dropped = decoder.bake(job(), grid(1), signal)
+    await expect(dropped).rejects.toBeInstanceOf(BakeDroppedError)
+    await expect(dropped).rejects.toMatchObject({ name: 'BakeDroppedError' })
+    // a second one too: the queue doesn't grow
+    await expect(decoder.bake(job(), grid(1), signal)).rejects.toBeInstanceOf(BakeDroppedError)
+    // the waiting ones still go out in turn, and only they do
+    for (let i = 0; i < 3; i++) {
+      const ids = bakeIdsOf(worker)
+      expect(ids).toHaveLength(i + 1)
+      worker.reply({ type: 'baked', id: ids[i], baked: { horizon: null, ms: 1 } })
+      expect(await kept[i]).toEqual({ horizon: null, ms: 1 })
+    }
+    expect(bakeIdsOf(worker)).toHaveLength(3)
+    // room again: a new bake waits rather than drops
+    const sent = decoder.bake(job(), grid(1), signal)
+    expect(bakeIdsOf(worker)).toHaveLength(4)
+    sent.catch(() => {})
+    decoder.dispose()
+  })
+
+  it('says ahead whether a bake would drop (bakeRoom), so nothing is copied for one (tides-8h7.5)', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1, maxWaitingBakes: 2 })
+    const signal = new AbortController().signal
+    const rooms: boolean[] = []
+    const bakes = [0, 1, 2].map(() => (rooms.push(decoder.bakeRoom), decoder.bake(job(), grid(1), signal)))
+    // sent, waits, waits: then full
+    expect(rooms).toEqual([true, true, true])
+    expect(decoder.bakeRoom).toBe(false)
+    await expect(decoder.bake(job(), grid(1), signal)).rejects.toBeInstanceOf(BakeDroppedError)
+    // one answered: the next goes out, and there's room again
+    worker.reply({ type: 'baked', id: bakeIdsOf(worker)[0], baked: { horizon: null, ms: 1 } })
+    await bakes[0]
+    expect(decoder.bakeRoom).toBe(true)
+    for (const bake of bakes) bake.catch(() => {})
+    decoder.dispose()
+    // nothing drops once nothing bakes
+    expect(decoder.bakeRoom).toBe(true)
+    // and by default nothing ever does
+    const open = createTerrariumDecoder({ createWorker: () => new FakeWorker(), inThread: async () => grid(-1), size: 1 })
+    for (let i = 0; i < 20; i++) open.bake(job(), grid(1), signal).catch(() => {})
+    expect(open.bakeRoom).toBe(true)
+    open.dispose()
+  })
+
+  it('makes room when a waiting bake is aborted (tides-8h7.5)', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1, maxWaitingBakes: 2 })
+    const signal = new AbortController().signal
+    const first = decoder.bake(job(), grid(1), signal)
+    const abort = new AbortController()
+    const waiting = decoder.bake(job(), grid(1), abort.signal)
+    const other = decoder.bake(job(), grid(1), signal)
+    abort.abort(new DOMException('gone', 'AbortError'))
+    await expect(waiting).rejects.toMatchObject({ name: 'AbortError' })
+    // its place is free: this one waits
+    const next = decoder.bake(job(), grid(1), signal)
+    worker.reply({ type: 'baked', id: bakeIdsOf(worker)[0], baked: { horizon: null, ms: 1 } })
+    await first
+    worker.reply({ type: 'baked', id: bakeIdsOf(worker)[1], baked: { horizon: null, ms: 2 } })
+    expect(await other).toEqual({ horizon: null, ms: 2 })
+    worker.reply({ type: 'baked', id: bakeIdsOf(worker)[2], baked: { horizon: null, ms: 3 } })
+    expect(await next).toEqual({ horizon: null, ms: 3 })
+    decoder.dispose()
+  })
+
+  it('lets every bake wait by default', async () => {
+    const worker = new FakeWorker()
+    const decoder = createTerrariumDecoder({ createWorker: () => worker, inThread: async () => grid(-1), size: 1 })
+    const signal = new AbortController().signal
+    const bakes = Array.from({ length: 51 }, () => decoder.bake(job(), grid(1), signal))
+    for (let i = 0; i < 51; i++) {
+      const ids = bakeIdsOf(worker)
+      expect(ids).toHaveLength(i + 1)
+      worker.reply({ type: 'baked', id: ids[i], baked: { horizon: null, ms: 1 } })
+    }
+    expect(await Promise.all(bakes)).toHaveLength(51)
     decoder.dispose()
   })
 

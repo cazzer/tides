@@ -29,6 +29,15 @@ export function isTileRange(altitude: number, top: number, wasInRange: boolean):
 }
 
 /**
+ * Whether an eye `altitude` is above the tiles' range however it got there
+ * (at or past the leave mark, TILE_RANGE_LEAVE tops): where tiles still
+ * mounted sit out their leave grace (stepTileMount), drawing nothing.
+ */
+export function aboveTileRange(altitude: number, top: number): boolean {
+  return altitude >= TILE_RANGE_LEAVE * top
+}
+
+/**
  * How long close zoom keeps the tiles mounted after the eye leaves their
  * range (tides-8h7), in seconds: a tilt swings the eye's height across the
  * range's edge and back, and each remount rebuilt them whole. Out of range

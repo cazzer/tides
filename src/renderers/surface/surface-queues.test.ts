@@ -44,6 +44,16 @@ describe('surface queues (tides-zmw.9.25)', () => {
     expect(parse.maxJobs).toBe(16)
   })
 
+  it('take custom limits, and keep the defaults without them (tides-8h7.5)', () => {
+    const { downloads, parse } = createSurfaceQueues({ jobsPerOrigin: 8, parseJobs: 6 })
+    expect(downloads).toBeInstanceOf(SurfaceDownloadQueue)
+    expect(downloads.maxJobsPerOrigin).toBe(8)
+    expect(parse.maxJobs).toBe(6)
+    const defaults = createSurfaceQueues()
+    expect(defaults.downloads.maxJobsPerOrigin).toBe(SURFACE_JOBS_PER_ORIGIN)
+    expect(defaults.parse.maxJobs).toBe(SURFACE_PARSE_JOBS)
+  })
+
   it("keep the tiles' synthetic downloads off their server's queue", () => {
     const { downloads } = createSurfaceQueues()
     downloads.add(`${ORIGIN}/12/1/2.webp`, tile('t'), () => {})
