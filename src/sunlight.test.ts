@@ -1,11 +1,12 @@
 import * as THREE from 'three'
 import { scaleLog } from 'd3'
-import { Body, Illumination } from 'astronomy-engine'
+import { Body, Illumination, SearchMoonPhase } from 'astronomy-engine'
 import { describe, expect, test, afterAll } from 'vitest'
 import {
   earthPosition,
   earthSpin,
   earthTilt,
+  moonOrientation,
   moonPosition,
 } from './ephemeris'
 import { applyBodyTransform } from './body-transform'
@@ -105,6 +106,16 @@ function moonLitFraction(t: number): number {
   return (1 + toLight(sunlightAt(t), moon).dot(toEarth)) / 2
 }
 
+// Selenographic lon/lat (degrees) of the point on the Moon facing the Sun, in
+// the scene's own Moon frame (axisOrientation: +X lon 0, +Y north, −Z east).
+function moonSunFacingPoint(t: number): { lon: number; lat: number } {
+  const moon = new THREE.Vector3(...moonPosition(t))
+  const v = toLight(sunlightAt(t), moon).applyQuaternion(
+    moonOrientation(t).clone().invert()
+  )
+  return { lon: Math.atan2(-v.z, v.x) * DEG, lat: Math.asin(v.y) * DEG }
+}
+
 const sunsetReport: Record<string, unknown>[] = []
 const moonReport: Record<string, unknown>[] = []
 afterAll(() => {
@@ -143,5 +154,31 @@ describe('sunlit fraction of the Moon vs astronomy-engine', () => {
       err: +(actual - expected).toFixed(4),
     })
     expect(Math.abs(actual - expected)).toBeLessThan(0.005)
+  })
+})
+
+describe('Moon phase lighting (tides-5ky)', () => {
+  // NASA SVS Dial-a-Moon for 2026-11-03 02:49 UT gives the subsolar point at
+  // 100.74°W, 1.5°S and the Moon 36% lit.
+  test("Moon's Sun-facing point at 2026-11-03T02:49Z", () => {
+    const t = Date.parse('2026-11-03T02:49:00Z')
+    const { lon, lat } = moonSunFacingPoint(t)
+    expect(Math.abs(lon - -100.74)).toBeLessThan(0.5)
+    expect(Math.abs(lat - -1.5)).toBeLessThan(0.5)
+    expect(Math.abs(moonLitFraction(t) - 0.36)).toBeLessThan(0.01)
+  })
+
+  const start = new Date('2026-10-01T00:00:00Z')
+  test.each([
+    ['new', 0],
+    ['first quarter', 90],
+    ['waxing gibbous', 135],
+    ['full', 180],
+  ])('%s Moon lit fraction matches astronomy-engine', (_, longitude) => {
+    const found = SearchMoonPhase(longitude, start, 30)
+    expect(found).not.toBeNull()
+    const t = found!.date.getTime()
+    const expected = Illumination(Body.Moon, new Date(t)).phase_fraction
+    expect(Math.abs(moonLitFraction(t) - expected)).toBeLessThan(0.005)
   })
 })
