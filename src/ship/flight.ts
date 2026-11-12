@@ -97,7 +97,12 @@
 //     toward the target instead and the nose stays put (tides-ufyr.6.2). The
 //     stop stays as the backstop: a ship that reaches it is put back on it
 //     and bounces off at CUSHION_RESTITUTION (none on a locked approach),
-//     and only that counts as a hit (telemetry.colliding).
+//     and only that counts as a hit (telemetry.colliding). Locked, a cushion
+//     other than the target's can leave the nose off the line: sliding round
+//     a body in the way, the lock switched while pressed in, or the nudge
+//     turning it away. Clear of it, the nose is eased back onto the target
+//     (ShipState.reaim, tides-ufyr.12) unless the stick takes over. Setting
+//     down on Earth with the Moon locked is none of those: the nose stays.
 //
 // A step allocates nothing: vector maths runs on module-level scratch vectors
 // and the nearest/target scan writes into a scratch record, as elsewhere in
@@ -138,6 +143,38 @@ export interface ShipState {
    * does, so a parked ship is never bounced.
    */
   cushion: CushionState
+  /**
+   * The cushion's nose nudge as it is now, body frame, rad/s (tides-ufyr.9):
+   * eased over ROTATION_TAU toward what cushionNudge asks for, and to 0 once
+   * that ends, so pressing or releasing the stick in the cushion never
+   * snaps the turn. It turns the ship on top of angularVelocity and never
+   * goes into it, so it leaves no lasting spin.
+   */
+  nudge: THREE.Vector3
+  /**
+   * The locked target to turn the nose back onto (tides-ufyr.12): armed
+   * while the ship is pressed into a cushion other than that target's and
+   * the contact took the nose off its line (reaimFor: sliding round, the
+   * lock switched, or the nose turned over REAIM_TURNED further off it).
+   * Clear of the cushion, the nose is eased back onto the target through
+   * `nudge` until it has settled within REAIM_DONE of it. Null for none;
+   * the stick (over REAIM_STICK), a change of lock, or pressing into the
+   * target's own cushion clears it.
+   */
+  reaim: string | null
+  /** The cushion contact reaimFor reads. */
+  reaimContact: ReaimContact
+}
+
+/** ShipState.reaimContact. */
+export interface ReaimContact {
+  /** The pressed body's key; null out of any cushion. */
+  key: string | null
+  /** The lock when the contact began (null for none), and the nose's angle off it then, radians (NaN unlocked). */
+  lock: string | null
+  angle: number
+  /** Whether the stick (over REAIM_STICK) moved during it: then nothing arms for the rest of it. */
+  pilot: boolean
 }
 
 /** ShipState.cushion. */
@@ -633,18 +670,18 @@ function cushionMotion(
 
 // When a ship at depth `x` ≤ 0 (above the band) moving in at `y` under a
 // constant inward acceleration `f` first reaches the band's top moving in,
-// seconds; Infinity if it never does.
+// seconds; Infinity if it never does. The root it enters at is the one
+// moving in at +√disc, (√disc − y) / f; moving in already, that is taken as
+// 2(−x) / (y + √disc), since on a settled Flight Assist approach f is a
+// rounding error, √disc rounds to y and (√disc − y) / f is noise
+// (tides-ufyr.10). It also covers f = 0.
 function entryTime(x: number, y: number, f: number): number {
-  if (f === 0) return y > 0 ? -x / y : Infinity
   const disc = y * y - 2 * f * x
-  if (disc < 0) return Infinity
+  if (!(disc >= 0)) return Infinity
   const root = Math.sqrt(disc)
-  let first = Infinity
-  for (const t of [(-y - root) / f, (-y + root) / f]) {
-    const rate = y + f * t
-    if (t >= 0 && t < first && (rate > 0 || (rate === 0 && f > 0))) first = t
-  }
-  return first
+  if (y > 0) return (-2 * x) / (y + root)
+  // Still or moving out: only an inward pull brings it in, and √disc ≥ −y.
+  return f > 0 ? (root - y) / f : Infinity
 }
 
 // The cushion over a step of `dt` s, after the thrust and before the move.
@@ -844,7 +881,7 @@ export const COLLISION_SPEED = 0.05
 //     backstop gives back outward.
 //   • The nose nudge: CUSHION_NUDGE_GAIN rad/s per radian of dive at full
 //     depth, at most PITCH_RATE, scaled by CUSHION_NUDGE_REDUCED under
-//     reduced motion.
+//     reduced motion, eased in and out over ROTATION_TAU (ShipState.nudge).
 export const CUSHION_DEPTH_SHARE = 1.5
 export const CUSHION_MAX_SECONDS = 0.6
 export const CUSHION_ABSORB = 1
@@ -861,6 +898,27 @@ export const CUSHION_SHELL_SHARE = 0.5
 // rate with FA off. Short enough to feel direct, long enough to hide frame
 // jitter in mouse/touch input.
 export const ROTATION_TAU = 0.2
+
+// Turning a locked ship's nose back onto its target after a cushion turned
+// it off (ShipState.reaim, tides-ufyr.12). [TUNE]
+//   • REAIM_GAIN: the turn rate per radian off the target, 1/s, never over
+//     the stick's own full rates (unscaled by the speed, like level and the
+//     nudge: an assist). Eased over ROTATION_TAU like level's roll, so the
+//     loop's damping ratio is ≈ 0.71: a 90° turn back takes ~4 s, the last
+//     radian ~2, without a visible overshoot.
+//   • REAIM_DONE: radians off the target under which, turning no faster
+//     than REAIM_GAIN × this, it is back on its line and the turn eases out.
+// It still turns under reduced motion, at the same rate: it is the lock's
+// own steering, not a flourish, and without it the ship misses its target.
+export const REAIM_GAIN = 2.5
+export const REAIM_DONE = 1e-3
+// How much further off the target, radians, the nose must turn while pressed
+// in (the nudge turning it away) to arm the turn back. [TUNE]
+export const REAIM_TURNED = 0.1
+// The stick deflection, pitch or yaw, over which the pilot has taken the
+// nose: a pointer's armed stick rests a hair off centre (mouse-joystick.ts),
+// and that must not cancel the turn back. [TUNE]
+export const REAIM_STICK = 0.05
 
 // Max turn rates at turnRateMultiplier = 1, rad/s. Elite ships pitch roughly
 // twice as fast as they yaw and roll faster still, so pilots learn to roll
@@ -967,6 +1025,9 @@ export function createShipState(): ShipState {
     boost: 0,
     groundHold: { key: null, radius: NaN },
     cushion: { key: null, depth: 0 },
+    nudge: new THREE.Vector3(),
+    reaim: null,
+    reaimContact: { key: null, lock: null, angle: NaN, pilot: false },
   }
 }
 
@@ -1388,6 +1449,10 @@ function levelRollRate(): number {
 const nudge = new THREE.Vector3()
 const nudgeTurn = new THREE.Quaternion()
 
+// Under this, rad/s, an eased nudge easing to rest is put at rest, so it
+// stops turning the ship rather than creeping on for ever.
+const NUDGE_REST = 1e-6
+
 // The cushion's nudge (tides-ufyr.1), into `nudge`, body frame, rad/s: with
 // the ship pressed `share` (0..1) of the way into a cushion whose outward
 // normal is `normal` and its nose below that horizon, a pitch and yaw (never
@@ -1418,11 +1483,29 @@ function cushionNudge(
   return true
 }
 
+// The turn back onto a locked target (ShipState.reaim), into `nudge`, body
+// frame, rad/s: about nose × `aim` (world frame, unit, toward the target),
+// REAIM_GAIN per radian off it, scaled down as a whole so that neither its
+// pitch nor its yaw is over PITCH_RATE or YAW_RATE; never a roll. Straight
+// away from the target, it pitches. Needs bodyAxes.
+function reaimTurn(orientation: THREE.Quaternion, aim: THREE.Vector3): void {
+  nudge.crossVectors(nose, aim)
+  const sin = nudge.length()
+  const angle = Math.atan2(sin, nose.dot(aim))
+  if (sin < 1e-9) nudge.copy(right)
+  else nudge.divideScalar(sin)
+  nudge.multiplyScalar(REAIM_GAIN * angle).applyQuaternion(nudgeTurn.copy(orientation).invert())
+  nudge.z = 0
+  nudge.divideScalar(Math.max(1, Math.abs(nudge.x) / PITCH_RATE, Math.abs(nudge.y) / YAW_RATE))
+}
+
 // `fraction` is the speed as a share of the cap (speedFraction). Turning keys
 // off how fast the ship is going, not where the throttle sits, so with FA off
 // a ship coasting at the cap still turns wide. `cushion` is the cushion the
 // ship is pressed into, if any: its outward normal and how far in, as a
-// share of its width (cushionNudge, scaled by `nudgeScale`).
+// share of its width (cushionNudge, scaled by `nudgeScale`). `aim`, clear of
+// any cushion, is the direction to a locked target to turn back onto
+// (reaimTurn; reaimFor).
 function rotate(
   state: ShipState,
   input: Readonly<ShipInput>,
@@ -1430,7 +1513,8 @@ function rotate(
   fraction: number,
   cushion: THREE.Vector3 | null = null,
   share = 0,
-  nudgeScale = 1
+  nudgeScale = 1,
+  aim: THREE.Vector3 | null = null
 ): void {
   const factor = turnRateMultiplier(fraction)
   // Input +1 is nose up / nose right / roll right; in the body frame that is
@@ -1444,14 +1528,26 @@ function rotate(
   // Level is unscaled: it is a recovery assist, and should right the ship as
   // quickly at the cap as at rest.
   if (input.level) demand.z = levelRollRate()
-  // Unscaled too, like level: an assist. It turns the ship for this step
-  // only, on top of the spin, and never goes into angularVelocity: when it
-  // ends (out of the cushion, the nose at the horizon) it leaves no turn
-  // behind, with Flight Assist on or off alike.
-  const nudged = cushion !== null && cushionNudge(state.orientation, cushion, share, nudgeScale, input)
+  // Unscaled too, like level: an assist. Eased at the stick's own rate
+  // (ShipState.nudge), on top of the spin and never into angularVelocity:
+  // when it ends (out of the cushion, the nose at the horizon, the stick on
+  // its axis) it eases out within ~ROTATION_TAU and leaves no turn behind,
+  // with Flight Assist on or off alike. The turn back onto a locked target
+  // after a cushion (`aim`) goes the same way.
+  const ease = 1 - Math.exp(-dt / ROTATION_TAU)
+  const eased = state.nudge
+  // A NaN would turn the ship to NaN for good.
+  if (!Number.isFinite(eased.lengthSq())) eased.set(0, 0, 0)
+  if (cushion !== null && cushionNudge(state.orientation, cushion, share, nudgeScale, input)) eased.lerp(nudge, ease)
+  else if (aim !== null) {
+    reaimTurn(state.orientation, aim)
+    eased.lerp(nudge, ease)
+  } else if (eased.lengthSq() > 0) {
+    eased.multiplyScalar(1 - ease)
+    if (eased.lengthSq() < NUDGE_REST * NUDGE_REST) eased.set(0, 0, 0)
+  }
 
   const w = state.angularVelocity
-  const ease = 1 - Math.exp(-dt / ROTATION_TAU)
   if (input.flightAssist) {
     w.lerp(demand, ease)
   } else {
@@ -1466,13 +1562,107 @@ function rotate(
       : clamp(w.z + (demand.z * dt) / ROTATION_TAU, -ROLL_RATE, ROLL_RATE)
   }
 
-  spinAxis.copy(w)
-  if (nudged) spinAxis.add(nudge)
+  spinAxis.copy(w).add(eased)
   const rate = spinAxis.length()
   if (rate > 0) {
     spin.setFromAxisAngle(spinAxis.divideScalar(rate), rate * dt)
     state.orientation.multiply(spin).normalize()
   }
+}
+
+const aimAt = new THREE.Vector3()
+const lineAt = new THREE.Vector3()
+
+// Whether the straight line from `from` to `to` runs into `body`'s
+// cushion: under the top of its band (on its passStop, where it has one)
+// at the line's closest approach.
+function lineThrough(body: Body, from: THREE.Vector3, to: THREE.Vector3): boolean {
+  aimAt.subVectors(to, from)
+  const length = aimAt.lengthSq()
+  lineAt.subVectors(from, body.position)
+  const along = length > 0 ? clamp(-lineAt.dot(aimAt) / length, 0, 1) : 0
+  const d = lineAt.addScaledVector(aimAt, along).length()
+  if (d > 0) lineAt.divideScalar(d)
+  else lineAt.copy(WORLD_UP)
+  const { stop, width } = cushionBandOver(body, surfaceAt(body, lineAt), body.passStop ?? 0)
+  return d < stop + width
+}
+
+// The nose's angle off `target`, radians; leaves the direction to it
+// (not unit) in aimAt and the nose in `nose`.
+function noseOff(state: ShipState, target: Body): number {
+  aimAt.subVectors(target.position, state.position)
+  nose.set(0, 0, -1).applyQuaternion(state.orientation)
+  return Math.atan2(scratch.crossVectors(nose, aimAt).length(), nose.dot(aimAt))
+}
+
+// Updates ShipState.reaim for a step that starts `depth` into `touch`'s
+// cushion (none at 0) locked on `target`, and returns the direction to turn
+// the nose back onto (world frame, unit; rotate's `aim`) while the ship is
+// clear of the cushion and off its line, else null.
+//   • Pressed into a cushion other than the target's, it arms only when the
+//     contact took the nose off the line: `passing` (sliding round the body
+//     to the target behind it), the lock switched since the contact began
+//     (pressed into Callisto, the lock then on Jupiter), or the nose turned
+//     more than REAIM_TURNED further off the target than it was then (the
+//     nudge turning it away). Setting down on Earth with the Moon locked
+//     overhead or on the horizon is none of those: the nudge only lifts the
+//     nose to the horizon, toward the Moon or across it, and the nose stays
+//     where it left it, as unlocked.
+//   • Into the target's own cushion (arrived), it is cleared.
+//   • The stick over REAIM_STICK on pitch or yaw hands the nose to the
+//     pilot: it clears the turn back and, during a contact, nothing arms
+//     for the rest of it. A change of lock drops it.
+//   • Back within REAIM_DONE of the target and turning no faster than it
+//     would there, it is done.
+// While the line to the target still runs into the `nearest` body's
+// cushion (the one just left: a giant the ship skirted, still between it
+// and the moon beyond), it waits: turned onto that line the ship would only
+// skim back in.
+function reaimFor(
+  state: ShipState,
+  input: Readonly<ShipInput>,
+  target: Body | null,
+  touch: Contact | null,
+  depth: number,
+  passing: boolean,
+  nearest: Body | null
+): THREE.Vector3 | null {
+  const steered = Math.abs(axis(input.pitch)) > REAIM_STICK || Math.abs(axis(input.yaw)) > REAIM_STICK
+  if (!target || state.reaim !== target.key || steered) state.reaim = null
+  const contact = state.reaimContact
+  const body = touch !== null && depth > 0 ? touch.body : null
+  if (body) {
+    if (contact.key !== body.key) {
+      contact.key = body.key
+      contact.lock = target ? target.key : null
+      contact.angle = target ? noseOff(state, target) : NaN
+      contact.pilot = false
+    }
+    contact.pilot ||= steered
+    if (target === body) state.reaim = null
+    else if (
+      target &&
+      !contact.pilot &&
+      (passing || contact.lock !== target.key || noseOff(state, target) - contact.angle > REAIM_TURNED)
+    ) {
+      state.reaim = target.key
+    }
+    return null
+  }
+  contact.key = null
+  if (!target || state.reaim === null) return null
+  if (nearest && nearest !== target && lineThrough(nearest, state.position, target.position)) return null
+  const off = noseOff(state, target)
+  const reach = aimAt.length()
+  // Settled on it: swinging through it faster, the eased turn would carry
+  // the nose on past.
+  const settled = state.nudge.length() <= REAIM_GAIN * REAIM_DONE
+  if (!(reach > 0) || (settled && off < REAIM_DONE)) {
+    state.reaim = null
+    return null
+  }
+  return aimAt.divideScalar(reach)
 }
 
 function translate(
@@ -1850,14 +2040,16 @@ export function stepShip(
     const normal = touch ? touch.normal : null
     // Locked on a body beyond the one it's pressed into, behind its surface
     // (PASSING_BELOW), the ship is going past that one (tides-ufyr.6.2: a
-    // line in to Jupiter through Callisto). No nudge then: nothing steers a
-    // locked ship's nose back, so turned off the line it flew on past its
-    // target for good. Its thrust slides it round instead (translate). A
-    // target over the horizon (the Moon, setting down on Earth) leaves the
-    // cushion as it is: the ship hovers.
+    // line in to Jupiter through Callisto). No nudge then: the nose stays on
+    // the line while its thrust slides it round (translate). A target over
+    // the horizon (the Moon, setting down on Earth) leaves the cushion as it
+    // is: the ship hovers, its nose nudged. Clear of a slide round, or of a
+    // contact that took the nose off the line, the nose is turned back onto
+    // the target (reaimFor, tides-ufyr.12).
     const passing = touch && target && touch.body !== target && behindSurface(target, state.position, touch.normal) ? target : null
     const nudgeScale = passing ? 0 : env.reducedMotion ? CUSHION_NUDGE_REDUCED : 1
-    rotate(state, input, h, speedFraction(state.velocity.length(), capBefore), normal, share, nudgeScale)
+    const aim = reaimFor(state, input, target, touch, depth, passing !== null, here.nearest)
+    rotate(state, input, h, speedFraction(state.velocity.length(), capBefore), normal, share, nudgeScale, aim)
     const before = touch ? state.velocity.dot(touch.normal) : 0
     translate(state, input, h, capBefore, here, normal, share, passing, passing !== null && touch !== null && touch.lift > 0)
     let shift = 0

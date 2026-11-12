@@ -74,6 +74,67 @@ describe('?relief=25', () => {
       vi.resetModules()
     }
   })
+
+  // The low tier's stop is ~0.085 u up here, so the cushion's depth share
+  // (CUSHION_DEPTH_SHARE × that, ~0.13 u) would reach over the atmosphere
+  // and the aurora; its caps keep it under them (tides-ufyr.11).
+  it("keeps the low tier's cushion under the atmosphere: over the ground, a cap binds, not the depth share", async () => {
+    vi.resetModules()
+    vi.stubGlobal('location', { search: '?relief=25' })
+    try {
+      const layer = await import('./cloud-layer')
+      const { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } = await import('./renderers/earth-shells')
+      const { createShipBodies, EARTH_COLLISION_RADIUS, EARTH_SHELL_RADII } = await import('./ship/ship-bodies')
+      const flight = await import('./ship/flight')
+      const lowEarth = createShipBodies('low').find((b) => b.key === 'earth')!
+      const atmosphere = EARTH_RADIUS * Math.min(ATMOSPHERE_OUTER, AURORA_SHELL_OUTER)
+      const directions = [
+        new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0.3, -0.5, 0.8).normalize(),
+        new THREE.Vector3(-0.7, 0.1, -0.7).normalize(),
+      ]
+      // Over the sea and the DEM's highest ground the stop is the hard
+      // sphere over the sheet; with no terrain loaded (as here, and in the
+      // page until the DEM arrives) the floor stands in 9 km of ground,
+      // 225 km at this relief, and the stop is over that.
+      const grounds = [
+        ['the sea', EARTH_RADIUS],
+        ['the highest ground', EARTH_RADIUS + layer.TERRAIN_DISPLACEMENT * layer.TERRAIN_MAX_GREY],
+        ['no terrain loaded', NaN],
+      ] as const
+      for (const [label, radius] of grounds) {
+        const earth = Number.isNaN(radius) ? lowEarth : { ...lowEarth, ground: () => radius }
+        for (const direction of directions) {
+          const stop = flight.floorRadius(earth, direction)
+          const width = flight.cushionWidth(earth, direction)
+          expect(width, label).toBeGreaterThan(0)
+          expect(stop + width, label).toBeLessThan(atmosphere)
+          if (Number.isNaN(radius)) {
+            expect(stop).toBeGreaterThan(EARTH_COLLISION_RADIUS)
+            continue
+          }
+          expect(stop, label).toBe(EARTH_COLLISION_RADIUS)
+          // What each of the band's limits allows (flight.ts cushionBandOver).
+          const share = flight.CUSHION_DEPTH_SHARE * (stop - radius)
+          const time = flight.CUSHION_MAX_SECONDS * flight.speedFloorAt(earth, stop - radius + share, stop + share - EARTH_RADIUS)
+          const shell = flight.CUSHION_SHELL_SHARE * Math.min(...EARTH_SHELL_RADII.filter((r) => r > stop).map((r) => r - stop))
+          expect(width, label).toBeCloseTo(Math.min(share, time, shell), 12)
+          // Over the sea the share alone would reach over the atmosphere; a
+          // cap is what sets the band.
+          if (radius === EARTH_RADIUS) {
+            expect(stop + share).toBeGreaterThan(atmosphere)
+            expect(Math.min(time, shell)).toBeLessThan(share)
+            expect(width).toBeCloseTo(Math.min(time, shell), 12)
+            if (direction === directions[0]) console.log(`relief 25, low tier, over the sea: stop ${(stop - EARTH_RADIUS).toFixed(4)} u up, share ${share.toFixed(4)}, time cap ${time.toFixed(4)}, shell cap ${shell.toFixed(4)}, band ${width.toFixed(4)}; ${(atmosphere - stop - width).toFixed(4)} u under the atmosphere`)
+          }
+        }
+      }
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
+  })
 })
 
 describe('?relief=10', () => {
