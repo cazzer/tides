@@ -250,7 +250,11 @@ export function DemoPlayer() {
     const focus = focusedRef<BodyRef>(state, current.pose.focus)?.current
     const sun = (state.sun as BodyRef)?.current
     const earth = (state.earth as BodyRef)?.current
-    if (!focus || !sun || !earth) return
+    if (!focus || !sun || !earth) {
+      // Nothing to fly about this frame: don't hold the moons' growth on it.
+      setDemoFlight(false)
+      return
+    }
     focus.getWorldPosition(_focus)
     sun.getWorldPosition(_sun)
     earth.getWorldPosition(_earth)

@@ -95,7 +95,7 @@ export const planets: Demo = {
       camera: VENUS,
       caption: {
         title: 'Venus spins backwards',
-        body: 'No moons. Watch the dark clouds: Venus turns clockwise seen from above, the opposite way to most planets.',
+        body: 'No moons. Watch the dark markings: Venus turns clockwise seen from above, the opposite way to most planets.',
       },
     },
     {
