@@ -57,8 +57,15 @@ describe('limbFacetPx', () => {
 describe('LIMB_SEGMENTS', () => {
   it('keeps every body’s limb under 1 px at its collision stop, even in a corner', () => {
     for (const body of createShipBodies('low')) {
+      // Earth's low-tier stop is over its cloud sheet now (tides-ufyr.2), as
+      // close as the high tier's floor: held at the centre below.
+      if (body.key === 'earth') continue
       expect(cornerPx(collisionRadius(body) / body.radius), body.key).toBeLessThan(1)
     }
+  })
+
+  it('keeps Earth’s sea horizon under 1 px at the screen’s centre from the low-tier stop (tides-ufyr.2)', () => {
+    expect(limbFacetPx(LIMB_SEGMENTS, EARTH_COLLISION_RADIUS / EARTH_RADIUS, SCREEN_PX, SHIP_FOV)).toBeLessThan(1)
   })
 
   it('keeps Earth’s sea horizon about 1 px at the screen’s centre from the high-tier floor', () => {
@@ -70,13 +77,14 @@ describe('LIMB_SEGMENTS', () => {
     expect(limbFacetPx(LIMB_SEGMENTS, floor, SCREEN_PX, SHIP_FOV)).toBeLessThan(1)
   })
 
-  it('keeps Earth’s outer shells under 1 px too, each in its own radii', () => {
-    for (const shell of [
-      EARTH_RADIUS + CLOUD_LAYER_TOP,
-      EARTH_RADIUS + CLOUD_FLAT_ALTITUDE,
-      EARTH_RADIUS * ATMOSPHERE_OUTER,
-    ]) {
-      expect(cornerPx(EARTH_COLLISION_RADIUS / shell), String(shell)).toBeLessThan(1)
+  it('keeps the low tier’s cloud sheet under 1 px at the centre from its stop, the shells over it limbless', () => {
+    // The stop is EARTH_SHEET_CLEARANCE over the sheet (tides-ufyr.2).
+    const sheet = EARTH_RADIUS + CLOUD_FLAT_ALTITUDE
+    expect(limbFacetPx(LIMB_SEGMENTS, EARTH_COLLISION_RADIUS / sheet, SCREEN_PX, SHIP_FOV)).toBeLessThan(1)
+    // Inside a shell there is no limb to facet.
+    for (const shell of [EARTH_RADIUS + CLOUD_LAYER_TOP, EARTH_RADIUS * ATMOSPHERE_OUTER]) {
+      expect(EARTH_COLLISION_RADIUS).toBeLessThan(shell)
+      expect(limbFacetPx(LIMB_SEGMENTS, EARTH_COLLISION_RADIUS / shell, SCREEN_PX, SHIP_FOV), String(shell)).toBeNaN()
     }
   })
 })

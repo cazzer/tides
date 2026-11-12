@@ -7,7 +7,9 @@ import {
   createShipBodies,
   EARTH_COLLISION_RADIUS,
   EARTH_RADIUS,
+  EARTH_SHEET_CLEARANCE,
   EARTH_SHELL_RADII,
+  EARTH_SHELL_RADIUS,
   updateShipBodies,
 } from './ship-bodies'
 import { FOV_KICK } from './dust'
@@ -35,6 +37,7 @@ import {
   shipNear,
   shipNearFloor,
   NEAR_MIN,
+  NEAR_SHARE,
   NEAR_MIN_REVERSED,
   SPAWN_EARTH_SHARE,
   SPAWN_MIN_DISTANCE,
@@ -321,7 +324,9 @@ describe('ship camera range', () => {
 
   it("keeps the near rectangle off Earth's shells on the way down through them", () => {
     let cut = 0
-    for (let d = EARTH_RADIUS + 0.003; d <= EARTH_COLLISION_RADIUS; d += 1e-4) {
+    // Out past the aurora, so the sweep crosses every shell, the atmosphere
+    // and aurora included, under the low tier's stop too (tides-ufyr.2).
+    for (let d = EARTH_RADIUS + 0.003; d <= EARTH_SHELL_RADIUS + shipNear(Infinity) / NEAR_SHARE; d += 1e-4) {
       // The ground can be anywhere below: sea level is the furthest.
       const shells = shellGap(d, EARTH_SHELL_RADII)
       // At a shell the floor wins: a hole a near's width across, crossing it.
@@ -329,6 +334,38 @@ describe('ship camera range', () => {
       if (shipNear(d - EARTH_RADIUS, shells) * CORNER >= shells) cut++
     }
     expect(cut).toBe(0)
+  })
+
+  it("keeps the near rectangle off Earth's shells all the way down to the low tier's stop (tides-ufyr.2)", () => {
+    const bodies = createShipBodies('low')
+    updateShipBodies(bodies, Date.UTC(2026, 0, 1))
+    const earth = bodies.find((b) => b.key === 'earth')!
+    const floor = earth.floor!
+    const stop = collisionRadius(earth)
+    expect(stop).toBe(EARTH_COLLISION_RADIUS)
+    const up = new THREE.Vector3(0.3, 1, -0.2).normalize()
+    const eye = new THREE.Vector3()
+    const nearAt = (d: number) => {
+      eye.copy(earth.position).addScaledVector(up, d)
+      const gap = bodiesShellGap(eye, bodies)
+      return { near: shipNear(floor.nearGap(eye), gap), gap }
+    }
+    let holes = 0
+    let steps = 0
+    for (let d = 3 * EARTH_RADIUS; d >= stop; d -= 1e-4) {
+      const { near, gap } = nearAt(d)
+      steps++
+      // At a shell the floor wins: a hole a near's width across, crossing it.
+      if (near <= NEAR_MIN) continue
+      if (near * NEAR_CORNER_REACH >= gap) holes++
+    }
+    expect(steps).toBeGreaterThan(50_000)
+    expect(holes).toBe(0)
+    // At the stop, over the cloud sheet, with the speed kick's FOV on a 21:9 screen.
+    const { near, gap } = nearAt(stop)
+    expect(gap).toBeCloseTo(EARTH_SHEET_CLEARANCE, 12)
+    expect(near).toBeGreaterThan(NEAR_MIN)
+    expect(near * CORNER).toBeLessThan(gap)
   })
 
   it("would cut Earth's atmosphere glow from between its shells going by the ground alone", () => {

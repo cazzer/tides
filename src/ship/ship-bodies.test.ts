@@ -4,11 +4,13 @@ import * as THREE from 'three'
 import { Body, HelioVector } from 'astronomy-engine'
 import { PLANET_KEYS, PLANETS, sceneRadius } from '../planets'
 import { FLIGHT_UNITS_PER_AU, flightPlanetPosition, positionsFor } from '../flight-scale'
-import { CLOUD_CLEARANCE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, FINE_DECK, cloudColumn, type CloudDeck } from '../cloud-layer'
+import { CLOUD_CLEARANCE, CLOUD_FLAT_ALTITUDE, TERRAIN_DISPLACEMENT, TERRAIN_KM_PER_GREY, FINE_DECK, cloudColumn, type CloudDeck } from '../cloud-layer'
 import { latLonToLocal } from '../aurora'
 import { applyBodyTransform } from '../body-transform'
 import { earthSpin, earthTilt } from '../ephemeris'
-import { ATMOSPHERE_OUTER, AURORA_SHELL_OUTER } from '../renderers/earth-shells'
+import { ATMOSPHERE_OUTER, AURORA_SHELL_INNER } from '../renderers/earth-shells'
+import { PRECIP_TOP } from './falling-precip'
+import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import {
   JUPITER_HAZE_OUTER,
   MARS_HAZE_OUTER,
@@ -46,16 +48,17 @@ import {
   EARTH_HARD_CLEARANCE,
   EARTH_RADIUS,
   EARTH_SHELL_RADII,
-  EARTH_SHELL_RADIUS,
+  EARTH_SHEET_CLEARANCE,
   JUPITER_STOP,
   MOON_COLLISION_CLEARANCE,
   EARTH_GROUND_SPEED_LAW,
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
   createShipBodies,
+  floorReach,
   updateShipBodies,
 } from './ship-bodies'
-import { SHIP_FOV, shipNear, spawnPose } from './ship-session'
+import { NEAR_MIN, SHIP_FOV, shipNear, spawnPose } from './ship-session'
 import {
   EARTH_BASE_SEGMENTS,
   TERRAIN_FALLBACK_GREY,
@@ -175,23 +178,30 @@ describe('ship bodies', () => {
   })
 
   describe('collision radius (tides-3bl.7)', () => {
-    it("keeps the ship outside every shell Earth draws, and a near plane's depth beyond, on the low tier", () => {
+    it('stops the ship just over the cloud sheet on the low tier, under the atmosphere and aurora (tides-ufyr.2)', () => {
       const { earth } = byKey(T, 'low')
-      expect(earth.minSpeed).toBeUndefined()
       expect(collisionRadius(earth)).toBe(EARTH_COLLISION_RADIUS)
-      for (const shell of [
-        earth.radius + CLOUD_LAYER_TOP,
-        earth.radius * ATMOSPHERE_OUTER,
-        earth.radius * AURORA_SHELL_OUTER,
-      ]) {
-        expect(EARTH_SHELL_RADIUS).toBeGreaterThanOrEqual(shell)
-      }
-      // From the collision sphere, whatever the near plane is it stays short
-      // of the outermost shell (it is measured from the sea-level surface).
-      const gap = EARTH_COLLISION_RADIUS - earth.radius
-      expect(EARTH_COLLISION_RADIUS - shipNear(gap)).toBeGreaterThanOrEqual(EARTH_SHELL_RADIUS)
-      // Close enough that Earth still fills the view: ~1.1 radii.
-      expect(EARTH_COLLISION_RADIUS / earth.radius).toBeLessThan(1.15)
+      expect(EARTH_COLLISION_RADIUS).toBe(EARTH_RADIUS + CLOUD_FLAT_ALTITUDE + EARTH_SHEET_CLEARANCE)
+      // Over the sheet and the rain's gate over it; inside the shells drawn
+      // from inside (pickShellFaces), the atmosphere and the aurora.
+      const altitude = EARTH_COLLISION_RADIUS - EARTH_RADIUS
+      expect(altitude).toBeGreaterThan(PRECIP_TOP)
+      expect(EARTH_COLLISION_RADIUS).toBeLessThan(EARTH_RADIUS * ATMOSPHERE_OUTER)
+      expect(EARTH_COLLISION_RADIUS).toBeLessThan(EARTH_RADIUS * AURORA_SHELL_INNER)
+      // ~55 km up, ~11 km over the sheet.
+      expect(altitude * EARTH_KM_PER_UNIT).toBeCloseTo(55, 0)
+      expect(EARTH_SHEET_CLEARANCE * EARTH_KM_PER_UNIT).toBeCloseTo(10.8, 1)
+      // The near plane at the stop, NEAR_SHARE of the gap to the sheet, is
+      // over the standard buffer's floor, and the floor's window inside it.
+      expect(shipNear(altitude, EARTH_SHEET_CLEARANCE)).toBeCloseTo(0.4 * EARTH_SHEET_CLEARANCE, 12)
+      expect(shipNear(altitude, EARTH_SHEET_CLEARANCE)).toBeGreaterThan(NEAR_MIN)
+      expect(floorReach(EARTH_SHEET_CLEARANCE)).toBeLessThan(EARTH_SHEET_CLEARANCE)
+      // The hard sphere is the stop: the globe's floor stays under it.
+      expect(floorRadius(earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
+      // The high tier's speed law, not V_NORMAL over the sheet.
+      expect(earth.minSpeed).toBe(EARTH_SLOWEST)
+      expect(earth.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
+      expect(speedFloor(earth)).toBe(EARTH_SLOWEST)
     })
 
     it('drops the hard sphere to the bare ground on the high tier (tides-01v.8.7)', () => {
@@ -477,7 +487,8 @@ describe('ship bodies', () => {
       expect(speedCap(at(0.5), bodies)).toBeLessThan(V_NORMAL)
       expect(speedCap(at(0.5), bodies)).toBeGreaterThan(EARTH_GROUND_SPEED)
       expect(speedCap(at(2), bodies)).toBeGreaterThan(V_NORMAL)
-      expect(speedCap(at(0.5), [byKey(T, 'low').earth])).toBe(V_NORMAL)
+      // The low tier flies the same law down to its stop over the sheet (tides-ufyr.2).
+      expect(speedCap(at(0.5), [byKey(T, 'low').earth])).toBeLessThan(V_NORMAL)
       for (const speed of [EARTH_GROUND_SPEED, OVERSPEED_MAX * EARTH_GROUND_SPEED]) {
         expect(fovKickShare(speed, EARTH_GROUND_SPEED)).toBe(0)
       }
@@ -512,7 +523,7 @@ describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
     expect(axis.distanceTo(new THREE.Vector3(0, 1, 0).applyQuaternion(frame.quaternion))).toBeLessThan(1e-14)
   })
 
-  it('flies the same law with the tiles or without (tides-zmw.9.29); the low tier keeps V_NORMAL', () => {
+  it('flies the same law with the tiles or without and on the low tier (tides-zmw.9.29, tides-ufyr.2)', () => {
     const over = createShipBodies('high', true).find((b) => b.key === 'earth')!
     expect(over.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
     expect(over.minSpeed).toBe(EARTH_SLOWEST)
@@ -521,8 +532,8 @@ describe("Earth's spin and speed law (tides-zmw.9.18)", () => {
     expect(without.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
     expect(without.minSpeed).toBe(EARTH_SLOWEST)
     const low = createShipBodies('low', false).find((b) => b.key === 'earth')!
-    expect(low.groundSpeed).toBeUndefined()
-    expect(low.minSpeed).toBeUndefined()
+    expect(low.groundSpeed).toBe(EARTH_GROUND_SPEED_LAW)
+    expect(low.minSpeed).toBe(EARTH_SLOWEST)
   })
 
   it("spools the air's boost no faster than Flight Assist rides a rising cap (tides-zmw.25)", () => {

@@ -50,6 +50,30 @@ describe('?relief=25', () => {
       vi.resetModules()
     }
   })
+
+  it("keeps the low tier's stop over the sheet's rain gate and under the atmosphere (tides-ufyr.2)", async () => {
+    vi.resetModules()
+    vi.stubGlobal('location', { search: '?relief=25' })
+    try {
+      const layer = await import('./cloud-layer')
+      const { ATMOSPHERE_OUTER, AURORA_SHELL_INNER, AURORA_SHELL_OUTER } = await import('./renderers/earth-shells')
+      const { PRECIP_TOP } = await import('./ship/falling-precip')
+      const { EARTH_COLLISION_RADIUS, EARTH_SHEET_CLEARANCE, EARTH_GROUND_CLEARANCE } = await import('./ship/ship-bodies')
+      const altitude = EARTH_COLLISION_RADIUS - EARTH_RADIUS
+      expect(altitude).toBeCloseTo(layer.CLOUD_FLAT_ALTITUDE + EARTH_SHEET_CLEARANCE, 12)
+      expect(altitude).toBeGreaterThan(PRECIP_TOP)
+      // Over the globe's highest floor, so the hard sphere is the stop.
+      expect(altitude).toBeGreaterThan(layer.TERRAIN_DISPLACEMENT * layer.TERRAIN_MAX_GREY + EARTH_GROUND_CLEARANCE)
+      // Under the atmosphere's top and the aurora's, both drawn from inside;
+      // at this relief within the aurora's band (over its base, which the
+      // default relief's stop is under), as every descent on the high tier is.
+      expect(EARTH_COLLISION_RADIUS).toBeLessThan(EARTH_RADIUS * Math.min(ATMOSPHERE_OUTER, AURORA_SHELL_OUTER))
+      expect(EARTH_COLLISION_RADIUS).toBeGreaterThan(EARTH_RADIUS * AURORA_SHELL_INNER)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
+  })
 })
 
 describe('?relief=10', () => {

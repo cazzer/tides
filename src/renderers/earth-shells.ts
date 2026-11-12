@@ -1,9 +1,10 @@
 // The outer edges of Earth's drawn shells, as fractions of its radius: shared
 // by their renderers and by ship mode, whose near plane keeps clear of them
-// and whose low-tier stop stays outside them (tides-3bl.7). In ship mode, and
-// in the system view's close zoom (tides-tvr.7.3), both are drawn from inside
-// too (pickShellFaces), and on the high tier the eye comes down through them
-// to the terrain floor (tides-01v.8.7). The face picking below serves the
+// (tides-3bl.7). In ship mode, and in the system view's close zoom
+// (tides-tvr.7.3), both are drawn from inside too (pickShellFaces): on the
+// high tier the eye comes down through them to the terrain floor
+// (tides-01v.8.7), on the low tier to its stop over the cloud sheet
+// (tides-ufyr.2). The face picking below serves the
 // planets' haze shells too (PlanetAtmosphere, tides-ufyr.4), each for its
 // own limb body.
 import * as THREE from 'three'
