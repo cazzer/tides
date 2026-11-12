@@ -8,6 +8,9 @@ export type QualityChoice = 'auto' | QualityTier
 
 const QUALITY_KEY = 'tides.quality'
 
+/** Phones and tablets by user agent (iPadOS's desktop UA aside: isTouchMac). */
+const MOBILE_UA = /Android|iPhone|iPad|iPod|Mobi/i
+
 /** The tier the URL or the saved choice forces, or null to go by user agent. */
 function forcedTier(search: string, saved: string | null): QualityTier | null {
   const override = new URLSearchParams(search).get('quality')
@@ -16,7 +19,7 @@ function forcedTier(search: string, saved: string | null): QualityTier | null {
 }
 
 export function resolveQualityTier(search: string, userAgent: string, saved: string | null = null): QualityTier {
-  return forcedTier(search, saved) ?? (/Android|iPhone|iPad|iPod|Mobi/i.test(userAgent) ? 'low' : 'high')
+  return forcedTier(search, saved) ?? (MOBILE_UA.test(userAgent) ? 'low' : 'high')
 }
 
 /** The choice saved on this device; 'auto' when none, or storage is unavailable. */
@@ -59,6 +62,20 @@ export function isTouchMac(userAgent: string, maxTouchPoints: number): boolean {
 }
 
 /**
+ * A phone or tablet, iPads included, whatever the tier: a phone-class
+ * memory budget (the flight map cap, the surface tiles' budget).
+ */
+export function isTouchDevice(userAgent: string, maxTouchPoints: number): boolean {
+  return MOBILE_UA.test(userAgent) || isTouchMac(userAgent, maxTouchPoints)
+}
+
+/** Whether this page runs on a phone or tablet (isTouchDevice); false outside a browser. */
+export function touchDevice(): boolean {
+  if (typeof window === 'undefined') return false
+  return isTouchDevice(navigator.userAgent, navigator.maxTouchPoints ?? 0)
+}
+
+/**
  * The widest flight-only map (tides-01v.6) this device fetches, or null for
  * none: 8k on desktops, 4k on phones and tablets, iPads included (their tier
  * stays 'high' for the Earth maps, but an 8k map is a third of a phone-class
@@ -72,9 +89,7 @@ export function resolveFlightTextureCap(
   saved: string | null = null
 ): 8192 | 4096 | null {
   const forced = forcedTier(search, saved)
-  const mobile =
-    forced === 'low' ||
-    (forced !== 'high' && (resolveQualityTier('', userAgent) === 'low' || isTouchMac(userAgent, maxTouchPoints)))
+  const mobile = forced === 'low' || (forced !== 'high' && isTouchDevice(userAgent, maxTouchPoints))
   const cap = mobile ? 4096 : 8192
   if (maxTextureSize >= cap) return cap
   return maxTextureSize >= 4096 ? 4096 : null

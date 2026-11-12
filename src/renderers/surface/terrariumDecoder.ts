@@ -22,6 +22,11 @@
 // bake at most. A cancelled bake holds its worker until the worker replies
 // (it can't stop a bake once started), so cancels in a burst don't stack
 // bakes on a worker.
+//
+// tides-8h7.5: each waiting bake holds a ~2 MB copy of its grid, and on a
+// phone a pivot low to the ground could queue them by the hundred.
+// maxWaitingBakes bounds the wait: past it a new bake is dropped
+// (BakeDroppedError), and its grid's cache bakes it again later.
 import type { HorizonJob, PaddedGrid } from './terrarium'
 
 export type DecodeRequest =
@@ -89,6 +94,16 @@ interface WaitingBake {
   onAbort: () => void
 }
 
+/**
+ * A bake turned away because maxWaitingBakes were already waiting: nothing
+ * was sent or kept. Not an AbortError: the bake is wanted, just not now.
+ */
+export class BakeDroppedError extends DOMException {
+  constructor() {
+    super('terrain bake dropped: too many waiting', 'BakeDroppedError')
+  }
+}
+
 const disposedError = () => new DOMException('terrain decoder disposed', 'AbortError')
 
 interface Slot {
@@ -111,10 +126,13 @@ export function createTerrariumDecoder({
   createWorker,
   inThread,
   size = DECODE_WORKERS,
+  maxWaitingBakes = Infinity,
 }: {
   createWorker: () => DecodeWorker | null
   inThread: (buffer: ArrayBuffer) => Promise<PaddedGrid>
   size?: number
+  /** Bakes that may wait for a worker; more reject with BakeDroppedError. */
+  maxWaitingBakes?: number
 }): TerrariumDecoder {
   const slots: Slot[] = []
   // false once a worker can't be made or has died: everything runs in thread
@@ -261,7 +279,8 @@ export function createTerrariumDecoder({
     const slot = !workersOk ? null : bake ? pickForBake() : pick()
     if (!slot) {
       if (!bake || !workersOk || slots.length === 0) return fallback()
-      // every worker has a bake in hand: wait for one
+      // every worker has a bake in hand: wait for one, if there's room
+      if (waitingBakes.length >= maxWaitingBakes) return Promise.reject(new BakeDroppedError())
       return new Promise<T>((resolve, reject) => {
         const waiting: WaitingBake = {
           signal,

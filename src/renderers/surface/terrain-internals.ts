@@ -69,7 +69,7 @@ import {
   type HorizonSource,
   type PaddedGrid,
 } from './terrarium'
-import type { BakedHorizon, TerrariumBake, TerrariumDecode } from './terrariumDecoder'
+import { BakeDroppedError, type BakedHorizon, type TerrariumBake, type TerrariumDecode } from './terrariumDecoder'
 
 /** A grid that gets a horizon map (SurfaceGridCache.startHorizon). */
 interface HorizonGrid {
@@ -436,7 +436,11 @@ export class SurfaceGridCache extends GridCache {
     this.runBake(k, entry)
   }
 
-  /** Bakes entry's map (once more after this one, if asked while it runs); a failure leaves the map it had. */
+  /**
+   * Bakes entry's map (once more after this one, if asked while it runs); a
+   * failure leaves the map it had, and a dropped bake runs again after
+   * HORIZON_REBAKE_DELAY_MS.
+   */
   private runBake(k: string, entry: HorizonGrid): void {
     if (entry.running) {
       entry.again = true
@@ -451,7 +455,17 @@ export class SurfaceGridCache extends GridCache {
       .then((baked) => {
         if (!signal.aborted) this.attachHorizon(entry.grid, baked, tileSize)
       })
-      .catch(() => {})
+      .catch((err) => {
+        // Turned away by a full queue (tides-8h7.5): tried again shortly, so
+        // no grid is left without its map. A rebake already pending covers it.
+        if (err instanceof BakeDroppedError && !signal.aborted && entry.timer === undefined) {
+          // (its grid's dispose clears it, and runBake skips a released grid)
+          entry.timer = setTimeout(() => {
+            entry.timer = entry.since = undefined
+            this.runBake(k, entry)
+          }, HORIZON_REBAKE_DELAY_MS)
+        }
+      })
       .finally(() => {
         release()
         entry.running = false

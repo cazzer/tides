@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resolveFlightTextureCap, resolveQualityTier, savedQualityChoice, saveQualityChoice } from './quality'
+import { isTouchDevice, resolveFlightTextureCap, resolveQualityTier, savedQualityChoice, saveQualityChoice } from './quality'
 
 const DESKTOP = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
@@ -97,8 +97,32 @@ describe('resolveFlightTextureCap', () => {
     expect(resolveFlightTextureCap('?quality=high', DESKTOP, 0, 16384, 'low')).toBe(8192)
   })
 
+  it('keeps 8k for a phone forced high (pending tides-8h7.6: whether forced high should still cap)', () => {
+    expect(resolveFlightTextureCap('', IPHONE, 5, 16384, 'high')).toBe(8192)
+    expect(resolveFlightTextureCap('?quality=high', IPHONE, 5, 16384)).toBe(8192)
+  })
+
   it('never exceeds the GPU, and is off below 4k', () => {
     expect(resolveFlightTextureCap('', DESKTOP, 0, 4096)).toBe(4096)
     expect(resolveFlightTextureCap('', DESKTOP, 0, 2048)).toBeNull()
+  })
+})
+
+describe('isTouchDevice (tides-8h7.5)', () => {
+  const IPAD = DESKTOP.replace('Chrome/141.0 Safari/537.36', 'Version/18.0 Safari/605.1.15')
+  const WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
+
+  it('is true for phones and for an iPad on its desktop UA, by its touch points', () => {
+    expect(isTouchDevice(IPHONE, 5)).toBe(true)
+    expect(isTouchDevice(ANDROID, 5)).toBe(true)
+    expect(isTouchDevice(IPAD, 5)).toBe(true)
+  })
+
+  it('is false for a Mac with no touch points and for Windows', () => {
+    expect(isTouchDevice(IPAD, 0)).toBe(false)
+    expect(isTouchDevice(DESKTOP, 0)).toBe(false)
+    expect(isTouchDevice(WINDOWS, 0)).toBe(false)
+    // a touchscreen laptop isn't a phone-class budget
+    expect(isTouchDevice(WINDOWS, 10)).toBe(false)
   })
 })

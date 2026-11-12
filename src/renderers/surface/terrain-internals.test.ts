@@ -32,6 +32,7 @@ import {
   setGridHorizon,
   GRID_LEVEL_STEP,
   HELD_BETWEEN_GRIDS,
+  HORIZON_REBAKE_DELAY_MS,
   installSurfaceGridCache,
   PINNED_TILES_VERSION,
   protectOverlayBitmaps,
@@ -48,6 +49,7 @@ import {
   type TerrainPluginInternals,
 } from './terrain-internals'
 import { decodeTerrariumPadded, type HorizonJob, type PaddedGrid } from './terrarium'
+import { BakeDroppedError } from './terrariumDecoder'
 import { GridEdges, type TexelRect } from './grid-upload'
 import { trackUploads } from './tile-upload'
 
@@ -692,6 +694,73 @@ describe('SurfaceGridCache (tides-zmw.9.2)', () => {
       // not even under way (charged nothing)
       expect(gridHorizonBytes((await third) as DataTexture)).toBe(0)
       expect(gridHorizonBytes((await land) as DataTexture)).toBe(8)
+    })
+
+    describe('a bake dropped by a full queue (tides-8h7.5)', () => {
+      // Timeouts faked (and still advancing with real time, for the queues'
+      // frames and the budget's waits), so the retry's delay is stepped over.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+      })
+      afterEach(() => vi.useRealTimers())
+
+      const map = { horizon: new Uint8Array(8).fill(9), ms: 1, max: 9 }
+
+      it('is baked again after HORIZON_REBAKE_DELAY_MS, so the grid still gets its map', async () => {
+        const { terrain } = await loadedPlugin()
+        let calls = 0
+        const bake = async () => {
+          if (++calls === 1) throw new BakeDroppedError()
+          return map
+        }
+        const opts = options({ decode: planes, bake })
+        const cache = installSurfaceGridCache(terrain, opts)
+        answer = byLevel
+        const land = cache.lock(1, 1, 2)
+        await drain(opts.budget, land)
+        await until(opts.budget, () => calls === 1)
+        const grid = (await land) as DataTexture
+        expect(gridHorizon(grid)).toBeNull()
+        await vi.advanceTimersByTimeAsync(HORIZON_REBAKE_DELAY_MS - 200)
+        expect(calls).toBe(1)
+        await vi.advanceTimersByTimeAsync(400)
+        await until(opts.budget, () => calls === 2)
+        await vi.waitFor(() => expect(gridHorizon(grid)).not.toBeNull())
+        // and only once
+        await vi.advanceTimersByTimeAsync(3 * HORIZON_REBAKE_DELAY_MS)
+        expect(calls).toBe(2)
+      })
+
+      it('is not baked again once its grid is released, before the retry or while the bake ran', async () => {
+        const { terrain } = await loadedPlugin()
+        let calls = 0
+        let dropLate!: () => void
+        const bake = () => {
+          if (++calls === 1) return Promise.reject(new BakeDroppedError())
+          // the second grid's: dropped after its grid is gone
+          return new Promise<never>((_, reject) => (dropLate = () => reject(new BakeDroppedError())))
+        }
+        const opts = options({ decode: planes, bake })
+        const cache = installSurfaceGridCache(terrain, opts)
+        answer = byLevel
+        // dropped, then released before the retry
+        const first = cache.lock(1, 1, 2)
+        await drain(opts.budget, first)
+        await until(opts.budget, () => calls === 1)
+        cache.release(1, 1, 2)
+        await Promise.resolve()
+        await Promise.resolve()
+        // released while baking, then dropped
+        const second = cache.lock(2, 1, 2)
+        await drain(opts.budget, second)
+        await until(opts.budget, () => calls === 2)
+        cache.release(2, 1, 2)
+        await Promise.resolve()
+        await Promise.resolve()
+        dropLate()
+        await vi.advanceTimersByTimeAsync(3 * HORIZON_REBAKE_DELAY_MS)
+        expect(calls).toBe(2)
+      })
     })
   })
 
