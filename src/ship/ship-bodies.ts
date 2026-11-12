@@ -30,7 +30,7 @@ import {
   VENUS_HAZE_OUTER,
 } from '../renderers/planets/haze-shells'
 import type { AirSpeedLaw, Body as FlightBody, GroundSpeedLaw } from './flight'
-import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE, shipNear } from './ship-session'
+import { NEAR_CORNER_REACH, NEAR_MIN, NEAR_SHARE } from './ship-session'
 import {
   earthLimbTerrain,
   earthTerrain,
@@ -71,12 +71,24 @@ export const EARTH_SHELL_RADII: readonly number[] = [
 export const EARTH_SHELL_RADIUS = Math.max(...EARTH_SHELL_RADII)
 
 /**
- * Where the ship stops above Earth on the low quality tier: a near plane's
- * depth (shipNear's ceiling) beyond the outermost shell. That tier draws a
- * flat cloud sheet with no columns or in-cloud fog, so it stays above the
- * deck (tides-01v.8.14). Earth still fills the view from there.
+ * How far over the low tier's flat cloud sheet (CLOUD_FLAT_ALTITUDE) the
+ * ship stops: ~10.8 km true at the default relief, so ~55 km up. That tier
+ * draws the sheet with no columns or in-cloud fog, so the ship stays over
+ * it, as it does over the falling precipitation's gate (PRECIP_TOP, the
+ * sheet plus its 1 km fade) at every relief. The near plane there is
+ * NEAR_SHARE of the gap to the sheet's shell, 0.002 (twice NEAR_MIN), and
+ * the floor's window (floorReach) stays inside the clearance. [TUNE]
  */
-export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
+export const EARTH_SHEET_CLEARANCE = 0.005
+
+/**
+ * Where the ship stops above Earth on the low quality tier
+ * (tides-ufyr.2): EARTH_SHEET_CLEARANCE over the flat cloud sheet,
+ * ~1.0086 R, under the atmosphere and the aurora, which are drawn from
+ * inside (pickShellFaces, tides-01v.8.2). It was a near plane's depth beyond
+ * the aurora (~662 km, tides-01v.8.14) until then.
+ */
+export const EARTH_COLLISION_RADIUS = EARTH_RADIUS + CLOUD_FLAT_ALTITUDE + EARTH_SHEET_CLEARANCE
 
 /**
  * Earth's ground draws its top level (sphere-lod.ts topWithin) from this
@@ -84,8 +96,8 @@ export const EARTH_COLLISION_RADIUS = EARTH_SHELL_RADIUS + shipNear(Infinity)
  * flat sheet's early out needs the 128×128 globe (SHEET_GROUND_SPHERE), and
  * within the hysteresis's margin of either tier's stop, whose floor is
  * that globe's (terrain-floor.ts). The margin scales the stop's radius, not
- * its altitude, deliberately: a band of ~0.38 R (the low tier's stop is at
- * ~1.10 R), as the Sun's is STOP_TOP_LEVEL_SHARE of its radius. A 64×64
+ * its altitude, deliberately: a band of ~0.26 R (the low tier's stop is at
+ * ~1.009 R), as the Sun's is STOP_TOP_LEVEL_SHARE of its radius. A 64×64
  * globe's facets would pass the bound that close on any screen anyway, so
  * the band costs nothing the rule wouldn't.
  */
@@ -319,7 +331,8 @@ const DEG = Math.PI / 180
 
 // Earth's ground, read in its own spinning frame. The mesh tilts about X,
 // then spins about the tilted Y (body-transform.ts), so world → local undoes
-// the spin after the tilt. On the low tier the shells' stop stays.
+// the spin after the tilt. On the low tier the stop is a fixed sphere over
+// the flat cloud sheet (EARTH_COLLISION_RADIUS), under the same speed law.
 //
 // The ground is the highest drawn within a window around the ship (`reach`,
 // the near plane's corners at the stop): over the globe its terrain floor
@@ -354,9 +367,11 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
   const marked = new THREE.Vector3()
   const low = tier === 'low'
   // Without the tiles (?surface=0 or the low tier) the stop is the globe's
-  // as it was: the standard clearance and window, no settling. The speed
-  // law is the same either way: ?surface=0 is an experiment toggle,
-  // not a flight mode of its own (the user, 2026-10-26).
+  // as it was: the standard clearance and window, no settling, and on the
+  // low tier a hard sphere over the cloud sheet. The speed law is the same
+  // on every path: ?surface=0 is an experiment toggle, not a flight mode
+  // of its own (the user, 2026-10-26), and without it the low tier would
+  // fly the sheet at V_NORMAL (tides-ufyr.2).
   const fixed = low || !surfaceTiles
   const clearance: EarthClearance = earthClearance(false)
   let lift = 0
@@ -398,8 +413,8 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
     ? EARTH_COLLISION_RADIUS
     : EARTH_RADIUS + (surfaceTiles ? clearance.hard : EARTH_GROUND_CLEARANCE)
   body.groundClearance = EARTH_GROUND_CLEARANCE
-  body.minSpeed = low ? undefined : EARTH_SLOWEST
-  if (!low) body.groundSpeed = EARTH_GROUND_SPEED_LAW
+  body.minSpeed = EARTH_SLOWEST
+  body.groundSpeed = EARTH_GROUND_SPEED_LAW
   body.spin = spin
   body.ground = (direction, reach = clearance.reach) => drawn(toEarth(direction), reach) + Math.max(lift, 0)
   body.turnTo = (t) => {

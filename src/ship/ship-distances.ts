@@ -62,8 +62,8 @@
 // The moon systems also nudge ranges outside them: Mars's moons' anchors
 // shift Earth's and Mars's ranges by 1–11% for a ship 200–400 units out.
 //
-// Near a body the ship flies down to its ground (Earth's terrain on the high
-// tier, where its speed floor is under V_NORMAL: flight.ts speedFloor), its
+// Near a body the ship flies down to its ground (Earth's, where its speed
+// floor is under V_NORMAL: flight.ts speedFloor), its
 // own anchor reads on the drawn ground's scale instead (tides-01v.8.18): the body's
 // true radius over its scene radius, ~2 160 km a unit for Earth, against
 // the Earth–Moon pair's ~38 000–62 000. Skimming the floor at Earth's 0.02
@@ -76,8 +76,8 @@
 // short of the usual scale's by the band's depth at the difference (~12 000
 // km at Earth), which it pays back over GROUND_PAYBACK, the speed reading up
 // to ~6–8% over the pair scale through it, so from there out (the Moon
-// included) every range and speed is as it was. On the low tier the ship
-// stops above the shells, nowhere near the ground, and nothing changes.
+// included) every range and speed is as it was. The low tier's floor is its
+// stop over the cloud sheet (tides-ufyr.2), read the same way.
 //
 // Under ?truescale=<a> (../truescale.ts, tides-o39) the drawn radii grow
 // toward true while the distances stay. For every body but the Sun nothing

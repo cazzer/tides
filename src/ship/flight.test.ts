@@ -64,6 +64,7 @@ import {
   EARTH_GROUND_SPEED,
   EARTH_GROUND_SPEED_LAW,
   EARTH_RADIUS,
+  EARTH_SHELL_RADIUS,
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
   FINE_GROUND_CLEARANCE,
@@ -1063,9 +1064,10 @@ describe("Earth's floor (tides-01v.8.7)", () => {
   })
 
   test('climbs back out of the deck at full throttle within seconds', () => {
-    // Over the deck's tallest tops in 8 s, the low tier's stop in 15.
+    // Over the deck's tallest tops in 8 s, and in 15 over the aurora by a
+    // max near plane, where the low tier stopped until tides-ufyr.2 (~662 km).
     expect(dive('high', 1, DECK, 8).height).toBeGreaterThan(DECK)
-    expect(dive('high', 1, DECK, 15).height).toBeGreaterThan(EARTH_COLLISION_RADIUS - EARTH_RADIUS)
+    expect(dive('high', 1, DECK, 15).height).toBeGreaterThan(EARTH_SHELL_RADIUS + shipNear(Infinity) - EARTH_RADIUS)
   })
 
   test.each([true, false])('a locked dive at Earth never goes over the cap (FA %s)', (flightAssist) => {
@@ -1080,6 +1082,17 @@ describe("Earth's floor (tides-01v.8.7)", () => {
     }
     expect(telemetry.nearest.surfaceDistance).toBeCloseTo(EARTH_GROUND_CLEARANCE, 6)
     expect(peak).toBeLessThanOrEqual(1 + 1e-6)
+  })
+
+  // Over the cloud sheet, on the high tier's speed law (tides-ufyr.2).
+  test('a dive on the low tier comes to rest at EARTH_COLLISION_RADIUS at the air\'s cap', () => {
+    const { landed, peakShare, lowest } = dive('low', 1)
+    expect(lowest).toBeGreaterThanOrEqual(-1e-9)
+    expect(landed.altitude).toBeCloseTo(EARTH_COLLISION_RADIUS - EARTH_RADIUS, 9)
+    expect(landed.cap).toBeCloseTo(lawFloor(EARTH_GROUND_SPEED_LAW, landed.gap, landed.altitude), 12)
+    // ~5 km/s over the sheet, not V_NORMAL.
+    expect(landed.cap).toBeLessThan(V_NORMAL)
+    expect(peakShare).toBeLessThan(1.5)
   })
 
   test('the low tier still stops at EARTH_COLLISION_RADIUS', () => {

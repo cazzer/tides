@@ -13,6 +13,7 @@ import {
   surfaceTopKm,
 } from './surface-handover'
 import { MAX_RELIEF, RELIEF } from './relief'
+import { surfaceTilesOn } from './surface'
 import { EARTH_COLLISION_RADIUS, EARTH_GROUND_CLEARANCE, EARTH_RADIUS, EARTH_UNITS_PER_METRE, SURFACE_GROUND_MARGIN_METRES } from './ship/ship-bodies'
 
 afterEach(() => setSurfaceEye(Infinity))
@@ -66,9 +67,10 @@ describe('the surface handover (tides-zmw.9.7)', () => {
     expect(surfaceOpacityUniform.value).toBe(0)
   })
 
-  it("keeps the low tier's stop above it at any relief: that tier never draws the tiles", () => {
-    expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(SURFACE_TOP)
-    expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeGreaterThan(surfaceTopKm(MAX_RELIEF) / EARTH_KM_PER_UNIT)
+  it("draws no tiles on the low tier, though its stop is under it now (tides-ufyr.2)", () => {
+    expect(EARTH_COLLISION_RADIUS - EARTH_RADIUS).toBeLessThan(SURFACE_TOP)
+    expect(surfaceTilesOn(true, true)).toBe(false)
+    expect(surfaceTilesOn(true, false)).toBe(true)
   })
 })
 

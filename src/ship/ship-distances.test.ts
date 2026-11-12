@@ -300,7 +300,8 @@ describe('measureRanges', () => {
       expect(ranges.km[earth.index] / bareRanges.km[earth.index]).toBeCloseTo(1, 9)
     })
 
-    it.each(DATES)('changes nothing on the low tier, which stops above the shells (%i)', (t) => {
+    // The low tier stops over the cloud sheet on the same speed law (tides-ufyr.2).
+    it.each(DATES)("reads the low tier's stop at the drawn ground's scale too, the pair's clear of the band (%i)", (t) => {
       const bodies = createShipBodies('low')
       updateShipBodies(bodies, t)
       const truth = trueBodies(
@@ -309,18 +310,14 @@ describe('measureRanges', () => {
       )
       const earth = find(bodies, 'earth')
       expect(earth.body.ground).toBeDefined()
-      const bare = bodies.map((b) => (b.key === 'earth' ? { ...b, ground: undefined } : b))
       const ranges = createShipRanges(bodies.length)
-      const bareRanges = createShipRanges(bodies.length)
-      const dir = new THREE.Vector3(0, 1, 0)
-      for (const gap of [0, 0.05, 0.2, 1]) {
-        const at = earth.body.position.clone().addScaledVector(dir, collisionRadius(earth.body) + gap)
-        measureRanges(at, bodies, truth, ranges)
-        measureRanges(at, bare, truth, bareRanges)
-        expect(ranges.kmPerUnit / bareRanges.kmPerUnit).toBeCloseTo(1, 9)
-        expect(ranges.km[earth.index]).toBeCloseTo(bareRanges.km[earth.index], 3)
+      for (const at of climbs(bodies)) {
+        measureRanges(at(0), bodies, truth, ranges)
+        expect(ranges.km[earth.index]).toBeCloseTo(0, 0)
+        expect(Math.abs(ranges.kmPerUnit / DRAWN_KM_PER_UNIT - 1)).toBeLessThan(0.05)
+        measureRanges(at(0.5), bodies, truth, ranges)
+        expect(ranges.kmPerUnit).toBeGreaterThan(20 * DRAWN_KM_PER_UNIT)
       }
-      expect(ranges.kmPerUnit).toBeGreaterThan(20 * DRAWN_KM_PER_UNIT)
     })
   })
 
