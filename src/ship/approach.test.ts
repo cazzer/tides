@@ -223,9 +223,8 @@ describe("touching Earth's ground (tides-01v.8.17)", () => {
       let impacts = 0
       let landed = false
       for (let t = 0; t < 300 && !landed; t += FRAME) {
-        const speedBefore = telemetry.speed
         stepShip(state, pilot, FRAME, { bodies, targetKey: null }, telemetry)
-        if (isImpact(telemetry.colliding, wasColliding, speedBefore)) impacts++
+        if (isImpact(telemetry.colliding, wasColliding, telemetry.impactSpeed)) impacts++
         wasColliding = telemetry.colliding
         peak = Math.max(peak, telemetry.speed / telemetry.speedCap)
         updateApproach({

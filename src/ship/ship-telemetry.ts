@@ -59,6 +59,12 @@ export interface ShipTelemetry {
    */
   colliding: boolean
   /**
+   * The inward speed this step reached the backstop at, units/s, while
+   * colliding; 0 otherwise. What impact.ts isImpact reads: the speed before
+   * the step is the cushion's, already braked, and depends on the frame rate.
+   */
+  impactSpeed: number
+  /**
    * How hard the ship is sinking into a body's cushion (flight.ts,
    * tides-ufyr.1), 0..1: its speed into the surface over the speed floor
    * the cushion is sized for, while it is pressed in; 0 otherwise. The
@@ -100,6 +106,7 @@ export function createShipTelemetry(): ShipTelemetry {
     target: null,
     colliding: false,
     cushion: 0,
+    impactSpeed: 0,
     air: { speed: 0, coupling: 0, density: 0, dynamicPressure: 0, velocity: new THREE.Vector3() },
     earthEye: { up: new THREE.Vector3(0, 1, 0), local: new THREE.Vector3(0, 1, 0), altitude: Infinity },
   }
@@ -124,6 +131,7 @@ export function resetShipTelemetry(): void {
   shipTelemetry.target = null
   shipTelemetry.colliding = false
   shipTelemetry.cushion = 0
+  shipTelemetry.impactSpeed = 0
   shipTelemetry.air.speed = 0
   shipTelemetry.air.coupling = 0
   shipTelemetry.air.density = 0

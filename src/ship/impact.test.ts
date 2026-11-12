@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'vitest'
 import { V_NORMAL } from './flight'
-import { IMPACT_FOV_PUNCH, IMPACT_FOV_TAU, impactFovPunch, isImpact } from './impact'
+import { IMPACT_BACKSTOP_SPEED, IMPACT_FOV_PUNCH, IMPACT_FOV_TAU, impactFovPunch, isImpact } from './impact'
 
 describe('impact', () => {
-  test('a new hit coming in fast; not a landing at the floor, nor a held contact', () => {
-    expect(isImpact(true, false, 10)).toBe(true)
-    expect(isImpact(true, false, V_NORMAL)).toBe(false)
-    expect(isImpact(true, true, 10)).toBe(false)
-    expect(isImpact(false, false, 10)).toBe(false)
+  test('a new hit reaching the backstop fast; not one just reaching it, nor a held contact', () => {
+    expect(isImpact(true, false, V_NORMAL)).toBe(true)
+    expect(isImpact(true, false, IMPACT_BACKSTOP_SPEED)).toBe(false)
+    expect(isImpact(true, false, 0.1 * V_NORMAL)).toBe(false)
+    expect(isImpact(true, true, V_NORMAL)).toBe(false)
+    expect(isImpact(false, false, V_NORMAL)).toBe(false)
   })
 
   test('the FOV punch starts at full and decays away', () => {

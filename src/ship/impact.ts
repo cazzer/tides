@@ -14,20 +14,34 @@ import { V_NORMAL } from './flight'
 export const shipImpacts = { count: 0 }
 
 /**
- * [TUNE] A hit counts as an impact only when the ship was going faster than
- * this, units/s, the frame before. A locked approach touches down at the
- * V_NORMAL floor, which the cushion takes without reaching the backstop,
- * and one that does reach it slowly (flight.ts COLLISION_SPEED) is a
- * landing, not a crash. Earth's ground on the
- * high tier is never one: its speed floor holds a dive at or under OVERSPEED_MAX ×
- * EARTH_GROUND_SPEED, well under this, so the ship stops there rather than
- * hitting it (tides-01v.8.17; approach.ts canCrash mutes its warnings).
+ * [TUNE] The arrival speed over the cushion, units/s, that reads as a crash
+ * for the approach panel (approach.ts OVER_ON, canCrash). A locked approach
+ * touches down at the V_NORMAL floor, which the cushion takes without
+ * reaching the backstop: a landing, not a crash. Earth's ground on the high
+ * tier is never one: its speed floor holds a dive at or under OVERSPEED_MAX
+ * × EARTH_GROUND_SPEED, well under this (tides-01v.8.17; approach.ts
+ * canCrash mutes its warnings). The cushion absorbs arrivals up to about
+ * twice the floor, so this warns early (tides-d11z).
  */
 export const IMPACT_MIN_SPEED = 1.5 * V_NORMAL
 
-/** Whether this frame's step is an impact: a new hit, coming in fast. */
-export function isImpact(colliding: boolean, wasColliding: boolean, speedBefore: number): boolean {
-  return colliding && !wasColliding && speedBefore > IMPACT_MIN_SPEED
+/**
+ * [TUNE] A hit counts as an impact only when the ship reached the backstop
+ * faster than this, units/s (telemetry.impactSpeed): the speed the cushion
+ * couldn't take, not the speed into the step, which the cushion has already
+ * braked, by more the shorter the frame. Over flight.ts COLLISION_SPEED, so
+ * just reaching it isn't a crash; an arrival at about 2.1× the floor speed
+ * reaches it this fast. Earth's ground on the high tier, whose floor is a
+ * tenth of V_NORMAL, never does.
+ */
+export const IMPACT_BACKSTOP_SPEED = 0.25 * V_NORMAL
+
+/**
+ * Whether this frame's step is an impact: a new hit, reaching the backstop
+ * at `impactSpeed` (telemetry.impactSpeed) over IMPACT_BACKSTOP_SPEED.
+ */
+export function isImpact(colliding: boolean, wasColliding: boolean, impactSpeed: number): boolean {
+  return colliding && !wasColliding && impactSpeed > IMPACT_BACKSTOP_SPEED
 }
 
 /**

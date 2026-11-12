@@ -79,6 +79,7 @@ import { CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY } from '../clou
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry, type ShipTelemetry } from './ship-telemetry'
 import { carryShip, createFrameCarry, earthSpinRate } from './frame-carry'
+import { IMPACT_BACKSTOP_SPEED, isImpact } from './impact'
 import { EARTH_KM_PER_UNIT } from '../surface-handover'
 import { approachEta } from './approach'
 import {
@@ -953,7 +954,11 @@ describe('cushion (tides-ufyr.1)', () => {
   // A ship just over the cushion moving straight down at `speed`, nose down.
   function arriving(speed: number, body: Body = ROCK): ShipState {
     const { width } = overStop(body, Y)
-    const state = shipAt(body.position.clone().addScaledVector(Y, floorRadius(body, Y) + width * 1.001), body.position)
+    const state = createShipState()
+    state.position.copy(body.position).addScaledVector(Y, floorRadius(body, Y) + width * 1.001)
+    // Nose exactly down (lookAt along its up is degenerate): any tilt slides a
+    // ship held against a sphere off it sideways.
+    state.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2)
     state.velocity.set(0, -speed, 0)
     return state
   }
@@ -1026,24 +1031,91 @@ describe('cushion (tides-ufyr.1)', () => {
     expect(hits).toBe(1)
   })
 
-  test.each([FRAME, MAX_DT])('holding full throttle into it with Flight Assist on settles into a hover in it, no hit (dt %s)', (dt) => {
+  test.each(
+    [FRAME, MAX_DT].flatMap((dt) => [true, false].map((flightAssist) => [dt, flightAssist] as const))
+  )('holding full throttle into it settles into a hover in it at rest, no hit (dt %s, Flight Assist %s)', (dt, flightAssist) => {
     const state = arriving(V_NORMAL)
     const telemetry = createShipTelemetry()
     let settled = NaN
     for (let t = 0; t < 30; t += dt) {
-      stepShip(state, input({ throttle: 1 }), dt, still, telemetry)
+      stepShip(state, input({ throttle: 1, flightAssist }), dt, still, telemetry)
       expect(state.position.length()).toBeGreaterThanOrEqual(STOP * (1 - 1e-12))
       if (t > 20) {
         expect(telemetry.colliding).toBe(false)
         expect(inCushion(ROCK, state.position)).toBe(true)
         settled = Number.isNaN(settled) ? state.position.length() : settled
-        // Holding still: each step's thrust in is pushed back out within it
-        // (what velocity remains is the spring's at the step's end, a share
-        // of one step's thrust).
         expect(Math.abs(state.position.length() - settled)).toBeLessThan(1e-3 * W)
-        expect(Math.abs(radial(state))).toBeLessThan(0.05 * V_NORMAL)
+        // At rest, so the HUD reads 0: the thrust is folded into the spring,
+        // not left as a velocity the next step's thrust cancels.
+        expect(telemetry.speed).toBeLessThan(1e-3 * V_NORMAL)
       }
     }
+  })
+
+  test('the nudge leaves no turn behind: out of the cushion the ship stops turning, with Flight Assist off', () => {
+    for (const throttle of [0, 1]) {
+      // 45° nose down, heading along +X, at the floor speed along the nose.
+      const state = createShipState()
+      state.position.set(0, STOP + 1.001 * W, 0)
+      state.orientation
+        .setFromAxisAngle(Y, -Math.PI / 2)
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 4))
+      state.velocity.copy(noseOf(state)).multiplyScalar(V_NORMAL)
+      const dive = () => -noseOf(state).dot(overStop(ROCK, state.position).normal)
+      const entry = dive()
+      let pressed = false
+      let left = false
+      for (let i = 0; i < 20 * 60; i++) {
+        const before = state.orientation.clone()
+        const out = state.cushion.depth === 0 && !inCushion(ROCK, state.position)
+        stepShip(state, input({ throttle, flightAssist: false }), FRAME, env([ROCK]))
+        pressed ||= state.cushion.depth > 0
+        // Idle stick: the spin it had before contact, none, all along.
+        expect(state.angularVelocity.length()).toBe(0)
+        if (pressed && out) left = true
+        // A step out of it doesn't turn the ship: the nose holds where the
+        // nudge left it.
+        if (out) expect(state.orientation.angleTo(before)).toBe(0)
+      }
+      expect(pressed).toBe(true)
+      expect(left).toBe(true)
+      expect(dive()).toBeLessThan(entry)
+    }
+  })
+
+  test.each([FRAME, 1 / 30, MAX_DT])('an arrival too fast for the cushion is an impact at any frame rate, one it absorbs never is (dt %s)', (dt) => {
+    const impacts = (speed: number) => {
+      const state = arriving(speed)
+      const telemetry = createShipTelemetry()
+      let count = 0
+      let was = false
+      for (let t = 0; t < 2; t += dt) {
+        stepShip(state, input({ flightAssist: false }), dt, still, telemetry)
+        if (isImpact(telemetry.colliding, was, telemetry.impactSpeed)) count++
+        if (!telemetry.colliding) expect(telemetry.impactSpeed).toBe(0)
+        was = telemetry.colliding
+      }
+      return count
+    }
+    expect(impacts(2.5 * V_NORMAL)).toBe(1)
+    expect(impacts(1.5 * V_NORMAL)).toBe(0)
+    expect(impacts(V_NORMAL)).toBe(0)
+  })
+
+  test('reaches the backstop at the same speed at any frame rate', () => {
+    const backstop = (dt: number) => {
+      const state = arriving(3 * V_NORMAL)
+      const telemetry = createShipTelemetry()
+      let most = 0
+      for (let t = 0; t < 2; t += dt) {
+        stepShip(state, input({ flightAssist: false }), dt, still, telemetry)
+        most = Math.max(most, telemetry.impactSpeed)
+      }
+      return most
+    }
+    const fast = backstop(FRAME)
+    expect(fast).toBeGreaterThan(IMPACT_BACKSTOP_SPEED)
+    expect(Math.abs(backstop(MAX_DT) / fast - 1)).toBeLessThan(0.05)
   })
 
   test('holding full throttle into it, the nose is eased up to the horizon without pilot input, and the ship skims off', () => {
