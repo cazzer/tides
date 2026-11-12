@@ -146,7 +146,7 @@ describe('band flow (tides-ufyr.8.2)', () => {
       expect(shader.indexOf(code)).toBe(shader.lastIndexOf(code))
       expect(block).toContain(code)
     }
-    expect(block).toContain('sin(6.0 * lat)')
+    expect(block).toContain('cos(lat) * cos(6.0 * lat)')
     // planetDetail's call into it is guarded too.
     const entry = shader.slice(shader.indexOf('void planetDetail('))
     const guard = entry.indexOf('#ifdef PLANET_DETAIL_FLOW')
@@ -155,13 +155,17 @@ describe('band flow (tides-ufyr.8.2)', () => {
     expect(entry.indexOf('detailFlowPhase(')).toBeLessThan(entry.indexOf('#endif', guard))
   })
 
-  it('blows jets that alternate every 30 degrees, still at the equator and poles', () => {
+  it('blows a prograde equatorial jet, alternating poleward, mirrored across the equator', () => {
     const deg = Math.PI / 180
-    for (const lat of [0, 30, 60, 90, -30, -60, -90]) expect(bandFlowRate(lat * deg)).toBeCloseTo(0, 12)
-    expect(bandFlowRate(15 * deg)).toBeGreaterThan(0)
-    expect(bandFlowRate(45 * deg)).toBeLessThan(0)
-    expect(bandFlowRate(75 * deg)).toBeGreaterThan(0)
+    expect(bandFlowRate(0)).toBe(DETAIL_FLOW_RATE)
+    for (const lat of [15, 45, 75, 90]) {
+      expect(bandFlowRate(lat * deg)).toBeCloseTo(0, 12)
+      expect(bandFlowRate(-lat * deg)).toBeCloseTo(0, 12)
+    }
+    expect(bandFlowRate(30 * deg)).toBeLessThan(0)
+    expect(bandFlowRate(60 * deg)).toBeGreaterThan(0)
     for (let lat = -90; lat <= 90; lat += 0.5) {
+      expect(bandFlowRate(-lat * deg)).toBeCloseTo(bandFlowRate(lat * deg), 15)
       expect(Math.abs(bandFlowRate(lat * deg))).toBeLessThanOrEqual(DETAIL_FLOW_RATE)
     }
   })

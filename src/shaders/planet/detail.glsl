@@ -96,12 +96,13 @@ void planetDetailNoise(vec3 n, float fp, float texel, out float d, out vec3 dh) 
 // DETAIL_FLOW_CYCLES periods (detailFlowTime).
 uniform float uDetailTime;
 
-// n turned about the pole (+Y) by t seconds of its latitude's wind: jets
-// that alternate every 30 degrees, still at the poles. cs is the turn's
-// cos and sin, to turn the gradient back.
+// n turned about the pole (+Y) by t seconds of its latitude's wind: as on
+// Jupiter and Saturn, a prograde jet on the equator, reversing at ±15° and
+// alternating poleward every 30°, mirrored across the equator and still at
+// the poles. cs is the turn's cos and sin, to turn the gradient back.
 vec3 detailFlowTurn(vec3 n, float t, out vec2 cs) {
   float lat = asin(clamp(n.y, -1.0, 1.0));
-  float a = t * DETAIL_FLOW_RATE * cos(lat) * sin(6.0 * lat);
+  float a = t * DETAIL_FLOW_RATE * cos(lat) * cos(6.0 * lat);
   cs = vec2(cos(a), sin(a));
   return vec3(n.x * cs.x - n.z * cs.y, n.y, n.z * cs.x + n.x * cs.y);
 }

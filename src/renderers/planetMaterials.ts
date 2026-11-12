@@ -84,10 +84,11 @@ export const DETAIL_FLOW_CYCLES = 64
  * many of the coarsest octave's wavelengths, so cycles don't correlate. */
 export const DETAIL_FLOW_OFFSET = 0.1
 
-/** The zonal wind at `lat` (radians), rad/s: jets alternating every 30
- * degrees, still at the poles. */
+/** The zonal wind at `lat` (radians), rad/s: as on Jupiter and Saturn, a
+ * prograde equatorial jet, reversing at ±15° and alternating poleward every
+ * 30°, mirrored across the equator and still at the poles. */
 export function bandFlowRate(lat: number): number {
-  return DETAIL_FLOW_RATE * Math.cos(lat) * Math.sin(6 * lat)
+  return DETAIL_FLOW_RATE * Math.cos(lat) * Math.cos(6 * lat)
 }
 
 /** The flow's two phases at `time` seconds: how long each has carried its
