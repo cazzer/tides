@@ -206,7 +206,8 @@ describe('?truescale: HUD ranges', () => {
   // At ?truescale=0 nothing tides-ofv added takes part: every range, the km
   // per unit, the true position and the nearest, bit for bit as before it,
   // over two years of dates from every body out toward three others. A
-  // deliberate change to the ranges at a = 0 re-pins this (log the digest).
+  // deliberate change to the ranges at a = 0 re-pins this (log the digest);
+  // last for tides-ufyr.6.2, the moons at true spacing.
   it('measures exactly as before at ?truescale=0', async () => {
     const hash = createHash('sha256')
     for (let day = 0; day < 720; day += 60) {
@@ -226,7 +227,7 @@ describe('?truescale: HUD ranges', () => {
         }
       }
     }
-    expect(hash.digest('hex')).toBe('3709ae7dcbe8c1dfb0e5afe0a08baa404d28d55996e00dd77b04b4883ea7892d')
+    expect(hash.digest('hex')).toBe('a8af857f24d156b3343fd2ee2fdfa6f06bfb1f3ff188d4d5fba5733f4be3340c')
   }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {
@@ -297,10 +298,38 @@ describe('?truescale=0.5: spawning from the main view', () => {
           )
         }
       }
-      // Only Io, whose parent grows round it, ever needs carrying out: on
-      // day 8 the mapped point is inside Jupiter.
-      if (key !== 'io') expect(pushed).toEqual([])
-      else expect(pushed).toContain(8)
+      // At true moon spacing (tides-ufyr.6.2) Io orbits 6 Jupiter radii out,
+      // so on this pose's line the grown Jupiter never stands on the mapped
+      // point: nothing needs carrying out (the case below makes it).
+      expect(pushed).toEqual([])
     }
   )
+
+  it('carries the ship on out past Jupiter when Io’s mapped point falls inside it', async () => {
+    const { bodies, moons, session, flight } = await loadAt('?truescale=0.5')
+    const ship = bodies.createShipBodies('high', false)
+    bodies.updateShipBodies(ship, T)
+    const io = ship.find((b) => b.key === 'io')!
+    const jupiter = ship.find((b) => b.key === 'jupiter')!
+    const systemRadius = moons.moonRadius('io', 'system')
+    // The main view looking at Io from beyond Jupiter, framed so the mapped
+    // point lands on Jupiter's centre.
+    const outward = jupiter.position.clone().sub(io.position).normalize()
+    const toJupiter = jupiter.position.distanceTo(io.position)
+    const from = (eyeDistance: number): MainCameraPose => ({
+      ...pose,
+      position: outward.clone().multiplyScalar(eyeDistance).toArray() as [number, number, number],
+      target: [0, 0, 0],
+    })
+    // The mapping is near enough linear this far out.
+    const aimed = from((10 * toJupiter) / session.cameraToShipDistance(from(10), systemRadius, io.radius)!)
+    expect(session.cameraToShipDistance(aimed, systemRadius, io.radius)! / toJupiter).toBeCloseTo(1, 2)
+    const state = session.spawnPoseFromCamera(aimed, 'io', ship)!
+    const along = state.position.clone().sub(io.position)
+    expect(along.clone().normalize().dot(outward)).toBeCloseTo(1, 9)
+    expect(along.length()).toBeGreaterThan(toJupiter + flight.collisionRadius(jupiter))
+    for (const other of ship) {
+      expect(state.position.distanceTo(other.position), other.key).toBeGreaterThan(flight.collisionRadius(other))
+    }
+  })
 })

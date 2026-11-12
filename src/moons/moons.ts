@@ -15,34 +15,48 @@
 //     its moons, which orbit the way it spins, go clockwise seen from that
 //     pole: POLE_SENSE flips it.
 //
-// How far out: true scale is hopeless (Phobos would sit 0.06 units from Mars'
-// radius-2 sphere at the system view's spacing, and inside it at ship mode's
-// 1000 units/AU), so each parent gets a compact log map of its moons' true
-// semi-major axes a:
+// How far out, per distance scale (tides-ufyr.6, board call 2026-11-12):
 //
-//   a_scene = floor + span · ln(a / a_min) / ln(a_max / a_min)
+//   - System view: true scale is hopeless there (Phobos would sit 0.06 units
+//     from Mars' radius-2 sphere at that view's spacing), so each parent gets
+//     a compact log map of its moons' true semi-major axes a:
 //
-// floor clears the planet (Saturn's and Uranus' ring edges) by MOON_ORBIT_GAP
-// plus the innermost moon's radius, and span is [TUNE] per parent. The map
-// is relative to the parent, and at 1000 units/AU true scale would put
-// Triton inside Neptune and Oberon inside Uranus' rings anyway.
+//       a_scene = floor + span · ln(a / a_min) / ln(a_max / a_min)
 //
-// Both distance scales share the map and the moons' sizes only at
-// ?truescale=0; otherwise (../truescale.ts, tides-o39, on by default) flight's
-// radii slide toward true. Then, in flight only, each moon's radius slides
-// the same way (true radii, floored at MOON_RADIUS_FLOOR: the user's call),
-// and each parent's whole map is scaled by its planet's flight radius over
-// its scene radius (moonOrbitRadiiAt), so the moons keep their spacing in planet radii and
-// clear the grown rings as they did. So a size or an orbit radius is per
-// scale (moonRadius, moonOrbitRadius, moonSystemExtent, and the offsets and
-// orbit lines built from them), and the scale is a required argument, so
-// nothing reads one scale's where it draws the other.
+//     floor clears the planet (Saturn's and Uranus' ring edges) by
+//     MOON_ORBIT_GAP plus the innermost moon's compact radius
+//     (clampedSceneRadius, the radius it was drawn at before tides-ufyr.6.2,
+//     kept so the map stays exactly as it was), and span is [TUNE] per
+//     parent. A later rule may grow a focused planet's system toward true
+//     (tides-ufyr.6.3), from this table and the flight one.
+//   - Flight (ship mode, 1000 units/AU): true spacing in planet radii. A moon
+//     orbits aKm / R_km of its planet's flight radius out (flightRadii, so it
+//     follows ?truescale's planet growth): Callisto ~27 Jupiter radii (~540
+//     units at the default truescale 0.7), Iapetus ~61 Saturn radii (~1065),
+//     Triton ~14.4 Neptune radii. The innermost moons (Phobos 2.8 R, Mimas
+//     3.2 R) still clear their planets and Saturn's rings (2.27 R).
+//
+// How big: in both views a moon's radius moves MOON_SIZE_TRUENESS of the way,
+// in log space, from its compact size (clampedSceneRadius in the system view;
+// that slid toward true at Earth's drawn scale by ?truescale, floored at
+// MOON_RADIUS_FLOOR, in flight: compactMoonRadiiAt) toward its true size
+// relative to its planet as that view draws the planet (radiusKm / R_km ×
+// the planet's radius), never under MOON_RADIUS_MIN. Within a parent the
+// order by true size holds (both ends of the slide are in that order), and
+// at ?truescale=0 the flight sizes are the system ones. MoonBodies draws
+// every moon at least MOON_MIN_RADIUS_PX in radius too, a draw-only floor that
+// picking, framing and collision never see.
+//
+// So a size or an orbit radius is per scale (moonRadius, moonOrbitRadius,
+// moonSystemExtent, and the offsets and orbit lines built from them), and the
+// scale is a required argument, so nothing reads one scale's where it draws
+// the other.
 //
 // Every system stays clear of every other planet's orbit band in the system
 // view (moons.test.ts, 1900–2100). The one exception: neighbouring systems
 // can't be kept apart at their closest approach. Jupiter's and Saturn's
 // centres come within ~45 units of each other, and Saturn's and Uranus'
-// within ~53, against extents summing to ~51 and ~53, so their outermost
+// within ~53, against extents summing to ~50 and ~52, so their outermost
 // moons' circles can touch near a great conjunction (2000-04, 2040-07),
 // ~2% of the time.
 
@@ -179,19 +193,21 @@ const MOONS_OF: Readonly<Record<MoonParent, readonly MoonKey[]>> = Object.fromEn
 // --- Sizes ---------------------------------------------------------------
 
 /**
- * The smallest moon's scene radius, and how fast the radius grows toward the
- * shared log scale below RADIUS_JOIN_KM. [TUNE] sceneRadius (the Sun, Earth
- * and planets' scale) reaches 0 at a diameter of ~1786 km, so below the join
- * a moon is FLOOR + GAIN · √(diameter / RADIUS_JOIN_KM) instead: never under
- * FLOOR and still in size order. A flat floor would draw every mid-size
- * moon alike and crowd Saturn's inner ones.
+ * The smallest moon's compact radius, and how fast the radius grows toward
+ * the shared log scale below RADIUS_JOIN_KM. [TUNE] sceneRadius (the Sun,
+ * Earth and planets' scale) reaches 0 at a diameter of ~1786 km, so below the
+ * join a moon is FLOOR + GAIN · √(diameter / RADIUS_JOIN_KM) instead: never
+ * under FLOOR and still in size order. A flat floor would draw every
+ * mid-size moon alike and crowd Saturn's inner ones. The compact radii are
+ * where the drawn ones start from (MOON_SIZE_TRUENESS), and the system log
+ * map's floor.
  */
 export const MOON_RADIUS_FLOOR = 0.2
 export const MOON_RADIUS_GAIN = 0.4
 // sceneRadius(2662 km) = 0.6 = FLOOR + GAIN, so the two meet there.
 const RADIUS_JOIN_KM = 2662
 
-/** Scene radius of a moon of `diameterKm`: sceneRadius, floored as above. */
+/** Compact radius of a moon of `diameterKm`: sceneRadius, floored as above. */
 export function clampedSceneRadius(diameterKm: number): number {
   return Math.max(
     sceneRadius(diameterKm * 1000),
@@ -199,24 +215,73 @@ export function clampedSceneRadius(diameterKm: number): number {
   )
 }
 
-const RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
+/**
+ * How far, in log space, each moon's drawn radius moves from its compact one
+ * toward its true size relative to its planet as the view draws the planet
+ * (tides-ufyr.6.2). [TUNE] 1 is true: Io a fortieth of Jupiter's radius,
+ * Phobos a three-hundredth of Mars'. 0 is the compact radii, 5–40× too large.
+ */
+export const MOON_SIZE_TRUENESS = 0.6
+
+/**
+ * The least a moon's radius is in either view, scene units. [TUNE] The main
+ * view's eye comes no closer than 1.35 radii to a body's centre
+ * (MIN_DISTANCE_FACTOR), so a moon this small still leaves 0.021 units to
+ * its surface, over the 2 · NEAR_MIN the near plane needs not to cut it
+ * (../main-view.ts).
+ */
+export const MOON_RADIUS_MIN = 0.06
+
+const COMPACT_RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
   MOON_KEYS.map((key) => [key, clampedSceneRadius(2 * MOONS[key].radiusKm)])
 ) as Record<MoonKey, number>
 
+// The parent's mean radius, km: half the diameter its sphere is sized from.
+function parentRadiusKm(parent: MoonParent): number {
+  return PLANETS[parent].diameter / 2000
+}
+
 /**
- * Every moon's flight radius at true-scale factor `a` (../truescale.ts): its
- * scene radius slid toward its true radius at Earth's drawn scale, never
- * under MOON_RADIUS_FLOOR. At a = 0, the scene radii.
+ * Every moon's compact flight radius at true-scale factor `a`
+ * (../truescale.ts): its compact radius slid toward its true radius at
+ * Earth's drawn scale, never under MOON_RADIUS_FLOOR. At a = 0, the compact
+ * radii. The drawn flight radii (moonRadiiAt) start from these.
  */
-export function moonRadiiAt(a: number): Readonly<Record<MoonKey, number>> {
-  if (a === 0) return RADIUS
+export function compactMoonRadiiAt(a: number): Readonly<Record<MoonKey, number>> {
+  if (a === 0) return COMPACT_RADIUS
   return Object.fromEntries(
     MOON_KEYS.map((key) => [
       key,
-      Math.max(MOON_RADIUS_FLOOR, towardTrue(RADIUS[key], MOONS[key].radiusKm / EARTH_KM_PER_UNIT, a)),
+      Math.max(MOON_RADIUS_FLOOR, towardTrue(COMPACT_RADIUS[key], MOONS[key].radiusKm / EARTH_KM_PER_UNIT, a)),
     ])
   ) as Record<MoonKey, number>
 }
+
+// `compact` moved MOON_SIZE_TRUENESS of the way toward each moon's true size
+// beside a parent drawn at `planetRadius`, never under MOON_RADIUS_MIN.
+function truerRadii(
+  compact: Readonly<Record<MoonKey, number>>,
+  planetRadius: Readonly<Record<MoonParent, number>>
+): Readonly<Record<MoonKey, number>> {
+  return Object.fromEntries(
+    MOON_KEYS.map((key) => {
+      const { parent, radiusKm } = MOONS[key]
+      const truth = (radiusKm / parentRadiusKm(parent)) * planetRadius[parent]
+      return [key, Math.max(MOON_RADIUS_MIN, towardTrue(compact[key], truth, MOON_SIZE_TRUENESS))]
+    })
+  ) as Record<MoonKey, number>
+}
+
+/**
+ * Every moon's drawn flight radius at true-scale factor `a`: its compact
+ * flight radius moved toward true beside its planet's flight radius. At
+ * a = 0, the system view's radii.
+ */
+export function moonRadiiAt(a: number): Readonly<Record<MoonKey, number>> {
+  return truerRadii(compactMoonRadiiAt(a), flightRadii(a))
+}
+
+const SYSTEM_RADIUS = truerRadii(COMPACT_RADIUS, positionsFor('system').radius)
 
 /** The moon's sphere radius at `scale`, scene units. */
 export function moonRadius(key: MoonKey, scale: DistanceScale): number {
@@ -226,11 +291,11 @@ export function moonRadius(key: MoonKey, scale: DistanceScale): number {
 // --- Orbit radii ---------------------------------------------------------
 
 /**
- * Scene units from the parent's centre over which its moons' log-spaced
- * orbits spread, innermost to outermost. [TUNE] Saturn needs ~14+ to keep
- * Enceladus, Tethys and Dione apart (they span 7% of its log range); larger
- * spans crowd the neighbouring planets' bands. Neptune has one moon, so it
- * has no span.
+ * System view: scene units from the parent's centre over which its moons'
+ * log-spaced orbits spread, innermost to outermost. [TUNE] Saturn needs ~14+
+ * to keep Enceladus, Tethys and Dione apart (they span 7% of its log range);
+ * larger spans crowd the neighbouring planets' bands. Neptune has one moon,
+ * so it has no span.
  */
 export const MOON_ORBIT_SPAN: Readonly<Record<MoonParent, number>> = {
   mars: 2,
@@ -241,9 +306,9 @@ export const MOON_ORBIT_SPAN: Readonly<Record<MoonParent, number>> = {
 }
 
 /**
- * Clearance between the planet's surface (or ring edge) and the innermost
- * moon's surface. [TUNE] Mars' is smaller to keep its system clear of the
- * Earth–Moon band.
+ * System view: clearance between the planet's surface (or ring edge) and the
+ * innermost moon's compact surface. [TUNE] Mars' is smaller to keep its
+ * system clear of the Earth–Moon band.
  */
 export const MOON_ORBIT_GAP: Readonly<Record<MoonParent, number>> = {
   mars: 0.6,
@@ -257,7 +322,7 @@ function orbitRadii(parent: MoonParent): [MoonKey, number][] {
   const planet = PLANETS[parent]
   const keys = moonsOf(parent)
   const clear = planet.radius * (planet.rings?.outer ?? 1)
-  const floor = clear + MOON_ORBIT_GAP[parent] + RADIUS[keys[0]]
+  const floor = clear + MOON_ORBIT_GAP[parent] + COMPACT_RADIUS[keys[0]]
   const aMin = MOONS[keys[0]].aKm
   const logRange = Math.log(MOONS[keys[keys.length - 1]].aKm / aMin)
   return keys.map((key) => [
@@ -269,24 +334,21 @@ function orbitRadii(parent: MoonParent): [MoonKey, number][] {
   ])
 }
 
-const ORBIT_RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
+/** Every moon's system-view orbit radius: the compact log map. */
+const SYSTEM_ORBIT_RADIUS: Readonly<Record<MoonKey, number>> = Object.fromEntries(
   MOON_PARENTS.flatMap(orbitRadii)
 ) as Record<MoonKey, number>
 
 /**
- * Every moon's flight orbit radius at true-scale factor `a`: its parent's
- * whole map scaled by the parent's flight radius over its scene radius, so
- * the orbits keep their spacing in planet radii (the user's call) and clear
- * the grown planet and rings by MOON_ORBIT_GAP scaled alike. At a = 0, the
- * scene orbit radii (the ratio is exactly 1).
+ * Every moon's flight orbit radius at true-scale factor `a`: true spacing in
+ * planet radii, aKm / R_km of its parent's flight radius (flightRadii) out.
  */
 export function moonOrbitRadiiAt(a: number): Readonly<Record<MoonKey, number>> {
-  if (a === 0) return ORBIT_RADIUS
   const planetRadius = flightRadii(a)
   return Object.fromEntries(
     MOON_KEYS.map((key) => {
-      const parent = MOONS[key].parent
-      return [key, ORBIT_RADIUS[key] * (planetRadius[parent] / PLANETS[parent].radius)]
+      const { parent, aKm } = MOONS[key]
+      return [key, (aKm / parentRadiusKm(parent)) * planetRadius[parent]]
     })
   ) as Record<MoonKey, number>
 }
@@ -310,9 +372,9 @@ function moonSizes(
   return { radius, orbitRadius, extent }
 }
 
-const SYSTEM_SIZES = moonSizes(RADIUS, ORBIT_RADIUS)
-const FLIGHT_SIZES =
-  TRUESCALE === 0 ? SYSTEM_SIZES : moonSizes(moonRadiiAt(TRUESCALE), moonOrbitRadiiAt(TRUESCALE))
+// Separate tables at every ?truescale, 0 included: the views' orbits differ.
+const SYSTEM_SIZES = moonSizes(SYSTEM_RADIUS, SYSTEM_ORBIT_RADIUS)
+const FLIGHT_SIZES = moonSizes(moonRadiiAt(TRUESCALE), moonOrbitRadiiAt(TRUESCALE))
 
 function sizesFor(scale: DistanceScale): MoonSizes {
   return scale === 'flight' ? FLIGHT_SIZES : SYSTEM_SIZES

@@ -9,7 +9,7 @@ import { qualityTier, type QualityTier } from '../quality'
 import { PLANET_KEYS, sceneRadius, type PlanetKey } from '../planets'
 import { positionsFor } from '../flight-scale'
 import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
-import { COLLISION_MARGIN, MAX_DT } from './flight'
+import { COLLISION_MARGIN, MAX_DT, V_NORMAL } from './flight'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { RELIEF } from '../relief'
 import {
@@ -478,10 +478,22 @@ function attachEarthStop(body: ShipBody, tier: QualityTier, surfaceTiles: boolea
 
 /**
  * The ship's stop above a major moon (tides-2hv.8). COLLISION_MARGIN's 2%
- * of Deimos' 0.23 is ~0.005 units, the near plane's own floor, so a moon's
- * shell stands at least MOON_COLLISION_CLEARANCE off its sphere. [TUNE]
+ * of Phobos' and Deimos' 0.06 (MOON_RADIUS_MIN, tides-ufyr.6.2) is ~0.001
+ * units, the near plane's own floor, so a moon's shell stands at least
+ * MOON_COLLISION_CLEARANCE off its sphere. [TUNE]
  */
 export const MOON_COLLISION_CLEARANCE = 0.02
+
+/**
+ * The moon radius, scene units, below which a moon's speed floor falls under
+ * V_NORMAL in proportion (minSpeed = V_NORMAL · r / MOON_SPEED_RADIUS), so
+ * crossing a small moon takes as long as crossing one this size at V_NORMAL:
+ * Phobos' 0.06 is crossed in ~1.6 s at 0.3 V_NORMAL, not ~0.5 s. Under
+ * half V_NORMAL (a moon under 0.1: Phobos, Deimos, Mimas) an arrival can't
+ * crash, only touch down (approach.ts canCrash), as on Earth's ground on the
+ * high tier. [TUNE]
+ */
+export const MOON_SPEED_RADIUS = 0.2
 
 // The planets' haze shells, as fractions of their radii.
 const PLANET_HAZE_OUTER: Partial<Record<PlanetKey, number>> = {
@@ -574,6 +586,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
         position: new THREE.Vector3(),
         radius,
         collisionRadius: Math.max(radius * COLLISION_MARGIN, radius + MOON_COLLISION_CLEARANCE),
+        minSpeed: V_NORMAL * Math.min(1, radius / MOON_SPEED_RADIUS),
         mass: MOONS[key].massKg,
         positionAt: (t: number) => moonPosition(key, t, 'flight'),
       }

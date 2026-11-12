@@ -4,18 +4,20 @@
 // BARE_TRUESCALE for a bare ?truescale; ?truescale=0 is the old sizes.
 //
 // The user's call: keep every distance as it is (the flight scale's 1000
-// units per AU, the Moon's packed 10 units, the moon systems' log maps) and
-// the system view exactly as it is, but in flight slide each body's radius
-// from its scene size toward its true size at Earth's drawn scale
+// units per AU, the Moon's packed 10 units) and the system view as it is,
+// but in flight slide each body's radius from its scene size toward its
+// true size at Earth's drawn scale
 // (EARTH_KM_PER_UNIT, ~2159 km a unit), so trips take no longer but the big
 // bodies feel big. The slide is in log space, scene^(1 − a) · true^a: the
 // scene radii are a log scale already (planets.ts sceneRadius), so a step in
 // a is the same share of the way for the Sun as for Jupiter. Earth doesn't
 // move at any a: its scene radius is its true one at that scale. Bodies
 // smaller than their scene size (Mercury, Mars, the Moon, most moons) shrink
-// toward true, which the user accepted; the moons stop at MOON_RADIUS_FLOOR
-// (moons/moons.ts), and each planet's moon system grows or shrinks with its
-// planet (moons.ts moonOrbitRadiiAt).
+// toward true, which the user accepted. The major moons' compact radii slide
+// the same way, floored at MOON_RADIUS_FLOOR, and then toward true beside
+// their planet (moons/moons.ts moonRadiiAt); their orbits are true spacing in
+// planet radii (moonOrbitRadiiAt), so each system grows or shrinks with its
+// planet (tides-ufyr.6.2).
 //
 // MAX_TRUESCALE: the Sun is the body that grows most, to 10 · 32.2^a (scene
 // 10, true ~322 units), ~114 units at 0.7. Room alone would allow more:

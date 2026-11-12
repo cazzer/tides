@@ -1710,16 +1710,15 @@ function trip(
 }
 
 // Jupiter's band is checked two days after TRIP_DATE, when the Earth →
-// Jupiter line runs clear of its moons (tides-2hv.8): it passes 10+ units off
-// every Galilean's shell, and Jupiter is as far as at TRIP_DATE. At
-// TRIP_DATE itself the line runs through Callisto (18.6 units out from
-// Jupiter): Callisto's well takes over ~18 units short and the locked ship
-// crawls through it at the V_NORMAL floor, ~20 s longer than the open
-// approach the band was set for (81 s against 60 s with no moons, since the
-// slowdown bands, tides-h6a). The
-// moons' phases change the trip by tens of seconds from day to day, so the
-// band is for the open approach; crossing a moon system is tested on its own
-// below.
+// Jupiter line runs clear of its moons (tides-2hv.8): it passes 45+ units off
+// every Galilean's shell at true spacing (tides-ufyr.6.2), and Jupiter is as
+// far as at TRIP_DATE, where the line passes ~5 units off Callisto's. On the
+// old compact map the line ran through Callisto at TRIP_DATE, and the locked
+// ship crawled through its well at the V_NORMAL floor, ~20 s longer than the
+// open approach the band was set for (81 s against 60 s with no moons, since
+// the slowdown bands, tides-h6a). The moons' phases change the trip by tens
+// of seconds from day to day, so the band is for the open approach; crossing
+// a moon system is tested on its own below.
 const JUPITER_TRIP_DATE = '2026-10-24T12:00:00Z'
 
 const GALILEANS = ['io', 'europa', 'ganymede', 'callisto'] as const
@@ -1778,13 +1777,15 @@ describe('trip times at the flight scale', () => {
   // Locked, the ride down follows the cap whichever well takes over, so a
   // straight line through a moon system drops hard at each moon instead of
   // carrying the ship in over its cap (2.4× at Callisto with the braked
-  // ride). On 2027-02-26 the line passes 0.84 units off Ganymede's shell; at
-  // TRIP_DATE it runs through Callisto, so the ship meets Callisto's surface,
-  // at no more than the V_NORMAL floor, and slides round it: contact is
-  // allowed there, since only steering avoids it.
+  // ride). At true spacing (tides-ufyr.6.2) on 2026-11-11 the line passes
+  // 1.1 units off Ganymede's shell; on 2026-10-05 at 18:30 it runs through
+  // Callisto (27 Jupiter radii out, it lies on the line only that once in
+  // the 400 days from 2026-10), so the ship meets Callisto's surface, at no
+  // more than the V_NORMAL floor, and slides round it: contact is allowed
+  // there, since only steering avoids it.
   test.each([
-    { date: TRIP_DATE, moon: 'callisto', missAtMost: 0, contactAllowed: true },
-    { date: '2027-02-26T12:00:00Z', moon: 'ganymede', missAtMost: 2, contactAllowed: false },
+    { date: '2026-10-05T18:30:00Z', moon: 'callisto', missAtMost: 0, contactAllowed: true },
+    { date: '2026-11-11T12:00:00Z', moon: 'ganymede', missAtMost: 2, contactAllowed: false },
   ] as const)('locked across Jupiter’s moons ($date, past $moon) stays under every well’s cap', ({ date, moon, missAtMost, contactAllowed }) => {
     // The premise: the line runs through (≤ 0) or just past the moon's shell.
     const miss = galileanMisses(date)[moon]
