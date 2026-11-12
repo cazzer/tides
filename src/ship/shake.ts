@@ -77,14 +77,24 @@ export function airShakeShare(q: number): number {
 }
 
 /**
+ * [TUNE] The shake while sinking into a body's cushion (telemetry.cushion,
+ * flight.ts, tides-ufyr.1), at full: a light jolt, in vacuum as in air.
+ */
+export const CUSHION_SHAKE_GAIN = 1
+
+/**
  * The shake's intensity to ease toward at dynamic pressure `q`, Pa, and
  * boost spool `boost` (0..1), counted only while `boosted` (the boost raises
- * the cap; telemetry.boosted): 0..SHAKE_MAX_INTENSITY, 0 under reduced motion.
+ * the cap; telemetry.boosted), or for sinking into a cushion at `cushion`
+ * (telemetry.cushion, 0..1), whichever is more: 0..SHAKE_MAX_INTENSITY, 0
+ * under reduced motion.
  */
-export function shakeTarget(q: number, boost: number, boosted: boolean, reducedMotion = false): number {
+export function shakeTarget(q: number, boost: number, boosted: boolean, reducedMotion = false, cushion = 0): number {
   if (reducedMotion) return 0
   const spool = boosted && Number.isFinite(boost) ? clamp01(boost) : 0
-  return airShakeShare(q) * (1 + SHAKE_BOOST_GAIN * spool)
+  const air = airShakeShare(q) * (1 + SHAKE_BOOST_GAIN * spool)
+  const jolt = Number.isFinite(cushion) ? CUSHION_SHAKE_GAIN * clamp01(cushion) : 0
+  return Math.max(air, jolt)
 }
 
 /**

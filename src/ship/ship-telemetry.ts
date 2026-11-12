@@ -53,11 +53,18 @@ export interface ShipTelemetry {
    */
   target: { key: string; surfaceDistance: number; etaSeconds: number } | null
   /**
-   * True when this step hit a body: pushed out of it while moving inward
-   * faster than COLLISION_SPEED. Resting on or pressing into a surface is not
-   * a hit.
+   * True when this step hit a body: reached the backstop under its cushion
+   * moving inward faster than COLLISION_SPEED (flight.ts collide). Sinking
+   * into the cushion, resting on or pressing into a surface is not a hit.
    */
   colliding: boolean
+  /**
+   * How hard the ship is sinking into a body's cushion (flight.ts,
+   * tides-ufyr.1), 0..1: its speed into the surface over the speed floor
+   * the cushion is sized for, while it is pressed in; 0 otherwise. The
+   * shake reads it (shake.ts shakeTarget).
+   */
+  cushion: number
   /**
    * The ship through Earth's air (frame-carry.ts fillAir, tides-zmw.9.18):
    * speed, scene units/s (what the HUD reads); coupling, the share of
@@ -92,6 +99,7 @@ export function createShipTelemetry(): ShipTelemetry {
     well: { key: null, factor: 1, floor: V_NORMAL },
     target: null,
     colliding: false,
+    cushion: 0,
     air: { speed: 0, coupling: 0, density: 0, dynamicPressure: 0, velocity: new THREE.Vector3() },
     earthEye: { up: new THREE.Vector3(0, 1, 0), local: new THREE.Vector3(0, 1, 0), altitude: Infinity },
   }
@@ -115,6 +123,7 @@ export function resetShipTelemetry(): void {
   shipTelemetry.well.floor = V_NORMAL
   shipTelemetry.target = null
   shipTelemetry.colliding = false
+  shipTelemetry.cushion = 0
   shipTelemetry.air.speed = 0
   shipTelemetry.air.coupling = 0
   shipTelemetry.air.density = 0

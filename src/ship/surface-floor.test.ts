@@ -252,6 +252,18 @@ describe("Earth's floor over the surface tiles (tides-zmw.9.8)", () => {
       expect(earth.floor!.lift).toBeCloseTo(FINE_HARD_CLEARANCE - FINE_GROUND_CLEARANCE, 15)
     })
 
+    it('never bounces a parked ship as the ground under it rises, gently or past the clearance (tides-ufyr.1)', () => {
+      const { earth, field, state } = setup()
+      for (let k = 0; k < 120; k++) {
+        const before = radius(earth, state)
+        // A metre a frame, then 30 m at once: lifted gently, then snapped.
+        frameOf(state, earth, dt, still, () => (field.base += k === 60 ? 30 : 1))
+        expect(state.velocity.length()).toBeLessThan(1e-12)
+        expect(state.cushion.depth).toBe(0)
+        expect(radius(earth, state)).toBeGreaterThanOrEqual(before - 1e-12)
+      }
+    })
+
     it('takes in what changes between frames too (the dissolve ending)', () => {
       const { earth, state } = setup()
       // A globe standing over the tiles there, which the floor takes in the dissolve.

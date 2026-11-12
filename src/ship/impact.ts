@@ -1,5 +1,8 @@
-// Impact feedback (tides-2hv.12): flight.ts stops the ship dead on a body
-// (telemetry.colliding) and nothing else said so. useSpeedFov, which runs in
+// Impact feedback (tides-2hv.12): an arrival too fast for a body's cushion
+// reaches the backstop under it (flight.ts collide, tides-ufyr.1;
+// telemetry.colliding) and bounces off, and nothing else said so; sinking
+// into the cushion alone is not a hit and only shakes the view (shake.ts).
+// useSpeedFov, which runs in
 // the R3F frame loop straight after the controller and so never misses a
 // step, counts hits here and punches the FOV; the HUD, on its own rAF loop,
 // flashes a vignette whenever the count moves. A counter rather than the
@@ -13,8 +16,9 @@ export const shipImpacts = { count: 0 }
 /**
  * [TUNE] A hit counts as an impact only when the ship was going faster than
  * this, units/s, the frame before. A locked approach touches down at the
- * V_NORMAL floor, which telemetry.colliding also flags (flight.ts
- * COLLISION_SPEED); that is a landing, not a crash. Earth's ground on the
+ * V_NORMAL floor, which the cushion takes without reaching the backstop,
+ * and one that does reach it slowly (flight.ts COLLISION_SPEED) is a
+ * landing, not a crash. Earth's ground on the
  * high tier is never one: its speed floor holds a dive at or under OVERSPEED_MAX ×
  * EARTH_GROUND_SPEED, well under this, so the ship stops there rather than
  * hitting it (tides-01v.8.17; approach.ts canCrash mutes its warnings).

@@ -83,11 +83,19 @@
 //   • Turn rates are full up to the top of BLUE_ZONE (speed as a share of
 //     v_max) and ease off above it, to TURN_RATE_MIN_FACTOR at the cap.
 //     Slow is never penalised, so easing off is always the way to turn tight.
-//   • Bodies are hard spheres at radius · COLLISION_MARGIN: the ship is pushed
-//     back out along the normal and loses its inward velocity. A body with
+//   • Bodies are hard spheres at radius · COLLISION_MARGIN. A body with
 //     ground (Earth's terrain) also keeps the ship groundClearance above
 //     that, direction by direction (floorRadius), and its gaps measure from
-//     the ground under the ship rather than its sphere.
+//     the ground under the ship rather than its sphere. Above that stop is a
+//     cushion (tides-ufyr.1): a spring-damper band cushionWidth deep, sized
+//     from the stop's height over the surface and the speed floor there, so
+//     arriving at the floor speed sinks in and is pushed back out with one
+//     small bob (ShipState.cushion holds how far it is pressed in). Inside
+//     it, thrust into the surface fades with the depth and the nose is eased
+//     toward the horizon (the stick wins; off under reduced motion). The
+//     stop stays as the backstop: a ship that reaches it is put back on it
+//     and bounces off at CUSHION_RESTITUTION (none on a locked approach),
+//     and only that counts as a hit (telemetry.colliding).
 //
 // A step allocates nothing: vector maths runs on module-level scratch vectors
 // and the nearest/target scan writes into a scratch record, as elsewhere in
@@ -120,6 +128,20 @@ export interface ShipState {
    * it (lawSpeed, tides-5lj). None (key null, radius NaN) unboosted.
    */
   groundHold: GroundHold
+  /**
+   * How far the ship is pressed into a body's cushion (tides-ufyr.1):
+   * `key` the body's, null for none; `depth` scene units, 0..its
+   * cushionWidth. Only the ship's own motion presses it in: ground that
+   * rises under the ship between steps (tiles, the lift, the carry) never
+   * does, so a parked ship is never bounced.
+   */
+  cushion: CushionState
+}
+
+/** ShipState.cushion. */
+export interface CushionState {
+  key: string | null
+  depth: number
 }
 
 /**
@@ -364,10 +386,192 @@ export function floorRadius(body: Body, direction: THREE.Vector3): number {
   return Number.isFinite(floor) ? Math.max(shell, floor) : shell
 }
 
+// The cushion over a body along a direction (cushionBand), scene units.
+interface CushionBand {
+  /** floorRadius: the backstop's distance from the body's centre. */
+  stop: number
+  /** The band's depth over the stop, W; 0 for none. */
+  width: number
+  /** The speed floor at the band's top, units/s (vRef), which sizes it. */
+  speed: number
+}
+
+const band: CushionBand = { stop: 0, width: 0, speed: 0 }
+
+// floorRadius and the cushion over it along `direction`, reading the ground
+// once. The stop's height over the surface (the ground, or the sphere where
+// there is none or it reads NaN) sizes the band, and the speed floor at its
+// top caps it; read at the top, not where the ship is, so the band's width
+// doesn't move as the ship sinks into it.
+function cushionBand(body: Body, direction: THREE.Vector3): CushionBand {
+  const shell = collisionRadius(body)
+  let stop = shell
+  let surface = body.radius
+  if (body.ground) {
+    const ground = body.ground(direction)
+    if (Number.isFinite(ground)) {
+      surface = ground
+      const floor = ground + (body.groundClearance ?? 0)
+      if (Number.isFinite(floor)) stop = Math.max(shell, floor)
+    }
+  }
+  const height = Math.max(0, stop - surface)
+  const share = CUSHION_DEPTH_SHARE * height
+  const speed = speedFloorAt(body, height + share, stop + share - body.radius)
+  const width = Math.min(share, CUSHION_MAX_SECONDS * speed)
+  band.stop = stop
+  band.speed = speed
+  band.width = width > 0 && Number.isFinite(width) ? width : 0
+  return band
+}
+
+/**
+ * The depth of `body`'s cushion over its stop along `direction` (world
+ * frame, unit), scene units (tides-ufyr.1): CUSHION_DEPTH_SHARE × the
+ * stop's height over the surface, never over CUSHION_MAX_SECONDS of travel
+ * at the speed floor at its top. 0 where the stop is on the surface.
+ */
+export function cushionWidth(body: Body, direction: THREE.Vector3): number {
+  return cushionBand(body, direction).width
+}
+
+// The body whose cushion a step can touch (findContact), and where the ship
+// is in it.
+interface Contact {
+  body: Body | null
+  /**
+   * Outward unit normal from the body's centre at the start of the step;
+   * collide sets it to the end's.
+   */
+  normal: THREE.Vector3
+  width: number
+  /** The band's vRef and natural frequency, CUSHION_ABSORB · vRef / width (1/s). */
+  speed: number
+  omega: number
+  /**
+   * The geometric depth into the band, stop + width − distance from the
+   * centre, unclamped (negative above the band, over width inside the
+   * stop): at the start of the step, after the move (collide, with the
+   * ground as it was at the start), and once collide has put the ship back
+   * on the stop.
+   */
+  start: number
+  end: number
+  settled: number
+}
+
+const contact: Contact = {
+  body: null,
+  normal: new THREE.Vector3(),
+  width: 0,
+  speed: 0,
+  omega: 0,
+  start: 0,
+  end: 0,
+  settled: 0,
+}
+
+// The body whose cushion the ship at `position` is in, or can reach in a
+// step that moves it at most `reach`; null for none. Bodies never overlap,
+// and their bands are a sliver of the gaps between them, so the first is
+// the only one.
+function findContact(position: THREE.Vector3, bodies: readonly Body[], reach: number): Contact | null {
+  const normal = contact.normal
+  for (const body of bodies) {
+    const d = normal.subVectors(position, body.position).length()
+    if (!body.ground) {
+      // A sphere's band is never over this; skip the far ones cheaply.
+      const shell = collisionRadius(body)
+      if (!(d - shell <= CUSHION_DEPTH_SHARE * Math.max(0, shell - body.radius) + reach)) continue
+    }
+    if (d > 1e-9) normal.divideScalar(d)
+    else normal.copy(WORLD_UP)
+    const { stop, width, speed } = cushionBand(body, normal)
+    if (!(width > 0) || !(d < stop + width + reach)) continue
+    contact.body = body
+    contact.width = width
+    contact.speed = speed
+    contact.omega = (CUSHION_ABSORB * speed) / width
+    contact.start = stop + width - d
+    contact.end = contact.start
+    contact.settled = contact.start
+    return contact
+  }
+  contact.body = null
+  return null
+}
+
+// The cushion's spring-damper along the normal, solved exactly (so it feels
+// the same at any frame rate and is stable however stiff): from depth `x`
+// and its rate `y` (inward positive, scene units and units/s), `t` seconds
+// on, natural frequency `omega` and damping ratio `zeta` (critical at 1 or
+// over). It only pushes: where the depth comes back to 0 the ship leaves the
+// band and coasts on at the speed it left with.
+const spring = { x: 0, y: 0 }
+
+function springMotion(x: number, y: number, t: number, omega: number, zeta: number): typeof spring {
+  let held: number
+  if (zeta < 1) {
+    const a = zeta * omega
+    const wd = omega * Math.sqrt(1 - zeta * zeta)
+    const s = (y + a * x) / wd
+    // x(t) = e^(−at) · R · cos(wd·t − φ), φ = atan2(s, x) ∈ [−π/2, π/2]
+    // for x ≥ 0: back at 0 first at (π/2 + φ) / wd.
+    held = Math.min(t, (Math.PI / 2 + Math.atan2(s, x)) / wd)
+    const e = Math.exp(-a * held)
+    const cos = Math.cos(wd * held)
+    const sin = Math.sin(wd * held)
+    spring.x = e * (x * cos + s * sin)
+    spring.y = e * (y * cos - ((a * y + omega * omega * x) / wd) * sin)
+  } else {
+    const b = y + omega * x
+    held = b < 0 ? Math.min(t, -x / b) : t
+    const e = Math.exp(-omega * held)
+    spring.x = e * (x + b * held)
+    spring.y = e * (y - omega * b * held)
+  }
+  if (held < t) spring.x = spring.y * (t - held)
+  return spring
+}
+
+// The cushion over a step of `dt` s, after the thrust and before the move:
+// sets the velocity's normal component to where the spring leaves it at the
+// end of the step and returns how much further out along the normal the
+// move must put the ship (scene units) for the step to end where the spring
+// has it. `depth` is how far it is pressed in (ShipState.cushion); a ship
+// above the band coasts until it reaches it, and one at its top or above
+// and not moving in is left alone. The spring only ever slows motion into
+// the surface (it pushes out, and its damper brakes motion either way), so
+// the step is no longer than without it (MAX_DT).
+function cushionStep(state: ShipState, c: Contact, depth: number, dt: number, zeta: number): number {
+  const v = state.velocity
+  const u = v.dot(c.normal)
+  const x0 = c.start >= 0 ? depth : c.start
+  const y0 = -u
+  if (!(x0 > 0) && !(y0 > 0)) return 0
+  let x = x0
+  let t = dt
+  if (x0 < 0) {
+    const coast = -x0 / y0
+    if (coast >= dt) return 0
+    x = 0
+    t = dt - coast
+  }
+  const end = springMotion(x, y0, t, c.omega, zeta)
+  const u1 = -end.y
+  v.addScaledVector(c.normal, u1 - u)
+  return x0 - end.x - u1 * dt
+}
+
 export interface FlightEnv {
   bodies: readonly Body[]
   /** Locked target body's key; caps the speed toward it (approachCap). */
   targetKey: string | null
+  /**
+   * prefers-reduced-motion: the cushion's nudge of the nose toward the
+   * horizon is scaled by CUSHION_NUDGE_REDUCED (off).
+   */
+  reducedMotion?: boolean
 }
 
 // Frames longer than this (tab switch, GC pause, debugger) are simulated as
@@ -378,7 +582,9 @@ export interface FlightEnv {
 // 15% of the gap to any surface, or 0.075 units at the V_NORMAL floor (at
 // most OVERSPEED_MAX · rate · MAX_DT = 0.6 of the gap under a groundSpeed
 // law unboosted, whose air never raises it over that), and the collision
-// clamps a step to the floor, so it cannot tunnel. Boosted (tides-5lj) the
+// clamps a step to the floor, so it cannot tunnel (the cushion only ever
+// slows the ship's motion into a surface, never speeds it, so the bound
+// holds with it). Boosted (tides-5lj) the
 // guard reads the held clearance at the air's guardRate, so the cap is at
 // most guardRate · gap (5 · gap over Earth): 0.5 of the gap a step at the
 // cap with Flight Assist, up to OVERSPEED_MAX · 5 · MAX_DT = 1.5 of it at
@@ -490,16 +696,44 @@ export const RIDE_DOWN_RATE = 6
 // the move. [TUNE] Bounds overshoot and, with K_WELL · MAX_DT, the step size.
 export const OVERSPEED_MAX = 3
 
-// Inward speed at the collision shell, units/s, above which a step counts as
-// a hit (telemetry.colliding). Resting on a surface or holding thrust into it
-// gains at most V_NORMAL · (1 − e^(−MAX_DT / VELOCITY_TAU_WELL)) ≈ 0.012 a
-// step (FA off: V_NORMAL · MAX_DT / VELOCITY_TAU_WELL = 0.0125) before being
-// cancelled, so 0.05 never flags those, while arriving at the V_NORMAL floor
-// always does. Arriving at a lower floor (Earth's ground, at most
+// Inward speed at the backstop (the collision shell under the cushion),
+// units/s, above which reaching it counts as a hit (telemetry.colliding) and
+// bounces off at CUSHION_RESTITUTION; under it the inward speed is just
+// dropped. The cushion holds a ship pressing into a surface off the
+// backstop, and one that does reach it slowly (a parked ship the ground
+// rose under, holding thrust in at the bottom: at most V_NORMAL · (1 −
+// e^(−MAX_DT / VELOCITY_TAU_WELL)) ≈ 0.012 a step) is under this, so only
+// an arrival too fast for the cushion to absorb (over ~2× the speed floor
+// it is sized for) flags. Arriving at a lower floor (Earth's ground, at most
 // OVERSPEED_MAX × 0.02) rarely does and is never an impact (impact.ts):
 // touching down there is landing, and the approach panel doesn't warn of it
 // either (approach.ts canCrash, tides-01v.8.17).
 export const COLLISION_SPEED = 0.05
+
+// The cushion above each body's stop (tides-ufyr.1; cushionWidth, ShipState.
+// cushion). [TUNE] all of them.
+//   • Its width, W: CUSHION_DEPTH_SHARE × the stop's height over the
+//     surface (2% of the radius for a plain sphere, groundClearance over a
+//     ground), never over CUSHION_MAX_SECONDS of travel at the speed floor
+//     at its top (vRef), so a big body's band isn't seconds deep.
+//   • Its stiffness: natural frequency CUSHION_ABSORB · vRef / W, so an
+//     undamped arrival at vRef would just reach the backstop; damped at
+//     CUSHION_DAMPING (ζ, slightly under critical: it sinks in and bobs
+//     once) one at about twice vRef does. A locked approach's (the target's
+//     cushion) is critically damped and has no restitution, so a touchdown
+//     never bounces.
+//   • CUSHION_RESTITUTION: the share of the inward speed a hit at the
+//     backstop gives back outward.
+//   • The nose nudge: CUSHION_NUDGE_GAIN rad/s per radian of dive at full
+//     depth, at most PITCH_RATE, scaled by CUSHION_NUDGE_REDUCED under
+//     reduced motion.
+export const CUSHION_DEPTH_SHARE = 1.5
+export const CUSHION_MAX_SECONDS = 0.6
+export const CUSHION_ABSORB = 1
+export const CUSHION_DAMPING = 0.6
+export const CUSHION_RESTITUTION = 0.25
+export const CUSHION_NUDGE_GAIN = 2.5
+export const CUSHION_NUDGE_REDUCED = 0
 
 // Rotation e-fold, s: how quickly turn rates follow the stick with FA on (and
 // stop when it is released), and how long full stick takes to reach the max
@@ -611,6 +845,7 @@ export function createShipState(): ShipState {
     angularVelocity: new THREE.Vector3(),
     boost: 0,
     groundHold: { key: null, radius: NaN },
+    cushion: { key: null, depth: 0 },
   }
 }
 
@@ -1028,14 +1263,52 @@ function levelRollRate(): number {
   return clamp(error * LEVEL_GAIN, -ROLL_RATE, ROLL_RATE)
 }
 
+const nudge = new THREE.Vector3()
+const nudgeTurn = new THREE.Quaternion()
+
+// The cushion's nudge (tides-ufyr.1), into `nudge`, body frame, rad/s: with
+// the ship pressed `share` (0..1) of the way into a cushion whose outward
+// normal is `normal` and its nose below that horizon, a pitch and yaw (never
+// a roll) turning the nose up toward it, CUSHION_NUDGE_GAIN per radian of
+// dive at full depth, at most PITCH_RATE, times `scale`. Each axis gives way
+// to the stick on it. Needs bodyAxes. False, and `nudge` untouched, where
+// there is none.
+function cushionNudge(
+  orientation: THREE.Quaternion,
+  normal: THREE.Vector3,
+  share: number,
+  scale: number,
+  input: Readonly<ShipInput>
+): boolean {
+  const dive = -nose.dot(normal)
+  if (!(share > 0) || !(dive > 0) || !(scale > 0)) return false
+  // Turning about nose × normal swings the nose toward the normal; nose
+  // straight down, any axis across it does, so the ship's right: pitch up.
+  nudge.crossVectors(nose, normal)
+  const length = nudge.length()
+  if (length < 1e-3) nudge.copy(right)
+  else nudge.divideScalar(length)
+  const rate = scale * Math.min(PITCH_RATE, CUSHION_NUDGE_GAIN * Math.min(1, share) * Math.asin(Math.min(1, dive)))
+  nudge.multiplyScalar(rate).applyQuaternion(nudgeTurn.copy(orientation).invert())
+  nudge.x *= 1 - Math.abs(axis(input.pitch))
+  nudge.y *= 1 - Math.abs(axis(input.yaw))
+  nudge.z = 0
+  return true
+}
+
 // `fraction` is the speed as a share of the cap (speedFraction). Turning keys
 // off how fast the ship is going, not where the throttle sits, so with FA off
-// a ship coasting at the cap still turns wide.
+// a ship coasting at the cap still turns wide. `cushion` is the cushion the
+// ship is pressed into, if any: its outward normal and how far in, as a
+// share of its width (cushionNudge, scaled by `nudgeScale`).
 function rotate(
   state: ShipState,
   input: Readonly<ShipInput>,
   dt: number,
-  fraction: number
+  fraction: number,
+  cushion: THREE.Vector3 | null = null,
+  share = 0,
+  nudgeScale = 1
 ): void {
   const factor = turnRateMultiplier(fraction)
   // Input +1 is nose up / nose right / roll right; in the body frame that is
@@ -1049,10 +1322,16 @@ function rotate(
   // Level is unscaled: it is a recovery assist, and should right the ship as
   // quickly at the cap as at rest.
   if (input.level) demand.z = levelRollRate()
+  // Unscaled too, like level: an assist.
+  const nudged = cushion !== null && cushionNudge(state.orientation, cushion, share, nudgeScale, input)
 
   const w = state.angularVelocity
   const ease = 1 - Math.exp(-dt / ROTATION_TAU)
   if (input.flightAssist) {
+    if (nudged) {
+      demand.x += nudge.x
+      demand.y += nudge.y
+    }
     w.lerp(demand, ease)
   } else {
     // Full stick reaches the max rate in ROTATION_TAU; nothing damps it. The
@@ -1064,6 +1343,11 @@ function rotate(
     w.z = input.level
       ? lerp(w.z, demand.z, ease)
       : clamp(w.z + (demand.z * dt) / ROTATION_TAU, -ROLL_RATE, ROLL_RATE)
+    // So is the nudge, on the axes the stick leaves alone.
+    if (nudged) {
+      if (axis(input.pitch) === 0) w.x = lerp(w.x, nudge.x, ease)
+      if (axis(input.yaw) === 0) w.y = lerp(w.y, nudge.y, ease)
+    }
   }
 
   const rate = w.length()
@@ -1078,7 +1362,9 @@ function translate(
   input: Readonly<ShipInput>,
   dt: number,
   cap: number,
-  { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost, targetHold, wellBand }: Proximity
+  { target, targetGap, targetFloor, targetAltitude, targetClimb, targetBoost, targetHold, wellBand }: Proximity,
+  cushion: THREE.Vector3 | null = null,
+  share = 0
 ): void {
   bodyAxes(state.orientation)
   // Thrust as a share of the cap, world frame.
@@ -1087,6 +1373,13 @@ function translate(
     .multiplyScalar(usableThrottle(input.throttle))
     .addScaledVector(right, STRAFE_SHARE * axis(input.strafeX))
     .addScaledVector(up, STRAFE_SHARE * axis(input.strafeY))
+  // Pressed into a cushion (outward normal `cushion`, `share` of the way
+  // in), thrust into the surface fades with the depth, so holding it in
+  // settles into a hover rather than bottoming out.
+  if (cushion && share > 0) {
+    const into = scratch.dot(cushion)
+    if (into < 0) scratch.addScaledVector(cushion, -Math.min(1, share) * into)
+  }
 
   const v = state.velocity
   const tau = velocityTau(cap)
@@ -1151,27 +1444,38 @@ function rideWell(
   v.clampLength(0, OVERSPEED_MAX * capAfter)
 }
 
-// Push the ship out of any body it ended inside and drop the velocity
-// component into it, so it slides along the surface. The push is radial,
-// also over a ground: climbing rising terrain lifts the ship straight up to
-// the floor, which keeps the tangential speed. Bodies in the scene never
-// overlap, so one pass leaves the ship outside all of them. Returns whether
-// the step hit something faster than COLLISION_SPEED.
-function collide(state: ShipState, bodies: readonly Body[]): boolean {
+// The backstop under the cushion: push the ship out of any body it ended
+// inside. Reaching it faster than COLLISION_SPEED is a hit, and the inward
+// velocity bounces back out at `restitution`; slower, it is dropped, so the
+// ship slides along the stop. The push is radial, also over a ground:
+// climbing rising terrain lifts the ship straight up to the floor, which
+// keeps the tangential speed. Bodies in the scene never overlap, so one pass
+// leaves the ship outside all of them. `cushion`'s body gets its geometric
+// depth after the move (Contact.end, .settled) and normal filled in, from
+// the same read of its ground. Returns whether the step was a hit.
+function collide(state: ShipState, bodies: readonly Body[], restitution: number, cushion: Contact | null = null): boolean {
   let hit = false
   for (const body of bodies) {
     const normal = scratch.subVectors(state.position, body.position)
     const d = normal.length()
+    const pressed = cushion !== null && cushion.body === body
     // A sphere needs no direction; a ground is sampled under the ship.
-    if (!body.ground && d >= collisionRadius(body)) continue
+    if (!pressed && !body.ground && d >= collisionRadius(body)) continue
     if (d > 1e-9) normal.divideScalar(d)
     else normal.copy(WORLD_UP)
     const shell = floorRadius(body, normal)
+    if (pressed) {
+      cushion.normal.copy(normal)
+      cushion.end = shell + cushion.width - d
+      cushion.settled = shell + cushion.width - Math.max(d, shell)
+    }
     if (d >= shell) continue
     state.position.copy(body.position).addScaledVector(normal, shell)
     const inward = state.velocity.dot(normal)
-    if (inward < 0) state.velocity.addScaledVector(normal, -inward)
-    if (-inward > COLLISION_SPEED) hit = true
+    if (-inward > COLLISION_SPEED) {
+      state.velocity.addScaledVector(normal, -(1 + restitution) * inward)
+      hit = true
+    } else if (inward < 0) state.velocity.addScaledVector(normal, -inward)
   }
   return hit
 }
@@ -1183,7 +1487,8 @@ function fillTelemetry(
   { nearest, nearestGap, target, targetGap, wellKey, wellBodyFactor, wellFloor }: Proximity,
   cap: number,
   colliding: boolean,
-  boosted: boolean
+  boosted: boolean,
+  cushion: number
 ): void {
   out.speed = state.velocity.length()
   out.speedCap = cap
@@ -1193,6 +1498,7 @@ function fillTelemetry(
   out.boosted = boosted
   out.velocity.copy(state.velocity)
   out.colliding = colliding
+  out.cushion = cushion
   // The carry (frame-carry.ts fillAir) overwrites these after the step, or,
   // without it, ShipController's fillAirDensity fills the density and pressure.
   out.air.speed = out.speed
@@ -1312,11 +1618,13 @@ export function updateGroundHold(
 /**
  * Puts the ship back over the ground after it moved under it between steps
  * (tides-zmw.9.8: the surface tiles update after the step, and the ground
- * the frame draws is theirs): stepShip's collision alone, no thrust, turn
- * or ride. Returns whether that was a hit (COLLISION_SPEED).
+ * the frame draws is theirs): stepShip's collision alone, no thrust, turn,
+ * ride, cushion or bounce. Returns whether that was a hit (COLLISION_SPEED).
  */
 export function settleShip(state: ShipState, env: Pick<FlightEnv, 'bodies'>): boolean {
-  return collide(state, env.bodies)
+  // The ground moved, not the ship: no bounce, and the cushion's depth is
+  // left as it is (stepShip clamps it to the band the ship is in).
+  return collide(state, env.bodies, 0)
 }
 
 /**
@@ -1346,14 +1654,46 @@ export function stepShip(
   // it reads the lower of the two (airApproachCap).
   const spool = h > 0 ? spoolBoost(state.boost, input.boost, h) : state.boost
   here.targetBoost = Math.min(here.targetBoost, spool)
+  // The cushion the step can touch (tides-ufyr.1): within the most the step
+  // can move the ship, OVERSPEED_MAX × the cap.
+  const touch = findContact(state.position, env.bodies, OVERSPEED_MAX * capBefore * h)
+  const cushion = state.cushion
+  const touchKey = touch?.body?.key ?? null
+  if (cushion.key !== touchKey || !Number.isFinite(cushion.depth)) {
+    cushion.key = touchKey
+    cushion.depth = 0
+  }
+  // The ground can have moved since the last step (tiles, the lift, the
+  // carry): never more pressed in than the ship is into the band now, and a
+  // floor that rose under it doesn't press it in at all.
+  let depth = touch ? Math.min(cushion.depth, clamp(touch.start, 0, touch.width)) : 0
+  const share = touch ? depth / touch.width : 0
+  // A locked approach settles onto its target's cushion without a bob or a
+  // bounce.
+  const soft = touch ? touch.body === target : target !== null
   if (h > 0) {
-    rotate(state, input, h, speedFraction(state.velocity.length(), capBefore))
-    translate(state, input, h, capBefore, here)
+    const normal = touch ? touch.normal : null
+    const nudgeScale = env.reducedMotion ? CUSHION_NUDGE_REDUCED : 1
+    rotate(state, input, h, speedFraction(state.velocity.length(), capBefore), normal, share, nudgeScale)
+    translate(state, input, h, capBefore, here, normal, share)
+    let shift = 0
+    if (touch) {
+      shift = cushionStep(state, touch, depth, h, soft ? 1 : CUSHION_DAMPING)
+      state.velocity.clampLength(0, OVERSPEED_MAX * capBefore)
+    }
     state.position.addScaledVector(state.velocity, h)
+    if (touch && shift !== 0) state.position.addScaledVector(touch.normal, shift)
   }
   // Even on a zero step: the ground can rise under a still ship (the live
   // terrain scale follows the altitude, tides-zmw.9.5; tiles load).
-  const colliding = collide(state, env.bodies)
+  const colliding = collide(state, env.bodies, h > 0 && !soft ? CUSHION_RESTITUTION : 0, touch)
+  if (touch) {
+    // The ground hasn't moved within the step, so the depth's change over it
+    // is the ship's own; a zero step never presses it in.
+    const most = Math.min(touch.width, Math.max(0, touch.settled))
+    depth = h > 0 ? clamp(depth + (touch.end - touch.start), 0, most) : Math.min(depth, most)
+    cushion.depth = depth
+  }
   // Spooled after the move and before the end-of-step measure, so the ride's
   // capAfter / capBefore carries the boost's change with the gap's, and the
   // held ground's.
@@ -1366,7 +1706,9 @@ export function stepShip(
   if (h > 0) rideWell(state, input, h, capBefore, capAfter, target !== null, groundLawSets(there), there.wellBand)
   if (telemetry) {
     const boosted = state.boost > 0 && boostRaises(there, capAfter)
-    fillTelemetry(telemetry, state, input, there, capAfter, colliding, boosted)
+    // How hard the ship is sinking into the cushion, for the shake.
+    const sinking = touch && depth > 0 ? clamp(-state.velocity.dot(touch.normal) / touch.speed, 0, 1) : 0
+    fillTelemetry(telemetry, state, input, there, capAfter, colliding, boosted, sinking || 0)
   }
   return state
 }
