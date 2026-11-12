@@ -20,6 +20,7 @@ import {
   RIDE_UP_RATE,
   ROLL_RATE,
   ROTATION_TAU,
+  REAIM_DONE,
   TURN_RATE_MIN_FACTOR,
   V_NORMAL,
   V_TOP,
@@ -1954,10 +1955,12 @@ describe('a locked line through a body that is not the target (tides-ufyr.6.2)',
   // Setting down on Earth locked on the Moon overhead: the target is above
   // the horizon, not behind the surface (PASSING_BELOW), so the cushion is
   // as it is unlocked: the nose is nudged up and the ship hovers, no slide.
+  // Once it is clear of the cushion the nose turns back onto the Moon
+  // (tides-ufyr.12), where the unlocked ship's stays put.
   test.each([
     ['overhead', new THREE.Vector3(0.5, 10, 0)],
     ['on the horizon', new THREE.Vector3(10, 1.2, 0)],
-  ])('locked on a body %s, holding throttle into another’s cushion hovers as unlocked, the nose nudged', (_, at) => {
+  ])('locked on a body %s, holding throttle into another’s cushion hovers as unlocked, the nose nudged, then turns back onto it', (_, at) => {
     const ground: Body = { key: 'earth', position: new THREE.Vector3(), radius: 1 }
     const moon: Body = { key: 'moon', position: at, radius: 0.3 }
     const stop = floorRadius(ground, Y)
@@ -1976,7 +1979,9 @@ describe('a locked line through a body that is not the target (tides-ufyr.6.2)',
     const start = locked.orientation.clone()
     const telemetry = createShipTelemetry()
     let pressed = 0
-    for (let i = 0; i < 120; i++) {
+    let i = 0
+    // In the cushion, until the first step that starts clear of it.
+    for (; i < 120 && locked.cushion.depth > 0; i++) {
       stepShip(locked, input({ throttle: 1 }), FRAME, env([ground, moon], 'moon'), telemetry)
       stepShip(free, input({ throttle: 1 }), FRAME, env([ground, moon]))
       expect(telemetry.colliding).toBe(false)
@@ -1984,10 +1989,21 @@ describe('a locked line through a body that is not the target (tides-ufyr.6.2)',
       // The same turn as unlocked, step for step (to acos precision): the nudge.
       expect(locked.orientation.angleTo(free.orientation), `step ${i}`).toBeLessThan(1e-6)
     }
+    expect(i).toBeLessThan(120)
     expect(locked.orientation.angleTo(start)).toBeGreaterThan(0.05)
     expect(pressed).toBeGreaterThan(0)
     // No slide toward the target: where the unlocked ship went, to a hair.
     expect(locked.position.distanceTo(free.position)).toBeLessThan(1e-3 * width)
+    const off = (state: ShipState) => noseOf(state).angleTo(moon.position.clone().sub(state.position))
+    const leaving = off(free)
+    expect(leaving).toBeGreaterThan(0.5)
+    // Clear of it, within 6 s the locked ship's nose is back on the Moon (on
+    // the horizon it skims back into the cushion once first, which holds the
+    // turn); the unlocked one's isn't turned.
+    fly(locked, 6, input({ throttle: 1 }), env([ground, moon], 'moon'))
+    fly(free, 6, input({ throttle: 1 }), env([ground, moon]))
+    expect(off(locked)).toBeLessThan(0.05)
+    expect(off(free)).toBeGreaterThan(0.5 * leaving)
   })
 
   test('still nudges the nose of a ship locked on the body it is pressed into, or unlocked', () => {
@@ -1998,6 +2014,114 @@ describe('a locked line through a body that is not the target (tides-ufyr.6.2)',
       for (let i = 0; i < 600; i++) stepShip(state, input({ throttle: 1 }), FRAME, env([rock], targetKey), createShipTelemetry())
       expect(state.orientation.angleTo(start), String(targetKey)).toBeGreaterThan(0.05)
     }
+  })
+})
+
+describe('turning a locked ship back onto its line after a cushion (tides-ufyr.12)', () => {
+  // Pressed into Callisto locked on it, the nudge noses the ship up to the
+  // horizon; the lock then goes to Jupiter, on that horizon. Before, once
+  // clear of the cushion nothing turned the nose back and the ship flew off
+  // along the horizon past Jupiter for good.
+  test.each([FRAME, MAX_DT])('the lock switched mid-contact from Callisto to Jupiter: the nose turns onto Jupiter once clear and the ship arrives (dt %s)', (dt) => {
+    const bodies = flightBodies()
+    const jupiter = bodies.find((b) => b.key === 'jupiter')!
+    const callisto = bodies.find((b) => b.key === 'callisto')!
+    const toJupiter = jupiter.position.clone().sub(callisto.position).normalize()
+    // From the side, square to the line to Jupiter and a touch off centre.
+    const side = toJupiter.clone().cross(Y).normalize()
+    const start = callisto.position.clone().addScaledVector(side, 3 * callisto.radius).addScaledVector(Y, 0.3 * callisto.radius)
+    const state = shipAt(start, callisto.position)
+    const telemetry = createShipTelemetry()
+    let pressed = 0
+    for (let t = 0; t < 60 && pressed < 1; t += dt) {
+      stepShip(state, input({ throttle: 1 }), dt, env(bodies, 'callisto'), telemetry)
+      expect(telemetry.colliding).toBe(false)
+      if (state.cushion.key === 'callisto' && state.cushion.depth > 0) pressed += dt
+    }
+    // A second into the cushion, the nose well off the line to Jupiter.
+    expect(pressed).toBeGreaterThanOrEqual(1)
+    const off = () => noseOf(state).angleTo(jupiter.position.clone().sub(state.position))
+    expect(off()).toBeGreaterThan(1)
+    let left = -1
+    let onLine = -1
+    let arrived = -1
+    for (let t = 0; t < 300 && arrived < 0; t += dt) {
+      stepShip(state, input({ throttle: 1 }), dt, env(bodies, 'jupiter'), telemetry)
+      expect(telemetry.colliding).toBe(false)
+      if (left < 0 && state.cushion.depth === 0 && !inCushion(callisto, state.position)) left = t
+      if (left >= 0 && onLine < 0 && off() < 0.01) onLine = t
+      if (state.position.distanceTo(jupiter.position) - jupiter.radius < jupiter.radius) arrived = t
+    }
+    console.log(`Callisto → Jupiter at dt ${dt.toFixed(3)}: clear at ${left.toFixed(1)} s, on the line at ${onLine.toFixed(1)} s, arrived at ${arrived.toFixed(1)} s`)
+    expect(left).toBeGreaterThanOrEqual(0)
+    // Within a few seconds of leaving the cushion.
+    expect(onLine).toBeGreaterThan(left)
+    expect(onLine - left).toBeLessThan(5)
+    // ~36 s; without the turn back it never arrives.
+    expect(arrived).toBeGreaterThan(0)
+    expect(arrived).toBeLessThan(90)
+  })
+
+  // Clear of any cushion, 93° off a locked target it is to turn back onto.
+  const ROCK: Body = { key: 'rock', position: new THREE.Vector3(), radius: 0.5 }
+  const GOAL: Body = { key: 'goal', position: new THREE.Vector3(0, 0, -50), radius: 1 }
+  const OTHER: Body = { key: 'other', position: new THREE.Vector3(0, 50, 0), radius: 1 }
+  const BODIES3 = [ROCK, GOAL, OTHER]
+  function offLine(): ShipState {
+    const state = shipAt(new THREE.Vector3(3, 0, 0), new THREE.Vector3(10, 0, 0))
+    state.reaim = GOAL.key
+    return state
+  }
+  const offGoal = (state: ShipState) => noseOf(state).angleTo(GOAL.position.clone().sub(state.position))
+
+  test.each([false, true])('turns back onto the target within a few seconds, with reduced motion too (reduced motion %s), and is done', (reducedMotion) => {
+    const state = offLine()
+    expect(offGoal(state)).toBeGreaterThan(1.5)
+    let done = -1
+    for (let t = 0; t < 10; t += FRAME) {
+      stepShip(state, input(), FRAME, { ...env(BODIES3, 'goal'), reducedMotion })
+      if (t > 5 - 1e-9 && t < 5 + FRAME) expect(offGoal(state)).toBeLessThan(0.01)
+      if (done < 0 && state.reaim === null) done = t
+    }
+    console.log(`turned back (reduced motion ${reducedMotion}): done at ${done.toFixed(2)} s, ${offGoal(state).toExponential(2)} rad off`)
+    expect(done).toBeGreaterThan(0)
+    expect(offGoal(state)).toBeLessThan(2 * REAIM_DONE)
+    // And then stops turning.
+    expect(state.angularVelocity.length()).toBeLessThan(1e-9)
+  })
+
+  test('the stick takes the nose back: a tap of pitch or yaw ends the turn back', () => {
+    for (const stick of [{ pitch: 0.2 }, { yaw: -0.2 }]) {
+      const state = offLine()
+      fly(state, 0.3, input(), env(BODIES3, 'goal'))
+      stepShip(state, input(stick), FRAME, env(BODIES3, 'goal'))
+      expect(state.reaim).toBe(null)
+      const tapped = offGoal(state)
+      fly(state, 5, input(), env(BODIES3, 'goal'))
+      // The nose drifts on only as the eased turn and the stick's spin die
+      // out, nowhere near onto the target.
+      expect(offGoal(state)).toBeGreaterThan(0.5 * tapped)
+      expect(state.nudge.length()).toBe(0)
+    }
+  })
+
+  test('a change of lock drops the turn back: it never steers onto a new target', () => {
+    const state = offLine()
+    const start = state.orientation.clone()
+    stepShip(state, input(), FRAME, env(BODIES3, 'other'))
+    expect(state.reaim).toBe(null)
+    fly(state, 5, input(), env(BODIES3, 'other'))
+    expect(state.orientation.angleTo(start)).toBe(0)
+  })
+
+  test('waits while the line to the target runs through the body just left', () => {
+    // On the far side of the rock from the goal, its line through the rock.
+    const state = shipAt(new THREE.Vector3(0, 0, 0.6), new THREE.Vector3(5, 0, 0.6))
+    state.reaim = GOAL.key
+    const start = state.orientation.clone()
+    fly(state, 1, input(), env(BODIES3, 'goal'))
+    expect(state.orientation.angleTo(start)).toBe(0)
+    expect(state.reaim).toBe(GOAL.key)
   })
 })
 
@@ -3172,13 +3296,15 @@ describe("the gas giants' cloud decks (tides-ufyr.8.3)", () => {
   // Locked on a moon behind the giant, the ship skirts its cloud tops on
   // the passing stop (Body.passStop), never diving into the fog to slide
   // round at the floor, and comes out past it on the moon's side in bounded
-  // time. (Its nose isn't steered, tides-ufyr.6.2, so it then flies on
-  // parallel to the line, about a giant's radius off it.)
+  // time. Its nose isn't steered while it slides (tides-ufyr.6.2); once the
+  // line to the moon clears the giant it is turned back onto the moon
+  // (tides-ufyr.12), so the ship arrives rather than flying on parallel to
+  // its line a giant's radius off.
   test.each([
     ['jupiter', 'io'],
     ['jupiter', 'callisto'],
     ['saturn', 'titan'],
-  ])('a locked line through %s to %s beyond keeps over the fog top and comes out past it', (giantKey, moonKey) => {
+  ])('a locked line through %s to %s beyond keeps over the fog top, comes out past it and arrives', (giantKey, moonKey) => {
     const bodies = flightBodies()
     const giant = bodies.find((b) => b.key === giantKey)!
     const moon = bodies.find((b) => b.key === moonKey)!
@@ -3196,20 +3322,29 @@ describe("the gas giants' cloud decks (tides-ufyr.8.3)", () => {
       let lowest = Infinity
       let touched = false
       let past = -1
-      for (let t = 0; t < 300 && past < 0; t += dt) {
+      let arrived = -1
+      for (let t = 0; t < 300 && arrived < 0; t += dt) {
         stepShip(state, input({ throttle: 1 }), dt, env(bodies, moonKey), telemetry)
         lowest = Math.min(lowest, state.position.distanceTo(giant.position))
         expect(telemetry.colliding).toBe(false)
         if (state.cushion.key === giantKey) touched = true
-        if (offset.subVectors(state.position, giant.position).dot(toMoon) > 1.1 * R) past = t
+        if (past < 0 && offset.subVectors(state.position, giant.position).dot(toMoon) > 1.1 * R) {
+          past = t
+          // Going on toward the moon.
+          expect(state.velocity.dot(toMoon)).toBeGreaterThan(0)
+        }
+        // Within a moon radius of its surface, as trip() counts arriving.
+        if (state.position.distanceTo(moon.position) - moon.radius < moon.radius) arrived = t
       }
       expect(touched, `${dt}`).toBe(true)
       expect(lowest, `${dt}`).toBeGreaterThanOrEqual(top - 1e-9)
       // Round a hemisphere at the V_NORMAL floor: ~45 s on the stop, ~85 s in all.
       expect(past, `${dt}`).toBeGreaterThan(0)
       expect(past, `${dt}`).toBeLessThan(120)
-      // Going on toward the moon.
-      expect(state.velocity.dot(toMoon)).toBeGreaterThan(0)
+      // And on to the moon: ~115-125 s in all.
+      console.log(`${giantKey} → ${moonKey} at dt ${dt.toFixed(3)}: past at ${past.toFixed(1)} s, arrived at ${arrived.toFixed(1)} s`)
+      expect(arrived, `${dt}`).toBeGreaterThan(past)
+      expect(arrived, `${dt}`).toBeLessThan(180)
     }
   })
 
