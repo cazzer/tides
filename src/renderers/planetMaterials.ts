@@ -65,8 +65,11 @@ export const DETAIL_OCTAVES = 5
 export const LOW_QUALITY_DETAIL_OCTAVES = 2
 /** The bands' octaves on the high tier, for the ship's dive to the cloud
  * tops (tides-ufyr.8.2); the finer ones show only that close. The low tier
- * keeps LOW_QUALITY_DETAIL_OCTAVES. */
-export const BAND_DETAIL_OCTAVES = 8
+ * keeps LOW_QUALITY_DETAIL_OCTAVES. No more: the noise is keyed to the unit
+ * sphere, and the 6th octave on an 8k map already puts |p| near 1.25e5
+ * (float steps ~0.008 of a wavelength); finer ones would terrace, and need
+ * a noise origin local to the eye (tides-ufyr.8.3's dive can revisit). */
+export const BAND_DETAIL_OCTAVES = 6
 
 // The bands' detail flows with the zonal winds (tides-ufyr.8.2, high tier
 // only), mirroring detail.glsl's PLANET_DETAIL_FLOW block. By the page's
@@ -93,13 +96,22 @@ export function bandFlowRate(lat: number): number {
 
 /** The flow's two phases at `time` seconds: how long each has carried its
  * noise (0..DETAIL_FLOW_PERIOD), its triangle weight (they sum to 1, and a
- * phase restarts only at weight 0) and its cycle (which picks its offset). */
-export function bandFlowPhases(time: number): { t: number; weight: number; cycle: number }[] {
+ * phase restarts only at weight 0), its cycle, and the key its offset is
+ * hashed from: even for the first phase, odd for the second, as the two
+ * share a cycle for half of every period. */
+export function bandFlowPhases(
+  time: number
+): { t: number; weight: number; cycle: number; key: number }[] {
   return [0, 0.5].map((shift) => {
     const cycles = time / DETAIL_FLOW_PERIOD + shift
     const f = cycles - Math.floor(cycles)
     const cycle = Math.floor(cycles) % DETAIL_FLOW_CYCLES
-    return { t: f * DETAIL_FLOW_PERIOD, weight: 1 - Math.abs(2 * f - 1), cycle }
+    return {
+      t: f * DETAIL_FLOW_PERIOD,
+      weight: 1 - Math.abs(2 * f - 1),
+      cycle,
+      key: 2 * cycle + 2 * shift,
+    }
   })
 }
 

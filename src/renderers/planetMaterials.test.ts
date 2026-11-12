@@ -120,14 +120,23 @@ describe('band flow (tides-ufyr.8.2)', () => {
     }
   })
 
-  it('gives the bands 8 octaves on high, 2 on low, others as before', () => {
+  it('gives the bands 6 octaves on high, 2 on low, others as before', () => {
     const high = planetSurfaceMaterial(sun, { map, flowingBands: true, lowQuality: false }).defines
     expect([high.PLANET_BAND_OCTAVES, high.PLANET_DETAIL_OCTAVES]).toEqual([BAND_DETAIL_OCTAVES, 5])
-    expect(BAND_DETAIL_OCTAVES).toBe(8)
+    // Finer would terrace: the noise is keyed to the unit sphere.
+    expect(BAND_DETAIL_OCTAVES).toBe(6)
     const low = planetSurfaceMaterial(sun, { map, flowingBands: true, lowQuality: true }).defines
     expect([low.PLANET_BAND_OCTAVES, low.PLANET_DETAIL_OCTAVES]).toEqual([2, 2])
     // The same for every globe of a tier, so it adds no program.
-    expect(planetSurfaceMaterial(sun, { lowQuality: false }).defines.PLANET_BAND_OCTAVES).toBe(8)
+    expect(planetSurfaceMaterial(sun, { lowQuality: false }).defines.PLANET_BAND_OCTAVES).toBe(6)
+  })
+
+  it('keeps the bands contrast from range, and stops at the first faded octave, NaN too', () => {
+    const shader = planetSurfaceMaterial(sun, { map }).fragmentShader
+    // Normalised by the first PLANET_DETAIL_OCTAVES' amplitudes, as before
+    // the extra octaves; rock and streaks take exactly those.
+    expect(shader).toContain('float(min(octaves, PLANET_DETAIL_OCTAVES))')
+    expect(shader).toContain('if (!(w > 0.0)) break;')
   })
 
   it('has a uDetailTime uniform, flowing or not', () => {
@@ -147,6 +156,9 @@ describe('band flow (tides-ufyr.8.2)', () => {
       expect(block).toContain(code)
     }
     expect(block).toContain('cos(lat) * cos(6.0 * lat)')
+    // bandFlowPhases' key.
+    expect(block).toContain('float key = 2.0 * mod(floor(cycles), DETAIL_FLOW_CYCLES) + 2.0 * shift;')
+    expect(block).toContain('fract(key * vec3(')
     // planetDetail's call into it is guarded too.
     const entry = shader.slice(shader.indexOf('void planetDetail('))
     const guard = entry.indexOf('#ifdef PLANET_DETAIL_FLOW')
@@ -176,7 +188,10 @@ describe('band flow (tides-ufyr.8.2)', () => {
     for (let time = step; time < 3 * DETAIL_FLOW_PERIOD; time += step) {
       const phases = bandFlowPhases(time)
       expect(phases[0].weight + phases[1].weight).toBeCloseTo(1, 9)
+      // Never the same offset, though they share a cycle half the time.
+      expect(phases[0].key).not.toBe(phases[1].key)
       phases.forEach((phase, i) => {
+        expect(phase.key).toBe(2 * phase.cycle + i)
         expect(phase.t).toBeGreaterThanOrEqual(0)
         expect(phase.t).toBeLessThan(DETAIL_FLOW_PERIOD)
         // A restart (t jumps back, a new cycle) only where the weight is ~0.
@@ -216,8 +231,10 @@ describe('band flow (tides-ufyr.8.2)', () => {
     expect(detailFlowTime(5 * span - 0.25)).toBeCloseTo(span - 0.25, 6)
     const before = bandFlowPhases(detailFlowTime(span - 1e-6))
     const after = bandFlowPhases(detailFlowTime(span))
-    // The half-period phase, at full weight here, keeps its cycle and age.
+    // The half-period phase, at full weight here, keeps its cycle, offset and age.
     expect(after[1].cycle).toBe(before[1].cycle)
+    expect(after[1].key).toBe(before[1].key)
+    expect(after[0].key).not.toBe(after[1].key)
     expect(after[1].t).toBeCloseTo(before[1].t, 4)
     expect(after[1].weight).toBeCloseTo(1, 6)
     expect(after[0].weight).toBeCloseTo(0, 6)

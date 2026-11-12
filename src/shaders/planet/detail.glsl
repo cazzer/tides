@@ -60,8 +60,10 @@ void planetDetailNoise(vec3 n, float fp, float texel, out float d, out vec3 dh) 
   // The bands take more octaves, for the ship's dive to their cloud tops
   // (tides-ufyr.8.2).
   int octaves = (rock || streaks) ? PLANET_DETAIL_OCTAVES : PLANET_BAND_OCTAVES;
-  // Every octave's full amplitude, faded or not.
-  float total = (1.0 - pow(gain, float(octaves))) / (1.0 - gain);
+  // Every octave's full amplitude, faded or not; for the bands' extra
+  // octaves, only the first PLANET_DETAIL_OCTAVES', so their contrast from
+  // range is as it was and the extras add a touch close in.
+  float total = (1.0 - pow(gain, float(min(octaves, PLANET_DETAIL_OCTAVES)))) / (1.0 - gain);
   float amp = 1.0;
   // The height's gradient in p, over the first wavelength.
   vec3 slope = vec3(0.0);
@@ -69,8 +71,9 @@ void planetDetailNoise(vec3 n, float fp, float texel, out float d, out vec3 dh) 
     if (i == octaves) break;
     float w = gate * smoothstep(2.0, 4.0, wavelength / fp);
     // The wavelengths only shrink, so once an octave has faded out so have
-    // the rest (and the bump's, which fades first).
-    if (w == 0.0) break;
+    // the rest (and the bump's, which fades first). Not w == 0.0: a NaN
+    // footprint skips them too.
+    if (!(w > 0.0)) break;
     vec3 g;
     float s = snoise3(p + float(i) * 7.31, g);
     d += w * amp * s;
@@ -110,15 +113,17 @@ vec3 detailFlowTurn(vec3 n, float t, out vec2 cs) {
 // One of two phases half a period apart. Its noise is carried for up to a
 // period, so the shear stays bounded, then restarts from a fresh offset (a
 // hash of its cycle, so the pattern doesn't repeat each period) where its
-// triangle weight is 0, so the restart doesn't show.
+// triangle weight is 0, so the restart doesn't show. The key is even for
+// one phase and odd for the other, which would otherwise share a cycle for
+// half of every period, and so an offset.
 void detailFlowPhase(vec3 n, float fp, float texel, float shift,
                      out float w, out float d, out vec3 dh) {
   float cycles = uDetailTime / DETAIL_FLOW_PERIOD + shift;
   float f = fract(cycles);
   w = 1.0 - abs(2.0 * f - 1.0);
-  float cycle = mod(floor(cycles), DETAIL_FLOW_CYCLES);
+  float key = 2.0 * mod(floor(cycles), DETAIL_FLOW_CYCLES) + 2.0 * shift;
   vec3 offset = DETAIL_FLOW_OFFSET
-    * (fract(cycle * vec3(0.7548777, 0.5698403, 0.4142136)) - 0.5);
+    * (fract(key * vec3(0.7548777, 0.5698403, 0.4142136)) - 0.5);
   vec2 cs;
   vec3 m = detailFlowTurn(n, f * DETAIL_FLOW_PERIOD, cs);
   vec3 g;
