@@ -22,11 +22,13 @@ import {
 import {
   BOOST_SPOOL_SECONDS,
   COLLISION_MARGIN,
+  CUSHION_MAX_SECONDS,
   OVERSPEED_MAX,
   RIDE_DOWN_RATE,
   RIDE_UP_RATE,
   V_NORMAL,
   collisionRadius,
+  cushionWidth,
   floorRadius,
   lawFloor,
   speedCap,
@@ -50,7 +52,6 @@ import {
   EARTH_RADIUS,
   EARTH_SHELL_RADII,
   EARTH_SHEET_CLEARANCE,
-  JUPITER_STOP,
   MOON_COLLISION_CLEARANCE,
   MOON_COLLISION_CLEARANCE_HIGH,
   MOON_SPEED_RADIUS,
@@ -60,11 +61,13 @@ import {
   EARTH_SLOWEST,
   EARTH_UNITS_PER_METRE,
   createShipBodies,
+  deckRestRadius,
   floorReach,
   updateShipBodies,
 } from './ship-bodies'
 import { NEAR_MIN, SHIP_FOV, shipNear, spawnPose } from './ship-session'
 import { canCrash } from './approach'
+import { DECK_PROFILES } from '../cloud-deck'
 import {
   EARTH_BASE_SEGMENTS,
   TERRAIN_FALLBACK_GREY,
@@ -275,20 +278,89 @@ describe('ship bodies', () => {
     it.each([
       ['venus', VENUS_HAZE_OUTER],
       ['mars', MARS_HAZE_OUTER],
-      ['jupiter', JUPITER_HAZE_OUTER],
-      ['saturn', SATURN_HAZE_OUTER],
-      ['uranus', URANUS_HAZE_OUTER],
-      ['neptune', NEPTUNE_HAZE_OUTER],
     ])("stops under %s's haze, clear of its shell, on either tier (tides-ufyr.4)", (key, haze) => {
       for (const tier of ['high', 'low'] as const) {
         const body = byKey(T, tier)[key]
         const stop = collisionRadius(body) / body.radius
-        expect(stop, tier).toBeCloseTo(key === 'jupiter' ? JUPITER_STOP : COLLISION_MARGIN, 12)
+        expect(stop, tier).toBeCloseTo(COLLISION_MARGIN, 12)
         // Inside the shell, and far enough under it that the near plane at the
         // stop (bodiesShellGap) need not crowd its floor.
         expect(haze - stop).toBeGreaterThanOrEqual(0.005)
         expect(body.shellRadii).toEqual([body.radius * haze])
+        expect(body.ground).toBeUndefined()
+        expect(body.groundClearance).toBeUndefined()
       }
+    })
+
+    describe('cloud decks (tides-ufyr.8.3)', () => {
+      const giants = [
+        ['jupiter', JUPITER_HAZE_OUTER],
+        ['saturn', SATURN_HAZE_OUTER],
+        ['uranus', URANUS_HAZE_OUTER],
+        ['neptune', NEPTUNE_HAZE_OUTER],
+      ] as const
+
+      it('gives the four giants, and only them, a deck', () => {
+        expect(Object.keys(DECK_PROFILES).sort()).toEqual(giants.map(([key]) => key).sort())
+      })
+
+      it.each(giants)('stacks base < floor < rest < cloud top < fog top < haze over %s', (key, haze) => {
+        const deck = DECK_PROFILES[key]!
+        const body = byKey()[key]
+        const rest = deckRestRadius(body) / body.radius
+        expect(deck.base).toBeLessThan(deck.floor)
+        expect(deck.floor).toBeLessThan(rest)
+        expect(rest).toBeLessThan(1)
+        expect(1).toBeLessThan(deck.top)
+        expect(deck.top).toBeLessThan(haze)
+        expect(deck.top).toBeCloseTo(1 + 4 * deck.scaleHeight, 12)
+      })
+
+      it.each(giants)("stops at %s's floor over a constant ground at its fog's base", (key, haze) => {
+        const body = byKey()[key]
+        const deck = DECK_PROFILES[key]!
+        const R = body.radius
+        expect(collisionRadius(body)).toBeCloseTo(R * deck.floor, 12)
+        // Its floor on either tier: not a rocky stop.
+        expect(collisionRadius(byKey(T, 'low')[key])).toBeCloseTo(R * deck.floor, 12)
+        for (const direction of [new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, -2, 3).normalize()]) {
+          expect(body.ground!(direction)).toBe(R * deck.base)
+          expect(floorRadius(body, direction)).toBeCloseTo(R * deck.floor, 12)
+        }
+        expect(body.groundClearance).toBeCloseTo(R * (deck.floor - deck.base), 12)
+        expect(body.shellRadii).toEqual([R, R * deck.top, R * haze])
+        // V_NORMAL's floor: no minSpeed, or ship-distances would read it as
+        // Earth's ground.
+        expect(body.minSpeed).toBeUndefined()
+        expect(speedFloor(body)).toBe(V_NORMAL)
+      })
+
+      it.each(giants)("rests %s's cushion top the same way round, half way from the floor to its cloud top", (key, haze) => {
+        const body = byKey()[key]
+        const deck = DECK_PROFILES[key]!
+        const R = body.radius
+        const rest = deckRestRadius(body)
+        for (const direction of [new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0.5, 0.2).normalize()]) {
+          expect(floorRadius(body, direction) + cushionWidth(body, direction)).toBeCloseTo(rest, 12)
+        }
+        expect(rest).toBeLessThan(R)
+        // The globe's shell caps it (CUSHION_SHELL_SHARE), under the speed floor's cap.
+        expect(rest / R).toBeCloseTo((deck.floor + 1) / 2, 12)
+        expect(CUSHION_MAX_SECONDS * V_NORMAL).toBeGreaterThan(rest - R * deck.floor)
+        // A ship passing it to a target beyond keeps over the fog's top,
+        // half way up to the haze, off both shells.
+        expect(body.passStop).toBeCloseTo((R * (deck.top + haze)) / 2, 12)
+        expect(body.passStop).toBeGreaterThan(R * deck.top)
+        expect(body.passStop).toBeLessThan(R * haze)
+      })
+
+      it('gives no other body a passing stop', () => {
+        for (const body of createShipBodies()) {
+          if (!(body.key in DECK_PROFILES)) expect(body.passStop, body.key).toBeUndefined()
+          else expect(deckRestRadius(body)).toBeGreaterThan(0)
+        }
+        expect(deckRestRadius(byKey().mars)).toBeNaN()
+      })
     })
 
     it('lists the shells each body draws for the near plane to keep clear of', () => {
@@ -567,9 +639,9 @@ describe('ship bodies', () => {
       expect(floorRadius(byKey(T, 'low').earth, new THREE.Vector3(0, 1, 0))).toBe(EARTH_COLLISION_RADIUS)
     })
 
-    it('gives no other body a ground', () => {
+    it('gives no other body a ground but the gas giants, at their cloud decks', () => {
       for (const body of createShipBodies()) {
-        if (body.key !== 'earth') expect(body.ground).toBeUndefined()
+        if (body.key !== 'earth' && !(body.key in DECK_PROFILES)) expect(body.ground).toBeUndefined()
       }
     })
   })

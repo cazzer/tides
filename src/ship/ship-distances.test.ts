@@ -15,6 +15,7 @@ import {
 } from './ship-bodies'
 import { MOONS, isMoonKey, type MoonKey } from '../moons/moons'
 import { spawnPose } from './ship-session'
+import { DECK_PROFILES } from '../cloud-deck'
 import {
   C_KM_PER_S,
   bodyName,
@@ -740,4 +741,30 @@ describe('planet moon systems on their own scale (tides-ufyr.6.2.1)', () => {
     expect(ranges.insideSystem[JUPITER]).toBe(true)
     expect(ranges.edgeCrossing.count).toBe(0)
   })
+})
+
+describe("a gas giant's cloud deck (tides-ufyr.8.3)", () => {
+  it.each(['jupiter', 'saturn', 'uranus', 'neptune'])(
+    "reads %s's range 0 at its floor, finite and growing up through its cloud top",
+    (key) => {
+      const { bodies, truth, ranges } = setup(DATES[0])
+      const { index, body } = find(bodies, key)
+      const deck = DECK_PROFILES[key as keyof typeof DECK_PROFILES]!
+      const R = body.radius
+      const up = new THREE.Vector3(0, 1, 0)
+      expect(floorRadius(body, up)).toBeCloseTo(R * deck.floor, 12)
+      const at = (d: number) => body.position.clone().addScaledVector(up, d)
+      measureRanges(at(R * deck.floor), bodies, truth, ranges)
+      expect(ranges.km[index]).toBeCloseTo(0, 6)
+      let last = 0
+      for (let i = 1; i <= 100; i++) {
+        const d = R * (deck.floor + (i / 100) * (1.05 - deck.floor))
+        measureRanges(at(d), bodies, truth, ranges)
+        const km = ranges.km[index]
+        expect(Number.isFinite(km)).toBe(true)
+        expect(km).toBeGreaterThan(last)
+        last = km
+      }
+    }
+  )
 })

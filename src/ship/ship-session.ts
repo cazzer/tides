@@ -4,7 +4,8 @@
 import * as THREE from 'three'
 import type { CameraFocus, Layout, PanelKey } from '../store'
 import type { MainCameraPose } from '../main-camera-session'
-import { collisionRadius, createShipState, type Body as FlightBody, type ShipState } from './flight'
+import { COLLISION_MARGIN, collisionRadius, createShipState, type Body as FlightBody, type ShipState } from './flight'
+import { DECK_PROFILES } from '../cloud-deck'
 import { FLIGHT_UNITS_PER_AU, positionsFor } from '../flight-scale'
 import { isMoonKey, moonRadius } from '../moons/moons'
 import type { ShipBody } from './ship-bodies'
@@ -300,7 +301,7 @@ export function spawnPoseFromCamera(
   const outward = new THREE.Vector3(...pose.position).sub(new THREE.Vector3(...pose.target))
   if (!(outward.lengthSq() > 0) || !Number.isFinite(outward.lengthSq())) return null
   outward.normalize()
-  const distance = beyondShells(body, outward, Math.max(mappedDistance, collisionRadius(body) + 0.01), bodies)
+  const distance = beyondShells(body, outward, Math.max(mappedDistance, spawnFloor(body) + 0.01), bodies)
   const state = createShipState()
   state.position.copy(body.position).addScaledVector(outward, distance)
   state.orientation.fromArray(pose.quaternion).normalize()
@@ -308,6 +309,28 @@ export function spawnPoseFromCamera(
 }
 
 const toOther = new THREE.Vector3()
+
+/**
+ * The least distance from `body`'s centre the ship spawns at, focused on
+ * it: its hard sphere, but over what it draws where that lies under it: a
+ * gas giant's stop is its cloud deck's floor (tides-ufyr.8.3), so over its
+ * visible cloud top (COLLISION_MARGIN) and its fog shell. Earth's and the
+ * hazes' shells above the stop stay open to a close main view's eye.
+ */
+export function spawnFloor(body: FlightBody): number {
+  const deck = DECK_PROFILES[body.key as keyof typeof DECK_PROFILES]
+  return deck ? Math.max(collisionRadius(body), body.radius * COLLISION_MARGIN, body.radius * deck.top) : collisionRadius(body)
+}
+
+/**
+ * How far from `other`'s centre a spawn on a line past it must keep: its
+ * hard sphere, its sphere's COLLISION_MARGIN and every shell it draws (a gas
+ * giant's stop lies under its cloud tops, tides-ufyr.8.3), so the ship never
+ * starts inside another body's fog or haze.
+ */
+export function spawnClearance(other: FlightBody): number {
+  return Math.max(collisionRadius(other), other.radius * COLLISION_MARGIN, ...(other.shellRadii ?? []))
+}
 
 // How far out along `outward` from `body` the ship can stand at `distance`
 // or beyond, clear of every other body's shell. Under ?truescale a moon's
@@ -324,7 +347,7 @@ function beyondShells(
     moved = false
     for (const other of bodies) {
       if (other === body) continue
-      const shell = collisionRadius(other)
+      const shell = spawnClearance(other)
       toOther.subVectors(other.position, body.position)
       const along = toOther.dot(outward)
       const across2 = toOther.lengthSq() - along * along

@@ -2,7 +2,8 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import type { MainCameraPose } from '../main-camera-session'
 import type { CameraFocus, Layout, PanelKey } from '../store'
-import { COLLISION_MARGIN, collisionRadius } from './flight'
+import { COLLISION_MARGIN, collisionRadius, cushionWidth, floorRadius } from './flight'
+import { DECK_PROFILES } from '../cloud-deck'
 import {
   createShipBodies,
   EARTH_COLLISION_RADIUS,
@@ -10,6 +11,7 @@ import {
   EARTH_SHEET_CLEARANCE,
   EARTH_SHELL_RADII,
   EARTH_SHELL_RADIUS,
+  deckRestRadius,
   updateShipBodies,
 } from './ship-bodies'
 import { FOV_KICK } from './dust'
@@ -43,9 +45,13 @@ import {
   SPAWN_MIN_DISTANCE,
   SPAWN_MOON_GAP,
   spawnPose,
+  spawnClearance,
+  spawnFloor,
   spawnPoseFromCamera,
   type ShipSessionState,
 } from './ship-session'
+import { positionsFor } from '../flight-scale'
+import { moonRadius } from '../moons/moons'
 import type { ShipState, Body as FlightBody } from './flight'
 
 // The store also holds a pending date jump, which entry clears.
@@ -389,16 +395,18 @@ describe('ship camera range', () => {
   })
 
   // The planets' hazes are drawn from inside too, and their stops sit under
-  // them (tides-ufyr.4).
+  // them (tides-ufyr.4); the gas giants' under their globes and cloud decks'
+  // fog shells too (tides-ufyr.8.3), its gaps from the fog's base.
   it.each(['venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'])(
-    "keeps the near rectangle off %s's haze on the way down to its stop",
+    "keeps the near rectangle off %s's shells on the way down to its stop",
     (key) => {
       const bodies = createShipBodies()
       updateShipBodies(bodies, Date.UTC(2026, 0, 1))
       const planet = bodies.find((b) => b.key === key)!
-      const [shell] = planet.shellRadii!
+      const shells = planet.shellRadii!
       const stop = collisionRadius(planet)
-      expect(stop).toBeLessThan(shell)
+      expect(stop).toBeLessThan(Math.min(...shells))
+      const surface = planet.ground ? planet.ground(new THREE.Vector3(0, 0, 1)) : planet.radius
       const eye = new THREE.Vector3()
       let holes = 0
       let groundAloneHoles = 0
@@ -407,16 +415,45 @@ describe('ship camera range', () => {
         const d = planet.radius * 1.2 + ((stop - planet.radius * 1.2) * i) / steps
         eye.set(0, 0, d).add(planet.position)
         const gap = bodiesShellGap(eye, bodies)
-        expect(gap).toBeCloseTo(Math.abs(d - shell), 9)
-        const near = shipNear(d - planet.radius, gap)
+        expect(gap).toBeCloseTo(Math.min(...shells.map((shell) => Math.abs(d - shell))), 9)
+        const near = shipNear(d - surface, gap)
         // At the shell the floor wins: a hole a near's width across, crossing it.
         if (near <= NEAR_MIN) continue
         if (near * NEAR_CORNER_REACH > gap) holes++
-        if (shipNear(d - planet.radius) * NEAR_CORNER_REACH > gap) groundAloneHoles++
+        if (shipNear(d - surface) * NEAR_CORNER_REACH > gap) groundAloneHoles++
       }
       expect(holes).toBe(0)
       // Going by the ground alone it would.
       expect(groundAloneHoles).toBeGreaterThan(0)
+    }
+  )
+
+  it.each(['jupiter', 'saturn', 'uranus', 'neptune'])(
+    "floors the near plane crossing %s's cloud top and keeps 0.4 of the gap to it at rest (tides-ufyr.8.3)",
+    (key) => {
+      const bodies = createShipBodies()
+      updateShipBodies(bodies, Date.UTC(2026, 0, 1))
+      const planet = bodies.find((b) => b.key === key)!
+      const R = planet.radius
+      const deck = DECK_PROFILES[key as keyof typeof DECK_PROFILES]!
+      const up = new THREE.Vector3(0, 0, 1)
+      const eye = new THREE.Vector3()
+      const nearAt = (d: number) => {
+        eye.copy(up).multiplyScalar(d).add(planet.position)
+        return shipNear(d - planet.ground!(up), bodiesShellGap(eye, bodies))
+      }
+      expect(nearAt(R)).toBe(NEAR_MIN)
+      expect(nearAt(R * (1 + 1e-6))).toBe(NEAR_MIN)
+      // Resting on the cushion's top, the globe overhead is the nearest
+      // surface: nearer than the fog's base, under the ship.
+      const rest = floorRadius(planet, up) + cushionWidth(planet, up)
+      expect(rest).toBeCloseTo(deckRestRadius(planet), 12)
+      expect(nearAt(rest)).toBeCloseTo(0.4 * (R - rest), 9)
+      expect(R - rest).toBeLessThan(rest - planet.ground!(up))
+      // Pressed down to the floor, the fog's base under it is: 0.4 × 0.006 R.
+      const floor = floorRadius(planet, up)
+      expect(nearAt(floor)).toBeCloseTo(0.4 * (deck.floor - deck.base) * R, 9)
+      expect(deck.floor - deck.base).toBeCloseTo(0.006, 12)
     }
   )
 
@@ -507,5 +544,70 @@ describe('frame order', () => {
     expect(SHIP_SETTLE_PRIORITY).toBeLessThan(SHIP_SHAKE_PRIORITY)
     expect(SHIP_SHAKE_PRIORITY).toBeLessThan(1)
     expect(SHIP_SHAKE_RESTORE_PRIORITY).toBeGreaterThan(1)
+  })
+})
+
+describe("spawning by a gas giant's cloud deck (tides-ufyr.8.3)", () => {
+  const T = Date.UTC(2026, 9, 25)
+  const pose = (target: THREE.Vector3, outward: THREE.Vector3, eyeDistance: number): MainCameraPose => {
+    const eye = target.clone().addScaledVector(outward, eyeDistance)
+    const quaternion = new THREE.Quaternion()
+      .setFromRotationMatrix(new THREE.Matrix4().lookAt(eye, target, new THREE.Vector3(0, 1, 0)))
+      .toArray() as [number, number, number, number]
+    return {
+      position: eye.toArray() as [number, number, number],
+      target: target.toArray() as [number, number, number],
+      quaternion,
+      up: [0, 1, 0],
+      projection: 'perspective',
+      fov: SHIP_FOV,
+      zoom: 1,
+    }
+  }
+
+  it.each(['jupiter', 'saturn', 'uranus', 'neptune'] as const)(
+    'starts a close view of %s over its visible cloud top and fog shell, not at its floor',
+    (key) => {
+      const bodies = createShipBodies()
+      updateShipBodies(bodies, T)
+      const giant = bodies.find((b) => b.key === key)!
+      const deck = DECK_PROFILES[key]!
+      const system = positionsFor('system').radius[key]
+      const outward = new THREE.Vector3(0.2, 1, 0.3).normalize()
+      // The main view's eye a hair over the globe.
+      const ship = spawnPoseFromCamera(pose(new THREE.Vector3(), outward, system * 1.0005), key, bodies)!
+      const d = ship.position.distanceTo(giant.position)
+      expect(spawnFloor(giant)).toBeGreaterThanOrEqual(giant.radius * deck.top)
+      expect(d).toBeGreaterThan(giant.radius * deck.top)
+      expect(d).toBeGreaterThan(giant.radius * COLLISION_MARGIN)
+      expect(collisionRadius(giant)).toBeLessThan(giant.radius)
+    }
+  )
+
+  it('starts a moon-focused view with its giant in the way past the giant, clear of its haze', () => {
+    const bodies = createShipBodies()
+    updateShipBodies(bodies, T)
+    const io = bodies.find((b) => b.key === 'io')!
+    const jupiter = bodies.find((b) => b.key === 'jupiter')!
+    // The main view looks at Io from just past Jupiter's centre, on the line
+    // through it, mapped to a flight distance inside Jupiter.
+    const outward = jupiter.position.clone().sub(io.position)
+    const along = outward.length()
+    outward.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), 1e-3)
+    const rs = moonRadius('io', 'system')
+    const rf = io.radius
+    const eyeDistance = Math.sqrt(rs * rs + ((along * along - rf * rf) * rs * rs) / (rf * rf))
+    const ship = spawnPoseFromCamera(pose(new THREE.Vector3(), outward, eyeDistance), 'io', bodies)!
+    const clear = spawnClearance(jupiter)
+    expect(clear).toBeGreaterThanOrEqual(Math.max(...jupiter.shellRadii!))
+    expect(ship.position.distanceTo(jupiter.position)).toBeGreaterThan(clear)
+    // On past Jupiter's far side, as the main view's eye stood.
+    expect(ship.position.distanceTo(io.position)).toBeGreaterThan(along)
+  })
+
+  it("keeps Earth's close start under its shells, at its own stop", () => {
+    const bodies = createShipBodies()
+    const earth = bodies.find((b) => b.key === 'earth')!
+    expect(spawnFloor(earth)).toBe(collisionRadius(earth))
   })
 })

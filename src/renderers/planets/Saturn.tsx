@@ -14,6 +14,7 @@ import saturnTexture from '../../assets/saturn-2k.jpg'
 import saturnCompressed from '../../assets/bodies/saturn-2k.ktx2?url'
 import ringTexture from '../../assets/saturn-ring-2k.png'
 import type { PlanetRendererProps } from './index'
+import { DECK_PROFILES } from '../../cloud-deck'
 import { SATURN_HAZE_OUTER } from './haze-shells'
 
 const EQUATORIAL_RADIUS_KM = 60_268
@@ -58,6 +59,7 @@ export function Saturn({ planet }: PlanetRendererProps) {
         limbDarkening={1.1}
         ringShadow={RINGS}
         detail={DETAIL}
+        deck={DECK_PROFILES.saturn}
       />
       {/* A pale haze, a little deeper than Jupiter's [TUNE]. The rings (from
           1.15 R) lie wholly outside it and draw after it (renderOrder 2 over

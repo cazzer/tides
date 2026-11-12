@@ -72,6 +72,12 @@ export interface ShipTelemetry {
    */
   cushion: number
   /**
+   * How deep the ship is in a gas giant's cloud deck (cloud-deck.ts
+   * deckShare, tides-ufyr.8.3), 0..1: 0 over its fog shell's top, 1 at its
+   * floor. The buffeting reads it (shake.ts deckShakeTarget).
+   */
+  deck: number
+  /**
    * The ship through Earth's air (frame-carry.ts fillAir, tides-zmw.9.18):
    * speed, scene units/s (what the HUD reads); coupling, the share of
    * Earth's spin carried; density over sea level's; dynamic pressure, Pa.
@@ -106,6 +112,7 @@ export function createShipTelemetry(): ShipTelemetry {
     target: null,
     colliding: false,
     cushion: 0,
+    deck: 0,
     impactSpeed: 0,
     air: { speed: 0, coupling: 0, density: 0, dynamicPressure: 0, velocity: new THREE.Vector3() },
     earthEye: { up: new THREE.Vector3(0, 1, 0), local: new THREE.Vector3(0, 1, 0), altitude: Infinity },
@@ -131,6 +138,7 @@ export function resetShipTelemetry(): void {
   shipTelemetry.target = null
   shipTelemetry.colliding = false
   shipTelemetry.cushion = 0
+  shipTelemetry.deck = 0
   shipTelemetry.impactSpeed = 0
   shipTelemetry.air.speed = 0
   shipTelemetry.air.coupling = 0

@@ -8,6 +8,7 @@ import type { PlanetDetail } from '../planetMaterials'
 import neptuneTexture from '../../assets/neptune-2k.jpg'
 import neptuneCompressed from '../../assets/bodies/neptune-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
+import { DECK_PROFILES } from '../../cloud-deck'
 import { NEPTUNE_HAZE_OUTER } from './haze-shells'
 
 // Below the map's resolution at a close pass: banded filaments.
@@ -22,6 +23,7 @@ export function Neptune({ planet }: PlanetRendererProps) {
         compressedTexture={neptuneCompressed}
         limbDarkening={1.1}
         detail={DETAIL}
+        deck={DECK_PROFILES.neptune}
       />
       <PlanetAtmosphere
         planet={planet}

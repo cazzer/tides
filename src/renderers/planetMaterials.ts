@@ -1,6 +1,7 @@
 // The lit-globe material and its uniforms, shared by the planets
-// (PlanetRenderer.tsx) and the major moons (moons/MoonBodies.tsx), and the
-// planets' haze shell's material (PlanetAtmosphere). The
+// (PlanetRenderer.tsx) and the major moons (moons/MoonBodies.tsx), the
+// planets' haze shell's material (PlanetAtmosphere) and the gas giants'
+// cloud-deck fog's (PlanetDeck). The
 // scene's directional sunlight is aimed at the Earth, so these take the Sun's
 // direction in the body's own frame instead (sunDirection).
 import * as THREE from 'three'
@@ -11,6 +12,7 @@ import planetVertex from '../shaders/planet/vertex.glsl'
 import planetFragment from '../shaders/planet/fragment.frag'
 import shellVertex from '../shaders/shell/vertex.glsl'
 import atmosphereFragment from '../shaders/atmosphere/fragment.frag'
+import deckFragment from '../shaders/planet/deck.frag'
 
 /** The scene's ambient fill, as the planets' shaders take it. */
 export const AMBIENT = new THREE.Color(AMBIENT_COLOR).multiplyScalar(AMBIENT_INTENSITY)
@@ -124,6 +126,17 @@ export function detailFlowTime(seconds: number): number {
 
 const glslFloat = (x: number) => (Number.isInteger(x) ? `${x}.0` : `${x}`)
 
+// detail.glsl's PLANET_DETAIL_FLOW block and its constants.
+function flowDefines(): Record<string, string> {
+  return {
+    PLANET_DETAIL_FLOW: '',
+    DETAIL_FLOW_RATE: glslFloat(DETAIL_FLOW_RATE),
+    DETAIL_FLOW_PERIOD: glslFloat(DETAIL_FLOW_PERIOD),
+    DETAIL_FLOW_CYCLES: glslFloat(DETAIL_FLOW_CYCLES),
+    DETAIL_FLOW_OFFSET: glslFloat(DETAIL_FLOW_OFFSET),
+  }
+}
+
 /** Sets a globe material's detail; uniforms only, so no recompile. */
 export function setPlanetDetail(material: THREE.ShaderMaterial, detail?: PlanetDetail) {
   const u = material.uniforms
@@ -165,13 +178,7 @@ export function planetSurfaceMaterial(
     PLANET_BAND_OCTAVES: lowQuality ? LOW_QUALITY_DETAIL_OCTAVES : BAND_DETAIL_OCTAVES,
   }
   if (map) defines.USE_PLANET_MAP = ''
-  if (map && flowingBands && !lowQuality) {
-    defines.PLANET_DETAIL_FLOW = ''
-    defines.DETAIL_FLOW_RATE = glslFloat(DETAIL_FLOW_RATE)
-    defines.DETAIL_FLOW_PERIOD = glslFloat(DETAIL_FLOW_PERIOD)
-    defines.DETAIL_FLOW_CYCLES = glslFloat(DETAIL_FLOW_CYCLES)
-    defines.DETAIL_FLOW_OFFSET = glslFloat(DETAIL_FLOW_OFFSET)
-  }
+  if (map && flowingBands && !lowQuality) Object.assign(defines, flowDefines())
   if (shadowed) {
     defines.USE_RING_SHADOW = ''
     defines.MAX_RING_BANDS = MAX_RING_BANDS
@@ -230,6 +237,67 @@ export function planetAtmosphereMaterial(sunDir: { value: THREE.Vector3 }): THRE
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
+    forceSinglePass: true,
+    userData: { warmSides: [THREE.DoubleSide] },
+  })
+}
+
+/**
+ * A gas giant's cloud-deck fog (PlanetDeck, tides-ufyr.8.3), lit from
+ * `sunDir` (sunDirection); its sizes, map and detail are set on the
+ * uniforms, so every giant shares one program per side on a tier: the
+ * bands' octaves, flowing on the high tier as the globes' do, and the rings'
+ * shadow, by map or bands (uRingHasMap). Blended over
+ * what is drawn (normal alpha, after the hazes and rings), double-sided
+ * within the ship's reach (pickShellFaces) in one pass, as the hazes are,
+ * that program warmed ahead (ship-warmup.ts warmSides). It writes no depth;
+ * the depth test goes off within reach, where its back faces lie beyond the
+ * globe.
+ */
+export function planetDeckMaterial(
+  sunDir: { value: THREE.Vector3 },
+  { lowQuality = isLowQuality() }: { lowQuality?: boolean } = {}
+): THREE.ShaderMaterial {
+  // The globes' octaves, so the bands' contrast matches the cloud top's.
+  // The rings' shadow for any giant, map or bands (ring/profile.glsl).
+  const defines: Record<string, unknown> = {
+    PLANET_DETAIL_OCTAVES: lowQuality ? LOW_QUALITY_DETAIL_OCTAVES : DETAIL_OCTAVES,
+    PLANET_BAND_OCTAVES: lowQuality ? LOW_QUALITY_DETAIL_OCTAVES : BAND_DETAIL_OCTAVES,
+    ...(!lowQuality && flowDefines()),
+    RING_PROFILE_EITHER: '',
+    MAX_RING_BANDS,
+  }
+  return new THREE.ShaderMaterial({
+    vertexShader: shellVertex,
+    fragmentShader: deckFragment,
+    defines,
+    uniforms: {
+      uOuter: { value: 0 },
+      uRadius: { value: 0 },
+      uScaleHeight: { value: 0 },
+      uVisibility: { value: 1 },
+      uSunDepth: { value: 1 },
+      uDeckFade: { value: 0 },
+      uPixelAngle: { value: 0 },
+      uSunDir: sunDir,
+      uAlbedo: { value: 1 },
+      uSunIntensity: { value: SUNLIGHT_INTENSITY },
+      uAmbient: { value: AMBIENT },
+      uMinnaert: { value: 1 },
+      uMap: { value: null },
+      uDetailStyle: { value: 0 },
+      uDetailStrength: { value: 0 },
+      uDetailBump: { value: 0 },
+      uDetailTime: { value: 0 },
+      uRingInner: { value: 0 },
+      uRingOuter: { value: 0 },
+      uRingOpacity: { value: 0 },
+      uRingMap: { value: null },
+      uRingHasMap: { value: false },
+      ...bandUniforms(),
+    },
+    transparent: true,
+    depthWrite: false,
     forceSinglePass: true,
     userData: { warmSides: [THREE.DoubleSide] },
   })

@@ -83,6 +83,22 @@ export function airShakeShare(q: number): number {
 export const CUSHION_SHAKE_GAIN = 1
 
 /**
+ * [TUNE] The buffeting deep in a gas giant's cloud deck (telemetry.deck,
+ * tides-ufyr.8.3), at its floor.
+ */
+export const DECK_SHAKE_GAIN = 0.75
+
+/**
+ * The buffeting `share` (telemetry.deck, 0..1) of the way down a gas
+ * giant's cloud deck: up to DECK_SHAKE_GAIN at its floor, 0 under reduced
+ * motion. useShipShake takes the more of it and shakeTarget.
+ */
+export function deckShakeTarget(share: number, reducedMotion = false): number {
+  if (reducedMotion || !Number.isFinite(share)) return 0
+  return DECK_SHAKE_GAIN * clamp01(share)
+}
+
+/**
  * The shake's intensity to ease toward at dynamic pressure `q`, Pa, and
  * boost spool `boost` (0..1), counted only while `boosted` (the boost raises
  * the cap; telemetry.boosted), or for sinking into a cushion at `cushion`

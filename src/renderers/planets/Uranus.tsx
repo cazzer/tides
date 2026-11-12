@@ -15,6 +15,7 @@ import type { PlanetDetail } from '../planetMaterials'
 import uranusTexture from '../../assets/uranus-2k.jpg'
 import uranusCompressed from '../../assets/bodies/uranus-2k.ktx2?url'
 import type { PlanetRendererProps } from './index'
+import { DECK_PROFILES } from '../../cloud-deck'
 import { URANUS_HAZE_OUTER } from './haze-shells'
 
 // The main rings in Uranus radii (25 559 km), from 6 (41 837 km) out to ε
@@ -56,6 +57,7 @@ export function Uranus({ planet }: PlanetRendererProps) {
         limbDarkening={1.1}
         ringShadow={RINGS}
         detail={DETAIL}
+        deck={DECK_PROFILES.uranus}
       />
       <PlanetAtmosphere
         planet={planet}
