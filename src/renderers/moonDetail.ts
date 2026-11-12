@@ -34,7 +34,10 @@ function fragmentHead(octaves: number): string {
   return /* glsl */ `
 varying vec3 vMoonDetailPos;
 varying float vMoonDetailRadius;
+// three declares this in the fragment stage only for object-space normal maps.
+#ifndef USE_NORMALMAP_OBJECTSPACE
 uniform mat3 normalMatrix;
+#endif
 #define PLANET_DETAIL_OCTAVES ${octaves}
 #define MOON_DETAIL_TERMINATOR ${MOON_DETAIL_TERMINATOR.toFixed(4)}
 ${detailGlsl}
