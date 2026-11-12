@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { planetSurfaceMaterial, setPlanetDetail } from './planetMaterials'
+import { moonDetailPatch } from './moonDetail'
 
 const sun = { value: new THREE.Vector3(1, 0, 0) }
 
@@ -48,5 +49,31 @@ describe('planet surface detail', () => {
     setPlanetDetail(material)
     expect([u.uDetailStyle.value, u.uDetailStrength.value]).toEqual([0, 0])
     expect(material.defines).toEqual(defines)
+  })
+})
+
+describe('shared detail source', () => {
+  it('gives the planets and the Moon the same detail code', () => {
+    const planet = planetSurfaceMaterial(sun, { map: new THREE.Texture() }).fragmentShader
+    const shader = {
+      uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.phong.uniforms),
+      vertexShader: THREE.ShaderLib.phong.vertexShader,
+      fragmentShader: THREE.ShaderLib.phong.fragmentShader,
+    }
+    moonDetailPatch(false).onBeforeCompile(
+      shader as THREE.WebGLProgramParametersWithUniforms,
+      {} as THREE.WebGLRenderer
+    )
+    // From a function's signature to the line that closes it.
+    const fn = (source: string, name: string) => {
+      const start = source.indexOf(`${name}(`)
+      expect(start).toBeGreaterThanOrEqual(0)
+      const end = source.indexOf('\n}\n', start)
+      expect(end).toBeGreaterThan(start)
+      return source.slice(start, end)
+    }
+    for (const name of ['void planetDetail', 'float planetDetailFootprint']) {
+      expect(fn(shader.fragmentShader, name)).toBe(fn(planet, name))
+    }
   })
 })
