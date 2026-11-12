@@ -75,6 +75,7 @@ import { closeZoomState, earthGroundRadius, groundAngle, useCloseZoom } from './
 import { reversedFloatDepth } from './renderers/depth-precision'
 import { shellGap, shipNearFloor } from './ship/ship-session'
 import { EARTH_SHELL_RADII } from './ship/ship-bodies'
+import { watchCamera } from './exit-watch'
 
 const CameraContext = createContext({
   handleFocus: null,
@@ -547,6 +548,10 @@ export const CameraProvider = ({ children }: { children: any }) => {
   const locationPin = useStore((s) => s.locationPin)
   const location = useStore((s) => s.location)
   const earthRadius = useStore((s) => s.earthRadius)
+
+  // The unclean-exit heartbeat's pose (exit-watch.ts): the main view's eye,
+  // the only panel with controls.
+  useEffect(() => (controls ? watchCamera(camera) : undefined), [camera, controls])
 
   // drei's OrbitControls connects to the same element.
   const connected = useThree((s) => s.events.connected) as

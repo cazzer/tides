@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
+import { watchCamera } from '../exit-watch'
 import { useStore } from '../store'
 import { mainCameraPose } from '../main-camera-session'
 import { settleShip, stepShip, type ShipState } from './flight'
@@ -48,6 +49,10 @@ export function ShipController() {
   const moon = useMemo(() => bodies.find((body) => body.key === 'moon'), [bodies])
   const bodiesAt = useRef<number | null>(null)
   const ship = useRef<ShipState | null>(null)
+  const camera = useThree((s) => s.camera)
+
+  // The unclean-exit heartbeat's pose (exit-watch.ts).
+  useEffect(() => watchCamera(camera), [camera])
 
   useEffect(
     () => () => {
