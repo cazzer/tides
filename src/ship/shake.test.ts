@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest'
 import { SEA_LEVEL_DENSITY, airDensity } from './frame-carry'
 import {
   CUSHION_SHAKE_GAIN,
+  DECK_SHAKE_GAIN,
+  deckShakeTarget,
   SHAKE_BOOST_GAIN,
   SHAKE_EPSILON,
   SHAKE_FALL_TAU,
@@ -228,5 +230,20 @@ describe('shake easing', () => {
   test('a broken intensity starts over at the target', () => {
     expect(easeShake(NaN, 0.7, FRAME)).toBe(0.7)
     expect(easeShake(Infinity, 0, FRAME)).toBe(0)
+  })
+})
+
+describe("deckShakeTarget (tides-ufyr.8.3)", () => {
+  test('buffets with the depth in a cloud deck, up to DECK_SHAKE_GAIN at its floor', () => {
+    expect(deckShakeTarget(0)).toBe(0)
+    expect(deckShakeTarget(0.5)).toBeCloseTo(0.5 * DECK_SHAKE_GAIN, 12)
+    expect(deckShakeTarget(1)).toBe(DECK_SHAKE_GAIN)
+    expect(deckShakeTarget(2)).toBe(DECK_SHAKE_GAIN)
+    expect(deckShakeTarget(-1)).toBe(0)
+    expect(deckShakeTarget(NaN)).toBe(0)
+  })
+
+  test('is off under reduced motion', () => {
+    for (const share of [0, 0.3, 1]) expect(deckShakeTarget(share, true)).toBe(0)
   })
 })

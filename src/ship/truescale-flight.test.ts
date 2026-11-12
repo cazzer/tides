@@ -229,7 +229,9 @@ describe('?truescale: HUD ranges', () => {
         }
       }
     }
-    expect(hash.digest('hex')).toBe('ffb70e4ad0b5898d2a0e306cfd40346fd28dfa668275da11851ab2a17cadbc2a')
+    // Re-pinned for tides-ufyr.8.3: the gas giants' shells moved to their
+    // cloud decks' floors (0.985 R), over a ground at the fog's base.
+    expect(hash.digest('hex')).toBe('60d4ed8b19901c380a279c667a915792b30d883fad6ff3d87e722a6474383ccb')
   }, 30_000)
 
   it('reads 0 on arrival at a moon, and names it nearest', async () => {

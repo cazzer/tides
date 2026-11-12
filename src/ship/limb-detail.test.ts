@@ -6,6 +6,7 @@ import { collisionRadius, type Body } from './flight'
 import { createShipBodies, EARTH_COLLISION_RADIUS, EARTH_GROUND_CLEARANCE, EARTH_RADIUS } from './ship-bodies'
 import { FLIGHT_UNITS_PER_AU } from '../flight-scale'
 import { SHIP_FOV } from './ship-session'
+import { DECK_PROFILES } from '../cloud-deck'
 import {
   whenIdle,
   LIMB_FACET_PX,
@@ -63,6 +64,13 @@ describe('LIMB_SEGMENTS', () => {
         // Earth's low-tier stop is over its cloud sheet now (tides-ufyr.2), as
         // close as the high tier's floor: held at the centre below.
         if (body.key === 'earth') continue
+        // A gas giant's stop is its cloud deck's floor, under its globe
+        // (tides-ufyr.8.3): no limb to facet there, and the fog covers the
+        // globe from its shell's top down (deckFade).
+        if (body.key in DECK_PROFILES) {
+          expect(cornerPx(collisionRadius(body) / body.radius), `${tier} ${body.key}`).toBeNaN()
+          continue
+        }
         expect(cornerPx(collisionRadius(body) / body.radius), `${tier} ${body.key}`).toBeLessThan(1)
       }
     }

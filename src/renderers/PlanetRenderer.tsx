@@ -32,6 +32,7 @@ import {
   bandUniforms,
   detailFlowTime,
   planetAtmosphereMaterial,
+  planetDeckMaterial,
   planetSurfaceMaterial,
   setPlanetDetail,
   sunDirection,
@@ -42,7 +43,8 @@ import ringVertex from '../shaders/ring/vertex.glsl'
 import ringFragment from '../shaders/ring/fragment.frag'
 import { useBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
-import { pickShellFaces } from './earth-shells'
+import { eyeNearBody, pickShellFaces } from './earth-shells'
+import { deckFade, type DeckProfile } from '../cloud-deck'
 
 export type { RingBand } from './planetFrame'
 
@@ -113,6 +115,9 @@ export interface PlanetSurfaceProps {
   detail?: PlanetDetail
   /** The sharper map that replaces `texture` near the ship (tides-01v.6). */
   flightTexture?: FlightTextureKey
+  /** A gas giant's cloud deck, the fog the ship dives into under its cloud
+   * tops (tides-ufyr.8.3). Needs `texture`. */
+  deck?: DeckProfile
 }
 
 /** The planet's globe: Sun-lit diffuse with the scene's ambient fill. */
@@ -156,6 +161,7 @@ function SurfaceMesh({
   limbDarkening = 1,
   ringShadow,
   detail,
+  deck,
   map,
   ringMap,
   shownMap = map,
@@ -223,7 +229,95 @@ function SurfaceMesh({
       />
       {/* Hides the glow behind it, a planet across the Sun (tides-64u.3). */}
       <GlowOccluder geometry={geometry} />
+      {deck && (
+        <PlanetDeck
+          planet={planet}
+          deck={deck}
+          map={shownMap}
+          albedo={albedo}
+          limbDarkening={limbDarkening}
+          detail={detail}
+        />
+      )}
     </>
+  )
+}
+
+const deckEye = new THREE.Vector3()
+const deckViewport = new THREE.Vector4()
+
+/**
+ * A gas giant's cloud-deck fog (tides-ufyr.8.3, cloud-deck.ts): a shell at
+ * R·top that, once the ship is inside it, lays an analytic exponential fog
+ * over the view (shaders/planet/deck.frag), easing in to the cloud top
+ * (deckFade), under which the globe culls itself and the fog covers the
+ * view alone. Out of the ship's reach, and over the shell's top, it
+ * discards every fragment (uDeckFade 0) rather than going invisible, which
+ * would keep ShipWarmup from compiling it ahead (ship-warmup.ts coldWork).
+ * Draws after the hazes (1) and rings (2), which it lies over. Samples the
+ * globe's own map (`map`), detail and lighting.
+ */
+function PlanetDeck({
+  planet,
+  deck,
+  map,
+  albedo,
+  limbDarkening,
+  detail,
+}: {
+  planet: Planet
+  deck: DeckProfile
+  map: THREE.Texture | null
+  albedo: number
+  limbDarkening: number
+  detail?: PlanetDetail
+}) {
+  const sun = useSunDirection()
+  const R = planet.radius
+  const material = useMemo(() => planetDeckMaterial(sun.uniform), [sun.uniform])
+  const geometry = useBodySphere(planet.key, R * deck.top, [96, 48])
+  useEffect(() => () => material.dispose(), [material])
+  useFrame((state) => {
+    material.uniforms.uDetailTime.value = detailFlowTime(state.clock.elapsedTime)
+  })
+  const onBeforeRender = useMemo<BodyMapDrawCheck>(
+    () =>
+      function (renderer, _scene, camera) {
+        sun.onBeforeRender.call(this)
+        pickShellFaces(this, material, camera, undefined, planet.key)
+        const u = material.uniforms
+        const distance = this.worldToLocal(camera.getWorldPosition(deckEye)).length()
+        u.uDeckFade.value = eyeNearBody(camera, planet.key) ? deckFade(distance, R, deck) : 0
+        const { fov } = camera as THREE.PerspectiveCamera
+        const height = renderer.getCurrentViewport(deckViewport).w
+        u.uPixelAngle.value = height > 0 ? (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2))) / height : 0
+      },
+    [sun, material, planet.key, R, deck]
+  )
+  useLayoutEffect(() => {
+    setUniforms(material.uniforms, { uMap: map })
+  }, [material, map])
+  useLayoutEffect(() => {
+    setUniforms(material.uniforms, {
+      uOuter: R * deck.top,
+      uRadius: R,
+      uScaleHeight: R * deck.scaleHeight,
+      uVisibility: R * deck.visibility,
+      uSunDepth: R * deck.sunDepth,
+      uAlbedo: albedo,
+      uMinnaert: Math.max(limbDarkening, MIN_MINNAERT),
+    })
+    setPlanetDetail(material, detail)
+  }, [material, R, deck, albedo, limbDarkening, detail])
+
+  return (
+    <mesh
+      geometry={geometry}
+      material={material}
+      renderOrder={3}
+      raycast={noRaycast}
+      onBeforeRender={onBeforeRender}
+    />
   )
 }
 

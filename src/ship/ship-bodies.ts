@@ -12,6 +12,7 @@ import { MOONS, MOON_KEYS, moonPosition, moonRadius } from '../moons/moons'
 import { COLLISION_MARGIN, MAX_DT, V_NORMAL } from './flight'
 import { CLOUD_FLAT_ALTITUDE, CLOUD_LAYER_TOP, TERRAIN_DISPLACEMENT, TERRAIN_MAX_GREY, TRUE_TERRAIN_DISPLACEMENT } from '../cloud-layer'
 import { RELIEF } from '../relief'
+import { DECK_PROFILES } from '../cloud-deck'
 import {
   EARTH_KM_PER_UNIT,
   EARTH_UNITS_PER_METRE,
@@ -533,24 +534,21 @@ const PLANET_HAZE_OUTER: Partial<Record<PlanetKey, number>> = {
   neptune: NEPTUNE_HAZE_OUTER,
 }
 
-/** The radii of a planet of `radius`'s drawn shells: its haze's, if it has one. */
-export function planetShellRadii(key: PlanetKey, radius: number): readonly number[] {
-  const haze = PLANET_HAZE_OUTER[key]
-  return haze === undefined ? [] : [radius * haze]
-}
-
 /**
- * The ship's stop over Jupiter, as a fraction of its radius: its haze's top
- * is at COLLISION_MARGIN (JUPITER_HAZE_OUTER 1.02), where a ship parked at
- * the default stop would sit on the shell, so it stops under it, 0.008 R
- * down. Lower and the limb sphere's facets pass 1 px in a screen's corner
- * (limb-detail.test LIMB_SEGMENTS: ~1.05 px at 1.01 R, ~0.95 px here).
- * [TUNE]
+ * The radii of a planet of `radius`'s drawn shells: a gas giant's globe at
+ * its cloud top and its cloud deck's fog shell (cloud-deck.ts, tides-
+ * ufyr.8.3), which the ship dives through, then its haze's, if it has one.
+ * The near plane keeps 0.4 of the gap to the nearest (bodiesShellGap), down
+ * to its floor where the ship crosses one.
  */
-export const JUPITER_STOP = 1.012
-
-// The hazy planets whose stop is not COLLISION_MARGIN.
-const PLANET_STOP: Partial<Record<PlanetKey, number>> = { jupiter: JUPITER_STOP }
+export function planetShellRadii(key: PlanetKey, radius: number): readonly number[] {
+  const radii: number[] = []
+  const deck = DECK_PROFILES[key]
+  if (deck) radii.push(radius, radius * deck.top)
+  const haze = PLANET_HAZE_OUTER[key]
+  if (haze !== undefined) radii.push(radius * haze)
+  return radii
+}
 
 /**
  * The ship's stop above a planet of `radius` on `tier`. Each haze is drawn
@@ -558,13 +556,42 @@ const PLANET_STOP: Partial<Record<PlanetKey, number>> = { jupiter: JUPITER_STOP 
  * near plane keeps clear of it on the way down (bodiesShellGap), so the stop
  * sits under the hazes rather than a near plane's depth beyond them
  * (tides-9m0, which held Mars at 9% R and Venus at 8.5%): COLLISION_MARGIN's
- * 1.02 R for Venus (haze to 1.05 R), Mars, Uranus and Neptune (1.04 R) and
- * Saturn (1.03 R), and JUPITER_STOP's 1.012 R under Jupiter's (1.02 R), on
- * either tier. A planet without a haze (Mercury) stops at rockyStop.
+ * 1.02 R for Venus (haze to 1.05 R) and Mars (1.04 R), on either tier. The
+ * gas giants' is their cloud deck's hard floor (cloud-deck.ts DECK_FLOOR,
+ * 0.985 R, tides-ufyr.8.3), under their visible cloud tops, on either tier.
+ * A planet without a haze (Mercury) stops at rockyStop.
  */
 export function planetCollisionRadius(key: PlanetKey, radius: number, tier: QualityTier): number {
+  const deck = DECK_PROFILES[key]
+  if (deck) return radius * deck.floor
   if (PLANET_HAZE_OUTER[key] === undefined) return radius * rockyStop(tier)
-  return radius * (PLANET_STOP[key] ?? COLLISION_MARGIN)
+  return radius * COLLISION_MARGIN
+}
+
+/**
+ * A planet's flight body on `tier`. A gas giant's ground (tides-ufyr.8.3) is
+ * its cloud deck's base, R·base, and its clearance the floor's height over
+ * it, so its gaps and the cushion (flight.ts cushionBandOver: 1.5 × that
+ * height, capped at half the way up to the globe's shell at 1.0 R) need no
+ * special case. That ground is the fog's base: nothing solid is drawn there.
+ */
+function planetBody(key: PlanetKey, radius: number, positionAt: (t: number) => Vec3, tier: QualityTier): ShipBody {
+  const body: ShipBody = {
+    key,
+    position: new THREE.Vector3(),
+    radius,
+    collisionRadius: planetCollisionRadius(key, radius, tier),
+    shellRadii: planetShellRadii(key, radius),
+    mass: BODY_MASS_KG[key],
+    positionAt,
+  }
+  const deck = DECK_PROFILES[key]
+  if (deck) {
+    const base = radius * deck.base
+    body.ground = () => base
+    body.groundClearance = radius * (deck.floor - deck.base)
+  }
+  return body
 }
 
 /**
@@ -602,15 +629,7 @@ export function createShipBodies(tier: QualityTier = qualityTier(), surfaceTiles
       mass: BODY_MASS_KG.moon,
       positionAt: positionAt.moon,
     },
-    ...PLANET_KEYS.map((key) => ({
-      key,
-      position: new THREE.Vector3(),
-      radius: flightRadius[key],
-      collisionRadius: planetCollisionRadius(key, flightRadius[key], tier),
-      shellRadii: planetShellRadii(key, flightRadius[key]),
-      mass: BODY_MASS_KG[key],
-      positionAt: positionAt[key],
-    })),
+    ...PLANET_KEYS.map((key) => planetBody(key, flightRadius[key], positionAt[key], tier)),
     ...MOON_KEYS.map((key) => {
       const radius = moonRadius(key, 'flight')
       return {

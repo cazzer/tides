@@ -24,12 +24,15 @@ import {
   EARTH_UNITS_PER_METRE,
   FINE_GROUND_CLEARANCE,
   createShipBodies,
+  updateShipBodies,
 } from './ship-bodies'
+import { DECK_PROFILES } from '../cloud-deck'
 import type { ShipInput } from './ship-input'
 import { createShipTelemetry } from './ship-telemetry'
 import { isImpact } from './impact'
 import {
   AHEAD_CONE,
+  AHEAD_MIN_SHARE,
   FAST_WINDOW_S,
   OVER_ON,
   SAFE_SHARE_FULL,
@@ -586,4 +589,59 @@ describe('approachEta over a ground speed law (tides-zmw.9.18)', () => {
       expect(Math.abs(e.eta / (arrival - e.t) - 1), String(share)).toBeLessThan(0.15)
     }
   })
+})
+
+describe("into a gas giant's cloud deck (tides-ufyr.8.3)", () => {
+  test.each(['jupiter', 'saturn', 'uranus', 'neptune'])(
+    'keeps the status and ETA finite and the gap positive under %s’s cloud top, down to its floor',
+    (key) => {
+      const all = createShipBodies()
+      updateShipBodies(all, Date.UTC(2026, 0, 1))
+      const subject = all.find((b) => b.key === key)!
+      const deck = DECK_PROFILES[key as keyof typeof DECK_PROFILES]!
+      const R = subject.radius
+      const bodies = [subject]
+      const outward = new THREE.Vector3()
+      for (const targetKey of [null, key]) {
+        const state = createShipState()
+        state.position.set(0, 0, R * 1.05).add(subject.position)
+        const telemetry = createShipTelemetry()
+        const km = [NaN]
+        resetShipApproach()
+        let under = 0
+        for (let t = 0; t < 120; t += FRAME) {
+          stepShip(state, input({ throttle: 1 }), FRAME, { bodies, targetKey }, telemetry)
+          updateApproach({
+            bodies,
+            position: state.position,
+            velocity: state.velocity,
+            speed: telemetry.speed,
+            cap: telemetry.speedCap,
+            capFloor: telemetry.well.floor,
+            boost: telemetry.boost,
+            throttle: telemetry.throttle,
+            flightAssist: true,
+            targetKey,
+            km,
+          })
+          const d = state.position.distanceTo(subject.position)
+          if (d >= R) continue
+          under++
+          expect(d).toBeGreaterThanOrEqual(R * deck.floor - 1e-9)
+          expect(telemetry.nearest.surfaceDistance).toBeGreaterThan(0)
+          // Unlocked, the subject drops once the cushion has slowed the ship.
+          if (shipApproach.key === null) continue
+          expect(shipApproach.key).toBe(key)
+          expect(['open', 'closing', 'fast', 'over', 'locked']).toContain(shipApproach.status)
+          // Infinity only while not closing (under AHEAD_MIN_SHARE of the floor).
+          outward.subVectors(state.position, subject.position).normalize()
+          if (-state.velocity.dot(outward) >= AHEAD_MIN_SHARE * V_NORMAL) {
+            expect(Number.isFinite(shipApproach.eta)).toBe(true)
+            expect(shipApproach.eta).toBeGreaterThan(0)
+          }
+        }
+        expect(under).toBeGreaterThan(0)
+      }
+    }
+  )
 })

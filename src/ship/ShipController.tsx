@@ -7,7 +7,8 @@ import { mainCameraPose } from '../main-camera-session'
 import { settleShip, stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
-import { createShipBodies, shipBodyVelocity, updateShipBodies, updateShipBody } from './ship-bodies'
+import { createShipBodies, shipBodyVelocity, updateShipBodies, updateShipBody, type ShipBody } from './ship-bodies'
+import { DECK_PROFILES, deckShare } from '../cloud-deck'
 import {
   NEAR_MIN,
   SHIP_SETTLE_PRIORITY,
@@ -37,6 +38,20 @@ const BODY_REFRESH_MS = 250
 // last refresh: the air's speed takes it out (fillAirUncarried).
 const earthVelocity = new THREE.Vector3()
 const earthVelocityNow = new THREE.Vector3()
+
+/**
+ * How deep the ship at `position` is in the cloud deck of any of `bodies`
+ * (cloud-deck.ts deckShare, tides-ufyr.8.3): 0 outside them all. The decks
+ * never overlap, so it is the nearest giant's.
+ */
+function deckDepth(position: THREE.Vector3, bodies: readonly ShipBody[]): number {
+  let share = 0
+  for (const body of bodies) {
+    const profile = DECK_PROFILES[body.key as keyof typeof DECK_PROFILES]
+    if (profile) share = Math.max(share, deckShare(position.distanceTo(body.position), body.radius, profile))
+  }
+  return share
+}
 
 /**
  * Flies the ship view's camera: each frame, steps the flight model with the
@@ -125,6 +140,7 @@ export function ShipController() {
       earthVelocityNow.copy(earthVelocity).multiplyScalar(Number.isFinite(timeScale) ? timeScale : 0)
       fillAirUncarried(shipTelemetry, state, earth, earthVelocityNow, spinRate)
     }
+    shipTelemetry.deck = deckDepth(state.position, bodies)
     if (earth) fillEarthEye(shipTelemetry, state.position, earth)
     else {
       shipTelemetry.earthEye.altitude = Infinity

@@ -92,6 +92,7 @@ import {
   VENUS_HAZE_OUTER,
 } from '../renderers/planets/haze-shells'
 import { shipNear } from './ship-session'
+import { DECK_PROFILES } from '../cloud-deck'
 
 const FRAME = 1 / 60
 const Y = new THREE.Vector3(0, 1, 0)
@@ -3030,4 +3031,39 @@ describe('boosted guard on the held ground (tides-5lj)', () => {
       expect(h.radius).toBeNaN()
     })
   })
+})
+
+describe("the gas giants' cloud decks (tides-ufyr.8.3)", () => {
+  test.each(['jupiter', 'saturn', 'uranus', 'neptune'])(
+    'a full-throttle dive into %s never ends a frame under its floor, its gaps and caps finite and positive',
+    (key) => {
+      const bodies = flightBodies()
+      const body = bodies.find((b) => b.key === key)!
+      const deck = DECK_PROFILES[key as keyof typeof DECK_PROFILES]!
+      const R = body.radius
+      const runs = [[true, FRAME], [true, MAX_DT], [false, FRAME], [false, 1 / 20]] as const
+      for (const [flightAssist, dt] of runs) {
+        const telemetry = createShipTelemetry()
+        const start = body.position.clone().add(new THREE.Vector3(0.3, 1, -0.2).normalize().multiplyScalar(R * 1.1))
+        const state = shipAt(start, body.position)
+        let deepest = Infinity
+        for (let t = 0; t < 90; t += dt) {
+          stepShip(state, input({ throttle: 1, flightAssist }), dt, env(bodies), telemetry)
+          const d = state.position.distanceTo(body.position)
+          deepest = Math.min(deepest, d)
+          expect(d).toBeGreaterThanOrEqual(R * deck.floor - 1e-9)
+          // A moon can be nearer up at the start.
+          if (d < R * deck.top) expect(telemetry.nearest.key).toBe(key)
+          expect(telemetry.nearest.surfaceDistance).toBeGreaterThan(0)
+          expect(Number.isFinite(telemetry.nearest.surfaceDistance)).toBe(true)
+          expect(telemetry.speedCap).toBeGreaterThan(0)
+          expect(Number.isFinite(telemetry.speedCap)).toBe(true)
+          expect(Number.isFinite(state.velocity.length())).toBe(true)
+        }
+        // It got below the visible cloud top, into the cushion over the floor.
+        expect(deepest, `${flightAssist} ${dt}`).toBeLessThan(R)
+        expect(deepest).toBeLessThan(R * deck.rest)
+      }
+    }
+  )
 })

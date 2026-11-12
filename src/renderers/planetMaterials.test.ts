@@ -10,6 +10,7 @@ import {
   bandFlowRate,
   detailFlowTime,
   planetAtmosphereMaterial,
+  planetDeckMaterial,
   planetSurfaceMaterial,
   setPlanetDetail,
 } from './planetMaterials'
@@ -253,5 +254,52 @@ describe('planet haze material (tides-ufyr.4)', () => {
     expect(material.uniforms.uSun).toBe(sun)
     expect(material.blending).toBe(THREE.AdditiveBlending)
     expect(material.defines.HAZE_COVER).toBeUndefined()
+  })
+})
+
+describe('planet cloud-deck material (tides-ufyr.8.3)', () => {
+  it('blends over the scene from inside in one pass, writing no depth, its double-sided program warmed', () => {
+    const material = planetDeckMaterial(sun)
+    expect(material.transparent).toBe(true)
+    expect(material.depthWrite).toBe(false)
+    expect(material.blending).toBe(THREE.NormalBlending)
+    expect(material.forceSinglePass).toBe(true)
+    expect(material.userData.warmSides).toEqual([THREE.DoubleSide])
+    // pickShellFaces reads the shell's radius from it, and it starts discarding.
+    expect(material.uniforms.uOuter).toBeDefined()
+    expect(material.uniforms.uDeckFade.value).toBe(0)
+    expect(material.uniforms.uSunDir).toBe(sun)
+  })
+
+  it('gives every giant one program per tier: the same shaders and defines', () => {
+    for (const lowQuality of [false, true]) {
+      const [a, b] = [planetDeckMaterial(sun, { lowQuality }), planetDeckMaterial({ value: new THREE.Vector3() }, { lowQuality })]
+      expect(a.vertexShader).toBe(b.vertexShader)
+      expect(a.fragmentShader).toBe(b.fragmentShader)
+      expect(Object.entries(a.defines)).toEqual(Object.entries(b.defines))
+    }
+  })
+
+  it("takes the globes' band octaves and flow on the high tier only", () => {
+    const high = planetDeckMaterial(sun, { lowQuality: false })
+    const globe = planetSurfaceMaterial(sun, { map: new THREE.Texture(), flowingBands: true, lowQuality: false })
+    const globeDefines = { ...globe.defines }
+    delete globeDefines.USE_PLANET_MAP
+    expect(high.defines).toEqual(globeDefines)
+    const low = planetDeckMaterial(sun, { lowQuality: true })
+    expect(low.defines.PLANET_DETAIL_FLOW).toBeUndefined()
+    expect(low.defines.PLANET_BAND_OCTAVES).toBe(2)
+  })
+
+  it('compiles the column without the hazes clamp, and no derivatives', () => {
+    const shader = planetDeckMaterial(sun).fragmentShader
+    expect(shader).toContain('float deckColumn(float r, float mu, float R, float H)')
+    expect(shader).toContain('bool shellBackFace(')
+    expect(shader).not.toContain('columnAhead(')
+    // Its footprint is uPixelAngle's: main() takes no derivatives, nor
+    // calls the detail's footprint helper, which does.
+    const main = shader.slice(shader.indexOf('void main()'))
+    expect(main).not.toMatch(/dFd[xy]|fwidth|planetDetailFootprint/)
+    expect(main).toContain('uPixelAngle')
   })
 })
