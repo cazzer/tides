@@ -30,11 +30,16 @@ export type DemoFrame = 'sun' | 'stars' | 'earth'
  *   against the stars as the focus moves.
  * - 'earth': `azimuth` is the geographic east longitude and `elevation` the
  *   latitude of the point under the eye, which turns with Earth as shown.
- * A pose in 'stars' or 'earth' is followed for as long as the step runs.
+ * A pose in 'stars' or 'earth' is followed for as long as the step runs;
+ * one in 'sun' only if it says so (`followed`).
  */
 export interface DemoPose {
   focus: DemoFocus
   frame?: DemoFrame
+  /** In the 'sun' frame, followed for as long as the step runs, so the Sun
+   * keeps its place on screen as the focus goes round: the day–night line
+   * holds still and the focus's own turn against it is what moves. */
+  followed?: boolean
   azimuth: number
   elevation: number
   distance: number
@@ -138,6 +143,10 @@ export interface DemoAids {
   /** Main view: the month names round Earth's orbit, hidden in a demo
    * otherwise (the 3D clock always is: the caption's is the only one). */
   monthLabels?: boolean
+  /** Main view: the focused planet's moon system spread all the way toward
+   * true spacing (expansionTarget's `spread`) at any zoom, the cap still
+   * holding it clear of its neighbours (tides-ufyr.7). */
+  moonSystems?: boolean
 }
 
 /**

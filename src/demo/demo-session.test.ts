@@ -30,6 +30,7 @@ import {
   type DemoSaved,
   type DemoSessionState,
 } from './demo-session'
+import { findDemo } from './demos'
 
 type View = DemoSessionState & { jumpDate: Date | null }
 
@@ -292,6 +293,47 @@ describe('exitDemoPatch', () => {
       const s = { ...before, ...enterDemoPatch(before, demo, 10_000)! }
       expect(exitDemoPatch(s, 70_000)!.timestamp).toBe(before.timestamp)
     }
+  })
+})
+
+describe('the planets tour', () => {
+  const planets = findDemo('planets')!
+  // Nothing on that the tour relies on: no planets, no orbits or labels.
+  const bare = () =>
+    view({
+      cameraFocus: 'earth',
+      showPlanets: false,
+      systemAids: { ...DEFAULT_SYSTEM_AIDS, orbits: false, labels: false },
+      timeScale: 1,
+    })
+
+  it('turns the planets, their orbits and labels on and goes to Mercury, sped up', () => {
+    const patch = enterDemoPatch(bare(), planets)!
+    expect(patch).toMatchObject({
+      demo: { id: 'planets', step: 0 },
+      showPlanets: true,
+      cameraFocus: 'mercury',
+      layout: 'single',
+      mainPanel: 'main',
+      timestamp: Date.parse(planets.steps[0].date),
+      timeScale: planets.steps[0].timeScale,
+    })
+    expect(patch.systemAids).toMatchObject({ orbits: true, labels: true })
+  })
+
+  it('puts the planets, aids, focus and clock back on exit from Neptune', () => {
+    const before = bare()
+    let s: View = { ...before, ...enterDemoPatch(before, planets, 10_000)! }
+    for (let i = 1; i < planets.steps.length; i++) s = { ...s, ...goToDemoStepPatch(s, planets, i)! }
+    expect(s.cameraFocus).toBe('neptune')
+    const after = { ...s, ...exitDemoPatch(s, 70_000)! }
+    expect(after.showPlanets).toBe(false)
+    expect(after.systemAids).toEqual(before.systemAids)
+    expect(after.cameraFocus).toBe('earth')
+    expect(after.timeScale).toBe(1)
+    // Real time, so the minute the tour took is added.
+    expect(after.timestamp).toBe(before.timestamp! + 60_000)
+    expect({ ...saved(after), timestamp: null }).toEqual({ ...saved(before), timestamp: null })
   })
 })
 

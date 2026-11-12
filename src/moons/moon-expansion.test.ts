@@ -65,6 +65,20 @@ describe('expansionTarget', () => {
     }
     expect(expansionTarget('triton', 1e4, 'neptune')).toBe(1)
   })
+
+  it('spread (a demo’s aids.moonSystems) holds the focused parent all the way at any zoom, and no other', () => {
+    for (const parent of MOON_PARENTS) {
+      for (const z of [1, zf(parent), zf(parent) * EXPANSION_FAR_RATIO, 1e4, Infinity]) {
+        expect(expansionTarget(parent, z, parent, EARTH, true)).toBe(1)
+        for (const other of MOON_PARENTS) {
+          if (other !== parent) expect(expansionTarget(parent, z, other, EARTH, true)).toBe(0)
+        }
+      }
+    }
+    for (const focus of ['earth', 'sun', 'mercury'] as const) {
+      expect(expansionTarget(focus, zf('jupiter'), 'jupiter', EARTH, true)).toBe(0)
+    }
+  })
 })
 
 describe('stepExpansion', () => {
@@ -182,6 +196,32 @@ describe('stepMoonExpansions', () => {
     expect(moonExpansion('jupiter')).toBeLessThan(SYSTEM_EXPANSION_MAX)
     run('earth', zf('jupiter'), 5)
     expect(moonExpansion('jupiter')).toBe(0)
+  })
+
+  it('spreads the focused system however far out the eye is, the cap still binding', () => {
+    for (let i = 0; i < 5 * 60; i++) stepMoonExpansions('jupiter', 1e4, T, 1 / 60, false, EARTH, { spread: true })
+    expect(moonExpansion('jupiter')).toBe(SYSTEM_EXPANSION_MAX)
+    for (const parent of MOON_PARENTS) if (parent !== 'jupiter') expect(moonExpansion(parent), parent).toBe(0)
+    // 2000 May: Jupiter and Saturn at conjunction, Jupiter's cap below the max.
+    const t = Date.UTC(2000, 4, 28)
+    resetMoonExpansions()
+    for (let i = 0; i < 5 * 60; i++) stepMoonExpansions('jupiter', 1e4, t, 1 / 60, false, EARTH, { spread: true })
+    expect(moonExpansion('jupiter')).toBe(expansionCap('jupiter', t))
+    expect(moonExpansion('jupiter')).toBeLessThan(SYSTEM_EXPANSION_MAX)
+  })
+
+  it('grows no system while growth is held, but lets the one left shrink', () => {
+    run('jupiter', zf('jupiter'), 5)
+    expect(moonExpansion('jupiter')).toBe(SYSTEM_EXPANSION_MAX)
+    // Flying from Jupiter to Saturn: Jupiter's eases in, Saturn's waits.
+    for (let i = 0; i < 3 * 60; i++) {
+      stepMoonExpansions('saturn', zf('saturn'), T, 1 / 60, false, EARTH, { spread: true, holdGrowth: true })
+      expect(moonExpansion('saturn')).toBe(0)
+    }
+    expect(moonExpansion('jupiter')).toBeLessThan(0.01)
+    // Landed: Saturn's grows.
+    for (let i = 0; i < 5 * 60; i++) stepMoonExpansions('saturn', 1e4, T, 1 / 60, false, EARTH, { spread: true })
+    expect(moonExpansion('saturn')).toBe(Math.min(SYSTEM_EXPANSION_MAX, expansionCap('saturn', T)))
   })
 
   it('holds a moon’s system expanded however far out the eye is', () => {
