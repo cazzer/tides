@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { PLANETS, sceneRadius } from '../planets'
 import {
   MAIN_ZOOM,
@@ -8,7 +8,7 @@ import {
   targetUnitsPerPixel,
   zoomDistance,
 } from '../main-view'
-import { MOON_KEYS, moonRadius, moonsOf } from '../moons/moons'
+import { MOON_KEYS, moonOrbitRadius, moonRadius, moonsOf, setMoonExpansion } from '../moons/moons'
 import type { CameraFocus } from '../store'
 import {
   LABEL_KEYS,
@@ -160,6 +160,31 @@ describe('labelClearance', () => {
     expect(labelClearance('triton')).toBe(Infinity)
     // Enceladus is between Mimas and Tethys, much tighter than Titan.
     expect(labelClearance('enceladus')).toBeLessThan(labelClearance('titan') / 3)
+  })
+
+  describe('with a system expanded (tides-ufyr.6.3)', () => {
+    afterEach(() => setMoonExpansion('jupiter', 0))
+
+    it('reads the moons’ live orbits, so Io’s clearance grows with the expansion', () => {
+      const compact = labelClearance('io')
+      expect(compact).toBe(moonOrbitRadius('europa', 'system') - moonOrbitRadius('io', 'system'))
+      let previous = compact
+      for (const e of [0.15, 0.3, 0.45, 0.6]) {
+        setMoonExpansion('jupiter', e)
+        const clearance = labelClearance('io')
+        expect(clearance).toBeCloseTo(moonOrbitRadius('europa', 'system') - moonOrbitRadius('io', 'system'), 12)
+        expect(clearance).toBeGreaterThan(previous)
+        previous = clearance
+      }
+      // Ganymede's nearest is Europa or Callisto, whichever is closer.
+      expect(labelClearance('ganymede')).toBe(
+        Math.min(
+          moonOrbitRadius('ganymede', 'system') - moonOrbitRadius('europa', 'system'),
+          moonOrbitRadius('callisto', 'system') - moonOrbitRadius('ganymede', 'system')
+        )
+      )
+      expect(labelClearance('triton')).toBe(Infinity)
+    })
   })
 })
 

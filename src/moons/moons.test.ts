@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { JupiterMoons, RotationAxis, Rotation_EQJ_ECT, RotateVector, Vector } from 'astronomy-engine'
 import { PLANETS, PLANET_KEYS, planetPosition, sceneRadius } from '../planets'
@@ -15,7 +15,9 @@ import {
   MOON_RADIUS_MIN,
   MOON_ORBIT_GAP,
   MOON_SIZE_TRUENESS,
+  SYSTEM_EXPANSION_MAX,
   clampedSceneRadius,
+  expansionForExtent,
   compactMoonRadiiAt,
   moonOffsetInto,
   moonOrbitPath,
@@ -27,7 +29,9 @@ import {
   moonRadius,
   moonSystemExtent,
   moonTrueOffsetKm,
+  moonExpansion,
   moonsOf,
+  setMoonExpansion,
   type MoonKey,
   type MoonParent,
 } from './moons'
@@ -246,6 +250,96 @@ describe('orbit radius (log map)', () => {
         expect(offset(key, t).length()).toBeCloseTo(moonOrbitRadius(key, 'system'), 9)
       }
     }
+  })
+})
+
+describe('system expansion (tides-ufyr.6.3)', () => {
+  afterEach(() => {
+    for (const parent of MOON_PARENTS) setMoonExpansion(parent, 0)
+  })
+  const STEPS = [0, 0.25, 0.5, 0.75, 1].map((share) => share * SYSTEM_EXPANSION_MAX)
+  const radiusOf = (key: MoonKey) => (MOONS[key].aKm / parentKm(MOONS[key].parent)) * PLANETS[MOONS[key].parent].radius
+
+  it('starts at, and comes back to, the compact map bit for bit', () => {
+    for (const parent of MOON_PARENTS) expect(moonExpansion(parent)).toBe(0)
+    setMoonExpansion('saturn', 0.37)
+    setMoonExpansion('saturn', 0)
+    for (const key of MOON_KEYS) expect(moonOrbitRadius(key, 'system'), key).toBe(SYSTEM_ORBIT_RADII[key])
+  })
+
+  it('moves each orbit that share of the way toward true spacing in log space', () => {
+    for (const parent of MOON_PARENTS) setMoonExpansion(parent, SYSTEM_EXPANSION_MAX)
+    for (const key of MOON_KEYS) {
+      expect(moonOrbitRadius(key, 'system'), key).toBeCloseTo(
+        towardTrue(SYSTEM_ORBIT_RADII[key], radiusOf(key), SYSTEM_EXPANSION_MAX),
+        9
+      )
+    }
+    const inRadii = (key: MoonKey) => moonOrbitRadius(key, 'system') / PLANETS[MOONS[key].parent].radius
+    expect(inRadii('io')).toBeCloseTo(3.3, 1)
+    expect(inRadii('callisto')).toBeCloseTo(11, 0)
+    expect(inRadii('titan')).toBeCloseTo(10.8, 1)
+    expect(inRadii('iapetus')).toBeCloseTo(22, 0)
+    expect(inRadii('triton')).toBeCloseTo(5.55, 1)
+  })
+
+  it.each(STEPS)('keeps order, clearance and gaps at e = %s', (e) => {
+    for (const parent of MOON_PARENTS) {
+      setMoonExpansion(parent, e)
+      const planet = PLANETS[parent]
+      const keys = moonsOf(parent)
+      expect(moonOrbitRadius(keys[0], 'system') - moonRadius(keys[0], 'system')).toBeGreaterThan(
+        planet.radius * (planet.rings?.outer ?? 1) + MOON_ORBIT_GAP[parent]
+      )
+      for (let i = 1; i < keys.length; i++) {
+        const gap =
+          moonOrbitRadius(keys[i], 'system') -
+          moonOrbitRadius(keys[i - 1], 'system') -
+          moonRadius(keys[i], 'system') -
+          moonRadius(keys[i - 1], 'system')
+        expect(gap, `${keys[i - 1]}–${keys[i]}`).toBeGreaterThan(0.2)
+      }
+      // The outermost moon is the system's extent (expansionForExtent's closed form).
+      const last = keys[keys.length - 1]
+      const extent = Math.max(...keys.map((key) => moonOrbitRadius(key, 'system') + moonRadius(key, 'system')))
+      expect(moonSystemExtent(parent, 'system')).toBe(extent)
+      expect(extent).toBe(moonOrbitRadius(last, 'system') + moonRadius(last, 'system'))
+      for (const t of DATES) {
+        for (const key of keys) expect(offset(key, t).length()).toBeCloseTo(moonOrbitRadius(key, 'system'), 9)
+      }
+    }
+  })
+
+  it('grows every system’s extent with e, and expansionForExtent inverts it', () => {
+    for (const parent of MOON_PARENTS) {
+      let previous = -Infinity
+      for (const e of STEPS) {
+        setMoonExpansion(parent, e)
+        const extent = moonSystemExtent(parent, 'system')
+        expect(extent, `${parent} at ${e}`).toBeGreaterThan(previous)
+        expect(expansionForExtent(parent, extent), `${parent} at ${e}`).toBeCloseTo(e, 9)
+        previous = extent
+      }
+      expect(expansionForExtent(parent, previous * 2)).toBe(SYSTEM_EXPANSION_MAX)
+      setMoonExpansion(parent, 0)
+      expect(expansionForExtent(parent, moonSystemExtent(parent, 'system') - 0.01)).toBe(0)
+    }
+  })
+
+  it('leaves the flight scale alone', () => {
+    const flight = MOON_KEYS.map((key) => moonOrbitRadius(key, 'flight'))
+    const flightExtent = MOON_PARENTS.map((parent) => moonSystemExtent(parent, 'flight'))
+    for (const parent of MOON_PARENTS) setMoonExpansion(parent, SYSTEM_EXPANSION_MAX)
+    expect(MOON_KEYS.map((key) => moonOrbitRadius(key, 'flight'))).toEqual(flight)
+    expect(MOON_PARENTS.map((parent) => moonSystemExtent(parent, 'flight'))).toEqual(flightExtent)
+  })
+
+  it('does nothing, and says so, for an unchanged expansion', () => {
+    expect(setMoonExpansion('jupiter', 0)).toBe(false)
+    expect(setMoonExpansion('jupiter', 0.3)).toBe(true)
+    const radii = moonsOf('jupiter').map((key) => moonOrbitRadius(key, 'system'))
+    expect(setMoonExpansion('jupiter', 0.3)).toBe(false)
+    expect(moonsOf('jupiter').map((key) => moonOrbitRadius(key, 'system'))).toEqual(radii)
   })
 })
 

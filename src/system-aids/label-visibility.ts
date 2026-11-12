@@ -155,7 +155,7 @@ function gaps(radii: readonly number[], inner?: number): number[] {
 // The Sun and Earth have no clearance limit: the Sun's name sits above it,
 // clear of every orbit, and Earth is the app's subject, named at every zoom
 // (Venus' name gives way to it instead).
-const CLEARANCE: Readonly<Record<LabelKey, number>> = (() => {
+const CLEARANCE: Readonly<Record<Exclude<LabelKey, MoonKey>, number>> = (() => {
   const planetOrder: readonly (PlanetKey | 'earth')[] = [
     'mercury',
     'venus',
@@ -164,7 +164,7 @@ const CLEARANCE: Readonly<Record<LabelKey, number>> = (() => {
   ]
   const radii = planetOrder.map((key) => (key === 'earth' ? EARTH_ORBIT_RADIUS : planetOrbit(key)))
   const planetGaps = gaps(radii, SUN_RADIUS)
-  const table: Partial<Record<LabelKey, number>> = {
+  const table: Partial<Record<Exclude<LabelKey, MoonKey>, number>> = {
     sun: Infinity,
     earth: Infinity,
     moon: MOON_ORBIT - EARTH_RADIUS,
@@ -172,24 +172,34 @@ const CLEARANCE: Readonly<Record<LabelKey, number>> = (() => {
   planetOrder.forEach((key, i) => {
     if (key !== 'earth') table[key] = planetGaps[i]
   })
-  for (const parent of ['mars', 'jupiter', 'saturn', 'uranus', 'neptune'] as const) {
-    const keys = moonsOf(parent)
-    const moonGaps = gaps(keys.map((key) => moonOrbitRadius(key, 'system')))
-    keys.forEach((key, i) => {
-      table[key] = moonGaps[i]
-    })
-  }
-  return table as Record<LabelKey, number>
+  return table as Record<Exclude<LabelKey, MoonKey>, number>
 })()
+
+// Each moon's index around its parent, for moonClearance.
+const MOON_INDEX: Readonly<Record<MoonKey, number>> = Object.fromEntries(
+  MOON_KEYS.map((key) => [key, moonsOf(MOONS[key].parent).indexOf(key)])
+) as Record<MoonKey, number>
+
+// As gaps, for a moon at its live system orbit (which grows with its
+// system's expansion, moons.ts): no inner bound, so the innermost counts
+// only its outer neighbour.
+function moonClearance(key: MoonKey): number {
+  const keys = moonsOf(MOONS[key].parent)
+  const i = MOON_INDEX[key]
+  const r = moonOrbitRadius(key, 'system')
+  const below = i > 0 ? r - moonOrbitRadius(keys[i - 1], 'system') : Infinity
+  const above = i < keys.length - 1 ? moonOrbitRadius(keys[i + 1], 'system') - r : Infinity
+  return Math.min(below, above)
+}
 
 /**
  * How far the body's orbit is from its neighbours', scene units: the
  * smallest gap to the next orbit in or out around the same parent (or the
  * Sun's surface for Mercury, Earth's for the Moon). Infinity where nothing
- * crowds it.
+ * crowds it. A planet's moons' is live, as their system expands.
  */
 export function labelClearance(key: LabelKey): number {
-  return CLEARANCE[key]
+  return isMoonKey(key) ? moonClearance(key) : CLEARANCE[key]
 }
 
 // How far out a system's outermost body reaches, scene units, for the

@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { moonOffset } from '../ephemeris'
-import { MOON_PARENTS, moonOffsetInto, moonsOf } from '../moons/moons'
+import { MOON_PARENTS, moonOffsetInto, moonOrbitRadius, moonsOf, setMoonExpansion } from '../moons/moons'
 import {
   GUIDE_PARENTS,
   MOON_ORBIT_SEGMENTS,
@@ -9,11 +9,13 @@ import {
   ORBIT_GUIDE_REFRESH_DAYS,
   ORBIT_GUIDE_SHOW_PX,
   earthMoonOrbitPath,
+  guideExpansion,
   guideExtent,
   guideLoopCount,
   loopIndices,
   orbitGuideFade,
   orbitGuideIsStale,
+  orbitGuideNeedsRebuild,
   writeGuidePaths,
   type GuideParent,
 } from './orbit-guides'
@@ -167,5 +169,44 @@ describe('orbitGuideFade', () => {
       expect(f).toBeGreaterThanOrEqual(last)
       last = f
     }
+  })
+})
+
+describe('orbitGuideNeedsRebuild (tides-ufyr.6.3)', () => {
+  afterEach(() => {
+    for (const parent of MOON_PARENTS) setMoonExpansion(parent, 0)
+  })
+  const t = DATES[1]
+
+  it('rebuilds a system-view set once its expansion differs from the one it was built at', () => {
+    const built = guideExpansion('jupiter', 'system')
+    expect(built).toBe(0)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, built, t)).toBe(false)
+    setMoonExpansion('jupiter', 0.3)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, built, t)).toBe(true)
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, guideExpansion('jupiter', 'system'), t)).toBe(false)
+    // Still on the clock's refresh too.
+    const stale = t + 2 * ORBIT_GUIDE_REFRESH_DAYS.jupiter * MS_PER_DAY
+    expect(orbitGuideNeedsRebuild('jupiter', 'system', t, guideExpansion('jupiter', 'system'), stale)).toBe(true)
+  })
+
+  it('ignores the expansion in flight, and for Earth', () => {
+    setMoonExpansion('jupiter', 0.3)
+    expect(guideExpansion('jupiter', 'flight')).toBe(0)
+    expect(orbitGuideNeedsRebuild('jupiter', 'flight', t, 0, t)).toBe(false)
+    expect(orbitGuideNeedsRebuild('earth', 'system', t, 0, t)).toBe(false)
+  })
+
+  it('builds the loops at the expanded radii', () => {
+    setMoonExpansion('jupiter', 0.6)
+    const positions = new Float32Array(guideLoopCount('jupiter') * SEG * 3)
+    writeGuidePaths('jupiter', t, SEG, 'system', positions)
+    moonsOf('jupiter').forEach((key, i) => {
+      const at = i * SEG * 3
+      expect(Math.hypot(positions[at], positions[at + 1], positions[at + 2]), key).toBeCloseTo(
+        moonOrbitRadius(key, 'system'),
+        4
+      )
+    })
   })
 })
