@@ -1,7 +1,7 @@
 // Live lightning (tides-ufyr.13): with Real weather, the GOES-East and
-// -West Geostationary Lightning Mappers' flashes, each a brief additive
-// glow at the cloud deck's height, flickering with its real timing
-// (../lightning.ts, shaders/lightning). One instanced draw per View; the
+// -West Geostationary Lightning Mappers' flashes, each a brief patch of lit
+// cloud lying on the cloud deck (tides-ufyr.13.1), flickering with its real
+// timing (../lightning.ts, ./lightningMaterial.ts). One instanced draw per View; the
 // flashes come from ./lightningFeed.ts, shared by every View. Each frame
 // starts the flashes whose time the clock just crossed in the ring of slots
 // (./lightningInstances.ts), which the vertex shader plays out.
@@ -23,7 +23,7 @@ import {
   type FlashBatch,
   type LightningTick,
 } from '../lightning'
-import { CLOUD_FLAT_ALTITUDE, cloudDeckAt, EARTH_RADIUS_KM } from '../cloud-layer'
+import { CLOUD_FLAT_ALTITUDE, cloudDeckAt } from '../cloud-layer'
 import { isLowQuality, touchDevice } from '../quality'
 import { SURFACE_TILES_ON } from '../surface'
 import { fineGroundDepth } from '../ship/ship-session'
@@ -31,18 +31,13 @@ import { reversedFloatDepth } from './depth-precision'
 import { LIGHTNING_RENDER_ORDER } from './earth-shells'
 import { lightningFeed } from './lightningFeed'
 import { createLightningInstances } from './lightningInstances'
-import lightningVertex from '../shaders/lightning/vertex.glsl'
-import lightningFragment from '../shaders/lightning/fragment.frag'
+import { createLightningMaterial } from './lightningMaterial'
 
 /** The cloud deck's flat sheet on the low tier, as the cloud layer's (EarthRenderer textureSet.low). */
 const LOW_QUALITY = isLowQuality()
 const CAPS = lightningCaps(LOW_QUALITY || touchDevice())
 /** [TUNE] A flash's height: where an 8 km cloud top is drawn. */
 const FLASH_KM = 8
-/** [TUNE] The glow's gain. */
-const LIGHTNING_GAIN = 1.5
-/** The smallest a flash's glow is drawn, CSS px. */
-const MIN_FLASH_PX = 2.5
 /** Downloads start only while some View shows Earth at least this big (radius, CSS px). */
 const MIN_EARTH_PX = 40
 /** ... and has within this long (wall ms). */
@@ -89,33 +84,20 @@ interface LightningRendererProps {
   radius: number
   /** The clouds are hidden (a demo aid): no lightning, nothing fetched. */
   hidden: boolean
+  /** The cloud layer's map, whether it is one channel (its grey in R), and
+   * its drift: the flashes dim where it shows clear sky or thick cloud. */
+  cloudMap: THREE.IUniform<THREE.Texture | null>
+  cloudMapRed: THREE.IUniform<number>
+  cloudShift: THREE.IUniform<number>
 }
 
-export default function LightningRenderer({ radius, hidden }: LightningRendererProps) {
+export default function LightningRenderer({ radius, hidden, cloudMap, cloudMapRed, cloudShift }: LightningRendererProps) {
   const real = useStore((s) => s.weatherSource) === 'real'
   const mesh = useRef<THREE.Mesh>(null)
   const instances = useMemo(() => createLightningInstances(CAPS.capacity), [])
   const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        vertexShader: lightningVertex,
-        fragmentShader: lightningFragment,
-        uniforms: {
-          uTime: { value: 0 },
-          uRadius: { value: radius },
-          uKmToScene: { value: radius / EARTH_RADIUS_KM },
-          uSun: { value: new THREE.Vector3(1, 0, 0) },
-          uMinPx: { value: MIN_FLASH_PX },
-          uViewportH: { value: 1 },
-          uGain: { value: LIGHTNING_GAIN },
-        },
-        transparent: true,
-        depthTest: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        toneMapped: false,
-      }),
-    [radius]
+    () => createLightningMaterial(radius, { map: cloudMap, red: cloudMapRed, shift: cloudShift }),
+    [radius, cloudMap, cloudMapRed, cloudShift]
   )
   useEffect(() => () => material.dispose(), [material])
   useEffect(() => () => instances.dispose(), [instances])
@@ -211,8 +193,11 @@ export default function LightningRenderer({ radius, hidden }: LightningRendererP
       const deck = cloudDeckAt(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(renderer)))
       u.uRadius.value = radius + deck.clearance + deck.unitsPerKm * FLASH_KM
     }
-    // The viewport is in device pixels; the minimum sizes are CSS px.
-    const viewportH = renderer.getCurrentViewport(viewport).w / renderer.getPixelRatio()
+    // The viewport is in device pixels; the size limits are CSS px.
+    renderer.getCurrentViewport(viewport)
+    const pixelRatio = renderer.getPixelRatio()
+    const viewportH = viewport.w / pixelRatio
+    u.uViewportW.value = viewport.z / pixelRatio
     u.uViewportH.value = viewportH
     if (mesh.current && earthPixels(mesh.current, radius, camera, viewportH) >= MIN_EARTH_PX) {
       earthSeenAt = performance.now()

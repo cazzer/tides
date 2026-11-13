@@ -71,6 +71,7 @@ import earthHorizonTrueUrl from '../assets/earth-horizon-1k-true.bin?url'
 import { HORIZON_TRUE_CURVE_RELIEF, horizonCurveRelief } from '../earth-horizon'
 import { RELIEF } from '../relief'
 import { EarthGlow } from './glow/EarthGlow'
+import LightningRenderer from './LightningRenderer'
 
 // The horizon map whose curvature is exact nearer the page's relief
 // (../earth-horizon.ts, tides-zmw.21): only that one is fetched.
@@ -495,6 +496,16 @@ export default function EarthRenderer({
         geometry={cloudSphere}
         raycast={meshBounds}
         material={clouds.material}
+      />
+
+      {/* Lightning in the cloud (tides-ufyr.13), reading its map. Mounted
+          whatever the weather, so the compile gate links it. */}
+      <LightningRenderer
+        radius={diameter}
+        hidden={hideClouds}
+        cloudMap={clouds.uniforms.uCloudMap}
+        cloudMapRed={clouds.uniforms.uCloudMapRed}
+        cloudShift={clouds.uniforms.uCloudShift}
       />
 
       {/* Atmosphere glow */}
