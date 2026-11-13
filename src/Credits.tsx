@@ -23,9 +23,10 @@ export const NSIDC_SEA_ICE_INDEX_URL = 'https://doi.org/10.7265/a98x-0f50'
 export const GLM_URL = 'https://registry.opendata.aws/noaa-goes/'
 // The simulated lightning's flash rates (tides-ufyr.14): NASA GHRC's LIS Very
 // High Resolution Monthly Climatology, read from its GIBS layer
-// (LIS_Very_High_Resolution_Lightning_Monthly_Climatology_LIS_Mean_Flash_Rate).
-// GIBS's page until tides-ufyr.14.1 confirms the dataset's own citation (DOI).
-export const LIS_CLIMATOLOGY_URL = 'https://earthdata.nasa.gov/gibs'
+// (LIS_Very_High_Resolution_Lightning_Monthly_Climatology_LIS_Mean_Flash_Rate):
+// the dataset's DOI (Albrecht et al. 2016, VHRMC; CMR C1979883359-GHRC_DAAC),
+// as scripts/build-lightning-climatology.py cites it (tides-ufyr.14.1).
+export const LIS_CLIMATOLOGY_URL = 'https://doi.org/10.5067/LIS/LIS/DATA302'
 // The data citation NSIDC requires (nsidc.org/data/g02135/versions/4), with the
 // subset scripts/build-sea-ice.py takes; fetched by 2026-11-03 (tides-zec.19).
 export const NSIDC_SEA_ICE_CITATION =
