@@ -30,6 +30,13 @@ export const AURORA_SHELL_OUTER = 1.07
 /** Draw order of the additive shells, after the clouds'. */
 export const ATMOSPHERE_RENDER_ORDER = 1
 export const AURORA_RENDER_ORDER = 2
+/**
+ * The lightning's glows (LightningRenderer, tides-ufyr.13): additive, after
+ * the clouds at every order they take (0, CLOUD_REACH_RENDER_ORDER,
+ * CLOUD_UNDER_AURORA_RENDER_ORDER) and the aurora, so they light the cloud
+ * they sit in rather than being drawn over by it.
+ */
+export const LIGHTNING_RENDER_ORDER = 3.5
 
 /**
  * The sea ice's shell (demo/SeaIceGlobe.tsx, tides-6ru.1): before every other
