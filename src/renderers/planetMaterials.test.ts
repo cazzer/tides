@@ -450,13 +450,18 @@ describe("the cloud deck's layer under the fog (tides-ufyr.4.1)", () => {
     const main = shader.slice(shader.indexOf('void main()'))
     expect(shader).toContain('vec3 deckRadiance(vec3 at, float s, vec3 rd, float foreshorten, float detailWeight, float deckLight)')
     // The fog keeps its colour point, giving its detail up to the layer.
-    expect(main).toContain('vec3 colour = deckRadiance(ro + rd * s, s, rd, 1.0, 1.0 - uLayerShow, uDeckLight);')
+    // Its detail is skipped wherever the layer shows: no two detail calls.
+    expect(main).toContain('vec3 colour = deckRadiance(ro + rd * s, s, rd, 1.0, uLayerShow > 0.0 ? 0.0 : 1.0, uDeckLight);')
     const gate = main.indexOf('if (uLayerShow > 0.0 && uLayerSeen > 0.0)')
     expect(gate).toBeGreaterThan(0)
     expect(main.indexOf('deckLayerHit(r, mu, uLayerLevel)')).toBeGreaterThan(gate)
     expect(main).toContain('float wL = uLayerShow * exp(-sL / uLayerSeen);')
     expect(main).toContain('if (wL > 1.0 / 512.0)')
-    expect(main).toContain('deckRadiance(atL, sL, rd, foreshorten, 1.0, uLayerLight)')
+    expect(main).toContain('deckRadiance(atL, sL, rd, foreshorten, DECK_LAYER_DETAIL, uLayerLight)')
+    // The view's shade by cos(zenith), after the layer, before the write.
+    const shade = main.indexOf('colour *= deckViewShade(mu, uDeckInside);')
+    expect(shade).toBeGreaterThan(main.indexOf('deckRadiance(atL'))
+    expect(shade).toBeLessThan(main.indexOf('gl_FragColor = vec4(colour'))
     // The giant's tint, by uDeckInside alone: none at and over the cloud top.
     expect(shader).toContain('albedo *= mix(vec3(1.0), uDeckTint, uDeckInside);')
     // The detail is skipped at no weight; at full weight as before.

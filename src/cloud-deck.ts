@@ -60,12 +60,37 @@ export const DECK_SUN_DEPTH = 0.006
 export const DECK_FLOOR_LIGHT = 0.45
 /**
  * [TUNE] How far the layer at the fog's base shows through it from inside
- * (DeckProfile layerSeen), a fraction of R: about half the nadir at the
- * floor, a third at rest, gone well before the horizon.
+ * (DeckProfile layerSeen), a fraction of R: about two thirds of the nadir
+ * at the floor, two fifths at rest, gone (under 1/512) by the tangent.
  */
-export const DECK_LAYER_SEEN = 0.011
-/** Scale heights under R over which the layer eases in (deckLayerShow). */
+export const DECK_LAYER_SEEN = 0.015
+/**
+ * Scale heights under R over which the layer eases in (deckLayerShow). At
+ * 1, deckLayerShow is deckInside.
+ */
 export const DECK_LAYER_EASE_HEIGHTS = 1
+/**
+ * [TUNE] The layer's daylight as a share of the fog's at its depth
+ * (deckLayerLight): under 1, so the nadir reads darker than the fog.
+ */
+export const DECK_LAYER_LIGHT = 0.6
+/**
+ * [TUNE] The detail's contrast on the layer over the globe's
+ * (deck-column.glsl DECK_LAYER_DETAIL): Uranus's map is all but
+ * featureless, so the layer's structure is mostly its detail.
+ */
+export const DECK_LAYER_DETAIL = 2.5
+/**
+ * [TUNE] The view inside the deck, art-directed (deckViewShade): dimmed to
+ * DECK_BELOW_DIM looking down from DECK_BELOW_MU, brightened to
+ * DECK_HORIZON_GAIN within DECK_HORIZON_MU of the horizon, and back to 1
+ * at DECK_ABOVE_MU, by cos(zenith).
+ */
+export const DECK_BELOW_DIM = 0.8
+export const DECK_HORIZON_GAIN = 1.06
+export const DECK_BELOW_MU = -0.6
+export const DECK_HORIZON_MU = 0.02
+export const DECK_ABOVE_MU = 0.4
 /** No tint. */
 export const DECK_NO_TINT: readonly [number, number, number] = [1, 1, 1]
 /**
@@ -73,7 +98,7 @@ export const DECK_NO_TINT: readonly [number, number, number] = [1, 1, 1]
  * colour (#f2d9b0, linear 0.888, 0.694, 0.434), at its Rec. 709 luminance
  * of 1, so the fog keeps its brightness and warms.
  */
-export const JUPITER_INSIDE_TINT: readonly [number, number, number] = [1.1, 0.99, 0.82]
+export const JUPITER_INSIDE_TINT: readonly [number, number, number] = [1.107, 0.986, 0.824]
 
 function deckProfile(scaleHeight: number, insideTint = DECK_NO_TINT): DeckProfile {
   return {
@@ -146,7 +171,8 @@ export function deckDayLight(distance: number, muSun: number, R: number, profile
  * an eye `distance` from the centre sees through the fog (the shader's
  * uLayerShow, tides-ufyr.4.1): exactly 0 at and over R, so the deck-top and
  * approach views are as before, 1 from DECK_LAYER_EASE_HEIGHTS scale
- * heights under it down, smoothstepped; 0 throughout with no layerSeen.
+ * heights under it down, smoothstepped; 0 throughout with no layerSeen. At
+ * DECK_LAYER_EASE_HEIGHTS 1 it is deckInside.
  * Without it the view inside is one fog colour every way (its colour point
  * a few km ahead); the layer gives the nadir texture and the horizon fog.
  */
@@ -181,6 +207,35 @@ export function deckLayerHit(r: number, mu: number, level: number): number {
 export function deckLayerWeight(s: number, seen: number): number {
   if (!(seen > 0) || !Number.isFinite(s)) return 0
   return Math.exp(-s / seen)
+}
+
+/**
+ * The layer's daylight (the shader's uLayerLight) with the Sun at
+ * cos(zenith) `muSun` at the eye: DECK_LAYER_LIGHT of the fog's at the
+ * layer's depth (deckDayLight at R·base).
+ */
+export function deckLayerLight(muSun: number, R: number, profile: DeckProfile): number {
+  return DECK_LAYER_LIGHT * deckDayLight(R * profile.base, muSun, R, profile)
+}
+
+const smoothstep = (edge0: number, edge1: number, x: number) => {
+  const t = clamp01((x - edge0) / (edge1 - edge0))
+  return t * t * (3 - 2 * t)
+}
+
+/**
+ * The in-deck view's brightness along a ray at cos(zenith) `mu`
+ * (deck-column.glsl deckViewShade, which scales the fog's colour): down
+ * darker, the horizon a little brighter, up as it was, so the view inside
+ * says which way is down. Blended in by `inside` (deckInside): exactly 1
+ * at 0, so the deck-top views are as they were.
+ */
+export function deckViewShade(mu: number, inside: number): number {
+  const shape =
+    mu < 0
+      ? DECK_BELOW_DIM + (DECK_HORIZON_GAIN - DECK_BELOW_DIM) * smoothstep(DECK_BELOW_MU, -DECK_HORIZON_MU, mu)
+      : DECK_HORIZON_GAIN + (1 - DECK_HORIZON_GAIN) * smoothstep(DECK_HORIZON_MU, DECK_ABOVE_MU, mu)
+  return inside === 0 ? 1 : 1 + inside * (shape - 1)
 }
 
 /** A vector by its components (a THREE.Vector3 is one). */

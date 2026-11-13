@@ -44,7 +44,7 @@ import ringFragment from '../shaders/ring/fragment.frag'
 import { useBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
 import { eyeNearBody, pickShellFaces } from './earth-shells'
-import { deckDayLight, deckFade, deckInside, deckLayerShow, deckSunElevation, type DeckProfile } from '../cloud-deck'
+import { deckDayLight, deckFade, deckInside, deckLayerLight, deckLayerShow, deckSunElevation, type DeckProfile } from '../cloud-deck'
 
 export type { RingBand } from './planetFrame'
 
@@ -302,8 +302,7 @@ function PlanetDeck({
         u.uDeckInside.value = deckInside(distance, R, deck)
         const muSun = deckSunElevation(deckEye, sun.uniform.value)
         u.uDeckLight.value = deckDayLight(distance, muSun, R, deck)
-        // The layer at the fog's base, lit at its own depth.
-        u.uLayerLight.value = deckDayLight(R * deck.base, muSun, R, deck)
+        u.uLayerLight.value = deckLayerLight(muSun, R, deck)
         const { fov } = camera as THREE.PerspectiveCamera
         const height = renderer.getCurrentViewport(deckViewport).w
         u.uPixelAngle.value = height > 0 ? (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2))) / height : 0

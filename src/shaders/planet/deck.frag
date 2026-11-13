@@ -14,9 +14,12 @@
 // solid: tides-ufyr.4.1), by uLayerShow (deckLayerShow, 0 at and over R)
 // times e^(−s/uLayerSeen) at its distance s (deckLayerWeight), so the
 // nadir is textured and the view fogs to the horizon; the fog's own colour
-// point, a few km ahead every way, gives up its detail to it. The layer is
-// lit by uLayerLight, the fog's daylight at its depth (deckDayLight at
-// R·base), so the nadir reads darker than the fog. Inside, too, the
+// point, a few km ahead every way, gives up its detail to it (skipped
+// wherever the layer shows), the layer taking DECK_LAYER_DETAIL of it. The
+// layer is lit by uLayerLight (deckLayerLight, a share of the fog's
+// daylight at its depth), so the nadir reads darker than the fog, and the
+// whole view is shaded by the ray's cos(zenith) by uDeckInside
+// (deckViewShade): darker down, brighter at the horizon. Inside, too, the
 // albedo takes the giant's tint (uDeckTint, cloud-deck.ts insideTint) by
 // uDeckInside: Jupiter's fog warms toward its haze. The footprint
 // comes from uPixelAngle, not derivatives, so the map's seam and the
@@ -136,7 +139,8 @@ void main() {
   float b = r * mu;
   float exitAt = -b + sqrt(max(b * b - (r * r - uOuter * uOuter), 0.0));
   float s = min(deckAhead(r, mu, R, H, uVisibility), exitAt);
-  vec3 colour = deckRadiance(ro + rd * s, s, rd, 1.0, 1.0 - uLayerShow, uDeckLight);
+  // Its detail only where the layer doesn't show: no two detail calls.
+  vec3 colour = deckRadiance(ro + rd * s, s, rd, 1.0, uLayerShow > 0.0 ? 0.0 : 1.0, uDeckLight);
 
   // The layer under the fog, where the ray falls to it and it shows.
   if (uLayerShow > 0.0 && uLayerSeen > 0.0) {
@@ -146,10 +150,11 @@ void main() {
       if (wL > 1.0 / 512.0) {
         vec3 atL = ro + rd * sL;
         float foreshorten = max(abs(dot(normalize(atL), rd)), 0.05);
-        colour = mix(colour, deckRadiance(atL, sL, rd, foreshorten, 1.0, uLayerLight), wL);
+        colour = mix(colour, deckRadiance(atL, sL, rd, foreshorten, DECK_LAYER_DETAIL, uLayerLight), wL);
       }
     }
   }
+  colour *= deckViewShade(mu, uDeckInside);
 
   gl_FragColor = vec4(colour, uDeckFade * (1.0 - T));
 

@@ -36,6 +36,24 @@ float deckAhead(float r, float mu, float R, float H, float visibility) {
   return (-H / mu) * log(1.0 - k);
 }
 
+// The in-deck view's brightness by the ray's cos(zenith) (tides-ufyr.4.1,
+// deckViewShade): down darker, the horizon brighter, up as it was; mix()
+// keeps it exactly 1 at inside 0.
+#define DECK_BELOW_DIM 0.8
+#define DECK_HORIZON_GAIN 1.06
+#define DECK_BELOW_MU (-0.6)
+#define DECK_HORIZON_MU 0.02
+#define DECK_ABOVE_MU 0.4
+float deckViewShade(float mu, float inside) {
+  float shape = mu < 0.0
+    ? mix(DECK_BELOW_DIM, DECK_HORIZON_GAIN, smoothstep(DECK_BELOW_MU, -DECK_HORIZON_MU, mu))
+    : mix(DECK_HORIZON_GAIN, 1.0, smoothstep(DECK_HORIZON_MU, DECK_ABOVE_MU, mu));
+  return mix(1.0, shape, inside);
+}
+
+// The detail's contrast on the layer under the fog (DECK_LAYER_DETAIL).
+#define DECK_LAYER_DETAIL 2.5
+
 // How far along the ray it falls to radius level (tides-ufyr.4.1,
 // deckLayerHit): -1.0 for none (climbing, level, or passing over it), 0.0
 // at or under it; c/(-b + sqrt(b*b - c)) keeps its precision at the nadir.
