@@ -5,6 +5,7 @@ import OrbitingBody from './OrbitingBody'
 import SunRenderer from './renderers/SunRenderer'
 import EarthRenderer from './renderers/EarthRenderer'
 import AuroraRenderer from './renderers/AuroraRenderer'
+import LightningRenderer from './renderers/LightningRenderer'
 import { CloseZoomWarmup } from './renderers/CloseZoomWarmup'
 import AtmosphereRenderer from './renderers/AtmosphereRenderer'
 import MoonRenderer from './renderers/MoonRenderer'
@@ -240,6 +241,13 @@ export default function SolarSystem({
         )}
         {!earthCamera && <AtmosphereRenderer radius={EARTH_DIAMETER} />}
         {!earthCamera && <AuroraRenderer radius={EARTH_DIAMETER} />}
+        {/* Mounted whatever the weather, so the compile gate links it. */}
+        {!earthCamera && (
+          <LightningRenderer
+            radius={EARTH_DIAMETER}
+            hidden={moonShadowShown || seaIceClearsClouds}
+          />
+        )}
         {/* The main view's first close zoom, compiled ahead (tides-tvr.7.4). */}
         {!earthCamera && !ship && <CloseZoomWarmup />}
         {seasons && interactive && !earthCamera && !ship && <SeasonsGlobe radius={EARTH_DIAMETER} />}

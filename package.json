@@ -25,6 +25,7 @@
     "3d-tiles-renderer": "0.5.3",
     "astronomy-engine": "2.1.19",
     "d3": "^7.9.0",
+    "jsfive": "0.4.0",
     "lodash": "^4.17.21",
     "luxon": "^3.7.2",
     "react": "^19.2.0",

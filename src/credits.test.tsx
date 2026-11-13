@@ -6,6 +6,7 @@ import {
   Credits,
   ETOPO_URL,
   GIBS_ACKNOWLEDGEMENT,
+  GLM_URL,
   NSIDC_SEA_ICE_CITATION,
 } from './Credits'
 import { OPEN_METEO_SITE } from './forecast-clouds'
@@ -81,6 +82,14 @@ describe('Credits', () => {
     expect(html).toContain('public domain')
     expect(html).toContain('Sentinel-2 cloudless')
     expect(html).toContain('Contains modified Copernicus Sentinel data 2020')
+  })
+
+  test('credits NOAA GOES-R GLM for the lightning, with its coverage (tides-ufyr.13)', () => {
+    const line = html.match(/<li>Lightning \(Real weather\):.*?<\/li>/)?.[0] ?? ''
+    expect(line).toContain(`href="${GLM_URL}"`)
+    expect(line).toContain('NOAA GOES-R Geostationary Lightning Mapper, GOES-19 and GOES-18')
+    expect(line).toContain('NOAA Open Data Dissemination')
+    expect(line).toContain('the Americas, Atlantic and Pacific only')
   })
 
   test('opens every link in a new tab without an opener', () => {

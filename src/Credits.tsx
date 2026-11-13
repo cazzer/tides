@@ -19,6 +19,8 @@ const FREE_ART_LICENSE_URL = 'https://artlibre.org/licence/lal/en/'
 export const MAPTERHORN_URL = 'https://mapterhorn.com/'
 export const ETOPO_URL = 'https://www.ncei.noaa.gov/products/etopo-global-relief-model'
 export const NSIDC_SEA_ICE_INDEX_URL = 'https://doi.org/10.7265/a98x-0f50'
+// NOAA Open Data Dissemination's GOES-R buckets, where the GLM files come from (tides-ufyr.13).
+export const GLM_URL = 'https://registry.opendata.aws/noaa-goes/'
 // The data citation NSIDC requires (nsidc.org/data/g02135/versions/4), with the
 // subset scripts/build-sea-ice.py takes; fetched by 2026-11-03 (tides-zec.19).
 export const NSIDC_SEA_ICE_CITATION =
@@ -102,6 +104,11 @@ export function Credits({ children }: { children?: ReactNode }) {
           CC BY-NC-SA 4.0
         </Link>
         )
+      </li>
+      <li>
+        Lightning (Real weather):{' '}
+        <Link href={GLM_URL}>NOAA GOES-R Geostationary Lightning Mapper, GOES-19 and GOES-18</Link>, via NOAA Open Data
+        Dissemination; the Americas, Atlantic and Pacific only
       </li>
       <li>
         {/* CC BY 4.0 asks for the licence and whether the data was changed:
