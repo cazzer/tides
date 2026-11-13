@@ -215,19 +215,25 @@ describe('lightning patch', () => {
 
   test('the vertex shader caps, floors and shears as these do', () => {
     const vertex = glsl('vertex.glsl')
-    expect(vertex).toContain('min(max(aFlash.w * uKmToScene * sqrt(aspect), uMinPx * pxWorld)')
+    expect(vertex).toContain('float trueMajor = aFlash.w * uKmToScene * sqrt(aspect);')
+    expect(vertex).toContain('min(max(trueMajor, uMinPx * pxWorld)')
     expect(vertex).toContain('uMaxFrac * min(uViewportW, uViewportH) * pxWorld)')
     expect(vertex).toContain('float minMu = min(1.0, uMinEdgePx * pxWorld / minor);')
     expect(vertex).toContain('float t = max(0.0, minMu - mu) / max(sqrt(1.0 - mu * mu), 1e-3);')
-    expect(vertex).toContain('corner.xyz -= nV * t * dot(corner.xyz - centre.xyz, hV);')
+    expect(vertex).toContain('corner.xyz -= nV * t * (dot(corner.xyz - centre.xyz, hV) - major);')
     expect(vertex).toContain('fract(seed * 97.31)')
     expect(vertex).toContain('1.0 + 0.6 * fract(seed * 61.7)')
     expect(vertex).toContain('vec2(fract(seed * 13.1), fract(seed * 29.7)) * 64.0')
     expect(vertex).toContain('abs(dir.y) > 0.9999')
     expect(vertex).toContain('floor(du + 0.5)')
-    // Camera-facing no more, and no near fade.
+    // Camera-facing no more.
     expect(vertex).not.toContain('centre.xy +=')
-    expect(vertex).not.toMatch(/\bnear\b/)
+    // The eye's fade on the true size, uncapped, not the drawn one.
+    expect(vertex).toContain('float near = perspective ? smoothstep(trueMajor, 4.0 * trueMajor, depth) : 1.0;')
+    expect(vertex).toMatch(/vI = flashIntensity\(age, aFlash\.y, seed\) \* aFlash\.z \* day \* near;/)
+    expect(vertex.indexOf('float near')).toBeLessThan(vertex.indexOf('float major'))
+    // Behind the eye, collapsed before any divide by its depth.
+    expect(vertex).toContain('if (perspective && depth <= 0.0) {')
     expect(vertex).not.toMatch(/\bround\(/)
   })
 

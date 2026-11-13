@@ -61,7 +61,7 @@ export function flashTangentBasis(dir: THREE.Vector3, angle: number, outE1: THRE
 
 /**
  * A patch's major half-axis, in world units, from its true one
- * (`worldMajor`) at `pxWorld` world units a CSS px, in a `vw` × `vh` CSS px
+ * (`worldMajor`: the shader's trueMajor, aFlash.w · uKmToScene · √aspect) at `pxWorld` world units a CSS px, in a `vw` × `vh` CSS px
  * viewport: no smaller than MIN_FLASH_PX, no bigger than MAX_FLASH_FRACTION
  * of the shorter side (the cap wins). `capped` when the cap applied.
  */
@@ -74,8 +74,11 @@ export function flashHalfSize(worldMajor: number, pxWorld: number, vw: number, v
 /**
  * The shear that keeps a patch seen at `mu` (the cosine between its normal
  * and the view) at least `minMu` thick: the corners move along the normal
- * by this much of their offset toward the eye, so it is seen as if at
- * mu + t·√(1 − mu²) = max(mu, minMu).
+ * by this much of their offset toward the eye (pivoted about the near edge,
+ * so none sinks under the deck), so it is seen as if at
+ * mu + t·√(1 − mu²) = max(mu, minMu). The shader takes minMu from the
+ * minor half-axis, the thinner whichever way the patch is turned, so
+ * conservatively: MIN_EDGE_PX · pxWorld / minor.
  */
 export function limbShear(mu: number, minMu: number): number {
   return Math.max(0, minMu - mu) / Math.max(Math.sqrt(1 - mu * mu), 1e-3)

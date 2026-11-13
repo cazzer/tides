@@ -71,18 +71,29 @@ void main() {
   // Perspective (the ship, the panels) or orthographic (the main view).
   bool perspective = projectionMatrix[2][3] == -1.0;
   float depth = -centre.z;
+  // Behind (or at) the eye: no fragments, and no divide by its depth.
+  if (perspective && depth <= 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
   // Scene units per (CSS) pixel at the flash: the viewport is in CSS px.
   float pxWorld = 2.0 / (projectionMatrix[1][1] * uViewportH) * (perspective ? depth : 1.0);
+  // The patch's shape (flashShape()).
+  float angle = 2.0 * LIGHTNING_PI * fract(seed * 97.31);
+  float aspect = 1.0 + 0.6 * fract(seed * 61.7);
+  // Its true major half-axis, before the floor and the cap.
+  float trueMajor = aFlash.w * uKmToScene * sqrt(aspect);
   float day = mix(1.0, DAY_FLOOR, smoothstep(-0.10, 0.15, dot(dir, uSun)));
-  vI = flashIntensity(age, aFlash.y, seed) * aFlash.z * day;
-  // Dark (between pulses): no fragments either.
+  // Fades as the eye comes within a few of its true size (diving through
+  // the deck), so the cap never holds it as a sprite in the eye's face.
+  float near = perspective ? smoothstep(trueMajor, 4.0 * trueMajor, depth) : 1.0;
+  vI = flashIntensity(age, aFlash.y, seed) * aFlash.z * day * near;
+  // Dark (between pulses, or the eye inside it): no fragments either, so a
+  // quad filling the screen costs nothing.
   if (vI <= 0.0) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     return;
   }
-  // The patch's shape (flashShape()).
-  float angle = 2.0 * LIGHTNING_PI * fract(seed * 97.31);
-  float aspect = 1.0 + 0.6 * fract(seed * 61.7);
   vNoiseOffset = vec2(fract(seed * 13.1), fract(seed * 29.7)) * 64.0;
   // The tangent plane (flashTangentBasis()): east and north, turned.
   vec3 east = abs(dir.y) > 0.9999 ? vec3(0.0, 0.0, -1.0) : cross(vec3(0.0, 1.0, 0.0), dir);
@@ -93,13 +104,14 @@ void main() {
   vec3 e1 = c * east + s * north;
   vec3 e2 = c * north - s * east;
   // Its major half-axis, held between the floor and the cap (flashHalfSize()).
-  float major = min(max(aFlash.w * uKmToScene * sqrt(aspect), uMinPx * pxWorld),
+  float major = min(max(trueMajor, uMinPx * pxWorld),
     uMaxFrac * min(uViewportW, uViewportH) * pxWorld);
   float minor = major / aspect;
   vec3 cornerLocal = dir * uRadius + major * (position.x * e1 + position.y * e2 / aspect);
   vec4 corner = modelViewMatrix * vec4(cornerLocal, 1.0);
   // Toward the limb, sheared to face the eye just enough to stay
-  // uMinEdgePx thick (limbShear()).
+  // uMinEdgePx thick (limbShear()); thick across the minor axis, the
+  // thinner either way it is turned, so conservatively.
   vec3 nV = normalize(mat3(modelViewMatrix) * dir);
   vec3 vV = perspective ? normalize(-centre.xyz) : vec3(0.0, 0.0, 1.0);
   if (dot(nV, vV) < 0.0) nV = -nV;
@@ -110,7 +122,9 @@ void main() {
   // Face on, vV - mu * nV is 0 (and so is t): no shear, and no NaN.
   vec3 h = vV - mu * nV;
   vec3 hV = h * inversesqrt(max(dot(h, h), 1e-12));
-  corner.xyz -= nV * t * dot(corner.xyz - centre.xyz, hV);
+  // Pivoted about the near edge (major toward the eye): the rest rises off
+  // the deck, none of it sinks under.
+  corner.xyz -= nV * t * (dot(corner.xyz - centre.xyz, hV) - major);
   // The cloud under the corner (unwrapU()).
   vec3 cornerDir = normalize(cornerLocal);
   float uCentre = cloudU(dir);
