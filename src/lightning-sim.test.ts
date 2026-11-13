@@ -1,21 +1,32 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import g18 from './__fixtures__/glm-lcfa-g18-12.json'
 import g19 from './__fixtures__/glm-lcfa-g19-12.json'
 import { encodePrecip } from './cloud-precip'
 import { TYPE_H, TYPE_W } from './cloud-types'
 import { WINDOW_MS, type FlashBatch } from './lightning'
-import { globalFlashRate, syntheticClimatology, syntheticClimatologyBytes, decodeLightningClimatology } from './lightning-climatology'
+import {
+  globalFlashRate,
+  monthBlend,
+  syntheticClimatology,
+  syntheticClimatologyBytes,
+  decodeLightningClimatology,
+} from './lightning-climatology'
 import {
   coverAt,
   diurnalFactor,
-  forecastFactor,
+  FORECAST_FLOOR,
   hash32,
   localSolarHour,
-  MEAN_GATE,
+  meanGateOf,
+  MIN_MEAN_GATE,
   normInv,
   poissonInv,
   R_MAX,
+  showersFactor,
   simulateWindow,
+  STORM_EPOCH_MS,
+  stormsOfEpoch,
   thickGate,
   unit,
   type SimClouds,
@@ -123,12 +134,21 @@ describe('rates', () => {
     expect(localSolarHour(Date.UTC(1960, 0, 1, 1), -30)).toBeCloseTo(23, 9)
   })
 
-  test('the forecast factor follows the showers up to R_MAX; the gate opens only on thick cloud', () => {
-    expect(forecastFactor(0)).toBe(0)
-    expect(forecastFactor(0.6)).toBeCloseTo(2 * forecastFactor(0.3), 9)
-    expect(forecastFactor(50)).toBe(R_MAX)
-    expect(thickGate(0.4)).toBe(0)
-    expect(thickGate(0.9)).toBe(1)
+  test("the showers factor: the floor with none, 1 at the reference, up to its cap; the gate opens on thick cloud", () => {
+    expect(showersFactor(0)).toBe(FORECAST_FLOOR)
+    expect(showersFactor(0.3)).toBeCloseTo(1, 9)
+    expect(showersFactor(0.6)).toBeCloseTo(FORECAST_FLOOR + 2 * (1 - FORECAST_FLOOR), 9)
+    expect(showersFactor(50)).toBeCloseTo(FORECAST_FLOOR + (1 - FORECAST_FLOOR) * R_MAX, 9)
+    expect(thickGate(0.25)).toBe(0)
+    expect(thickGate(0.65)).toBe(1)
+  })
+
+  test("the gate's mean is its F-weighted mean over the static cover, floored", () => {
+    const july = monthBlend(JULY)
+    expect(meanGateOf(syntheticClimatology({ density: 0.005, cover: 1 }), july)).toBeCloseTo(1, 6)
+    expect(meanGateOf(syntheticClimatology({ density: 0.005, cover: 0 }), july)).toBe(MIN_MEAN_GATE)
+    // Cloud over the northern hemisphere only: half the flashes' weight.
+    expect(meanGateOf(syntheticClimatology({ density: 0.005, cover: (lat) => (lat > 0 ? 1 : 0) }), july)).toBeCloseTo(0.5, 2)
   })
 })
 
@@ -136,10 +156,14 @@ describe('simulateWindow', () => {
   // Sea everywhere (a weak diurnal cycle), all thick cloud.
   const flat = syntheticClimatology({ density: 0.005, land: 0, cover: 1 })
 
-  test('flashes at the climatology rate, over a gate of 1 / MEAN_GATE, over 500 windows', () => {
-    const expected = (globalFlashRate(flat) * (WINDOW_MS / 1000)) / MEAN_GATE
+  test('flashes at the climatology rate under the static clouds, over 500 windows', () => {
+    const expected = globalFlashRate(flat) * (WINDOW_MS / 1000)
     const { total } = run(flat, STATIC, windowAt(Date.UTC(2031, 3, 2)), 500)
     expect(Math.abs(total / 500 / expected - 1)).toBeLessThan(0.1)
+    // Under half the static cloud, as much, all on the cloudy half.
+    const half = syntheticClimatology({ density: 0.005, land: 0, cover: (lat) => (lat > 0 ? 1 : 0) })
+    const halved = run(half, STATIC, windowAt(Date.UTC(2031, 3, 2)), 200).total
+    expect(Math.abs(halved / 200 / expected - 1)).toBeLessThan(0.1)
   })
 
   test('nothing under clear sky', () => {
@@ -185,22 +209,29 @@ describe('simulateWindow', () => {
   })
 
   describe('in forecast hours, where LIS has no data (the guess)', () => {
-    // Cloud only at 40-60° N, so no window comes near the cap.
-    const guess = syntheticClimatology({ density: 0, coverage: 0, land: 0.5, cover: (lat) => (lat > 40 && lat < 60 ? 1 : 0) })
+    // The sea (fewer flashes), cloud only at 40-60° N.
+    const guess = syntheticClimatology({ density: 0, coverage: 0, land: 0, cover: (lat) => (lat > 40 && lat < 60 ? 1 : 0) })
     const w0 = windowAt(JULY)
     const at = (showers: number, from = w0) =>
       run(guess, { a: precipFrame(showers), b: precipFrame(showers), mix: 0 }, from, 60).total
 
-    test('flashes follow the showers: none without, twice as many for twice the showers, up to R_MAX', () => {
-      expect(at(0)).toBe(0)
+    test('flashes follow the showers: the floor without, more for more, up to the cap', () => {
+      const climatology = run(guess, STATIC, w0, 60).total
+      const none = at(0)
       const one = at(0.3)
       const two = at(0.6)
       const capped = at(5)
       expect(one).toBeGreaterThan(1000)
-      expect(two / one).toBeGreaterThan(1.8)
-      expect(two / one).toBeLessThan(2.2)
+      expect(one / climatology).toBeGreaterThan(0.9)
+      expect(one / climatology).toBeLessThan(1.1)
+      // Under thick cloud with no showers: FORECAST_FLOOR of the climatology's.
+      expect(none / climatology).toBeGreaterThan(FORECAST_FLOOR - 0.05)
+      expect(none / climatology).toBeLessThan(FORECAST_FLOOR + 0.05)
+      const twice = FORECAST_FLOOR + 2 * (1 - FORECAST_FLOOR)
+      expect(two / one).toBeGreaterThan(twice - 0.15)
+      expect(two / one).toBeLessThan(twice + 0.15)
       expect(at(20)).toBe(capped)
-      expect(capped / one).toBeGreaterThan(2.7)
+      expect(capped / one).toBeGreaterThan(2)
     })
 
     test('the guess flashes in summer and less in winter', () => {
@@ -266,5 +297,35 @@ describe('simulateWindow', () => {
       `[lightning-sim] ${globalFlashRate(clim).toFixed(1)} fl/s climatology: cold window ${coldMs.toFixed(1)} ms ` +
         `(${cold.count} flashes, seeding 3 epochs), warm ${warmMs.toFixed(2)} ms/window (${(count / 30).toFixed(0)} flashes)`
     )
+  })
+})
+
+// The shipped asset (tides-ufyr.14.1) under the static clouds (tides-ufyr.33).
+describe('simulated lightning on the shipped climatology', () => {
+  const clim = decodeLightningClimatology(new Uint8Array(readFileSync('src/assets/earth-lightning.bin')))
+
+  test("emits the climatology's global rate within 20%, in January and July", () => {
+    for (const m of [0, 6]) {
+      // 48 windows 97 min apart about mid-month: every hour of the UTC day.
+      const mid = Date.UTC(2031, m, 15, 12)
+      let total = 0
+      for (let i = 0; i < 48; i++) total += simulateWindow(windowAt(mid + (i - 24) * 97 * 60_000), clim, STATIC).count
+      const emitted = total / 48 / (WINDOW_MS / 1000)
+      expect(emitted / globalFlashRate(clim, m)).toBeGreaterThan(0.8)
+      expect(emitted / globalFlashRate(clim, m)).toBeLessThan(1.2)
+    }
+  })
+
+  test('seeds about 10k storms an epoch (logs the time)', () => {
+    for (const m of [0, 6]) {
+      const e = Math.floor(Date.UTC(2032, m, 15, 12) / STORM_EPOCH_MS)
+      stormsOfEpoch(e, clim)
+      const t = performance.now()
+      let count = 0
+      for (let k = 1; k <= 4; k++) count += stormsOfEpoch(e + k, clim).count
+      console.log(`[lightning-sim] month ${m}: ${(count / 4).toFixed(0)} storms an epoch, seeded in ${((performance.now() - t) / 4).toFixed(2)} ms`)
+      expect(count / 4).toBeGreaterThan(7000)
+      expect(count / 4).toBeLessThan(13000)
+    }
   })
 })

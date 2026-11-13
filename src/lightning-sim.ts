@@ -4,25 +4,34 @@
 // time alone so scrubbing replays the same storms. Pure.
 //
 // Storms are seeded per STORM_EPOCH_MS per climatology cell
-// (./lightning-climatology.ts) at the most the cell could flash, F · R_MAX /
-// MEAN_GATE, each storm living 20-60 min with a sin-shaped flash rate, and
+// (./lightning-climatology.ts) for the most the cell could flash, F · R_MAX
+// / meanGate, each storm living 20-60 min with a sin-shaped flash rate, and
 // thinned per 20 s window: a storm flashes in a window when its fixed draw
 // uAccept is under (R / R_MAX) · g, so the expected density is
-//   F_clim(cell, t) · R · g(cover) / MEAN_GATE
-// with R the regime's factor at the storm's centre (the forecast's showers
-// where the cloud frames carry precipitation there, the climatology's
-// diurnal cycle elsewhere) and g the thick-cloud gate on the drawn cover.
-// MEAN_GATE is g's mean where storms are, so the climatology's own rate
-// comes back on average. F_clim is LIS's where it has data and a guess
-// elsewhere (./lightning-climatology.ts densityOf): there the cover gate and
-// the forecast's showers alone say where storms are. Storm centres are in
-// the cloud map's frame (the
+//   F_clim(cell, t) · R · g(cover) / meanGate
+// with R the regime's factor at the storm's centre (the climatology's
+// diurnal cycle, scaled by the forecast's showers where the cloud frames
+// carry precipitation there) and g the thick-cloud gate on the drawn cover.
+// meanGate is g's F-weighted mean over the static clouds' cover in the
+// epoch's month (meanGateOf), so under the static clouds the climatology's
+// own rate comes back on average. The static cover is the reference for
+// every regime: it's the only cover the CPU always has (the forecast and
+// observed frames come and go), so under other clouds the rate follows how
+// much thicker or thinner they are than the static ones. Storms are as many
+// as if meanGate were SEED_GATE, each flashing SEED_GATE / meanGate times as
+// hard: burstier, not more of them, so seeding costs the same. F_clim is
+// LIS's where it has data and a guess elsewhere (./lightning-climatology.ts
+// densityOf): there the cover gate and the forecast's showers alone say
+// where storms are. Storm centres are in the cloud map's frame (the
 // renderer adds the static clouds' drift at emit).
 import { precipFromFrames } from './cloud-precip'
 import {
   CLIM_CELLS,
   CLIM_W,
+  COVER_H,
+  COVER_W,
   cellAreaKm2,
+  cellOf,
   densityOf,
   monthBlend,
   staticCover,
@@ -34,14 +43,22 @@ import { smoothstep } from './real-clouds'
 
 /** [TUNE] The most the regime factor R reaches (the storms' seeding headroom). */
 export const R_MAX = 3
-/** [TUNE] Forecast showers (mm/h, on the 10° grid, smoothed) for R = 1. */
+/** [TUNE] Forecast showers (mm/h, on the 10° grid, smoothed) for the
+ * climatology's own rate. */
 export const SHOWERS_REF_MM_H = 0.3
+/** [TUNE] Under thick cloud a forecast with no showers still flashes this
+ * share of the climatology's rate (the 10° grid smooths storms' showers out). */
+export const FORECAST_FLOOR = 0.4
 /** [TUNE] The thick-cloud gate: none under this alpha, all over THICK_HI. */
-export const THICK_LO = 0.5
-export const THICK_HI = 0.8
-/** [TUNE] The gate's mean where storms are. */
-export const MEAN_GATE = 0.35
-/** [TUNE] A storm's mean peak flash rate (exponential), flashes per minute. */
+export const THICK_LO = 0.3
+export const THICK_HI = 0.6
+/** The gate's mean (meanGateOf) is taken as at least this, so a month
+ * whose static clouds are thin where it flashes can't blow the rate up. */
+export const MIN_MEAN_GATE = 0.05
+/** Storms are seeded as many as if the gate's mean were this (~10k an epoch). */
+export const SEED_GATE = 0.35
+/** [TUNE] A storm's mean peak flash rate (exponential) at a gate's mean of
+ * SEED_GATE, flashes per minute; x SEED_GATE / meanGate. */
 export const STORM_RATE_PER_MIN = 3
 /** [TUNE] A storm's life, uniform between these. */
 export const STORM_LIFE_MIN_MS = 20 * 60_000
@@ -52,7 +69,7 @@ export const FLASH_SIGMA_KM = 12
 export const STORM_EPOCH_MS = 30 * 60_000
 /** A window's flashes are capped at this many. */
 export const SIM_MAX_PER_WINDOW = 4096
-/** A storm's mean flash count: mean peak · mean life · the sine's mean (2 / π). */
+/** A storm's mean flash count at STORM_RATE_PER_MIN: mean peak · mean life · the sine's mean (2 / π). */
 export const FLASHES_PER_STORM =
   ((STORM_RATE_PER_MIN * (STORM_LIFE_MIN_MS + STORM_LIFE_MAX_MS)) / 2 / 60_000) * (2 / Math.PI)
 
@@ -149,9 +166,10 @@ export function diurnalFactor(hour: number, land: number): number {
   return land * (1 + 0.9 * Math.cos(w * (hour - 16.5))) + (1 - land) * (1 + 0.25 * Math.cos(w * (hour - 4)))
 }
 
-/** The forecast's factor for its convective showers, mm/h. */
-export function forecastFactor(showersMmH: number): number {
-  return Math.min(R_MAX, Math.max(0, showersMmH) / SHOWERS_REF_MM_H)
+/** The forecast's factor for its convective showers (mm/h), times the
+ * diurnal cycle: FORECAST_FLOOR with none, 1 at SHOWERS_REF_MM_H. */
+export function showersFactor(showersMmH: number): number {
+  return FORECAST_FLOOR + (1 - FORECAST_FLOOR) * Math.min(R_MAX, Math.max(0, showersMmH) / SHOWERS_REF_MM_H)
 }
 
 /** How much of a storm flashes under a drawn cloud alpha: only thick cloud. */
@@ -202,8 +220,8 @@ export function coverAt(clouds: SimClouds, clim: LightningClimatology, latDeg: n
   return (1 - mix) * frameCover(a, clim, latDeg, lonDeg) + mix * frameCover(b, clim, latDeg, lonDeg)
 }
 
-/** R at a point: the forecast's showers where the frames have precipitation
- * there, else the climatology's diurnal cycle. */
+/** R at a point, at most R_MAX: the climatology's diurnal cycle, times the
+ * forecast's showers factor where the frames have precipitation there. */
 export function regimeFactor(
   clouds: SimClouds,
   latDeg: number,
@@ -212,7 +230,8 @@ export function regimeFactor(
   land: number
 ): number {
   const precip = precipFromFrames(clouds.a?.precip ?? null, clouds.b?.precip ?? null, clouds.mix, latDeg, lonDeg)
-  return precip ? forecastFactor(precip.showers) : diurnalFactor(localSolarHour(tMs, lonDeg), land)
+  const diurnal = diurnalFactor(localSolarHour(tMs, lonDeg), land)
+  return Math.min(R_MAX, precip ? diurnal * showersFactor(precip.showers) : diurnal)
 }
 
 // --- Storms ------------------------------------------------------------------
@@ -225,7 +244,7 @@ export interface Storms {
   lon: Float32Array
   startMs: Float64Array
   lifeMs: Float32Array
-  /** Flashes per minute at the storm's height. */
+  /** Flashes per minute at the storm's height (SEED_GATE / meanGate burstier). */
   peakPerMin: Float32Array
   /** Its fixed draw against (R / R_MAX) · g. */
   uAccept: Float32Array
@@ -233,6 +252,8 @@ export interface Storms {
   land: Float32Array
   /** Seeds its windows' draws. */
   seed: Uint32Array
+  /** The gate's mean it was seeded for (meanGateOf). */
+  meanGate: number
 }
 
 /** The epochs whose storms can be alive at a time: a storm outlives its epoch by up to two. */
@@ -242,7 +263,46 @@ const EPOCHS_KEPT = 2 * (EPOCHS_BACK + 1)
 const stormCache = new WeakMap<LightningClimatology, Map<number, Storms>>()
 const blend: MonthBlend = { m0: 0, m1: 0, f: 0 }
 const cellCounts = new Int32Array(CLIM_CELLS)
-const SEED_SCALE = (R_MAX / MEAN_GATE) * (STORM_EPOCH_MS / DAY_MS) / FLASHES_PER_STORM
+const cellDensity = new Float32Array(CLIM_CELLS)
+const SEED_SCALE = (R_MAX / SEED_GATE) * (STORM_EPOCH_MS / DAY_MS) / FLASHES_PER_STORM
+
+const cellGates = new WeakMap<LightningClimatology, Float32Array>()
+
+/** Each cell's mean thick-cloud gate over the static clouds' cover: its 1°
+ * texels' (each counted in the cell holding its centre), area-weighted;
+ * worked out once per climatology (~1 ms). */
+export function staticCellGates(clim: LightningClimatology): Float32Array {
+  let gates = cellGates.get(clim)
+  if (gates) return gates
+  gates = new Float32Array(CLIM_CELLS)
+  const weights = new Float32Array(CLIM_CELLS)
+  for (let y = 0; y < COVER_H; y++) {
+    const lat = -90 + ((y + 0.5) * 180) / COVER_H
+    const w = Math.cos(lat * DEG)
+    for (let x = 0; x < COVER_W; x++) {
+      const cell = cellOf(lat, -180 + ((x + 0.5) * 360) / COVER_W)
+      gates[cell] += w * thickGate(clim.cover[y * COVER_W + x] / 255)
+      weights[cell] += w
+    }
+  }
+  for (let cell = 0; cell < CLIM_CELLS; cell++) gates[cell] = weights[cell] > 0 ? gates[cell] / weights[cell] : 0
+  cellGates.set(clim, gates)
+  return gates
+}
+
+/** The thick-cloud gate's mean where it flashes at a month blend: Σ F·A·g /
+ * Σ F·A over the static clouds' cover, at least MIN_MEAN_GATE. */
+export function meanGateOf(clim: LightningClimatology, at: MonthBlend): number {
+  const gates = staticCellGates(clim)
+  let weighted = 0
+  let total = 0
+  for (let cell = 0; cell < CLIM_CELLS; cell++) {
+    const fa = densityOf(clim, cell, at) * cellAreaKm2(Math.floor(cell / CLIM_W))
+    weighted += fa * gates[cell]
+    total += fa
+  }
+  return total > 0 ? Math.max(MIN_MEAN_GATE, weighted / total) : 1
+}
 
 /** The epoch of window w's middle: w needs this one's storms and the
  * EPOCHS_BACK before it. */
@@ -278,11 +338,22 @@ export function stormsOfEpoch(epoch: number, clim: LightningClimatology): Storms
 function seedStorms(epoch: number, clim: LightningClimatology): Storms {
   const epochStart = epoch * STORM_EPOCH_MS
   monthBlend(epochStart + STORM_EPOCH_MS / 2, blend)
+  const gates = staticCellGates(clim)
+  let weighted = 0
+  let flashing = 0
+  for (let cell = 0; cell < CLIM_CELLS; cell++) {
+    const fa = densityOf(clim, cell, blend) * cellAreaKm2(Math.floor(cell / CLIM_W))
+    cellDensity[cell] = fa
+    weighted += fa * gates[cell]
+    flashing += fa
+  }
+  // As meanGateOf, from the same sums.
+  const meanGate = flashing > 0 ? Math.max(MIN_MEAN_GATE, weighted / flashing) : 1
+  const peakRate = (STORM_RATE_PER_MIN * SEED_GATE) / meanGate
   let total = 0
   for (let cell = 0; cell < CLIM_CELLS; cell++) {
-    const density = densityOf(clim, cell, blend)
-    const mu = density > 0 ? density * cellAreaKm2(Math.floor(cell / CLIM_W)) * SEED_SCALE : 0
-    const n = poissonInv(mu, unit(epoch, cell, 0))
+    const fa = cellDensity[cell]
+    const n = fa > 0 ? poissonInv(fa * SEED_SCALE, unit(epoch, cell, 0)) : 0
     cellCounts[cell] = n
     total += n
   }
@@ -296,6 +367,7 @@ function seedStorms(epoch: number, clim: LightningClimatology): Storms {
     uAccept: new Float32Array(total),
     land: new Float32Array(total),
     seed: new Uint32Array(total),
+    meanGate,
   }
   let i = 0
   for (let cell = 0; cell < CLIM_CELLS; cell++) {
@@ -310,7 +382,7 @@ function seedStorms(epoch: number, clim: LightningClimatology): Storms {
       s.lon[i] = lon0 + unit(epoch, cell, stream + 1) * CELL_DEG
       s.startMs[i] = epochStart + unit(epoch, cell, stream + 2) * STORM_EPOCH_MS
       s.lifeMs[i] = STORM_LIFE_MIN_MS + unit(epoch, cell, stream + 3) * (STORM_LIFE_MAX_MS - STORM_LIFE_MIN_MS)
-      s.peakPerMin[i] = -STORM_RATE_PER_MIN * Math.log(unit(epoch, cell, stream + 4))
+      s.peakPerMin[i] = -peakRate * Math.log(unit(epoch, cell, stream + 4))
       s.uAccept[i] = unit(epoch, cell, stream + 5)
       s.land[i] = clim.land[cell]
       s.seed[i] = hash32(epoch >>> 0, Math.floor(epoch / TWO_32) | 0, cell, stream + 6)
@@ -370,7 +442,8 @@ export function simulateWindow(w: number, clim: LightningClimatology, clouds: Si
       const u = s.uAccept[i]
       const lat0 = s.lat[i]
       const lon0 = s.lon[i]
-      // R / R_MAX is at most 1: the gate alone settles most.
+      // R is at most R_MAX (regimeFactor), so R / R_MAX is at most 1: the
+      // gate alone settles most.
       const g = thickGate(coverAt(clouds, clim, lat0, lon0))
       if (!(u < g)) continue
       if (!(u < (regimeFactor(clouds, lat0, lon0, tMid, s.land[i]) / R_MAX) * g)) continue
