@@ -41,7 +41,9 @@ const HOOKS = [
   },
   {
     file: /\/src\/ship\/ShipController\.tsx$/,
-    anchor: /( *)(stepShip\(state, shipInput, delta,[^\n]*\n)/,
+    // One line, or (since tides-ufyr.8.3) spread over lines up to its own
+    // closing paren at the call's indent.
+    anchor: /( *)(stepShip\(state, shipInput, delta,[^\n]*\n|stepShip\(\n[\s\S]*?\n\1\)\n)/,
     replace: (_m, indent, line) =>
       `${indent}${line}` +
       `${indent};(window as any).__ship = { state, bodies, input: shipInput, telemetry: shipTelemetry, earth }\n` +
