@@ -305,6 +305,22 @@ describe('planet cloud-deck material (tides-ufyr.8.3)', () => {
     expect(main).not.toMatch(/dFd[xy]|fwidth|planetDetailFootprint/)
     expect(main).toContain('uPixelAngle')
   })
+
+  it('blends the direct term to the fog daylight before the ring shadow, adding no defines (tides-ufyr.8.3.2)', () => {
+    const flow = ['PLANET_DETAIL_FLOW', 'DETAIL_FLOW_RATE', 'DETAIL_FLOW_PERIOD', 'DETAIL_FLOW_CYCLES', 'DETAIL_FLOW_OFFSET']
+    for (const lowQuality of [false, true]) {
+      const material = planetDeckMaterial(sun, { lowQuality })
+      expect(material.uniforms.uDeckLight.value).toBe(0)
+      expect(material.uniforms.uDeckInside.value).toBe(0)
+      const main = material.fragmentShader.slice(material.fragmentShader.indexOf('void main()'))
+      const blend = main.indexOf('direct = mix(direct, uDeckLight, uDeckInside);')
+      expect(blend).toBeGreaterThan(main.indexOf('direct *= exp(-max(R - length(at), 0.0) / uSunDepth);'))
+      expect(blend).toBeLessThan(main.indexOf('uRingOpacity > 0.0'))
+      expect(Object.keys(material.defines).sort()).toEqual(
+        ['PLANET_DETAIL_OCTAVES', 'PLANET_BAND_OCTAVES', ...(lowQuality ? [] : flow), 'RING_PROFILE_EITHER', 'MAX_RING_BANDS'].sort()
+      )
+    }
+  })
 })
 
 describe("the cloud deck's ring shadow (tides-ufyr.8.3)", () => {

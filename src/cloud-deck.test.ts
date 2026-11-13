@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  DECK_FLOOR_LIGHT,
   DECK_MAX_EXPONENT,
   DECK_PROFILES,
   deckAhead,
   deckColumn,
+  deckDayLight,
   deckEye,
   deckFade,
+  deckInside,
   deckShare,
   deckSunlight,
   setDeckEye,
@@ -173,5 +176,65 @@ describe('deckSunlight (the Sun glow through the fog)', () => {
     expect(deckEye).toEqual({ key: 'jupiter', sunlight: 0.25 })
     setDeckEye(null, 0.25)
     expect(deckEye).toEqual({ key: null, sunlight: 1 })
+  })
+})
+
+describe('deckInside (how far the fog light takes over, tides-ufyr.8.3.2)', () => {
+  it.each(profiles)('is exactly 0 at and over the cloud top of %s, 1 a scale height under it and at its floor', (_key, deck) => {
+    expect(deckInside(R, R, deck)).toBe(0)
+    expect(deckInside(R * 1.02, R, deck)).toBe(0)
+    expect(deckInside(R * deck.top, R, deck)).toBe(0)
+    expect(deckInside(R * (1 - deck.scaleHeight), R, deck)).toBe(1)
+    expect(deckInside(R * deck.floor, R, deck)).toBe(1)
+  })
+
+  it.each(profiles)('rises monotonically and continuously through the band on %s', (_key, deck) => {
+    const steps = 200
+    let last = deckInside(R, R, deck)
+    for (let i = 1; i <= steps; i++) {
+      const v = deckInside(R * (1 - (i / steps) * 2 * deck.scaleHeight), R, deck)
+      expect(v).toBeGreaterThanOrEqual(last)
+      expect(v - last).toBeLessThan(0.02)
+      last = v
+    }
+  })
+})
+
+describe('deckDayLight (the fog lit by the Sun at the eye, tides-ufyr.8.3.2)', () => {
+  it.each(profiles)('is dark with the Sun down on %s at any depth', (_key, deck) => {
+    for (const mu of [-1, -0.3, 0]) {
+      for (const at of [1.01, 1, 0.995, deck.floor, deck.base]) {
+        expect(deckDayLight(R * at, mu, R, deck)).toBe(0)
+      }
+    }
+  })
+
+  it.each(profiles)('is the Sun elevation at the cloud top of %s and DECK_FLOOR_LIGHT of it at the floor', (_key, deck) => {
+    for (const mu of [0.2, 0.7, 1]) {
+      expect(deckDayLight(R, mu, R, deck)).toBeCloseTo(mu, 12)
+      expect(deckDayLight(R * deck.floor, mu, R, deck)).toBeCloseTo(DECK_FLOOR_LIGHT * mu, 12)
+    }
+  })
+
+  it.each(profiles)('dims with depth and as the Sun sinks on %s, and stays finite under the floor', (_key, deck) => {
+    let last = Infinity
+    for (let i = 0; i <= 50; i++) {
+      const v = deckDayLight(R * (1 - (i / 50) * (1 - deck.floor)), 0.7, R, deck)
+      expect(v).toBeLessThanOrEqual(last)
+      last = v
+    }
+    const at = R * 0.995
+    expect(deckDayLight(at, 1, R, deck)).toBeGreaterThan(deckDayLight(at, 0.5, R, deck))
+    expect(deckDayLight(at, 0.5, R, deck)).toBeGreaterThan(deckDayLight(at, 0.1, R, deck))
+    for (const at of [deck.base, 0.9, 0.5, 0]) {
+      const v = deckDayLight(R * at, 0.7, R, deck)
+      expect(Number.isFinite(v)).toBe(true)
+      expect(v).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it.each(profiles)("lights %s's floor at least 4x the old sun-depth dimming", (_key, deck) => {
+    const before = 0.7 * Math.exp(-(1 - deck.floor) / deck.sunDepth)
+    expect(deckDayLight(R * deck.floor, 0.7, R, deck)).toBeGreaterThanOrEqual(4 * before)
   })
 })

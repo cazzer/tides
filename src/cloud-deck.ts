@@ -43,6 +43,11 @@ export const DECK_TOP_HEIGHTS = 4
 /** [TUNE] 1/σ₀ at R and Z_L, fractions of R. */
 export const DECK_VISIBILITY = 0.004
 export const DECK_SUN_DEPTH = 0.006
+/**
+ * [TUNE] The share of the cloud top's daylight the fog keeps at the floor
+ * (deckDayLight), the eye's sunlight falling geometrically between.
+ */
+export const DECK_FLOOR_LIGHT = 0.45
 
 function deckProfile(scaleHeight: number): DeckProfile {
   return {
@@ -83,6 +88,29 @@ export function deckShare(distance: number, R: number, profile: DeckProfile): nu
 export function deckFade(distance: number, R: number, profile: DeckProfile): number {
   const x = clamp01((R * profile.top - distance) / (R * (profile.top - 1)))
   return x * x * (3 - 2 * x)
+}
+
+/**
+ * How far into the fog under the cloud top an eye `distance` from the
+ * centre is (the shader's uDeckInside): exactly 0 at and over R, so the
+ * deck-top and approach views keep the globe's lighting, 1 from one scale
+ * height under it down, smoothstepped as deckFade is.
+ */
+export function deckInside(distance: number, R: number, profile: DeckProfile): number {
+  const x = clamp01((R - distance) / (R * profile.scaleHeight))
+  return x * x * (3 - 2 * x)
+}
+
+/**
+ * The fog's daylight for an eye `distance` from the centre with the Sun at
+ * cos(zenith) `muSun` there (the shader's uDeckLight, what its direct
+ * term blends to by deckInside): the Sun's elevation, dimmed with depth
+ * under R to DECK_FLOOR_LIGHT of it at the floor, so a daytime dive stays
+ * lit and the night side dark.
+ */
+export function deckDayLight(distance: number, muSun: number, R: number, profile: DeckProfile): number {
+  const depth = Math.max(R - distance, 0) / R
+  return Math.max(muSun, 0) * DECK_FLOOR_LIGHT ** (depth / (1 - profile.floor))
 }
 
 /** The exponent's cap: e^60 overflows no float32 and is opaque at any visibility. */

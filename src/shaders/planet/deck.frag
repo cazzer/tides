@@ -6,7 +6,10 @@
 // itself and the fog covers the view alone. Its colour is the band map and
 // detail at the point one optical depth ahead (clamped to the shell's
 // exit), lit as the globe is (fragment.frag: Minnaert, with the ambient
-// fill) but with the sunlight dimmed over uSunDepth under R. The footprint
+// fill) but with the sunlight dimmed over uSunDepth under R. Inside the
+// deck that direct term blends, by uDeckInside (cloud-deck.ts deckInside, 0
+// at and over R), to uDeckLight, the fog's daylight by the Sun's elevation
+// at the eye (deckDayLight), so a daytime dive stays lit. The footprint
 // comes from uPixelAngle, not derivatives, so the map's seam and the
 // detail's octave weights stay smooth. Saturn's and Uranus's rings shadow
 // it as they do the globe (fragment.frag's USE_RING_SHADOW, here gated by
@@ -22,6 +25,9 @@ uniform float uVisibility;
 uniform float uSunDepth;
 // 0 discards (out of reach, or over the shell's top).
 uniform float uDeckFade;
+// The fog's daylight at the eye, and how far the direct term blends to it.
+uniform float uDeckLight;
+uniform float uDeckInside;
 // A pixel's angle at the view's centre, radians.
 uniform float uPixelAngle;
 uniform vec3 uSunDir;
@@ -90,6 +96,7 @@ void main() {
   float cosE = max(abs(dot(n, rd)), 0.05);
   float direct = pow(cosI, uMinnaert) * pow(cosE, uMinnaert - 1.0);
   direct *= exp(-max(R - length(at), 0.0) / uSunDepth);
+  direct = mix(direct, uDeckLight, uDeckInside);
 
   // The rings' shadow, as on the globe: sunlight toward n crosses the ring
   // plane only from the side away from the Sun.

@@ -278,6 +278,8 @@ export function planetDeckMaterial(
       uVisibility: { value: 1 },
       uSunDepth: { value: 1 },
       uDeckFade: { value: 0 },
+      uDeckLight: { value: 0 },
+      uDeckInside: { value: 0 },
       uPixelAngle: { value: 0 },
       uSunDir: sunDir,
       uAlbedo: { value: 1 },

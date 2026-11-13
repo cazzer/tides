@@ -44,7 +44,7 @@ import ringFragment from '../shaders/ring/fragment.frag'
 import { useBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
 import { eyeNearBody, pickShellFaces } from './earth-shells'
-import { deckFade, type DeckProfile } from '../cloud-deck'
+import { deckDayLight, deckFade, deckInside, type DeckProfile } from '../cloud-deck'
 
 export type { RingBand } from './planetFrame'
 
@@ -295,6 +295,9 @@ function PlanetDeck({
         const u = material.uniforms
         const distance = this.worldToLocal(camera.getWorldPosition(deckEye)).length()
         u.uDeckFade.value = eyeNearBody(camera, planet.key) ? deckFade(distance, R, deck) : 0
+        const muSun = distance > 0 ? deckEye.dot(sun.uniform.value) / distance : 1
+        u.uDeckInside.value = deckInside(distance, R, deck)
+        u.uDeckLight.value = deckDayLight(distance, muSun, R, deck)
         const { fov } = camera as THREE.PerspectiveCamera
         const height = renderer.getCurrentViewport(deckViewport).w
         u.uPixelAngle.value = height > 0 ? (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2))) / height : 0
