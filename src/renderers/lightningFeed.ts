@@ -19,12 +19,10 @@ import { eitherSignal } from './surface/fetch-retry'
 const FETCH_TIMEOUT_MS = 30_000
 
 /**
- * The climatology asset (tides-ufyr.14.1), fetched on first need. Without
- * it the fetch 404s (Vite leaves a missing file's URL to resolve at
- * runtime, with a build warning) or gets the dev server's HTML, which
- * decodeLightningClimatology rejects for its length: either way the feed
- * warns once and simulates nothing. Dropping the file in at this path is
- * all it takes: Vite then bundles it.
+ * The climatology asset (tides-ufyr.14.1, scripts/build-lightning-climatology.py),
+ * bundled by Vite and fetched on first need. A missing file (404) or bytes of
+ * the wrong length (decodeLightningClimatology rejects them) make the feed
+ * warn once and simulate nothing; a network error or timeout backs off.
  */
 const CLIMATOLOGY_URL = new URL('../assets/earth-lightning.bin', import.meta.url)
 

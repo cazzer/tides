@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import {
   CLIM_CELLS,
@@ -7,6 +8,7 @@ import {
   COVER_W,
   DENSITY_F0,
   cellAreaKm2,
+  cellCentre,
   cellOf,
   decodeFlashDensity,
   decodeLightningClimatology,
@@ -150,10 +152,99 @@ describe('the guess where LIS has no data', () => {
   })
 })
 
-// The real asset (tides-ufyr.14.1) once it exists: its global mean rate is
-// 46 ± 7 fl/s over 12 months; Lake Maracaibo and the eastern Congo are in the
-// top 1% of cells; the Sahara in January and Antarctica are about 0; and the
-// guess (GUESS_BASE) is about LIS's own at 30-38° in the same month.
-describe.skip('the shipped climatology (tides-ufyr.14.1)', () => {
-  test.todo('46 ± 7 fl/s, hotspots, deserts, and GUESS_BASE calibrated at the coverage edge')
+// The shipped asset (tides-ufyr.14.1, scripts/build-lightning-climatology.py).
+describe('the shipped climatology (tides-ufyr.14.1)', () => {
+  const bytes = new Uint8Array(readFileSync('src/assets/earth-lightning.bin'))
+  const clim = decodeLightningClimatology(bytes)
+  const yearly = (cell: number) => clim.monthly.reduce((sum, plane) => sum + plane[cell], 0) / 12
+  const midMonth = (m: number) => monthBlend(Date.UTC(2031, m, 15, 12))
+
+  test('is the layout, exactly', () => {
+    expect(bytes.length).toBe(LIGHTNING_BYTES)
+  })
+
+  test("LIS's band flashes about 41 times a second, below the whole Earth's 46 (LIS/OTD)", () => {
+    // Σ density x coverage x area over the band, the 12 months' mean. The
+    // build reads 40.96 before the bytes and 40.99 after; a byte is a 1.5%
+    // half step, so 2 fl/s is room for a rebuild, not for a class misread
+    // (0.01 fl/km²/day over the band is ~30 fl/s).
+    let sum = 0
+    for (const plane of clim.monthly) {
+      for (let y = 0; y < CLIM_H; y++) {
+        const area = cellAreaKm2(y)
+        for (let x = 0; x < CLIM_W; x++) sum += plane[y * CLIM_W + x] * clim.coverage[y * CLIM_W + x] * area
+      }
+    }
+    const rate = sum / 12 / 86_400
+    expect(rate).toBeGreaterThan(39)
+    expect(rate).toBeLessThan(43)
+  })
+
+  test('Lake Maracaibo and the eastern Congo are in the top 1% of covered cells', () => {
+    const covered: number[] = []
+    for (let i = 0; i < CLIM_CELLS; i++) if (clim.coverage[i] === 1) covered.push(yearly(i))
+    covered.sort((a, b) => a - b)
+    const top1 = covered[Math.floor(0.99 * covered.length)]
+    expect(yearly(cellOf(9.75, -71.5))).toBeGreaterThanOrEqual(top1)
+    expect(yearly(cellOf(-1.25, 28.75))).toBeGreaterThanOrEqual(top1)
+  })
+
+  test('the Sahara in January, the mid-South-Pacific and Antarctica (beyond LIS) are about 0', () => {
+    expect(clim.monthly[0][cellOf(25, 10)]).toBeLessThan(0.002)
+    expect(yearly(cellOf(-20, -130))).toBeLessThan(0.005)
+    for (let m = 0; m < 12; m++) expect(clim.monthly[m][cellOf(-80, 0)]).toBe(0)
+  })
+
+  test('land is the Sahara, not the mid-Pacific', () => {
+    expect(landAt(clim, 25, 10)).toBeGreaterThan(0.95)
+    expect(landAt(clim, 0, -150)).toBeLessThan(0.05)
+  })
+
+  test("LIS's coverage is the band: full at the equator, none at 70° N", () => {
+    for (let lon = -178.75; lon < 180; lon += 2.5) {
+      expect(clim.coverage[cellOf(0, lon)]).toBe(1)
+      expect(clim.coverage[cellOf(70, lon)]).toBe(0)
+      expect(clim.coverage[cellOf(-70, lon)]).toBe(0)
+    }
+    // LIS has density wherever it has any coverage.
+    for (let i = 0; i < CLIM_CELLS; i++) if (clim.coverage[i] > 0) expect(clim.monthly[6][i] + clim.monthly[0][i]).toBeGreaterThan(0)
+  })
+
+  test("the guess is within a factor of 2 of LIS's over land at 30-37.5°, in its summer and over the year", () => {
+    const compare = (inRow: (lat: number) => boolean, months: number[]) => {
+      let lis = 0
+      let guess = 0
+      let n = 0
+      for (let i = 0; i < CLIM_CELLS; i++) {
+        const [lat] = cellCentre(i)
+        if (!inRow(lat) || clim.coverage[i] < 1 || clim.land[i] < 0.5) continue
+        for (const m of months) {
+          lis += clim.monthly[m][i]
+          guess += guessedDensity(lat, clim.land[i], midMonth(m))
+          n++
+        }
+      }
+      expect(n).toBeGreaterThan(100)
+      return guess / lis
+    }
+    const north = (lat: number) => lat > 30 && lat < 37.5
+    const south = (lat: number) => lat < -30 && lat > -37.5
+    for (const ratio of [
+      compare(north, [5, 6, 7]),
+      compare(south, [11, 0, 1]),
+      compare(north, [...Array(12).keys()]),
+      compare(south, [...Array(12).keys()]),
+    ]) {
+      expect(ratio).toBeGreaterThan(0.5)
+      expect(ratio).toBeLessThan(2)
+    }
+  })
+
+  test('the static cover is the static clouds', () => {
+    expect(clim.cover.length).toBe(COVER_W * COVER_H)
+    const mean = clim.cover.reduce((a, b) => a + b, 0) / clim.cover.length / 255
+    expect(mean).toBeGreaterThan(0.1)
+    expect(mean).toBeLessThan(0.6)
+    expect(staticCover(clim, 25, 10)).toBeLessThan(0.1)
+  })
 })
