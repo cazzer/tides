@@ -54,13 +54,19 @@ void main() {
   // Perspective (the ship, the panels) or orthographic (the main view).
   bool perspective = projectionMatrix[2][3] == -1.0;
   float depth = -centre.z;
-  // Scene units per pixel at the flash.
+  // Scene units per (CSS) pixel at the flash: uViewportH is in CSS px.
   float pxWorld = 2.0 / (projectionMatrix[1][1] * uViewportH) * (perspective ? depth : 1.0);
   float size = max(aFlash.w * uKmToScene, uMinPx * pxWorld);
   // Fades as the eye comes within a few glows of it (flying through).
   float near = perspective ? smoothstep(size, 4.0 * size, depth) : 1.0;
   float day = mix(1.0, DAY_FLOOR, smoothstep(-0.10, 0.15, dot(dir, uSun)));
   vI = flashIntensity(age, aFlash.y, aDir.w) * aFlash.z * day * near;
+  // Dark (between pulses, or the eye inside it): no fragments either, so a
+  // quad filling the screen costs nothing.
+  if (vI <= 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
   centre.xy += position.xy * size;
   gl_Position = projectionMatrix * centre;
 }

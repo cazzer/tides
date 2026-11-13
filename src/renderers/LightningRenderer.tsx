@@ -16,11 +16,12 @@ import {
   flashRadiusKm,
   flashSeed,
   hashKey,
+  heldLightningClock,
   isJump,
   lightningCaps,
-  lightningClock,
   windowStride,
   type FlashBatch,
+  type LightningTick,
 } from '../lightning'
 import { CLOUD_FLAT_ALTITUDE, cloudDeckAt, EARTH_RADIUS_KM } from '../cloud-layer'
 import { isLowQuality, touchDevice } from '../quality'
@@ -40,9 +41,9 @@ const CAPS = lightningCaps(LOW_QUALITY || touchDevice())
 const FLASH_KM = 8
 /** [TUNE] The glow's gain. */
 const LIGHTNING_GAIN = 1.5
-/** The smallest a flash's glow is drawn, px. */
+/** The smallest a flash's glow is drawn, CSS px. */
 const MIN_FLASH_PX = 2.5
-/** Downloads start only while some View shows Earth at least this big (radius, px). */
+/** Downloads start only while some View shows Earth at least this big (radius, CSS px). */
 const MIN_EARTH_PX = 40
 /** ... and has within this long (wall ms). */
 const SEEN_MS = 1500
@@ -58,6 +59,8 @@ const earthSphere = new THREE.Sphere()
 const viewport = new THREE.Vector4()
 const local = new THREE.Vector3()
 const eye = new THREE.Vector3()
+/** The feed's arguments, filled in each frame (no allocation). */
+const tickArgs: LightningTick = { clockMs: 0, stride: 1, rate: 0, wallMs: 0, nowMs: 0, fetch: false }
 
 // three r180's Frustum takes the reversed depth its typings predate.
 const setFrustum = frustum.setFromProjectionMatrix.bind(frustum) as (
@@ -121,7 +124,14 @@ export default function LightningRenderer({ radius, hidden }: LightningRendererP
   }, [real])
 
   // The frame's emission state, read by the one emit callback.
-  const frame = useRef({ prevClock: null as number | null, prevStride: 0, emitted: 0, batch: null as FlashBatch | null, keyHash: 0 })
+  const frame = useRef({
+    prevClock: null as number | null,
+    prevStride: 0,
+    emitted: 0,
+    batch: null as FlashBatch | null,
+    keyHash: 0,
+    hold: { sceneMs: Number.NaN, clockMs: Number.NaN },
+  })
   const emit = useMemo(
     () => (batch: FlashBatch, i: number) => {
       const f = frame.current
@@ -165,16 +175,16 @@ export default function LightningRenderer({ radius, hidden }: LightningRendererP
     const nowMs = Date.now()
     const wallMs = performance.now()
     // During a jump only its target matters: its window loads on the way.
-    const clockMs = lightningClock(jumpDate?.getTime() ?? timestamp, nowMs)
+    // Paused, the clock holds (near live it would follow now).
+    const clockMs = heldLightningClock(f.hold, jumpDate?.getTime() ?? timestamp, timeScale, nowMs)
     const stride = windowStride(timeScale)
-    const batches = lightningFeed.tick({
-      clockMs,
-      stride,
-      rate: timeScale,
-      wallMs,
-      nowMs,
-      fetch: !hidden && wallMs - earthSeenAt < SEEN_MS,
-    })
+    tickArgs.clockMs = clockMs
+    tickArgs.stride = stride
+    tickArgs.rate = timeScale
+    tickArgs.wallMs = wallMs
+    tickArgs.nowMs = nowMs
+    tickArgs.fetch = !hidden && wallMs - earthSeenAt < SEEN_MS
+    const batches = lightningFeed.tick(tickArgs)
     const from = f.prevClock
     const steady = from !== null && stride === f.prevStride && jumpDate == null && !isJump(from, clockMs, stride)
     f.prevClock = clockMs
@@ -201,8 +211,10 @@ export default function LightningRenderer({ radius, hidden }: LightningRendererP
       const deck = cloudDeckAt(fineGroundDepth(SURFACE_TILES_ON, reversedFloatDepth(renderer)))
       u.uRadius.value = radius + deck.clearance + deck.unitsPerKm * FLASH_KM
     }
-    u.uViewportH.value = renderer.getCurrentViewport(viewport).w
-    if (mesh.current && earthPixels(mesh.current, radius, camera, viewport.w) >= MIN_EARTH_PX) {
+    // The viewport is in device pixels; the minimum sizes are CSS px.
+    const viewportH = renderer.getCurrentViewport(viewport).w / renderer.getPixelRatio()
+    u.uViewportH.value = viewportH
+    if (mesh.current && earthPixels(mesh.current, radius, camera, viewportH) >= MIN_EARTH_PX) {
       earthSeenAt = performance.now()
     }
   }

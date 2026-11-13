@@ -1,24 +1,26 @@
-"""Build the GLM lightning fixtures (tides-ufyr.13; format: src/glm.ts).
+"""Build a GLM lightning fixture (tides-ufyr.13; format: src/glm.ts).
 
-- src/__fixtures__/glm-lcfa-g19-12.nc: the first N (12) flashes of a real
-  GOES-19 GLM L2 LCFA file: every flash_* variable on the number_of_flashes
-  dimension cut to them, the other flash_* variables (scalars) whole, and
-  nominal_satellite_subpoint_lon, each with its original attributes in
-  their original order (_FillValue first, as netCDF sets it at creation),
-  packed raw (no scaling on the way through), zlib + shuffle like the
-  source.
-- src/__fixtures__/glm-lcfa-g19-0.nc: the same with no flashes, the shape
-  a quiet 20 s window has.
+Writes the first N flashes of a real GLM L2 LCFA file to <out.nc>: every
+flash_* variable on the number_of_flashes dimension cut to them, the other
+flash_* variables (scalars) whole, and nominal_satellite_subpoint_lon, each
+with its original attributes in their original order (_FillValue first, as
+netCDF sets it at creation), packed raw (no scaling on the way through),
+zlib + shuffle like the source. N = 0 gives the shape a quiet 20 s window
+has.
 
-Source: NOAA's open-data bucket noaa-goes19,
-GLM-L2-LCFA/2026/317/00/OR_GLM-L2-LCFA_G19_s20263170000000_e20263170000200_c20263170000217.nc
-(read 2026-11-12). Nothing at runtime reads it.
+The fixtures in src/__fixtures__ and their sources, from NOAA's open-data
+buckets (read 2026-11-12); nothing at runtime reads them:
+- glm-lcfa-g19-12.nc, glm-lcfa-g19-0.nc: noaa-goes19
+  GLM-L2-LCFA/2026/317/00/OR_GLM-L2-LCFA_G19_s20263170000000_e20263170000200_c20263170000217.nc
+- glm-lcfa-g18-12.nc: noaa-goes18
+  GLM-L2-LCFA/2026/316/22/OR_GLM-L2-LCFA_G18_s20263162200000_e20263162200200_c20263162200219.nc
 
-Prints the fixture's flashes decoded with the packing src/glm.ts hard-codes
-(GLM_PACKING), as JSON, for the tests' expectations
-(src/__fixtures__/glm-lcfa-g19-12.json).
+Prints the fixture's flashes as netCDF4 itself unpacks them (its own mask
+and scale, from the file's attributes, _Unsigned included: not
+src/glm.ts's hard-coded GLM_PACKING, which the tests check against these),
+as JSON, for the tests' expectations (<out>.json beside the .nc).
 
-usage: uv run --no-project --with netCDF4 python -I scripts/build-glm-fixture.py <source.nc> <out_dir> [N] > src/__fixtures__/glm-lcfa-g19-12.json
+usage: uv run --no-project --with netCDF4 python -I scripts/build-glm-fixture.py <source.nc> <out.nc> [N] > <out.json>
 """
 
 import json
@@ -31,13 +33,11 @@ import numpy as np
 FLASH_DIM = "number_of_flashes"
 # netCDF4 writes these itself.
 SKIP_ATTRS = {"_FillValue", "DIMENSION_LIST", "_Netcdf4Coordinates", "_Netcdf4Dimid"}
-# src/glm.ts GLM_PACKING.
-TIME = (0.00038147560553625226, -5.0)
-PACKING = {
-    "flash_time_offset_of_first_event": TIME,
-    "flash_time_offset_of_last_event": TIME,
-    "flash_energy": (9.999959802209943e-16, 2.8514998886357517e-16),
-    "flash_area": (152601.859375, 0.0),
+FIELDS = {
+    "firstS": "flash_time_offset_of_first_event",
+    "lastS": "flash_time_offset_of_last_event",
+    "energyJ": "flash_energy",
+    "areaM2": "flash_area",
 }
 
 
@@ -61,26 +61,27 @@ def copy(src: netCDF4.Dataset, out: Path, n: int) -> None:
 
 
 def decode(src: netCDF4.Dataset, n: int) -> list[dict]:
-    raw = {}
-    for name in PACKING:
+    # netCDF4's defaults: masked fill values, scale_factor / add_offset and
+    # _Unsigned applied from the file's own attributes.
+    values = {}
+    for field, name in FIELDS.items():
         var = src.variables[name]
-        var.set_auto_maskandscale(False)
-        raw[name] = np.asarray(var[:n]).astype(np.int64)
+        var.set_auto_maskandscale(True)
+        values[field] = np.ma.masked_invalid(np.ma.asarray(var[:n], dtype=np.float64))
     lat = np.asarray(src.variables["flash_lat"][:n], dtype=np.float64)
     lon = np.asarray(src.variables["flash_lon"][:n], dtype=np.float64)
     rows = []
     for i in range(n):
-        if any(raw[k][i] == -1 for k in PACKING):
+        if any(np.ma.is_masked(values[f][i]) for f in FIELDS):
             continue
-        value = {k: float((raw[k][i] & 0xFFFF) * s + o) for k, (s, o) in PACKING.items()}
         rows.append(
             {
-                "lat": float(np.float32(lat[i])),
-                "lon": float(np.float32(lon[i])),
-                "firstS": value["flash_time_offset_of_first_event"],
-                "lastS": value["flash_time_offset_of_last_event"],
-                "energyJ": value["flash_energy"],
-                "areaKm2": value["flash_area"] / 1e6,
+                "lat": float(lat[i]),
+                "lon": float(lon[i]),
+                "firstS": float(values["firstS"][i]),
+                "lastS": float(values["lastS"][i]),
+                "energyJ": float(values["energyJ"][i]),
+                "areaKm2": float(values["areaM2"][i]) / 1e6,
             }
         )
     return rows
@@ -88,12 +89,12 @@ def decode(src: netCDF4.Dataset, n: int) -> list[dict]:
 
 def main() -> None:
     source = Path(sys.argv[1])
-    out_dir = Path(sys.argv[2])
+    out = Path(sys.argv[2])
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 12
     with netCDF4.Dataset(source) as src:
-        copy(src, out_dir / f"glm-lcfa-g19-{n}.nc", n)
-        copy(src, out_dir / "glm-lcfa-g19-0.nc", 0)
-        print(json.dumps({"subpointLon": float(src.variables["nominal_satellite_subpoint_lon"][...]), "flashes": decode(src, n)}, indent=1))
+        copy(src, out, n)
+        subpoint = float(src.variables["nominal_satellite_subpoint_lon"][...])
+        print(json.dumps({"subpointLon": subpoint, "flashes": decode(src, n)}, indent=1))
 
 
 if __name__ == "__main__":

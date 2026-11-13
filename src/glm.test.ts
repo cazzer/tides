@@ -114,19 +114,22 @@ describe('decodeGlmFlashes', () => {
     expect([...batch.owned]).toEqual([0, 0, 0])
   })
 
-  test('drops fill values and non-finite rows', () => {
+  test("drops energy and area fill values and non-finite rows; a time's raw -1 is 20 s", () => {
     const r = raw([
       { first: 1, last: 1.2, energyJ: 1e-13, areaKm2: 300 },
       { first: 2, last: 2.2, energyJ: 1e-13, areaKm2: 300 },
       { first: 3, last: 3.2, energyJ: 1e-13, areaKm2: 300 },
       { first: 4, last: 4.2, energyJ: 1e-13, areaKm2: 300 },
+      { first: 19.9, last: 19.95, energyJ: 1e-13, areaKm2: 300 },
     ])
     ;(r.energy as number[])[0] = -1
-    ;(r.first as number[])[1] = -1
+    ;(r.area as number[])[1] = -1
     ;(r.lat as number[])[2] = Number.NaN
+    ;(r.last as number[])[4] = -1
     const batch = decodeGlmFlashes(r, KEY, start)
-    expect(batch.count).toBe(1)
+    expect(batch.count).toBe(2)
     expect(batch.offsetMs[0]).toBeCloseTo(4000, -1)
+    expect(batch.offsetMs[1] + batch.durationMs[1]).toBeCloseTo(20_000, -1)
   })
 
   test('an area out of range means the packing is wrong: the batch is emptied', () => {

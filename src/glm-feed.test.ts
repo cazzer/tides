@@ -61,7 +61,8 @@ function harness({
   auto = true,
   failLoads = false,
   startNow = NOW,
-}: { auto?: boolean; failLoads?: boolean; startNow?: number } = {}) {
+  silent = null,
+}: { auto?: boolean; failLoads?: boolean; startNow?: number; silent?: 'G19' | 'G18' | null } = {}) {
   const lists: ListCall[] = []
   const loads: LoadCall[] = []
   let wall = 0
@@ -73,7 +74,8 @@ function harness({
         lists.push({ sat, hourMs, startAfter, signal, wall, resolve: resolve as never, reject })
         if (!auto) return
         const keys: string[] = []
-        for (let w = hourMs / WINDOW_MS; w < (hourMs + HOUR_MS) / WINDOW_MS; w++) {
+        // A satellite in an outage posts nothing.
+        for (let w = hourMs / WINDOW_MS; w < (hourMs + HOUR_MS) / WINDOW_MS && sat.id !== silent; w++) {
           if ((w + 1) * WINDOW_MS + POSTED_MS > now || w * WINDOW_MS < sat.fromMs) continue
           const key = keyFor(sat, w)
           if (startAfter === null || key > startAfter) keys.push(key)
@@ -311,6 +313,59 @@ describe('createGlmFeed', () => {
       [false, [0, 1]],
     ])
     expect(glmKeyWindow(batches[0].key)).toBe(w)
+  })
+
+  test('live, with one satellite posting nothing, the other still plays, every flash its own', async () => {
+    const h = harness({ silent: 'G18' })
+    let ticksWithBatches = 0
+    for (let s = 0; s < 120; s++) {
+      const batches = await h.play(NOW + s * 1000, 1, 0.9)
+      if (batches.length > 0) {
+        ticksWithBatches++
+        expect(batches.every((b) => b.key.includes('_G19_') && [...b.owned].every((o) => o === 1))).toBe(true)
+      }
+    }
+    expect(h.loads.some((c) => c.sat.id === 'G18')).toBe(false)
+    // All but the first second or so, before the first file is in.
+    expect(ticksWithBatches).toBeGreaterThan(115)
+  })
+
+  test('a scrub straight after the first tick settles before listing anything more', async () => {
+    const h = harness({ auto: false })
+    const scene = Date.UTC(2026, 9, 1)
+    // 2 s at 60 fps, an hour of scene time a frame.
+    for (let f = 0; f < 120; f++) await h.play(scene + f * HOUR_MS, 0, 0, { stepMs: 17 })
+    expect(h.lists.length).toBeLessThanOrEqual(2)
+    // Held: the target's hour is listed once it has settled.
+    const before = h.lists.length
+    await h.play(scene + 200 * HOUR_MS, 0, (SETTLE_MS + 100) / 1000, { stepMs: 17 })
+    expect(h.lists.length).toBe(before + 2)
+    expect(h.lists.slice(-2).map((c) => c.hourMs)).toEqual([scene + 200 * HOUR_MS, scene + 200 * HOUR_MS])
+  })
+
+  test('a satellite back from failing takes its share of a window the other was drawing alone', async () => {
+    const h = harness({ auto: false })
+    const scene = Date.UTC(2026, 10, 10, 6, 10)
+    const w = scene / WINDOW_MS
+    await h.play(scene, 0, 0.1)
+    for (const c of h.lists) c.resolve([keyFor(c.sat, w)] as never)
+    await h.play(scene, 0, 0.1)
+    const [east, west] = SATELLITES.map((sat) => h.loads.find((c) => c.sat === sat)!)
+    east.resolve(batchFor(east.sat, east.key, scene, [-80, -130]) as never)
+    west.reject(new Error('boom'))
+    let batches = await h.play(scene, 0, 0.1)
+    // GOES-18 failed: GOES-19 draws both.
+    expect(batches.map((b) => [...b.owned])).toEqual([[1, 1]])
+    // Its retry, after the 10 s backoff, comes in.
+    await h.play(scene, 0, 10)
+    const retry = h.loads.filter((c) => c.sat.id === 'G18')
+    expect(retry).toHaveLength(2)
+    retry[1].resolve(batchFor(retry[1].sat, retry[1].key, scene, [-80, -130]) as never)
+    batches = await h.play(scene, 0, 0.1)
+    expect(batches.map((b) => [b.key.includes('_G19_'), [...b.owned]])).toEqual([
+      [true, [1, 0]],
+      [false, [0, 1]],
+    ])
   })
 
   test('deactivate drops in-flight downloads and keeps what is loaded', async () => {

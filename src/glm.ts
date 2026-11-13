@@ -33,13 +33,16 @@ export interface Packing {
 
 /**
  * The packed flash variables' scale_factor and add_offset (all i2 with
- * _Unsigned "true" and _FillValue -1): value = (raw & 0xffff) · scale +
- * offset. jsfive 0.4.0 can't read HDF5's dense attribute storage, which
- * these variables' attributes use, so they are hard-coded, as read with
- * netCDF4 from OR_GLM-L2-LCFA_G19_s20263170000000_e20263170000200_c20263170000217.nc
- * (2026-11-12) and as the GOES-19 GLM L2 ReadMe gives them; readGlmFile
- * checks the time packing against flash_time_offset_of_last_event's, which
- * jsfive can read.
+ * _Unsigned "true"; flash_energy and flash_area have _FillValue -1, the
+ * times none): value = (raw & 0xffff) · scale + offset. jsfive 0.4.0 can't
+ * read HDF5's dense attribute storage, which these variables' attributes
+ * use, so they are hard-coded, as read with netCDF4 from
+ * OR_GLM-L2-LCFA_G19_s20263170000000_e20263170000200_c20263170000217.nc and
+ * OR_GLM-L2-LCFA_G18_s20263162200000_e20263162200200_c20263162200219.nc
+ * (2026-11-12; the same for both satellites, and as the GOES-19 GLM L2
+ * ReadMe gives them). readGlmFile checks the time packing against
+ * flash_time_offset_of_last_event's, which jsfive can read, and the tests
+ * check all of it against netCDF4's own unpacking of both fixtures.
  */
 export const GLM_PACKING = {
   /** Seconds from the file's start (flash_time_offset_of_first_event / _last_event). */
@@ -50,6 +53,7 @@ export const GLM_PACKING = {
   area: { scale: 152601.859375, offset: 0 },
 } as const satisfies Record<string, Packing>
 
+/** Energy and area's fill value (raw). */
 const FILL = -1
 
 /** A file's flash variables as read, still packed. */
@@ -152,8 +156,10 @@ export function decodeGlmFlashes(raw: GlmRaw, key: string, windowStartMs: number
   const first = new Float64Array(n)
   let sane = true
   for (let i = 0; i < n; i++) {
+    // The times have no _FillValue: their raw -1 is 20.0 s, a real time.
+    if (raw.energy[i] === FILL || raw.area[i] === FILL) continue
     const r = [raw.first[i], raw.last[i], raw.energy[i], raw.area[i]]
-    if (r.some((v) => v === FILL || !Number.isFinite(v))) continue
+    if (r.some((v) => !Number.isFinite(v))) continue
     if (!Number.isFinite(raw.lat[i]) || !Number.isFinite(raw.lon[i])) continue
     const areaKm2 = unpack(raw.area[i], GLM_PACKING.area) / 1e6
     if (areaKm2 < AREA_SANE_KM2[0] || areaKm2 > AREA_SANE_KM2[1]) sane = false

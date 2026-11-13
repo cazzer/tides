@@ -68,6 +68,25 @@ export function lightningClock(sceneMs: number, nowMs: number): number {
   return Math.min(sceneMs, nowMs - LIVE_LAG_MS)
 }
 
+/** The last scene time a clock was taken at, and the clock. */
+export interface ClockHold {
+  sceneMs: number
+  clockMs: number
+}
+
+/**
+ * lightningClock, held while paused on the same scene time: near live the
+ * clock would otherwise go on following now − LIVE_LAG_MS, and pause
+ * wouldn't pause the lightning. `hold` is the caller's, updated.
+ */
+export function heldLightningClock(hold: ClockHold, sceneMs: number, timeScale: number, nowMs: number): number {
+  if (!(timeScale === 0 && sceneMs === hold.sceneMs && Number.isFinite(hold.clockMs))) {
+    hold.clockMs = lightningClock(sceneMs, nowMs)
+  }
+  hold.sceneMs = sceneMs
+  return hold.clockMs
+}
+
 /**
  * Sped up, only every stride-th window plays, its 20 s stretched over the
  * stride's span, so no more than one file plays per ~5 s of wall time: a

@@ -84,7 +84,10 @@ interface Sat {
   sat: GlmSatellite
   hours: Map<number, Hour>
   listing: { hourMs: number; abort: AbortController } | null
+  /** Change through setWindow / dropWindow, which keep `finished`. */
   windows: Map<number, Window>
+  /** Windows not loading (done, empty or failed). */
+  finished: number
   failures: number
   /** No download starts before this wall ms. */
   retryAt: number
@@ -100,6 +103,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
     hours: new Map(),
     listing: null,
     windows: new Map(),
+    finished: 0,
     failures: 0,
     retryAt: -Infinity,
     lastStartAt: -Infinity,
@@ -116,6 +120,29 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
 
   const available = (s: Sat, w: number, nowMs: number) =>
     w * WINDOW_MS >= s.sat.fromMs && (w + 1) * WINDOW_MS <= nowMs
+
+  function setWindow(s: Sat, w: number, state: Window) {
+    const before = s.windows.get(w)
+    if (before && before.status !== 'loading') s.finished--
+    if (state.status !== 'loading') s.finished++
+    s.windows.set(w, state)
+  }
+
+  function dropWindow(s: Sat, w: number) {
+    const before = s.windows.get(w)
+    if (!before) return
+    if (before.status !== 'loading') s.finished--
+    s.windows.delete(w)
+  }
+
+  // Window w's batches settle their shares again: another satellite's file
+  // for it came in (perhaps after one was drawing it alone).
+  function reshare(w: number) {
+    for (const s of sats) {
+      const state = s.windows.get(w)
+      if (state?.status === 'done') state.owned = false
+    }
+  }
 
   function fail(s: Sat, what: string, err: unknown) {
     s.failures++
@@ -158,22 +185,23 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
   function startLoad(s: Sat, w: number, key: string) {
     const abort = new AbortController()
     const gen = generation
-    s.windows.set(w, { status: 'loading', abort })
+    setWindow(s, w, { status: 'loading', abort })
     s.lastStartAt = wall
     fresh = false
     load(s.sat, key, w * WINDOW_MS, abort.signal).then(
       (batch) => {
         if (gen !== generation || (s.windows.get(w) as { abort?: AbortController } | undefined)?.abort !== abort) return
         s.failures = 0
-        s.windows.set(w, { status: 'done', batch, owned: false })
+        setWindow(s, w, { status: 'done', batch, owned: false })
+        reshare(w)
       },
       (err: unknown) => {
         if (gen !== generation || (s.windows.get(w) as { abort?: AbortController } | undefined)?.abort !== abort) return
         if (abort.signal.aborted) {
-          s.windows.delete(w)
+          dropWindow(s, w)
           return
         }
-        s.windows.set(w, { status: 'failed' })
+        setWindow(s, w, { status: 'failed' })
         fail(s, 'file', err)
       }
     )
@@ -197,7 +225,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
       return 'started'
     }
     if (hour?.complete) {
-      s.windows.set(w, { status: 'empty' })
+      setWindow(s, w, { status: 'empty' })
       return 'settled'
     }
     if (s.listing) return 'waiting'
@@ -206,18 +234,22 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
   }
 
   // What the other satellite saw of window w: its subpoint longitude, NaN
-  // when it saw nothing (or never will), undefined while it may yet.
-  function otherSubpoint(o: Sat, w: number, nowMs: number): number | undefined {
+  // when it has nothing for it (none to come, or none in flight once the
+  // clock has reached w: a gap in its files, an outage), undefined while
+  // it may yet. Should its file come in after all, reshare() settles the
+  // shares again.
+  function otherSubpoint(o: Sat, w: number, nowMs: number, reached: boolean): number | undefined {
     if (!available(o, w, nowMs)) return Number.NaN
     const state = o.windows.get(w)
     if (state?.status === 'done') return state.batch.subpointLon
-    if (state?.status === 'empty' || state?.status === 'failed' || o.failures > 0) return Number.NaN
+    if (state?.status === 'loading') return undefined
+    if (state || o.failures > 0 || reached) return Number.NaN
     return undefined
   }
 
-  // Once both satellites have window w (or one never will), each flash goes
-  // to the one nearer it.
-  function resolveOwnership(w: number, nowMs: number) {
+  // Once both satellites have window w (or one has none), each flash goes
+  // to the one nearer it. `reached`: the clock is in w or past it.
+  function resolveOwnership(w: number, nowMs: number, reached: boolean) {
     for (let i = 0; i < sats.length; i++) {
       const state = sats[i].windows.get(w)
       if (state?.status !== 'done' || state.owned) continue
@@ -225,7 +257,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
       let pending = false
       for (const o of sats) {
         if (o === sats[i]) continue
-        const other = otherSubpoint(o, w, nowMs)
+        const other = otherSubpoint(o, w, nowMs, reached)
         if (other === undefined) pending = true
         else lon = other
       }
@@ -240,12 +272,10 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
 
   // Keeps the MAX_WINDOWS finished windows nearest the current one.
   function prune(s: Sat, wc: number) {
-    let finished = 0
-    for (const state of s.windows.values()) if (state.status !== 'loading') finished++
-    if (finished <= MAX_WINDOWS) return
+    if (s.finished <= MAX_WINDOWS) return
     const kept = [...s.windows].filter(([, state]) => state.status !== 'loading')
     kept.sort((a, b) => Math.abs(b[0] - wc) - Math.abs(a[0] - wc))
-    for (const [w] of kept.slice(0, kept.length - MAX_WINDOWS)) s.windows.delete(w)
+    for (const [w] of kept.slice(0, kept.length - MAX_WINDOWS)) dropWindow(s, w)
   }
 
   // A jump: drop downloads for windows other than these.
@@ -255,7 +285,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
       for (const [w, state] of s.windows) {
         if (state.status === 'loading' && !keep.includes(w)) {
           state.abort.abort()
-          s.windows.delete(w)
+          dropWindow(s, w)
         }
       }
       if (s.listing && !hours.includes(s.listing.hourMs)) {
@@ -273,6 +303,9 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
       const dir = rate < 0 ? -1 : 1
       const wn = wc + dir * stride
       if (lastCurrent === null || stride !== lastStride || Math.abs(wc - lastCurrent) > stride) {
+        // Only the very first target goes at once: a scrub from the start
+        // settles like any other.
+        if (lastCurrent !== null) fresh = false
         for (const s of sats) s.anchored = false
         settleSince = wallMs
         abandon([wc, wn])
@@ -307,7 +340,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
       }
 
       out.length = 0
-      for (let k = -1; k <= 1; k++) resolveOwnership(wc + k * stride, nowMs)
+      for (let k = -1; k <= 1; k++) resolveOwnership(wc + k * stride, nowMs, k * dir <= 0)
       for (const s of sats) {
         prune(s, wc)
         for (let k = -1; k <= 1; k++) {
@@ -324,7 +357,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
         for (const [w, state] of s.windows) {
           if (state.status === 'loading') {
             state.abort.abort()
-            s.windows.delete(w)
+            dropWindow(s, w)
           }
         }
         s.listing?.abort.abort()

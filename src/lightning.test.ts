@@ -17,6 +17,7 @@ import {
   FLASH_LIFETIME_S,
   FUTURE_SLACK_MS,
   hashKey,
+  heldLightningClock,
   isJump,
   lightningCaps,
   lightningClock,
@@ -62,6 +63,14 @@ describe('the lightning clock', () => {
     expect(lightningClock(now + FUTURE_SLACK_MS, now)).toBe(now - LIVE_LAG_MS)
     expect(lightningClock(now - 3_600_000, now)).toBe(now - 3_600_000)
     expect(lightningClock(now + FUTURE_SLACK_MS + 1, now)).toBe(now + FUTURE_SLACK_MS + 1)
+  })
+
+  test('paused on a scene time, the clock holds, live too; a scrub or play moves it', () => {
+    const hold = { sceneMs: Number.NaN, clockMs: Number.NaN }
+    expect(heldLightningClock(hold, now, 0, now)).toBe(now - LIVE_LAG_MS)
+    expect(heldLightningClock(hold, now, 0, now + 30_000)).toBe(now - LIVE_LAG_MS)
+    expect(heldLightningClock(hold, now - 3_600_000, 0, now + 31_000)).toBe(now - 3_600_000)
+    expect(heldLightningClock(hold, now + 31_000, 1, now + 31_000)).toBe(now + 31_000 - LIVE_LAG_MS)
   })
 
   test('sped up, every stride-th window: at most one per ~5 s of wall time', () => {
