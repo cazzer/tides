@@ -9,6 +9,8 @@ import {
   flashShape,
   flashTangentBasis,
   limbShear,
+  LOBE_MAIN_RADIUS,
+  LOBE_REACH,
   MAX_FLASH_FRACTION,
   MIN_FLASH_PX,
   unwrapU,
@@ -36,6 +38,7 @@ const perspectivePx = (fovDeg: number, depth: number, vh: number) => (2 * Math.t
 
 const glsl = (name: string) =>
   readFileSync(new URL(`./shaders/lightning/${name}`, import.meta.url), 'utf8').replace(/\/\/.*$/gm, '')
+const define = (text: string, name: string) => Number(text.match(new RegExp(`#define ${name} ([\\d.]+)`))?.[1])
 
 describe('lightning patch', () => {
   test('the tangent basis is orthonormal, in the plane, right-handed', () => {
@@ -186,6 +189,40 @@ describe('lightning patch', () => {
     }
   })
 
+  test("flashShape's lobes: the main one brightest and near the centre, the others across from it, all inside the window", () => {
+    const h = hashKey('OR_GLM-L2-LCFA_G18_s20263170000000')
+    const fragment = glsl('fragment.frag')
+    const vertex = glsl('vertex.glsl')
+    expect(define(vertex, 'LOBE_REACH')).toBe(LOBE_REACH)
+    expect(define(vertex, 'LOBE_MAIN_RADIUS')).toBe(LOBE_MAIN_RADIUS)
+    // The window toward the quad's edge starts past every lobe.
+    const windowStart = Math.sqrt(define(fragment, 'LOBE_WINDOW'))
+    expect(windowStart).toBeGreaterThanOrEqual(LOBE_REACH)
+    expect(windowStart).toBeLessThan(1)
+    let minGap = Infinity
+    for (let i = 0; i < 3000; i++) {
+      const [main, a, b] = flashShape(flashSeed(h, i)).lobes
+      expect(Math.hypot(main.x, main.y)).toBeLessThanOrEqual(0.15)
+      expect(main.weight).toBe(1)
+      for (const lobe of [main, a, b]) {
+        expect(Math.hypot(lobe.x, lobe.y) + lobe.radius).toBeLessThanOrEqual(LOBE_REACH + 1e-12)
+        expect(lobe.radius).toBeGreaterThan(0.3)
+      }
+      for (const lobe of [a, b]) {
+        const reach = Math.hypot(lobe.x, lobe.y)
+        expect(reach).toBeGreaterThanOrEqual(0.3 - 1e-12)
+        expect(reach).toBeLessThanOrEqual(0.5 + 1e-12)
+        expect(lobe.weight).toBeGreaterThanOrEqual(0.45)
+        expect(lobe.weight).toBeLessThan(main.weight)
+        // Across from the main lobe's offset, so the outline isn't one convex blob.
+        expect(lobe.x * main.x + lobe.y * main.y).toBeLessThanOrEqual(1e-12)
+      }
+      minGap = Math.min(minGap, Math.hypot(a.x - b.x, a.y - b.y))
+    }
+    // The two outer lobes never sit on top of each other.
+    expect(minGap).toBeGreaterThan(0.1)
+  })
+
   test('unwrapU: continuous across the seam', () => {
     expect(unwrapU(0.02, 0.98)).toBeCloseTo(1.02, 12)
     expect(unwrapU(0.97, 0.01)).toBeCloseTo(-0.03, 12)
@@ -225,6 +262,15 @@ describe('lightning patch', () => {
     expect(vertex).toContain('1.0 + 0.6 * fract(seed * 61.7)')
     expect(vertex).toContain('vec2(fract(seed * 13.1), fract(seed * 29.7)) * 64.0')
     expect(vertex).toContain('abs(dir.y) > 0.9999')
+    // The lobes, as flashShape() lays them out.
+    expect(vertex).toContain('float lobeAngle = 2.0 * LIGHTNING_PI * fract(seed * 3.7);')
+    expect(vertex).toContain('0.15 * fract(seed * 7.3)')
+    expect(vertex).toContain('float reach1 = 0.3 + 0.2 * fract(seed * 17.9);')
+    expect(vertex).toContain('float reach2 = 0.3 + 0.2 * fract(seed * 37.1);')
+    expect(vertex).toContain('lobeAngle + 2.1 + 0.8 * fract(seed * 23.3)')
+    expect(vertex).toContain('lobeAngle - 2.1 - 0.8 * fract(seed * 41.9)')
+    expect(vertex).toContain('0.45 + 0.4 * fract(seed * 47.3), 0.45 + 0.4 * fract(seed * 53.9)')
+    expect(vertex).toContain('vec3(LOBE_MAIN_RADIUS, LOBE_REACH - reach1, LOBE_REACH - reach2)')
     expect(vertex).toContain('floor(du + 0.5)')
     // Camera-facing no more.
     expect(vertex).not.toContain('centre.xy +=')
@@ -243,6 +289,14 @@ describe('lightning patch', () => {
     expect(fragment).not.toMatch(/\bround\(/)
     expect(fragment).not.toMatch(/\b(for|while)\s*\(/)
     expect(fragment).toContain('textureGrad(uCloudMap')
+    // A ragged edge, lobes and cells: a strong warp, a sharp threshold, a wide mottle.
+    expect(define(fragment, 'NOISE_FREQ')).toBeGreaterThanOrEqual(4)
+    expect(define(fragment, 'NOISE_FREQ')).toBeLessThanOrEqual(5)
+    expect(fragment).toContain('mix(0.25, 2.0, n)')
+    expect(fragment).toContain('smoothstep(0.08, 0.3, field)')
+    expect(fragment).toContain('mix(0.5, 1.2, smoothstep(0.1, 0.9, fine))')
+    // Two noise calls (and its definition), as before: the cost stays put.
+    expect(fragment.match(/valueNoise\(/g)).toHaveLength(3)
     expect(fragment.match(/texture\w*\(/g)).toHaveLength(1)
     const discard = fragment.indexOf('discard')
     expect(discard).toBeGreaterThan(0)

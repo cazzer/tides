@@ -15,7 +15,21 @@ export const CLEAR_FLOOR = 0.3
 /** [TUNE] A flash under the thickest cloud keeps this much of its light. */
 export const THICK_FLOOR = 0.7
 
+/** The main lobe's radius, in the quad's half-widths (vUv). */
+export const LOBE_MAIN_RADIUS = 0.6
+/** How far out from the quad's centre the other lobes reach (centre offset plus radius), vUv. */
+export const LOBE_REACH = 0.84
+
 const fract = (x: number) => x - Math.floor(x)
+
+/** One of a patch's lobes, in vUv (the quad's half-widths, minor axis squashed). */
+export interface FlashLobe {
+  x: number
+  y: number
+  radius: number
+  /** Its light; the main lobe's (the core's) is 1, the brightest. */
+  weight: number
+}
 
 export interface FlashShape {
   /** The major axis' turn from local east toward north, radians. */
@@ -25,15 +39,30 @@ export interface FlashShape {
   /** Where in the noise its footprint is cut from. */
   noiseX: number
   noiseY: number
+  /** The main lobe, then two smaller, dimmer ones across from it. */
+  lobes: [FlashLobe, FlashLobe, FlashLobe]
+}
+
+function outerLobe(lobeAngle: number, reachSeed: number, turn: number, weightSeed: number): FlashLobe {
+  const reach = 0.3 + 0.2 * reachSeed
+  const angle = lobeAngle + turn
+  return { x: reach * Math.cos(angle), y: reach * Math.sin(angle), radius: LOBE_REACH - reach, weight: 0.45 + 0.4 * weightSeed }
 }
 
 /** A flash's shape from its flicker seed (0..1). */
 export function flashShape(seed: number): FlashShape {
+  const lobeAngle = 2 * Math.PI * fract(seed * 3.7)
+  const offset = 0.15 * fract(seed * 7.3)
   return {
     angle: 2 * Math.PI * fract(seed * 97.31),
     aspect: 1 + 0.6 * fract(seed * 61.7),
     noiseX: fract(seed * 13.1) * 64,
     noiseY: fract(seed * 29.7) * 64,
+    lobes: [
+      { x: offset * Math.cos(lobeAngle), y: offset * Math.sin(lobeAngle), radius: LOBE_MAIN_RADIUS, weight: 1 },
+      outerLobe(lobeAngle, fract(seed * 17.9), 2.1 + 0.8 * fract(seed * 23.3), fract(seed * 47.3)),
+      outerLobe(lobeAngle, fract(seed * 37.1), -2.1 - 0.8 * fract(seed * 41.9), fract(seed * 53.9)),
+    ],
   }
 }
 

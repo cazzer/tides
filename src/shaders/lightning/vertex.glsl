@@ -22,6 +22,12 @@ varying float vI;
 // u unwrapped about the flash's so the patch has no seam.
 varying vec2 vCloudUv;
 varying vec2 vNoiseOffset;
+// The patch's three lobes (flashShape()), in vUv: xy the main one's
+// centre, zw the second's; xy the third's centre, z and w the second's and
+// third's weights (the main one's is 1); and each one's 1 / radius².
+varying vec4 vLobes;
+varying vec4 vLobe3;
+varying vec3 vLobeK;
 
 #define FLASH_MIN_S 0.1
 #define FLASH_MAX_S 0.4
@@ -30,6 +36,10 @@ varying vec2 vNoiseOffset;
 #define PULSE_DECAY_S 0.035
 #define DAY_FLOOR 0.08
 #define LIGHTNING_PI 3.141592653589793
+// The main lobe's radius, and how far out the others reach (in vUv): inside
+// the fragment's window, so the quad never clips one.
+#define LOBE_MAIN_RADIUS 0.6
+#define LOBE_REACH 0.84
 
 float flashIntensity(float age, float dur, float seed) {
   float d = clamp(dur, FLASH_MIN_S, FLASH_MAX_S);
@@ -60,6 +70,9 @@ void main() {
   vI = 0.0;
   vCloudUv = vec2(0.0);
   vNoiseOffset = vec2(0.0);
+  vLobes = vec4(0.0);
+  vLobe3 = vec4(0.0);
+  vLobeK = vec3(0.0);
   // Unlit slots collapse to a point off screen: no fragments.
   if (age < 0.0 || age > d + FLASH_TAIL_S) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -95,6 +108,19 @@ void main() {
     return;
   }
   vNoiseOffset = vec2(fract(seed * 13.1), fract(seed * 29.7)) * 64.0;
+  // Its lobes: the main one (the core's) a little off centre, two smaller,
+  // dimmer ones across from it, so the outline is lumpy, not convex.
+  float lobeAngle = 2.0 * LIGHTNING_PI * fract(seed * 3.7);
+  vec2 lobe0 = 0.15 * fract(seed * 7.3) * vec2(cos(lobeAngle), sin(lobeAngle));
+  float reach1 = 0.3 + 0.2 * fract(seed * 17.9);
+  float reach2 = 0.3 + 0.2 * fract(seed * 37.1);
+  float angle1 = lobeAngle + 2.1 + 0.8 * fract(seed * 23.3);
+  float angle2 = lobeAngle - 2.1 - 0.8 * fract(seed * 41.9);
+  vLobes = vec4(lobe0, reach1 * vec2(cos(angle1), sin(angle1)));
+  vLobe3 = vec4(reach2 * vec2(cos(angle2), sin(angle2)),
+    0.45 + 0.4 * fract(seed * 47.3), 0.45 + 0.4 * fract(seed * 53.9));
+  vec3 lobeRadius = vec3(LOBE_MAIN_RADIUS, LOBE_REACH - reach1, LOBE_REACH - reach2);
+  vLobeK = 1.0 / (lobeRadius * lobeRadius);
   // The tangent plane (flashTangentBasis()): east and north, turned.
   vec3 east = abs(dir.y) > 0.9999 ? vec3(0.0, 0.0, -1.0) : cross(vec3(0.0, 1.0, 0.0), dir);
   east = normalize(east - dir * dot(east, dir));
