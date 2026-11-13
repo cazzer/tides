@@ -17,10 +17,16 @@ describe('FocusTitleView', () => {
       <FocusTitleView title={{ name: 'Mars', size: '6,780 km wide', comparison: 'about half Earth’s width' }} />
     )
     expect(html).toContain('class="focus-title"')
-    expect(html).toContain('<p class="focus-title__name">Mars</p>')
+    expect(html).toContain('<h2 class="focus-title__name">Mars</h2>')
+    expect(html).not.toContain('aria-live')
     expect(html).toContain('class="focus-title__stats"')
     expect(html).toContain('<span class="focus-title__stat">6,780 km wide</span>')
     expect(html).toContain('<span class="focus-title__stat">about half Earth’s width</span>')
+    // The dot is drawn, not read; a reader hears a comma between the stats.
+    expect(html).toContain('<span class="focus-title__sep" aria-hidden="true"> · </span><span class="visually-hidden">, </span>')
+    expect(html.replace(/<span[^>]*aria-hidden="true"[^>]*>.*?<\/span>/g, '').replace(/<[^>]+>/g, '')).toBe(
+      'Mars6,780 km wide, about half Earth’s width'
+    )
   })
 })
 
@@ -38,6 +44,6 @@ describe('FocusTitle', () => {
     state.cameraFocus = 'saturn'
     const html = renderToStaticMarkup(<FocusTitle />)
     expect(html).toContain('Saturn')
-    expect(html).toContain(`${(116_000).toLocaleString()} km wide`)
+    expect(html).toContain('116,000 km wide')
   })
 })

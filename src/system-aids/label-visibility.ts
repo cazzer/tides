@@ -39,6 +39,8 @@ import {
 } from '../moons/moons'
 import { EARTH_ORBIT_RADIUS, MOON_UNITS_PER_KM } from '../ephemeris'
 import type { CameraFocus } from '../store'
+import type { ViewSize } from '../main-view'
+import type { Band } from '../demo/demo-chrome'
 
 export type LabelKey = 'sun' | 'earth' | 'moon' | PlanetKey | MoonKey
 
@@ -486,6 +488,42 @@ export interface LabelFrame {
   gapPx: number
   /** How far body i reaches from its centre along (dirX, dirY), px (bodyReach / upp). */
   reach(i: number, dirX: number, dirY: number): number
+}
+
+/**
+ * Set `frame`'s edges, px from the view's centre (screenPointInto's, y up):
+ * the view's full width, and its height cut to `band` (px from the view's
+ * top, as clearBand gives it), so names keep clear of the boxes over the
+ * view.
+ */
+export function bandFrame(size: ViewSize, band: Band, frame: LabelFrame): LabelFrame {
+  frame.left = -size.width / 2
+  frame.right = size.width / 2
+  frame.top = size.height / 2 - band.top
+  frame.bottom = size.height / 2 - band.bottom
+  return frame
+}
+
+/** Which name is placed first, and which one is not wanted at all; -1 for none. */
+export interface LabelFocus {
+  focus: number
+  unnamed: number
+}
+
+/**
+ * The focused body's name (index `focusIndex`) is placed first and always
+ * shown (LabelFrame.focus), unless the focus title names the body
+ * (`titled`): then there is no focus to place and its name is unwanted.
+ * Written into `out` when given, and returned.
+ */
+export function labelFocus(
+  focusIndex: number,
+  titled: boolean,
+  out: LabelFocus = { focus: -1, unnamed: -1 }
+): LabelFocus {
+  out.focus = titled ? -1 : focusIndex
+  out.unnamed = titled ? focusIndex : -1
+  return out
 }
 
 /** Below this a name is skipped altogether rather than drawn invisible. */

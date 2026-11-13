@@ -17,9 +17,15 @@ export interface FocusTitleViewProps {
 export function FocusTitleView({ title, chromeRef }: FocusTitleViewProps) {
   return (
     <div ref={chromeRef} className="focus-title">
-      <p className="focus-title__name">{title.name}</p>
+      {/* A heading, not a live region: it changes with every focus, and the
+          tours' captions already announce each stop. */}
+      <h2 className="focus-title__name">{title.name}</h2>
       <p className="focus-title__stats">
         <span className="focus-title__stat">{title.size}</span>
+        <span className="focus-title__sep" aria-hidden="true">
+          {' · '}
+        </span>
+        <span className="visually-hidden">, </span>
         <span className="focus-title__stat">{title.comparison}</span>
       </p>
     </div>

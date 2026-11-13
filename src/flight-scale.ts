@@ -136,8 +136,8 @@ const sunPosition = (): Vec3 => ORIGIN
 // them (the planets' are in PLANETS). ship-distances.ts' true radii are
 // halves of these.
 const SUN_DIAMETER = 1_392_700_000
-const EARTH_DIAMETER = 12_742_000
-const MOON_DIAMETER = 3_474_800
+export const EARTH_DIAMETER = 12_742_000
+export const MOON_DIAMETER = 3_474_800
 
 const SYSTEM_RADII: Readonly<Record<BodyKey, number>> = {
   sun: sceneRadius(SUN_DIAMETER),

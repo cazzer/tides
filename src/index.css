@@ -273,26 +273,29 @@ body {
 /* The focused planet's or moon's name and size (src/FocusTitle.tsx), centred
  * at the top of the main view. On a phone the folded dock is a button at the
  * top-left (dock-disclosure.ts), so the title is narrowed by its width on
- * both sides and stays centred. It names, never takes taps. */
+ * both sides and stays centred. It names, never takes taps. The halo's wide
+ * blur keeps it legible over a bright globe or ring. */
 .focus-title {
   position: absolute;
-  top: var(--dock-top);
-  left: 50%;
-  transform: translateX(-50%);
-  width: max-content;
+  top: max(16px, var(--dock-top));
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
   max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
   text-align: center;
   color: #fff;
   text-shadow:
     0 0 2px #000,
-    0 1px 3px #000;
+    0 1px 3px #000,
+    0 0 10px rgba(0, 0, 0, 0.55);
   pointer-events: none;
   z-index: 1;
 }
 
 .focus-title__name {
   margin: 0;
-  font-size: 26px;
+  font-size: clamp(21px, 2.4vw, 36px);
   font-weight: 600;
   line-height: 1.15;
 }
@@ -302,8 +305,8 @@ body {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.78);
+  font-size: clamp(12.5px, 1.1vw, 18px);
+  color: rgba(255, 255, 255, 0.88);
   font-variant-numeric: tabular-nums;
 }
 
@@ -311,18 +314,15 @@ body {
   white-space: nowrap;
 }
 
-.focus-title__stat + .focus-title__stat::before {
-  content: '\00a0·\00a0';
-}
-
-@media only screen and (min-width: 601px) {
-  .focus-title {
-    top: max(16px, var(--dock-top));
-  }
+/* Drawn, not read: a visually hidden comma (FocusTitle.tsx) parts the two
+ * stats for a screen reader. */
+.focus-title__sep {
+  white-space: pre;
 }
 
 @media only screen and (max-width: 600px) {
   .focus-title {
+    top: var(--dock-top);
     max-width: calc(100% - 2 * (var(--dock-inset-left) + var(--dock-height) + 8px));
   }
 
@@ -340,8 +340,23 @@ body {
     text-wrap: balance;
   }
 
-  .focus-title__stat + .focus-title__stat::before {
-    content: none;
+  .focus-title__sep {
+    display: none;
+  }
+}
+
+/* A phone held landscape: little height to spare over the scene. */
+@media only screen and (max-height: 500px) {
+  .focus-title {
+    top: max(8px, var(--dock-top));
+  }
+
+  .focus-title__name {
+    font-size: 18px;
+  }
+
+  .focus-title__stats {
+    font-size: 12px;
   }
 }
 

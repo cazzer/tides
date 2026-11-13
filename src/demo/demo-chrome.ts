@@ -2,8 +2,8 @@
 // (tides-zec.15), so the main view can frame its bodies in the band they
 // leave clear. The focus title (FocusTitle.tsx) is one too, in and out of
 // the tours: the framing (DemoPlayer) reads the boxes only while a demo
-// runs, and BodyLabels keeps the bodies' names in the band every frame
-// (clearBand's `out`, so that allocates nothing). Their rects are measured when they resize or the window does,
+// runs, and BodyLabels keeps the bodies' names in the band every frame,
+// writing it into clearBand's `out` rather than a new object. Their rects are measured when they resize or the window does,
 // never in the frame loop: the bar's clock rewrites its text every frame, and
 // reading layout after that would force a reflow each frame.
 
@@ -68,7 +68,11 @@ export interface Band {
  * box in the view's lower half bounds the band from below, else from above.
  * Written into `out` when given, and returned.
  */
-export function clearBand(view: Rect, chrome: Iterable<Rect>, out: Band = { top: 0, bottom: 0 }): Band {
+export function clearBand(
+  view: Rect,
+  chrome: Iterable<Rect>,
+  out: Band = { top: 0, bottom: 0 }
+): Band {
   const height = view.bottom - view.top
   const width = view.right - view.left
   const middleLeft = view.left + 0.3 * width

@@ -10,8 +10,10 @@ import {
 } from '../main-view'
 import { MOON_KEYS, moonOrbitRadius, moonRadius, moonsOf, setMoonExpansion } from '../moons/moons'
 import type { CameraFocus } from '../store'
+import { hasFocusTitle } from '../body-facts'
 import {
   LABEL_KEYS,
+  bandFrame,
   createLabelLayout,
   eclipsed,
   resolveLabels,
@@ -23,6 +25,7 @@ import {
   labelClearance,
   labelDirection,
   labelDistancePx,
+  labelFocus,
   labelOpacity,
   steerClearOfSun,
   whollyEclipsed,
@@ -245,6 +248,17 @@ describe('collisions', () => {
   })
 })
 
+describe('bandFrame', () => {
+  it('spans the view’s width and the band’s height, px from the centre, y up', () => {
+    const frame = { left: 0, right: 0, top: 0, bottom: 0 } as LabelFrame
+    // A 390 × 844 phone with a title down to 78 px and a caption from 622.
+    expect(bandFrame({ width: 390, height: 844 }, { top: 78, bottom: 622 }, frame)).toBe(frame)
+    expect(frame).toMatchObject({ left: -195, right: 195, top: 344, bottom: -200 })
+    bandFrame({ width: 390, height: 844 }, { top: 0, bottom: 844 }, frame)
+    expect(frame).toMatchObject({ top: 422, bottom: -422 })
+  })
+})
+
 describe('resolveLabels', () => {
   // Names 40 × 12 px; bodies' default side to the right; a big view.
   function setup(bodies: [x: number, y: number, r: number][]): LabelLayout {
@@ -436,13 +450,33 @@ describe('resolveLabels', () => {
       [0, 0, 60],
       [70, 0, 2],
     ])
-    layout.wanted[0] = 0
+    const mainSlot = true
+    const gate = labelFocus(0, mainSlot && hasFocusTitle('mars'))
+    expect(gate).toEqual({ focus: -1, unnamed: 0 })
+    layout.wanted[gate.unnamed] = 0
     layout.dirX[1] = -1
-    resolveLabels(layout, frame(layout, { focus: -1 }))
+    resolveLabels(layout, frame(layout, { focus: gate.focus }))
     expect(layout.shown[0]).toBe(0)
     expect(layout.shown[1]).toBe(1)
     expect(layout.side[1]).not.toBe(0)
     expect(boxHitsDisc(layout.boxX[1], layout.boxY[1], layout.halfW[1], layout.halfH[1], 0, 0, 60)).toBe(false)
+  })
+
+  it('keeps the focused planet’s name outside the main slot, where no title shows', () => {
+    const mainSlot = false
+    const gate = labelFocus(0, mainSlot && hasFocusTitle('mars'))
+    expect(gate).toEqual({ focus: 0, unnamed: -1 })
+    // A view too tight for any name: only the focused one shows.
+    const layout = setup([[0, 0, 10]])
+    resolveLabels(layout, frame(layout, { focus: gate.focus, left: -15, right: 15, bottom: -15, top: 15 }))
+    expect(layout.shown[0]).toBe(1)
+  })
+
+  it('writes the gate into `out`', () => {
+    const out = { focus: 9, unnamed: 9 }
+    expect(labelFocus(3, false, out)).toBe(out)
+    expect(out).toEqual({ focus: 3, unnamed: -1 })
+    expect(labelFocus(-1, true, out)).toEqual({ focus: -1, unnamed: -1 })
   })
 
   it('turns a name off a band lowered under a box at the top', () => {

@@ -44,7 +44,7 @@ import type { DistanceScale } from '../distance-scale'
 import { targetUnitsPerPixel, type ViewSize } from '../main-view'
 import { useViewSize, type ViewRect } from '../use-view-size'
 import { hasFocusTitle } from '../body-facts'
-import { clearBand, demoChromeRects, type Rect } from '../demo/demo-chrome'
+import { clearBand, demoChromeRects, type Band, type Rect } from '../demo/demo-chrome'
 import { CLOCK_HALF_WIDTH } from '../clock-size'
 import { CLOCK_INNER_RADIUS, labelMaterial } from '../orbit-label'
 import { earthAngle } from '../ephemeris'
@@ -65,6 +65,7 @@ import {
 import {
   LABEL_KEYS,
   MIN_NAME_OPACITY,
+  bandFrame,
   bodyRadius,
   bodyReach,
   createLabelLayout,
@@ -72,8 +73,10 @@ import {
   focusBody,
   isLabelMoon,
   labelDirection,
+  labelFocus,
   labelOpacity,
   resolveLabels,
+  type LabelFocus,
   type LabelFrame,
   type LabelKey,
   type ScreenDirection,
@@ -165,7 +168,9 @@ function ringPoleAlong(key: LabelKey, x: number, y: number): number {
 // The view in viewport px, and the band of it clear of the demo's boxes, px
 // from its top: filled each frame.
 const viewRect: Rect = { left: 0, top: 0, right: 0, bottom: 0 }
-const band = { top: 0, bottom: 0 }
+const band: Band = { top: 0, bottom: 0 }
+// Which name goes first and which isn't wanted (labelFocus).
+const focusGate: LabelFocus = { focus: -1, unnamed: -1 }
 
 const frame: LabelFrame = {
   focus: -1,
@@ -284,14 +289,10 @@ function placeLabels(
   viewRect.top = size.top
   viewRect.right = size.left + size.width
   viewRect.bottom = size.top + size.height
-  clearBand(viewRect, demoChromeRects(), band)
-  frame.left = -size.width / 2
-  frame.right = size.width / 2
-  frame.bottom = size.height / 2 - band.bottom
-  frame.top = size.height / 2 - band.top
+  bandFrame(size, clearBand(viewRect, demoChromeRects(), band), frame)
   // The title names the focused body instead (see the header).
-  const focusIndex = LABEL_KEYS.indexOf(focusBody(focus))
-  frame.focus = titled ? -1 : focusIndex
+  labelFocus(LABEL_KEYS.indexOf(focusBody(focus)), titled, focusGate)
+  frame.focus = focusGate.focus
   frame.delta = delta
   const shrink = size.width <= PHONE_VIEW_PX ? PHONE_LABEL_SHRINK_PX : 0
   const { discX, discY, discR, nearness, inView, wanted, halfW, halfH, dirX, dirY } = layout
@@ -322,7 +323,7 @@ function placeLabels(
     const parent = PARENT_INDEX[i]
     const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && discOnScreen(layout, frame, parent))
     const shown = text && bounds && inView[i] && parentSeen && !(key === 'moon' && moonHidden)
-    wanted[i] = shown && !(titled && i === focusIndex) ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
+    wanted[i] = shown && i !== focusGate.unnamed ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
     if (!text || !bounds || wanted[i] < MIN_NAME_OPACITY) continue
     // Sides from the bodies' 3D offsets: what it orbits may be behind the
     // eye, where its projection is mirrored through the view's centre.

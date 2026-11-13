@@ -25,7 +25,7 @@ describe('SIZE_COMPARISON', () => {
       'about half Earth’s width',
       '11 Earths across',
       'over 9 Earths across',
-      '4 Earths across',
+      'about 4 Earths across',
       'nearly 4 Earths across',
     ])
   })
@@ -35,6 +35,12 @@ describe('SIZE_COMPARISON', () => {
     expect(SIZE_COMPARISON.titan).toBe('1.5 times our Moon’s width')
     expect(SIZE_COMPARISON.ganymede).toBe('1.5 times our Moon’s width')
     expect(SIZE_COMPARISON.triton).toBe('about three-quarters of our Moon’s width')
+    expect(SIZE_COMPARISON.deimos).toBe('under 10 minutes’ drive across')
+    expect(SIZE_COMPARISON.io).toBe('about as wide as our Moon')
+    expect(SIZE_COMPARISON.iapetus).toBe('over two-fifths of our Moon’s width')
+    for (const key of ['rhea', 'oberon', 'titania'] as const) {
+      expect(SIZE_COMPARISON[key]).toBe('nearly half our Moon’s width')
+    }
   })
 
   // The copy is written from these ratios; a change to the data should show.
@@ -46,7 +52,14 @@ describe('SIZE_COMPARISON', () => {
     const vsMoon = (key: MoonKey) => diameterKm(key) / MOON_DIAMETER_KM
     expect(vsMoon('ganymede')).toBeCloseTo(1.5, 1)
     expect(vsMoon('callisto')).toBeCloseTo(1.4, 1)
-    expect(vsMoon('titania')).toBeLessThan(0.5)
+    for (const key of ['rhea', 'oberon', 'titania'] as const) {
+      expect(vsMoon(key)).toBeGreaterThan(0.42)
+      expect(vsMoon(key)).toBeLessThan(0.5)
+    }
+    expect(vsMoon('iapetus')).toBeGreaterThan(0.4)
+    expect(vsMoon('io')).toBeCloseTo(1, 1)
+    // Deimos at ~100 km/h.
+    expect((diameterKm('deimos') / 100) * 60).toBeLessThan(10)
     expect(vsMoon('triton')).toBeCloseTo(0.75, 1)
     expect(vsMoon('tethys')).toBeCloseTo(1 / 3, 1)
   })
@@ -63,10 +76,11 @@ describe('focusTitleFor', () => {
   it('names a planet or moon with its size', () => {
     expect(focusTitleFor('saturn')).toEqual({
       name: 'Saturn',
-      size: `${(116_000).toLocaleString()} km wide`,
+      size: '116,000 km wide',
       comparison: 'over 9 Earths across',
     })
-    expect(focusTitleFor('phobos')?.size).toBe(`${(22.2).toLocaleString()} km wide`)
+    expect(focusTitleFor('phobos')?.size).toBe('22.2 km wide')
+    expect(focusTitleFor('jupiter')?.size).toBe('140,000 km wide')
     expect(hasFocusTitle('titan')).toBe(true)
   })
 
