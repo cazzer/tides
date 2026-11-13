@@ -44,7 +44,7 @@ import ringFragment from '../shaders/ring/fragment.frag'
 import { useBodySphere } from '../ship/limb-detail'
 import { GlowOccluder } from './glow/GlowOccluder'
 import { eyeNearBody, pickShellFaces } from './earth-shells'
-import { deckDayLight, deckFade, deckInside, deckSunElevation, type DeckProfile } from '../cloud-deck'
+import { deckDayLight, deckFade, deckInside, deckLayerShow, deckSunElevation, type DeckProfile } from '../cloud-deck'
 
 export type { RingBand } from './planetFrame'
 
@@ -258,7 +258,9 @@ const deckViewport = new THREE.Vector4()
  * would keep ShipWarmup from compiling it ahead (ship-warmup.ts coldWork).
  * Draws after the hazes (1) and rings (2), which it lies over. Samples the
  * globe's own map (`map`), detail and lighting, and the rings' shadow
- * (`ringShadow`, its strip `ringMap`) as the globe takes it.
+ * (`ringShadow`, its strip `ringMap`) as the globe takes it. Under the cloud
+ * top it also shows that map from a layer at the fog's base (deckLayerShow,
+ * tides-ufyr.4.1), so the view inside has a nadir and a horizon.
  */
 function PlanetDeck({
   planet,
@@ -294,9 +296,14 @@ function PlanetDeck({
         pickShellFaces(this, material, camera, undefined, planet.key)
         const u = material.uniforms
         const distance = this.worldToLocal(camera.getWorldPosition(deckEye)).length()
-        u.uDeckFade.value = eyeNearBody(camera, planet.key) ? deckFade(distance, R, deck) : 0
+        const near = eyeNearBody(camera, planet.key)
+        u.uDeckFade.value = near ? deckFade(distance, R, deck) : 0
+        u.uLayerShow.value = near ? deckLayerShow(distance, R, deck) : 0
         u.uDeckInside.value = deckInside(distance, R, deck)
-        u.uDeckLight.value = deckDayLight(distance, deckSunElevation(deckEye, sun.uniform.value), R, deck)
+        const muSun = deckSunElevation(deckEye, sun.uniform.value)
+        u.uDeckLight.value = deckDayLight(distance, muSun, R, deck)
+        // The layer at the fog's base, lit at its own depth.
+        u.uLayerLight.value = deckDayLight(R * deck.base, muSun, R, deck)
         const { fov } = camera as THREE.PerspectiveCamera
         const height = renderer.getCurrentViewport(deckViewport).w
         u.uPixelAngle.value = height > 0 ? (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2))) / height : 0
@@ -313,9 +320,12 @@ function PlanetDeck({
       uScaleHeight: R * deck.scaleHeight,
       uVisibility: R * deck.visibility,
       uSunDepth: R * deck.sunDepth,
+      uLayerLevel: R * deck.base,
+      uLayerSeen: R * deck.layerSeen,
       uAlbedo: albedo,
       uMinnaert: Math.max(limbDarkening, MIN_MINNAERT),
     })
+    material.uniforms.uDeckTint.value.set(...deck.insideTint)
     setPlanetDetail(material, detail)
   }, [material, R, deck, albedo, limbDarkening, detail])
   useLayoutEffect(() => {

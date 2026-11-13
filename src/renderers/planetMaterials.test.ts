@@ -305,6 +305,32 @@ describe("planet haze veil from inside (tides-ufyr.4.1)", () => {
     }
   })
 
+  it("compiles none of it into the Earth's program (HAZE_COVER)", () => {
+    // Every code line that reads or writes the veil, or writes the planets'
+    // alpha 0, lies in a branch the Earth's HAZE_COVER compiles out.
+    const shader = planetAtmosphereMaterial(sun).fragmentShader
+    // Per open #if: is the branch we're in compiled out under HAZE_COVER?
+    const out: { kind: 'ifndef' | 'ifdef' | 'other'; out: boolean }[] = []
+    let seen = 0
+    for (const line of shader.split('\n')) {
+      const t = line.trim()
+      if (t === '#ifndef HAZE_COVER') out.push({ kind: 'ifndef', out: true })
+      else if (t === '#ifdef HAZE_COVER') out.push({ kind: 'ifdef', out: false })
+      else if (t.startsWith('#if')) out.push({ kind: 'other', out: false })
+      else if (t.startsWith('#el')) {
+        const top = out[out.length - 1]
+        top.out = top.kind === 'ifdef' && t === '#else'
+      } else if (t === '#endif') out.pop()
+      const code = t.split('//')[0]
+      if (/\bveil\b|PLANET_HAZE_VEIL_HEIGHTS|ro\), 0\.0\);$/.test(code)) {
+        seen++
+        expect(out.some((branch) => branch.out), line).toBe(true)
+      }
+    }
+    expect(out).toHaveLength(0)
+    expect(seen).toBe(4)
+  })
+
   it.each(hazes)("veils %s's ground whole at its stop, none at the shell's edge, monotone", (_key, outer, H) => {
     expect(1 + HAZE_VEIL_HEIGHTS * H).toBeLessThan(outer)
     expect(hazeVeilWeight(outer, 1, outer, H)).toBe(0)
@@ -377,11 +403,15 @@ describe('planet cloud-deck material (tides-ufyr.8.3)', () => {
     expect(shader).toContain('float deckColumn(float r, float mu, float R, float H)')
     expect(shader).toContain('bool shellBackFace(')
     expect(shader).not.toContain('columnAhead(')
-    // Its footprint is uPixelAngle's: main() takes no derivatives, nor
-    // calls the detail's footprint helper, which does.
-    const main = shader.slice(shader.indexOf('void main()'))
-    expect(main).not.toMatch(/dFd[xy]|fwidth|planetDetailFootprint/)
-    expect(main).toContain('uPixelAngle')
+    // Its footprint is uPixelAngle's: main() and deckRadiance(), which it
+    // calls, take no derivatives, nor call the detail's footprint helper,
+    // which does.
+    const radiance = shader.indexOf('vec3 deckRadiance(')
+    expect(radiance).toBeGreaterThan(0)
+    expect(radiance).toBeLessThan(shader.indexOf('void main()'))
+    const own = shader.slice(radiance)
+    expect(own).not.toMatch(/dFd[xy]|fwidth|planetDetailFootprint/)
+    expect(own).toContain('uPixelAngle')
   })
 
   it('blends the direct term to the fog daylight before the ring shadow, adding no defines (tides-ufyr.8.3.2)', () => {
@@ -390,14 +420,49 @@ describe('planet cloud-deck material (tides-ufyr.8.3)', () => {
       const material = planetDeckMaterial(sun, { lowQuality })
       expect(material.uniforms.uDeckLight.value).toBe(0)
       expect(material.uniforms.uDeckInside.value).toBe(0)
-      const main = material.fragmentShader.slice(material.fragmentShader.indexOf('void main()'))
-      const blend = main.indexOf('direct = mix(direct, uDeckLight, uDeckInside);')
-      expect(blend).toBeGreaterThan(main.indexOf('direct *= exp(-max(R - length(at), 0.0) / uSunDepth);'))
-      expect(blend).toBeLessThan(main.indexOf('uRingOpacity > 0.0'))
+      // In deckRadiance, which main calls for the fog and for the layer.
+      const radiance = material.fragmentShader.slice(material.fragmentShader.indexOf('vec3 deckRadiance('))
+      const blend = radiance.indexOf('direct = mix(direct, deckLight, uDeckInside);')
+      expect(blend).toBeGreaterThan(radiance.indexOf('direct *= exp(-max(R - length(at), 0.0) / uSunDepth);'))
+      expect(blend).toBeLessThan(radiance.indexOf('uRingOpacity > 0.0'))
+      expect(radiance.indexOf('uRingOpacity > 0.0')).toBeLessThan(radiance.indexOf('void main()'))
       expect(Object.keys(material.defines).sort()).toEqual(
         ['PLANET_DETAIL_OCTAVES', 'PLANET_BAND_OCTAVES', ...(lowQuality ? [] : flow), 'RING_PROFILE_EITHER', 'MAX_RING_BANDS'].sort()
       )
     }
+  })
+})
+
+describe("the cloud deck's layer under the fog (tides-ufyr.4.1)", () => {
+  it('starts with no layer, its uniforms 0, adding no defines', () => {
+    for (const lowQuality of [false, true]) {
+      const material = planetDeckMaterial(sun, { lowQuality })
+      for (const name of ['uLayerShow', 'uLayerLevel', 'uLayerSeen', 'uLayerLight']) {
+        expect(material.uniforms[name].value, name).toBe(0)
+      }
+      expect(material.uniforms.uDeckTint.value.toArray()).toEqual([1, 1, 1])
+      expect(Object.keys(material.defines)).not.toContain('DECK_LAYER')
+    }
+  })
+
+  it('lights the fog and the layer through one deckRadiance, the layer only where it shows', () => {
+    const shader = planetDeckMaterial(sun).fragmentShader
+    const main = shader.slice(shader.indexOf('void main()'))
+    expect(shader).toContain('vec3 deckRadiance(vec3 at, float s, vec3 rd, float foreshorten, float detailWeight, float deckLight)')
+    // The fog keeps its colour point, giving its detail up to the layer.
+    expect(main).toContain('vec3 colour = deckRadiance(ro + rd * s, s, rd, 1.0, 1.0 - uLayerShow, uDeckLight);')
+    const gate = main.indexOf('if (uLayerShow > 0.0 && uLayerSeen > 0.0)')
+    expect(gate).toBeGreaterThan(0)
+    expect(main.indexOf('deckLayerHit(r, mu, uLayerLevel)')).toBeGreaterThan(gate)
+    expect(main).toContain('float wL = uLayerShow * exp(-sL / uLayerSeen);')
+    expect(main).toContain('if (wL > 1.0 / 512.0)')
+    expect(main).toContain('deckRadiance(atL, sL, rd, foreshorten, 1.0, uLayerLight)')
+    // The giant's tint, by uDeckInside alone: none at and over the cloud top.
+    expect(shader).toContain('albedo *= mix(vec3(1.0), uDeckTint, uDeckInside);')
+    // The detail is skipped at no weight; at full weight as before.
+    expect(shader).toContain('if (uDetailStyle != 0 && detailWeight > 0.0)')
+    expect(shader).toContain('albedo *= max(0.0, 1.0 + uDetailStrength * detailWeight * d);')
+    expect(shader).toContain('float fp = uPixelAngle * max(s, 1e-6 * R) / R / foreshorten;')
   })
 })
 
@@ -411,8 +476,7 @@ describe("the cloud deck's ring shadow (tides-ufyr.8.3)", () => {
     expect(u.uRingHasMap.value).toBe(false)
     expect(u.uBands.value).toHaveLength(material.defines.MAX_RING_BANDS as number)
     const shader = material.fragmentShader
-    const main = shader.slice(shader.indexOf('void main()'))
-    expect(main).toContain('uRingOpacity > 0.0 && n.y * uSunDir.y < 0.0')
+    expect(shader).toContain('uRingOpacity > 0.0 && n.y * uSunDir.y < 0.0')
     expect(shader).toContain('uniform bool uRingHasMap;')
     expect(shader).toContain('uniform sampler2D uRingMap;')
     expect(shader).toContain('float ringBandsAlpha(float u)')

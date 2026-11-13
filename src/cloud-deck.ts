@@ -34,6 +34,16 @@ export interface DeckProfile {
   visibility: number
   /** The depth under R over which sunlight dims by e, Z_L. */
   sunDepth: number
+  /**
+   * How far the textured layer at `base` shows through the fog from inside
+   * (deckLayerWeight), a fraction of R; 0 turns it off.
+   */
+  layerSeen: number
+  /**
+   * The albedo's tint inside the deck (linear RGB, the shader's uDeckTint),
+   * blended in by deckInside so the deck-top views keep the map's colours.
+   */
+  insideTint: readonly [number, number, number]
 }
 
 /** [TUNE] The fog's base, floor and the shell's height in scale heights. */
@@ -48,8 +58,24 @@ export const DECK_SUN_DEPTH = 0.006
  * (deckDayLight), the eye's sunlight falling geometrically between.
  */
 export const DECK_FLOOR_LIGHT = 0.45
+/**
+ * [TUNE] How far the layer at the fog's base shows through it from inside
+ * (DeckProfile layerSeen), a fraction of R: about half the nadir at the
+ * floor, a third at rest, gone well before the horizon.
+ */
+export const DECK_LAYER_SEEN = 0.011
+/** Scale heights under R over which the layer eases in (deckLayerShow). */
+export const DECK_LAYER_EASE_HEIGHTS = 1
+/** No tint. */
+export const DECK_NO_TINT: readonly [number, number, number] = [1, 1, 1]
+/**
+ * [TUNE] Jupiter's in-deck tint: half way from white to its haze sky's
+ * colour (#f2d9b0, linear 0.888, 0.694, 0.434), at its Rec. 709 luminance
+ * of 1, so the fog keeps its brightness and warms.
+ */
+export const JUPITER_INSIDE_TINT: readonly [number, number, number] = [1.1, 0.99, 0.82]
 
-function deckProfile(scaleHeight: number): DeckProfile {
+function deckProfile(scaleHeight: number, insideTint = DECK_NO_TINT): DeckProfile {
   return {
     base: DECK_BASE,
     floor: DECK_FLOOR,
@@ -57,12 +83,14 @@ function deckProfile(scaleHeight: number): DeckProfile {
     top: 1 + DECK_TOP_HEIGHTS * scaleHeight,
     visibility: DECK_VISIBILITY,
     sunDepth: DECK_SUN_DEPTH,
+    layerSeen: DECK_LAYER_SEEN,
+    insideTint,
   }
 }
 
 /** [TUNE] The giants' decks, by scale height: Jupiter 0.004, Saturn 0.005, Uranus and Neptune 0.006. */
 export const DECK_PROFILES: Readonly<Partial<Record<PlanetKey, DeckProfile>>> = {
-  jupiter: deckProfile(0.004),
+  jupiter: deckProfile(0.004, JUPITER_INSIDE_TINT),
   saturn: deckProfile(0.005),
   uranus: deckProfile(0.006),
   neptune: deckProfile(0.006),
@@ -111,6 +139,48 @@ export function deckInside(distance: number, R: number, profile: DeckProfile): n
 export function deckDayLight(distance: number, muSun: number, R: number, profile: DeckProfile): number {
   const depth = Math.max(R - distance, 0) / R
   return Math.max(muSun, 0) * DECK_FLOOR_LIGHT ** (depth / Math.max(1 - profile.floor, 1e-6))
+}
+
+/**
+ * How much of the textured layer at the fog's base (R·base, nothing solid)
+ * an eye `distance` from the centre sees through the fog (the shader's
+ * uLayerShow, tides-ufyr.4.1): exactly 0 at and over R, so the deck-top and
+ * approach views are as before, 1 from DECK_LAYER_EASE_HEIGHTS scale
+ * heights under it down, smoothstepped; 0 throughout with no layerSeen.
+ * Without it the view inside is one fog colour every way (its colour point
+ * a few km ahead); the layer gives the nadir texture and the horizon fog.
+ */
+export function deckLayerShow(distance: number, R: number, profile: DeckProfile): number {
+  if (!(profile.layerSeen > 0)) return 0
+  const x = clamp01((R - distance) / (R * DECK_LAYER_EASE_HEIGHTS * profile.scaleHeight))
+  return x * x * (3 - 2 * x)
+}
+
+/**
+ * How far along a ray from radius `r` at cos(zenith) `mu` it falls to
+ * radius `level` (one unit): Infinity for a climbing or level ray, or one
+ * that passes over it, 0 for an eye at or under it. In the form that keeps
+ * its precision near the nadir, c/(−b + sqrt(b² − c)) with b = r·mu and
+ * c = (r − level)(r + level).
+ */
+export function deckLayerHit(r: number, mu: number, level: number): number {
+  if (r <= level) return 0
+  if (mu >= 0) return Infinity
+  const b = r * mu
+  const c = (r - level) * (r + level)
+  const h = b * b - c
+  if (h < 0) return Infinity
+  return c / (-b + Math.sqrt(h))
+}
+
+/**
+ * The layer's share of a ray's colour at distance `s` along it (the
+ * shader's, before uLayerShow): e^(−s/seen), 0 for a miss (Infinity) or
+ * with `seen` 0.
+ */
+export function deckLayerWeight(s: number, seen: number): number {
+  if (!(seen > 0) || !Number.isFinite(s)) return 0
+  return Math.exp(-s / seen)
 }
 
 /** A vector by its components (a THREE.Vector3 is one). */

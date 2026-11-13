@@ -1,8 +1,9 @@
 // The gas giants' cloud-deck fog (tides-ufyr.8.3), mirroring cloud-deck.ts
-// (deckColumn, deckAhead), its tested spec; keep them in step. Takes the
-// eye's radius r, the ray's cos(zenith) mu, the planet's radius R and the
-// fog's scale height H as arguments: unlike the hazes' columnAhead, the eye
-// is never clamped to the surface, as the fog runs on below R.
+// (deckColumn, deckAhead, deckLayerHit), its tested spec; keep them in
+// step. Takes the eye's radius r, the ray's cos(zenith) mu, the planet's
+// radius R and the fog's scale height H as arguments: unlike the hazes'
+// columnAhead, the eye is never clamped to the surface, as the fog runs on
+// below R.
 
 #define DECK_MAX_EXPONENT 60.0
 
@@ -33,4 +34,17 @@ float deckAhead(float r, float mu, float R, float H, float visibility) {
   if (abs(k) < 1e-6) return seen;
   if (k >= 1.0) return 1e30;
   return (-H / mu) * log(1.0 - k);
+}
+
+// How far along the ray it falls to radius level (tides-ufyr.4.1,
+// deckLayerHit): -1.0 for none (climbing, level, or passing over it), 0.0
+// at or under it; c/(-b + sqrt(b*b - c)) keeps its precision at the nadir.
+float deckLayerHit(float r, float mu, float level) {
+  if (r <= level) return 0.0;
+  if (mu >= 0.0) return -1.0;
+  float b = r * mu;
+  float c = (r - level) * (r + level);
+  float h = b * b - c;
+  if (h < 0.0) return -1.0;
+  return c / (-b + sqrt(h));
 }

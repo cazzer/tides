@@ -2,14 +2,21 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   DECK_FLOOR_LIGHT,
+  DECK_LAYER_EASE_HEIGHTS,
+  DECK_LAYER_SEEN,
   DECK_MAX_EXPONENT,
+  DECK_NO_TINT,
   DECK_PROFILES,
+  JUPITER_INSIDE_TINT,
   deckAhead,
   deckColumn,
   deckDayLight,
   deckEye,
   deckFade,
   deckInside,
+  deckLayerHit,
+  deckLayerShow,
+  deckLayerWeight,
   deckShare,
   deckSunElevation,
   deckSunlight,
@@ -145,6 +152,9 @@ describe('the shaders mirror', () => {
     expect(glsl).toContain('float deckColumn(float r, float mu, float R, float H)')
     expect(glsl).toContain('float p = max(r * sqrt(max(0.0, 1.0 - mu * mu)), H);')
     expect(glsl).toContain('return (-H / mu) * log(1.0 - k);')
+    expect(glsl).toContain('float deckLayerHit(float r, float mu, float level)')
+    expect(glsl).toContain('float c = (r - level) * (r + level);')
+    expect(glsl).toContain('return c / (-b + sqrt(h));')
   })
 })
 
@@ -253,5 +263,117 @@ describe('deckSunElevation (the Sun cos(zenith) at the eye, tides-ufyr.8.3.2)', 
   it('falls back to the Sun overhead at zero distance or with no Sun direction', () => {
     expect(deckSunElevation({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBe(1)
     expect(deckSunElevation(eye, { x: 0, y: 0, z: 0 })).toBe(1)
+  })
+})
+
+// The ship at rest over a deck: the cushion's top, half way from the floor
+// to the cloud top (ship-bodies.ts deckRestRadius, tested there).
+const restOf = (deck: DeckProfile) => (deck.floor + 1) / 2
+
+describe('deckLayerShow (the layer under the fog, tides-ufyr.4.1)', () => {
+  it.each(profiles)('is exactly 0 at and over the cloud top of %s, 1 at rest and at its floor', (_key, deck) => {
+    for (const at of [1, 1.001, 1.02, deck.top]) expect(deckLayerShow(R * at, R, deck)).toBe(0)
+    expect(deckLayerShow(R * (1 - DECK_LAYER_EASE_HEIGHTS * deck.scaleHeight), R, deck)).toBe(1)
+    expect(deckLayerShow(R * restOf(deck), R, deck)).toBe(1)
+    expect(deckLayerShow(R * deck.floor, R, deck)).toBe(1)
+  })
+
+  it.each(profiles)('rises monotonically and continuously under the cloud top of %s', (_key, deck) => {
+    let last = 0
+    for (let i = 1; i <= 200; i++) {
+      const v = deckLayerShow(R * (1 - (i / 200) * (1 - deck.floor)), R, deck)
+      expect(v).toBeGreaterThanOrEqual(last)
+      expect(v - last).toBeLessThan(0.1)
+      last = v
+    }
+  })
+
+  it('is off with no layerSeen', () => {
+    const deck = { ...DECK_PROFILES.uranus!, layerSeen: 0 }
+    expect(deckLayerShow(R * deck.floor, R, deck)).toBe(0)
+  })
+})
+
+describe('deckLayerHit', () => {
+  const level = R * 0.979
+
+  it('is the height over the layer straight down, and none climbing or level', () => {
+    for (const r of [R * 0.985, R * 0.9925, R]) {
+      expect(deckLayerHit(r, -1, level)).toBeCloseTo(r - level, 12)
+      expect(deckLayerHit(r, 0, level)).toBe(Infinity)
+      expect(deckLayerHit(r, 0.5, level)).toBe(Infinity)
+    }
+  })
+
+  it('misses just over the tangent and hits just under it, at about the tangent distance', () => {
+    for (const r of [R * 0.985, R * 0.9925, R]) {
+      const tangent = -Math.sqrt(1 - (level / r) ** 2)
+      expect(deckLayerHit(r, tangent + 1e-6, level)).toBe(Infinity)
+      const s = deckLayerHit(r, tangent - 1e-6, level)
+      expect(Number.isFinite(s)).toBe(true)
+      expect(s / Math.sqrt(r * r - level * level)).toBeCloseTo(1, 2)
+    }
+  })
+
+  it('is Δ/|mu| over a thin gap Δ, plane-parallel', () => {
+    const delta = 1e-6 * R
+    for (const mu of [-1, -0.5, -0.2]) {
+      expect(deckLayerHit(level + delta, mu, level) / (delta / -mu)).toBeCloseTo(1, 4)
+    }
+  })
+
+  it('is 0 for an eye at or under the layer', () => {
+    expect(deckLayerHit(level, -0.5, level)).toBe(0)
+    expect(deckLayerHit(level * 0.99, 0.5, level)).toBe(0)
+  })
+})
+
+describe('deckLayerWeight', () => {
+  it('is none for a miss or with no seen', () => {
+    expect(deckLayerWeight(Infinity, 0.01)).toBe(0)
+    expect(deckLayerWeight(0.01, 0)).toBe(0)
+    expect(deckLayerWeight(0, 0.01)).toBe(1)
+  })
+
+  it.each(profiles)("shows %s's layer at the nadir in part, fading toward the horizon, gone at the tangent", (_key, deck) => {
+    const level = R * deck.base
+    const seen = R * deck.layerSeen
+    for (const at of [deck.floor, restOf(deck)]) {
+      const r = R * at
+      const show = deckLayerShow(r, R, deck)
+      const weight = (mu: number) => show * deckLayerWeight(deckLayerHit(r, mu, level), seen)
+      const nadir = weight(-1)
+      expect(nadir).toBeGreaterThanOrEqual(0.2)
+      expect(nadir).toBeLessThanOrEqual(0.6)
+      const tangent = -Math.sqrt(1 - (level / r) ** 2)
+      let last = nadir
+      for (let i = 1; i <= 100; i++) {
+        const v = weight(-1 + (i / 100) * (tangent + 1))
+        expect(v).toBeLessThanOrEqual(last)
+        last = v
+      }
+      // The shader's cut-off: no seam where the ray stops meeting it.
+      expect(show * deckLayerWeight(Math.sqrt(r * r - level * level), seen)).toBeLessThan(1 / 512)
+    }
+  })
+
+  it('is on for every giant', () => {
+    for (const [, deck] of profiles) expect(deck.layerSeen).toBe(DECK_LAYER_SEEN)
+    expect(DECK_LAYER_SEEN).toBeGreaterThan(0)
+  })
+})
+
+describe("insideTint (the albedo's tint in the deck, tides-ufyr.4.1)", () => {
+  it.each(profiles)('is none for %s but Jupiter', (key, deck) => {
+    expect(deck.insideTint).toEqual(key === 'jupiter' ? JUPITER_INSIDE_TINT : DECK_NO_TINT)
+  })
+
+  it("warms Jupiter's fog at its own brightness", () => {
+    const [r, g, b] = JUPITER_INSIDE_TINT
+    expect(r).toBeGreaterThan(g)
+    expect(g).toBeGreaterThan(b)
+    expect(0.2126 * r + 0.7152 * g + 0.0722 * b).toBeCloseTo(1, 2)
+    // Subtle: no channel moves by more than a fifth.
+    for (const c of JUPITER_INSIDE_TINT) expect(Math.abs(c - 1)).toBeLessThanOrEqual(0.2)
   })
 })
