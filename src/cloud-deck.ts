@@ -110,7 +110,24 @@ export function deckInside(distance: number, R: number, profile: DeckProfile): n
  */
 export function deckDayLight(distance: number, muSun: number, R: number, profile: DeckProfile): number {
   const depth = Math.max(R - distance, 0) / R
-  return Math.max(muSun, 0) * DECK_FLOOR_LIGHT ** (depth / (1 - profile.floor))
+  return Math.max(muSun, 0) * DECK_FLOOR_LIGHT ** (depth / Math.max(1 - profile.floor, 1e-6))
+}
+
+/** A vector by its components (a THREE.Vector3 is one). */
+export interface DeckVector {
+  x: number
+  y: number
+  z: number
+}
+
+/**
+ * The Sun's cos(zenith) at an eye `eye` from a planet's centre, toward the
+ * Sun along `toSun` (any length; the two in one frame): what deckSunlight
+ * and deckDayLight take as muSun. 1, the Sun overhead, when either is zero.
+ */
+export function deckSunElevation(eye: DeckVector, toSun: DeckVector): number {
+  const lengths = Math.hypot(eye.x, eye.y, eye.z) * Math.hypot(toSun.x, toSun.y, toSun.z)
+  return lengths > 0 ? (eye.x * toSun.x + eye.y * toSun.y + eye.z * toSun.z) / lengths : 1
 }
 
 /** The exponent's cap: e^60 overflows no float32 and is opaque at any visibility. */

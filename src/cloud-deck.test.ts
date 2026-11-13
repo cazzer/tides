@@ -11,6 +11,7 @@ import {
   deckFade,
   deckInside,
   deckShare,
+  deckSunElevation,
   deckSunlight,
   setDeckEye,
   type DeckProfile,
@@ -236,5 +237,21 @@ describe('deckDayLight (the fog lit by the Sun at the eye, tides-ufyr.8.3.2)', (
   it.each(profiles)("lights %s's floor at least 4x the old sun-depth dimming", (_key, deck) => {
     const before = 0.7 * Math.exp(-(1 - deck.floor) / deck.sunDepth)
     expect(deckDayLight(R * deck.floor, 0.7, R, deck)).toBeGreaterThanOrEqual(4 * before)
+  })
+})
+
+describe('deckSunElevation (the Sun cos(zenith) at the eye, tides-ufyr.8.3.2)', () => {
+  const eye = { x: 0, y: R * 0.99, z: 0 }
+  it('is 1 with the Sun overhead, negative on the far side, about 0 at the terminator', () => {
+    expect(deckSunElevation(eye, { x: 0, y: 3, z: 0 })).toBeCloseTo(1, 12)
+    expect(deckSunElevation(eye, { x: 0, y: -1, z: 0 })).toBeCloseTo(-1, 12)
+    expect(deckSunElevation(eye, { x: 0.6, y: -0.8, z: 0 })).toBeLessThan(0)
+    expect(deckSunElevation(eye, { x: 1, y: 0, z: 0 })).toBeCloseTo(0, 12)
+    expect(deckSunElevation(eye, { x: 0.6, y: 0.8, z: 0 })).toBeCloseTo(0.8, 12)
+  })
+
+  it('falls back to the Sun overhead at zero distance or with no Sun direction', () => {
+    expect(deckSunElevation({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })).toBe(1)
+    expect(deckSunElevation(eye, { x: 0, y: 0, z: 0 })).toBe(1)
   })
 })

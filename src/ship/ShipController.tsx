@@ -8,7 +8,7 @@ import { settleShip, stepShip, type ShipState } from './flight'
 import { shipInput } from './ship-input'
 import { getShipTarget, shipTelemetry } from './ship-telemetry'
 import { createShipBodies, shipBodyVelocity, updateShipBodies, updateShipBody, type ShipBody } from './ship-bodies'
-import { DECK_PROFILES, deckShare, deckSunlight, setDeckEye } from '../cloud-deck'
+import { DECK_PROFILES, deckShare, deckSunElevation, deckSunlight, setDeckEye } from '../cloud-deck'
 import {
   NEAR_MIN,
   SHIP_SETTLE_PRIORITY,
@@ -55,9 +55,7 @@ function updateDeckEye(position: THREE.Vector3, bodies: readonly ShipBody[], sun
     if (!profile) continue
     const distance = position.distanceTo(body.position)
     if (!(distance < body.radius * profile.top) || !(distance > 0)) continue
-    deckToSun.subVectors(sun, position)
-    const toSun = deckToSun.length()
-    const muSun = toSun > 0 ? deckUp.subVectors(position, body.position).dot(deckToSun) / (distance * toSun) : 1
+    const muSun = deckSunElevation(deckUp.subVectors(position, body.position), deckToSun.subVectors(sun, position))
     setDeckEye(body.key, deckSunlight(distance, muSun, body.radius, profile))
     return deckShare(distance, body.radius, profile)
   }
