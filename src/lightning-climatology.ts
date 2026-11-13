@@ -20,8 +20,12 @@
 //
 // Where LIS has no data (poleward of its orbit, or a gap) the density is
 // guessed (guessedDensity): a prior tied to no place, only the season, the
-// latitude's hemisphere and land or sea, which the simulation's cloud
-// cover gate and forecast showers then put under the storms' clouds.
+// latitude and land or sea, which the simulation's cloud cover gate and
+// forecast showers then put under the storms' clouds. It falls off poleward
+// of LIS's band and is none over ice: the asset has no clean ice signal (its
+// land plane counts sea ice and ice sheets as land, its cover plane is
+// cloud), so ice is by latitude: south of 60° S (Antarctica, its shelves
+// and pack ice) and north of 70° N (Greenland's interior, the Arctic's ice).
 
 export const CLIM_W = 144
 export const CLIM_H = 72
@@ -35,16 +39,29 @@ export const DENSITY_FMAX = 2
 /** The planes before the static cover: 12 months, land, coverage. */
 const CLIM_PLANES = MONTHS + 2
 export const LIGHTNING_BYTES = CLIM_PLANES * CLIM_CELLS + COVER_W * COVER_H
-/** [TUNE] The guess's density (fl/km²/day) over sea at the year's mean,
- * matched by eye to LIS at 30-38° (land in its summer ~0.04, ~15 fl/km²/yr). */
-export const GUESS_BASE = 0.0075
+/** [TUNE] The guess's density (fl/km²/day) over sea at the year's mean in
+ * LIS's band: land in its summer ~0.04 (~15 fl/km²/yr), within a factor of 2
+ * of LIS's at 30-37.5°; with the fall-off, the whole Earth's 12-month rate
+ * is ~47 fl/s (LIS/OTD: 46 ± 7). */
+export const GUESS_BASE = 0.0045
 /** [TUNE] The guess's seasonal swing: x(1 ± SEASON_AMP), peaking mid-July in
  * the north and mid-January in the south. */
 export const SEASON_AMP = 0.8
-/** [TUNE] Land flashes this many times as often as the sea in the guess. */
-export const GUESS_LAND_RATIO = 3
+/** [TUNE] Land flashes this many times as often as the sea in the guess
+ * (LIS/OTD has it about 10 to 1). */
+export const GUESS_LAND_RATIO = 5
 /** The guess's season is full by this latitude, none at the equator. */
 const SEASON_FULL_LAT = 20
+/** [TUNE] Poleward of LIS_EDGE_LAT the guess falls off as a Gaussian of this
+ * many degrees: 0.85 at 42°, 0.24 at 50°, 0.008 at 60°. */
+export const LAT_FALLOFF = 10
+/** LIS's band's edge (TRMM's orbit), degrees. */
+export const LIS_EDGE_LAT = 38
+/** No convection over ice: the guess fades to 0 over the 5° to these
+ * latitudes (degrees, north and south). */
+export const ICE_LAT_NORTH = 70
+export const ICE_LAT_SOUTH = -60
+const ICE_FADE_DEG = 5
 
 const CELL_DEG = 360 / CLIM_W
 const EARTH_RADIUS_KM = 6371.0088
@@ -154,9 +171,25 @@ export function seasonFactor(latDeg: number, blend: MonthBlend): number {
   return 1 - SEASON_AMP * hemisphere * Math.cos((2 * Math.PI * months) / MONTHS)
 }
 
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
+
+/** The guess's share left at a latitude: 1 in LIS's band, falling off
+ * poleward of it, 0 over the ice (by latitude: see the header). */
+export function latitudeFactor(latDeg: number): number {
+  const beyond = Math.max(0, Math.abs(latDeg) - LIS_EDGE_LAT)
+  const ice =
+    latDeg >= 0
+      ? smoothstep(ICE_LAT_NORTH, ICE_LAT_NORTH - ICE_FADE_DEG, latDeg)
+      : smoothstep(ICE_LAT_SOUTH, ICE_LAT_SOUTH + ICE_FADE_DEG, latDeg)
+  return Math.exp(-((beyond / LAT_FALLOFF) ** 2)) * ice
+}
+
 /** The guessed density (fl/km²/day) where LIS has no data. */
 export function guessedDensity(latDeg: number, land: number, blend: MonthBlend): number {
-  return GUESS_BASE * seasonFactor(latDeg, blend) * (1 + (GUESS_LAND_RATIO - 1) * land)
+  return GUESS_BASE * seasonFactor(latDeg, blend) * latitudeFactor(latDeg) * (1 + (GUESS_LAND_RATIO - 1) * land)
 }
 
 /** A cell's flash density at a month blend, fl/km²/day: LIS's, blended

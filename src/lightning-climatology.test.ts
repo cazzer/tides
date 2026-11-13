@@ -111,15 +111,29 @@ describe('the guess where LIS has no data', () => {
   const july = monthBlend(Date.UTC(2031, 6, 16, 12))
 
   test('flashes over land in summer, less in winter, and the seasons are opposite across the equator', () => {
-    for (const lat of [45, 60, -45, -60]) {
+    for (const lat of [45, -45]) {
       const summer = lat > 0 ? july : january
       const winter = lat > 0 ? january : july
-      expect(guessedDensity(lat, 1, summer)).toBeGreaterThan(0.02)
+      expect(guessedDensity(lat, 1, summer)).toBeGreaterThan(0.01)
       expect(guessedDensity(lat, 1, winter)).toBeGreaterThan(0)
       expect(guessedDensity(lat, 1, winter)).toBeLessThan(guessedDensity(lat, 1, summer) / 4)
     }
     expect(seasonFactor(0, january)).toBeCloseTo(seasonFactor(0, july), 9)
-    expect(guessedDensity(50, 1, july) / guessedDensity(50, 0, july)).toBeCloseTo(3, 9)
+    expect(guessedDensity(50, 1, july) / guessedDensity(50, 0, july)).toBeCloseTo(5, 9)
+  })
+
+  test('falls off poleward of the band: mid-latitude summer land flashes, past 60° hardly, over the ice not at all', () => {
+    // The US Midwest, Europe in July.
+    expect(guessedDensity(42, 1, july)).toBeGreaterThan(0.005)
+    expect(guessedDensity(42, 1, july)).toBeLessThan(0.05)
+    expect(guessedDensity(50, 1, july)).toBeGreaterThan(0.005)
+    expect(guessedDensity(50, 1, july)).toBeLessThan(0.03)
+    expect(guessedDensity(62, 1, july)).toBeLessThan(0.001)
+    // Antarctica (land, in the land plane) in its summer; the Arctic's ice in July.
+    for (const lat of [-60, -65, -75, -89]) expect(guessedDensity(lat, 1, january)).toBe(0)
+    for (const lat of [70, 80, 89]) expect(guessedDensity(lat, 1, july)).toBe(0)
+    // Inside the band, unchanged.
+    expect(guessedDensity(30, 1, july)).toBeCloseTo(guessedDensity(37.9, 1, july), 9)
   })
 
   test('changes smoothly through the year', () => {
@@ -140,10 +154,16 @@ describe('the guess where LIS has no data', () => {
       land: 1,
       coverage: (lat) => Math.min(1, Math.max(0, (42.5 - lat) / 7.5)),
     })
+    // No step beyond the guess's own change from row to row (its fall-off).
     const rows: number[] = []
-    for (let lat = 21.25; lat < 60; lat += 2.5) rows.push(densityOf(clim, cellOf(lat, 10), blend))
+    const guesses: number[] = []
+    for (let lat = 21.25; lat < 60; lat += 2.5) {
+      rows.push(densityOf(clim, cellOf(lat, 10), blend))
+      guesses.push(guessedDensity(lat, 1, blend))
+    }
     for (let i = 1; i < rows.length; i++) {
-      expect(Math.abs(rows[i] - rows[i - 1])).toBeLessThan(0.05 * Math.max(rows[i], rows[i - 1]))
+      const own = Math.abs(guesses[i] - guesses[i - 1])
+      expect(Math.abs(rows[i] - rows[i - 1])).toBeLessThan(own + 0.05 * Math.max(rows[i], rows[i - 1]))
     }
     // Covered: LIS's alone; beyond the ramp: the guess alone.
     const cell = cellOf(30, 10)
@@ -178,6 +198,30 @@ describe('the shipped climatology (tides-ufyr.14.1)', () => {
     const rate = sum / 12 / 86_400
     expect(rate).toBeGreaterThan(39)
     expect(rate).toBeLessThan(43)
+  })
+
+  test("the whole Earth, LIS's band and the guess, flashes 46 ± 7 times a second over the year (LIS/OTD)", () => {
+    const rate = globalFlashRate(clim)
+    expect(rate).toBeGreaterThan(39)
+    expect(rate).toBeLessThan(53)
+  })
+
+  test('with the guess: Antarctica in January and the Arctic Ocean in July about 0; the US Midwest in July flashes', () => {
+    const january = midMonth(0)
+    const july = midMonth(6)
+    for (let lon = -178.75; lon < 180; lon += 2.5) {
+      expect(densityOf(clim, cellOf(-80, lon), january)).toBeLessThan(1e-4)
+      expect(densityOf(clim, cellOf(85, lon), july)).toBeLessThan(1e-4)
+    }
+    const midwest = densityOf(clim, cellOf(42, -90), july)
+    expect(midwest).toBeGreaterThanOrEqual(0.005)
+    expect(midwest).toBeLessThanOrEqual(0.05)
+  })
+
+  test('at 45° N winter flashes less than summer', () => {
+    for (const lon of [-90, 10, 90]) {
+      expect(densityOf(clim, cellOf(45, lon), midMonth(0))).toBeLessThan(densityOf(clim, cellOf(45, lon), midMonth(6)))
+    }
   })
 
   test('Lake Maracaibo and the eastern Congo are in the top 1% of covered cells', () => {
