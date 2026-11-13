@@ -44,7 +44,7 @@ function precipFrame(showersMmH: number): SimFrame {
     precip[i * 4 + 1] = encodePrecip(showersMmH)
     precip[i * 4 + 3] = 255
   }
-  return { cover: null, precip }
+  return { id: 100 + showersMmH, cover: null, precip }
 }
 
 const median = (xs: number[]) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]
@@ -175,7 +175,7 @@ describe('simulateWindow', () => {
     }
     expect(west).toBeGreaterThan(1000)
     // A frame's own cover, where it has one, rather than the static clouds'.
-    const north: SimFrame = { cover: { data: [0, 0, 255, 255], width: 2, height: 2 }, precip: null }
+    const north: SimFrame = { id: 1, cover: { data: [0, 0, 255, 255], width: 2, height: 2 }, precip: null }
     const clear = syntheticClimatology({ density: 0.005, cover: 0 })
     expect(coverAt({ a: north, b: null, mix: 0 }, clear, 45, 10)).toBe(1)
     expect(coverAt({ a: north, b: null, mix: 1 }, clear, 45, 10)).toBe(0)

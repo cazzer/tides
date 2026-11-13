@@ -62,8 +62,8 @@ function satHas(sat: GlmSatellite, w: number, nowMs: number): boolean {
   return w * WINDOW_MS >= sat.fromMs && (w + 1) * WINDOW_MS <= nowMs
 }
 
-/** Some satellite has (or will have) a GLM file for window w: simulated
- * lightning (./lightning-sim-feed.ts) plays only where none does. */
+/** Window w is in some satellite's archive and ended by now: simulated
+ * lightning (./lightning-sim-feed.ts) plays only where it isn't. */
 export function glmCovers(w: number, nowMs: number, sats: readonly GlmSatellite[] = SATELLITES): boolean {
   for (const sat of sats) if (satHas(sat, w, nowMs)) return true
   return false

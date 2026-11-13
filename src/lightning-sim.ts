@@ -96,21 +96,25 @@ export function unit(index: number, key: number, stream: number): number {
   return (hash32(index >>> 0, Math.floor(index / TWO_32) | 0, key, stream) + 0.5) / TWO_32
 }
 
+// Acklam's coefficients for normInv.
+const NORM_A = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239]
+const NORM_B = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572]
+const NORM_C = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783]
+const NORM_D = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416]
+const NORM_TAIL = 0.02425
+
+function normTail(q: number): number {
+  const c = NORM_C
+  const d = NORM_D
+  return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+}
+
 /** The standard normal's quantile (Acklam's rational approximation, ~1e-9). */
 export function normInv(p: number): number {
-  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239]
-  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572]
-  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783]
-  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416]
-  const lo = 0.02425
-  if (p < lo) {
-    const q = Math.sqrt(-2 * Math.log(p))
-    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
-  }
-  if (p > 1 - lo) {
-    const q = Math.sqrt(-2 * Math.log(1 - p))
-    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
-  }
+  if (p < NORM_TAIL) return normTail(Math.sqrt(-2 * Math.log(p)))
+  if (p > 1 - NORM_TAIL) return -normTail(Math.sqrt(-2 * Math.log(1 - p)))
+  const a = NORM_A
+  const b = NORM_B
   const q = p - 0.5
   const r = q * q
   return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
@@ -163,8 +167,10 @@ export interface CloudBytes {
 }
 
 /** One cloud frame as the CPU reads it: its alpha (null: the static
- * clouds', from the climatology) and precipitation grid (null: none). */
+ * clouds', from the climatology) and precipitation grid (null: none), and
+ * an id of its own (above 0), which caches key on rather than the frame. */
 export interface SimFrame {
+  id: number
   cover: CloudBytes | null
   precip: Uint8Array | null
 }
@@ -229,14 +235,28 @@ export interface Storms {
   seed: Uint32Array
 }
 
-const EPOCHS_KEPT = 4
+/** The epochs whose storms can be alive at a time: a storm outlives its epoch by up to two. */
+export const EPOCHS_BACK = Math.ceil(STORM_LIFE_MAX_MS / STORM_EPOCH_MS)
+/** Epochs kept seeded: the current and next windows' (EPOCHS_BACK + 1 each). */
+const EPOCHS_KEPT = 2 * (EPOCHS_BACK + 1)
 const stormCache = new WeakMap<LightningClimatology, Map<number, Storms>>()
 const blend: MonthBlend = { m0: 0, m1: 0, f: 0 }
 const cellCounts = new Int32Array(CLIM_CELLS)
 const SEED_SCALE = (R_MAX / MEAN_GATE) * (STORM_EPOCH_MS / DAY_MS) / FLASHES_PER_STORM
 
-/** The storms starting in epoch `epoch` (floor(t / STORM_EPOCH_MS)); the
- * last few epochs' are kept. */
+/** The epoch of window w's middle: w needs this one's storms and the
+ * EPOCHS_BACK before it. */
+export function epochOfWindow(w: number): number {
+  return Math.floor(((w + 0.5) * WINDOW_MS) / STORM_EPOCH_MS)
+}
+
+/** Epoch `epoch`'s storms are seeded (kept) already. */
+export function isEpochSeeded(epoch: number, clim: LightningClimatology): boolean {
+  return stormCache.get(clim)?.has(epoch) ?? false
+}
+
+/** The storms starting in epoch `epoch` (floor(t / STORM_EPOCH_MS)), seeded
+ * on first use (a few ms); the last EPOCHS_KEPT epochs' are kept. */
 export function stormsOfEpoch(epoch: number, clim: LightningClimatology): Storms {
   let cache = stormCache.get(clim)
   if (!cache) {
@@ -301,9 +321,6 @@ function seedStorms(epoch: number, clim: LightningClimatology): Storms {
 
 // --- A window's flashes --------------------------------------------------------
 
-/** The epochs whose storms can be alive at a time: a storm outlives its epoch by up to two. */
-const EPOCHS_BACK = Math.ceil(STORM_LIFE_MAX_MS / STORM_EPOCH_MS)
-
 // Scratch for a window's flashes before they are sorted, grown as needed.
 let scratchCap = 0
 let sLat = new Float32Array(0)
@@ -336,12 +353,14 @@ const wrapLon = (lon: number) => ((((lon + 180) % 360) + 360) % 360) - 180
 /**
  * Window w's simulated flashes (its 20 s from w · WINDOW_MS) under these
  * clouds (as drawn at the window's middle). Depends on nothing else: the
- * same arguments give the same batch, byte for byte.
+ * same arguments give the same batch, byte for byte, within one JavaScript
+ * engine (Math.exp, log, sin and cos may differ in the last bit between
+ * engines). Seeds any of its epochs not seeded yet (isEpochSeeded).
  */
 export function simulateWindow(w: number, clim: LightningClimatology, clouds: SimClouds): FlashBatch {
   const startMs = w * WINDOW_MS
   const tMid = startMs + WINDOW_MS / 2
-  const e = Math.floor(tMid / STORM_EPOCH_MS)
+  const e = epochOfWindow(w)
   let count = 0
   for (let epoch = e - EPOCHS_BACK; epoch <= e; epoch++) {
     const s = stormsOfEpoch(epoch, clim)

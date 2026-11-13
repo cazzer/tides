@@ -123,7 +123,9 @@ export default function LightningRenderer({ radius, hidden, cloudMap, cloudMapRe
         f.batch = batch
         f.keyHash = hashKey(batch.key)
       }
-      // Simulated storms sit in the cloud map's frame: on the clouds as they drift.
+      // Simulated storms sit in the cloud map's frame: on the clouds as they
+      // drift. A safeguard: the drift is 0 under Real weather today, the only
+      // time lightning plays.
       const lon = batch.source === 'simulated' ? batch.lon[i] + 360 * cloudShift.value : batch.lon[i]
       latLonToLocal(batch.lat[i], lon, local)
       const written = instances.write(
@@ -159,6 +161,9 @@ export default function LightningRenderer({ radius, hidden, cloudMap, cloudMapRe
     }
     const nowMs = Date.now()
     const wallMs = performance.now()
+    // The feed's wall time is the shared clock's, the same for every View in
+    // a frame: the simulated feed does its frame's work once.
+    const feedWallMs = state.clock.elapsedTime * 1000
     // During a jump only its target matters: its window loads on the way.
     // Paused, the clock holds (near live it would follow now).
     const clockMs = heldLightningClock(f.hold, jumpDate?.getTime() ?? timestamp, timeScale, nowMs)
@@ -166,7 +171,7 @@ export default function LightningRenderer({ radius, hidden, cloudMap, cloudMapRe
     tickArgs.clockMs = clockMs
     tickArgs.stride = stride
     tickArgs.rate = timeScale
-    tickArgs.wallMs = wallMs
+    tickArgs.wallMs = feedWallMs
     tickArgs.nowMs = nowMs
     tickArgs.fetch = !hidden && wallMs - earthSeenAt < SEEN_MS
     const batches = lightningFeed.tick(tickArgs)

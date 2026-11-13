@@ -116,10 +116,10 @@ export function Credits({ children }: { children?: ReactNode }) {
         Dissemination; the Americas, Atlantic and Pacific only
       </li>
       <li>
-        Lightning (Real weather) elsewhere in time, before the GLM archive and after the latest data: simulated, from
-        flash rates in <Link href={LIS_CLIMATOLOGY_URL}>NASA GHRC&apos;s LIS Very High Resolution Monthly Lightning
-        Climatology, via NASA GIBS</Link> from 38° S to 38° N; beyond that, and wherever data is missing, guessed from the
-        cloud cover and <Link href={OPEN_METEO_SITE}>Open-Meteo</Link>&apos;s forecast showers
+        Lightning (Real weather) elsewhere in time, before the GLM archive and after the latest data: simulated: flash
+        rates from <Link href={LIS_CLIMATOLOGY_URL}>NASA GHRC&apos;s LIS Very High Resolution Monthly Lightning
+        Climatology</Link> (38° S–38° N; elsewhere a seasonal guess), placed under thick cloud and, in forecast hours,
+        under <Link href={OPEN_METEO_SITE}>Open-Meteo</Link>&apos;s forecast showers
       </li>
       <li>
         {/* CC BY 4.0 asks for the licence and whether the data was changed:

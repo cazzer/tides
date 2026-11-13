@@ -7,8 +7,8 @@ import type { Texture } from 'three'
 import { createGlmFeed, glmCovers } from '../glm-feed'
 import { glmListUrl, glmObjectUrl, parseGlmListing } from '../glm'
 import type { LightningFeed } from '../lightning'
-import { decodeLightningClimatology } from '../lightning-climatology'
-import type { SimClouds, SimFrame } from '../lightning-sim'
+import { ClimatologyUnusable, decodeLightningClimatology } from '../lightning-climatology'
+import type { SimFrame } from '../lightning-sim'
 import { createSimulatedFeed, mergeFeeds } from '../lightning-sim-feed'
 import { pickBlend } from '../cloud-frames'
 import { coverBytesOf, precipBytesOf } from './cloudBlend'
@@ -19,12 +19,12 @@ import { eitherSignal } from './surface/fetch-retry'
 const FETCH_TIMEOUT_MS = 30_000
 
 /**
- * The climatology asset (tides-ufyr.14.1), fetched on first need. Until it
- * exists the fetch 404s (Vite leaves a missing file's URL to resolve at
+ * The climatology asset (tides-ufyr.14.1), fetched on first need. Without
+ * it the fetch 404s (Vite leaves a missing file's URL to resolve at
  * runtime, with a build warning) or gets the dev server's HTML, which
  * decodeLightningClimatology rejects for its length: either way the feed
- * backs off and simulates nothing. Dropping the file in at this path is all
- * it takes: Vite then bundles it.
+ * warns once and simulates nothing. Dropping the file in at this path is
+ * all it takes: Vite then bundles it.
  */
 const CLIMATOLOGY_URL = new URL('../assets/earth-lightning.bin', import.meta.url)
 
@@ -59,6 +59,7 @@ async function loadClimatology(signal: AbortSignal) {
   const { signal: either, release } = eitherSignal(signal, AbortSignal.timeout(FETCH_TIMEOUT_MS))
   try {
     const res = await fetch(url, { signal: either })
+    if (res.status === 404) throw new ClimatologyUnusable(`HTTP 404 for ${url}`)
     if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
     return decodeLightningClimatology(new Uint8Array(await res.arrayBuffer()))
   } finally {
@@ -66,31 +67,30 @@ async function loadClimatology(signal: AbortSignal) {
   }
 }
 
-/** Each frame's texture as the simulation reads it, the same object while the texture lives. */
+/** Each frame's texture as the simulation reads it, with an id of its own,
+ * while the texture lives. */
 const simFrames = new WeakMap<Texture, SimFrame>()
+let lastFrameId = 0
 
 function simFrame(texture: Texture | 'static'): SimFrame | null {
   if (texture === 'static') return null
   let frame = simFrames.get(texture)
   if (!frame) {
-    frame = { cover: coverBytesOf(texture), precip: precipBytesOf(texture) }
+    frame = { id: ++lastFrameId, cover: coverBytesOf(texture), precip: precipBytesOf(texture) }
     simFrames.set(texture, frame)
   }
   return frame
 }
 
-/** clouds()'s answer, reused (the feed copies what it keeps). */
-const shown: SimClouds = { a: null, b: null, mix: 0 }
-
 const simFeed = createSimulatedFeed({
   loadClimatology,
-  clouds: (tMs) => {
+  clouds: (tMs, out) => {
     const pick = pickBlend(realClouds.getSnapshot().frames, tMs)
-    if (!pick) return null
-    shown.a = simFrame(pick.a)
-    shown.b = simFrame(pick.b)
-    shown.mix = pick.mix
-    return shown
+    if (!pick) return false
+    out.a = simFrame(pick.a)
+    out.b = simFrame(pick.b)
+    out.mix = pick.mix
+    return true
   },
   covers: glmCovers,
 })

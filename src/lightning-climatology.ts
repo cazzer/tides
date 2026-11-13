@@ -73,9 +73,14 @@ export function decodeFlashDensity(byte: number): number {
   return DENSITY_F0 * Math.expm1((byte / 255) * LOG_SPAN)
 }
 
+/** The climatology isn't there, or isn't this layout: trying again won't help. */
+export class ClimatologyUnusable extends Error {
+  override name = 'ClimatologyUnusable'
+}
+
 export function decodeLightningClimatology(bytes: Uint8Array): LightningClimatology {
   if (bytes.length !== LIGHTNING_BYTES) {
-    throw new Error(`lightning climatology: ${bytes.length} bytes, expected ${LIGHTNING_BYTES}`)
+    throw new ClimatologyUnusable(`lightning climatology: ${bytes.length} bytes, expected ${LIGHTNING_BYTES}`)
   }
   const table = new Float32Array(256)
   for (let b = 0; b < 256; b++) table[b] = decodeFlashDensity(b)
