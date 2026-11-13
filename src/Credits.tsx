@@ -21,6 +21,11 @@ export const ETOPO_URL = 'https://www.ncei.noaa.gov/products/etopo-global-relief
 export const NSIDC_SEA_ICE_INDEX_URL = 'https://doi.org/10.7265/a98x-0f50'
 // NOAA Open Data Dissemination's GOES-R buckets, where the GLM files come from (tides-ufyr.13).
 export const GLM_URL = 'https://registry.opendata.aws/noaa-goes/'
+// The simulated lightning's flash rates (tides-ufyr.14): NASA GHRC's LIS Very
+// High Resolution Monthly Climatology, read from its GIBS layer
+// (LIS_Very_High_Resolution_Lightning_Monthly_Climatology_LIS_Mean_Flash_Rate).
+// GIBS's page until tides-ufyr.14.1 confirms the dataset's own citation (DOI).
+export const LIS_CLIMATOLOGY_URL = 'https://earthdata.nasa.gov/gibs'
 // The data citation NSIDC requires (nsidc.org/data/g02135/versions/4), with the
 // subset scripts/build-sea-ice.py takes; fetched by 2026-11-03 (tides-zec.19).
 export const NSIDC_SEA_ICE_CITATION =
@@ -106,9 +111,15 @@ export function Credits({ children }: { children?: ReactNode }) {
         )
       </li>
       <li>
-        Lightning (Real weather):{' '}
+        Lightning (Real weather), observed:{' '}
         <Link href={GLM_URL}>NOAA GOES-R Geostationary Lightning Mapper, GOES-19 and GOES-18</Link>, via NOAA Open Data
         Dissemination; the Americas, Atlantic and Pacific only
+      </li>
+      <li>
+        Lightning (Real weather) elsewhere in time, before the GLM archive and after the latest data: simulated, from
+        flash rates in <Link href={LIS_CLIMATOLOGY_URL}>NASA GHRC&apos;s LIS Very High Resolution Monthly Lightning
+        Climatology, via NASA GIBS</Link> from 38° S to 38° N; beyond that, and wherever data is missing, guessed from the
+        cloud cover and <Link href={OPEN_METEO_SITE}>Open-Meteo</Link>&apos;s forecast showers
       </li>
       <li>
         {/* CC BY 4.0 asks for the licence and whether the data was changed:

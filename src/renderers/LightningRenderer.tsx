@@ -1,5 +1,6 @@
 // Live lightning (tides-ufyr.13): with Real weather, the GOES-East and
-// -West Geostationary Lightning Mappers' flashes, each a brief patch of lit
+// -West Geostationary Lightning Mappers' flashes (simulated ones where GLM
+// has no data for the time, tides-ufyr.14), each a brief patch of lit
 // cloud lying on the cloud deck (tides-ufyr.13.1), flickering with its real
 // timing (../lightning.ts, ./lightningMaterial.ts). One instanced draw per View; the
 // flashes come from ./lightningFeed.ts, shared by every View. Each frame
@@ -122,7 +123,9 @@ export default function LightningRenderer({ radius, hidden, cloudMap, cloudMapRe
         f.batch = batch
         f.keyHash = hashKey(batch.key)
       }
-      latLonToLocal(batch.lat[i], batch.lon[i], local)
+      // Simulated storms sit in the cloud map's frame: on the clouds as they drift.
+      const lon = batch.source === 'simulated' ? batch.lon[i] + 360 * cloudShift.value : batch.lon[i]
+      latLonToLocal(batch.lat[i], lon, local)
       const written = instances.write(
         local.x,
         local.y,
@@ -137,7 +140,7 @@ export default function LightningRenderer({ radius, hidden, cloudMap, cloudMapRe
       f.emitted++
       return true
     },
-    [instances]
+    [instances, cloudShift]
   )
 
   useFrame((state) => {

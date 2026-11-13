@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { backoffMs, createGlmFeed, RELIST_MS, SETTLE_MS, windowWallMs } from './glm-feed'
+import { backoffMs, createGlmFeed, glmCovers, RELIST_MS, SETTLE_MS, windowWallMs } from './glm-feed'
 import { glmHourPrefix, glmKeyWindow, HOUR_MS, SATELLITES, WINDOW_MS, type GlmBatch, type GlmSatellite } from './glm'
 import { lightningClock, windowStride } from './lightning'
 
@@ -386,5 +386,31 @@ describe('createGlmFeed', () => {
     for (const c of inFlight) c.resolve(batchFor(c.sat, c.key, (w + 1) * WINDOW_MS) as never)
     const batches = await h.play(scene, 0, 0.1, { fetch: false })
     expect(batches.map((b) => glmKeyWindow(b.key))).toEqual([w, w])
+  })
+})
+
+describe('glmCovers (tides-ufyr.14)', () => {
+  const G18 = SATELLITES.find((s) => s.id === 'G18')!
+  const G19 = SATELLITES.find((s) => s.id === 'G19')!
+
+  test("from GOES-18's first window, not before", () => {
+    const w = G18.fromMs / WINDOW_MS
+    expect(glmCovers(w, NOW)).toBe(true)
+    expect(glmCovers(w - 1, NOW)).toBe(false)
+  })
+
+  test("GOES-19's start covers on its own, and is inside GOES-18's archive anyway", () => {
+    const w = G19.fromMs / WINDOW_MS
+    expect(glmCovers(w, NOW, [G19])).toBe(true)
+    expect(glmCovers(w - 1, NOW, [G19])).toBe(false)
+    expect(glmCovers(w - 1, NOW)).toBe(true)
+  })
+
+  test('up to the window that has ended by now', () => {
+    const last = Math.floor(NOW / WINDOW_MS) - 1
+    expect(glmCovers(last, NOW)).toBe(true)
+    expect(glmCovers(last, (last + 1) * WINDOW_MS)).toBe(true)
+    expect(glmCovers(last, (last + 1) * WINDOW_MS - 1)).toBe(false)
+    expect(glmCovers(last + 1, NOW)).toBe(false)
   })
 })

@@ -57,6 +57,18 @@ export function minStartGapMs(stride: number, rate: number): number {
   return (MIN_GAP_SHARE * stride * WINDOW_MS) / Math.max(Math.abs(rate), 1)
 }
 
+/** Satellite `sat` has window w: in its archive and ended by now. */
+function satHas(sat: GlmSatellite, w: number, nowMs: number): boolean {
+  return w * WINDOW_MS >= sat.fromMs && (w + 1) * WINDOW_MS <= nowMs
+}
+
+/** Some satellite has (or will have) a GLM file for window w: simulated
+ * lightning (./lightning-sim-feed.ts) plays only where none does. */
+export function glmCovers(w: number, nowMs: number, sats: readonly GlmSatellite[] = SATELLITES): boolean {
+  for (const sat of sats) if (satHas(sat, w, nowMs)) return true
+  return false
+}
+
 export interface GlmFeedDeps {
   /** One hour's keys (after `startAfter`), in key order. */
   list(sat: GlmSatellite, hourMs: number, startAfter: string | null, signal: AbortSignal): Promise<string[]>
@@ -118,8 +130,7 @@ export function createGlmFeed({ list, load, satellites = SATELLITES }: GlmFeedDe
   /** Nothing started since creation or deactivate(): the first start needs no settling. */
   let fresh = true
 
-  const available = (s: Sat, w: number, nowMs: number) =>
-    w * WINDOW_MS >= s.sat.fromMs && (w + 1) * WINDOW_MS <= nowMs
+  const available = (s: Sat, w: number, nowMs: number) => satHas(s.sat, w, nowMs)
 
   function setWindow(s: Sat, w: number, state: Window) {
     const before = s.windows.get(w)

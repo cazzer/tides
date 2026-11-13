@@ -7,6 +7,7 @@ import {
   ETOPO_URL,
   GIBS_ACKNOWLEDGEMENT,
   GLM_URL,
+  LIS_CLIMATOLOGY_URL,
   NSIDC_SEA_ICE_CITATION,
 } from './Credits'
 import { OPEN_METEO_SITE } from './forecast-clouds'
@@ -85,11 +86,22 @@ describe('Credits', () => {
   })
 
   test('credits NOAA GOES-R GLM for the lightning, with its coverage (tides-ufyr.13)', () => {
-    const line = html.match(/<li>Lightning \(Real weather\):.*?<\/li>/)?.[0] ?? ''
+    const line = html.match(/<li>Lightning \(Real weather\), observed:.*?<\/li>/)?.[0] ?? ''
     expect(line).toContain(`href="${GLM_URL}"`)
     expect(line).toContain('NOAA GOES-R Geostationary Lightning Mapper, GOES-19 and GOES-18')
     expect(line).toContain('NOAA Open Data Dissemination')
     expect(line).toContain('the Americas, Atlantic and Pacific only')
+  })
+
+  test('says the lightning beyond GLM is simulated, and from what (tides-ufyr.14)', () => {
+    const line = html.match(/<li>Lightning \(Real weather\) elsewhere in time.*?<\/li>/)?.[0] ?? ''
+    expect(line).toContain('simulated')
+    expect(line).toContain(`href="${LIS_CLIMATOLOGY_URL}"`)
+    expect(line).toContain('LIS Very High Resolution Monthly Lightning')
+    expect(line).toContain('38° S to 38° N')
+    expect(line).toContain('guessed from the')
+    expect(line).toContain(`href="${OPEN_METEO_SITE}"`)
+    expect(line).toContain('Open-Meteo')
   })
 
   test('opens every link in a new tab without an opener', () => {

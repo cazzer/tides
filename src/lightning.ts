@@ -2,7 +2,9 @@
 // the clock they play on, which of them a frame emits, and the TypeScript
 // mirrors of the flicker the vertex shader plays
 // (shaders/lightning/vertex.glsl; keep them in step). Source-agnostic: the
-// GOES GLM feed (./glm-feed.ts) is one producer. No DOM.
+// GOES GLM feed (./glm-feed.ts) is one producer, simulated lightning
+// (./lightning-sim-feed.ts, tides-ufyr.14) the other, for the times GLM
+// has nothing for. No DOM.
 
 /** One file's 20 s of flashes. */
 export const WINDOW_MS = 20_000
@@ -12,7 +14,9 @@ export const WINDOW_MS = 20_000
  * out of the worker that parsed them).
  */
 export interface FlashBatch {
-  source: 'glm'
+  /** Simulated flashes are placed in the cloud map's frame: the renderer
+   * adds the static clouds' drift. */
+  source: 'glm' | 'simulated'
   /** Unique per window and producer (the GLM object key); seeds the flicker. */
   key: string
   /** The window's start, epoch ms; offsets are from it. */
