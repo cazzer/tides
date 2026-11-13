@@ -1,5 +1,6 @@
 // The focused planet's or moon's name at the top of the main view, with its
-// diameter and a size to picture (tides-ufyr.18; the copy is body-facts.ts).
+// diameter and its size against Earth or our Moon on one short line
+// (tides-ufyr.18; the copy is body-facts.ts).
 // It stands in for the body's own name in the scene, which BodyLabels hides
 // while this shows. A DOM overlay in the main Panel (App.tsx), mounted with
 // the planets on and the system view filling the 'main' grid area; nothing
@@ -21,12 +22,17 @@ export function FocusTitleView({ title, chromeRef }: FocusTitleViewProps) {
           tours' captions already announce each stop. */}
       <h2 className="focus-title__name">{title.name}</h2>
       <p className="focus-title__stats">
-        <span className="focus-title__stat">{title.size}</span>
-        <span className="focus-title__sep" aria-hidden="true">
-          {' · '}
-        </span>
-        <span className="visually-hidden">, </span>
-        <span className="focus-title__stat">{title.comparison}</span>
+        {title.size}
+        {title.comparison && (
+          <>
+            {/* The spaces stay outside the hidden dot, so a reader still
+                hears two words, not "km0.38". */}
+            {' '}
+            <span aria-hidden="true">·</span>
+            {' '}
+            {title.comparison}
+          </>
+        )}
       </p>
     </div>
   )

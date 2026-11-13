@@ -284,7 +284,6 @@ body {
   width: fit-content;
   max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
   text-align: center;
-  color: #fff;
   text-shadow:
     0 0 2px #000,
     0 1px 3px #000,
@@ -298,26 +297,17 @@ body {
   font-size: clamp(21px, 2.4vw, 36px);
   font-weight: 600;
   line-height: 1.15;
+  color: rgba(255, 255, 255, 0.82);
 }
 
+/* One short line at every width ("4,880 km · 0.38× Earth"), smaller and
+ * greyer than the name. */
 .focus-title__stats {
   margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  font-size: clamp(12.5px, 1.1vw, 18px);
-  color: rgba(255, 255, 255, 0.88);
-  font-variant-numeric: tabular-nums;
-}
-
-.focus-title__stat {
+  font-size: clamp(11.5px, 0.4vw + 8px, 14px);
+  color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
-}
-
-/* Drawn, not read: a visually hidden comma (FocusTitle.tsx) parts the two
- * stats for a screen reader. */
-.focus-title__sep {
-  white-space: pre;
+  font-variant-numeric: tabular-nums;
 }
 
 @media only screen and (max-width: 600px) {
@@ -331,17 +321,7 @@ body {
   }
 
   .focus-title__stats {
-    flex-direction: column;
-    font-size: 12.5px;
-  }
-
-  .focus-title__stat {
-    white-space: normal;
-    text-wrap: balance;
-  }
-
-  .focus-title__sep {
-    display: none;
+    font-size: 11.5px;
   }
 }
 
@@ -356,7 +336,7 @@ body {
   }
 
   .focus-title__stats {
-    font-size: 12px;
+    font-size: 11px;
   }
 }
 

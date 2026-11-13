@@ -1,6 +1,6 @@
 // What the focus title (FocusTitle.tsx, tides-ufyr.18) says about a planet
-// or moon: its name, its diameter and a size anyone can picture. Pure, so
-// the copy is tested on its own.
+// or moon: its name, its diameter and its size against Earth or our Moon,
+// kept to one short line. Pure, so the copy is tested on its own.
 
 import { EARTH_DIAMETER, MOON_DIAMETER } from './flight-scale'
 import { PLANETS, type PlanetKey } from './planets'
@@ -13,55 +13,34 @@ import { isSystemFocus, type CameraFocus } from './store'
 export const EARTH_DIAMETER_KM = EARTH_DIAMETER / 1000
 export const MOON_DIAMETER_KM = MOON_DIAMETER / 1000
 
+/** Under this diameter, km, a moon gets no comparison: "0.0064× Moon" says nothing. */
+export const TINY_MOON_KM = 100
+
 /** The body's mean diameter, km. */
 export function diameterKm(key: PlanetKey | MoonKey): number {
   return isMoonKey(key) ? 2 * MOONS[key].radiusKm : PLANETS[key].diameter / 1000
 }
 
-/**
- * Each body's size against something familiar: the planets against Earth,
- * the moons against ours, and the ones too small for that against a city or
- * a drive (at ~100 km/h). Written from diameterKm over
- * the diameters above; body-facts.test.ts checks the ratios still hold.
- */
-export const SIZE_COMPARISON: Readonly<Record<PlanetKey | MoonKey, string>> = {
-  mercury: 'over a third of Earth’s width',
-  venus: 'nearly as wide as Earth',
-  mars: 'about half Earth’s width',
-  jupiter: '11 Earths across',
-  saturn: 'over 9 Earths across',
-  uranus: 'about 4 Earths across',
-  neptune: 'nearly 4 Earths across',
-  phobos: 'about as long as Manhattan',
-  deimos: 'under 10 minutes’ drive across',
-  io: 'about as wide as our Moon',
-  europa: 'nearly as wide as our Moon',
-  ganymede: '1.5 times our Moon’s width',
-  callisto: '1.4 times our Moon’s width',
-  mimas: 'about a 4-hour drive across',
-  enceladus: 'about a 5-hour drive across',
-  tethys: 'about a third of our Moon’s width',
-  dione: 'about a third of our Moon’s width',
-  rhea: 'nearly half our Moon’s width',
-  titan: '1.5 times our Moon’s width',
-  iapetus: 'over two-fifths of our Moon’s width',
-  miranda: 'about a 5-hour drive across',
-  ariel: 'about a third of our Moon’s width',
-  umbriel: 'about a third of our Moon’s width',
-  titania: 'nearly half our Moon’s width',
-  oberon: 'nearly half our Moon’s width',
-  triton: 'about three-quarters of our Moon’s width',
-}
-
 export interface FocusTitle {
   name: string
-  /** "116,000 km wide". */
+  /** "116,000 km". */
   size: string
-  comparison: string
+  /** "9.1× Earth" or "1.5× Moon"; null for a moon under TINY_MOON_KM. */
+  comparison: string | null
 }
 
 // English, as the copy is: "116,000", not the reader's "116.000".
 const threeFigures = new Intl.NumberFormat('en', { maximumSignificantDigits: 3 })
+// Always two figures: Io is "1.0× Moon" and Uranus "4.0× Earth", not a bare "1×".
+const twoFigures = new Intl.NumberFormat('en', { minimumSignificantDigits: 2, maximumSignificantDigits: 2 })
+
+/** The body's size against Earth (a planet) or our Moon (a moon); null for a tiny moon. */
+export function sizeComparison(key: PlanetKey | MoonKey): string | null {
+  const diameter = diameterKm(key)
+  if (!isMoonKey(key)) return `${twoFigures.format(diameter / EARTH_DIAMETER_KM)}× Earth`
+  if (diameter < TINY_MOON_KM) return null
+  return `${twoFigures.format(diameter / MOON_DIAMETER_KM)}× Moon`
+}
 
 /** Whether the focus gets a title: a planet or one of their moons. */
 export function hasFocusTitle(focus: CameraFocus): boolean {
@@ -73,7 +52,8 @@ export function focusTitleFor(focus: CameraFocus): FocusTitle | null {
   if (!isSystemFocus(focus)) return null
   return {
     name: bodyName(focus),
-    size: `${threeFigures.format(diameterKm(focus))} km wide`,
-    comparison: SIZE_COMPARISON[focus],
+    // Whole km: Phobos is "22 km", not "22.2 km".
+    size: `${threeFigures.format(Math.round(diameterKm(focus)))} km`,
+    comparison: sizeComparison(focus),
   }
 }

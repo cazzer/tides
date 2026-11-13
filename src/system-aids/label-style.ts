@@ -21,10 +21,13 @@ export const PHONE_LABEL_SHRINK_PX = 1
 export const PHONE_VIEW_PX = 600
 
 /**
- * Brighter than the month names' grey (#404040), which recede on purpose;
- * a name has to read against the starfield and the planets' orbit lines.
+ * A soft grey: near-white (#d8d8d8) was jarring against the black sky
+ * (tides-ufyr.24). Still brighter than the month names' grey (#404040),
+ * which recede on purpose; a name has to read against the starfield and the
+ * planets' orbit lines. The fades (labelOpacity, resolveLabels) scale its
+ * opacity, so this is the colour at full strength.
  */
-export const LABEL_COLOR = '#d8d8d8'
+export const LABEL_COLOR = '#9aa0a6'
 
 /** A dark edge, as the clock has, so a name stays readable over the Sun. */
 export const LABEL_OUTLINE_WIDTH = '8%'
