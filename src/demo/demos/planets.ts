@@ -29,6 +29,11 @@ import type { Demo, DemoPose } from '../demo-script'
 // way through these weeks. In 2026 Saturn's is held back by its conjunction
 // with Neptune.
 //
+// The AU rings are off for the whole tour (exit puts the user's back): each
+// stop is one planet's system, where a ring's label is a stray "2 AU" mid-view
+// and says nothing about the planet (tides-ufyr.18). The focus title names
+// each stop's planet, with its size.
+//
 // Mercury and Venus have no moons: their stops show the planet's turn. The
 // eye is high over its north, beside the Sun's line and followed, so the
 // Sun keeps its place on screen and the day–night line holds still: what
@@ -81,7 +86,7 @@ export const planets: Demo = {
       camera: MERCURY,
       layout: 'single',
       mainPanel: 'main',
-      overlays: { showPlanets: true, systemAids: { orbits: true, labels: true } },
+      overlays: { showPlanets: true, systemAids: { orbits: true, labels: true, grid: false } },
       aids: { moonSystems: true },
       caption: {
         title: 'Mercury: no moons',

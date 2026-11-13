@@ -457,6 +457,12 @@ describe('planets', () => {
     demo.steps.forEach((_, i) => expect(demoAidAt(demo, i, 'moonSystems')).toBe(true))
   })
 
+  // A ring's label is a stray "2 AU" at a planet's stop (tides-ufyr.18).
+  it('keeps the AU rings off, with the orbits and names on, at every stop', () => {
+    expect(demo.steps[0].overlays?.systemAids).toMatchObject({ orbits: true, labels: true, grid: false })
+    demo.steps.forEach((_, i) => expect(demoStepPatch(bare, demo, i).systemAids.grid).toBe(false))
+  })
+
   // The day–night line held still, so the planet's own turn is what moves:
   // Venus' clockwise (retrograde) against it, Mercury's slow one.
   it('holds the Sun still at Mercury and Venus', () => {

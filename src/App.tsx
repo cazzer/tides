@@ -45,6 +45,7 @@ import { allShownReady } from './renderers/compile-gate'
 import { persistedView, SHIP_STAR_RADIUS } from './ship/ship-session'
 import { mainCameraPose, rememberMainCameraPose, takeMainCameraRestore } from './main-camera-session'
 import { ScaleReadout } from './system-aids/ScaleReadout'
+import { FocusTitle } from './FocusTitle'
 import type { DistanceScale } from './distance-scale'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { DemoBar } from './demo/DemoBar'
@@ -272,6 +273,7 @@ export default function App() {
                 {panelProps('main').gridArea === 'main' && (
                   <>
                     {!demo && showPlanets && systemAids.scale && <ScaleReadout />}
+                    {showPlanets && <FocusTitle />}
                     {!demo && <ShipButton />}
                     {/* The close zoom tiles' credits (tides-tvr.7.2): none
                         without tiles on screen. */}

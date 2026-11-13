@@ -11,7 +11,15 @@ import { ScaleProbe } from './ScaleProbe'
 import { Trails } from './Trails'
 import type { SystemAidProps } from './types'
 
-export function SystemAids({ distanceScale, ship }: SystemAidProps) {
+interface SystemAidsProps extends SystemAidProps {
+  /**
+   * The view holds the main grid slot, where the focus title shows
+   * (FocusTitle.tsx): BodyLabels drops the focused body's name under it.
+   */
+  mainSlot?: boolean
+}
+
+export function SystemAids({ distanceScale, ship, mainSlot = false }: SystemAidsProps) {
   const aids = useStore((s) => s.systemAids)
   const props = { distanceScale, ship }
   // One Suspense each, so an aid that loads (a font, a texture) never blanks
@@ -30,7 +38,7 @@ export function SystemAids({ distanceScale, ship }: SystemAidProps) {
       )}
       {aids.labels && (
         <Suspense fallback={null}>
-          <BodyLabels {...props} />
+          <BodyLabels {...props} mainSlot={mainSlot} />
         </Suspense>
       )}
       {aids.belts && (

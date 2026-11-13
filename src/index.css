@@ -270,6 +270,81 @@ body {
   }
 }
 
+/* The focused planet's or moon's name and size (src/FocusTitle.tsx), centred
+ * at the top of the main view. On a phone the folded dock is a button at the
+ * top-left (dock-disclosure.ts), so the title is narrowed by its width on
+ * both sides and stays centred. It names, never takes taps. */
+.focus-title {
+  position: absolute;
+  top: var(--dock-top);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - var(--dock-inset-left) - var(--dock-inset-right));
+  text-align: center;
+  color: #fff;
+  text-shadow:
+    0 0 2px #000,
+    0 1px 3px #000;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.focus-title__name {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.focus-title__stats {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.78);
+  font-variant-numeric: tabular-nums;
+}
+
+.focus-title__stat {
+  white-space: nowrap;
+}
+
+.focus-title__stat + .focus-title__stat::before {
+  content: '\00a0·\00a0';
+}
+
+@media only screen and (min-width: 601px) {
+  .focus-title {
+    top: max(16px, var(--dock-top));
+  }
+}
+
+@media only screen and (max-width: 600px) {
+  .focus-title {
+    max-width: calc(100% - 2 * (var(--dock-inset-left) + var(--dock-height) + 8px));
+  }
+
+  .focus-title__name {
+    font-size: 21px;
+  }
+
+  .focus-title__stats {
+    flex-direction: column;
+    font-size: 12.5px;
+  }
+
+  .focus-title__stat {
+    white-space: normal;
+    text-wrap: balance;
+  }
+
+  .focus-title__stat + .focus-title__stat::before {
+    content: none;
+  }
+}
+
 /* The year the globe's sea ice is from (src/demo/SeaIceNote.tsx), one small
  * line bottom-left, above the view's label or the view menu, which opens
  * upward over it. It names, never takes taps. */

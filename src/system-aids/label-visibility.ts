@@ -18,9 +18,12 @@
 //     target) is not zoomed so far in on the focused body that the others
 //     are off in the distance (or off screen).
 //
-// The focused body's own name always shows. Where bodies still line up on
-// screen (a conjunction, a moon passing its planet), the lower-priority name
-// gives way (Collisions, below).
+// The focused body's own name always shows, but where the focus title
+// (FocusTitle.tsx) names it instead: there BodyLabels passes no focus
+// (LabelFrame.focus -1) and wants no name for it, and its globe still keeps
+// the others off. Where bodies still line up on screen (a conjunction, a
+// moon passing its planet), the lower-priority name gives way (Collisions,
+// below).
 
 import * as THREE from 'three'
 import { PLANETS, PLANET_KEYS, sceneDistance, sceneRadius, type PlanetKey } from '../planets'

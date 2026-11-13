@@ -326,6 +326,9 @@ describe('the planets tour', () => {
     let s: View = { ...before, ...enterDemoPatch(before, planets, 10_000)! }
     for (let i = 1; i < planets.steps.length; i++) s = { ...s, ...goToDemoStepPatch(s, planets, i)! }
     expect(s.cameraFocus).toBe('neptune')
+    // The tour turns the AU rings off (tides-ufyr.18); the user's come back.
+    expect(s.systemAids.grid).toBe(false)
+    expect(before.systemAids.grid).toBe(true)
     const after = { ...s, ...exitDemoPatch(s, 70_000)! }
     expect(after.showPlanets).toBe(false)
     expect(after.systemAids).toEqual(before.systemAids)

@@ -27,6 +27,14 @@ describe('clearBand', () => {
     expect(clearBand(rect(0, 100, 400, 900), [rect(0, 700, 400, 900)])).toEqual({ top: 0, bottom: 592 })
   })
 
+  it('runs between a title at the top and a caption at the bottom, into `out`', () => {
+    const phone = rect(0, 0, 390, 844)
+    const out = { top: -1, bottom: -1 }
+    const band = clearBand(phone, [rect(120, 8, 270, 70), rect(8, 630, 382, 832)], out)
+    expect(band).toBe(out)
+    expect(out).toEqual({ top: 78, bottom: 622 })
+  })
+
   it('falls back to the whole view when the boxes leave a sliver', () => {
     const land = rect(0, 0, 844, 390)
     expect(clearBand(land, [rect(142, 214, 702, 378), rect(8, 8, 400, 150)])).toEqual({ top: 0, bottom: 390 })

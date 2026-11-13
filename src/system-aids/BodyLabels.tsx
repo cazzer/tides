@@ -14,24 +14,37 @@
 //
 // Laid out in screen px: each body is projected into the view, and its name
 // sized and set off by the scene units a pixel spans at the body's depth, so
-// near and far names read the same size.
+// near and far names read the same size. The view's size is read live
+// (use-view-size.ts), not from r3f's `size`, which inside a drei <View> lags
+// a layout change: a tour going to the single layout on a phone grew the
+// view ~1.3× while the names were still laid out for the old one, so they
+// drew larger than the boxes that kept them apart (tides-ufyr.18).
+//
+// Names keep to the band of the view clear of the boxes over it
+// (demo-chrome.ts): a tour's caption, and the focus title (FocusTitle.tsx).
+// Where the title shows (the main slot, a planet or moon in focus), it names
+// the focused body, so its name in the scene is dropped; its globe still
+// keeps the other names off it.
 //
 // Off in ship mode: the HUD's target marker already names what the ship is
 // pointed at.
 //
 // One useFrame places and fades all of them through refs; React renders the
-// labels once (again only if the view crosses the phone width). Their
-// per-frame state is module level, so one BodyLabels is mounted at a time:
-// SystemAids mounts it in the main view only (ship mode draws none).
+// labels once. Their per-frame state is module level, so one BodyLabels is
+// mounted at a time: SystemAids mounts it in the main view only (ship mode
+// draws none).
 import { useRef, type FC } from 'react'
 import { Text } from '@react-three/drei'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useStore, type CameraFocus } from '../store'
 import { positionsFor } from '../flight-scale'
 import type { DistanceScale } from '../distance-scale'
 import { targetUnitsPerPixel, type ViewSize } from '../main-view'
+import { useViewSize, type ViewRect } from '../use-view-size'
+import { hasFocusTitle } from '../body-facts'
+import { clearBand, demoChromeRects, type Rect } from '../demo/demo-chrome'
 import { CLOCK_HALF_WIDTH } from '../clock-size'
 import { CLOCK_INNER_RADIUS, labelMaterial } from '../orbit-label'
 import { earthAngle } from '../ephemeris'
@@ -149,6 +162,11 @@ function ringPoleAlong(key: LabelKey, x: number, y: number): number {
   return along.copy(right).multiplyScalar(x).addScaledVector(up, y).dot(pole)
 }
 
+// The view in viewport px, and the band of it clear of the demo's boxes, px
+// from its top: filled each frame.
+const viewRect: Rect = { left: 0, top: 0, right: 0, bottom: 0 }
+const band = { top: 0, bottom: 0 }
+
 const frame: LabelFrame = {
   focus: -1,
   obstacleRank: RING_LABEL_RANK,
@@ -247,11 +265,11 @@ function offsetFrom(i: number, j: number): THREE.Vector3 {
 function placeLabels(
   texts: readonly (TroikaText | null)[],
   camera: THREE.PerspectiveCamera,
-  size: ViewSize,
+  size: ViewRect,
   t: number,
   scale: DistanceScale,
   focus: CameraFocus,
-  phone: boolean,
+  titled: boolean,
   viewUpp: number,
   delta: number
 ) {
@@ -260,14 +278,22 @@ function placeLabels(
   // The camera's screen axes in world space (the scene's root is unrotated).
   right.setFromMatrixColumn(camera.matrixWorld, 0)
   up.setFromMatrixColumn(camera.matrixWorld, 1)
-  // Screen px from the view's centre (screenPointInto's).
+  // Screen px from the view's centre (screenPointInto's), up to the band
+  // clear of the demo's boxes.
+  viewRect.left = size.left
+  viewRect.top = size.top
+  viewRect.right = size.left + size.width
+  viewRect.bottom = size.top + size.height
+  clearBand(viewRect, demoChromeRects(), band)
   frame.left = -size.width / 2
   frame.right = size.width / 2
-  frame.bottom = -size.height / 2
-  frame.top = size.height / 2
-  frame.focus = LABEL_KEYS.indexOf(focusBody(focus))
+  frame.bottom = size.height / 2 - band.bottom
+  frame.top = size.height / 2 - band.top
+  // The title names the focused body instead (see the header).
+  const focusIndex = LABEL_KEYS.indexOf(focusBody(focus))
+  frame.focus = titled ? -1 : focusIndex
   frame.delta = delta
-  const shrink = phone ? PHONE_LABEL_SHRINK_PX : 0
+  const shrink = size.width <= PHONE_VIEW_PX ? PHONE_LABEL_SHRINK_PX : 0
   const { discX, discY, discR, nearness, inView, wanted, halfW, halfH, dirX, dirY } = layout
 
   // Every body: where it is on screen, the scene units a pixel spans at its
@@ -296,7 +322,7 @@ function placeLabels(
     const parent = PARENT_INDEX[i]
     const parentSeen = !isLabelMoon(key) || (inView[parent] === 1 && discOnScreen(layout, frame, parent))
     const shown = text && bounds && inView[i] && parentSeen && !(key === 'moon' && moonHidden)
-    wanted[i] = shown ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
+    wanted[i] = shown && !(titled && i === focusIndex) ? labelOpacity(key, bodyUpp[i], focus, viewUpp) : 0
     if (!text || !bounds || wanted[i] < MIN_NAME_OPACITY) continue
     // Sides from the bodies' 3D offsets: what it orbits may be behind the
     // eye, where its projection is mirrored through the view's centre.
@@ -338,23 +364,29 @@ function placeLabels(
   }
 }
 
-export const BodyLabels: FC<SystemAidProps> = ({ distanceScale, ship }) =>
-  ship ? null : <Labels distanceScale={distanceScale} />
+interface BodyLabelsProps extends SystemAidProps {
+  /** The view holds the main grid slot, where the focus title shows. */
+  mainSlot?: boolean
+}
 
-function Labels({ distanceScale }: { distanceScale: DistanceScale }) {
+export const BodyLabels: FC<BodyLabelsProps> = ({ distanceScale, ship, mainSlot = false }) =>
+  ship ? null : <Labels distanceScale={distanceScale} mainSlot={mainSlot} />
+
+function Labels({ distanceScale, mainSlot }: { distanceScale: DistanceScale; mainSlot: boolean }) {
   const texts = useRef<(TroikaText | null)[]>([])
-  // A boolean, so resizing re-renders only on crossing the phone width.
-  const phone = useThree((state) => state.size.width <= PHONE_VIEW_PX)
+  const viewSize = useViewSize()
 
   useFrame(({ camera, controls, size }, delta) => {
     const { timestamp, cameraFocus } = useStore.getState()
     const perspective = camera as THREE.PerspectiveCamera
     const orbit = controls as OrbitControlsImpl | null
     if (timestamp == null || !perspective.isPerspectiveCamera || !orbit) return
+    const view = viewSize(size)
     // How far in the view is: the scale at the orbit target, as the ortho
     // view's zoom was.
-    const viewUpp = targetUnitsPerPixel(orbit.getDistance(), size.height)
-    placeLabels(texts.current, perspective, size, timestamp, distanceScale, cameraFocus, phone, viewUpp, delta)
+    const viewUpp = targetUnitsPerPixel(orbit.getDistance(), view.height)
+    const titled = mainSlot && hasFocusTitle(cameraFocus)
+    placeLabels(texts.current, perspective, view, timestamp, distanceScale, cameraFocus, titled, viewUpp, delta)
   })
 
   return (

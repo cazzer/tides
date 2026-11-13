@@ -15,6 +15,7 @@
 // orbit lines (OrbitGuides) and planet orbits stay there.
 import { useEffect, useMemo, useRef, type FC } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { useViewSize } from '../use-view-size'
 import { Text } from '@react-three/drei'
 import * as THREE from 'three'
 import type { DistanceScale } from '../distance-scale'
@@ -134,7 +135,9 @@ function Rings({ distanceScale }: { distanceScale: DistanceScale }) {
     [materials]
   )
 
-  useFrame(({ camera, size }) => faceLabels(labels.current, camera, size.height))
+  // The live height: r3f's `size` lags a layout change inside a <View>.
+  const viewSize = useViewSize()
+  useFrame(({ camera, size }) => faceLabels(labels.current, camera, viewSize(size).height))
 
   return (
     <>

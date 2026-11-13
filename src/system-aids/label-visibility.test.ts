@@ -428,6 +428,42 @@ describe('resolveLabels', () => {
     expect(layout.side[1]).not.toBe(0)
   })
 
+  // The focus title names the focused body (tides-ufyr.18): BodyLabels
+  // passes no focus and wants no name for it.
+  it('keeps a moon’s name off the focused planet while the title names it', () => {
+    // The moon's default side heads onto the planet's big disc.
+    const layout = setup([
+      [0, 0, 60],
+      [70, 0, 2],
+    ])
+    layout.wanted[0] = 0
+    layout.dirX[1] = -1
+    resolveLabels(layout, frame(layout, { focus: -1 }))
+    expect(layout.shown[0]).toBe(0)
+    expect(layout.shown[1]).toBe(1)
+    expect(layout.side[1]).not.toBe(0)
+    expect(boxHitsDisc(layout.boxX[1], layout.boxY[1], layout.halfW[1], layout.halfH[1], 0, 0, 60)).toBe(false)
+  })
+
+  it('turns a name off a band lowered under a box at the top', () => {
+    // Named above, its box tops out at 928 px: clear of the view's edge, not
+    // of a title reaching down to 930.
+    const up = () => {
+      const layout = setup([[0, 900, 10]])
+      layout.dirX[0] = 0
+      layout.dirY[0] = 1
+      return layout
+    }
+    const open = up()
+    resolveLabels(open, frame(open))
+    expect(open.side[0]).toBe(0)
+    const lowered = up()
+    resolveLabels(lowered, frame(lowered, { top: 930 }))
+    expect(lowered.side[0]).not.toBe(0)
+    expect(lowered.boxY[0] + lowered.halfH[0]).toBeLessThanOrEqual(930)
+    expect(lowered.shown[0]).toBe(1)
+  })
+
   it('drops the name of a body behind a larger, nearer globe, whatever its priority', () => {
     const layout = setup([
       [0, 0, 5],

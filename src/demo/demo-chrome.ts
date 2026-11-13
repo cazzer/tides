@@ -1,6 +1,9 @@
 // The demo's boxes over the scene, its caption bar and readouts
 // (tides-zec.15), so the main view can frame its bodies in the band they
-// leave clear. Their rects are measured when they resize or the window does,
+// leave clear. The focus title (FocusTitle.tsx) is one too, in and out of
+// the tours: the framing (DemoPlayer) reads the boxes only while a demo
+// runs, and BodyLabels keeps the bodies' names in the band every frame
+// (clearBand's `out`, so that allocates nothing). Their rects are measured when they resize or the window does,
 // never in the frame loop: the bar's clock rewrites its text every frame, and
 // reading layout after that would force a reflow each frame.
 
@@ -52,13 +55,20 @@ export function demoChromeRects(): Iterable<Rect> {
 /** Space kept between a box and the band, px. */
 const BAND_MARGIN = 8
 
+/** A band of a view, px from its top. */
+export interface Band {
+  top: number
+  bottom: number
+}
+
 /**
  * The band of `view` (viewport px) clear of `chrome`, as px from the view's
  * top. Only boxes over the middle 40% of the view's width count, where the
  * focus is framed: a readout in a desktop corner leaves the middle clear. A
  * box in the view's lower half bounds the band from below, else from above.
+ * Written into `out` when given, and returned.
  */
-export function clearBand(view: Rect, chrome: Iterable<Rect>): { top: number; bottom: number } {
+export function clearBand(view: Rect, chrome: Iterable<Rect>, out: Band = { top: 0, bottom: 0 }): Band {
   const height = view.bottom - view.top
   const width = view.right - view.left
   const middleLeft = view.left + 0.3 * width
@@ -73,8 +83,10 @@ export function clearBand(view: Rect, chrome: Iterable<Rect>): { top: number; bo
     } else top = Math.max(top, box.bottom - view.top + BAND_MARGIN)
   }
   // Boxes leaving almost nothing: frame in the whole view rather than a sliver.
-  if (bottom - top < 0.3 * height) return { top: 0, bottom: height }
-  return { top, bottom }
+  const sliver = bottom - top < 0.3 * height
+  out.top = sliver ? 0 : top
+  out.bottom = sliver ? height : bottom
+  return out
 }
 
 /**

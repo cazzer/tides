@@ -336,6 +336,7 @@ export default function SolarSystem({
             <SystemAids
               distanceScale={distanceScale}
               ship={ship}
+              mainSlot={mainSlot}
             />
           </Suspense>
         </>
