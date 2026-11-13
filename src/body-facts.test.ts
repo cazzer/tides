@@ -18,21 +18,21 @@ const statsLine = (key: Parameters<typeof sizeComparison>[0]): string => {
 }
 
 describe('sizeComparison', () => {
-  it('reads the planets against Earth, to two figures', () => {
+  it('reads the planets against Earth, to two figures without trailing zeros', () => {
     expect(PLANET_KEYS.map(sizeComparison)).toEqual([
       '0.38× Earth',
       '0.95× Earth',
       '0.53× Earth',
       '11× Earth',
       '9.1× Earth',
-      '4.0× Earth',
+      '4× Earth',
       '3.9× Earth',
     ])
   })
 
   it('reads the moons against ours', () => {
-    expect(sizeComparison('io')).toBe('1.0× Moon')
-    expect(sizeComparison('europa')).toBe('0.90× Moon')
+    expect(sizeComparison('io')).toBe('1× Moon')
+    expect(sizeComparison('europa')).toBe('0.9× Moon')
     expect(sizeComparison('titan')).toBe('1.5× Moon')
     expect(sizeComparison('ganymede')).toBe('1.5× Moon')
     expect(sizeComparison('triton')).toBe('0.78× Moon')

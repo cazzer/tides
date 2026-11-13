@@ -31,8 +31,8 @@ export interface FocusTitle {
 
 // English, as the copy is: "116,000", not the reader's "116.000".
 const threeFigures = new Intl.NumberFormat('en', { maximumSignificantDigits: 3 })
-// Always two figures: Io is "1.0× Moon" and Uranus "4.0× Earth", not a bare "1×".
-const twoFigures = new Intl.NumberFormat('en', { minimumSignificantDigits: 2, maximumSignificantDigits: 2 })
+// At most two figures, trailing zeros dropped: Io is "1× Moon", Uranus "4× Earth".
+const twoFigures = new Intl.NumberFormat('en', { maximumSignificantDigits: 2 })
 
 /** The body's size against Earth (a planet) or our Moon (a moon); null for a tiny moon. */
 export function sizeComparison(key: PlanetKey | MoonKey): string | null {
