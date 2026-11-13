@@ -1,4 +1,4 @@
-import{ao as c,ap as u,ar as m,as as v,a3 as p,E as x}from"./index-B1YukknB.js";import{e as g,k as y,S as h}from"./tile-features-CDBvdJlC.js";class S extends c{constructor(d){super(d),this.onBeforeCompile=t=>{t.fragmentShader=t.fragmentShader.replace("#include <bumpmap_pars_fragment>",`
+import{ar as c,as as u,au as m,av as v,a6 as p,J as x}from"./index-CUTz1MJc.js";import{f as g,k as y,S as h}from"./tile-features-BaQpF6CE.js";class S extends c{constructor(d){super(d),this.onBeforeCompile=t=>{t.fragmentShader=t.fragmentShader.replace("#include <bumpmap_pars_fragment>",`
 				#ifdef USE_BUMPMAP
 
 					uniform sampler2D bumpMap;
