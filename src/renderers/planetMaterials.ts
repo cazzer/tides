@@ -210,20 +210,46 @@ export function planetSurfaceMaterial(
 }
 
 /**
- * A planet's additive haze shell (PlanetAtmosphere), lit from `sunDir`
- * (sunDirection); its sizes and colours are set on the uniforms. Double-
- * sided within the ship's reach of it, as the Earth's (pickShellFaces,
- * tides-ufyr.4), where the shader keeps one face per ray and, at uSeaLevel
- * 0, adds the haze ahead from inside with no ground cover (no HAZE_COVER).
- * Single pass: three would otherwise draw a transparent double-sided
- * material as a back pass and a front pass, two programs, and the shader's
- * own choice of face would be drawn twice. That program is warmed ahead
- * (ship-warmup.ts warmSides).
+ * [TUNE] Scale heights over a planet's haze surface up to which, from inside
+ * over the ground, the haze veils it whole (tides-ufyr.4.1): over the ship's
+ * stops under every haze, easing out to the shell's edge.
+ */
+export const HAZE_VEIL_HEIGHTS = 3
+
+const smoothstep = (edge0: number, edge1: number, x: number) => {
+  const t = Math.min(Math.max((x - edge0) / (edge1 - edge0), 0), 1)
+  return t * t * (3 - 2 * t)
+}
+
+/**
+ * How much a planet's haze veils the ground it lies over (atmosphere/
+ * fragment.frag's veil, its alpha's scale there) for an eye at radius `r`
+ * under a haze from `surface` to `outer` of scale height `H` (all one
+ * unit): 1 up to HAZE_VEIL_HEIGHTS · H over the surface, 0 at the shell's
+ * edge and outside, smoothstepped.
+ */
+export function hazeVeilWeight(r: number, surface: number, outer: number, H: number): number {
+  return 1 - smoothstep(surface + HAZE_VEIL_HEIGHTS * H, outer, r)
+}
+
+/**
+ * A planet's haze shell (PlanetAtmosphere), lit from `sunDir`
+ * (sunDirection); its sizes and colours are set on the uniforms. Blended
+ * premultiplied, as the Earth's (AtmosphereRenderer): its alpha is 0, an
+ * additive blend, but from inside over the ground, where it veils what it
+ * covers by its own brightness (hazeVeilWeight, tides-ufyr.4.1) so the two
+ * don't clip. Double-sided within the ship's reach of it, as the Earth's
+ * (pickShellFaces, tides-ufyr.4), where the shader keeps one face per ray,
+ * with no sea (uSeaLevel 0, no HAZE_COVER). Single pass: three would
+ * otherwise draw a transparent double-sided material as a back pass and a
+ * front pass, two programs, and the shader's own choice of face would be
+ * drawn twice. That program is warmed ahead (ship-warmup.ts warmSides).
  */
 export function planetAtmosphereMaterial(sunDir: { value: THREE.Vector3 }): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     vertexShader: shellVertex,
     fragmentShader: atmosphereFragment,
+    defines: { PLANET_HAZE_VEIL_HEIGHTS: glslFloat(HAZE_VEIL_HEIGHTS) },
     uniforms: {
       uSurface: { value: 0 },
       uOuter: { value: 0 },
@@ -236,7 +262,9 @@ export function planetAtmosphereMaterial(sunDir: { value: THREE.Vector3 }): THRE
     },
     transparent: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
     forceSinglePass: true,
     userData: { warmSides: [THREE.DoubleSide] },
   })
@@ -280,6 +308,11 @@ export function planetDeckMaterial(
       uDeckFade: { value: 0 },
       uDeckLight: { value: 0 },
       uDeckInside: { value: 0 },
+      uLayerShow: { value: 0 },
+      uLayerLevel: { value: 0 },
+      uLayerSeen: { value: 0 },
+      uLayerLight: { value: 0 },
+      uDeckTint: { value: new THREE.Vector3(1, 1, 1) },
       uPixelAngle: { value: 0 },
       uSunDir: sunDir,
       uAlbedo: { value: 1 },
