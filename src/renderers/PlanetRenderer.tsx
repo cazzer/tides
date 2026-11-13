@@ -354,10 +354,11 @@ export interface PlanetAtmosphereProps {
 }
 
 /**
- * An additive limb haze, the Earth's (AtmosphereRenderer) with the planet's
- * own sizes and colours, lit from the Sun's actual direction. Drawn from
- * inside too, as the Earth's, while the planet is the limb body
- * (tides-ufyr.4), so the ship's stop can sit under it.
+ * A limb haze, the Earth's (AtmosphereRenderer) with the planet's own sizes
+ * and colours, lit from the Sun's actual direction. Drawn from inside too,
+ * as the Earth's, while the planet is the limb body (tides-ufyr.4), so the
+ * ship's stop can sit under it; additive but there, over the ground, where
+ * it veils the globe (planetAtmosphereMaterial, tides-ufyr.4.1).
  */
 export function PlanetAtmosphere({
   planet,

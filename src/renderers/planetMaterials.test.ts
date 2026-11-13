@@ -6,15 +6,26 @@ import {
   DETAIL_FLOW_OFFSET,
   DETAIL_FLOW_PERIOD,
   DETAIL_FLOW_RATE,
+  HAZE_VEIL_HEIGHTS,
   bandFlowPhases,
   bandFlowRate,
   detailFlowTime,
+  hazeVeilWeight,
   planetAtmosphereMaterial,
   planetDeckMaterial,
   planetSurfaceMaterial,
   setPlanetDetail,
 } from './planetMaterials'
 import { moonDetailPatch } from './moonDetail'
+import {
+  JUPITER_HAZE_OUTER,
+  MARS_HAZE_OUTER,
+  NEPTUNE_HAZE_OUTER,
+  SATURN_HAZE_OUTER,
+  URANUS_HAZE_OUTER,
+  VENUS_HAZE_OUTER,
+} from './planets/haze-shells'
+import { COLLISION_MARGIN } from '../ship/flight'
 
 const sun = { value: new THREE.Vector3(1, 0, 0) }
 
@@ -252,8 +263,75 @@ describe('planet haze material (tides-ufyr.4)', () => {
     // pickShellFaces reads the shell's radius from it.
     expect(material.uniforms.uOuter).toBeDefined()
     expect(material.uniforms.uSun).toBe(sun)
-    expect(material.blending).toBe(THREE.AdditiveBlending)
     expect(material.defines.HAZE_COVER).toBeUndefined()
+  })
+})
+
+describe("planet haze veil from inside (tides-ufyr.4.1)", () => {
+  // Each planet's haze as its PlanetAtmosphere takes it (planets/*.tsx):
+  // surface 1, the outer edge and the scale height, fractions of R.
+  const hazes: [string, number, number][] = [
+    ['venus', VENUS_HAZE_OUTER, 0.008],
+    ['mars', MARS_HAZE_OUTER, 0.007],
+    ['jupiter', JUPITER_HAZE_OUTER, 0.004],
+    ['saturn', SATURN_HAZE_OUTER, 0.006],
+    ['uranus', URANUS_HAZE_OUTER, 0.008],
+    ['neptune', NEPTUNE_HAZE_OUTER, 0.008],
+  ]
+
+  it("blends premultiplied as the Earth's, its veil's heights a GLSL float", () => {
+    const material = planetAtmosphereMaterial(sun)
+    expect(material.blending).toBe(THREE.CustomBlending)
+    expect(material.blendSrc).toBe(THREE.OneFactor)
+    expect(material.blendDst).toBe(THREE.OneMinusSrcAlphaFactor)
+    expect(material.defines.HAZE_COVER).toBeUndefined()
+    expect(material.defines.PLANET_HAZE_VEIL_HEIGHTS).toBe(`${HAZE_VEIL_HEIGHTS}.0`)
+  })
+
+  it('sets the veil on the encoded colour, the outside alpha 0, all off the Earth program', () => {
+    const shader = planetAtmosphereMaterial(sun).fragmentShader
+    const encode = shader.indexOf('#include <colorspace_fragment>')
+    const alpha = shader.indexOf('gl_FragColor.a = min(veil * max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b), 1.0);')
+    expect(encode).toBeGreaterThan(0)
+    expect(alpha).toBeGreaterThan(encode)
+    // Under #ifndef HAZE_COVER, so the Earth's program compiles none of it.
+    expect(shader.lastIndexOf('#ifndef HAZE_COVER', alpha)).toBeGreaterThan(encode)
+    expect(shader).toContain('gl_FragColor = vec4(hazeGlow(column, grazing, at, uSun, rd, ro), 0.0);')
+    expect(shader).toContain('veil = 1.0 - smoothstep(uSurface + PLANET_HAZE_VEIL_HEIGHTS * H, uOuter, length(ro));')
+    for (const at of [shader.indexOf('float veil = 0.0;'), shader.indexOf('veil = 1.0 - smoothstep(')]) {
+      const guard = shader.lastIndexOf('#ifndef HAZE_COVER', at)
+      expect(guard).toBeGreaterThan(0)
+      expect(shader.indexOf('#endif', guard)).toBeGreaterThan(at)
+    }
+  })
+
+  it.each(hazes)("veils %s's ground whole at its stop, none at the shell's edge, monotone", (_key, outer, H) => {
+    expect(1 + HAZE_VEIL_HEIGHTS * H).toBeLessThan(outer)
+    expect(hazeVeilWeight(outer, 1, outer, H)).toBe(0)
+    expect(hazeVeilWeight(outer * 1.1, 1, outer, H)).toBe(0)
+    expect(hazeVeilWeight(1, 1, outer, H)).toBe(1)
+    let last = Infinity
+    for (let i = 0; i <= 200; i++) {
+      const v = hazeVeilWeight(0.99 + (i / 200) * (outer + 0.01 - 0.99), 1, outer, H)
+      expect(v).toBeLessThanOrEqual(last)
+      last = v
+    }
+  })
+
+  it.each(hazes.filter(([key]) => key === 'venus' || key === 'mars'))('veils whole at the %s stop', (_key, outer, H) => {
+    for (const r of [COLLISION_MARGIN, 1.0205]) expect(hazeVeilWeight(r, 1, outer, H)).toBe(1)
+  })
+
+  it('keeps glow over what is left of the ground under 1, channel by channel', () => {
+    // One/OneMinusSrcAlpha with alpha the glow's brightest channel s, over
+    // any d ≤ 1: s + d(1 − max s) ≤ 1.
+    const steps = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+    for (const r of steps) for (const g of steps) for (const b of steps) {
+      const alpha = Math.max(r, g, b)
+      for (const d of steps) {
+        for (const s of [r, g, b]) expect(s + d * (1 - alpha)).toBeLessThanOrEqual(1 + 1e-12)
+      }
+    }
   })
 })
 
