@@ -8,7 +8,7 @@ import lightningVertex from '../shaders/lightning/vertex.glsl'
 import lightningFragment from '../shaders/lightning/fragment.frag'
 
 /** [TUNE] The glow's gain. */
-export const LIGHTNING_GAIN = 1.5
+export const LIGHTNING_GAIN = 1.35
 
 /** The cloud layer's uniforms the flashes read (CloudLayer['uniforms']), shared, never copied. */
 export interface LightningCloud {
