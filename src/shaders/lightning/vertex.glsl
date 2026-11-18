@@ -100,7 +100,12 @@ void main() {
   // Fades as the eye comes within a few of its true size (diving through
   // the deck), so the cap never holds it as a sprite in the eye's face.
   float near = perspective ? smoothstep(trueMajor, 4.0 * trueMajor, depth) : 1.0;
-  vI = flashIntensity(age, aFlash.y, seed) * aFlash.z * day * near;
+  // Dims as the floor inflates it (zoomed out, its true size under uMinPx):
+  // the light per area, squared, so the whole system's flashes fade out
+  // instead of holding as full-bright dots (flashZoomFade()).
+  float zoomRatio = clamp(trueMajor / (uMinPx * pxWorld), 0.0, 1.0);
+  float zoomFade = zoomRatio * zoomRatio;
+  vI = flashIntensity(age, aFlash.y, seed) * aFlash.z * day * near * zoomFade;
   // Dark (between pulses, or the eye inside it): no fragments either, so a
   // quad filling the screen costs nothing.
   if (vI <= 0.0) {

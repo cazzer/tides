@@ -101,6 +101,18 @@ export function flashHalfSize(worldMajor: number, pxWorld: number, vw: number, v
 }
 
 /**
+ * How much of its light a flash keeps by how far the floor inflated it: its
+ * true major half-axis (`worldMajor`) over the floor's (MIN_FLASH_PX ·
+ * pxWorld), squared (the light per area, so the total stays that of the true
+ * patch), 1 at or above the floor, 0 for a flash with no size. The shader's
+ * `zoomFade`.
+ */
+export function flashZoomFade(worldMajor: number, pxWorld: number): number {
+  const ratio = Math.min(Math.max(worldMajor / (MIN_FLASH_PX * pxWorld), 0), 1)
+  return ratio * ratio
+}
+
+/**
  * The shear that keeps a patch seen at `mu` (the cosine between its normal
  * and the view) at least `minMu` thick: the corners move along the normal
  * by this much of their offset toward the eye (pivoted about the near edge,

@@ -7,6 +7,7 @@ import { flashSeed, hashKey, pulseCount } from './lightning'
 import {
   flashHalfSize,
   flashShape,
+  flashZoomFade,
   flashTangentBasis,
   limbShear,
   LOBE_MAIN_RADIUS,
@@ -126,6 +127,31 @@ describe('lightning patch', () => {
       const { major, capped } = flashHalfSize(80, pxWorld, vw, vh)
       expect(capped).toBe(true)
       expect(major / pxWorld).toBeCloseTo(capPx, 9)
+    })
+  })
+
+  describe('flashZoomFade', () => {
+    const pxWorld = 10
+
+    test('full at or above the floor', () => {
+      expect(flashZoomFade(MIN_FLASH_PX * pxWorld, pxWorld)).toBe(1)
+      expect(flashZoomFade(100 * pxWorld, pxWorld)).toBe(1)
+    })
+
+    test('squared below it, 0 for no size', () => {
+      expect(flashZoomFade((MIN_FLASH_PX / 2) * pxWorld, pxWorld)).toBeCloseTo(0.25, 9)
+      expect(flashZoomFade(0, pxWorld)).toBe(0)
+    })
+
+    test('an 80 km flash from orbit is nearly dark', () => {
+      expect(flashZoomFade(80, perspectivePx(60, 100_000, 800))).toBeLessThan(0.05)
+    })
+
+    test('the shader applies the same ratio', () => {
+      const vertex = readFileSync(new URL('./shaders/lightning/vertex.glsl', import.meta.url), 'utf8').replace(/\/\/.*$/gm, '')
+      expect(vertex).toMatch(/zoomRatio = clamp\(trueMajor \/ \(uMinPx \* pxWorld\), 0\.0, 1\.0\)/)
+      expect(vertex).toMatch(/zoomFade = zoomRatio \* zoomRatio/)
+      expect(vertex).toMatch(/\* near \* zoomFade/)
     })
   })
 
@@ -276,7 +302,7 @@ describe('lightning patch', () => {
     expect(vertex).not.toContain('centre.xy +=')
     // The eye's fade on the true size, uncapped, not the drawn one.
     expect(vertex).toContain('float near = perspective ? smoothstep(trueMajor, 4.0 * trueMajor, depth) : 1.0;')
-    expect(vertex).toMatch(/vI = flashIntensity\(age, aFlash\.y, seed\) \* aFlash\.z \* day \* near;/)
+    expect(vertex).toMatch(/vI = flashIntensity\(age, aFlash\.y, seed\) \* aFlash\.z \* day \* near \* zoomFade;/)
     expect(vertex.indexOf('float near')).toBeLessThan(vertex.indexOf('float major'))
     // Behind the eye, collapsed before any divide by its depth.
     expect(vertex).toContain('if (perspective && depth <= 0.0) {')
